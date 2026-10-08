@@ -85,6 +85,29 @@ class GitTests(unittest.IsolatedAsyncioTestCase):
   with self.assertRaisesRegex(git.Rejected,"credential guard"):
    await git.network(self.base,self.repo,"origin","push")
 
+ async def test_push_definite_auth_failure_and_ambiguous_failure(self):
+  from unittest.mock import patch
+  class FailedProcess:
+   returncode=128
+   def __init__(self,output):
+    self.stdout=asyncio.StreamReader();self.stdout.feed_data(output);self.stdout.feed_eof()
+   async def wait(self):return self.returncode
+  async def run(output):
+   async def spawn(*args,**kwargs):return FailedProcess(output)
+   with patch.object(git.asyncio,"create_subprocess_exec",spawn):
+    return await git.command(self.repo,["push","origin","HEAD:refs/heads/main"],mutable=True,env_extra={"V3_GIT_TOKEN":"private-fixture"})
+  with self.assertRaisesRegex(git.Rejected,"authentication rejected"):
+   await run(b"fatal: Authentication failed for 'https://example.test/repo/'")
+  with self.assertRaisesRegex(git.Rejected,"write permission"):
+   await run(b"fatal: unable to access 'https://example.test/repo/': The requested URL returned error: 403")
+  with self.assertRaisesRegex(git.Rejected,"repository unavailable"):
+   await run(b"remote: Repository not found.")
+  with self.assertRaises(git.Uncertain):
+   await run(b"fatal: remote hung up unexpectedly")
+  # Credential withholding always wins over error classification.
+  with self.assertRaises(git.Uncertain):
+   await run(b"fatal: Authentication failed for private-fixture")
+
  async def test_status_commit_push_and_dedupe(self):
   initial=await self.call("git_tool",{"operation":"status"})
   self.assertEqual(initial["status"],"success",initial)

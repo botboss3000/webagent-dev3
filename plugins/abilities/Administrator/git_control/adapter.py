@@ -181,6 +181,15 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,
   if mutable:raise Uncertain("Git output withheld after possible effect; reconcile repository before retry")
   raise Rejected("Git output withheld by credential guard")
  if proc.returncode:
+  # Only explicit pre-transfer HTTPS failures are known to have no effect.
+  # Emit fixed guidance, never remote stderr (which may contain credentials).
+  if env_extra and argv[0]=="push":
+   if b"fatal: Authentication failed for " in output:
+    raise Rejected("GitHub authentication rejected the saved repository key; update it in the repository configuration or Vault")
+   if b"fatal: unable to access " in output and b"The requested URL returned error: 403" in output:
+    raise Rejected("GitHub denied push access; check the saved key's repository access and write permission")
+   if b"remote: Repository not found." in output:
+    raise Rejected("GitHub repository unavailable; check the repository URL and the saved key's access")
   if mutable:raise Uncertain("Git mutation did not finish cleanly; reconcile local and remote state before retry")
   raise Rejected("Git operation rejected; inspect workspace status")
  return b"" if scan_only else bytes(output)
