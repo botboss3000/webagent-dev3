@@ -18,9 +18,18 @@
 #tab-app .agent-card-tabs [role=tab]{touch-action:none;user-select:none;cursor:grab;border:0;background:transparent;color:var(--fg-2);padding:8px 14px;white-space:nowrap}
 #tab-app .agent-card-tabs [aria-selected=true]{color:var(--accent);border-bottom:2px solid var(--accent)}
 #tab-app .agent-card-tabs .dragging{cursor:grabbing;background:var(--accent-soft);outline:2px solid var(--accent)}
-#app-files-page{padding:0;color:var(--fg-2);height:calc(100vh - 170px);min-height:480px;overflow:hidden}
-
-#app-files-page .files-sidebar{width:min(36%,340px)}
+/* Match V2's embedded File Manager: tabs stay above a workspace that fills
+   the panel, while the tree and editor own their scrolling. */
+#main-panel:has(> #tab-app:not([hidden]) #app-files-page:not([hidden])){overflow:hidden!important}
+#tab-app:has(#app-files-page:not([hidden])){height:100%;min-height:0;padding:0;overflow:hidden}
+#tab-app:has(#app-files-page:not([hidden])) .app-page-framework{display:flex;flex-direction:column;height:100%;min-height:0;min-width:0}
+#tab-app:has(#app-files-page:not([hidden])) .app-page-framework > .agent-card{flex-shrink:0}
+#tab-app:has(#app-files-page:not([hidden])) .agent-detail-panel{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
+#tab-app:has(#app-files-page:not([hidden])) .agent-detail-content{height:auto;flex:1;min-height:0;overflow:hidden}
+#app-files-page{padding:0;color:var(--fg-2);min-height:0;min-width:0;overflow:hidden}
+#app-files-page:not([hidden]){display:flex;flex-direction:column;flex:1}
+#app-files-page > #file-manager{height:auto;flex:1;min-height:0}
+#app-files-page .lucide-icon,#app-files-page i[data-lucide],#app-files-page svg{pointer-events:none}
 @media(max-width:800px){#tab-app .agent-config-star{margin-right:14px}}
 
 /* Native tier disclosures use the same body but their own open state. */

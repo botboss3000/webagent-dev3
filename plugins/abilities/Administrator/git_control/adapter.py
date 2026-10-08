@@ -115,7 +115,7 @@ def ref(v):
  return v
 def secret(data):
  return bool(re.search(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}|(?:https?|ssh)://[^\s/@:]+:[^\s/@]+@|\b(?:api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*[\"']?[A-Za-z0-9_./+-]{12,}",data,re.I))
-async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30):
+async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,scan_only=False):
  env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8","HOME":str(repo.parent),"GIT_CONFIG_NOSYSTEM":"1","GIT_CONFIG_GLOBAL":"/dev/null","GIT_OPTIONAL_LOCKS":"0","GIT_TERMINAL_PROMPT":"0","GIT_EDITOR":":","GIT_SEQUENCE_EDITOR":":","GIT_NO_REPLACE_OBJECTS":"1"}
  if env_extra:
   if not isinstance(env_extra,dict) or any(k not in {"GIT_ASKPASS","V3_GIT_URL","V3_GIT_USERNAME","V3_GIT_TOKEN"} or not isinstance(v,str) for k,v in env_extra.items()):raise Rejected("Invalid trusted transport")
@@ -124,9 +124,22 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30)
  proc=await asyncio.create_subprocess_exec("git",*opts,*argv,cwd=repo,env=env,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT,start_new_session=True,preexec_fn=lambda:(_RESTRICT(_SANDBOX_ROOT.get() or repo.parent,read_paths=(str(Path(__file__).resolve().parent/"askpass.py"),)) if env_extra else _RESTRICT(_SANDBOX_ROOT.get() or repo.parent)))
  output=bytearray()
  async def drain():
+  line_bytes=0
   while chunk:=await proc.stdout.read(8192):
    output.extend(chunk)
-   if len(output)>LIMIT:raise Rejected("Git output exceeds limit")
+   if scan_only:
+    # Scan the entire stream, retaining overlap instead of returning a patch.
+    # Reject oversized lines/whitespace so a credential cannot bridge beyond
+    # the retained window; ordinary tool responses keep their original cap.
+    if secret(bytes(output)):raise Rejected("Outgoing history withheld by credential guard")
+    if re.search(rb"\s{4096}",output):raise Rejected("Outgoing history whitespace exceeds scan bound")
+    segments=chunk.split(b"\n")
+    for index,segment in enumerate(segments):
+     line_bytes+=len(segment)
+     if line_bytes>LIMIT:raise Rejected("Outgoing history line exceeds scan bound")
+     if index<len(segments)-1:line_bytes=0
+    if len(output)>LIMIT:del output[:-LIMIT]
+   elif len(output)>LIMIT:raise Rejected("Git output exceeds limit")
   await proc.wait()
  try:await asyncio.wait_for(drain(),timeout)
  except BaseException as error:
@@ -138,8 +151,12 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30)
     try:os.killpg(proc.pid,signal.SIGKILL)
     except ProcessLookupError:pass
     await proc.wait()
+  # Close the captured pipe after an early scan rejection as well as the child.
+  try:await asyncio.wait_for(proc.communicate(),2)
+  except asyncio.TimeoutError:pass
   if isinstance(error,asyncio.CancelledError):raise
   if mutable:raise Uncertain("Interrupted Git effect uncertain; inspect repository before retry") from error
+  if scan_only and isinstance(error,Rejected):raise
   raise Rejected("Git read timed out or exceeded output limit") from error
  if secret(bytes(output)) or env_extra and env_extra.get("V3_GIT_TOKEN") and env_extra["V3_GIT_TOKEN"].encode() in output:
   if mutable:raise Uncertain("Git output withheld after possible effect; reconcile repository before retry")
@@ -147,7 +164,7 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30)
  if proc.returncode:
   if mutable:raise Uncertain("Git mutation did not finish cleanly; reconcile local and remote state before retry")
   raise Rejected("Git operation rejected; inspect workspace status")
- return bytes(output)
+ return b"" if scan_only else bytes(output)
 async def validate(repo,bare=False):
  for item in (await command(repo,["config","--local","--null","--list"])).split(b"\0"):
   key=item.split(b"\n",1)[0].decode().lower()
@@ -199,7 +216,7 @@ async def network(base,repo,remote,operation):
  target,env,local=await transport(base,repo,remote,operation)
  if operation=="push":
   # Bounded outgoing-history scan; unknown/new remotes conservatively scan HEAD.
-  await command(repo,["log","--no-ext-diff","--no-textconv","--no-show-signature","-p","HEAD","--not","--remotes="+ref(remote),"--"])
+  await command(repo,["log","--no-ext-diff","--no-textconv","--no-show-signature","-p","HEAD","--not","--remotes="+ref(remote),"--"],scan_only=True,timeout=120)
  branch=ref((await command(repo,["symbolic-ref","--quiet","--short","HEAD"])).decode().strip()) if operation!="fetch" else ""
  argv=["fetch","--no-tags","--prune",ref(remote)] if operation=="fetch" else (["pull","--ff-only","--no-rebase",target,branch] if operation=="pull" else ["push","--no-verify",target,"HEAD:refs/heads/"+branch])
  output=await command(repo,argv,mutable=True,env_extra=env,local=local,timeout=120)

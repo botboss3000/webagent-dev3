@@ -42,6 +42,21 @@ class GitTests(unittest.IsolatedAsyncioTestCase):
   pushed=subprocess.run(["git","--git-dir",str(self.remote),"rev-parse","main"],capture_output=True,check=True).stdout.decode().strip()
   self.assertEqual(pushed,self.run_git("rev-parse","HEAD"))
 
+ async def test_large_outgoing_history_push_and_streamed_secret_guard(self):
+  (self.repo/"large.txt").write_text("ordinary source line\n"*12000)
+  self.run_git("add","large.txt");self.run_git("commit","-qm","large source")
+  with self.assertRaises(git.Rejected):
+   await git.command(self.repo,["log","-p","HEAD","--"])
+  await git.network(self.base,self.repo,"origin","push")
+  pushed=subprocess.run(["git","--git-dir",str(self.remote),"rev-parse","main"],capture_output=True,check=True).stdout.decode().strip()
+  self.assertEqual(pushed,self.run_git("rev-parse","HEAD"))
+  (self.repo/"large.txt").write_text("ordinary source line\n"*24000+"access_token="+"x"*24+"\n")
+  self.run_git("add","large.txt");self.run_git("commit","-qm","guard fixture")
+  with self.assertRaisesRegex(git.Rejected,"credential guard"):
+   await git.network(self.base,self.repo,"origin","push")
+  unchanged=subprocess.run(["git","--git-dir",str(self.remote),"rev-parse","main"],capture_output=True,check=True).stdout.decode().strip()
+  self.assertEqual(unchanged,pushed)
+
  async def test_status_commit_push_and_dedupe(self):
   initial=await self.call("git_tool",{"operation":"status"})
   self.assertEqual(initial["status"],"success",initial)
