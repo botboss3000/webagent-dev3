@@ -33,6 +33,8 @@ COPY --from=tested_builder /usr/local/rustup/toolchains/1.90.0-x86_64-unknown-li
 COPY v3/worker.py v3/sandbox.py v3/launch.py v3/promote.py /opt/v3/
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/gates /opt/v3/plugins/gates
+# Git invokes this fixed helper directly as the unprivileged tool worker.
+RUN chmod 0555 /opt/v3/plugins/abilities/Administrator/git_control/askpass.py
 COPY v3 /opt/v3/source-template
 COPY v3/ui /opt/v3/ui
 COPY v3/ui-baseline.json /opt/v3/ui-baseline.json

@@ -78,6 +78,37 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(git.Rejected, "Ambiguous"):
             transport.connections({"connections": self.row()["connections"] * 2})
 
+    async def test_git_executes_the_vault_askpass_helper(self):
+        url = "https://one.example.test/team/repo"
+        subprocess.run(["git", "config", "remote.origin.url", url], cwd=self.repo, check=True)
+        lease = transport._CONNECTIONS.set(transport.connections(self.row()))
+        try:
+            trusted = await transport.authorize(self.repo, "origin", "push")
+        finally:
+            transport._CONNECTIONS.reset(lease)
+        self.assertEqual(str(DIRECTORY / "askpass.py"), trusted["GIT_ASKPASS"])
+        env = {"PATH":"/usr/bin:/bin", "HOME":str(self.base),
+               "GIT_CONFIG_NOSYSTEM":"1", "GIT_CONFIG_GLOBAL":"/dev/null",
+               "GIT_TERMINAL_PROMPT":"0", **trusted}
+        # credential fill invokes the exact Git prompt path, without a network
+        # request or any real credential. A Python argv string fails this test.
+        result = subprocess.run(
+            ["git", "-c", "credential.helper=", "-c", "credential.useHttpPath=true",
+             "credential", "fill"], input=("url="+url+"\n\n").encode(),
+            cwd=self.repo, env=env, capture_output=True, timeout=10,
+            preexec_fn=lambda: git._RESTRICT(self.base, read_paths=(trusted["GIT_ASKPASS"],)))
+        self.assertEqual(0, result.returncode, result.stderr.decode())
+        self.assertIn(b"username=git\n", result.stdout)
+        self.assertIn(b"password=fixture-token-one\n", result.stdout)
+        self.assertEqual(b"", result.stderr)
+        with patch.object(transport.os, "access", return_value=False):
+            lease = transport._CONNECTIONS.set(transport.connections(self.row()))
+            try:
+                with self.assertRaisesRegex(git.Rejected, "not executable"):
+                    await transport.authorize(self.repo, "origin", "push")
+            finally:
+                transport._CONNECTIONS.reset(lease)
+
     def test_askpass_answers_only_exact_https_repository(self):
         env = {"V3_GIT_URL": "https://one.example.test/team/repo", "V3_GIT_USERNAME": "git", "V3_GIT_TOKEN": "fixture-token-one"}
         self.assertEqual("git", askpass.answer("Username for 'https://one.example.test/team/repo': ", env))

@@ -1,9 +1,9 @@
 """Per-call agent-scoped HTTPS transport; credentials never become tool output."""
 import contextvars
 import importlib.util
+import os
 from pathlib import Path
 import re
-import shlex
 from urllib.parse import urlsplit
 
 _DIRECTORY = Path(__file__).resolve().parent
@@ -63,9 +63,13 @@ async def authorize(repo, remote, operation):
     row = next((row for row in _CONNECTIONS.get() if row["url"] == exact), None)
     if row is None:
         raise adapter.Rejected("Remote is not granted by this agent's repository connections")
-    # Fixed trusted askpass code, never a repository-controlled script. The
-    # sandbox grants read access to this exact file for this Git subprocess.
-    return {"GIT_ASKPASS": "/usr/bin/python3 -I " + shlex.quote(str(_DIRECTORY / "askpass.py")),
+    # Git executes GIT_ASKPASS directly as one filename, without shell parsing.
+    # Its fixed shebang supplies isolated Python; the sandbox allows only this
+    # trusted helper, never an executable selected by repository configuration.
+    helper = _DIRECTORY / "askpass.py"
+    if not os.access(helper, os.X_OK):
+        raise adapter.Rejected("Trusted Git credential helper is not executable")
+    return {"GIT_ASKPASS": str(helper),
             "V3_GIT_URL": exact, "V3_GIT_USERNAME": row["username"],
             "V3_GIT_TOKEN": row["token"] or ""}
 
