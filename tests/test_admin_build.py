@@ -196,6 +196,18 @@ class BuildTests(unittest.TestCase):
         self.assertEqual("healthy", view["containers"]["api"]["health"])
         self.assertNotIn("NEVER-EXPOSE-THIS", json.dumps(view))
         self.assertNotIn("access_fingerprint", view["jobs"][0])
+        result = self.call("v3_build_result", {"job_id": job_id}, trusted=dashboard,
+                           workspace=dashboard["session_id"])["job"]
+        self.assertEqual(job_id, result["job_id"])
+        self.assertEqual("passed", result["rust_tests"]["status"])
+        self.assertIn("building_api", [item["phase"] for item in result["phase_history"]])
+        self.assertNotIn("access_fingerprint", result)
+        self.assertNotIn("NEVER-EXPOSE-THIS", json.dumps(result))
+        self.assertIsNone(self.call("v3_build_result", {"job_id": str(uuid.uuid4())},
+                                    trusted=dashboard, workspace=dashboard["session_id"])["job"])
+        with self.assertRaises(PermissionError):
+            self.call("v3_build_result", {"job_id": job_id},
+                      trusted=self.trusted, workspace=self.workspace)
         with self.assertRaises(PermissionError):
             self.call("v3_build_dashboard", trusted=self.trusted, workspace=self.workspace)
         with self.assertRaises(PermissionError):
@@ -229,13 +241,44 @@ class BuildTests(unittest.TestCase):
                       "--- a/README.md\n+++ b/README.md\n"
                       "@@ -1 +1 @@\n-before\n+after\n")
         with patch.object(host, "SOURCE", root):
-            with self.assertRaisesRegex(ValueError, "hunk line counts mismatch"):
+            with self.assertRaisesRegex(ValueError, "hunk count in README.md"):
                 host.inspect_source_patch(source, patch_text + "+ignored trailing line\n")
             self.assertEqual(["README.md"], host.inspect_source_patch(source, patch_text))
             host.source_git(source, ["apply", "--whitespace=error", "-"], patch_text.encode())
         self.assertEqual("after\n", target.read_text())
         with patch.object(host, "SOURCE", root), self.assertRaisesRegex(ValueError, "README.md:1"):
             host.source_git(source, ["apply", "--check", "-"], patch_text.encode())
+
+    def test_checked_patch_explains_apply_patch_format_error(self):
+        root = self.state / "format-repo"
+        root.mkdir()
+        source = root / "v3"
+        source.mkdir()
+        with patch.object(host, "SOURCE", root):
+            with self.assertRaisesRegex(ValueError, "apply_patch markers are unsupported"):
+                host.inspect_source_patch(source, "*** Begin Patch\n*** Add File: ui/page.json\n+{}\n*** End Patch\n")
+            with self.assertRaisesRegex(ValueError, "must start with diff --git"):
+                host.inspect_source_patch(source, "--- /dev/null\n+++ b/ui/page.json\n")
+
+    def test_checked_patch_accepts_exact_middle_line_without_context(self):
+        root = self.state / "zero-context-repo"
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        source = root / "v3/build-jobs/coordination/trees/task/v3"
+        target = source / "ui/app.js"
+        target.parent.mkdir(parents=True)
+        target.write_text("before\nconst note=text=>1;\nafter\n")
+        patch_text = ("diff --git a/ui/app.js b/ui/app.js\n"
+                      "--- a/ui/app.js\n+++ b/ui/app.js\n"
+                      "@@ -2,1 +2,1 @@\n-const note=text=>1;\n+const note=text=>2;\n")
+        stale_text = patch_text.replace("const note=text=>1;", "const note=text=>0;")
+        with patch.object(host, "SOURCE", root):
+            with self.assertRaisesRegex(ValueError, "patch does not apply"):
+                host.inspect_source_patch(source, stale_text)
+            self.assertEqual(["ui/app.js"], host.inspect_source_patch(source, patch_text))
+            host.source_git(source, ["apply", "--unidiff-zero", "--whitespace=error", "-"],
+                            patch_text.encode())
+        self.assertEqual("before\nconst note=text=>2;\nafter\n", target.read_text())
 
     def test_release_mounts_pin_source_and_keep_state_writable(self):
         root = self.state / "release-fixture"
@@ -309,6 +352,130 @@ class BuildTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "checkout changed during release"):
             promote(root, before, after, ["v3/README.md"], host.context_digest)
         self.assertEqual("unrelated edit", path.read_text())
+
+    def test_standalone_checkout_promotion_preserves_conflicts(self):
+        root = self.state / "standalone"
+        root.mkdir()
+        path = root / "README.md"
+        path.write_text("before")
+        before = context(extra={"v3/README.md": "before"})
+        after = context(extra={"v3/README.md": "after"})
+        release = host.release
+        self.assertEqual(1, release.promote_checkout(root, before, after,
+            ["v3/README.md"], host.context_digest, standalone=True))
+        self.assertEqual("after", path.read_text())
+        self.assertTrue(release.checkout_matches(root, after,
+            ["v3/README.md"], host.context_digest, standalone=True))
+        path.write_text("another writer")
+        with self.assertRaisesRegex(ValueError, "checkout changed"):
+            release.promote_checkout(root, before, after,
+                ["v3/README.md"], host.context_digest, standalone=True)
+        self.assertEqual("another writer", path.read_text())
+
+    def test_source_apply_schemas_have_disjoint_arguments(self):
+        path = Path(__file__).resolve().parents[1] / "src/agent_loop/tools/administrator-schemas.json"
+        schemas = {item["name"]: item["parameters"] for item in json.loads(path.read_text())}
+        prepared = schemas["v3_source_apply_prepared"]
+        raw = schemas["v3_source_apply"]
+        self.assertEqual({"task_id", "request_id", "prepared_id", "expected_inputs_sha256"},
+                         set(prepared["properties"]))
+        self.assertEqual(set(prepared["properties"]), set(prepared["required"]))
+        self.assertEqual({"task_id", "request_id", "patch", "expected_inputs_sha256"},
+                         set(raw["properties"]))
+        self.assertEqual(set(raw["properties"]), set(raw["required"]))
+
+    def test_prepared_new_files_apply_exact_reviewed_patch(self):
+        task = self.call("v3_build_work", {"action": "begin", "task_id": "prepare-task",
+            "summary": "Prepare", "mode": "isolated"})
+        source = Path(task["workspace_path"])
+        files = [
+            {"path": "ui/main-panel/session-metrics/page.json",
+             "content": '{"id":"session-metrics"}\n'},
+            {"path": "ui/main-panel/session-metrics/page.css",
+             "content": ".table { overflow: auto; }\n.more { color: red; }\n"},
+        ]
+        prepared = self.call("v3_source_prepare", {"task_id": "prepare-task",
+            "files": files, "expected_inputs_sha256": task["workspace_inputs_sha256"]})
+        self.assertIn("@@ -0,0 +1,2 @@", prepared["patch"])
+        self.assertEqual(64, len(prepared["patch_sha256"]))
+        self.assertFalse((source / files[0]["path"]).exists())
+        both = {"task_id": "prepare-task", "request_id": "bad-both",
+                "prepared_id": prepared["prepared_id"], "patch": prepared["patch"],
+                "expected_inputs_sha256": task["workspace_inputs_sha256"]}
+        for tool in ("v3_source_apply", "v3_source_apply_prepared"):
+            with self.assertRaisesRegex(ValueError, "arguments do not match tool"):
+                self.call(tool, both)
+        self.assertFalse((source / files[0]["path"]).exists())
+        result = self.call("v3_source_apply_prepared", {"task_id": "prepare-task",
+            "request_id": "prepared-apply-1", "prepared_id": prepared["prepared_id"],
+            "expected_inputs_sha256": task["workspace_inputs_sha256"]})
+        self.assertEqual("success", result["status"])
+        self.assertEqual(files[0]["content"], (source / files[0]["path"]).read_text())
+        self.assertEqual(files[1]["content"], (source / files[1]["path"]).read_text())
+        self.assertEqual(result, self.call("v3_source_receipt", {"task_id": "prepare-task",
+            "request_id": "prepared-apply-1"}))
+        self.assertEqual(result, self.call("v3_source_apply_prepared", {"task_id": "prepare-task",
+            "request_id": "prepared-apply-1", "prepared_id": prepared["prepared_id"],
+            "expected_inputs_sha256": task["workspace_inputs_sha256"]}))
+        with self.assertRaisesRegex(ValueError, "stale source inputs"):
+            self.call("v3_source_apply_prepared", {"task_id": "prepare-task",
+                "request_id": "prepared-apply-2", "prepared_id": prepared["prepared_id"],
+                "expected_inputs_sha256": task["workspace_inputs_sha256"]})
+
+    def test_prepare_rejects_unsafe_or_existing_source(self):
+        task = self.call("v3_build_work", {"action": "begin", "task_id": "prepare-deny",
+            "summary": "Prepare", "mode": "isolated"})
+        digest = task["workspace_inputs_sha256"]
+        for name, content in [("../data/secret", "x\n"), ("data/secret", "x\n"),
+                              ("ui/page.json", "missing newline")]:
+            with self.assertRaises(ValueError):
+                self.call("v3_source_prepare", {"task_id": "prepare-deny",
+                    "files": [{"path": name, "content": content}],
+                    "expected_inputs_sha256": digest})
+        with self.assertRaisesRegex(ValueError, "not a regular source file|patch does not apply|new files"):
+            self.call("v3_source_prepare", {"task_id": "prepare-deny",
+                "files": [{"path": "Cargo.toml", "content": "replacement\n"}],
+                "expected_inputs_sha256": digest})
+
+    def test_hunk_errors_name_file_and_actual_count(self):
+        bad = ("diff --git a/ui/main-panel/session-metrics/page.html "
+               "b/ui/main-panel/session-metrics/page.html\n"
+               "new file mode 100644\n--- /dev/null\n"
+               "+++ b/ui/main-panel/session-metrics/page.html\n"
+               "@@ -0,0 +1,38 @@\n+one\n+two\n")
+        with self.assertRaisesRegex(ValueError,
+                r"page.html: header declares -0/\+38 lines; body has -0/\+2"):
+            host.validate_source_hunks(bad)
+
+    def test_isolated_source_list_and_read_errors(self):
+        task = self.call("v3_build_work", {"action": "begin", "task_id": "list-task",
+            "summary": "List", "mode": "isolated"})
+        source = Path(task["workspace_path"])
+        page = source / "ui/main-panel/builds/page.json"
+        page.parent.mkdir(parents=True)
+        page.write_text("{}\n")
+        root = self.call("v3_source_list", {"task_id": "list-task", "limit": 2})
+        self.assertIn("ui", [entry["path"] for entry in root["entries"]] +
+                      [entry["path"] for entry in self.call("v3_source_list",
+                        {"task_id": "list-task", "offset": 2})["entries"]])
+        listed = self.call("v3_source_list", {"task_id": "list-task",
+            "path": "ui/main-panel/builds"})
+        self.assertEqual([{"name": "page.json", "path": "ui/main-panel/builds/page.json",
+                           "kind": "file"}], listed["entries"])
+        self.assertEqual(self.call("v3_source_read", {"task_id": "list-task",
+            "path": "ui/main-panel/builds/page.json"})["workspace_inputs_sha256"],
+            listed["workspace_inputs_sha256"])
+        with self.assertRaisesRegex(ValueError, "use v3_source_list"):
+            self.call("v3_source_read", {"task_id": "list-task", "path": "ui/main-panel"})
+        with self.assertRaisesRegex(ValueError, "does not exist"):
+            self.call("v3_source_read", {"task_id": "list-task", "path": "ui/main-panel/index.html"})
+        for path in ("../ui", "data", "ui/../Cargo.toml"):
+            with self.assertRaisesRegex(ValueError, "denied"):
+                self.call("v3_source_list", {"task_id": "list-task", "path": path})
+        with self.assertRaisesRegex(ValueError, "open isolated task"):
+            self.call("v3_source_list", {"task_id": "another-task", "path": "ui"})
+        with self.assertRaisesRegex(ValueError, "not a directory"):
+            self.call("v3_source_list", {"task_id": "list-task", "path": "ui/main-panel/builds/page.json"})
 
     def test_isolated_source_read_is_task_scoped_and_bounded(self):
         task = self.call("v3_build_work", {"action": "begin", "task_id": "read-task",
@@ -824,6 +991,13 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(accepted["operator_adopted"])
         self.assertEqual("uncertain", self.broker.jobs[receipt["job_id"]]["status"])
         self.assertFalse(self.broker._has_unresolved_release())
+        dashboard = {"user_id": "admin", "session_id": "00000000-0000-0000-0000-000000000000",
+                     "lease_until": time.time() + 30, "access_fingerprint": "a" * 64}
+        recent = self.call("v3_build_dashboard", trusted=dashboard, workspace=dashboard["session_id"])
+        self.assertNotIn(receipt["job_id"], [job["job_id"] for job in recent["jobs"]])
+        retained = self.call("v3_build_result", {"job_id": receipt["job_id"]},
+                             trusted=dashboard, workspace=dashboard["session_id"])["job"]
+        self.assertEqual("uncertain", retained["status"])
         self.broker.shutdown()
         self.broker = host.Broker(self.state, self.runner)
         self.assertFalse(self.broker._has_unresolved_release())

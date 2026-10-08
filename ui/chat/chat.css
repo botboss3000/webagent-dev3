@@ -95,3 +95,5 @@ body.light .v3-config-bubble,[data-theme=light] .v3-config-bubble{background:var
 .voice-conversation-controls {display:flex;gap:8px;justify-content:center;margin-bottom:8px;}
 .voice-conversation-controls[hidden],.voice-conversation-caption[hidden] {display:none;}
 .voice-conversation-control {border:1px solid var(--border);border-radius:10px;background:var(--surface);color:inherit;padding:4px 10px;}
+.v3-message.system{align-items:center}
+.v3-message.system .message-content{max-width:min(90%,680px);font-size:13px;color:var(--fg-2);background:var(--bg-elev);text-align:center}

@@ -1,0 +1,7 @@
+{
+  "id": "session-metrics",
+  "label": "Session Metrics",
+  "order": 3,
+  "html": "session-metrics.html",
+  "css": ["session-metrics.css"]
+}

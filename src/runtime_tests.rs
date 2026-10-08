@@ -5593,3 +5593,47 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
     assert!(caller.tokens_for(&selection,&run).await.is_err());
     assert!(!caller.run_model_authorized(&run).await);
 }
+#[tokio::test]
+async fn run_logs_route_is_admin_authenticated_and_run_scoped() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let other = conversation(&app).await;
+    let rid = queued(&app, &sid).await;
+    let other_rid = queued(&app, &other).await;
+    let mut tx = app.store.pool.begin().await.unwrap();
+    app.store.insert_interaction(&mut tx,&sid,&rid,"step:1",
+        &json!({"type":"message","content":"selected private step"})).await.unwrap();
+    app.store.insert_interaction(&mut tx,&other,&other_rid,"step:1",
+        &json!({"type":"message","content":"foreign private step"})).await.unwrap();
+    tx.commit().await.unwrap();
+    let path = format!("/api/v3/sessions/{sid}/runs/{rid}/logs");
+    let request = |uri: &str, cookie: Option<&str>| {
+        let mut builder = Request::builder().uri(uri);
+        if let Some(cookie) = cookie { builder = builder.header("cookie", cookie); }
+        builder.body(Body::empty()).unwrap()
+    };
+    assert_eq!(router(app.clone()).oneshot(request(&path,None)).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED);
+    let cookie = ability_auth(&app).await;
+    assert_eq!(router(app.clone()).oneshot(request(
+        &format!("/api/v3/sessions/{other}/runs/{rid}/logs"),Some(&cookie)))
+        .await.unwrap().status(),StatusCode::NOT_FOUND);
+    assert_eq!(router(app.clone()).oneshot(request(&format!("{path}?after=-1"),Some(&cookie)))
+        .await.unwrap().status(),StatusCode::BAD_REQUEST);
+    let response=router(app.clone()).oneshot(request(&path,Some(&cookie))).await.unwrap();
+    assert_eq!(response.status(),StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"],"no-store");
+    let body:Value=serde_json::from_slice(&axum::body::to_bytes(response.into_body(),65536)
+        .await.unwrap()).unwrap();
+    assert_eq!(body["run_id"],rid);
+    assert!(body["events"].as_array().unwrap().iter().any(|event|
+        event["payload"]["content"]=="selected private step"));
+    assert!(body["events"].as_array().unwrap().iter().all(|event|
+        event["run_id"]==rid));
+    assert!(!body.to_string().contains("foreign private step"));
+    let next=router(app).oneshot(request(&format!("{path}?after={}",body["cursor"]),
+        Some(&cookie))).await.unwrap();
+    let page:Value=serde_json::from_slice(&axum::body::to_bytes(next.into_body(),65536)
+        .await.unwrap()).unwrap();
+    assert!(page["events"].as_array().unwrap().is_empty());
+}

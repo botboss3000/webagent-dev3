@@ -25,7 +25,8 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
                        "\nexcept PermissionError: result['control_write']=False"
                        f"\ntry: open('/proc/{app_pid}/environ','rb'); result['app_environ_access']=True"
                        "\nexcept PermissionError: result['app_environ_access']=False"
-                       "\nresult['source_access']=os.path.isdir('/live-checkout/app') and os.path.isdir('/live-checkout/v3')"
+                       "\nresult['source_access']=os.path.isfile('/live-checkout/Cargo.toml') and os.path.isdir('/live-checkout/src')"
+                       "\nresult['v2_source_access']=os.path.exists('/live-checkout/app') or os.path.exists('/live-checkout/v3')"
                        "\nresult['secret_env']=any(k.startswith('V3_ADMIN') for k in os.environ)"
                        "\nprint(json.dumps(result))")},
                    "timeout_seconds": 10}
@@ -37,8 +38,10 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["status"], "success", response)
         result = json.loads(response["output"])
         self.assertEqual(result["uid"], 1000)
-        self.assertEqual(result["groups"], [])
+        # launch.py retains the checkout group; application state stays inaccessible.
+        self.assertEqual(result["groups"], [1001])
         self.assertTrue(result["source_access"])
+        self.assertFalse(result["v2_source_access"])
         self.assertFalse(result["state_access"])
         self.assertFalse(result["control_write"])
         self.assertFalse(result["secret_env"])

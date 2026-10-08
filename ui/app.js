@@ -145,9 +145,15 @@ function updateMainPageState(){
 let csrf='',state={},poll;
 const ids=new Map();
 const keyId=key=>{if(!ids.has(key))ids.set(key,crypto.randomUUID());return ids.get(key);};
-const note=text=>{$('notice').textContent=text;};
+let noticeSource='';
+const note=(text,source='')=>{
+  const visibleText=text==='Sign in required'?'':text;
+  $('notice').textContent=visibleText;
+  noticeSource=visibleText?source:'';
+};
+const clearNoticeFrom=source=>{if(noticeSource===source)note('');};
 async function api(path,method='GET',body){const response=await fetch('/api/v3'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...(method==='GET'?{}:{'x-csrf-token':csrf})},...(body===undefined?{}:{body:JSON.stringify(body)})});const data=await response.json().catch(()=>({}));if(!response.ok){if(response.status===401)out();const error=Error(data.error||data.message||'Request failed ('+response.status+')');error.status=response.status;throw error;}return data;}
-const guard=fn=>async event=>{event?.preventDefault();try{await fn(event);note('');}catch(error){if(error.status===401&&error.message==='Sign in required'){note('');return;}note(error.message);}};
+const guard=fn=>async event=>{event?.preventDefault();try{await fn(event);note('');}catch(error){note(error.message);}};
 const chat = await mountChatPanel({request:api, guard, note, keyId, forgetKey:key=>ids.delete(key), refresh, getState:()=>state, getAgentId:()=>agentId, getIdentity:()=>accountMe});
 await loadMainPages();
 
@@ -197,7 +203,7 @@ function saveAgentTabs(){
 syncAgentTabs();
 wirePageTabDrag(document.querySelector('#agents-grid .agent-card-tabs'), { getOrder: () => agentTabOrder, save: saveAgentTabs, prefix: 'agent-tab-' });
 async function loadGuestPolicy(){try{const policy=await api('/auth/access-mode');$('guest-login').hidden=!policy.guest_access;document.querySelector('.private-access-approval').hidden=!!policy.guest_access;}catch{$('guest-login').hidden=true;}}
-$('guest-login').onclick=async()=>{const btn=$('guest-login');btn.disabled=true;try{const result=await api('/auth/guest-login','POST',{});csrf=result.csrf_token;note('');await boot();}catch(error){$('registration-status').textContent=error.message;}finally{btn.disabled=false;}};
+$('guest-login').onclick=async()=>{const btn=$('guest-login');btn.disabled=true;try{const result=await api('/auth/guest-login','POST',{});csrf=result.csrf_token;await boot();}catch(error){$('registration-status').textContent=error.message;}finally{btn.disabled=false;}};
 function out(){availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
 async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;$('shutoff').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}if(!$('rules').children.length)for(const [tool,rule]of Object.entries(state.policy?.rules||{})){const label=document.createElement('label');label.textContent=tool;const select=document.createElement('select');select.name=tool;for(const value of ['allow','deny','require_approval']){const option=document.createElement('option');option.value=value;option.textContent=value.replaceAll('_',' ');select.append(option);}select.value=rule;label.append(select);$('rules').append(label);}chat.runs(state.runs||[]);}
 // Explicit role administration replaces the legacy default-model form for every agent.
@@ -241,6 +247,7 @@ async function boot(){
       document.querySelector('.agent-card-name').textContent='WebAgent';
       try{selectionTable=await mountModels();}
       catch(fallbackError){error=fallbackError;selectionTable=null;}
+      if(selectionTable)note('Requested agent is unavailable. Showing WebAgent.');
     }
     if(!selectionTable){
       const warning=document.createElement('p');
@@ -256,10 +263,11 @@ async function boot(){
   const selected=items.find(item=>item.id===requested)||items[0];
   if(selected)await chat.open(selected.id,'replace');
   else if(requested){const route=new URL(location.href);route.searchParams.delete('session_id');history.replaceState({},'',route);}
+  if(requested&&requested!==selected?.id)note('Requested conversation is unavailable. Showing your latest conversation.');
   if(initialTab==='account')showAccountPanel('replace');
   window.__boot?.appReady();
   clearInterval(poll);
-  poll=setInterval(()=>refresh().catch(error=>note(error.message)),3000);
+  poll=setInterval(()=>refresh().then(()=>clearNoticeFrom('status-poll')).catch(error=>note(error.message,'status-poll')),3000);
 }
 // Registration mirrors V2's mode switch; V3 retains independent cookie authentication.
 let registerMode=false;
@@ -289,7 +297,7 @@ $('login-form').onsubmit=async event=>{
       $('registration-status').textContent='Account created and waiting for administrator approval.';
       return;
     }
-    csrf=result.csrf_token;$('login-form').reset();note('');await boot();
+    csrf=result.csrf_token;$('login-form').reset();await boot();
     $('registration-status').textContent='';
   }catch(error){$('registration-status').textContent=error.message;}
   finally{submit.disabled=false;}
@@ -369,7 +377,7 @@ async function loadAccountControls(){
       const revoke=document.createElement('button');revoke.type='button';
       revoke.textContent=entry.current?'Sign out':'Revoke';revoke.onclick=async()=>{
         await api('/auth/sessions/'+encodeURIComponent(entry.id),'DELETE');
-        if(entry.current){out();}else await loadAccountControls();
+        if(entry.current){out();note('Signed out.');}else await loadAccountControls();
       };
       revoke.className='account-btn';row.append(details,revoke);list.append(row);
     }

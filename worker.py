@@ -1007,7 +1007,7 @@ def file_operation(request, base, args, name):
                                 break
                             names.append(entry.name)
                     for entry in sorted(names):
-                        if depth == 0 and raw == "/live-checkout/v3" and entry in {
+                        if depth == 0 and raw in {"/live-checkout", "/live-checkout/v3"} and entry in {
                                 "build-jobs", "workspaces", "target", "v2_ref", "data",
                                 "rollback", "runtime", "gate-runtime", "host-build-service"}:
                             continue

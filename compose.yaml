@@ -2,9 +2,6 @@ services:
   app:
     container_name: webagent-dev-v3
     image: webagent-dev-v3:local
-    build:
-      context: ..
-      dockerfile: v3/Dockerfile
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
@@ -18,7 +15,7 @@ services:
     volumes:
       - ./data:/state
       - ./workspaces:/workspaces
-      - ..:/live-checkout
+      - .:/live-checkout
     tmpfs:
       - /run:rw,nosuid,nodev,size=16m
       - /tmp:rw,nosuid,nodev,size=32m

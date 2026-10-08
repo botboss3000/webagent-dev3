@@ -73,6 +73,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/control", put(control))
         .route("/file-manager", post(file_manager::action))
         .route("/admin/builds", get(build_dashboard::list))
+        .route("/admin/builds/{job_id}/result", get(build_dashboard::result))
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth));
     // Model handlers enforce tenant authority themselves; all retain browser auth and CSRF.
     let api = Router::new()

@@ -1,0 +1,14 @@
+.session-metrics-page { padding: 1.25rem; min-width: 0; }
+.session-metrics-header { margin-bottom: 1rem; }
+.session-metrics-header h1 { margin: 0 0 .4rem; }
+.session-metrics-header p { margin: 0; color: var(--text-muted, #888); }
+.session-metrics-table-wrap { max-width: 100%; overflow: auto; border: 1px solid var(--border-color, #444); border-radius: .5rem; }
+.session-metrics-table-wrap table { border-collapse: collapse; white-space: nowrap; width: max-content; min-width: 100%; font-size: .875rem; }
+.session-metrics-table-wrap th, .session-metrics-table-wrap td { padding: .65rem .8rem; text-align: left; border-bottom: 1px solid var(--border-color, #444); }
+.session-metrics-table-wrap th { position: sticky; top: 0; background: var(--surface-color, #222); }
+.session-metrics-table-wrap tbody tr:last-child td { border-bottom: 0; }
+.session-metrics-table-wrap .sample-row-label { font-weight: 600; color: var(--text-muted, #888); background: var(--surface-color, #222); }
+.session-metrics-defs { margin-top: 1.25rem; max-width: 62rem; }
+.session-metrics-defs h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
+.session-metrics-defs dt { font-weight: 600; margin-top: .55rem; }
+.session-metrics-defs dd { margin: .15rem 0 0 1rem; color: var(--text-muted, #888); }

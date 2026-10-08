@@ -25,7 +25,8 @@ import sys
 import time
 import uuid
 
-V3 = Path("/home/ar/webagent-dev2/v3")
+V3 = Path("/home/ar/webagent-dev3")
+SHARED_SOURCE = Path("/home/ar/webagent-dev2")
 SOURCE = V3 / "plugins/abilities/Administrator/v3_build"
 SERVICE = V3 / "host-build-service"
 RUNTIME = V3 / "runtime/build"
@@ -296,7 +297,7 @@ def archive_rollbacks():
 
 def snapshot_context(context):
     root_only()
-    origin = directory(V3.parent)
+    origin = directory(V3)
     stream = io.BytesIO()
     total = count = 0
     try:
@@ -308,8 +309,10 @@ def snapshot_context(context):
                     raise ValueError("runtime data outside gate allowlist")
                 if name.startswith(("v3/workspaces/", "v3/build-jobs/", "v3/rollback/", "v3/runtime/", "v3/target/")):
                     raise ValueError("runtime directory rejected")
-                parent_path, leaf = str(Path(name).parent), Path(name).name
-                parent = directory(V3.parent / parent_path)
+                # Preserve archive names while reading V3 from its independent root.
+                source = V3 / name.removeprefix("v3/") if name.startswith("v3/") else SHARED_SOURCE / name
+                parent_path, leaf = source.parent, source.name
+                parent = directory(parent_path)
                 try:
                     info = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
                     if stat.S_ISDIR(info.st_mode):
@@ -596,12 +599,33 @@ def start():
         os.close(service)
 
 
+def snapshot():
+    """Export only the installed broker's fixed build allowlist."""
+    root_only()
+    if Path(__file__).resolve() != SERVICE / "bootstrap.py":
+        raise PermissionError("snapshot only through installed protected bootstrap")
+    service = directory(SERVICE)
+    try:
+        body = read_regular(service, "host.py", 2 * 1024 * 1024, owner=0)
+        tree = ast.parse(body)
+        context = next(ast.literal_eval(node.value) for node in tree.body
+            if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
+            and target.id == "CONTEXT" for target in node.targets))
+        return snapshot_context(context)
+    finally:
+        os.close(service)
+
+
 def main():
     parser = argparse.ArgumentParser()
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--install", action="store_true")
     actions.add_argument("--start", action="store_true")
+    actions.add_argument("--snapshot", action="store_true")
     args = parser.parse_args()
+    if args.snapshot:
+        sys.stdout.buffer.write(snapshot())
+        return
     result = install() if args.install else start()
     # Only content-free hashes/PIDs; no container environment or credentials.
     print(json.dumps(result, sort_keys=True))

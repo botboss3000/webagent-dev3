@@ -1222,7 +1222,7 @@ impl Store {
             })
             .collect()
     }
-    async fn insert_interaction(
+    pub(crate) async fn insert_interaction(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         sid: &str,

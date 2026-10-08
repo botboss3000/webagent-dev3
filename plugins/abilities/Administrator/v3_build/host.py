@@ -29,10 +29,10 @@ import time
 import uuid
 from urllib.parse import quote
 
-SOURCE = Path("/home/ar/webagent-dev2")
-STATE = SOURCE / "v3/build-jobs"
-SOCKET = SOURCE / "v3/runtime/build/build.sock"
-BRIDGE_SOCKET = SOURCE / "v3/runtime/build/python.sock"
+SOURCE = Path("/home/ar/webagent-dev3")
+STATE = SOURCE / "build-jobs"
+SOCKET = SOURCE / "runtime/build/build.sock"
+BRIDGE_SOCKET = SOURCE / "runtime/build/python.sock"
 BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
 CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
@@ -57,7 +57,7 @@ MAX_CONTEXT = 128 * 1024 * 1024
 MIN_DEPLOY_FREE = 8 * 1024 * 1024 * 1024
 MIN_SEQUENCE_FREE = 16 * 1024 * 1024 * 1024
 
-_release_file = (SOURCE / "v3/host-build-service/release.py"
+_release_file = (SOURCE / "host-build-service/release.py"
                  if str(__file__).startswith("/proc/self/fd/") else Path(__file__).with_name("release.py"))
 _release_spec = importlib.util.spec_from_file_location(
     "v3_build_release", _release_file)
@@ -141,11 +141,80 @@ def source_git(root, arguments, patch):
     return result.stdout
 
 
+def validate_source_hunks(patch):
+    """Report malformed hunk counts before Git can hide the useful location."""
+    path = "unknown source"
+    lines = patch.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.startswith("diff --git "):
+            path = scrub(line.split(" b/", 1)[-1])[:240]
+        if not line.startswith("@@ "):
+            index += 1
+            continue
+        match = re.match(r"@@ -[0-9]+(?:,([0-9]+))? \+[0-9]+(?:,([0-9]+))? @@", line)
+        if not match:
+            raise ValueError(f"source patch malformed hunk header in {path}")
+        expected_old = int(match.group(1) or 1)
+        expected_new = int(match.group(2) or 1)
+        old_count = new_count = 0
+        index += 1
+        while index < len(lines) and not lines[index].startswith(("diff --git ", "@@ ")):
+            body = lines[index]
+            if body.startswith("+"):
+                new_count += 1
+            elif body.startswith("-"):
+                old_count += 1
+            elif body.startswith(" "):
+                old_count += 1
+                new_count += 1
+            elif body == "\\ No newline at end of file":
+                pass
+            else:
+                raise ValueError(f"source patch malformed line in {path} after hunk {line[:80]}")
+            index += 1
+        if (old_count, new_count) != (expected_old, expected_new):
+            raise ValueError(
+                f"source patch hunk count in {path}: header declares "
+                f"-{expected_old}/+{expected_new} lines; body has -{old_count}/+{new_count}")
+
+
+def prepare_new_source_files(files):
+    """Generate exact Git hunks for bounded new text files; do not edit source."""
+    if not isinstance(files, list) or not 1 <= len(files) <= 8:
+        raise ValueError("prepare requires one to eight new files")
+    parts = []
+    seen = set()
+    total = 0
+    for entry in files:
+        if not isinstance(entry, dict) or set(entry) != {"path", "content"}:
+            raise ValueError("prepare entries require path and content")
+        name, content = entry["path"], entry["content"]
+        if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*", name)
+                or any(part in (".", "..") for part in name.split("/")) or name in seen):
+            raise ValueError("prepare source path denied")
+        if (not isinstance(content, str) or not content or not content.endswith("\n")
+                or "\0" in content or "\r" in content):
+            raise ValueError("prepare content must be nonempty LF-terminated text")
+        total += len(content.encode("utf-8"))
+        if total > 16000:
+            raise ValueError("prepare text exceeds 16000-byte bound")
+        seen.add(name)
+        lines = content.split("\n")[:-1]
+        parts.append(f"diff --git a/{name} b/{name}\nnew file mode 100644\n"
+                     f"--- /dev/null\n+++ b/{name}\n@@ -0,0 +1,{len(lines)} @@\n"
+                     + "".join("+" + line + "\n" for line in lines))
+    return "".join(parts)
+
+
 def source_patch_text_counts(patch):
     """Count all text changes, including lines Git would ignore after a short hunk."""
     added = removed = 0
     in_hunk = False
-    for line in patch.splitlines():
+    for line in patch.split("\n"):
         if line.startswith("diff --git "):
             in_hunk = False
         elif line.startswith("@@ "):
@@ -161,6 +230,10 @@ def inspect_source_patch(root, patch):
     """Confine a checked text diff to V3 source; proposals stay separate until here."""
     if not root.is_dir() or root.is_symlink() or root.stat().st_uid != 1000:
         raise ValueError("live V3 checkout unavailable")
+    if patch.startswith("*** Begin Patch"):
+        raise ValueError("source patch must be a Git unified diff starting with diff --git; apply_patch markers are unsupported")
+    if not patch.startswith("diff --git a/"):
+        raise ValueError("source patch must start with diff --git a/<V3-relative-path> b/<V3-relative-path>")
     if any(line.startswith(("GIT binary patch", "Binary files ", "rename from ",
                             "rename to ", "copy from ", "copy to "))
            for line in patch.splitlines()):
@@ -169,6 +242,7 @@ def inspect_source_patch(root, patch):
         if line.startswith(("new file mode ", "deleted file mode ", "old mode ", "new mode ")):
             if line.rsplit(" ", 1)[-1] not in ("100644", "100755"):
                 raise ValueError("unsupported source file mode")
+    validate_source_hunks(patch)
     encoded = patch.encode()
     output = source_git(root, ["apply", "--numstat", "-z", "-"], encoded)
     records = [part for part in output.split(b"\0") if part]
@@ -210,7 +284,9 @@ def inspect_source_patch(root, patch):
         paths.append(name)
     if (counted_added, counted_removed) != source_patch_text_counts(patch):
         raise ValueError("source patch hunk line counts mismatch")
-    source_git(root, ["apply", "--check", "--whitespace=error", "-"], encoded)
+    # Check and execution must accept the same zero-context hunks; the digest
+    # and old text still bind each edit to the reviewed task snapshot.
+    source_git(root, ["apply", "--check", "--unidiff-zero", "--whitespace=error", "-"], encoded)
     return paths
 
 
@@ -271,7 +347,7 @@ class Runner:
     def __init__(self, source=SOURCE, snapshot_helper=None, snapshot_socket=None):
         self.source, self.snapshot_helper = Path(source), snapshot_helper
         self.secrets = []
-        self.snapshot_socket = snapshot_socket
+        self.snapshot_socket = snapshot_socket or str(SOURCE / "host-build-service/snapshot.sock")
         self.cancel = threading.Event()
 
     def command(self, argv, stdin=None, timeout=3600, output_file=None, private_raw=False):
@@ -368,10 +444,10 @@ class Runner:
         return blob
 
     def promote_checkout(self, before, after, changed):
-        return release.promote_checkout(self.source, before, after, changed, context_digest)
+        return release.promote_checkout(self.source, before, after, changed, context_digest, standalone=True)
 
     def checkout_matches(self, blob, changed):
-        return release.checkout_matches(self.source, blob, changed, context_digest)
+        return release.checkout_matches(self.source, blob, changed, context_digest, standalone=True)
 
     def stage_assets(self, blob, job_id):
         return release.stage_assets(ASSET_ROOT, job_id, blob, context_digest)
@@ -823,6 +899,20 @@ class Broker:
             view["reason"] = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
         return view | {"log": tail, "log_truncated": len(raw) > PUBLIC_LOG, "log_bytes": len(raw)}
 
+    def _rust_test_result(self, job):
+        if job.get("rust_tests"):
+            return job["rust_tests"]
+        if job["operation"] == "ui_deploy":
+            return {"status": "not_required",
+                    "summary": "UI assets only; no Rust build or tests required"}
+        if job["status"] == "completed" and job.get("images", {}).get("api"):
+            return {"status": "passed",
+                    "summary": "Confirmed by successful tested API image; detailed test output was not retained"}
+        if job["status"] in ("queued", "running"):
+            return {"status": "not_started"}
+        return {"status": "unavailable",
+                "summary": "Structured test result was not recorded; inspect the failure reason"}
+
     def _lease(self, job):
         if job.get("revoked") or job.get("lease_until", 0) <= time.time():
             raise PermissionError("host job authorization expired or revoked; no automatic replay")
@@ -963,7 +1053,9 @@ class Broker:
                 self._incoming_lease(trusted)
                 tasks = {item.get("job_id"): item for item in self.work.values() if item.get("job_id")}
                 jobs = []
-                for job in sorted(self.jobs.values(), key=lambda row: row["created_at"], reverse=True)[:20]:
+                # Adopted releases remain addressable by ID but are no longer pending in the queue.
+                recent = (job for job in self.jobs.values() if not job.get("operator_adopted_at"))
+                for job in sorted(recent, key=lambda row: row["created_at"], reverse=True)[:20]:
                     view = self._view(job)
                     view.pop("access_fingerprint", None)
                     view["log"] = view["log"][-2048:]
@@ -1001,6 +1093,26 @@ class Broker:
                     except Exception:
                         containers[role] = {"state": "unavailable", "health": "unknown"}
                 return {"jobs": jobs, "busy": self.active is not None or self.active_ui is not None, "containers": containers}
+            if name == "v3_build_result":
+                if (trusted["user_id"] != "admin"
+                        or workspace != "00000000-0000-0000-0000-000000000000"
+                        or set(args) != {"job_id"}
+                        or not isinstance(args["job_id"], str)
+                        or not re.fullmatch(r"[0-9a-f-]{36}", args["job_id"])):
+                    raise PermissionError("administrator build result denied")
+                self._incoming_lease(trusted)
+                job = self.jobs.get(args["job_id"])
+                if job is None:
+                    return {"job": None}
+                # Return a single durable job, including older jobs outside the
+                # dashboard's 20-row window; never expose its host lease.
+                view = self._view(job)
+                view.pop("access_fingerprint", None)
+                view["started_at"] = job.get("started_at")
+                view["finished_at"] = job.get("finished_at")
+                view["phase_history"] = job.get("phase_history", [])[-32:]
+                view["rust_tests"] = self._rust_test_result(job)
+                return {"job": view}
             if name in ("administrator_host_lease", "administrator_host_revoke"):
                 if args:
                     raise ValueError("internal lease control takes no arguments")
@@ -1129,6 +1241,67 @@ class Broker:
                                 if len(matches) >= limit:
                                     return {"task_id": task_id, "matches": matches, "truncated": True}
                 return {"task_id": task_id, "matches": matches, "truncated": False}
+            if name == "v3_source_list":
+                if set(args) - {"task_id", "path", "offset", "limit"} or "task_id" not in args:
+                    raise ValueError("source list requires task_id and optional directory path")
+                task_id, name_path = args["task_id"], args.get("path", "")
+                offset, limit = args.get("offset", 0), args.get("limit", 100)
+                if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", task_id):
+                    raise ValueError("bounded task ID required")
+                if not isinstance(name_path, str) or len(name_path) > 240:
+                    raise ValueError("bounded source directory path required")
+                parts = name_path.split("/") if name_path else []
+                allowed_dirs = {"src", "plugins", "tests", "ui", "docs", "config"}
+                allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
+                                 ".gitignore", "README.md", "deploy.sh", "launch.py",
+                                 "worker.py", "sandbox.py", "promote.py", "ui-baseline.json"}
+                if (name_path and (not re.fullmatch(r"[A-Za-z0-9_./-]+", name_path)
+                        or any(part in ("", ".", "..") for part in parts)
+                        or parts[0] not in allowed_dirs)):
+                    raise ValueError("source list path denied")
+                if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
+                    raise ValueError("bounded source list page required")
+                key = hashlib.sha256(canonical([trusted["user_id"], workspace, task_id])).hexdigest()
+                item = self.work.get(key)
+                if not item or item.get("mode") != "isolated" or item["status"] != "open":
+                    raise ValueError("open isolated task required")
+                root = self.work_dir / "trees" / key
+                source_root = root / "v3"
+                source = source_root
+                for part in parts:
+                    source = source / part
+                    if source.is_symlink():
+                        raise ValueError("source list path denied")
+                if not source.exists():
+                    raise ValueError("source directory does not exist")
+                if not source.is_dir() or not source.resolve().is_relative_to(source_root.resolve()):
+                    raise ValueError("source path is not a directory")
+                # The broker task owns these files; session workspace seeding is unrelated.
+                entries = []
+                for child in source.iterdir():
+                    if child.is_symlink():
+                        continue
+                    relative = child.relative_to(source_root).as_posix()
+                    if not parts and child.name not in allowed_dirs | allowed_files:
+                        continue
+                    if not re.fullmatch(r"[A-Za-z0-9_./-]{1,240}", relative):
+                        continue
+                    if child.is_dir():
+                        kind = "directory"
+                    elif child.is_file():
+                        kind = "file"
+                    else:
+                        continue
+                    entries.append({"name": child.name, "path": relative, "kind": kind})
+                    if len(entries) > 3000:
+                        raise ValueError("source directory exceeds entry bound")
+                entries.sort(key=lambda entry: entry["name"])
+                page = entries[offset:offset + limit]
+                return {"task_id": task_id, "path": name_path, "entries": page,
+                        "offset": offset, "next_offset": offset + len(page),
+                        "has_more": offset + len(page) < len(entries),
+                        "workspace_inputs_sha256": context_digest(
+                            release.snapshot(root, CONTEXT, context_digest))[0]}
             if name == "v3_source_read":
                 if set(args) - {"task_id", "path", "offset", "limit"} or not {"task_id", "path"} <= set(args):
                     raise ValueError("source read requires task_id and path")
@@ -1149,7 +1322,13 @@ class Broker:
                     raise ValueError("open isolated task required")
                 root = self.work_dir / "trees" / key
                 source = root / "v3" / name_path
-                if source.is_symlink() or not source.is_file() or not source.resolve().is_relative_to((root / "v3").resolve()):
+                if source.is_symlink() or not source.resolve().is_relative_to((root / "v3").resolve()):
+                    raise ValueError("source file unavailable")
+                if source.is_dir():
+                    raise ValueError("source path is a directory; use v3_source_list")
+                if not source.exists():
+                    raise ValueError("source file does not exist")
+                if not source.is_file():
                     raise ValueError("source file unavailable")
                 data = source.read_bytes()
                 if len(data) > 1024 * 1024 or b"\0" in data:
@@ -1171,16 +1350,58 @@ class Broker:
                 if not receipt:
                     raise ValueError("source receipt unavailable")
                 return dict(receipt)
-            if name == "v3_source_apply":
-                if set(args) != {"task_id", "request_id", "patch", "expected_inputs_sha256"}:
-                    raise ValueError("bridge source apply request denied")
+            if name == "v3_source_prepare":
+                if set(args) != {"task_id", "files", "expected_inputs_sha256"}:
+                    raise ValueError("source prepare requires task_id, files and input digest")
+                task_id = args["task_id"]
+                if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", task_id):
+                    raise ValueError("bounded task ID required")
+                item = self.work.get(hashlib.sha256(canonical(
+                    [trusted["user_id"], workspace, task_id])).hexdigest())
+                if not item or item["status"] != "open" or item.get("mode") != "isolated":
+                    raise ValueError("open isolated task required")
+                tree = self.work_dir / "trees" / item["key"]
+                current, _ = context_digest(release.snapshot(tree, CONTEXT, context_digest))
+                if current != args["expected_inputs_sha256"]:
+                    raise ValueError("stale source inputs")
+                patch = prepare_new_source_files(args["files"])
+                if any((tree / "v3" / entry["path"]).exists() for entry in args["files"]):
+                    raise ValueError("prepare accepts only new files")
+                paths = inspect_source_patch(tree / "v3", patch)
+                prepared = item.setdefault("prepares", {})
+                if len(prepared) >= 8:
+                    raise ValueError("task has too many prepared patches")
+                prepared_id = uuid.uuid4().hex
+                prepared[prepared_id] = {"patch": patch, "inputs_sha256": current,
+                                         "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(),
+                                         "paths": paths}
+                self._save_work()
+                return {"task_id": task_id, "prepared_id": prepared_id, "patch": patch,
+                        "patch_sha256": prepared[prepared_id]["patch_sha256"],
+                        "paths": paths, "workspace_inputs_sha256": current}
+            if name in ("v3_source_apply", "v3_source_apply_prepared"):
+                # Distinct model schemas converge on one checked, receipted broker write.
+                required = ({"task_id", "request_id", "prepared_id", "expected_inputs_sha256"}
+                            if name == "v3_source_apply_prepared" else
+                            {"task_id", "request_id", "patch", "expected_inputs_sha256"})
+                if set(args) != required:
+                    raise ValueError("source apply arguments do not match tool")
                 task_id, request_id = args["task_id"], args["request_id"]
                 if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", task_id) or not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", request_id):
                     raise ValueError("bounded task and request IDs required")
                 item = self.work.get(hashlib.sha256(canonical([trusted["user_id"], workspace, task_id])).hexdigest())
                 if not item or item["status"] != "open":
                     raise ValueError("registered open bridge task required")
-                patch = args["patch"]
+                if name == "v3_source_apply_prepared":
+                    prepared_id = args["prepared_id"]
+                    if not isinstance(prepared_id, str) or not re.fullmatch(r"[0-9a-f]{32}", prepared_id):
+                        raise ValueError("bounded prepared_id required")
+                    prepared = item.get("prepares", {}).get(prepared_id)
+                    if not prepared or prepared["inputs_sha256"] != args["expected_inputs_sha256"]:
+                        raise ValueError("prepared patch unavailable or stale")
+                    patch = prepared["patch"]
+                else:
+                    patch = args["patch"]
                 if not isinstance(patch, str) or not 0 < len(patch.encode()) <= 1024 * 1024:
                     raise ValueError("bounded text patch required")
                 digest = hashlib.sha256(canonical(args)).hexdigest()
@@ -1205,7 +1426,7 @@ class Broker:
                 item["applies"][request_id] = receipt
                 self._save_work()
                 try:
-                    source_git(source, ["apply", "--whitespace=error", "-"], patch.encode())
+                    source_git(source, ["apply", "--unidiff-zero", "--whitespace=error", "-"], patch.encode())
                 except Exception:
                     receipt.update(status="uncertain", reason="source apply outcome requires review")
                 else:
@@ -1713,7 +1934,7 @@ async def serve(broker, listener, bridge_listener=None):
                 raise ValueError("bounded request required")
             request = json.loads(raw)
             if bridge:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_apply", "v3_source_receipt", "v3_source_read", "v3_source_read_batch", "v3_source_search", "v3_cargo_task"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task"):
                     raise ValueError("bridge operation denied")
                 request["workspace"] = BRIDGE_WORKSPACE
                 request["trusted"] = {"user_id": "python-v2-admin", "session_id": BRIDGE_WORKSPACE,
@@ -1721,7 +1942,7 @@ async def serve(broker, listener, bridge_listener=None):
                     "access_fingerprint": hashlib.sha256(b"python-v2-build-bridge").hexdigest(),
                     "bridge_caller": True}
             elif uid == 1000:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_apply", "v3_source_receipt", "v3_source_read", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": "codex-local", "session_id": LOCAL_WORKSPACE,

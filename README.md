@@ -22,7 +22,8 @@ approval and a fresh revision.
 
 
 Independent Rust agent runtime, subscription provider adapter, and isolated Python tool worker.
-Source lives here within the primary development checkout; v2 remains independently available.
+Source lives independently at `/home/ar/webagent-dev3`; v2 remains at `/home/ar/webagent-dev2`.
+Build archives retain virtual `v3/` paths for existing release receipts. See [the root migration](docs/root-migration.md).
 
 New to this codebase? Start with the
 [plain-language code tour](docs/code-tour.md), then use the sections below
@@ -33,12 +34,12 @@ for deployment and API details.
 On the development server:
 
 ```sh
-sh /home/ar/webagent-dev2/v3/deploy.sh build
-sh /home/ar/webagent-dev2/v3/deploy.sh build-loop
-sh /home/ar/webagent-dev2/v3/gate-deploy.sh build
-sh /home/ar/webagent-dev2/v3/deploy.sh start
-sh /home/ar/webagent-dev2/v3/gate-deploy.sh start
-sh /home/ar/webagent-dev2/v3/deploy.sh start-loop
+sh /home/ar/webagent-dev3/deploy.sh build
+sh /home/ar/webagent-dev3/deploy.sh build-loop
+sh /home/ar/webagent-dev3/gate-deploy.sh build
+sh /home/ar/webagent-dev3/deploy.sh start
+sh /home/ar/webagent-dev3/gate-deploy.sh start
+sh /home/ar/webagent-dev3/deploy.sh start-loop
 curl -fsS http://100.112.23.15:8081/health/ready
 ```
 
@@ -246,6 +247,8 @@ The Rust changes require a rebuild and authorized development deployment before
 live databases receive the migration; no deployment is performed by the tests.
 
 ## Direct messaging API
+
+For the authenticated session, run, approval, and build routes, see [V3 orchestration API](docs/orchestration-api.md).
 
 The narrowly scoped `/api/v3/admin/messaging` API accepts an administrator machine
 credential without a browser cookie or CSRF token. All other admin routes retain
@@ -663,9 +666,9 @@ reply; there is no separate downstream delivery consumer in this phase.
 Build the images independently on the development server:
 
 ```sh
-sh /home/ar/webagent-dev2/v3/deploy.sh build
-sh /home/ar/webagent-dev2/v3/deploy.sh build-loop
-sh /home/ar/webagent-dev2/v3/gate-deploy.sh build
+sh /home/ar/webagent-dev3/deploy.sh build
+sh /home/ar/webagent-dev3/deploy.sh build-loop
+sh /home/ar/webagent-dev3/gate-deploy.sh build
 ```
 
 For a new installation, start the API first so its control and worker sockets

@@ -728,11 +728,11 @@ impl Catalog {
     ) -> Vec<Value> {
         let mut schemas = vec![
             json!({"type":"function","name":"list_abilities",
-                "description":"Search permitted abilities by task words, ability names or tool names; use an empty query to list all.",
+                "description":"Search permitted abilities by task words, ability names or tool names; use an empty query to list all. Results are full ability records and can be large: prefer a few task words over an empty query, and when you only need to rank candidate tools, use search_tools instead.",
                 "parameters":{"type":"object","properties":{"query":{"type":"string"}},
                     "required":[],"additionalProperties":false}}),
             json!({"type":"function","name":"load_ability",
-                "description":"Load an ability by ID and read its skill and tool guidance.",
+                "description":"Load an ability by ID and read its skill and tool guidance. This returns the ability's main skill plus every tool skill in one large payload; when you need only one tool's guidance, prefer list_skills to see the ability's entries, then load_skill with kind \"tool\" for just that tool.",
                 "parameters":{"type":"object","properties":{"ability_id":{"type":"string"}},
                     "required":["ability_id"],"additionalProperties":false}}),
         ];

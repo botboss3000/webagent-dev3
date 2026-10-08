@@ -8,3 +8,15 @@
 /build-jobs/
 /host-build-service/
 /rollback/
+
+# These rules were inherited from V2 before the checkout was separated.
+__pycache__/
+*.py[cod]
+.env
+provider.json
+bootstrap.json
+bootstrap.applied.json
+app-settings.json
+.venv/
+node_modules/
+*.log

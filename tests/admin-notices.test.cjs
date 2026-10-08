@@ -52,6 +52,8 @@ test('dedicated DOM renderer never overwrites chat connection errors or uses HTM
 });
 test('chat client clears timer and stale EventSource epoch while preserving note callbacks',async()=>{
  const ctx=load(),notes=[],timer=timers(),sources=[];class Events{constructor(){sources.push(this);}close(){this.closed=true;}}
+ const classes=new Set(),button={title:'Toggle chat panel',classList:{toggle:(name,on)=>on?classes.add(name):classes.delete(name)}};
+ ctx.document={getElementById:id=>id==='chat-toggle-btn'?button:null};
  ctx.EventSource=Events;
  ctx.createAdministratorNotices=args=>load().createAdministratorNotices({...args,...timer,render:()=>{}});
  const clientSource=fs.readFileSync(path.join(__dirname,'../ui/chat/core/client.js'),'utf8')
@@ -59,7 +61,9 @@ test('chat client clears timer and stale EventSource epoch while preserving note
  vm.runInContext(clientSource,ctx);
  const client=ctx.createChatClient({request:async url=>url.endsWith('/administrator/notices')?{notice:null}:{last_seq:0},
  note:text=>notes.push(text),EventSourceClass:Events});
- await client.open('first',()=>{},()=>{});sources[0].onerror();assert.equal(notes.at(-1),'Connection interrupted. Reconnecting…');
- await client.open('second',()=>{},()=>{});const count=notes.length;sources[0].onopen();assert.equal(notes.length,count);
- sources[1].onopen();assert.equal(notes.at(-1),'');assert.equal(timer.size(),1);client.disconnect();assert.equal(timer.size(),0);
+ await client.open('first',()=>{},()=>{});assert(classes.has('connection-connecting'));sources[0].onopen();assert(!classes.has('connection-connecting'));
+ sources[0].onerror();assert(classes.has('connection-connecting'));assert.equal(notes.length,0);
+ await client.open('second',()=>{},()=>{});sources[0].onopen();assert(classes.has('connection-connecting'));
+ sources[1].onopen();assert(!classes.has('connection-connecting'));assert.equal(button.title,'Toggle chat panel');
+ assert.equal(timer.size(),1);client.disconnect();assert(!classes.has('connection-connecting'));assert.equal(timer.size(),0);
 });

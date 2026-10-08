@@ -30,6 +30,33 @@ export function mountBuilds(panel, onStatus = () => {}) {
   let stopped = false;
   let loading = false;
   let snapshot = {jobs: [], containers: {}};
+  const dismissedKey = 'v3-builds-dismissed-job-ids';
+  const readDismissed = () => {
+    try { return new Set(JSON.parse(localStorage.getItem(dismissedKey) || '[]')); }
+    catch { return new Set(); }
+  };
+  let dismissed = readDismissed();
+  const enabledStatuses = new Map();
+  const filters = document.createElement('div');
+  filters.className = 'build-filters';
+  filters.setAttribute('aria-label', 'Filter builds by status');
+  const clear = document.createElement('select');
+  clear.setAttribute('aria-label', 'Clear finished builds from this view');
+  for (const [value, label] of [['completed', 'Clear completed'], ['failed-cancelled', 'Clear failed & cancelled'], ['all', 'Clear all finished']]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    clear.append(option);
+  }
+  const clearButton = document.createElement('button');
+  clearButton.type = 'button';
+  clearButton.textContent = 'Clear';
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.textContent = 'Reset view';
+  const controls = document.createElement('div');
+  controls.className = 'build-clear-controls';
+  controls.append(clear, clearButton, reset);
   panel.replaceChildren();
   const header = document.createElement('div');
   header.className = 'build-header';
@@ -51,7 +78,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
   list.className = 'build-list';
   list.setAttribute('aria-label', 'Recent development builds');
   header.append(intro, update);
-  panel.append(header, status, list);
+  panel.append(header, status, filters, controls, list);
 
   const fact = (facts, label, value) => {
     const item = document.createElement('div');
@@ -65,20 +92,50 @@ export function mountBuilds(panel, onStatus = () => {}) {
   };
   function render() {
     const jobs = snapshot.jobs;
+    const statuses = [...new Set(jobs.map(job => String(job.status || 'unknown')))].sort();
+    for (const statusName of statuses) if (!enabledStatuses.has(statusName)) enabledStatuses.set(statusName, true);
+    for (const statusName of [...enabledStatuses.keys()]) if (!statuses.includes(statusName)) enabledStatuses.delete(statusName);
+    filters.replaceChildren();
+    for (const statusName of statuses) {
+      const label = document.createElement('label');
+      const chip = document.createElement('input');
+      chip.type = 'checkbox';
+      chip.checked = enabledStatuses.get(statusName) !== false;
+      chip.addEventListener('change', () => { enabledStatuses.set(statusName, chip.checked); render(); });
+      label.append(chip, document.createTextNode(' ' + phaseLabel(statusName)));
+      filters.append(label);
+    }
+    const persistDismissed = () => { try { localStorage.setItem(dismissedKey, JSON.stringify([...dismissed])); } catch {} };
+    clearButton.onclick = () => {
+      const mode = clear.value;
+      for (const job of jobs) {
+        const terminal = job.status === 'completed' || stoppedStatuses.has(job.status);
+        const match = mode === 'completed' ? job.status === 'completed'
+          : mode === 'failed-cancelled' ? ['failed', 'cancelled'].includes(job.status) : terminal;
+        if (match) dismissed.add(job.job_id);
+      }
+      persistDismissed(); render();
+    };
+    reset.onclick = () => {
+      dismissed.clear(); persistDismissed();
+      for (const statusName of statuses) enabledStatuses.set(statusName, true);
+      render();
+    };
     const linkedId = new URL(location.href).searchParams.get('job_id');
     list.replaceChildren();
-    if (!jobs.length) {
+    const visibleJobs = jobs.filter(job => !dismissed.has(job.job_id) && enabledStatuses.get(String(job.status || 'unknown')) !== false);
+    if (!visibleJobs.length) {
       status.textContent = 'No development builds recorded.';
       return;
     }
-    status.textContent = snapshot.busy ? 'A development build is active.' : jobs.length + ' recent builds';
+    status.textContent = snapshot.busy ? 'A development build is active.' : visibleJobs.length + ' recent builds';
     if (linkedId && !jobs.some(job => job.job_id === linkedId)) {
       const notice = document.createElement('p');
       notice.className = 'build-missing';
       notice.textContent = 'The linked job is outside the recent build list.';
       list.append(notice);
     }
-    for (const job of jobs) {
+    for (const job of visibleJobs) {
       const card = document.createElement('article');
       card.className = 'build-card';
       card.dataset.status = stateFor(job).tone;

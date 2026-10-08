@@ -7,7 +7,7 @@ import sys
 import time
 import uuid
 
-SOCKET = "/home/ar/webagent-dev2/v3/runtime/build/build.sock"
+SOCKET = "/home/ar/webagent-dev3/runtime/build/build.sock"
 POLL_SECONDS = 15
 MAX_WAIT_SECONDS = 30 * 60
 TERMINAL = {"completed", "failed", "stale", "cancelled", "uncertain", "interrupted"}

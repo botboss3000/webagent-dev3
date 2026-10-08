@@ -72,6 +72,18 @@ impl Store {
         }
         Ok(counts)
     }
+    /// Page only one caller-owned run's encrypted interactions. The API checks
+    /// administrator and session authority before exposing this private log.
+    pub async fn private_run_activity(&self,sid:&str,rid:&str,after:i64)->Result<Value> {
+        let rows=sqlx::query("SELECT i.seq,i.run_id,i.item,i.created_at,b.boundary_item_id FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.run_id=? AND i.seq>? ORDER BY i.seq LIMIT 101")
+            .bind(sid).bind(rid).bind(after).fetch_all(&self.pool).await?;
+        let more=rows.len()>100;
+        let page=&rows[..rows.len().min(100)];
+        let events=page.iter().map(|row|event(row,self,sid)).collect::<Result<Vec<_>>>()?;
+        let cursor=page.last().map(|row|row.get::<i64,_>("seq")).unwrap_or(after);
+        Ok(json!({"session_id":sid,"run_id":rid,"events":events,
+            "cursor":cursor,"has_more":more}))
+    }
     pub async fn private_activity(&self,sid:&str,after:i64)->Result<Value> {
         let mut tx=self.pool.begin().await?;
         let rows=sqlx::query("SELECT i.seq,i.run_id,i.item,i.created_at,b.boundary_item_id FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.seq>? ORDER BY i.seq LIMIT 201")

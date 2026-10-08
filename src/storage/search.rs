@@ -112,7 +112,11 @@ mod tests {
         assert_eq!(next["scan_complete"],true);
         assert!(store.search_private_sessions("different","active",50,Some(token)).await.is_err());
         assert!(store.search_private_sessions("needle","recycled",50,Some(token)).await.is_err());
-        let mut tampered = token.to_owned(); tampered.replace_range(0..2,"ff"); assert!(store.search_private_sessions("needle","active",50,Some(&tampered)).await.is_err());
+        let mut tampered = token.to_owned();
+        // Always change the encrypted token, including when its first byte is ff.
+        let replacement = if &tampered[..2] == "ff" { "00" } else { "ff" };
+        tampered.replace_range(0..2, replacement);
+        assert!(store.search_private_sessions("needle","active",50,Some(&tampered)).await.is_err());
         sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES('searchother','searchother',?)")
             .bind(store.seal(&json!({"user_id":"searchother","username":"searchother"})).unwrap()).execute(&store.app_pool).await.unwrap();
         let other = store.for_user("searchother").await.unwrap(); assert!(other.search_private_sessions("needle","active",50,Some(token)).await.is_err());

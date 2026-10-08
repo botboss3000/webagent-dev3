@@ -161,6 +161,23 @@ class InstallTests(unittest.TestCase):
         (src / "secret.db").write_bytes(b"SQLite format 3")
         with self.assertRaisesRegex(ValueError, "database"): installer.snapshot_context(("v3/src",))
 
+    def test_snapshot_maps_standalone_and_shared_roots_without_symlinks(self):
+        shared = self.root / "shared-v2"
+        css = shared / "ui/shared/css"
+        css.mkdir(parents=True)
+        (css / "index.css").write_text("body {}")
+        (self.v3 / "src").mkdir()
+        (self.v3 / "src/main.rs").write_text("fn main() {}")
+        with patch.object(installer, "SHARED_SOURCE", shared):
+            blob = installer.snapshot_context(("v3/src", "ui/shared/css/index.css"))
+            with installer.tarfile.open(fileobj=installer.io.BytesIO(blob)) as archive:
+                self.assertEqual(b"body {}", archive.extractfile("ui/shared/css/index.css").read())
+                self.assertEqual(b"fn main() {}", archive.extractfile("v3/src/main.rs").read())
+            (css / "index.css").unlink()
+            (css / "index.css").symlink_to(self.v3 / "src/main.rs")
+            with self.assertRaises(OSError):
+                installer.snapshot_context(("ui/shared/css/index.css",))
+
     def test_snapshot_protocol_checks_peer_before_reading_source(self):
         stopped = threading.Event()
         class Connection:

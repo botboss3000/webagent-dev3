@@ -78,6 +78,8 @@ pub fn is_read(name: &str) -> bool {
             | "v3_workspace_status"
             | "v3_workspace_receipt"
             | "v3_build_status"
+            | "v3_source_list"
+            | "v3_source_read"
             | "v3_worker_job"
             | "read_diagnostics"
             | "dev_browser_url"

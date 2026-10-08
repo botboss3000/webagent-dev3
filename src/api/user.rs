@@ -135,6 +135,26 @@ async fn activity(Extension(app): Extension<App>, Extension(identity): Extension
     }.await;
     result.into_response()
 }
+// Private interactions are available only to an administrator who still owns
+// the selected session and can access its agent. A run ID alone grants nothing.
+async fn run_logs(Extension(app): Extension<App>, Extension(identity): Extension<Value>,
+    Path((sid,rid)): Path<(String,String)>, Query(args): Query<ActivityArgs>) -> Response {
+    let result: Result<_, crate::ApiError> = async {
+        crate::phase3_api::administrator(&app,&identity).await?;
+        let scoped=session_app(app.clone(),&sid).await?;
+        if args.after.unwrap_or(0)<0 {return Err(crate::bad("Invalid activity cursor"));}
+        let run=scoped.run(&rid).await
+            .map_err(|_|crate::ApiError(axum::http::StatusCode::NOT_FOUND,"Run not found".into()))?;
+        if run["session_id"]!=sid {
+            return Err(crate::ApiError(axum::http::StatusCode::NOT_FOUND,"Run not found".into()));
+        }
+        let data=scoped.store.private_run_activity(&sid,&rid,args.after.unwrap_or(0)).await?;
+        crate::phase3_api::administrator(&app,&identity).await?;
+        session_app(app,&sid).await?;
+        Ok(([("cache-control","no-store")],Json(data)))
+    }.await;
+    result.into_response()
+}
 async fn events(Extension(app): Extension<App>, Path(id): Path<String>,
     headers: HeaderMap, Extension(auth_doc): Extension<Value>,
     Query(params): Query<HashMap<String, String>>) -> Response {
@@ -190,6 +210,7 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/search", get(session_search))
         .route("/sessions/{sid}/runs/{rid}/diagnostics", get(diagnostics))
         .route("/sessions/{sid}/runs/{rid}/progress", get(progress))
+        .route("/sessions/{sid}/runs/{rid}/logs", get(run_logs))
         .route("/sessions/{id}", get(snapshot).patch(session_patch).delete(session_recycle))
         .route("/sessions/{id}/restore", post(session_restore))
         .route("/sessions/{id}/read", axum::routing::put(session_read))

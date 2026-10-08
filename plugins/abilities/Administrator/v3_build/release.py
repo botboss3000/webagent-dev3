@@ -139,7 +139,7 @@ def release_mounts(previous, root, asset_root=None):
     host["Mounts"] = mounts
     return host
 
-def promote_checkout(root, before_blob, after_blob, changed, validate):
+def promote_checkout(root, before_blob, after_blob, changed, validate, standalone=False):
     """Copy a healthy release's changed files into the shared source checkout."""
     before, after = entries(before_blob, validate), entries(after_blob, validate)
     root = Path(root).resolve()
@@ -147,7 +147,8 @@ def promote_checkout(root, before_blob, after_blob, changed, validate):
     for name in changed:
         if not name.startswith("v3/") or name.startswith("v3/data/"):
             raise ValueError("checkout promotion path outside V3 source")
-        path = root / name
+        # Archives keep stable v3/ names; the independent checkout starts at that root.
+        path = root / (name.removeprefix("v3/") if standalone else name)
         for parent in (path, *path.parents):
             if parent == root:
                 break
@@ -186,14 +187,15 @@ def promote_checkout(root, before_blob, after_blob, changed, validate):
     return len(actions)
 
 
-def checkout_matches(root, after_blob, changed, validate):
+def checkout_matches(root, after_blob, changed, validate, standalone=False):
     """Reconcile a completed deployment without writing the shared checkout."""
     after = entries(after_blob, validate)
     root = Path(root).resolve()
     for name in changed:
         if not name.startswith("v3/") or name.startswith("v3/data/"):
             return False
-        path = root / name
+        # Archives keep stable v3/ names; the independent checkout starts at that root.
+        path = root / (name.removeprefix("v3/") if standalone else name)
         for parent in (path, *path.parents):
             if parent == root:
                 break

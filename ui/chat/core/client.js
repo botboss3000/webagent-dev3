@@ -4,7 +4,13 @@ import { createAdministratorNotices } from './administrator-notices.js';
 export function createChatClient({request, note, EventSourceClass = EventSource}) {
   const administratorNotices = createAdministratorNotices({ request });
   let source = null, epoch = 0;
-  function disconnect() { ++epoch; administratorNotices.stop(); source?.close(); source = null; document.getElementById('chat-toggle-btn')?.classList.remove('connection-error'); }
+  function setConnecting(connecting) {
+    const button = document.getElementById('chat-toggle-btn');
+    if (!button) return;
+    button.classList.toggle('connection-connecting', connecting);
+    button.title = connecting ? 'Chat connecting…' : 'Toggle chat panel';
+  }
+  function disconnect() { ++epoch; administratorNotices.stop(); source?.close(); source = null; setConnecting(false); }
   async function open(id, render, publish) {
     disconnect();
     const turn = epoch;
@@ -14,6 +20,7 @@ export function createChatClient({request, note, EventSourceClass = EventSource}
     administratorNotices.start(id);
     let last = data.last_seq || 0;
     source = new EventSourceClass('/api/v3/sessions/' + encodeURIComponent(id) + '/events?after=' + last);
+    setConnecting(true);
     source.onmessage = event => {
       if (turn !== epoch) return;
       try {
@@ -23,8 +30,8 @@ export function createChatClient({request, note, EventSourceClass = EventSource}
         publish(item);
       } catch { note('Unable to read chat event. Reload to recover.'); }
     };
-    source.onerror = () => { if (turn === epoch) document.getElementById('chat-toggle-btn')?.classList.add('connection-error'); };
-    source.onopen = () => { if (turn === epoch) document.getElementById('chat-toggle-btn')?.classList.remove('connection-error'); };
+    source.onerror = () => { if (turn === epoch) setConnecting(true); };
+    source.onopen = () => { if (turn === epoch) setConnecting(false); };
   }
   return {
     open, disconnect,

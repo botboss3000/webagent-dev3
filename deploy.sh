@@ -1,7 +1,7 @@
 #!/bin/sh
 # Run only on the development server; never operates on v2 or production.
 set -eu
-cd /home/ar/webagent-dev2
+cd /home/ar/webagent-dev3
 case "${1:-build}" in
   build|build-loop)
     if [ "${1:-build}" = build-loop ]; then
@@ -13,13 +13,9 @@ case "${1:-build}" in
     fi
     # The complete allowlist enters both image targets from the same checkout.
     # Only the two named gate JSON files enter from runtime data.
-    python3 -B -c 'import hashlib,json,pathlib; baseline=json.loads(pathlib.Path("v3/ui-baseline.json").read_text()); assert all(hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()==expected for path,expected in baseline["assets"].items()), "Shared UI baseline changed; review and explicitly update v3/ui-baseline.json"'
+    python3 -B -c 'import hashlib,json,pathlib; baseline=json.loads(pathlib.Path("ui-baseline.json").read_text()); assert all(hashlib.sha256((pathlib.Path("/home/ar/webagent-dev2") / path).read_bytes()).hexdigest()==expected for path,expected in baseline["assets"].items()), "Shared UI baseline changed; review and explicitly update v3/ui-baseline.json"'
     # Gate config is protected state: tar may read only the two named JSON files.
-    sudo -n tar --exclude=__pycache__ --exclude=*.pyc --exclude=*.pyo -cf - v3/Dockerfile v3/Cargo.toml v3/Cargo.lock v3/build.rs v3/.gitignore v3/src v3/ui v3/plugins/abilities v3/plugins/gates v3/worker.py v3/sandbox.py v3/launch.py v3/promote.py \
-      v3/ui-baseline.json v3/tests v3/docs v3/README.md v3/deploy.sh v3/config \
-      v3/data/config/gates/message_visibility_v1.json v3/data/config/gates/closing_status_v1.json \
-      ui/shared/css/app1.css ui/shared/css/app2.css ui/shared/css/app3.css ui/shared/css/design-system.css ui/shared/css/index.css \
-      ui/main-panel/agents/agents.html ui/main-panel/agents/agents.css ui/vendor/fonts ui/vendor/lucide ui/favicon.svg \
+    sudo -n python3 -B host-build-service/bootstrap.py --snapshot \
       | docker buildx build --builder default --load --progress=plain --target "$target" -f v3/Dockerfile -t "$tag" -
     ;;
   start)
@@ -30,36 +26,36 @@ case "${1:-build}" in
       echo "webagent-dev-v3 already exists; inspect it before a deliberate lifecycle change" >&2
       exit 1
     fi
-    mkdir -p v3/data v3/workspaces v3/runtime
+    mkdir -p data workspaces runtime
     # Seed independent v3 chat configuration once; preserve subsequent v3 edits.
-    mkdir -p v3/data/config
-    if [ ! -f v3/data/config/chat.json ]; then
-      cp data/config/chat_ui.json v3/data/config/chat.json
+    mkdir -p data/config
+    if [ ! -f data/config/chat.json ]; then
+      cp /home/ar/webagent-dev2/data/config/chat_ui.json data/config/chat.json
       python3 - <<'PYCONFIG'
 import json
 from pathlib import Path
-path = Path('v3/data/config/chat.json')
+path = Path('data/config/chat.json')
 config = json.loads(path.read_text())
 config['chat_common']['execution_mode'] = {'default_mode': 'auto', 'confirm_auto_mode': False}
 path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + '\n')
 PYCONFIG
     fi
     # Seed the documented admin storage policy once, never overwrite edits.
-    if [ ! -f v3/data/config/app-settings.json ]; then
-      cp v3/config/app-settings.json v3/data/config/app-settings.json
+    if [ ! -f data/config/app-settings.json ]; then
+      cp config/app-settings.json data/config/app-settings.json
     fi
     docker run -d --name webagent-dev-v3 --restart unless-stopped --read-only \
       --cap-drop ALL --cap-add CHOWN --cap-add FOWNER --cap-add SETUID --cap-add SETGID \
       --security-opt no-new-privileges:true --pids-limit 256 --memory 2g --memory-swap 3g --cpus 2 \
       --publish 100.112.23.15:8081:8080 \
-      --mount type=bind,src=/home/ar/webagent-dev2/v3/data,dst=/state \
-      --mount type=bind,src=/home/ar/webagent-dev2/v3/config,dst=/opt/v3/config,readonly \
+      --mount type=bind,src=/home/ar/webagent-dev3/data,dst=/state \
+      --mount type=bind,src=/home/ar/webagent-dev3/config,dst=/opt/v3/config,readonly \
       --env V3_CONTEXT_COMPACTION_CONFIG_PATH=/opt/v3/config/context-compaction.json \
-      --mount type=bind,src=/home/ar/webagent-dev2/v3/workspaces,dst=/workspaces \
-      --mount type=bind,src=/home/ar/webagent-dev2/v3/runtime,dst=/run/v3 \
-      --mount type=bind,src=/home/ar/webagent-dev2/v3,dst=/live-v3 \
-      --mount type=bind,src=/home/ar/webagent-dev2,dst=/live-checkout \
-      --mount type=bind,src=/home/ar/webagent-dev2/v3/ui,dst=/opt/v3/ui,readonly \
+      --mount type=bind,src=/home/ar/webagent-dev3/workspaces,dst=/workspaces \
+      --mount type=bind,src=/home/ar/webagent-dev3/runtime,dst=/run/v3 \
+      --mount type=bind,src=/home/ar/webagent-dev3,dst=/live-v3 \
+      --mount type=bind,src=/home/ar/webagent-dev3,dst=/live-checkout \
+      --mount type=bind,src=/home/ar/webagent-dev3/ui,dst=/opt/v3/ui,readonly \
       --env V3_CHAT_UI_CONFIG_PATH=/state/config/chat.json \
       --env V3_MESSAGE_API_TOKEN \
       --env V3_BROWSER_LOGIN_TOKEN \
@@ -86,19 +82,19 @@ PYCONFIG
       echo "start the v3 API and worker container first" >&2
       exit 1
     }
-    mkdir -p v3/gate-runtime
+    mkdir -p gate-runtime
     docker run -d --name webagent-dev-v3-loop --restart unless-stopped --read-only \
       --cap-drop ALL --security-opt no-new-privileges:true --pids-limit 128 --memory 768m --cpus 2 \
-      --mount type=bind,src=/home/ar/webagent-dev2/v3/data,dst=/state \
-      --mount type=bind,src=/home/ar/webagent-dev2/v3/config,dst=/opt/v3/config,readonly \
+      --mount type=bind,src=/home/ar/webagent-dev3/data,dst=/state \
+      --mount type=bind,src=/home/ar/webagent-dev3/config,dst=/opt/v3/config,readonly \
       --env V3_CONTEXT_COMPACTION_CONFIG_PATH=/opt/v3/config/context-compaction.json \
-      --mount type=bind,src=/home/ar/webagent-dev2/v3/workspaces,dst=/workspaces \
-      --mount type=bind,src=/home/ar/webagent-dev2/v3/runtime,dst=/run/v3 \
-      --mount type=bind,src=/home/ar/webagent-dev2/v3/gate-runtime,dst=/run/v3/gate \
-      --mount type=bind,src=/home/ar/webagent-dev2/v3/plugins/abilities,dst=/opt/v3/plugins/abilities,readonly \
+      --mount type=bind,src=/home/ar/webagent-dev3/workspaces,dst=/workspaces \
+      --mount type=bind,src=/home/ar/webagent-dev3/runtime,dst=/run/v3 \
+      --mount type=bind,src=/home/ar/webagent-dev3/gate-runtime,dst=/run/v3/gate \
+      --mount type=bind,src=/home/ar/webagent-dev3/plugins/abilities,dst=/opt/v3/plugins/abilities,readonly \
       --env V3_ABILITIES_ROOT=/opt/v3/plugins/abilities \
       --tmpfs /run:rw,nosuid,nodev,size=16m --tmpfs /tmp:rw,nosuid,nodev,size=32m \
       --stop-timeout 30 webagent-dev-v3-loop:local
     ;;
-  *) echo "Usage: sh v3/deploy.sh build|start|build-loop|start-loop" >&2; exit 2 ;;
+  *) echo "Usage: sh deploy.sh build|start|build-loop|start-loop" >&2; exit 2 ;;
 esac
