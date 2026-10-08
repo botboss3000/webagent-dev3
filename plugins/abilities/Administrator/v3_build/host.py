@@ -142,24 +142,33 @@ def source_git(root, arguments, patch):
 
 
 def validate_source_hunks(patch):
-    """Report malformed hunk counts before Git can hide the useful location."""
+    """Recompute hunk counts from the patch body; return the corrected patch.
+
+    Header counts are derivable from the body, so a miscounted header is
+    corrected here instead of rejected; the checked git apply in
+    inspect_source_patch remains the gate for context mismatches. Malformed
+    headers and malformed body lines still raise with the file location.
+    """
     path = "unknown source"
     lines = patch.split("\n")
-    if lines[-1] == "":
+    trailing_newline = lines[-1] == ""
+    if trailing_newline:
         lines.pop()
+    corrected = []
     index = 0
     while index < len(lines):
         line = lines[index]
         if line.startswith("diff --git "):
             path = scrub(line.split(" b/", 1)[-1])[:240]
         if not line.startswith("@@ "):
+            corrected.append(line)
             index += 1
             continue
-        match = re.match(r"@@ -[0-9]+(?:,([0-9]+))? \+[0-9]+(?:,([0-9]+))? @@", line)
+        match = re.match(r"@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@", line)
         if not match:
             raise ValueError(f"source patch malformed hunk header in {path}")
-        expected_old = int(match.group(1) or 1)
-        expected_new = int(match.group(2) or 1)
+        old_start, new_start = match.group(1), match.group(3)
+        body_lines = []
         old_count = new_count = 0
         index += 1
         while index < len(lines) and not lines[index].startswith(("diff --git ", "@@ ")):
@@ -175,11 +184,15 @@ def validate_source_hunks(patch):
                 pass
             else:
                 raise ValueError(f"source patch malformed line in {path} after hunk {line[:80]}")
+            body_lines.append(body)
             index += 1
-        if (old_count, new_count) != (expected_old, expected_new):
-            raise ValueError(
-                f"source patch hunk count in {path}: header declares "
-                f"-{expected_old}/+{expected_new} lines; body has -{old_count}/+{new_count}")
+        corrected.append(
+            f"@@ -{old_start},{old_count} +{new_start},{new_count} @@" + line[match.end():])
+        corrected.extend(body_lines)
+    result = "\n".join(corrected)
+    if trailing_newline:
+        result += "\n"
+    return result
 
 
 def prepare_new_source_files(files):
@@ -242,7 +255,7 @@ def inspect_source_patch(root, patch):
         if line.startswith(("new file mode ", "deleted file mode ", "old mode ", "new mode ")):
             if line.rsplit(" ", 1)[-1] not in ("100644", "100755"):
                 raise ValueError("unsupported source file mode")
-    validate_source_hunks(patch)
+    patch = validate_source_hunks(patch)
     encoded = patch.encode()
     output = source_git(root, ["apply", "--numstat", "-z", "-"], encoded)
     records = [part for part in output.split(b"\0") if part]
