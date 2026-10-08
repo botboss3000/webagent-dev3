@@ -241,6 +241,18 @@ def source_patch_text_counts(patch):
 
 def inspect_source_patch(root, patch):
     """Confine a checked text diff to V3 source; proposals stay separate until here."""
+    paths, _corrected = inspect_source_patch_corrected(root, patch)
+    return paths
+
+
+def inspect_source_patch_corrected(root, patch):
+    """inspect_source_patch, also returning the count-corrected patch text.
+
+    Handlers that act on a patch (the checked apply, the receipt hash, a
+    stored prepared patch) must use the corrected text: it is the text
+    whose hunk counts validate_source_hunks recomputed and whose context
+    the checked git apply in this function verified.
+    """
     if not root.is_dir() or root.is_symlink() or root.stat().st_uid != 1000:
         raise ValueError("live V3 checkout unavailable")
     if patch.startswith("*** Begin Patch"):
@@ -300,7 +312,7 @@ def inspect_source_patch(root, patch):
     # Check and execution must accept the same zero-context hunks; the digest
     # and old text still bind each edit to the reviewed task snapshot.
     source_git(root, ["apply", "--check", "--unidiff-zero", "--whitespace=error", "-"], encoded)
-    return paths
+    return paths, patch
 
 
 def replacement_config(current, old_defaults, new_defaults):
@@ -1380,7 +1392,7 @@ class Broker:
                 patch = prepare_new_source_files(args["files"])
                 if any((tree / "v3" / entry["path"]).exists() for entry in args["files"]):
                     raise ValueError("prepare accepts only new files")
-                paths = inspect_source_patch(tree / "v3", patch)
+                paths, patch = inspect_source_patch_corrected(tree / "v3", patch)
                 prepared = item.setdefault("prepares", {})
                 if len(prepared) >= 8:
                     raise ValueError("task has too many prepared patches")
@@ -1432,7 +1444,7 @@ class Broker:
                 if current != args["expected_inputs_sha256"]:
                     raise ValueError("stale source inputs")
                 source = tree / "v3"
-                paths = inspect_source_patch(source, patch)
+                paths, patch = inspect_source_patch_corrected(source, patch)
                 receipt = {"task_id": task_id, "request_id": request_id, "request_sha256": digest,
                            "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(),
                            "status": "dispatching", "paths": paths}
