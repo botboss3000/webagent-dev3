@@ -144,6 +144,10 @@ async function ghFetch(path, opts = {}) {
   const repo = selectedRepo();
   if (endpoint === 'repos' && !opts.method) {
     const entries = repoState();
+    const connectionResponse = await fetch('/api/v3/agents/shared_default/repository-connections',
+      {credentials:'same-origin'});
+    const connectionCatalog = await connectionResponse.json().catch(() => ({}));
+    if (!connectionResponse.ok) throw Error(connectionCatalog.error || 'Repository connections unavailable');
     await Promise.all(entries.map(async row => {
       const repo = row.folder === '/live-checkout' ? '__root__' :
         row.folder.startsWith('/live-checkout/') ? row.folder.slice('/live-checkout/'.length) : '';
@@ -153,6 +157,9 @@ async function ghFetch(path, opts = {}) {
         row.remote_url = status.remote_url;
         row.git_user_name = status.git_user_name || '';
         row.git_user_email = status.git_user_email || '';
+        const connection = (connectionCatalog.connections || []).find(item =>
+          item.id === row.id && item.url === row.remote_url);
+        row.has_token = connection?.authenticated === true && connection?.revoked !== true;
       } catch (_) { /* Keep unavailable repositories selectable for repair. */ }
     }));
     return {repos:entries};

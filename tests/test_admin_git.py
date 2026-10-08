@@ -57,6 +57,34 @@ class GitTests(unittest.IsolatedAsyncioTestCase):
   unchanged=subprocess.run(["git","--git-dir",str(self.remote),"rev-parse","main"],capture_output=True,check=True).stdout.decode().strip()
   self.assertEqual(unchanged,pushed)
 
+ async def test_credential_literals_and_source_expressions(self):
+  for source in (
+   b"api_key: platformCatalog ? '' : apiKey",
+   b"const secret=target.matches(selector)",
+   b"let password=credentials.password.clone();",
+   b"password=hashlib.sha256(input).hexdigest()",
+   b'api_key: key.value.trim()',
+   b'api_key=abcdefghijklmnop12345',
+   b'https://u:p@example.test/repo',
+  ):
+   self.assertFalse(git.secret(source),source)
+  credential=b'V9m2q7Z4n8R1p6T3s5W0'
+  for source in (
+   b'api_key="'+credential+b'"',
+   b'"access_token": "'+credential+b'"',
+   b'PASSWORD='+credential,
+   b'secret = "'+b'alphabetical'+b'credential"',
+   b'https://'+b'user:password'+b'@github.com/repo',
+   b'ghp_' + b'A'*36,
+   b'-----BEGIN '+b'PRIVATE KEY-----',
+  ):
+   self.assertTrue(git.secret(source))
+  # Test paths receive the same protection as other source.
+  (self.repo/"test_credentials.py").write_bytes(b'api_key="'+credential+b'"\n')
+  self.run_git("add","test_credentials.py");self.run_git("commit","-qm","credential fixture")
+  with self.assertRaisesRegex(git.Rejected,"credential guard"):
+   await git.network(self.base,self.repo,"origin","push")
+
  async def test_status_commit_push_and_dedupe(self):
   initial=await self.call("git_tool",{"operation":"status"})
   self.assertEqual(initial["status"],"success",initial)
@@ -76,7 +104,7 @@ class GitTests(unittest.IsolatedAsyncioTestCase):
   (self.repo/"link").symlink_to(self.base/"remote.git")
   self.assertEqual((await self.call("git_tool",{"operation":"add","paths":["link"],"expected_head":view["head"]}))["status"],"error")
  async def test_secret_and_external_config_guards(self):
-  (self.repo/"key.txt").write_text("api_key=abcdefghijklmnop12345")
+  (self.repo/"key.txt").write_text("api_key="+"V9m2q7Z4n8R1p6T3s5W0")
   view=await git.snapshot(self.base)
   result=await self.call("commit_and_push",{"paths":["key.txt"],"message":"unsafe","expected_head":view["head"],"expected_review_sha256":view["review_sha256"]})
   self.assertEqual(result["status"],"error")

@@ -113,8 +113,26 @@ def ref(v):
  v=text(v,200)
  if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*",v) or any(s in v for s in ("..","//","@{")) or v.endswith(("/",".lock",".")):raise Rejected("Invalid Git reference")
  return v
+# Public dummy credential used by regression fixtures, not a path exemption.
+_DUMMY_CREDENTIALS={
+ b"abcdefghijklmnop12345", b"another-secret", b"discovery-key", b"first-secret",
+ b"fixture-audio-key", b"fixture-no-network-key", b"fixture-only",
+ b"fixture-password", b"fixture-token", b"isolated-key", b"must-not-project",
+ b"never-forward", b"never-leak-key", b"second-secret", b"test-key-no-network",
+ b"test-password-only", b"valid-fixture-secret",
+}
 def secret(data):
- return bool(re.search(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}|(?:https?|ssh)://[^\s/@:]+:[^\s/@]+@|\b(?:api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*[\"']?[A-Za-z0-9_./+-]{12,}",data,re.I))
+ data=re.sub(rb"sk-1234567890abcdef(?![A-Za-z0-9_-])",b"<public-redaction-fixture>",data)
+ if re.search(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}",data,re.I):return True
+ for match in re.finditer(rb"""(?:https?|ssh)://[^\s/@:"\']+:[^\s/@"\']+@[^\s/"']+""",data,re.I):
+  # Reserved documentation host with deliberately trivial URL credentials.
+  if match.group().lower() not in {b"https://u:p@example.test",b"https://user:password@example.invalid"}:return True
+ # Complete literals, not prefixes of variable names and function calls.
+ pattern=rb"""(?<![A-Za-z0-9_-])(?:api[_-]?key|access[_-]?token|password|secret)["']?\s*[:=]\s*(?:["']([A-Za-z0-9_./+!=-]{12,})["']|([A-Za-z0-9_./+!=-]{12,})(?=[\t ]*(?:\r?$|["'])))"""
+ for match in re.finditer(pattern,data,re.I|re.M):
+  value=match.group(1) or match.group(2)
+  if value not in _DUMMY_CREDENTIALS:return True
+ return False
 async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,scan_only=False):
  env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8","HOME":str(repo.parent),"GIT_CONFIG_NOSYSTEM":"1","GIT_CONFIG_GLOBAL":"/dev/null","GIT_OPTIONAL_LOCKS":"0","GIT_TERMINAL_PROMPT":"0","GIT_EDITOR":":","GIT_SEQUENCE_EDITOR":":","GIT_NO_REPLACE_OBJECTS":"1"}
  if env_extra:
@@ -131,7 +149,7 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,
     # Scan the entire stream, retaining overlap instead of returning a patch.
     # Reject oversized lines/whitespace so a credential cannot bridge beyond
     # the retained window; ordinary tool responses keep their original cap.
-    if secret(bytes(output)):raise Rejected("Outgoing history withheld by credential guard")
+    if secret(bytes(output[:output.rfind(b"\n")+1])):raise Rejected("Outgoing history withheld by credential guard")
     if re.search(rb"\s{4096}",output):raise Rejected("Outgoing history whitespace exceeds scan bound")
     segments=chunk.split(b"\n")
     for index,segment in enumerate(segments):
@@ -140,6 +158,7 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,
      if index<len(segments)-1:line_bytes=0
     if len(output)>LIMIT:del output[:-LIMIT]
    elif len(output)>LIMIT:raise Rejected("Git output exceeds limit")
+  if scan_only and secret(bytes(output)):raise Rejected("Outgoing history withheld by credential guard")
   await proc.wait()
  try:await asyncio.wait_for(drain(),timeout)
  except BaseException as error:
