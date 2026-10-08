@@ -17,6 +17,31 @@ class GitTests(unittest.IsolatedAsyncioTestCase):
   self.assertIn(p.returncode,allowed,p.stderr.decode());return p.stdout.decode().strip()
  async def call(self,name,args):
   return await git.execute(name,args,self.base)
+ async def test_file_manager_regular_commit_with_dirty_gitlink_and_saved_author(self):
+  fm_spec=importlib.util.spec_from_file_location("file_manager",FILE.with_name("file_manager.py"))
+  fm=importlib.util.module_from_spec(fm_spec);fm_spec.loader.exec_module(fm)
+  nested=self.repo/"reference";nested.mkdir()
+  subprocess.run(["git","init","-q",str(nested)],check=True)
+  self.run_git("update-index","--add","--cacheinfo","160000,"+self.run_git("rev-parse","HEAD")+",reference")
+  self.run_git("commit","-qm","reference pointer")
+  (nested/"dirty.txt").write_text("reference work stays separate")
+  (self.repo/"file.txt").write_text("updated source\n")
+  for name in ("target","runtime","workspaces","build-jobs"):
+   (self.repo/name).mkdir();(self.repo/name/"private.txt").write_text("runtime fixture")
+  view=await fm._git_status(git,self.repo,"__root__")
+  rows=view["staged"]+view["unstaged"]+view["untracked"]
+  self.assertEqual(view["git_user_name"],"Fixture")
+  self.assertEqual(view["git_user_email"],"fixture@localhost")
+  self.assertFalse(next(row for row in rows if row["path"]=="reference")["committable"])
+  self.assertEqual({row["path"] for row in rows if row["committable"]},{"file.txt"})
+  result=await fm._git_commit(git,self.repo,{"repo":"__root__","paths":["file.txt"],"message":"regular files only","expected_head":view["head"],"expected_review_sha256":view["review_sha256"]})
+  self.assertEqual(result["status"],"committed")
+  self.assertEqual(self.run_git("show","--format=%an <%ae>","--no-patch"),"Fixture <fixture@localhost>")
+  self.assertEqual(self.run_git("diff-tree","--no-commit-id","--name-only","-r","HEAD"),"file.txt")
+  await git.network(self.base,self.repo,"origin","push")
+  pushed=subprocess.run(["git","--git-dir",str(self.remote),"rev-parse","main"],capture_output=True,check=True).stdout.decode().strip()
+  self.assertEqual(pushed,self.run_git("rev-parse","HEAD"))
+
  async def test_status_commit_push_and_dedupe(self):
   initial=await self.call("git_tool",{"operation":"status"})
   self.assertEqual(initial["status"],"success",initial)

@@ -135,13 +135,28 @@ async function applyRepoSettings(id, folder, payload) {
     remote_url:remote, git_user_name:String(payload.git_user_name || ''),
     git_user_email:String(payload.git_user_email || '')});
   if (!remote) await saveConnection(id, '', '', true);
+  return v3Files({action:'git_status', repo});
 }
 async function ghFetch(path, opts = {}) {
   const url = new URL(path, location.origin);
   const endpoint = url.pathname.replace('/api/v1/github/', '');
   const payload = opts.body ? JSON.parse(opts.body) : {};
   const repo = selectedRepo();
-  if (endpoint === 'repos' && !opts.method) return {repos:repoState()};
+  if (endpoint === 'repos' && !opts.method) {
+    const entries = repoState();
+    await Promise.all(entries.map(async row => {
+      const repo = row.folder === '/live-checkout' ? '__root__' :
+        row.folder.startsWith('/live-checkout/') ? row.folder.slice('/live-checkout/'.length) : '';
+      if (!repo) return;
+      try {
+        const status = await v3Files({action:'git_status', repo});
+        row.remote_url = status.remote_url;
+        row.git_user_name = status.git_user_name || '';
+        row.git_user_email = status.git_user_email || '';
+      } catch (_) { /* Keep unavailable repositories selectable for repair. */ }
+    }));
+    return {repos:entries};
+  }
   if (endpoint === 'repos/select') {
     const entries = repoState();
     if (!entries.some(row => row.id === payload.id)) throw Error('Repository not found');
@@ -168,9 +183,10 @@ async function ghFetch(path, opts = {}) {
     if (!validation.is_repo) throw Error(validation.message || 'Repository unavailable');
     const entries = repoState();
     const id = 'repo-' + crypto.randomUUID();
-    await applyRepoSettings(id, folder, payload);
+    const saved = await applyRepoSettings(id, folder, payload);
     entries.push({id, label:String(payload.label || folder.split('/').pop()).slice(0,80),
-      folder, remote_url:String(payload.remote_url || ''), builtin:false, active:false});
+      folder, remote_url:saved.remote_url, git_user_name:saved.git_user_name,
+      git_user_email:saved.git_user_email, builtin:false, active:false});
     return saveRepoState(entries);
   }
   if (endpoint.startsWith('repos/') && opts.method === 'DELETE') {
@@ -187,10 +203,12 @@ async function ghFetch(path, opts = {}) {
     const folder = String(payload.folder || '');
     const validation = await ghFetch('/api/v1/github/repos/validate?path=' + encodeURIComponent(folder));
     if (!validation.is_repo) throw Error(validation.message || 'Repository unavailable');
-    await applyRepoSettings(id, folder, payload);
+    const saved = await applyRepoSettings(id, folder, payload);
     row.folder = folder;
     row.label = String(payload.label || row.label).slice(0,80);
-    row.remote_url = String(payload.remote_url || '');
+    row.remote_url = saved.remote_url;
+    row.git_user_name = saved.git_user_name;
+    row.git_user_email = saved.git_user_email;
     return saveRepoState(entries);
   }
   if (endpoint === 'status') {
@@ -1501,10 +1519,12 @@ async function streamCommitPush(payload, onEvent, signal) {
   const repo = selectedRepo();
   const status = await v3Files({action:'git_status', repo});
   lastGitStatus = status;
-  const paths = [...new Set([...(status.staged || []), ...(status.unstaged || []),
-    ...(status.untracked || [])].map(item => item.path))];
+  const entries = [...(status.staged || []), ...(status.unstaged || []), ...(status.untracked || [])];
+  const paths = [...new Set(entries.filter(item => item.committable !== false).map(item => item.path))];
+  const skipped = [...new Set(entries.filter(item => item.committable === false).map(item => item.path))];
+  const skippedNote = skipped.length ? 'Skipped submodules, directories or symlinks (commit separately): ' + skipped.join(', ') : '';
   if (!paths.length) {
-    onEvent({phase:'done', result:{status:'nothing_to_commit', message:'Nothing to commit.'}});
+    onEvent({phase:'done', result:{status:'nothing_to_commit', message:skippedNote || 'Nothing to commit.'}});
     return;
   }
   if (signal?.aborted) throw Error('Commit was cancelled before it started');
@@ -1530,7 +1550,7 @@ async function streamCommitPush(payload, onEvent, signal) {
       push = {attempted:true, ok:false, detail:error.message};
     }
   }
-  onEvent({phase:'done', result:{...committed, push}});
+  onEvent({phase:'done', result:{...committed, push, skipped_note:skippedNote}});
 }
 
 // Render one streamed phase event into the status line. Goes through the sticky
@@ -1785,6 +1805,8 @@ async function runCommitFlow(rootEl, { skipPush } = {}) {
     outMsg = `✓ ${final.title} (${final.hash}) - ${pushTxt}`;
     if (usedFallback) outMsg += ' | note auto-written from the file list (AI writer unavailable)';
   }
+
+  if (final.skipped_note) outMsg += ' | ' + final.skipped_note;
 
   // Pin the outcome (sticky, so the repaints below never blank it) and clear the
   // note box. The button's working spinner is no longer wanted — the flash takes

@@ -383,7 +383,8 @@ async def _git_optional(adapter, repo, arguments):
         return ""
 
 
-GIT_EXCLUDES = [":(exclude)data", ":(exclude)v3/data", ":(exclude)v3/target",
+GIT_EXCLUDES = [*[
+    f":(exclude){name}" for name in HIDDEN], ":(exclude)build-jobs", ":(exclude)data", ":(exclude)v3/data", ":(exclude)v3/target",
                 ":(exclude)v3/workspaces", ":(exclude)v3/runtime",
                 ":(exclude)v3/gate-runtime", ":(exclude)v3/host-build-service",
                 ":(exclude)v3/rollback"]
@@ -419,6 +420,8 @@ async def _git_status(adapter, repo, repo_name):
     counts = await _git_optional(adapter, repo, ["rev-list", "--left-right", "--count",
                                                  "HEAD...refs/remotes/origin/" + branch])
     ahead, behind = (map(int, counts.split()) if len(counts.split()) == 2 else (0, 0))
+    author = await _git_optional(adapter, repo, ["config", "--local", "user.name"])
+    email = await _git_optional(adapter, repo, ["config", "--local", "user.email"])
     staged, unstaged, untracked = [], [], []
     for line in snap["status"].splitlines():
         if len(line) < 4:
@@ -428,15 +431,25 @@ async def _git_status(adapter, repo, repo_name):
             parts(name)
         except Rejected:
             continue
+        # Gitlinks and symlinks stay visible, but cannot enter a regular-file commit.
+        committable = True
+        reason = ""
+        try:
+            adapter.path(repo, name, True)
+        except adapter.Rejected:
+            committable = False
+            reason = "Submodule, directory or symlink: commit separately"
+        entry = {"path": name, "committable": committable, "skip_reason": reason}
         x, y = line[0], line[1]
         if x == y == "?":
-            untracked.append({"path": name, "flag": "??"})
+            untracked.append({**entry, "flag": "??"})
         else:
             if x != " ":
-                staged.append({"path": name, "flag": x})
+                staged.append({**entry, "flag": x})
             if y != " ":
-                unstaged.append({"path": name, "flag": y})
+                unstaged.append({**entry, "flag": y})
     return {"branch": branch, "remote_url": remote, "has_remote": bool(remote),
+            "git_user_name": author, "git_user_email": email,
             "ahead": ahead, "behind": behind,
             "file_count": len(staged) + len(unstaged) + len(untracked),
             "staged": staged, "unstaged": unstaged, "untracked": untracked,
