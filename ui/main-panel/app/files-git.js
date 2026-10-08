@@ -216,7 +216,8 @@ async function ghFetch(path, opts = {}) {
     row.remote_url = saved.remote_url;
     row.git_user_name = saved.git_user_name;
     row.git_user_email = saved.git_user_email;
-    return saveRepoState(entries);
+    saveRepoState(entries);
+    return ghFetch('/api/v1/github/repos');
   }
   if (endpoint === 'status') {
     lastGitStatus = await v3Files({action:'git_status', repo});
