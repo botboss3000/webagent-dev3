@@ -6,6 +6,9 @@ pub(crate) mod search;
 pub(crate) mod own_skills;
 pub(crate) mod base_task;
 mod activity;
+mod naming;
+mod background_tasks;
+mod background_followup;
 mod reasoning_cleanup;
 
 use crate::access;
@@ -477,7 +480,8 @@ impl Store {
             }
         }
         Ok(json!({"revision":metadata["ability_revision"].as_i64().unwrap_or(0),"visibility":visibility,
-            "skill_visibility":metadata["skill_modes"],"tool_modes":metadata["tool_modes"],"settings":metadata["ability_settings"]}))
+            "skill_visibility":metadata["skill_modes"],"tool_modes":metadata["tool_modes"],"settings":metadata["ability_settings"],
+            "tool_execution":metadata["tool_execution"].as_object().cloned().unwrap_or_default()}))
     }
     pub async fn save_agent_abilities(&self, value: &Value, expected_revision: u64) -> Result<()> {
         if expected_revision==u64::MAX {return Err(anyhow!("Agent ability revision overflow"));}
@@ -504,6 +508,7 @@ impl Store {
         metadata["skill_modes"]=value["skill_visibility"].clone();
         metadata["tool_modes"]=value["tool_modes"].clone();
         metadata["ability_settings"]=value["settings"].clone();
+        if let Some(execution)=value.get("tool_execution") {metadata["tool_execution"]=execution.clone();}
         metadata["ability_revision"]=json!(expected_revision + 1);
         // Visibility and its encrypted audit receipt have one agent-owned commit.
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
@@ -534,11 +539,15 @@ impl Store {
         if key.starts_with("agent:") || key.starts_with("agent_abilities:") {
             &self.agent_pool
         } else if key.starts_with("session:")
+            || key.starts_with("manager_review:")
+            || key.starts_with("manager_pending:")
             || key.starts_with("session_mode:")
             || key.starts_with("session_chat_controls:")
+            || key.starts_with("session_naming:")
             || key.starts_with("receipt:chat_controls:")
             || key.starts_with("compaction_segment:")
             || key.starts_with("session_ability_state:")
+            || key.starts_with("background_task:")
             || key.starts_with("run:")
             || key.starts_with("run_view:")
             || key.starts_with("administrator_receipt:")
@@ -1695,8 +1704,12 @@ impl Store {
                 }
                 self.insert_chat(&mut tx, sid, rid, "assistant", &json!(text))
                     .await?;
+                // Naming is queued with terminal publication, never a detached
+                // after-commit hook that could be lost during restart.
+                self.queue_session_naming(&mut tx, sid, run).await?;
             }
         }
+        self.background_claim_delivery(&mut tx,run).await?;
         if kind == "context_compacted" {
             let session_key = format!("session:{sid}");
             let row = sqlx::query("SELECT value FROM docs WHERE key=?")
@@ -1902,7 +1915,10 @@ impl Store {
         {
             return Err(anyhow!("Atomic documents cross storage authorities"));
         }
-        let touched = docs.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>();
+        let mut touched = docs.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>();
+        if kind == "message" && payload["role"] == "user" {
+            touched.push(format!("session:{sid}"));
+        }
         let touches_session = touched.iter().any(|key| key.starts_with("session:"));
         let _context_guard = if touches_session {
             Some(self.context_gate.write().await)
@@ -1910,8 +1926,15 @@ impl Store {
             None
         };
         let mut tx = destination.begin().await?;
-        if kind == "message" && payload["role"] == "user" {
+        if matches!(kind,"message"|"manager_submission") && payload["role"] == "user" {
+            sqlx::query("UPDATE docs SET key=key WHERE key=?").bind(format!("session:{sid}")).execute(&mut *tx).await?;
             self.require_active_session(&mut tx, sid).await?;
+            let existing:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND id!=? AND status NOT IN ('completed','cancelled','failed')")
+                .bind(sid).bind(payload["run_id"].as_str().unwrap_or("")).fetch_one(&mut *tx).await?;
+            if existing>0 {return Err(anyhow!("Session already has an active run"));}
+            let pending:i64=sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key=?")
+                .bind(format!("manager_pending:{sid}")).fetch_one(&mut *tx).await?;
+            if pending!=0 {return Err(anyhow!("Resolve the pending message review first"));}
         }
         for (_, run) in docs.iter().filter(|(key,_)|key.starts_with("run:")) {
             if !matches!(run["status"].as_str(), Some("completed" | "cancelled" | "failed")) {
@@ -1945,7 +1968,7 @@ impl Store {
                 self.index_run(&mut tx, &value).await?;
             }
         }
-        if kind == "message" && payload["role"] == "user" {
+        if matches!(kind,"message"|"manager_submission") && payload["role"] == "user" {
             let run_id = payload["run_id"]
                 .as_str()
                 .ok_or_else(|| anyhow!("User message has no run ID"))?;
@@ -1954,17 +1977,16 @@ impl Store {
                 .ok_or_else(|| anyhow!("User message has no content"))?;
             self.insert_chat(&mut tx, sid, run_id, "user", &json!(text))
                 .await?;
+            if kind=="message" {
+                self.begin_session_naming(&mut tx, sid, run_id, payload).await?;
+            }
             // Chat shows the author's message; model context also includes
             // the validated attachment text, committed in this same transaction.
             let context_content = payload["context_content"].as_str().unwrap_or(text);
-            self.insert_interaction(
-                &mut tx,
-                sid,
-                run_id,
-                "user",
-                &json!({"role":"user","content":context_content}),
-            )
-            .await?;
+            if kind=="message" {
+                self.insert_interaction(&mut tx,sid,run_id,"user",
+                    &json!({"role":"user","content":context_content})).await?;
+            }
         }
         if kind != "message" {
             sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,?,?)")
@@ -2000,6 +2022,7 @@ impl Store {
         Ok(())
     }
 }
+mod message_admission;
 #[cfg(test)]
 mod tests {
     #[tokio::test]
@@ -2352,6 +2375,10 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(store.context("s").await.unwrap(), vec![summary.clone()]);
+        checkpoint["status"] = json!("completed");
+        store.save_run(&mut checkpoint, "run_status", &json!({"run_id":"r1","status":"completed"}))
+            .await.unwrap();
         assert_eq!(store.context("s").await.unwrap(), vec![summary.clone()]);
         store
             .atomic_docs_event(

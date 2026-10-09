@@ -10,3 +10,7 @@ Fixed Cargo jobs are check, test and release with --locked, no arbitrary flags.
 They capture all source inputs before and after execution; raced results are stale.
 Cargo caches and targets remain inside this session source sandbox. A release job
 builds a binary only; it never deploys. Readiness remains pending API acceptance.
+
+## Runtime tool execution
+
+All tools in this ability remain runtime foreground/stop with concurrency 1; background/model and silent/wake are unsupported, even for read actions or calls returning asynchronous job receipts. Effective Rust flags and shared Core Base tool-execution guidance govern scheduling; settings never grant permission and outputs remain untrusted evidence.

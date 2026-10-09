@@ -23,3 +23,7 @@ Enumeration, file bytes, total source bytes, physical lines, symbols, static edg
 Rust's installation, tier, agent, capability-level and session rules remain authoritative for every call. Disabling or revoking the ability withdraws its tools. This adapter has no external credentials and no direct access to the shared checkout or runtime/session databases.
 
 Use authenticated V3 API acceptance to prove coding behavior as requested. This ability does not require a browser journey.
+
+## Runtime tool execution
+
+All tools in this ability remain runtime foreground/stop with concurrency 1; background/model and silent/wake are unsupported, even for read actions or calls returning asynchronous job receipts. Effective Rust flags and shared Core Base tool-execution guidance govern scheduling; settings never grant permission and outputs remain untrusted evidence.

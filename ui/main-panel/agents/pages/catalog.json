@@ -8,7 +8,7 @@
     {
       "id": "identity",
       "title": "Identity",
-      "description": "Edit the agent's name and description.",
+      "description": "Edit identity, compaction thresholds, and chat modes.",
       "order": 5,
       "panelId": "identity-page",
       "icon": "badge"

@@ -23,7 +23,8 @@ pub(crate) async fn send(
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> std::result::Result<(StatusCode, Json<Value>), ApiError> {
-    let text = required(&body, "text", 65536)?;
+    let text = body["text"].as_str().ok_or_else(||bad("text is required"))?;
+    if text.len() > 65536 { return Err(bad("text has invalid length")); }
     let request_id = required(&body, "client_message_id", 128)?;
     let _guard = app.gate.lock().await;
     let receipt_key = format!("receipt:message:{id}:{request_id}");
@@ -31,7 +32,14 @@ pub(crate) async fn send(
         if receipt["digest"] != digest(&body) {
             return Err(conflict("Message identifier reused with different input"));
         }
-        return Ok((StatusCode::ACCEPTED, Json(receipt["result"].clone())));
+        let mut result=receipt["result"].clone();
+        if let Some(review_id)=result["review_id"].as_str() {
+            if let Some(review)=app.store.get(&format!("manager_review:{review_id}")).await? {
+                result["admission"]=crate::manager::public(&review);
+                result["run_id"]=result["admission"]["run_id"].clone();
+            }
+        }
+        return Ok((StatusCode::ACCEPTED, Json(result)));
     }
     if app.shutoff().await? {
         return Err(conflict("Global shutoff is active"));
@@ -43,11 +51,17 @@ pub(crate) async fn send(
     let access=app.store.live_access(app.store.current_user_id(),&agent_id).await
         .map_err(|_|ApiError(StatusCode::FORBIDDEN,"Agent unavailable".into()))?;
     if !access.admitted() { return Err(ApiError(StatusCode::FORBIDDEN,"Agent unavailable".into())); }
+    if app.store.get(&format!("manager_pending:{id}")).await?.is_some() {
+        return Err(conflict("Resolve the pending message review first"));
+    }
+    let manager=crate::manager::prepare(&app,&agent_id).await
+        .map_err(|_|conflict("Incoming-message review requires valid criteria and an authorized System model"))?;
     let active = app.store.active_runs().await?;
-    if active.len() >= app.runtime.read().await.scheduler.max_unresolved_runs {
+    let review_count=app.store.list("manager_pending:").await?.len();
+    if active.len()+review_count >= app.runtime.read().await.scheduler.max_unresolved_runs {
         return Err(conflict("Run queue is full"));
     }
-    if active.len() >= access.max_active_runs() as usize {
+    if active.len()+review_count >= access.max_active_runs() as usize {
         return Err(conflict("Account run limit reached"));
     }
     if active
@@ -64,6 +78,9 @@ pub(crate) async fn send(
     let mut prepared = attachments::prepare(body.get("attachments"), &id, &run_id)
         .map_err(|_| bad("Invalid or unsupported attachments"))?;
     uploads::prepare_uploads(&app,&id,&run_id,body.get("attachment_ids"),&mut prepared).await?;
+    if text.trim().is_empty() && prepared.metadata.is_empty() {
+        return Err(bad("Message text or attachments required"));
+    }
     let mut message = json!({"role":"user","content":text,"run_id":run_id});
     if !prepared.metadata.is_empty() {
         message["context_content"] = json!(prepared.context_content(text)?);
@@ -127,6 +144,21 @@ pub(crate) async fn send(
         &workflow::Input::Admission { request_digest:digest(&body) }, workflow::Decision::Pass)?;
     workflow::record(&mut run, &workflow_policy,
         &workflow::Input::AttachmentPreparation { attachment_count:prepared.metadata.len() }, workflow::Decision::Pass)?;
+    if let Some(manager)=manager {
+        let record=json!({"id":run_id,"session_id":id,"agent_id":agent_id,
+            "status":"pending_review","generation":"","deadline":0,"verdict":null,"error":null,
+            "settings":manager["settings"],"settings_revision":manager["settings_revision"],"selection_plan":manager["selection_plan"],
+            "failover_state":manager["failover_state"],"message":message,"run":run,
+            "created_at":now(),"updated_at":now()});
+        let result=json!({"run_id":null,"review_id":run_id,"admission":crate::manager::public(&record),"attachments":prepared.metadata});
+        let mut docs=prepared.records;
+        docs.push((format!("message_attachments:{run_id}"),json!(prepared.metadata)));
+        docs.push((format!("manager_review:{run_id}"),record));
+        docs.push((format!("manager_pending:{id}"),json!({"id":run_id})));
+        docs.push((receipt_key,json!({"digest":digest(&body),"result":result})));
+        app.store.atomic_docs_event(docs,&id,"manager_submission",&message).await?;
+        return Ok((StatusCode::ACCEPTED,Json(result)));
+    }
     let result = json!({"run_id":run_id,"attachments":prepared.metadata});
     let mut docs = prepared.records;
     docs.push((format!("message_attachments:{run_id}"),json!(prepared.metadata)));
@@ -139,7 +171,10 @@ pub(crate) async fn send(
             "message",
             &message,
         )
-        .await?;
+        .await.map_err(|error| {
+            if error.to_string()=="Session already has an active run" {conflict("Resolve the existing run first")}
+            else {ApiError::from(error)}
+        })?;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
 // Only the owning session can read this encrypted attachment record. The
@@ -242,10 +277,10 @@ pub(crate) async fn events(
             auth_key,
             expires,
             0u64,
-            user_id, generation, agent_id, access_revision,
+            user_id, generation, agent_id, access_revision, None::<u64>, 0u64,
         ),
         |(app, id, mut cursor, mut queue, start, auth_key, expires, mut checked,
-            user_id, generation, agent_id, access_revision)| async move {
+            user_id, generation, agent_id, access_revision, mut metadata_revision, mut metadata_checked)| async move {
             loop {
                 if now() - start > 3600 || app.stop.is_cancelled() || now() >= expires {
                     return None;
@@ -277,13 +312,28 @@ pub(crate) async fn events(
                     return Some((
                         Ok(event),
                         (app, id, cursor, queue, start, auth_key, expires, checked,
-                            user_id, generation, agent_id, access_revision),
+                            user_id, generation, agent_id, access_revision, metadata_revision, metadata_checked),
                     ));
                 }
                 queue = match app.store.chat_events(&id, cursor).await {
-                    Ok(mut v) => {if uploads::message_files(&app,&mut v).await.is_err(){return None;} v},
+                    Ok(mut v) => {if uploads::message_files(&app,&mut v).await.is_err() || crate::manager::decorate(&app,&mut v).await.is_err(){return None;} v},
                     Err(_) => return None,
                 };
+                if queue.is_empty() && now() > metadata_checked {
+                    metadata_checked = now();
+                    let summary = app.store.session_read_summary(&id).await.ok()?;
+                    let revision = summary["metadata_revision"].as_u64().unwrap_or(0);
+                    if metadata_revision != Some(revision) {
+                        metadata_revision = Some(revision);
+                        // Metadata events deliberately carry no SSE ID: event-log
+                        // sequence numbers are not public chat sequence numbers.
+                        let event = Event::default().event("session_updated")
+                            .data(json!({"session":summary}).to_string());
+                        return Some((Ok(event), (app, id, cursor, queue, start, auth_key,
+                            expires, checked, user_id, generation, agent_id, access_revision,
+                            metadata_revision, metadata_checked)));
+                    }
+                }
                 if queue.is_empty() {
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }

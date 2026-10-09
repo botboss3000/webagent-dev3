@@ -111,9 +111,20 @@ Workflow defaults are embedded in the binary. An authenticated, validated
 application-plane override may tighten limits within shipped ceilings. The
 effective policy revision is a digest of resolved settings, not an independent
 counter. Live changes are read at loop boundaries; the current limit is checked
-again before publication. Tool permission policy remains independent and
-mandatory. Existing model selection and base instructions are pinned at
+again before publication. Tool denials remain mandatory. Named Auto mode waives
+only per-tool Ask checkpoints after live denial checks; other modes retain
+approval semantics. Existing model selection and base instructions are pinned at
 admission; live revocation still applies before dispatch.
+
+## Manager message admission
+
+The independent V3 incoming-message gate stores submissions as visible user chat
+before admission to the working agent. Agent metadata owns
+manager_incoming_message settings beneath the Identity revision. User-owned
+manager_review: documents retain submissions, pinned criteria/model plans and
+generation-fenced verdicts; manager_pending: documents are temporary per-session
+queue pointers. Acceptance alone atomically adds the user interaction and agent
+run. Rejected and errored submissions never enter model history. See manager.md.
 
 ## Authoritative record map
 
@@ -147,7 +158,7 @@ Encrypted content and sensitive metadata follow the sensitivity noted above.
 | `run_index` | User; projection of run documents | Private metadata | Update with run; rebuild or verify against it |
 | `events` | App or user; operational event stream | Redacted metadata | Append; bounded retention |
 | `legacy_event_map` | App or user; migration mapping | Private metadata | Preserve through rollback window |
-| `docs`: `session:`, `session_mode:`, `session_chat_controls:`, `session_ability_state:`, `run:`, `run_view:`, `attachment:`, `promotion:`, `receipt:session:`, `receipt:message:`, `receipt:run:`, `receipt:approval:`, `receipt:chat_controls:` | User; canonical state and idempotency receipts | Private | Revisioned or immutable by key; user ownership check |
+| `docs`: `manager_review:`, `manager_pending:`, `session:`, `session_mode:`, `session_chat_controls:`, `session_ability_state:`, `run:`, `run_view:`, `attachment:`, `promotion:`, `receipt:session:`, `receipt:message:`, `receipt:run:`, `receipt:approval:`, `receipt:chat_controls:` | User; canonical state and idempotency receipts | Private | Revisioned or immutable by key; user ownership check |
 | `docs`: `agent:`, `agent_abilities:` | Agent; compatibility/configuration document | Private | Migrate to typed agent tables when replaced |
 | `docs`: all remaining keys, including `workflow_policy`, provider tokens, shutoff, auth, model catalog, `storage:split_migrated`, `storage:access_v1`, and `storage:agent_split_v1` | App; canonical policy, secret, control, or migration marker | Security sensitive or secret | Revisioned, revoked, or versioned by family |
 
@@ -201,3 +212,45 @@ shutoff, and uncertain-write recovery. Then deploy the tested image to
 `webagent-dev-v3` and exercise authenticated chat, read tool, approval gate,
 reload, and recovery in the v3 development UI. A healthy container or unit-test
 pass alone does not meet the Phase 1 exit condition.
+
+## Tool-execution policy and background record ownership
+
+| Record or resource | Owner and authority | Sensitivity and retention | Cross-plane contract |
+| --- | --- | --- | --- |
+| Agent `tool_execution` settings | Revisioned agent ability configuration; shared Rust resolver validates mode, concurrency and run-end behavior | Agent configuration; existing encrypted agent-record retention | Scheduling only, never a grant, capability escalation or approval |
+| Effective execution flags and semantics | Trusted model-call runtime guidance from `src/tool_execution.rs` | Call-scoped contribution; not durable user instructions | Bundled skill text and tool outputs cannot override effective flags |
+| Active tool counters and installation resource lock | Process-wide Rust OnceLock limiter; per-agent/tool counters across users/sessions, total bounded by loop-runtime tools.max_parallel_calls (maximum four), installation-wide shared-read/exclusive-write guard | Transient identity keys only; removed when active count reaches zero; no per-resource registry | Applies to actual authorized foreground/background execution, not submit/task-wait controls; no database reads or persisted semaphore state |
+| Background task handle and completion envelope | Parent authenticated runtime task service, not low-level worker or model arguments | Session/user-bound tool arguments/results are sensitive untrusted evidence; use runtime’s existing encrypted run/event ownership and retention, never a plaintext sidecar | Deliver results/completion at a model-call boundary; stop cancels, silent notifies without a loop and carries leftovers to next user turn, wake has a read-only ceiling with no escalation, background spawn or inherited approvals |
+| Durable V3 broker job and finish receipt | Protected build broker plus original Rust call/recovery watcher | Existing caller/session-bound broker receipts and retention | Not a generic background task; no duplicate uncertain deployment/finish and no implied cancellation/replay by generic run-end policy |
+
+The module adds no storage schema or migration and does not establish a new durable background-record format. The parent service owns task persistence, cancellation, authorization rechecks, completion publication and recovery; audit its exact record names and existing retention when those contracts change. OnceLock coordinates one executor process only; independent executors require installation-wide coordination before aggregate concurrency can be claimed. Do not inspect encrypted session database files for this verification.
+
+Background capability and concurrency capability are separate. In addition to the six background-vetted tools, get_time, get_date, calculate, web_search, get_weather and maps_geocode allow foreground concurrency up to four and use the shared installation read guard, but cannot background or silent/wake. Other stateful discovery/native controls stay concurrency one and exclusive. The API can report max_supported_concurrency(name); omitted/null tool_execution maps or null tool entries resolve to defaults.
+
+## Background read tasks (additive, integration acceptance pending)
+
+`background_task:` documents belong explicitly to the authenticated user plane.
+Arguments, results, origin references, lease state, and delivery references are
+always AEAD-encrypted, including when administrator plaintext storage is enabled.
+`background_task_index` is a bounded pending-work projection in the same user
+file; it holds only task/session identifiers, revision, and status.
+`background_task_delivery` holds task ID and consuming run ID. A consuming run's
+input and task delivery receipt commit in its existing save transaction; a
+competing consumer fails instead of duplicating evidence. Cross-plane agent and
+account references are checked through live authorization before dispatch and
+again before result delivery. Reads never confer new authority.
+
+Admission permits at most 256 active or unconsumed completed tasks per user;
+consumed completion documents remain retained for stable-call idempotency and
+status lookup, excluded from pending scans. Cancelled/failed records are also
+retained but excluded from pending quota. This implementation does not yet
+supply archival pruning of retained task documents. Admission fails closed when
+the pending quota is full. Schema creation is additive and idempotent and does
+not read or migrate live session database files outside the Store APIs.
+
+The scheduler starts an independent background service with at most four local
+inflight reads. Shared execution limits remain enforced by call_foreground.
+Leased interrupted safe reads may be reclaimed after expiration. The renewable lease lasts thirty seconds and is refreshed every ten seconds; a lost claim cancels the local operation before another executor can publish its result. Completion evidence stays untrusted.
+Postrun classification, durable notices and read-only wake admission are owned
+by background_followup; its delivery claims must share the delivery receipt
+transaction. No deployment or end-to-end acceptance is implied by these modules.

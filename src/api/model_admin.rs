@@ -210,19 +210,29 @@ async fn identity_get(State(app): State<App>, Extension(identity): Extension<Val
     let row = sqlx::query("SELECT name,description,revision FROM agents WHERE id=?")
         .bind(&id).fetch_one(&store.agent_pool).await.map_err(anyhow::Error::from)?;
     let config=crate::execution_modes::config(&store,&id).await?;
+    let defaults=crate::context_compaction::Config::read(&app.compaction_config_path)?;
+    let override_settings=crate::context_compaction::agent_thresholds(&store,&id).await?;
+    // Keep Identity readable if a later app-default edit invalidates an override.
+    let effective=override_settings.clone().unwrap_or(crate::context_compaction::AgentThresholds{
+        trigger_tokens:defaults.trigger_tokens,tail_tokens:defaults.tail_tokens});
+    let compaction_valid=effective.apply(&defaults).is_ok();
     let settings=crate::gate_controls::agent_visibility(&store,&id).await?;
     let closing=crate::gate_controls::agent_closing(&store,&id).await?;
+    let manager=crate::manager::config::incoming(&store,&id).await?;
     let closing_protocol=crate::gate_registry::closing_config()?;
     let fixed=crate::gate_registry::visibility_config()?.guidance;
-    Ok(Json(json!({"closing_message":closing,"closing_protocol":{"flags":closing_protocol.flags,"notification_max_words":closing_protocol.notification_max_words},"message_visibility":{"mode":settings.mode,"guidance":settings.guidance,"fixed_protocol":fixed},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":row.get::<String,_>("name"),
+    Ok(Json(json!({"manager_incoming_message":manager,"closing_message":closing,"closing_protocol":{"flags":closing_protocol.flags,"notification_max_words":closing_protocol.notification_max_words},"message_visibility":{"mode":settings.mode,"guidance":settings.guidance,"fixed_protocol":fixed},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":row.get::<String,_>("name"),
+        "compaction_thresholds":{"trigger_tokens":effective.trigger_tokens,"tail_tokens":effective.tail_tokens},
+        "compaction_defaults":{"trigger_tokens":defaults.trigger_tokens,"tail_tokens":defaults.tail_tokens,"summary_tokens":defaults.summary_tokens},
+        "compaction_overridden":override_settings.is_some(),"compaction_valid":compaction_valid,
         "description":row.get::<String,_>("description"),"revision":row.get::<i64,_>("revision"),
         "can_manage":rights["can_manage"]})))
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct IdentityUpdate { revision: i64, name: Option<String>, description: Option<String>, execution_modes: Option<Value>, default_execution_mode: Option<String>, message_visibility: Option<crate::gate_controls::AgentVisibility>, closing_message: Option<crate::gate_controls::AgentClosing> }
+struct IdentityUpdate { revision: i64, name: Option<String>, description: Option<String>, execution_modes: Option<Value>, default_execution_mode: Option<String>, message_visibility: Option<crate::gate_controls::AgentVisibility>, closing_message: Option<crate::gate_controls::AgentClosing>, compaction_thresholds: Option<crate::context_compaction::AgentThresholds>, manager_incoming_message: Option<crate::manager::config::IncomingMessage> }
 async fn identity_put(State(app): State<App>, Extension(identity): Extension<Value>, Path(id): Path<String>, Json(body): Json<IdentityUpdate>) -> Api {
-    if body.revision < 0 || (body.name.is_none() && body.description.is_none() && body.execution_modes.is_none() && body.default_execution_mode.is_none() && body.message_visibility.is_none() && body.closing_message.is_none())
+    if body.revision < 0 || (body.name.is_none() && body.description.is_none() && body.execution_modes.is_none() && body.default_execution_mode.is_none() && body.message_visibility.is_none() && body.closing_message.is_none() && body.compaction_thresholds.is_none() && body.manager_incoming_message.is_none())
         || body.name.as_ref().is_some_and(|s| s.trim().is_empty() || s.len()>200)
         || body.description.as_ref().is_some_and(|s| s.len()>2000) {
         return Err(ApiError(StatusCode::BAD_REQUEST,"Name must contain 1–200 bytes; description at most 2000 bytes".into()));
@@ -238,6 +248,11 @@ async fn identity_put(State(app): State<App>, Extension(identity): Extension<Val
     let default=if modes.as_array().unwrap().iter().any(|m|m["id"]==requested) {requested.to_owned()}
         else if body.default_execution_mode.is_some() {return Err(crate::bad("Unknown default mode"));} else {"ask".to_owned()};
     metadata["execution_modes"]=modes; metadata["default_execution_mode"]=json!(default);
+    if let Some(thresholds)=body.compaction_thresholds {
+        let defaults=crate::context_compaction::Config::read(&app.compaction_config_path)?;
+        thresholds.apply(&defaults).map_err(|_|crate::bad("Invalid compaction thresholds: tail plus summary must be below trigger"))?;
+        metadata["compaction_thresholds"]=serde_json::to_value(thresholds).map_err(anyhow::Error::from)?;
+    }
     if let Some(settings)=body.message_visibility {
         settings.validate().map_err(|e|crate::bad(&e.to_string()))?;
         metadata["message_visibility"]=serde_json::to_value(settings).map_err(anyhow::Error::from)?;
@@ -245,6 +260,23 @@ async fn identity_put(State(app): State<App>, Extension(identity): Extension<Val
     if let Some(settings)=body.closing_message {
         settings.validate().map_err(|e|crate::bad(&e.to_string()))?;
         metadata["closing_message"]=serde_json::to_value(settings).map_err(anyhow::Error::from)?;
+    }
+    if let Some(settings)=body.manager_incoming_message {
+        settings.validate().map_err(|e|crate::bad(&e.to_string()))?;
+        if settings.enabled {
+            let mut scoped=app.clone();scoped.store=store.clone();
+            // Validate the actual judge appointment before accepting an enabled gate.
+            let mut plan=store.model_catalog().await?.resolve_role(&id,crate::model_selection::ModelRole::System)
+                .map_err(|_|crate::bad("Assign an authorized System model before enabling incoming-message review"))?;
+            scoped.pin_model_plan(&mut plan).await
+                .map_err(|_|crate::bad("System model is unavailable"))?;
+        }
+        let next=serde_json::to_value(settings).map_err(anyhow::Error::from)?;
+        if metadata["manager_incoming_message"]!=next {
+            metadata["manager_incoming_message_revision"]=json!(metadata["manager_incoming_message_revision"]
+                .as_u64().unwrap_or(0).checked_add(1).ok_or_else(||crate::bad("Manager settings revision exhausted"))?);
+        }
+        metadata["manager_incoming_message"]=next;
     }
     let changed = sqlx::query("UPDATE agents SET name=COALESCE(?,name),description=COALESCE(?,description),metadata=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?")
         .bind(body.name.as_deref().map(str::trim)).bind(body.description.as_deref()).bind(store.seal(&metadata)?)
@@ -680,7 +712,7 @@ mod tests {
         let (_root,app)=fixture().await;let identity=json!({"_user_id":"admin"});
         let Json(before)=identity_get(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap();
         assert_eq!(before["message_visibility"]["mode"],"manual");
-        let patch=|revision,guidance:&str|IdentityUpdate{revision,name:None,description:None,execution_modes:None,default_execution_mode:None,message_visibility:Some(crate::gate_controls::AgentVisibility{mode:crate::gate_controls::PromotionMode::None,guidance:guidance.into()}),closing_message:None};
+        let patch=|revision,guidance:&str|IdentityUpdate{revision,name:None,description:None,execution_modes:None,default_execution_mode:None,message_visibility:Some(crate::gate_controls::AgentVisibility{mode:crate::gate_controls::PromotionMode::None,guidance:guidance.into()}),closing_message:None,manager_incoming_message:None,compaction_thresholds:None};
         let revision=before["revision"].as_i64().unwrap();
         let Json(saved)=identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(patch(revision,"Keep progress concise"))).await.unwrap();
         assert_eq!(saved["message_visibility"]["fixed_protocol"],before["message_visibility"]["fixed_protocol"]);
@@ -694,6 +726,35 @@ mod tests {
         assert!(identity_put(State(app.clone()),Extension(identity),Path("shared_default".into()),Json(patch(revision+1,&"x".repeat(4097)))).await.is_err());
     }
     #[tokio::test]
+    async fn identity_compaction_thresholds_are_agent_scoped_and_validated() {
+        let (_root,app)=fixture().await;
+        let identity=json!({"_user_id":"admin"});
+        let Json(before)=identity_get(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap();
+        assert_eq!(before["compaction_overridden"],false);
+        let defaults=&before["compaction_defaults"];
+        let trigger=defaults["trigger_tokens"].as_u64().unwrap() as usize + 1000;
+        let tail=defaults["tail_tokens"].as_u64().unwrap() as usize;
+        let update=|revision,trigger,tail|IdentityUpdate{
+            revision,name:None,description:None,execution_modes:None,default_execution_mode:None,
+            message_visibility:None,closing_message:None,manager_incoming_message:None,
+            compaction_thresholds:Some(crate::context_compaction::AgentThresholds{trigger_tokens:trigger,tail_tokens:tail})};
+        let revision=before["revision"].as_i64().unwrap();
+        let Json(saved)=identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),
+            Json(update(revision,trigger,tail))).await.unwrap();
+        assert_eq!(saved["compaction_overridden"],true);
+        assert_eq!(saved["compaction_thresholds"]["trigger_tokens"].as_u64(),Some(trigger as u64));
+        let store=app.store.for_agent("shared_default").await.unwrap();
+        let override_settings=crate::context_compaction::agent_thresholds(&store,"shared_default").await.unwrap().unwrap();
+        assert_eq!(override_settings.trigger_tokens,trigger);
+        assert_eq!(identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),
+            Json(update(revision,trigger,tail))).await.unwrap_err().0,StatusCode::CONFLICT);
+        assert_eq!(identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),
+            Json(update(saved["revision"].as_i64().unwrap(),trigger,trigger))).await.unwrap_err().0,StatusCode::BAD_REQUEST);
+        let outsider=tenant_user(&app,"compaction-outsider").await;
+        assert_eq!(identity_put(State(app.clone()),Extension(json!({"_user_id":outsider})),Path("shared_default".into()),
+            Json(update(saved["revision"].as_i64().unwrap(),trigger+1000,tail))).await.unwrap_err().0,StatusCode::FORBIDDEN);
+    }
+    #[tokio::test]
     async fn notification_guidance_roundtrips_with_identity_revision() {
         let (_root,app)=fixture().await;
         let identity=json!({"_user_id":"admin"});
@@ -703,7 +764,7 @@ mod tests {
         let update=|revision,guidance:&str|IdentityUpdate{revision,name:None,description:None,
             execution_modes:None,default_execution_mode:None,message_visibility:None,
             closing_message:Some(crate::gate_controls::AgentClosing{
-                notification_guidance:guidance.into()})};
+                notification_guidance:guidance.into()}),manager_incoming_message:None,compaction_thresholds:None};
         let Json(saved)=identity_put(State(app.clone()),Extension(identity.clone()),
             Path("shared_default".into()),Json(update(revision,"Name the next step"))).await.unwrap();
         assert_eq!(saved["closing_message"]["notification_guidance"],"Name the next step");
@@ -723,7 +784,7 @@ mod tests {
         let Json(saved)=identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{
             revision:before["revision"].as_i64().unwrap(),name:None,description:None,
             execution_modes:Some(json!([{"id":"review","label":"Review","permission_policy":"read_only","prompt":"Inspect only"}])),
-            default_execution_mode:Some("review".into()),message_visibility:None,closing_message:None})).await.unwrap();
+            default_execution_mode:Some("review".into()),message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None})).await.unwrap();
         let Json(reloaded)=identity_get(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap();
         assert_eq!(saved,reloaded);
         let Json(session)=crate::api::create_session(State(app.clone()),Json(json!({"client_request_id":crate::uuid()}))).await.unwrap();
@@ -734,7 +795,7 @@ mod tests {
         let mut modes=saved["execution_modes"].clone();
         modes.as_array_mut().unwrap().last_mut().unwrap()["permission_policy"]=json!("write");
         identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{
-            revision:saved["revision"].as_i64().unwrap(),name:None,description:None,execution_modes:Some(modes),default_execution_mode:None,message_visibility:None,closing_message:None})).await.unwrap();
+            revision:saved["revision"].as_i64().unwrap(),name:None,description:None,execution_modes:Some(modes),default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None})).await.unwrap();
         assert_eq!(crate::session_mode(&app,sid).await.unwrap()["mode"],"read_only");
         let Json(next)=crate::api::change_session_mode(&app,sid,"review",Some(0),None).await.unwrap();
         assert_eq!(next["mode"],"write");
@@ -773,12 +834,12 @@ mod tests {
         let identity = json!({"_user_id":"admin"});
         let Json(before) = identity_get(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap();
         let revision = before["revision"].as_i64().unwrap();
-        let Json(saved) = identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{revision,name:Some("  Renamed  ".into()),description:Some("Description".into()),execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None})).await.unwrap();
+        let Json(saved) = identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{revision,name:Some("  Renamed  ".into()),description:Some("Description".into()),execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None})).await.unwrap();
         assert_eq!(saved["name"],"Renamed"); assert_eq!(saved["description"],"Description");
-        assert!(identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{revision,name:Some("Stale".into()),description:None,execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None})).await.is_err());
-        assert!(identity_put(State(app.clone()),Extension(identity),Path("shared_default".into()),Json(IdentityUpdate{revision:revision+1,name:Some(" ".into()),description:None,execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None})).await.is_err());
+        assert!(identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{revision,name:Some("Stale".into()),description:None,execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None})).await.is_err());
+        assert!(identity_put(State(app.clone()),Extension(identity),Path("shared_default".into()),Json(IdentityUpdate{revision:revision+1,name:Some(" ".into()),description:None,execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None})).await.is_err());
         let outsider = tenant_user(&app,"identity-outsider").await;
-        assert!(identity_put(State(app.clone()),Extension(json!({"_user_id":outsider})),Path("shared_default".into()),Json(IdentityUpdate{revision:revision+1,name:Some("Forbidden".into()),description:None,execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None})).await.is_err());
+        assert!(identity_put(State(app.clone()),Extension(json!({"_user_id":outsider})),Path("shared_default".into()),Json(IdentityUpdate{revision:revision+1,name:Some("Forbidden".into()),description:None,execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None})).await.is_err());
     }
     #[tokio::test]
     async fn deepseek_keys_are_validated_encrypted_scoped_and_not_returned() {
@@ -943,5 +1004,29 @@ mod tests {
         forged.connections.get_mut("one").unwrap().credential_ref="credential:two".into();
         assert!(matches!(save(State(app),Extension(json!({"_user_id":"admin"})),agent_query("agent-a"),Json(forged)).await,
             Err(ApiError(StatusCode::BAD_REQUEST,_))));
+    }
+}
+
+
+#[cfg(test)]
+mod manager_identity_tests {
+    use super::*;
+    #[tokio::test]
+    async fn manager_identity_is_off_by_default_scoped_and_revision_fenced() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let identity=json!({"_user_id":"admin"});
+        let before=identity_get(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap().0;
+        assert_eq!(before["manager_incoming_message"],json!({"enabled":false,"criteria":""}));
+        let revision=before["revision"].as_i64().unwrap();
+        let body=|revision,criteria:&str|serde_json::from_value::<IdentityUpdate>(json!({
+            "revision":revision,"manager_incoming_message":{"enabled":true,"criteria":criteria}})).unwrap();
+        assert!(identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(body(revision," "))).await.is_err());
+        let saved=identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(body(revision,"Clothing questions only"))).await.unwrap().0;
+        let reloaded=identity_get(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap().0;
+        assert_eq!(saved,reloaded);
+        assert_eq!(identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(body(revision,"Stale"))).await.unwrap_err().0,StatusCode::CONFLICT);
+        let user=app.store.create_user_account("manager-setting-outsider","fixture-only-password").await.unwrap();
+        assert_eq!(identity_put(State(app.clone()),Extension(json!({"_user_id":user["user_id"]})),Path("shared_default".into()),Json(body(revision+1,"Forbidden"))).await.unwrap_err().0,StatusCode::FORBIDDEN);
+        assert!(identity_put(State(app.clone()),Extension(identity),Path("shared_default".into()),Json(body(revision+1,&"x".repeat(8193)))).await.is_err());
     }
 }

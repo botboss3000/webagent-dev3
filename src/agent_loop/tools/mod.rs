@@ -30,7 +30,9 @@ pub(crate) mod core_compaction;
 pub(crate) mod core_recall;
 mod dispatch;
 pub(crate) mod administrator;
-pub(crate) use dispatch::call;
+pub(crate) use dispatch::{call, call_foreground};
+#[cfg(test)]
+pub(crate) use dispatch::call_raw;
 use serde_json::{json, Value};
 use std::sync::OnceLock;
 use tokio::{
@@ -42,7 +44,8 @@ use tokio_util::sync::CancellationToken;
 pub fn is_read(name: &str) -> bool {
     matches!(
         name,
-        "search_tools"
+        "task_status" | "task_wait" | "task_cancel"
+            | "search_tools"
             | "decide_with_jev"
             | "score_directory_with_jev"
             | "get_time"
@@ -109,6 +112,7 @@ pub fn schemas() -> Vec<Value> {
         "type":"function", "name":name, "description":description,
         "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}
     })).collect();
+        schemas.extend(crate::background_tasks::schemas());
         schemas.extend(administrator::schemas());
         schemas.extend(web_access::schemas());
         schemas.extend(core_decision::schemas());

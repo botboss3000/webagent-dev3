@@ -2,6 +2,8 @@
 'use strict';
 import { renderVisibility } from './visibility.js';
 import { renderClosing } from './closing.js';
+import { renderManager } from './manager.js';
+import { renderCompaction } from './compaction.js';
 // Adapted V2 Identity fields; V3 transport, tenant permissions and revision fencing.
 export async function renderIdentity(host, request, {agentId, onSaved = () => {}}) {
   const path = '/models/agents/' + encodeURIComponent(agentId) + '/identity';
@@ -53,6 +55,11 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
       input.addEventListener('blur',save);
     }
   }
+  const persist = (patch) => {
+    const task = queue.then(async()=>{ const saved=await request(path,'PUT',{revision:agent.revision,...patch}); agent=saved; onSaved(saved); return saved; });
+    queue=task.catch(()=>{}); return task;
+  };
+  renderCompaction(content, agent, persist);
   const title = document.createElement('h3'); title.textContent = 'Chat modes'; content.append(title);
   const hint = document.createElement('p'); hint.className = 'ac-hint';
   hint.textContent = 'Default mode applies to new conversations. Read-only modes cannot execute mutating tools. Each mode adds its own instruction before model calls; existing permissions and approvals still apply.'; content.append(hint);
@@ -62,10 +69,6 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   const notice = document.createElement('p'); notice.className = 'ac-hint'; notice.setAttribute('role','status');
   const fill = () => { select.replaceChildren(); modes.filter(m=>!m._deleted&&!m._new).forEach(m=>{ const option=document.createElement('option'); option.value=m.id; option.textContent=m.label; select.append(option); }); select.value=agent.default_execution_mode; };
   fill(); defaultLabel.append(select); content.append(defaultLabel,notice);
-  const persist = (patch) => {
-    const task = queue.then(async()=>{ const saved=await request(path,'PUT',{revision:agent.revision,...patch}); agent=saved; onSaved(saved); return saved; });
-    queue=task.catch(()=>{}); return task;
-  };
   select.addEventListener('change',async()=>{select.disabled=true;try {await persist({default_execution_mode:select.value});notice.textContent='Default mode saved';} catch(error){notice.textContent='Save failed: '+error.message;} finally {fill();select.disabled=!agent.can_manage;} });
   const editor=document.createElement('div'); editor.style.cssText='display:flex;flex-direction:column;gap:8px;padding:10px 0';content.append(editor);
   const renderModes=()=>{
@@ -96,6 +99,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
     });
     if(agent.can_manage){const add=document.createElement('button');add.type='button';add.className='ac-btn ac-btn-ghost';add.textContent='Add mode';add.addEventListener('click',()=>{let n=1;while(modes.some(m=>m.id==='custom-'+n))n++;modes.push({id:'custom-'+n,label:'New mode',description:'',permission_policy:'read_only',prompt:'',builtin:false,_new:true});renderModes();});editor.append(add);}
   };renderModes();
+  renderManager(content, agent, persist);
   renderVisibility(content, agent, persist);
 
   renderClosing(content, agent, persist);

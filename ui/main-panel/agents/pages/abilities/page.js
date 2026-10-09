@@ -174,6 +174,19 @@ export async function renderAbilities(host, request, options) {
         abilityId: ability.id,
         hasToolSkill: tool.has_tool_skill === true,
         onOpenToolSkill: name => openToolSkill(ability, name),
+        onExecutionChange: async (_, settings) => {
+          try {
+            await request(scope + '/abilities/' + encodeURIComponent(ability.id) +
+              '/tools/' + encodeURIComponent(tool.name) + '/execution', 'PUT',
+              { expected_revision: data.revision, settings });
+            expandedAbility = ability.id;
+            await rerender({ administratorNotice: 'Tool execution settings saved.' });
+          } catch (error) {
+            status.textContent = error.status === 409
+              ? 'Settings changed. Reload before saving: ' + error.message : error.message;
+            throw error;
+          }
+        },
         onPermissionChange: (_, mode) => saveToolPermission(mode),
         onVisibilityChange: (_, mode) => save(ability, 'tool', mode, toolRow.querySelector('.ac-tri'), tool.name),
       });

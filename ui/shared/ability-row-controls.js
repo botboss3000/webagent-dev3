@@ -345,6 +345,7 @@ export function _buildToolRow(toolMeta, opts) {
       showVisibility,
       onPermissionChange,
       onVisibilityChange,
+      onExecutionChange: opts?.onExecutionChange,
     }));
   }
   return row;
@@ -361,6 +362,7 @@ function _buildToolStateControl(toolMeta, opts) {
     showVisibility = true,
     onPermissionChange = _noop,
     onVisibilityChange = _noop,
+    onExecutionChange,
   } = opts || {};
 
   const ORDER = ['deny', 'ask', 'auto'];          // least → most permissive
@@ -371,6 +373,14 @@ function _buildToolStateControl(toolMeta, opts) {
   let perm = ORDER.includes(toolMeta.permMode) ? toolMeta.permMode : 'auto';
   if ((RANK[perm] ?? 0) < ceilRank) perm = ceiling;
   let vis = toolMeta.mode === 'discoverable' ? 'discoverable' : 'visible';
+  let execution = toolMeta.execution ? { ...toolMeta.execution } : null;
+  let savingExecution = false;
+  const showExecution = !!execution && typeof onExecutionChange === 'function';
+  const backgroundCapable = toolMeta.background_capable === true;
+  const maxSupportedConcurrency = Number.isInteger(toolMeta.max_supported_concurrency)
+    && toolMeta.max_supported_concurrency >= 1 && toolMeta.max_supported_concurrency <= 4
+    ? toolMeta.max_supported_concurrency : 1;
+  const backgroundReason = 'Background execution is not supported for this tool.';
 
   // ── The control — the shared 3-position PERMISSION tri (Off · Ask · Auto) ───
   // The tool's toggle IS the `.ac-tri` its row used before, so it reads as one
@@ -429,6 +439,29 @@ function _buildToolStateControl(toolMeta, opts) {
     return ok;
   }
 
+  async function saveExecution(key, next) {
+    if (!canEdit || savingExecution) return false;
+    if (key === 'max_concurrency' && (!Number.isInteger(next) || next < 1 || next > maxSupportedConcurrency)) {
+      _flashSaveCheck(tri, false, `Concurrency must be an integer from 1 to ${maxSupportedConcurrency}.`);
+      return false;
+    }
+    if (key === 'mode' && next !== 'foreground' && !backgroundCapable) return false;
+    if (!backgroundCapable && key === 'on_run_end' && next !== 'stop') return false;
+    if (execution[key] === next) return true;
+    const before = execution;
+    execution = { ...execution, [key]: next };
+    savingExecution = true;
+    _markSaving(tri);
+    let ok = true;
+    let message = '';
+    try { ok = (await onExecutionChange(toolMeta.name, { ...execution })) !== false; }
+    catch (error) { ok = false; message = error?.message || 'Not saved'; }
+    if (!ok) execution = before;
+    savingExecution = false;
+    _flashSaveCheck(tri, ok, message);
+    return ok;
+  }
+
   // ── The panel body. Rebuilt on every open/repaint from live state, so the
   //    ✓ marks always show exactly one selection per section. ─────────────────
   const _menuItems = () => {
@@ -461,6 +494,42 @@ function _buildToolStateControl(toolMeta, opts) {
           action: () => _save('vis', v),
         });
       }
+    }
+    if (showExecution) {
+      out.push({ separator: true });
+      for (const [key, heading, choices] of [
+        ['mode', 'Execution', [['foreground', 'Foreground'], ['background', 'Background'], ['model', 'Model chooses']]],
+        ['on_run_end', 'When run ends', [['stop', 'Stop'], ['silent', 'Silent (notify only)'], ['wake', 'Wake (read-only)']]],
+      ]) {
+        out.push({ info: true, className: 'ac-tool-state-head', label: heading });
+        for (const [value, label] of choices) {
+          const unsupported = !backgroundCapable && (key === 'mode' ? value !== 'foreground' : value !== 'stop');
+          out.push({
+            label, checked: execution[key] === value, radio: true,
+            disabled: !canEdit || savingExecution || unsupported,
+            title: unsupported ? backgroundReason : '',
+            keepOpen: true, action: () => saveExecution(key, value),
+          });
+        }
+      }
+      if (backgroundCapable) out.push({
+        info: true,
+        label: 'Silent posts a completion note without an agent loop; leftover results reach the next user turn. Wake starts a read-only continuation.',
+      });
+      if (!backgroundCapable) out.push({ info: true, label: backgroundReason });
+      out.push({
+        field: true, fieldType: 'number', label: `Maximum concurrency (1–${maxSupportedConcurrency})`,
+        value: execution.max_concurrency, min: 1, max: maxSupportedConcurrency, step: 1,
+        disabled: !canEdit || savingExecution || maxSupportedConcurrency === 1,
+        title: maxSupportedConcurrency === 1 ? 'This tool is restricted to one execution at a time.' : '',
+        onSave: async value => {
+          await saveExecution('max_concurrency', value.trim() === '' ? NaN : Number(value));
+          if (document.getElementById('files-floating-menu')?._owner === tri) {
+            const rect = document.getElementById('files-floating-menu').getBoundingClientRect();
+            openFloatingMenu(_menuItems, rect.top, rect.left, tri);
+          }
+        },
+      });
     }
     return out;
   };
@@ -535,7 +604,13 @@ export function openFloatingMenu(items, top, left, owner = null) {
       }
       const inp = document.createElement('input');
       inp.type = item.fieldType || 'text';
-      inp.value = item.value || '';
+      inp.value = item.value ?? '';
+      inp.disabled = !!item.disabled;
+      if (item.title) inp.title = item.title;
+      for (const bound of ['min', 'max', 'step']) {
+        if (item[bound] !== undefined) inp[bound] = String(item[bound]);
+      }
+      if (item.label) inp.setAttribute('aria-label', item.label);
       inp.placeholder = item.placeholder || '';
       inp.spellcheck = false;
       inp.autocomplete = item.fieldType === 'password' ? 'new-password' : 'off';
@@ -558,6 +633,11 @@ export function openFloatingMenu(items, top, left, owner = null) {
     btn.className = 'files-tab-menu-item' + (item.danger ? ' danger' : '') + (item.checked ? ' checked' : '');
     btn.type = 'button';
     btn.disabled = !!item.disabled;
+    if (item.title) btn.title = item.title;
+    if (item.radio) {
+      btn.setAttribute('role', 'menuitemradio');
+      btn.setAttribute('aria-checked', String(!!item.checked));
+    }
     // An item may ship its own inline SVG (`iconHtml`) instead of a lucide name.
     // The ability tables' controls use inline SVGs so they never depend on a
     // lucide pass having run on the page.
@@ -590,7 +670,7 @@ export function openFloatingMenu(items, top, left, owner = null) {
         const r = item.action();
         const repaint = () => {
           // Only repaint if the user hasn't already dismissed the panel.
-          if (!document.getElementById('files-floating-menu')) return;
+          if (document.getElementById('files-floating-menu')?._owner !== owner) return;
           openFloatingMenu(items, top, left, owner);
         };
         repaint();                                        // optimistic

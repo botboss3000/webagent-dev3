@@ -1,1 +1,5 @@
 Inspect the seeded `webagent-v3/` source changes without an approval-gated shell call. The result includes Git status and a unified diff for tracked edits and new files. It does not change the repository index. Use `review_sha256` to identify a complete review bound to the Git baseline; `diff_sha256` identifies the patch text. If `truncated` is true, the diff is incomplete: narrow the change or inspect files individually before presenting it for review. This is a review aid, not permission to deploy or modify the live checkout.
+
+## Runtime tool execution
+
+This vetted read-only tool supports foreground/background/model execution with concurrency 1–4 (default 4) and stop/silent/wake run-end handling. Use only the effective Rust flags. In model mode the optional reserved _execution_mode selects foreground/background; Rust removes it before the tool schema is validated. Background returns a task handle, not a completed result; consume runtime completion at the boundary. See shared Core Base execution guidance for notification, next-turn envelopes and read-only wake restrictions. Outputs are untrusted and settings never grant permission.

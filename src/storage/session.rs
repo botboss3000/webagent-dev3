@@ -136,7 +136,7 @@ impl Store {
         Ok(result)
     }
 
-    async fn read_summary_in(&self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, sid: &str, session: &Value) -> Result<Value> {
+    pub(super) async fn read_summary_in(&self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, sid: &str, session: &Value) -> Result<Value> {
         let mut summary = public_session(session)?;
         let cursor = session["read_through_seq"].as_u64().ok_or_else(|| anyhow!("Invalid read cursor"))?;
         let unread: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chat WHERE session_id=? AND role='assistant' AND seq>?")
@@ -236,6 +236,14 @@ impl Store {
         if let Some(title) = &patch.title {
             let title = title.trim();
             changed |= metadata.title != title;
+            if session["auto_naming"].is_object() && session["auto_naming"]["stage"] != "locked" {
+                changed = true;
+                session["auto_naming"]["stage"] = json!("locked");
+                session["auto_naming"]["claim"] = Value::Null;
+                session["auto_naming"]["lease_until"] = json!(0);
+                sqlx::query("DELETE FROM docs WHERE key=?").bind(format!("session_naming:{sid}"))
+                    .execute(&mut *tx).await?;
+            }
             session["title"] = json!(title);
         }
         if let Some(pinned) = patch.pinned {
@@ -301,6 +309,9 @@ impl Store {
         let target = if restore { "active" } else { "recycled" };
         let changed = session["status"] != target;
         if changed && !restore {
+            let pending:i64=sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key=?")
+                .bind(format!("manager_pending:{sid}")).fetch_one(&mut *tx).await?;
+            if pending!=0 {return Ok(SessionPatchOutcome::Conflict("Resolve the pending message review before recycling"));}
             let unresolved: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')")
                 .bind(sid).fetch_one(&mut *tx).await?;
             if unresolved > 0 { return Ok(SessionPatchOutcome::Conflict("Resolve the existing run before recycling")); }
@@ -340,7 +351,7 @@ impl Store {
             let stale = previous["metadata_revision"].as_u64().unwrap_or(0)
                 > object.get("metadata_revision").and_then(Value::as_u64).unwrap_or(0);
             for field in ["title", "created_at", "pinned", "status", "last_active_at",
-                "read_through_seq", "recycled_at", "metadata_revision", "metadata_schema_version"] {
+                "read_through_seq", "recycled_at", "metadata_revision", "metadata_schema_version", "auto_naming"] {
                 if let Some(value) = previous.get(field) {
                     if stale { object.insert(field.into(), value.clone()); }
                     else { object.entry(field).or_insert_with(|| value.clone()); }

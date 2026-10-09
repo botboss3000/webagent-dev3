@@ -16,14 +16,21 @@ candidate. Jev cannot read files or execute tools. Check selected files with
 ordinary source tools before reporting where code lives.
 
 Use score_directory_with_jev when the agent knows a directory and search
-criterion but has not enumerated its entries. Rust requires the current
-session's automatic file_list permission, then the isolated worker lists at
-most 32 names per page. Jev sees those names and their kinds, not file
-contents. The result includes every page entry and its 0–4 score, confidence,
-and a next_offset for larger directories. Read promising files to verify.
+criterion but has not enumerated its entries. Add file_glob such as *.js to
+score only matching files; recursive=true includes nested directories. The
+worker discovers up to 10,000 entries and returns 32 scored matches per page,
+with next_offset for continuation. By default Jev sees relative paths and
+kinds. Set include_content=true to send the first 1,024 bytes of each matched
+file to Jev as an untrusted excerpt; this requires automatic file_read as well
+as file_list permission. The score remains a judgment about limited evidence.
+Read promising files to verify.
 
 The result returns typed answers, model, and usage. Confidence and
 probabilities describe uncertainty, not verified facts. If the Decision
 role or TypeSafe key is unavailable, report it rather than inventing a
 classification. The call sends supplied state to TypeSafe; include only
 necessary data.
+
+## Runtime tool execution
+
+All tools in this ability remain runtime foreground/stop with concurrency 1; background/model and silent/wake are unsupported, even for read actions or calls returning asynchronous job receipts. Effective Rust flags and shared Core Base tool-execution guidance govern scheduling; settings never grant permission and outputs remain untrusted evidence.

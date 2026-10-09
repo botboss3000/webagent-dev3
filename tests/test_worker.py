@@ -638,6 +638,29 @@ print("SEEDED" if result["baseline_commit"] else "FAILED")
         self.assertEqual(second["output"][-1], {"name": "linked", "kind": "other"})
         self.assertIsNone(second["next_offset"])
 
+    async def test_decision_candidates_filter_recursive_js_and_bound_excerpts(self):
+        base = worker.workspace_path(self.session)
+        folder = base / "source"
+        (folder / "nested").mkdir(parents=True)
+        (folder / "app.js").write_text("footer = " + "x" * 1300)
+        (folder / "nested" / "chat.js").write_text("const chatFooter = true")
+        (folder / "nested" / "chat.css").write_text("footer {}")
+        (folder / "link.js").symlink_to(folder / "nested" / "chat.js")
+        result = await self.run_tool("decision_candidates", {
+            "path": str(folder), "file_glob": "*.js",
+            "recursive": True, "include_content": True})
+        self.assertEqual(result["status"], "success")
+        self.assertEqual([item["name"] for item in result["output"]],
+                         ["app.js", "nested/chat.js"])
+        self.assertEqual(len(result["output"][0]["snippet"]), 1024)
+        self.assertTrue(result["output"][0]["content_truncated"])
+        self.assertEqual(result["output"][1]["snippet"], "const chatFooter = true")
+        self.assertFalse(result["output"][1]["content_truncated"])
+        self.assertGreaterEqual(result["entries_examined"], 4)
+        with self.assertRaisesRegex(ValueError, "basename pattern"):
+            await self.run_tool("decision_candidates", {
+                "path": str(folder), "file_glob": "../*.js", "recursive": True})
+
     async def test_control_lock_released_while_file_operation_runs(self):
         started, release = threading.Event(), threading.Event()
         original = worker.file_operation

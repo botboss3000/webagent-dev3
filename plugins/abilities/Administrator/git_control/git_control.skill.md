@@ -12,3 +12,7 @@ trusted runtime credential transport. Workspace-local remotes stay in the sessio
 Interrupted mutations may have uncertain effects: inspect local and remote state
 before retry. Passive repository notices use deduplicated snapshots, never changes.
 Readiness remains pending until registration, configuration and API acceptance.
+
+## Runtime tool execution
+
+All tools in this ability remain runtime foreground/stop with concurrency 1; background/model and silent/wake are unsupported, even for read actions or calls returning asynchronous job receipts. Effective Rust flags and shared Core Base tool-execution guidance govern scheduling; settings never grant permission and outputs remain untrusted evidence.

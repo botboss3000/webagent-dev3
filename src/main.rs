@@ -15,8 +15,12 @@
 #[path = "agent_loop/tools/batch.rs"] mod parallel_batch;
 mod diagnostics;
 mod execution_modes;
+mod tool_execution;
+mod background_tasks;
+mod background_followup;
 mod abilities;
 mod services;
+mod session_naming;
 mod administrator_services;
 #[path = "api/browser_login.rs"] mod browser_login;
 #[path = "api/accounts.rs"] mod accounts;
@@ -86,6 +90,7 @@ use uuid::Uuid;
 include!("app.rs");
 mod api;
 use api::*;
+mod manager;
 mod agent_loop;
 use agent_loop::*;
 // Choose one role for this process. The API serves requests; the loop owns

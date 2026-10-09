@@ -29,6 +29,9 @@
     "get_webhook_log",
     "update_task_checkpoint",
     "get_task_checkpoint",
+    "task_status",
+    "task_wait",
+    "task_cancel",
     "present_plan",
     "present_chat_component",
     "manage_agent_profiles",
@@ -41,5 +44,5 @@
   "order": 0,
   "readiness": "partial",
   "config": {},
-  "migration_note": "Partial V3 port: compiled Base tools include utilities, own-session and cross-session search, execution mode, manual compaction and recall, prompt and selectable own-skill edits, task checkpoints, and declarative presentations. Cross-session similarity is bounded literal matching, not semantic embedding. Self-edits require agent administration, a revision and approval. Other declared Base tools remain unavailable; manifest metadata alone never registers execution."
+  "migration_note": "Partial V3 port: compiled Base tools include utilities, own-session and cross-session search, execution mode, manual compaction and recall, prompt and selectable own-skill edits, task checkpoints, current-session background read controls (task_status, task_wait, task_cancel), and declarative presentations. Adding declarations does not automatically grant tool access; live account, agent, capability, visibility and session policy still authorize every call. Background tasks start through per-tool execution dispatch, not a standalone task_start tool. Cross-session similarity is bounded literal matching, not semantic embedding. Self-edits require agent administration, a revision and approval. Other declared Base tools remain unavailable; manifest metadata alone never registers execution."
 }

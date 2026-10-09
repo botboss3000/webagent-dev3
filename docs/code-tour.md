@@ -283,6 +283,12 @@ journal remains intact. Compacted history remains past evidence, not permission.
 
 Base read_own_prompt resolves the current caller-owned session before the agent
 and rechecks live access and bundle validity around bounded prompt-slot reads.
+Incoming user messages can first pass the independent V3 manager in src/manager/.
+With the Identity gate enabled, chat admission stores visible text and a durable
+review without creating an agent run. The manager uses a tool-free System-model
+call; only acceptance commits the model-facing interaction and queued run.
+See docs/manager.md for states, ownership and interruption behavior.
+
 Internal slots are omitted; locked slots and nonmanagers are reported read-only.
 The separate edit_own_prompt, save_own_skill and remove_own_skill tools now
 target that agent, require manager authority and compare-and-swap revisions,
@@ -452,3 +458,14 @@ before the next promotion. The mode does not register or deploy source changes.
 
 Disable live UI editing before a broker release, whose acceptance check verifies
 the frozen UI bytes; re-enable it after promotion completes.
+
+## Automatic session names
+
+The UI and machine messaging API share session creation and message admission.
+Unnamed creation stores `New chat`. Storage naming hooks atomically derive the
+`New: <60 characters>` placeholder from the first accepted user message and
+queue naming alongside the first successful terminal publication.
+`src/session_naming.rs` owns optional System-only dispatch and recovery;
+`src/storage/naming.rs` owns encrypted state, leases and conditional commits.
+Manual title patches lock this state, including while a naming call is running.
+No assistant text enters the title prompt and no naming result enters chat history.

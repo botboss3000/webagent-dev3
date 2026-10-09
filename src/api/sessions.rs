@@ -44,9 +44,14 @@ pub(crate) async fn patch_session_api(State(app): State<App>, Path(id): Path<Str
 }
 pub(crate) async fn create_session(State(app): State<App>, Json(body): Json<Value>) -> Api {
     let request_id = required(&body, "client_request_id", 128)?;
-    let title = body["title"].as_str().unwrap_or("New chat");
-    if title.len() > 200 {
-        return Err(bad("Title too long"));
+    let supplied = match body.get("title") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(title)) => Some(title.trim()),
+        Some(_) => return Err(bad("Invalid session title")),
+    }.filter(|title| !title.is_empty());
+    let title = supplied.unwrap_or("New chat");
+    if title.len() > 200 || title.chars().any(char::is_control) {
+        return Err(bad("Invalid session title"));
     }
     let _guard = app.gate.lock().await;
     let receipt_key = format!("receipt:session:{request_id}");
@@ -70,7 +75,8 @@ pub(crate) async fn create_session(State(app): State<App>, Json(body): Json<Valu
         .bind(agent_id).fetch_optional(&agent_store.agent_pool).await.map_err(anyhow::Error::from)?;
     if exists.is_none() { return Err(bad("Agent not found")); }
     let id = uuid();
-    let value = json!({"id":id,"agent_id":agent_id,"title":title,"checkpoint_input":[],"checkpoint_through":0,"created_at":now()});
+    let value = json!({"id":id,"agent_id":agent_id,"title":title,"checkpoint_input":[],"checkpoint_through":0,"created_at":now(),
+        "auto_naming":{"version":1,"stage":if supplied.is_some() {"locked"} else {"awaiting_message"}}});
     let result = json!({"id":id,"agent_id":agent_id,"title":title});
     app.store
         .atomic_docs_event(
@@ -101,6 +107,7 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Session not found".into()))?;
     let (mut messages, last_seq) = app.store.chat_snapshot(&id).await?;
     uploads::message_files(&app,&mut messages).await?;
+    crate::manager::decorate(&app,&mut messages).await?;
     let usage=crate::usage::public(&app.store.get(&format!("session_usage:{id}")).await?.unwrap_or(Value::Null));
     let runs = public_runs(&app,app.store.recent_runs(Some(&id)).await?).await?;
     let components = app.store.base_chat_components(&id).await?;

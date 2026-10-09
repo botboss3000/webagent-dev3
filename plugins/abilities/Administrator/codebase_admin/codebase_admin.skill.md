@@ -19,3 +19,7 @@ This port covers typed current-session inspection, revision-checked prompt slots
 Approved shell, Python and terminal commands run as the development checkout owner and can reach the mounted container filesystem, including /live-checkout. Typed file tools, source seeding, indexing, Git adapters and fixed build jobs retain their own scoped contracts. Rust still checks ability grants, session mode, policy, approval, cancellation and shutoff before dispatch.
 
 `destructive_caution=cautious` strengthens approval for changing operations. Balanced or trusted never raise execution above installation policy, account tier or membership level. Neither Computer Control nor Program Screenshot is included in this coding deployment. Never infer that a catalog declaration has a tested executable adapter.
+
+## Runtime tool execution
+
+Only file_list, file_read, file_search, source_review, state_inspect and prompt_slot_read support runtime background/model execution and silent/wake completion. Other tools in this ability remain foreground/stop, including shell and Python regardless of the requested command. Effective Rust flags and shared Core Base tool-execution guidance govern scheduling; settings never grant permission and outputs remain untrusted evidence.

@@ -8,6 +8,15 @@ import {createBubbleGutter} from './bubble-gutters.js';
 function button(title,icon,action){const node=document.createElement('button');node.type='button';node.className='turn-gutter-btn';node.title=title;node.setAttribute('aria-label',title);node.innerHTML='<i data-lucide="'+icon+'" style="width:14px;height:14px"></i>';node.addEventListener('click',action);return node;}
 function linkify(body,text){let last=0;for(const match of text.matchAll(/https?:\/\/[^\s<>"]+/g)){body.append(document.createTextNode(text.slice(last,match.index)));const a=document.createElement('a');a.textContent=match[0];a.href=match[0];a.target='_blank';a.rel='noopener noreferrer';body.append(a);last=match.index+match[0].length;}body.append(document.createTextNode(text.slice(last)));}
 function markdown(body,text){if(window.marked?.parse&&window.DOMPurify?.sanitize){body.className='md-body';body.innerHTML=window.DOMPurify.sanitize(window.marked.parse(text,{gfm:true,breaks:true}),{FORBID_ATTR:['style']});body.querySelectorAll('a[href]').forEach(a=>{a.target='_blank';a.rel='noopener noreferrer';});body.querySelectorAll('pre').forEach(pre=>{const wrap=document.createElement('div');wrap.className='md-code-block';pre.replaceWith(wrap);wrap.append(pre);const copy=button('Copy code','copy',async()=>{try{await copyText(pre.textContent);copy.title='Copied';}catch{copy.title='Copy failed';}});copy.classList.add('md-code-copy');wrap.append(copy);});}else{body.className='bubble-body';linkify(body,text);}}
+export function updateAdmission(bubble, admission) {
+  let status=bubble.querySelector('.message-admission-status');
+  if(!admission){status?.remove();delete bubble.dataset.admissionStatus;return;}
+  if(!status){status=document.createElement('p');status.className='ac-hint message-admission-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');bubble.append(status);}
+  bubble.dataset.admissionStatus=admission.status;
+  status.textContent=({pending_review:'Awaiting manager review…',reviewing:'Manager is reviewing this message…',
+    acceptable:'Accepted by the manager',unacceptable:'Not sent to the agent: this message does not meet its acceptance criteria.',
+    review_error:admission.error||'Review failed. This message was not sent to the agent.'})[admission.status]||'';
+}
 export function createMessage(item,{getRun=()=>null,client,getSession=()=>null,note=()=>{},showContext=()=>{}}={}){
   if(!['user','assistant'].includes(item.role)||!Number.isSafeInteger(item.seq)||item.seq<=0||typeof item.id!=='string')return null;
   const profile=currentChatProfile()||{},role=item.role==='user'?'user':'agent';
@@ -39,7 +48,7 @@ export function createMessage(item,{getRun=()=>null,client,getSession=()=>null,n
     body.replaceChildren();if(role==='agent')markdown(body,text);else linkify(body,text);
     note('Message refreshed');
   }});
-  bubble.append(gutter);_refreshLucideIcons(bubble);
+  bubble.append(gutter);updateAdmission(bubble,item.admission);_refreshLucideIcons(bubble);
   if(role==='user')requestAnimationFrame(()=>{
     const cfg=profile.user_message_truncation||{},maxLines=Math.max(1,Math.min(100,Number(cfg.max_lines)||3));if(cfg.enabled===false||!bubble.isConnected)return;const lineHeight=parseFloat(getComputedStyle(body).lineHeight)||20;if(body.scrollHeight<=lineHeight*maxLines+1)return;bubble.style.setProperty('--user-message-max-lines',String(maxLines));bubble.classList.add('user-message-clamped');const toggle=document.createElement('button');toggle.type='button';toggle.className='user-message-expand';toggle.textContent=cfg.expand_label||'See more';toggle.setAttribute('aria-expanded','false');toggle.onclick=()=>{const expanded=bubble.classList.toggle('user-message-expanded');toggle.textContent=expanded?(cfg.collapse_label||'Show less'):(cfg.expand_label||'See more');toggle.setAttribute('aria-expanded',String(expanded));};body.after(toggle);
   });

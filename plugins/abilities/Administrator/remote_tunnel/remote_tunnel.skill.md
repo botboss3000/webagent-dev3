@@ -12,3 +12,7 @@ to the preview server. HTTP payloads are capped at 1 MiB; WebSockets and streame
 request bodies are unsupported. get_tunnel_url takes no arguments.
 The lease expires, stops when its process fails or workspace closes, and is never
 replayed after worker restart. Missing CLI or ownership validation means unavailable.
+
+## Runtime tool execution
+
+All tools in this ability remain runtime foreground/stop with concurrency 1; background/model and silent/wake are unsupported, even for read actions or calls returning asynchronous job receipts. Effective Rust flags and shared Core Base tool-execution guidance govern scheduling; settings never grant permission and outputs remain untrusted evidence.

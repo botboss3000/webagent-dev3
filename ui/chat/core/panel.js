@@ -5,7 +5,7 @@ import {mountComposerMedia} from '../controls/composer-media.js';
 import {mountSessionControls} from '../controls/session-controls.js';
 import {mountChatNotifications} from './chat-notifications.js';
 import {mountUsageStats} from '../controls/usage-stats.js';
-import {createMessage} from './message-view.js';
+import {createMessage,updateAdmission} from './message-view.js';
 import {closeGutterOverlays,updateGutterTimes} from './bubble-gutters.js';
 import {mountComposerProgress} from './composer-progress.js';
 import {createActivityView} from './activity-view.js';
@@ -76,7 +76,22 @@ function queueRead(){
 const readObserver=new IntersectionObserver(entries=>{for(const entry of entries){if(entry.isIntersecting&&entry.intersectionRect.height>0)visibleRows.add(entry.target);else visibleRows.delete(entry.target);}queueRead();},{root:$('chat-messages'),threshold:0});
 document.addEventListener('visibilitychange',queueRead,{signal:readAbort.signal});
 function resetReads(){++readGeneration;clearTimeout(readTimer);readThrough=0;readPending=0;visibleRows.clear();readObserver.disconnect();}
-function message(item){const target=$('chat-messages-inner');if([...target.children].some(row=>row.dataset.publicId===item.id))return;const row=createMessage(item,{getRun:()=>gutterRuns.get(item.run_id),client,getSession:()=>session,note,showContext:run=>stats.show(run)});if(!row)return;target.append(row);readObserver.observe(row);paintActivity();}
+let reviewRefreshBusy=false;
+const reviewTimer=setInterval(async()=>{
+  if(!session||reviewRefreshBusy||document.visibilityState==='hidden')return;
+  const rows=[...$('chat-messages-inner').querySelectorAll('[data-admission-status]')];
+  if(!rows.some(row=>['pending_review','reviewing'].includes(row.dataset.admissionStatus)))return;
+  const sid=session,generation=sessionGeneration;reviewRefreshBusy=true;
+  try{
+    const data=await client.snapshot(sid);
+    if(sid!==session||generation!==sessionGeneration)return;
+    for(const item of data.messages){const row=rows.find(row=>row.dataset.publicId===item.id);if(row)updateAdmission(row,item.admission);}
+    runs(data.runs||[]);
+    if(!data.messages.some(item=>['pending_review','reviewing'].includes(item.admission?.status)))await refresh();
+  }catch(error){if(sid===session&&generation===sessionGeneration)note('Manager status unavailable: '+error.message);}
+  finally{reviewRefreshBusy=false;}
+},1000);
+function message(item){const target=$('chat-messages-inner');const existing=[...target.children].find(row=>row.dataset.publicId===item.id);if(existing){updateAdmission(existing,item.admission);return;}const row=createMessage(item,{getRun:()=>gutterRuns.get(item.run_id),client,getSession:()=>session,note,showContext:run=>stats.show(run)});if(!row)return;target.append(row);readObserver.observe(row);paintActivity();}
 // Base presentation is display-only. Never turn model-supplied choice or
 // approval descriptions into an action or an authorization control.
 function components(items){
@@ -128,9 +143,9 @@ function failedRunMessages(items){
     row.firstChild.textContent='Run failed'+(run.error?' — '+run.error:'')+'. To continue, write a new message in the chat.';
   }
 }
-function runs(items){anchor.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));progress.update(items);void stats.refresh();controls.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));activityRuns=items.filter(run=>run.session_id===session||!run.session_id);rememberRuns(activityRuns);if(session)paintActivity();$('runs').replaceChildren();notifications.clearTools();const relevant=items.filter(run=>run.session_id===session||!run.session_id);const active=relevant.find(run=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(run.status));$('chat-input-row').dataset.runStatus=active?.status||relevant[0]?.status||'Ready';$('chat-stop-btn').hidden=!active||$('chat-stop-btn').dataset.configEnabled==='false';$('chat-stop-btn').dataset.run=active?.id||'';$('chat-stop-btn').style.display=$('chat-stop-btn').hidden?'none':'';$('chat-send').disabled=!!active||!!getState().shutoff||submitting||!!media?.uploading;
+function runs(items){anchor.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));progress.update(items);void stats.refresh();controls.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));activityRuns=items.filter(run=>run.session_id===session||!run.session_id);rememberRuns(activityRuns);if(session)paintActivity();$('runs').replaceChildren();notifications.clearTools();const relevant=items.filter(run=>run.session_id===session||!run.session_id);const pendingReview=!!$('chat-messages-inner').querySelector('[data-admission-status="pending_review"],[data-admission-status="reviewing"]');const active=relevant.find(run=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(run.status));$('chat-input-row').dataset.runStatus=active?.status||relevant[0]?.status||'Ready';$('chat-stop-btn').hidden=!active||$('chat-stop-btn').dataset.configEnabled==='false';$('chat-stop-btn').dataset.run=active?.id||'';$('chat-stop-btn').style.display=$('chat-stop-btn').hidden?'none':'';$('chat-send').disabled=pendingReview||!!active||!!getState().shutoff||submitting||!!media?.uploading;
 failedRunMessages(relevant);
-const continuing=!active&&!media?.count&&!$('chat-input').value.trim()&&$('chat-continue-btn').dataset.configEnabled!=='false';
+const continuing=!pendingReview&&!active&&!media?.count&&!$('chat-input').value.trim()&&$('chat-continue-btn').dataset.configEnabled!=='false';
 $('chat-continue-btn').hidden=!continuing;$('chat-continue-btn').style.display=continuing?'':'none';
 $('chat-continue-btn').disabled=!!getState().shutoff||submitting;
 // Context reports live in the composer panel and each bubble's More menu.
@@ -180,7 +195,12 @@ async function submit(text,clearInput=false){
     if((origin&&origin!==session)||(epoch!==sessionGeneration&&session!==sid))throw Error('Conversation changed; message was not sent.');
     const ids=media.snapshot(sid),content=text;
     const requestKey='message:'+sid+':'+content+':'+ids.join(',');
-    await client.send(sid,{text:content,attachment_ids:ids,client_message_id:keyId(requestKey)});
+    const sent=await client.send(sid,{text:content,attachment_ids:ids,client_message_id:keyId(requestKey)});
+    if(sent.review_id&&sid===session){
+      progress.note('Awaiting manager review…');
+      const data=await client.snapshot(sid);
+      if(sid===session){for(const item of data.messages)message(item);runs(data.runs||[]);}
+    }
     forgetKey(requestKey);media.committed(sid,ids);
     if(clearInput&&sid===session&&$('chat-input').value===draft)$('chat-input').value='';
     applyChatConfig();await refresh();
@@ -194,7 +214,7 @@ $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
 
   function disconnect(){anchor.reset();progress.reset();notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
   function destroy(){
-    disconnect();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);stats.destroy();media.destroy();controls.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
+    disconnect();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
     $('chat-input').onkeydown=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;
   }

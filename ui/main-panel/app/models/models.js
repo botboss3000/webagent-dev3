@@ -16,7 +16,7 @@ export async function mountAppModels(host) {
   const live=()=>!disposed;
   async function request(path,method='GET',body) {
     const auth=await fetch('/api/v3/auth/me',{credentials:'same-origin',cache:'no-store',signal});
-    if(!auth.ok)throw Error('');const me=await auth.json();
+    if(!auth.ok)throw Error('Sign in required');const me=await auth.json();
     if(!me.is_admin)throw Error('Administrator access required');
     const response=await fetch('/api/v3'+path,{method,credentials:'same-origin',cache:'no-store',signal,
       headers:{'Content-Type':'application/json',...(method==='GET'?{}:{'x-csrf-token':me.csrf_token})},

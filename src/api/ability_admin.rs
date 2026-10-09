@@ -100,6 +100,9 @@ async fn catalog(app:&App,identity:&Value,id:&str,params:&HashMap<String,String>
             for tool in tools {
                 let name=tool["name"].as_str().unwrap_or("").to_owned();
                 tool["call_count"]=json!(call_counts.get(&name).copied().unwrap_or(0));
+                tool["execution"]=serde_json::to_value(crate::tool_execution::resolve(&visibility,&name)?).map_err(anyhow::Error::from)?;
+                tool["background_capable"]=json!(crate::tool_execution::background_capable(&name));
+                tool["max_supported_concurrency"]=json!(crate::tool_execution::max_supported_concurrency(&name));
                 let decision=live_tool_decision(&scoped,&access,&name,&policy,&visibility,&active,&loaded,false);
                 if first || (decision.permission!=Permission::Deny && (effective.permission==Permission::Deny
                     || decision.permission==Permission::Auto)) {effective=decision;}
@@ -210,6 +213,39 @@ pub(crate) async fn skill_named_set(State(app):State<App>,Extension(identity):Ex
 pub(crate) async fn tool_set(State(app):State<App>,Extension(identity):Extension<Value>,Path((id,ability,tool)):Path<(String,String,String)>,Json(body):Json<AbilityVisibilityBody>)->Api {
     visibility(app,identity,id,ability,Some(tool),None,body).await
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExecutionBody {expected_revision:u64,settings:Value}
+pub(crate) async fn execution_set(State(app):State<App>,Extension(identity):Extension<Value>,Path((id,ability,tool)):Path<(String,String,String)>,Json(body):Json<ExecutionBody>)->Api {
+    let _guard=app.gate.lock().await;authority(&app,&identity,&id,true).await?;
+    if !app.abilities.known(&ability) || !app.abilities.has_tool(&ability,&tool) {
+        return Err(bad("Unknown ability or tool"));
+    }
+    let fields=body.settings.as_object().ok_or_else(||bad("Execution settings required"))?;
+    if fields.len()!=3 || !fields.contains_key("mode") || !fields.contains_key("max_concurrency") || !fields.contains_key("on_run_end") {
+        return Err(bad("Expected mode, max_concurrency and on_run_end"));
+    }
+    if !matches!(body.settings["mode"].as_str(),Some("foreground"|"background"|"model"))
+        || !matches!(body.settings["on_run_end"].as_str(),Some("stop"|"silent"|"wake"))
+        || !body.settings["max_concurrency"].as_u64().is_some_and(|concurrency|(1..=4).contains(&concurrency))
+        || (body.settings["mode"]!="foreground" && !crate::tool_execution::background_capable(&tool)) {
+        return Err(bad("Invalid or unsupported tool execution settings"));
+    }
+    let mut scoped=admin_agent_view(&app,&id).await?;
+    scoped.store=scoped.store.for_user(identity["_user_id"].as_str().ok_or_else(denied)?).await?;
+    let mut value=agent_abilities(&scoped).await?;
+    if value["revision"]!=body.expected_revision {return Err(conflict("Agent ability revision changed"));}
+    let revision=body.expected_revision.checked_add(1).ok_or_else(||bad("Agent ability revision overflow"))?;
+    let before=value.clone();
+    if !value["tool_execution"].is_object() {value["tool_execution"]=json!({});}
+    value["tool_execution"][&tool]=body.settings;
+    let settings=crate::tool_execution::resolve(&value,&tool).map_err(|_|bad("Invalid or unsupported tool execution settings"))?;
+    let settings=serde_json::to_value(settings).map_err(anyhow::Error::from)?;
+    if before["tool_execution"][&tool]==settings {return Ok(Json(before));}
+    value["tool_execution"][&tool]=settings;value["revision"]=json!(revision);
+    scoped.store.save_agent_abilities(&value,body.expected_revision).await.map_err(update_error)?;
+    phase3_api::quiesce_agent(&app,&id).await?;Ok(Json(value))
+}
 pub(crate) async fn skill_named_content(State(app):State<App>,Extension(identity):Extension<Value>,Path((id,ability,skill)):Path<(String,String,String)>)->Api {
     authority(&app,&identity,&id,true).await?;
     let content=app.abilities.configuration_skill_asset(&ability,"skill",&skill)
@@ -262,6 +298,82 @@ mod tests {
         assert!(grant_ceiling(&app,&identity,&json!({}),&json!({}),&json!({"base":"deny"}),&json!({}),true).await.is_err());
         assert!(grant_ceiling(&app,&identity,&json!({"codebase_admin":"auto"}),&json!({}),&json!({}),&json!({}),false).await.is_err());
         assert!(grant_ceiling(&app,&identity,&json!({"codebase_admin":"deny"}),&json!({}),&unchanged,&json!({}),false).await.is_ok());
+    }
+    #[tokio::test]
+    async fn tool_execution_is_authorized_validated_persisted_and_revision_fenced() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let identity=json!({"_user_id":app.store.current_user_id()});
+        let before=app.store.agent_abilities().await.unwrap();
+        let revision=before["revision"].as_u64().unwrap();
+        let path=("shared_default".into(),"codebase_admin".into(),"file_read".into());
+        let settings=json!({"mode":"foreground","max_concurrency":2,"on_run_end":"stop"});
+        execution_set(State(app.clone()),Extension(identity.clone()),Path(path.clone()),
+            Json(ExecutionBody{expected_revision:revision,settings:settings.clone()})).await.unwrap();
+        let saved=app.store.agent_abilities().await.unwrap();
+        assert_eq!(saved["tool_execution"]["file_read"],settings);
+        assert_eq!(saved["revision"],revision+1);
+        assert_eq!(saved["visibility"],before["visibility"]);
+        let response=read(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap();
+        assert!(response.0.get("tool_execution").is_none());
+        let tool=response.0["abilities"].as_array().unwrap().iter()
+            .find(|ability|ability["id"]=="codebase_admin").unwrap()["tools"].as_array().unwrap().iter()
+            .find(|entry|entry["name"]=="file_read").unwrap();
+        assert_eq!(tool["execution"],settings);
+        assert_eq!(tool["background_capable"],crate::tool_execution::background_capable("file_read"));
+        assert_eq!(tool["max_supported_concurrency"],crate::tool_execution::max_supported_concurrency("file_read"));
+        let member=app.store.create_user_account("execution_reader","fixture-only-password-hash").await.unwrap();
+        let member_id=member["user_id"].as_str().unwrap();
+        app.store.update_account_access(member_id,1,crate::access::AccountStatus::Active,crate::access::Role::User,"basic").await.unwrap();
+        app.store.set_agent_membership(member_id,"shared_default",crate::access::Relationship::Member,0).await.unwrap();
+        let member_identity=json!({"_user_id":member_id});
+        let member_catalog=read(State(app.clone()),Extension(member_identity.clone()),Path("shared_default".into())).await.unwrap();
+        assert_eq!(member_catalog.0["authority"]["can_manage"],false);
+        assert!(member_catalog.0.get("tool_execution").is_none());
+        assert_eq!(member_catalog.0["settings"],json!({}));
+        assert!(execution_set(State(app.clone()),Extension(member_identity),Path(path.clone()),
+            Json(ExecutionBody{expected_revision:revision+1,settings:settings.clone()})).await.is_err());
+        let stale=execution_set(State(app.clone()),Extension(identity.clone()),Path(path.clone()),
+            Json(ExecutionBody{expected_revision:revision,settings:settings.clone()})).await.err().unwrap();
+        assert_eq!(stale.0,StatusCode::CONFLICT);
+        execution_set(State(app.clone()),Extension(identity.clone()),Path(path.clone()),
+            Json(ExecutionBody{expected_revision:revision+1,settings:settings.clone()})).await.unwrap();
+        assert_eq!(app.store.agent_abilities().await.unwrap()["revision"],revision+1);
+        for invalid in [
+            json!({"mode":"invalid","max_concurrency":1,"on_run_end":"stop"}),
+            json!({"mode":"foreground","max_concurrency":0,"on_run_end":"stop"}),
+            json!({"mode":"foreground","max_concurrency":5,"on_run_end":"stop"}),
+            json!({"mode":"foreground","max_concurrency":1.5,"on_run_end":"stop"}),
+            json!({"mode":"foreground","max_concurrency":1,"on_run_end":"invalid"}),
+            json!({"mode":"foreground","max_concurrency":1,"on_run_end":"stop","extra":true}),
+        ] {
+            let error=execution_set(State(app.clone()),Extension(identity.clone()),Path(path.clone()),
+                Json(ExecutionBody{expected_revision:revision+1,settings:invalid})).await.err().unwrap();
+            assert_eq!(error.0,StatusCode::BAD_REQUEST);
+        }
+        assert!(execution_set(State(app.clone()),Extension(json!({"_user_id":"outsider"})),Path(path.clone()),
+            Json(ExecutionBody{expected_revision:revision+1,settings:settings.clone()})).await.is_err());
+        for unsupported in [
+            json!({"mode":"background","max_concurrency":1,"on_run_end":"stop"}),
+            json!({"mode":"model","max_concurrency":1,"on_run_end":"stop"}),
+            json!({"mode":"foreground","max_concurrency":2,"on_run_end":"stop"}),
+            json!({"mode":"foreground","max_concurrency":1,"on_run_end":"wake"}),
+        ] {
+            let unsupported_path=("shared_default".into(),"codebase_admin".into(),"file_write".into());
+            let error=execution_set(State(app.clone()),Extension(identity.clone()),Path(unsupported_path),
+                Json(ExecutionBody{expected_revision:revision+1,settings:unsupported})).await.err().unwrap();
+            assert_eq!(error.0,StatusCode::BAD_REQUEST);
+        }
+        let unknown=("shared_default".into(),"codebase_admin".into(),"not_a_tool".into());
+        assert!(execution_set(State(app.clone()),Extension(identity.clone()),Path(unknown),
+            Json(ExecutionBody{expected_revision:revision+1,settings:settings.clone()})).await.is_err());
+        let next=visibility_set(State(app.clone()),Extension(identity.clone()),
+            Path(("shared_default".into(),"codebase_admin".into())),
+            Json(AbilityVisibilityBody{expected_revision:revision+1,visibility:"off".into()})).await.unwrap();
+        assert_eq!(next.0["revision"],revision+2);
+        assert_eq!(next.0["tool_execution"]["file_read"],settings);
+        assert!(execution_set(State(app.clone()),Extension(identity),Path(path),
+            Json(ExecutionBody{expected_revision:revision+1,settings})).await.is_err());
+        assert_eq!(app.store.agent_abilities().await.unwrap()["revision"],revision+2);
     }
     #[tokio::test]
     async fn named_skill_save_is_independent_and_authorized() {

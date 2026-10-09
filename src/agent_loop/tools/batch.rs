@@ -23,8 +23,6 @@ pub(super) fn mark_uncertain_writes(run:&mut Value) {
     }
 }
 
-// BATCH-DISPATCH: never serialize overflow calls. The config explicitly marks
-// each name concurrent or reject; omitted names reject only in a multi-call turn.
 pub(super) async fn execute_parallel_batch(
     app:&App,id:&str,generation:&str,cancel:&CancellationToken,
     workflow_policy:&workflow::Policy,access:&access_policy::LiveAccess,
@@ -45,14 +43,15 @@ pub(super) async fn execute_parallel_batch(
     if run["batch"].as_array().map(Vec::len)!=Some(calls.len()) {
         return Err(anyhow!("Batch checkpoint length mismatch"));
     }
-    let config=loop_runtime::Config::read(&app.runtime_path)?;
     let sid=run["session_id"].as_str().ok_or_else(||anyhow!("Missing session"))?.to_owned();
     let agent_id=run["agent_id"].as_str().unwrap_or("shared_default").to_owned();
     let (policy,mode_revision,visibility,ability_state)=ability_controls(app,&sid).await?;
     let execution_mode=session_mode(app,&sid).await?;
+    let execution_mode=if run["post_run_followup"]==true {
+        json!({"mode":"read_only","execution_mode":"ask","revision":execution_mode["revision"]})
+    } else {execution_mode};
     let read_only=execution_mode["mode"]=="read_only";
     let saved_index=run["call_index"].as_u64().unwrap_or(0);
-    let mut accepted=0usize;
     for (idx,model_call) in calls.iter().enumerate() {
         if run["batch"][idx]["state"]!="new" {continue;}
         let name=model_call["name"].as_str().unwrap_or("").to_owned();
@@ -72,17 +71,16 @@ pub(super) async fn execute_parallel_batch(
             "digest":digest(&args),"policy_version":policy["version"],"mode_revision":mode_revision,
             "visibility_revision":visibility["revision"],"ability_state_revision":ability_state["revision"],
             "access_revision":access.revision.clone(),"state":"requested","decision":null});
-        let mode=config.tools.parallel_modes.get(&name).map(String::as_str).unwrap_or("reject");
+        crate::tool_execution::resolve(&visibility,&name)?;
         let effective=live_tool_decision(app,access,&name,&policy,&visibility,
             &ability_state,&run["loaded_abilities"],read_only).for_execution_mode(&execution_mode);
-        let result=if mode!="concurrent" {
-            Some(denied("Tool rejects parallel execution; request it in a separate turn"))
-        } else if accepted>=config.tools.max_parallel_calls {
-            Some(denied("Parallel tool-call limit exceeded; request this tool later"))
+        let result=if run["post_run_followup"]==true
+            && !crate::tool_execution::background_capable(&name) {
+            Some(denied("Tool is unavailable during a background follow-up"))
         } else if args.get("invalid_arguments").is_some()
             || effective.permission==access::Permission::Deny {
             Some(denied("Tool invocation denied by policy or invalid arguments"))
-        } else {accepted+=1;None};
+        } else {None};
         let state=if result.is_some() {"done"}
             else if effective.permission==access::Permission::Ask {"waiting"}
             else {"requested"};
@@ -127,16 +125,6 @@ pub(super) async fn execute_parallel_batch(
         }
     }
 
-    // Approval requests are serialized for the existing API, but execution is
-    // not. Wait for every independently approved call, then launch the batch.
-    if let Some(item)=run["batch"].as_array().unwrap().iter().find(|item|item["state"]=="waiting") {
-        run["pending"]=item["pending"].clone();
-        run["pending"]["state"]=json!("waiting");
-        run["status"]=json!("waiting_approval");
-        let mut payload=run["pending"].clone();payload["run_id"]=json!(id);
-        app.store.save_run(&mut run,"approval_required",&payload).await?;
-        return Ok(());
-    }
     let mut dispatch=Vec::new();
     let fresh_access=app.store.live_access(app.store.current_user_id(),&agent_id).await?;
     for idx in 0..calls.len() {
@@ -151,7 +139,9 @@ pub(super) async fn execute_parallel_batch(
             && pending["mode_revision"]==json!(mode_revision)
             && pending["visibility_revision"]==visibility["revision"]
             && pending["ability_state_revision"]==ability_state["revision"];
-        if !fresh || config.tools.parallel_modes.get(&name).map(String::as_str)!=Some("concurrent")
+        crate::tool_execution::resolve(&visibility,&name)?;
+        if !fresh || (run["post_run_followup"]==true
+                && !crate::tool_execution::background_capable(&name))
             || effective.permission==access::Permission::Deny
             || (effective.permission==access::Permission::Ask && pending["decision"]!="approve") {
             run["batch"][idx]["result"]=denied("Tool authorization changed before parallel dispatch");
@@ -171,10 +161,12 @@ pub(super) async fn execute_parallel_batch(
         run["call_index"]=json!(saved_index);
         run["batch"][idx]["state"]=json!("executing");
         run["batch"][idx]["pending"]["state"]=json!("executing");
+        run["batch"][idx]["pending"]["human_approved"]=json!(pending["decision"]=="approve");
         run["batch"][idx]["pending"]["decision"]=json!("consumed");
         dispatch.push((idx,name,args,pending["id"].as_str().unwrap_or("").to_owned(),
             pending["policy_version"].as_u64().unwrap_or(0)));
     }
+    run["pending"]=Value::Null;
     app.save(&mut run).await?;
     if !dispatch.is_empty() {
         drop(guard);
@@ -218,6 +210,27 @@ pub(super) async fn execute_parallel_batch(
             // next future is awaited, so recovery only reviews unresolved calls.
             app.save(&mut current).await?;
         }
+        let _approval_guard=app.gate.lock().await;
+        let mut current=app.run(id).await?;
+        if current["generation"]!=generation || current["status"]!="running"
+            || uncertain_count(&current)>0 || cancel.is_cancelled() {
+            return Ok(());
+        }
+        if let Some(item)=current["batch"].as_array().unwrap().iter().find(|item|item["state"]=="waiting") {
+            current["pending"]=item["pending"].clone();
+            current["pending"]["state"]=json!("waiting");
+            current["status"]=json!("waiting_approval");
+            let mut payload=current["pending"].clone();payload["run_id"]=json!(id);
+            app.store.save_run(&mut current,"approval_required",&payload).await?;
+        }
+        return Ok(());
+    }
+    if let Some(item)=run["batch"].as_array().unwrap().iter().find(|item|item["state"]=="waiting") {
+        run["pending"]=item["pending"].clone();
+        run["pending"]["state"]=json!("waiting");
+        run["status"]=json!("waiting_approval");
+        let mut payload=run["pending"].clone();payload["run_id"]=json!(id);
+        app.store.save_run(&mut run,"approval_required",&payload).await?;
         return Ok(());
     }
     if run["batch"].as_array().unwrap().iter().all(|item|item["state"]=="done") {

@@ -8,7 +8,34 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
-/// The external JSON file is the sole configuration authority.
+/// Agent overrides affect history folding, while the data-root file retains
+/// summary size, source limits, and every other app-wide safety bound.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentThresholds {
+    pub trigger_tokens: usize,
+    pub tail_tokens: usize,
+}
+
+impl AgentThresholds {
+    pub fn apply(&self, defaults: &Config) -> Result<Config> {
+        let mut effective = defaults.clone();
+        effective.trigger_tokens = self.trigger_tokens;
+        effective.tail_tokens = self.tail_tokens;
+        effective.validate()?;
+        Ok(effective)
+    }
+}
+
+pub async fn agent_thresholds(store: &crate::store::Store, agent_id: &str) -> Result<Option<AgentThresholds>> {
+    let blob: Vec<u8> = sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?")
+        .bind(agent_id).fetch_one(&store.agent_pool).await?;
+    let metadata = store.unseal(&blob)?;
+    if metadata["compaction_thresholds"].is_null() { return Ok(None); }
+    Ok(Some(serde_json::from_value(metadata["compaction_thresholds"].clone())?))
+}
+
+/// The external JSON owns app defaults and safety limits; Identity may override history thresholds.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {

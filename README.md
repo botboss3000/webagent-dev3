@@ -287,7 +287,7 @@ never belong in URL parameters. Backend changes require an image rebuild.
 The Rust application owns policies, approvals, execution state, recovery and shutoff. The first v3 UI port uses v2's Agents partial and CSS at image-build time; the independent v3 API and storage serve its chat and model settings. Other v2 tabs and agent subpages are not wired yet.
 The model first receives `list_abilities` and `load_ability`. Loading a catalog ability
 makes its currently permitted worker schemas available for that run; execution checks the
-current policy again, and writes still require approval by default. The authenticated
+current policy again. Named Auto mode runs allowed tools without per-tool approval; Deny still blocks them. The authenticated
 `GET /api/v3/abilities` endpoint exposes the visible catalog and effective tool policies.
 The Administrator catalog contains ten abilities. This coding port implements Codebase Admin,
 Code Index, Git Control, Terminal Control, Diagnostics, Remote Tunnel, V3 Build and
@@ -312,7 +312,7 @@ without pending tool arguments or provider payloads. Chat uses an ascending
 `GET /api/v3/sessions/{id}/state-inspect` route uses the same typed resources
 and enforces the current tool policy. Neither interface accepts SQL or a database path.
 
-The `prompt_slot_read` and approval-gated `prompt_slot_write` tools manage
+The `prompt_slot_read` and policy-gated `prompt_slot_write` tools manage
 ordered instructions for the single `shared_default` agent. Slots live encrypted
 in the agent database, use optimistic revisions to reject stale writes, and
 are assembled into model instructions for newly accepted runs. Existing runs
@@ -322,7 +322,7 @@ retain their pinned instructions. The authenticated
 administrator management; mutations require CSRF. V3 has no per-user slot
 overrides yet, and reserves v2's special `__skills__` slot.
 
-The approval-gated `workspace_seed` tool copies the audited v3 source snapshot into
+The policy-gated `workspace_seed` tool copies the audited v3 source snapshot into
 `webagent-v3/` within one session workspace and creates a clean Git baseline. The runtime
 image includes Rust 1.90 and build tools for local verification. `source_review` gives a
 bounded read-only view of tracked edits and new files without changing the Git index.
@@ -331,7 +331,7 @@ the administrator when policy allows it. A
 `truncated` result is incomplete and must not be treated as a full patch. Edits and commits
 in that workspace do not promote themselves to the server checkout.
 
-The approval-gated `source_patch` tool applies a text-only unified diff to up to 64 files in
+The policy-gated `source_patch` tool applies a text-only unified diff to up to 64 files in
 the seeded source after matching its `expected_review_sha256` to a complete review bound to the
 Git baseline. It
 rejects path escapes, Git internals, symlinks, binary patches, and unsupported modes. A
@@ -728,7 +728,7 @@ Settings are read at each model-call boundary and held immutable through the sum
 Administrators can read and update this same data-root file through
 `GET/PUT /api/v3/admin/context-compaction`; writes validate the full schema,
 require the returned digest, and publish atomically. The chat context panel
-edits the principal budgets. The Python worker rereads the file for every search.
+edits the principal budgets. The Python worker rereads the file for every search. Agent Identity may override the history trigger and verbatim tail; app defaults retain every other safety limit. The resolved settings remain immutable through each summary call.
 
 Defaults are a 40,000 estimated-token history trigger, 10,000-token verbatim tail,
 and 2,000-token summary prompt target, using four characters per estimated token.
@@ -979,3 +979,25 @@ plaintext records. Protect the database, WAL files, and backups because plaintex
 can include private conversations and tool output. Rebuild the backend and restart
 **both API and loop together** before using this new format; old binaries cannot
 read it. Source checks alone are not live deployment acceptance.
+
+## Automatic session naming
+
+New unnamed UI and API sessions save `New chat`. Acceptance of their first
+message atomically saves `New: ` plus its first 60 Unicode characters after
+whitespace normalization. Attachment-only input uses `New: Attachments`;
+empty text is accepted only with attachments. Explicit creation names and manual
+renames suppress automatic naming, including a manual save of the current name.
+
+After the first successful assistant turn, the Rust loop makes a separate,
+tool-free title call using only the first user input (up to 600 characters),
+or attachment text and names for an attachment-only message. It uses the first
+message's pinned System role and configured backups only. With no System role,
+the placeholder remains. The title call never inserts chat messages or context.
+
+Encrypted naming state is transactional with message admission and terminal
+publication. Claims, renewable leases and manual-rename fences prevent stale
+results from replacing a user name. Three model attempts precede a fixed failure
+label and a 60-second retry cooldown. A bounded recovery sweep starts after 30
+seconds and runs every 60 seconds. Successful naming locks the automatic title;
+existing sessions are not enrolled or renamed retroactively. Session updates
+refresh the UI through named metadata SSE events that do not alter chat cursors.

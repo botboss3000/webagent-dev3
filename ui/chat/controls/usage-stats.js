@@ -54,21 +54,18 @@ export function mountUsageStats({root,client,note}) {
     const head=document.createElement('div'); head.className='cmp-cc-head'; head.textContent='Context compaction'; content.append(head);
     for(const [label,key] of [['Target history','trigger_tokens'],['Keep verbatim','tail_tokens']]) {
       row(content,label,Number.isFinite(run?.context_controls?.[key]) ? num(run.context_controls[key])+' estimated tokens' : 'Not measured yet');
-      const slider=document.createElement('input'); slider.type='range';slider.disabled=true;
-      slider.className='cmp-cc-slider v3-backend-pending';slider.setAttribute('aria-label',label+' — settings backend port pending');
-      slider.min='0';slider.max=String(Math.max(1000,run?.context_controls?.[key]||100000));slider.value=String(run?.context_controls?.[key]||0);
-      slider.title='Per-session compaction settings backend port pending';content.append(slider);
     }
+    const location=document.createElement('p');location.className='cmp-cx-hint';
+    location.textContent='Set this agent’s thresholds on Identity.';content.append(location);
     const compact=document.createElement('button');compact.type='button';compact.className='cmp-cc-btn v3-backend-pending';compact.disabled=true;
     compact.innerHTML='<i data-lucide="minimize-2"></i><span>Compact now</span>';compact.title='Composer compaction action backend port pending';content.append(compact);
     if(configData?.config) {
       const head=document.createElement('div');head.className='cmp-cc-head';
-      head.textContent='Administrator context settings';content.append(head);
+      head.textContent='App-wide context limits';content.append(head);
       const hint=document.createElement('p');hint.className='cmp-cx-hint';
-      hint.textContent='Saved to context-compaction.json. New model calls use these settings.';
+      hint.textContent='Agent trigger and tail thresholds are set on Identity. These app-wide limits are saved to context-compaction.json and apply at the next model call.';
       content.append(hint);
       const fields=[
-        ['Summary trigger','trigger_tokens'],['Verbatim tail','tail_tokens'],
         ['Tool preview bytes','tool_result_preview_bytes'],['Search output bytes','search_output_bytes'],
         ['Search line bytes','search_line_bytes'],['Summary source bytes','max_source_bytes']
       ];

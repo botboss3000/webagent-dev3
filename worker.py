@@ -861,32 +861,90 @@ def file_operation(request, base, args, name):
             offset = args.get("offset", 0)
             if type(offset) is not int or not 0 <= offset <= 10000:
                 raise ValueError("offset must be between 0 and 10000")
+            file_glob = args.get("file_glob")
+            recursive = args.get("recursive", False)
+            include_content = args.get("include_content", False)
+            if (file_glob is not None and (not isinstance(file_glob, str)
+                    or not file_glob or len(file_glob) > 128
+                    or "/" in file_glob or "\\" in file_glob or "\0" in file_glob)):
+                raise ValueError("file_glob must be a basename pattern of at most 128 characters")
+            if type(recursive) is not bool or type(include_content) is not bool:
+                raise ValueError("recursive and include_content must be booleans")
+            if (recursive or include_content) and file_glob is None:
+                raise ValueError("recursive and include_content require file_glob")
             fd = os.open(leaf, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                          dir_fd=directory)
             try:
-                names = []
-                with os.scandir(fd) as entries:
-                    for entry in entries:
-                        if len(names) >= 10000:
-                            scan_limited = True
-                            break
-                        # Directory names are untrusted data; do not follow links or
-                        # read file contents on behalf of the Decision model.
-                        try:
-                            entry.name.encode("utf-8")
-                        except UnicodeEncodeError:
-                            scan_limited = True
-                            continue
-                        kind = ("file" if entry.is_file(follow_symlinks=False)
-                                else "directory" if entry.is_dir(follow_symlinks=False)
-                                else "other")
-                        names.append({"name": entry.name, "kind": kind})
+                names, examined = [], 0
+
+                def walk(folder, prefix="", depth=0):
+                    nonlocal examined, scan_limited
+                    with os.scandir(folder) as entries:
+                        for entry in entries:
+                            if examined >= 10000:
+                                scan_limited = True
+                                return
+                            examined += 1
+                            # Do not follow a directory or file symlink while
+                            # collecting candidates for an external model.
+                            try:
+                                relative = prefix + entry.name
+                                if len(relative.encode("utf-8")) > 512:
+                                    scan_limited = True
+                                    continue
+                            except UnicodeEncodeError:
+                                scan_limited = True
+                                continue
+                            kind = ("file" if entry.is_file(follow_symlinks=False)
+                                    else "directory" if entry.is_dir(follow_symlinks=False)
+                                    else "other")
+                            if file_glob is None or (
+                                    kind == "file"
+                                    and fnmatch.fnmatchcase(entry.name, file_glob)):
+                                names.append({"name": relative, "kind": kind})
+                            if recursive and kind == "directory":
+                                if depth >= 8:
+                                    scan_limited = True
+                                    continue
+                                child = os.open(entry.name,
+                                                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                                dir_fd=folder)
+                                try:
+                                    walk(child, relative + "/", depth + 1)
+                                finally:
+                                    os.close(child)
+
+                walk(fd)
                 names.sort(key=lambda item: item["name"])
                 page = names[offset:offset + 32]
+                if include_content:
+                    for item in page:
+                        parts = item["name"].split("/")
+                        folder = os.dup(fd)
+                        try:
+                            for part in parts[:-1]:
+                                nextfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                                 dir_fd=folder)
+                                os.close(folder)
+                                folder = nextfd
+                            source = os.open(parts[-1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                                             dir_fd=folder)
+                            try:
+                                size = os.fstat(source)
+                                if not stat.S_ISREG(size.st_mode):
+                                    raise ValueError("Candidate changed during inspection")
+                                excerpt = os.read(source, 1024)
+                                item["snippet"] = excerpt.decode("utf-8", errors="replace")
+                                item["content_truncated"] = size.st_size > len(excerpt)
+                            finally:
+                                os.close(source)
+                        finally:
+                            os.close(folder)
                 next_offset = offset + len(page)
                 return {"status": "success", "output": page,
                         "offset": offset, "next_offset": next_offset if next_offset < len(names) else None,
-                        "total_scanned": len(names), "truncated": scan_limited}
+                        "total_scanned": len(names), "entries_examined": examined,
+                        "truncated": scan_limited}
             finally:
                 os.close(fd)
         elif name in ("file_list", "file_search"):
