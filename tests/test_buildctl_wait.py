@@ -1,6 +1,8 @@
 """Read-only shared build result polling for the Codex client."""
 import importlib.util
 import unittest
+import io
+from unittest.mock import patch
 from pathlib import Path
 
 PATH = Path(__file__).resolve().parents[1] / "plugins/abilities/Administrator/v3_build/buildctl.py"
@@ -47,6 +49,18 @@ class WaitTests(unittest.TestCase):
                             for name, _ in broker.calls))
         self.assertTrue(all(args == {"action": "status"} for name, args in broker.calls
                             if name == "v3_build_work"))
+
+    def test_cancel_cli_targets_one_job_with_stable_identity(self):
+        with patch.object(client, "call", side_effect=[{"cancellation":{"affected_job_ids":["job-1"]}}, {"job":{"status":"cancelled"}}]) as request, patch("sys.argv", ["buildctl", "cancel", "job-1", "--request-id", "cancel-one"]), patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(0, client.main())
+        self.assertEqual(2, request.call_count)
+        self.assertEqual(("v3_build_cancel", {"job_id":"job-1", "request_id":"cancel-one", "expected_job_ids":["job-1"]}), request.call_args.args)
+
+    def test_cli_requires_explicit_shared_batch_stop(self):
+        with patch.object(client, "call", return_value={"cancellation":{"affected_job_ids":["job-1","peer"]}}) as request, patch("sys.argv", ["buildctl", "cancel", "job-1"]):
+            with self.assertRaisesRegex(ValueError, "include-batch"):
+                client.main()
+        self.assertEqual(1, request.call_count)
 
     def test_early_finisher_discovers_shared_job_on_next_turn(self):
         broker = FakeBroker([receipt(), receipt("job-1")], [job()])

@@ -374,6 +374,7 @@ class Runner:
         self.secrets = []
         self.snapshot_socket = snapshot_socket or str(SOURCE / "host-build-service/snapshot.sock")
         self.cancel = threading.Event()
+        self.job_context = threading.local()
 
     def command(self, argv, stdin=None, timeout=3600, output_file=None, private_raw=False):
         # Explicit arguments only; the model never supplies argv. Environment
@@ -395,8 +396,15 @@ class Runner:
             import select
             try:
                 while True:
-                    if self.cancel.is_set():
-                        raise PermissionError("host broker stopping; reconcile interrupted effects")
+                    job = getattr(self.job_context, "job", None)
+                    event = getattr(self.job_context, "event", None)
+                    if self.cancel.is_set() or (event is not None and event.is_set()
+                                                and not job.get("effects_started")):
+                        error = PermissionError("host job stop requested; reconcile any interrupted effects")
+                        # Private Docker inspection may contain values not yet
+                        # learned by the scrubber. Never publish partial raw data.
+                        error.log = "" if private_raw else scrub(bytes(output).decode("utf-8", "replace"), self.secrets)
+                        raise error
                     if time.monotonic() > deadline:
                         raise TimeoutError("fixed build task timeout")
                     if select.select([proc.stdout], [], [], .2)[0]:
@@ -420,8 +428,24 @@ class Runner:
                     raise RuntimeError("fixed command failed: " + text)
                 return bytes(output).decode("utf-8", "strict") if private_raw else text
             finally:
-                if proc.poll() is None:
-                    os.killpg(proc.pid, signal.SIGKILL)
+                event = getattr(self.job_context, "event", None)
+                job = getattr(self.job_context, "job", None)
+                stopping = self.cancel.is_set() or (event is not None and event.is_set() and not job.get("effects_started"))
+                if proc.poll() is None or stopping:
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    # The leader may exit on TERM while descendants survive.
+                    # Reap the entire original group, never a shared runner PID.
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                     proc.wait()
 
     def snapshot(self):
@@ -683,6 +707,7 @@ class Broker:
         self.deploy_lock = threading.Lock()
         self.active_ui = None
         self.jobs = {}
+        self.job_cancellations = {}
         self.requests = {}
         self.active = None
         self.stopping = False
@@ -721,7 +746,8 @@ class Broker:
                 if job["status"] in ("queued", "running") and not (
                         job.get("isolated") and job["status"] == "queued"):
                     # A restart never repeats a build or external mutation.
-                    job["status"] = "uncertain" if job["operation"] == "deploy" or job.get("effects_started") else "interrupted"
+                    job["status"] = ("uncertain" if job.get("effects_started") or job["operation"] == "deploy"
+                                     else "cancelled" if job.get("cancel_request") else "interrupted")
                     job["reason"] = "broker restarted; no automatic replay"
                     if job["status"] == "uncertain" and self._reconcile(job):
                         job["status"] = "completed"
@@ -954,6 +980,52 @@ class Broker:
                            finished_at=time.time())
                 self._save(job)
 
+    def _cancel_job(self, args, trusted, workspace):
+        if set(args) != {"job_id", "request_id", "expected_job_ids"} or not isinstance(args["job_id"], str) or not re.fullmatch(r"[0-9a-f-]{36}", args["job_id"]):
+            raise ValueError("cancel requires a valid job_id and stable request_id")
+        if not isinstance(args["request_id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", args["request_id"]):
+            raise ValueError("stable cancellation request_id required")
+        self._incoming_lease(trusted)
+        job = self.jobs.get(args["job_id"])
+        dashboard = trusted["user_id"] == "admin" and workspace == "00000000-0000-0000-0000-000000000000"
+        if job is None:
+            return {"job": None}
+        if not dashboard and not self._owned(job, trusted, workspace):
+            raise PermissionError("build cancellation denied")
+        parent = self.jobs.get(job.get("batch_parent"), job)
+        affected = [parent["job_id"], *parent.get("batch_members", [])]
+        expected = args["expected_job_ids"]
+        if not isinstance(expected, list) or not 1 <= len(expected) <= 8 or any(not isinstance(value, str) for value in expected):
+            raise ValueError("bounded expected job IDs required")
+        if parent["status"] in ("queued", "running", "needs_decision") and not parent.get("cancel_request") and sorted(expected) != sorted(affected):
+            raise ValueError("Build batch changed; refresh affected jobs before requesting stop")
+        # A merged candidate is one tested unit: cancellation stops all members.
+        if not parent.get("cancel_request") and parent["status"] in ("queued", "running", "needs_decision"):
+            parent["cancel_request"] = {"request_id": args["request_id"],
+                "requested_by": trusted["user_id"], "requested_at": time.time(),
+                "affected_job_ids": affected}
+            parent["revoked"] = True
+            active = parent["job_id"] in (self.active, self.active_ui)
+            if not active:
+                parent.update(status="cancelled", reason="queued job cancelled before execution",
+                              finished_at=time.time())
+            self._save(parent)  # Persist intent before signalling execution.
+            for member_id in parent.get("batch_members", []):
+                member = self.jobs[member_id]
+                member["cancel_request"] = parent["cancel_request"]
+                member["revoked"] = True
+                self._save(member)
+            if active:
+                self.job_cancellations.setdefault(parent["job_id"], threading.Event()).set()
+            else:
+                self._mirror_batch(parent)
+                self._start_next()
+        view = self._view(job)
+        view.pop("access_fingerprint", None)
+        return {"job": view, "affected_job_ids": affected,
+                "disposition": "stop_requested" if parent["status"] in ("queued", "running")
+                               else parent["status"]}
+
     def _view(self, job):
         raw = scrub(job.get("log", ""), self.runner.secrets).encode("utf-8")
         tail = raw[-PUBLIC_LOG:].decode("utf-8", "replace")
@@ -965,6 +1037,15 @@ class Broker:
         if "reason" in job:
             # Compiler failures are at the end of a bounded build transcript.
             view["reason"] = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
+        parent = self.jobs.get(job.get("batch_parent"), job)
+        pending = parent["status"] in ("queued", "running", "needs_decision")
+        view["cancellation"] = {"available": pending and not parent.get("cancel_request"),
+            "mode": "deployment_stop" if parent.get("effects_started") else
+                    "queued" if parent["status"] in ("queued", "needs_decision") and parent["job_id"] not in (self.active, self.active_ui) else "build_stop",
+            "requested": bool(parent.get("cancel_request")),
+            "affected_job_ids": [parent["job_id"], *parent.get("batch_members", [])]}
+        if parent.get("cancel_request"):
+            view["cancellation"]["requested_at"] = parent["cancel_request"]["requested_at"]
         return view | {"log": tail, "log_truncated": len(raw) > PUBLIC_LOG, "log_bytes": len(raw)}
 
     def _rust_test_result(self, job):
@@ -1116,6 +1197,8 @@ class Broker:
                 self._start_next()
                 return {"job_id": job["job_id"], "status": job["status"],
                         "operator_adopted": True, "checkout_promotion": "conflicted"}
+            if name == "v3_build_cancel":
+                return self._cancel_job(args, trusted, workspace)
             if name == "v3_build_dashboard":
                 if args or trusted["user_id"] != "admin" or workspace != "00000000-0000-0000-0000-000000000000":
                     raise PermissionError("administrator build dashboard denied")
@@ -1908,6 +1991,13 @@ class Broker:
             self._save(job)
 
     def _run(self, job, blob):
+        with self.lock:
+            event = self.job_cancellations.setdefault(job["job_id"], threading.Event())
+            if job.get("cancel_request"):
+                event.set()
+        if hasattr(self.runner, "job_context"):
+            self.runner.job_context.job = job
+            self.runner.job_context.event = event
         mutated = False
         deploy_locked = False
         try:
@@ -2046,6 +2136,8 @@ class Broker:
             with self.lock:
                 job["status"] = "uncertain" if mutated or job.get("effects_started") else ("cancelled" if isinstance(error, PermissionError) else "failed")
                 job["reason"] = scrub(str(error), self.runner.secrets)
+                if getattr(error, "log", None):
+                    job["log"] = scrub(job.get("log", "") + error.log, self.runner.secrets)[-MAX_LOG:]
                 job["finished_at"] = time.time()
                 if job.get("isolated") and job.get("phase") == "promoting_checkout":
                     try:
@@ -2058,10 +2150,14 @@ class Broker:
                         "summary": "Image build stopped before Rust test success was confirmed"}
                 self._save(job)
         finally:
+            if hasattr(self.runner, "job_context"):
+                self.runner.job_context.job = None
+                self.runner.job_context.event = None
             if deploy_locked:
                 self.deploy_lock.release()
             with self.lock:
                 self._mirror_batch(job)
+                self.job_cancellations.pop(job["job_id"], None)
                 if job.get("parallel_ui"):
                     self.active_ui = None
                     if job["status"] not in ("uncertain", "interrupted"):
@@ -2110,7 +2206,7 @@ async def serve(broker, listener, bridge_listener=None):
                     "access_fingerprint": hashlib.sha256(b"python-v2-build-bridge").hexdigest(),
                     "bridge_caller": True}
             elif uid == 1000:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release", "v3_build_cancel"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": "codex-local", "session_id": LOCAL_WORKSPACE,

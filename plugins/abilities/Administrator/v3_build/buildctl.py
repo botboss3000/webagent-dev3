@@ -131,6 +131,10 @@ def main():
     abandon.add_argument("task_id")
     job = commands.add_parser("job")
     job.add_argument("job_id")
+    cancel = commands.add_parser("cancel", help="request targeted stop; deployment effects require reconciliation")
+    cancel.add_argument("job_id")
+    cancel.add_argument("--include-batch", action="store_true", help="explicitly stop every member of an admitted shared build")
+    cancel.add_argument("--request-id", default=None, help="stable cancellation receipt identity")
     wait = commands.add_parser("wait", help="poll a finished task's shared job without submitting work")
     wait.add_argument("task_id")
     wait.add_argument("--timeout", type=int, default=MAX_WAIT_SECONDS,
@@ -144,12 +148,22 @@ def main():
         return code
     if args.command == "inputs":
         if args.task:
-            own = call("v3_build_work", {"action": "status"})["own"]
+            own = call("v3_build_work", {"action": "status", "task_id": args.task})["own"]
             result = next((item for item in own if item["task_id"] == args.task), None)
             if result is None:
                 raise ValueError("task receipt unavailable")
         else:
             result = call("v3_build_status", {})
+    elif args.command == "cancel":
+        job = call("v3_worker_job", {"job_id": args.job_id})
+        affected = job.get("cancellation", {}).get("affected_job_ids", [args.job_id])
+        if len(affected) > 1 and not args.include_batch:
+            raise ValueError("shared build affects " + ", ".join(affected) + "; use --include-batch to stop all members")
+        result = call("v3_build_cancel", {"job_id": args.job_id,
+                     "request_id": args.request_id or "cancel-" + args.job_id,
+                     "expected_job_ids": affected})
+        if result.get("job") is None:
+            raise ValueError("build job receipt unavailable")
     elif args.command == "job":
         result = call("v3_worker_job", {"job_id": args.job_id})
     else:

@@ -470,6 +470,13 @@ queue naming alongside the first successful terminal publication.
 Manual title patches lock this state, including while a naming call is running.
 No assistant text enters the title prompt and no naming result enters chat history.
 
+Targeted build cancellation flows from the Builds administrator POST route or
+`buildctl cancel` to `v3_build_cancel` in the protected broker. Durable intent
+precedes a per-job process signal; admitted batches stop together. Queued jobs
+are terminally cancelled. After deployment effects start, cancellation stops
+at a phase boundary and retains an uncertain receipt and rollback material.
+Recovery reconciles outcomes and never replays uncertain writes.
+
 
 ## Broker source synchronization guard
 

@@ -22,6 +22,22 @@ A conflicting direct checkout edit holds subsequent releases for reconciliation.
 
 Codex uses the same broker through server-side `buildctl.py`: `begin` defaults to an isolated workspace, `inputs --task ID` reads its digest, `finish ID --expected DIGEST` queues one release, and `wait ID` polls without creating a job. The V2 Python bridge uses the same task registry and its own authenticated caller identity. Legacy shared-checkout work must not overlap isolated tasks.
 
+## Targeted cancellation
+
+Use `buildctl.py cancel <job-id> [--request-id <stable-id>]` or the administrator
+Builds stop button. Read the same durable job after a timeout; never resubmit
+finish or create a replacement build to discover its outcome. Open source tasks
+still use abandon. A queued job becomes cancelled immediately. An active build
+requests termination of its subprocess group; Buildx backend cleanup can outlive
+the client. Admitted batch members share one tested candidate and stop together.
+After UI activation or container stop intent, cancellation only stops at a safe
+phase boundary and yields uncertain until reconciliation. No automatic rollback
+or retry is performed. Receipts, frozen source, and rollback material remain.
+
+CLI cancellation of an admitted shared build requires `--include-batch` after
+reviewing its affected job IDs. Both clients bind their request to the observed
+batch membership; if admission changed it, refresh and confirm the new scope.
+
 
 ## Source synchronization decisions
 

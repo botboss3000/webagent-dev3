@@ -39,6 +39,9 @@ export function mountBuilds(panel, onStatus = () => {}) {
   };
   let dismissed = readDismissed();
   const enabledStatuses = new Map();
+  const cancelRequests = new Map();
+  const cancelMessages = new Map();
+  const cancelling = new Set();
   const filters = document.createElement('div');
   filters.className = 'build-filters';
   filters.setAttribute('aria-label', 'Filter builds by status');
@@ -181,6 +184,52 @@ export function mountBuilds(panel, onStatus = () => {}) {
       flag.append(marker, label);
       top.append(title, flag);
       card.append(top);
+      const cancellation = job.cancellation || {};
+      if (cancellation.available || (cancellation.requested && !stoppedStatuses.has(job.status) && job.status !== 'completed')) {
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.textContent = cancellation.requested ? 'Stop requested' :
+          cancellation.mode === 'queued' ? 'Cancel queued job' :
+          cancellation.mode === 'deployment_stop' ? 'Request deployment stop' : 'Stop build';
+        cancel.disabled = cancellation.requested || cancelling.has(job.job_id);
+        cancel.addEventListener('click', async () => {
+          const affected = cancellation.affected_job_ids || [job.job_id];
+          const warning = (affected.length > 1 ? 'This stops all ' + affected.length + ' jobs in the shared build. ' : '') +
+            (cancellation.mode === 'deployment_stop' ? 'Deployment effects have started. Stopping may leave an uncertain release requiring reconciliation. ' : '') + 'Request stop?';
+          if (!window.confirm(warning)) return;
+          const requestId = cancelRequests.get(job.job_id) || crypto.randomUUID();
+          cancelRequests.set(job.job_id, requestId);
+          cancelling.add(job.job_id);
+          cancelMessages.set(job.job_id, 'Requesting stop…');
+          render();
+          try {
+            const identity = await fetch('/api/v3/auth/me', {credentials: 'same-origin', cache: 'no-store'});
+            if (!identity.ok) throw Error('Sign in required');
+            const me = await identity.json();
+            if (!me.is_admin || stopped) throw Error('Administrator access required');
+            const response = await fetch('/api/v3/admin/builds/' + encodeURIComponent(job.job_id) + '/cancel', {
+              method: 'POST', credentials: 'same-origin',
+              headers: {'Content-Type': 'application/json', 'x-csrf-token': me.csrf_token},
+              body: JSON.stringify({request_id: requestId, expected_job_ids: affected})
+            });
+            const result = await response.json();
+            if (!response.ok) throw Error(result.error || 'Stop request unavailable (' + response.status + ')');
+            cancelMessages.set(job.job_id, 'Stop result: ' + phaseLabel(result.disposition));
+          } catch (error) {
+            cancelMessages.set(job.job_id, error.message + '. Update status before retrying the same request.');
+          } finally {
+            cancelling.delete(job.job_id);
+            if (!stopped) { render(); void load(); }
+          }
+        });
+        card.append(cancel);
+      }
+      if (cancelMessages.has(job.job_id)) {
+        const note = document.createElement('p');
+        note.setAttribute('role', 'status');
+        note.textContent = cancelMessages.get(job.job_id);
+        card.append(note);
+      }
       const facts = document.createElement('dl');
       facts.className = 'build-facts';
       if (job.phase !== 'finished') fact(facts, 'Current phase', phaseLabel(job.phase));
