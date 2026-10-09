@@ -1,0 +1,11 @@
+{
+  "_instructions": "Copy this initial template to v3/data/config/app-settings.json only if that file does not already exist. Both v3 API and loop processes reread the data-root encryption setting before admin account writes. Never delete encryption.key.",
+  "admin_database_encryption": {
+    "enabled": false,
+    "_instructions": "false saves new or rewritten records in user_data/admin/admin.db as readable JSON with an authentication tag, not encrypted ciphertext. true encrypts new writes with AES-256-GCM. Existing records remain readable in either mode and are not bulk-converted. App and agent databases, credentials in those planes, other users, and search cursors remain encrypted. Plaintext admin records may contain private conversation data and tool outputs: protect the database, WAL files, and backups. This is the fixed admin account ID, not every user with an administrator role. The API and loop reread this value before admin writes. Missing configuration preserves encryption; invalid configuration prevents writes."
+  },
+  "development": {
+    "live_ui_editing": false,
+    "_instructions": "Development only. true serves v3 UI directly from /live-checkout/ui (/home/ar/webagent-dev3/ui on the host). Save and refresh; no restart. false restores broker-selected frozen UI. Disable before broker releases, then re-enable after promotion. Backend code and shared V2 assets remain frozen."
+  }
+}

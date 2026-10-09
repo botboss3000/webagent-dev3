@@ -20,3 +20,6 @@ app-settings.json
 .venv/
 node_modules/
 *.log
+
+# Public source template; runtime app settings remain ignored.
+!/config/app-settings.json

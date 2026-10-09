@@ -435,3 +435,20 @@ Scheduler changes require a loop restart. Account and queue limits still apply.
 Committed run transitions feed fixed-admin metadata through `diagnostics::committed`
 after the observed Store save wrappers commits. See `docs/diagnostics-parity.md` for the
 staged V2 parity work and remaining coverage boundaries.
+
+## Direct development UI editing
+
+The operator file `data/config/app-settings.json` supports
+`development.live_ui_editing` (default false). When true, the development API
+serves its shell, setup page, `/v3-ui/` assets and page catalog from the fixed
+`/live-checkout/ui` mount, which is `/home/ar/webagent-dev3/ui` on the host.
+The flag is reread for requests: save it and refresh the browser; no restart is
+required. Existing encryption and diagnostic capture settings are unaffected. Invalid
+configuration or an unavailable checkout UI falls back to the frozen release.
+Set the flag false to return to broker-selected UI assets. Shared V2 assets and
+backend code remain frozen. Direct UI edits affect the public development app
+immediately; preserve them in Git and reconcile them with isolated broker tasks
+before the next promotion. The mode does not register or deploy source changes.
+
+Disable live UI editing before a broker release, whose acceptance check verifies
+the frozen UI bytes; re-enable it after promotion completes.

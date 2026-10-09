@@ -140,6 +140,7 @@ pub(super) fn router(app: App) -> Router {
         .route_service("/app",ServeFile::new(format!("{ui}/index.html")))
         .route_service("/",ServeFile::new(format!("{ui}/index.html")))
         .nest_service("/v3-ui",ServeDir::new(ui)).nest_service("/ui",ServeDir::new(shared))
+        .layer(middleware::from_fn_with_state(app.clone(), ui_pages::live_ui))
         .layer(DefaultBodyLimit::max(2*1024*1024))
         .layer(middleware::from_fn(diagnostics::http_errors))
         .layer(middleware::from_fn(|request:Request,next:Next|async move{

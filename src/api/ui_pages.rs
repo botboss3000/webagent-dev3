@@ -1,4 +1,7 @@
-use axum::{http::StatusCode, Json};
+use axum::{extract::{Request, State}, http::StatusCode, middleware::Next,
+    response::Response, Json, Router};
+use tower::ServiceExt;
+use tower_http::services::{ServeDir, ServeFile};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{fs, path::Path};
@@ -55,14 +58,85 @@ fn discover(ui: &Path) -> Result<Value, String> {
     Ok(json!({"main":pages}))
 }
 
-pub async fn catalog() -> Result<Json<Value>, (StatusCode, String)> {
-    let ui = std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into());
+fn live_root(state: &Path, ui: &Path) -> Option<std::path::PathBuf> {
+    (crate::store::read_app_settings(state)
+        .is_ok_and(|settings| settings["development"]["live_ui_editing"].as_bool() == Some(true)) && ui.is_dir() && !ui.is_symlink())
+        .then(|| ui.to_path_buf())
+}
+
+fn live_routes(ui: &Path) -> Router {
+    Router::new()
+        .route_service("/app", ServeFile::new(ui.join("index.html")))
+        .route_service("/", ServeFile::new(ui.join("index.html")))
+        .route_service("/setup.html", ServeFile::new(ui.join("setup.html")))
+        .nest_service("/v3-ui", ServeDir::new(ui))
+}
+
+/// Only the fixed development checkout UI is eligible. API admission, backend
+/// code and shared reference assets continue through their existing routes.
+pub(super) async fn live_ui(
+    State(app): State<crate::App>, request: Request, next: Next,
+) -> Response {
+    let path = request.uri().path();
+    let ui_request = matches!(path, "/" | "/app" | "/setup.html")
+        || path == "/v3-ui" || path.starts_with("/v3-ui/");
+    if ui_request {
+        if let Some(ui) = live_root(&app.store.root, Path::new("/live-checkout/ui")) {
+            return live_routes(&ui).oneshot(request).await.expect("infallible UI router");
+        }
+    }
+    next.run(request).await
+}
+
+pub async fn catalog(State(app): State<crate::App>) -> Result<Json<Value>, (StatusCode, String)> {
+    let ui = live_root(&app.store.root, Path::new("/live-checkout/ui"))
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| frozen_root());
     discover(Path::new(&ui)).map(Json).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+fn frozen_root() -> String {
+    std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn live_ui_switch_and_saved_edits_are_visible() {
+        let state = tempfile::tempdir().unwrap();
+        let ui = tempfile::tempdir().unwrap();
+        fs::create_dir(state.path().join("config")).unwrap();
+        let config_path = state.path().join("config/app-settings.json");
+        let mut config: Value = serde_json::from_str(include_str!("../../config/app-settings.json")).unwrap();
+        fs::write(&config_path, config.to_string()).unwrap();
+        assert!(live_root(state.path(), ui.path()).is_none());
+        config["development"]["live_ui_editing"] = json!(true);
+        fs::write(&config_path, config.to_string()).unwrap();
+        assert_eq!(live_root(state.path(), ui.path()).unwrap(), ui.path());
+        // Storage policy is preserved; switching does not require a restart.
+        assert_eq!(config["admin_database_encryption"]["enabled"], false);
+        for text in ["first edit", "saved edit"] {
+            fs::write(ui.path().join("index.html"), text).unwrap();
+            let response = live_routes(ui.path()).oneshot(
+                Request::builder().uri("/app").body(axum::body::Body::empty()).unwrap()
+            ).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+            assert_eq!(body.as_ref(), text.as_bytes());
+        }
+        config["development"]["live_ui_editing"] = json!(false);
+        fs::write(&config_path, config.to_string()).unwrap();
+        assert!(live_root(state.path(), ui.path()).is_none());
+        // Invalid or missing settings and absent checkout mounts fail closed.
+        fs::write(&config_path, "{}").unwrap();
+        assert!(live_root(state.path(), ui.path()).is_none());
+        fs::write(&config_path, "{broken").unwrap();
+        assert!(live_root(state.path(), ui.path()).is_none());
+        fs::remove_file(config_path).unwrap();
+        assert!(live_root(state.path(), ui.path()).is_none());
+    }
+
     #[test]
     fn discovers_drop_in_pages_in_order() {
         let root = tempfile::tempdir().unwrap();
