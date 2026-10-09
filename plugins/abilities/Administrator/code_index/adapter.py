@@ -824,6 +824,37 @@ def execute_published(name, args, release):
         if conn is not None:conn.close()
         if fd is not None:os.close(fd)
 
+def read_seeded_index(rootfd):
+    """Read bootstrap bytes through the already confined source inode."""
+    folder=open_child_dir(rootfd,".code-index")
+    def bounded(name,limit):
+        fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=folder)
+        try:
+            before=os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink!=1 or before.st_size>limit:
+                raise ValueError("Invalid seeded index file")
+            raw=bytearray()
+            while len(raw)<=limit:
+                chunk=os.read(fd,min(65536,limit+1-len(raw)))
+                if not chunk:break
+                raw.extend(chunk)
+            after=os.fstat(fd)
+            if len(raw)>limit or (before.st_ino,before.st_size,before.st_mtime_ns)!=(after.st_ino,after.st_size,after.st_mtime_ns):
+                raise ValueError("Seeded index changed while reading")
+            return bytes(raw)
+        finally:os.close(fd)
+    try:
+        manifest=json.loads(bounded("manifest.json",2*1024*1024))
+        blob=bounded("index.sqlite",MAX_DB_BYTES)
+        if (not isinstance(manifest,dict) or manifest.get("index_version")!=INDEX_VERSION
+            or manifest.get("schema_version")!=1 or manifest.get("index_sha256")!=sha(blob)
+            or any(manifest.get(k)!=0 for k in ("gaps","stale_count","unindexed_count"))):
+            raise ValueError("Seeded index binding mismatch")
+        # Private edits are allowed; dispatch checks row freshness on rootfd.
+        return blob
+    finally:os.close(folder)
+
+
 def execute(name,args,base):
     """Rust supplies base after caller/session policy. Never accept a runtime DB path."""
     fds=[];conn=None;indexfd=None;key=None;save=False
@@ -852,14 +883,10 @@ def execute(name,args,base):
         # A newly seeded source may carry an immutable bootstrap index.
         # Existing private rows always win, including matching isolated edits.
         if not raw:
-            seeded=Path(base)/args["root"]/".code-index"
-            if seeded.is_dir() and not seeded.is_symlink():
-                try:
-                    blob,_manifest=read_published(Path(base)/args["root"])
-                    raw.extend(blob)
-                except (OSError,ValueError):
-                    # Edited seed before its first scan: rebuild privately.
-                    pass
+            try:raw.extend(read_seeded_index(rootfd))
+            except (OSError,ValueError):
+                # Missing or unusable bootstrap: rebuild inside this workspace.
+                pass
         conn=sqlite3.connect(":memory:",timeout=1)
         if raw:conn.deserialize(bytes(raw))
         conn.row_factory=sqlite3.Row

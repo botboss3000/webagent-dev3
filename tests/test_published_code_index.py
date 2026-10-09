@@ -1,4 +1,4 @@
-import importlib.util,json,shutil,tempfile,unittest,uuid
+import importlib.util,json,os,shutil,tempfile,unittest,uuid
 from pathlib import Path
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
@@ -18,6 +18,21 @@ class PublishedTests(unittest.TestCase):
  def stage(self,blob):
   j=str(uuid.uuid4());d=rel.stage_assets(self.assets,j,blob,lambda _:None)
   m=idx.build_published(d,d/".code-index",j,idx.sha(blob));return j,d,m
+ def test_private_bootstrap_parent_swap_stays_confined(self):
+  base=self.root/"session";own=base/"a/b";foreign=self.root/"foreign/b"
+  for root,symbol in ((own,"own_symbol"),(foreign,"foreign_symbol")):
+   root.mkdir(parents=True);(root/"source.py").write_text("def "+symbol+"(): pass\n")
+   idx.build_published(root,root/".code-index",str(uuid.uuid4()),"0"*64)
+  original=idx.open_path
+  def swap(fd,parts,directory=False):
+   opened=original(fd,parts,directory)
+   if parts==["a","b"] and directory:
+    (base/"a").rename(base/"a-old");(base/"a").symlink_to(foreign.parent,target_is_directory=True)
+   return opened
+  with patch.object(idx,"open_path",side_effect=swap):
+   result=idx.execute("code_index_lookup",{"root":"a/b","action":"symbol","query":""},base)
+  self.assertEqual("success",result["status"],result)
+  text=json.dumps(result);self.assertIn("own_symbol",text);self.assertNotIn("foreign_symbol",text)
  def test_full_ui_pair_and_rollback(self):
   j,d,m=self.stage(self.blob());self.assertEqual(4,m["file_count"])
   self.assertTrue(m["parser_limitations"]);self.assertTrue(m["exclusions"])
