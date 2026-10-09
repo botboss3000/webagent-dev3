@@ -93,11 +93,16 @@ impl Store {
             };
             self.unseal(&raw)?
         };
-        let plan = first["system_selection_plan"].clone();
-        session["auto_naming"]["stage"] = json!(if plan.is_null() { "skipped" } else { "queued" });
+        let settings = crate::session_naming::config::Config::load(&self.root);
+        let plan = if settings.model_role == crate::model_selection::ModelRole::System {
+            first["system_selection_plan"].clone()
+        } else { Value::Null };
+        let skipped = settings.model_role == crate::model_selection::ModelRole::System && plan.is_null();
+        session["auto_naming"]["config"] = json!(settings);
+        session["auto_naming"]["stage"] = json!(if skipped { "skipped" } else { "queued" });
         session["auto_naming"]["system_plan"] = plan;
         session["auto_naming"]["queued_at"] = json!(crate::now());
-        if !session["auto_naming"]["system_plan"].is_null() {
+        if !skipped {
             // Sparse encrypted queue markers keep discovery scoped to pending
             // jobs, rather than decrypting completed session checkpoints.
             sqlx::query("INSERT OR IGNORE INTO docs(key,value) VALUES(?,?)")
@@ -132,6 +137,23 @@ impl Store {
         if !naming_due(&session, recovery) {
             return Ok(None);
         }
+        // Legacy pending jobs gain one durable snapshot on their first claim.
+        if session["auto_naming"]["config"].is_null() {
+            session["auto_naming"]["config"] = json!(crate::session_naming::config::Config::load(&self.root));
+        }
+        let settings = crate::session_naming::config::Config::for_session(&session)?;
+        if session["auto_naming"]["attempts"].as_u64().unwrap_or(0) >= settings.max_job_attempts {
+            session["auto_naming"]["stage"] = json!("exhausted");
+            session["auto_naming"]["claim"] = Value::Null;
+            session["auto_naming"]["lease_until"] = json!(0);
+            session["auto_naming"]["last_error"] = json!("Title generation unavailable");
+            sqlx::query("DELETE FROM docs WHERE key=?").bind(format!("session_naming:{sid}"))
+                .execute(&mut *tx).await?;
+            self.naming_save(&mut tx, sid, &mut session, true).await?;
+            tx.commit().await?;
+            self.cache.lock().unwrap().invalidate(&[format!("session:{sid}")]);
+            return Ok(None);
+        }
         let attempts = session["auto_naming"]["attempts"]
             .as_u64()
             .unwrap_or(0)
@@ -148,6 +170,22 @@ impl Store {
             .unwrap()
             .invalidate(&[format!("session:{sid}")]);
         Ok(Some(session))
+    }
+    pub(crate) async fn naming_pin_plan(&self, sid: &str, claim: &str, plan: &Value) -> Result<bool> {
+        let _guard = self.context_gate.write().await;
+        let mut tx = self.pool.begin().await?;
+        let Some(mut session) = self.naming_session(&mut tx, sid).await? else { return Ok(false); };
+        if !naming_owned(&session, claim) { return Ok(false); }
+        let selected: crate::model_selection::SelectionPlan = serde_json::from_value(plan.clone())?;
+        let settings = crate::session_naming::config::Config::for_session(&session)?;
+        if selected.role != settings.model_role || selected.agent_id != session["agent_id"].as_str().unwrap_or("") {
+            return Err(anyhow!("Invalid naming plan"));
+        }
+        session["auto_naming"]["system_plan"] = plan.clone();
+        self.naming_save(&mut tx, sid, &mut session, false).await?;
+        tx.commit().await?;
+        self.cache.lock().unwrap().invalidate(&[format!("session:{sid}")]);
+        Ok(true)
     }
     pub(crate) async fn naming_owned(&self, sid: &str, claim: &str) -> Result<bool> {
         Ok(self
@@ -192,8 +230,13 @@ impl Store {
         if !naming_owned(&session, claim) {
             return Ok(false);
         }
+        let settings = crate::session_naming::config::Config::for_session(&session)?;
+        let exhausted = title.is_none()
+            && session["auto_naming"]["attempts"].as_u64().unwrap_or(0) >= settings.max_job_attempts;
         session["auto_naming"]["stage"] = json!(if title.is_some() {
             "completed"
+        } else if exhausted {
+            "exhausted"
         } else {
             "failed"
         });
@@ -210,7 +253,11 @@ impl Store {
         } else {
             // Fixed diagnostic label only; never provider payloads or input.
             session["auto_naming"]["last_error"] = json!("Title generation unavailable");
-            session["auto_naming"]["retry_at"] = json!(crate::now() + 60);
+            session["auto_naming"]["retry_at"] = json!(crate::now() + settings.recovery_retry_delay_seconds);
+        }
+        if exhausted {
+            sqlx::query("DELETE FROM docs WHERE key=?").bind(format!("session_naming:{sid}"))
+                .execute(&mut *tx).await?;
         }
         self.naming_save(&mut tx, sid, &mut session, true).await?;
         tx.commit().await?;

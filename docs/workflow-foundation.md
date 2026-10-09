@@ -268,6 +268,31 @@ code, not as untrusted tool workers. The archive and operational config travel w
 
 The installed package owns diagnostics.json and logs.db (including SQLite WAL sidecars). Removing the folder removes archive access and capture; moving it preserves its settings and evidence. The host does not recreate it. Ephemeral socket/PID/ready files remain under /state/diagnostics. Snapshot ciphertext still requires the originating installation key to decrypt; a package alone does not carry that key.
 
+## Session naming configuration
+
+The mutable data-root config/prompts.json owns session_naming: prompt,
+model_role (system, standard or premium), attempts_per_job (1–10),
+retry_delay_ms (0–60000), request_timeout_seconds (1–300),
+recovery_retry_delay_seconds (1–86400), and max_job_attempts (1–20).
+The shipped defaults are System, 3 calls per job, 400 ms between calls,
+45 seconds per call, 60 seconds recovery cooldown, and 3 job claims total
+(at most 9 provider calls, fewer when an interrupted claim consumes a slot).
+
+Startup adds a missing section under the existing prompts lock without
+replacing other fields. Invalid live configuration uses shipped defaults with
+a fixed diagnostic; invalid content is preserved for correction. A prompt-only
+string remains readable, and omitted object settings use shipped defaults.
+
+The first successful chat turn queues naming and snapshots these settings in
+encrypted session auto_naming.config. Edits apply to newly queued jobs; retries
+and restart recovery retain their snapshot. System uses the first message's
+independently pinned System selection. Other supported roles resolve and pin
+their own agent assignment at first dispatch, persist that plan, and never
+alter chat or compaction selections. Live authorization is still rechecked.
+Exhausted jobs leave the New: fallback title and leave the discovery queue;
+manual titles remain locked against late results. Existing pending jobs receive
+a settings snapshot on their first new claim and honor the configured cap.
+
 ## Outbound notification ownership (Phase 1)
 
 The reviewed [outbound notification contract](outbound-notifications.md) adds

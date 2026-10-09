@@ -509,6 +509,14 @@ The authorized worker resolves the active release once for published reads
 and workspace seeding; a seed carries its matching private V3 projection.
 Published indexes are derived release metadata, not conversation storage.
 
+Session naming now reads session_naming from the mutable data-root
+config/prompts.json through src/session_naming/config.rs. Startup fills a missing
+section without replacing existing prompts. Storage snapshots settings when
+naming queues, fences configured-role plan writes and enforces the total claim
+limit. src/session_naming.rs uses the snapshot for prompt, role, provider-attempt
+limits and timing; chat's System plan remains independent. See
+workflow-foundation.md for validation bounds and recovery ownership.
+
 ## Outbound lifecycle events
 
 Lifecycle transactions in storage/mod.rs stage six metadata-only notifications
