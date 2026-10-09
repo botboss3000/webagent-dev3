@@ -563,6 +563,7 @@ impl Store {
             || key.starts_with("memory:")
             || key.starts_with("promotion:")
             || key.starts_with("receipt:session:")
+            || key.starts_with("receipt:direct_message:")
             || key.starts_with("receipt:message:")
             || key.starts_with("receipt:run:")
             || key.starts_with("receipt:session_mode:")
@@ -1921,11 +1922,24 @@ impl Store {
     // this includes the queued run and retry receipt: either all exist or none do.
     pub async fn atomic_docs_event(
         &self,
-        mut docs: Vec<(String, Value)>,
+        docs: Vec<(String, Value)>,
         sid: &str,
         kind: &str,
         payload: &Value,
     ) -> Result<()> {
+        self.atomic_admission(docs,sid,kind,payload,None).await
+    }
+    pub async fn atomic_first_message(
+        &self, docs:Vec<(String,Value)>,sid:&str,kind:&str,payload:&Value,created:&Value
+    )->Result<()> {
+        if !matches!(kind,"message"|"manager_submission") || sid.is_empty() {
+            return Err(anyhow!("Invalid first-message admission"));
+        }
+        self.atomic_admission(docs,sid,kind,payload,Some(created)).await
+    }
+    async fn atomic_admission(
+        &self,mut docs:Vec<(String,Value)>,sid:&str,kind:&str,payload:&Value,created:Option<&Value>
+    )->Result<()> {
         let destination = if sid.is_empty() {
             &self.app_pool
         } else {
@@ -1948,6 +1962,23 @@ impl Store {
             None
         };
         let mut tx = destination.begin().await?;
+        if let Some(created)=created {
+            let exists:i64=sqlx::query_scalar("SELECT count(*) FROM docs WHERE key=?")
+                .bind(format!("session:{sid}")).fetch_one(&mut *tx).await?;
+            if exists!=0 {return Err(anyhow!("Session identifier already exists"));}
+            // Write only the newly prepared session/mode before message guards.
+            // Rollback also removes these records and both notification stages.
+            for prefix in ["session","session_mode"] {
+                let name=format!("{prefix}:{sid}");
+                let position=docs.iter().position(|(key,_)|key==&name)
+                    .ok_or_else(||anyhow!("First-message session records missing"))?;
+                let (name,value)=docs.remove(position);
+                self.write_document(&mut tx,&name,&value).await?;
+            }
+            self.stage_notification(&mut tx,&format!("created:{sid}"),"session.created",sid,None,None).await?;
+            sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,'session_created',?)")
+                .bind(sid).bind(self.encode_user_record(created)?).execute(&mut *tx).await?;
+        }
         if matches!(kind,"message"|"manager_submission") && payload["role"] == "user" {
             sqlx::query("UPDATE docs SET key=key WHERE key=?").bind(format!("session:{sid}")).execute(&mut *tx).await?;
             self.require_active_session(&mut tx, sid).await?;

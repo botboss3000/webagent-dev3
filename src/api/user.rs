@@ -71,6 +71,9 @@ async fn session_search(Extension(app): Extension<App>, Query(args): Query<crate
     crate::session_search_api(State(app), Query(args)).await.into_response()
 }
 json_arg!(create_session => create_session);
+async fn direct_message(Extension(app):Extension<App>,Json(body):Json<Value>)->Response {
+    crate::api::direct_messages::send(State(app),Json(body)).await.into_response()
+}
 path_arg!(snapshot => snapshot, String);
 path_json!(session_read => session_read_api, String, crate::SessionReadBody);
 path_json!(session_recycle => recycle_session_api, String, crate::store::session::SessionLifecycle);
@@ -242,6 +245,7 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{id}/promotions/{request_id}/review", get(promotion_review))
         .route("/sessions/{id}/promotions/{request_id}", get(promotion_receipt))
         .route("/sessions/{id}/promotions/{request_id}/reject", post(promotion_reject))
+        .route("/messages",post(direct_message).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/sessions/{id}/messages", post(send).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/sessions/{id}/voice/route",post(voice_route).layer(axum::middleware::from_fn(crate::api::media_lane::limit)))
         .route("/sessions/{id}/voice/capabilities",get(voice_capabilities))

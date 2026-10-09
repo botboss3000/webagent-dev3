@@ -5,6 +5,7 @@ mod admin;
 mod sessions;
 mod promotions;
 mod chat;
+pub(crate) mod direct_messages;
 mod chat_controls;
 pub(crate) mod media_lane;
 pub(crate) mod uploads;

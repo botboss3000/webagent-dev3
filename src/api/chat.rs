@@ -41,13 +41,35 @@ pub(crate) async fn send(
         }
         return Ok((StatusCode::ACCEPTED, Json(result)));
     }
+    let prepared=prepare_message(&app,&id,&body,None).await?;
+    let mut docs=prepared.docs;
+    docs.push((receipt_key,json!({"digest":digest(&body),"result":prepared.result})));
+    app.store.atomic_docs_event(docs,&id,prepared.kind,&prepared.message).await.map_err(admission_error)?;
+    Ok((StatusCode::ACCEPTED,Json(prepared.result)))
+}
+pub(super) struct PreparedMessage {
+    pub docs:Vec<(String,Value)>,
+    pub kind: &'static str,
+    pub message:Value,
+    pub result:Value,
+}
+pub(super) fn admission_error(error:anyhow::Error)->ApiError {
+    if error.to_string()=="Session already has an active run" {conflict("Resolve the existing run first")}
+    else {ApiError::from(error)}
+}
+pub(super) async fn prepare_message(app:&App,id:&str,body:&Value,supplied_session:Option<&Value>)
+    ->std::result::Result<PreparedMessage,ApiError> {
+    let text=body["text"].as_str().ok_or_else(||bad("text is required"))?;
     if app.shutoff().await? {
         return Err(conflict("Global shutoff is active"));
     }
-    let session = app.store.get(&key("session", &id)).await?
-        .ok_or_else(||ApiError(StatusCode::NOT_FOUND,"Session not found".into()))?;
+    let session = match supplied_session {
+        Some(value)=>value.clone(),
+        None=>app.store.get(&key("session",id)).await?
+            .ok_or_else(||ApiError(StatusCode::NOT_FOUND,"Session not found".into()))?,
+    };
     if session["status"] == "recycled" { return Err(conflict("Session is recycled; restore it first")); }
-    let agent_id = session_agent_id(&app, &id).await?;
+    let agent_id=session["agent_id"].as_str().unwrap_or("shared_default").to_owned();
     let access=app.store.live_access(app.store.current_user_id(),&agent_id).await
         .map_err(|_|ApiError(StatusCode::FORBIDDEN,"Agent unavailable".into()))?;
     if !access.admitted() { return Err(ApiError(StatusCode::FORBIDDEN,"Agent unavailable".into())); }
@@ -155,27 +177,13 @@ pub(crate) async fn send(
         docs.push((format!("message_attachments:{run_id}"),json!(prepared.metadata)));
         docs.push((format!("manager_review:{run_id}"),record));
         docs.push((format!("manager_pending:{id}"),json!({"id":run_id})));
-        docs.push((receipt_key,json!({"digest":digest(&body),"result":result})));
-        app.store.atomic_docs_event(docs,&id,"manager_submission",&message).await?;
-        return Ok((StatusCode::ACCEPTED,Json(result)));
+        return Ok(PreparedMessage {docs,kind:"manager_submission",message,result});
     }
     let result = json!({"run_id":run_id,"attachments":prepared.metadata});
     let mut docs = prepared.records;
     docs.push((format!("message_attachments:{run_id}"),json!(prepared.metadata)));
     docs.push((key("run", &run_id), run));
-    docs.push((receipt_key, json!({"digest":digest(&body),"result":result})));
-    app.store
-        .atomic_docs_event(
-            docs,
-            &id,
-            "message",
-            &message,
-        )
-        .await.map_err(|error| {
-            if error.to_string()=="Session already has an active run" {conflict("Resolve the existing run first")}
-            else {ApiError::from(error)}
-        })?;
-    Ok((StatusCode::ACCEPTED, Json(result)))
+    Ok(PreparedMessage {docs,kind:"message",message,result})
 }
 // Only the owning session can read this encrypted attachment record. The
 // model-facing copy was already saved with the message at admission.

@@ -532,3 +532,11 @@ phases; private chat events retain their existing path.
 ## Tool-output retention
 
 Live app defaults in data/config/tool-output-retention.json and revision-fenced Identity overrides reload each working model call. App-level data/config/prompts.json owns tool_output_retention guidance and placeholders. Expiration defaults off. Only successful native-designated perishable reads are eligible. A metadata-only ledger belongs to user-owned session/run documents, commits with existing run fences, and inherits at execution. Active context can replace expired output with bounded recall receipts; original encrypted interactions remain intact. Promotion has a separate character budget and never grants read permission. Compaction still applies; original source evidence must be reread after edits. Disabling expiration restores un-compacted available replay, with bounded recall for older segments.
+
+## Single-call first message
+
+POST /api/v3/messages uses the cookie/CSRF user router. Session and chat preparation
+share admission checks with the existing two-step handlers. One user transaction
+commits the new session, first message, run or manager review, immutable retry
+receipt and both lifecycle notification stages. Inline attachments keep existing
+validation; uploaded IDs remain session-bound. See [the API contract](direct-messages.md).

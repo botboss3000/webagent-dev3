@@ -61,6 +61,27 @@ pub(crate) async fn create_session(State(app): State<App>, Json(body): Json<Valu
         }
         return Ok(Json(receipt["result"].clone()));
     }
+    let prepared=prepare_session(&app,&body).await?;
+    let mut docs=prepared.docs;
+    docs.push((receipt_key,json!({"digest":digest(&body),"result":prepared.result})));
+    app.store.atomic_docs_event(docs,prepared.result["id"].as_str().unwrap(),"session_created",&prepared.result).await?;
+    Ok(Json(prepared.result))
+}
+pub(super) struct PreparedSession {
+    pub docs: Vec<(String,Value)>,
+    pub value: Value,
+    pub result: Value,
+}
+pub(super) async fn prepare_session(app:&App,body:&Value) -> std::result::Result<PreparedSession,ApiError> {
+    let supplied = match body.get("title") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(title)) => Some(title.trim()),
+        Some(_) => return Err(bad("Invalid session title")),
+    }.filter(|title| !title.is_empty());
+    let title = supplied.unwrap_or("New chat");
+    if title.len() > 200 || title.chars().any(char::is_control) {
+        return Err(bad("Invalid session title"));
+    }
     let agent_id = body.get("agent_id").map(|v| v.as_str().ok_or_else(|| bad("Invalid agent ID")))
         .transpose()?.unwrap_or("shared_default");
     let access=app.store.live_access(app.store.current_user_id(),agent_id).await
@@ -78,25 +99,14 @@ pub(crate) async fn create_session(State(app): State<App>, Json(body): Json<Valu
     let value = json!({"id":id,"agent_id":agent_id,"title":title,"checkpoint_input":[],"checkpoint_through":0,"created_at":now(),
         "auto_naming":{"version":1,"stage":if supplied.is_some() {"locked"} else {"awaiting_message"}}});
     let result = json!({"id":id,"agent_id":agent_id,"title":title});
-    app.store
-        .atomic_docs_event(
-            vec![
-                (key("session", &id), value),
-                (key("session_mode", &id), {
+    let mode = {
                     let config=crate::execution_modes::config(&app.store,agent_id).await?;
                     let chat=crate::execution_modes::chat_preferences(&app.chat_ui_config_path).await?;
                     let default=chat.default_mode.as_deref().unwrap_or(config["default_execution_mode"].as_str().unwrap());
                     let entry=crate::execution_modes::resolve(&config,default).map_err(|_|bad("Unknown chat default execution mode"))?;
                     json!({"mode":entry["permission_policy"],"execution_mode":entry["id"],"revision":0})
-                }),
-                (receipt_key, json!({"digest":digest(&body),"result":result})),
-            ],
-            &id,
-            "session_created",
-            &result,
-        )
-        .await?;
-    Ok(Json(result))
+    };
+    Ok(PreparedSession { docs:vec![(key("session",&id),value.clone()),(key("session_mode",&id),mode)],value,result })
 }
 pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> Api {
     let _guard = app.gate.lock().await;
