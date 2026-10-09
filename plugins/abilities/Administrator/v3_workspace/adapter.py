@@ -6,7 +6,7 @@ LIMIT=65536
 CARGO_LOG_LIMIT=8192
 MAX_FILES=10000
 MAX_BYTES=64*1024*1024
-EXCLUDED={".git","target",".cache"}
+EXCLUDED={".git","target",".cache",".code-index"}
 READ_EXCLUDED=EXCLUDED|{"data","workspaces","runtime","gate-runtime","deployment-secrets"}
 def configure(module):
  global WORKER

@@ -1,5 +1,6 @@
 """Frozen task contexts and versioned development release mounts."""
 import io
+import importlib.util
 import hashlib
 import json
 import os
@@ -42,6 +43,17 @@ def extract(root, blob, validate):
         with path.open("xb") as output:
             output.write(body)
         path.chmod(mode)
+        with path.open("rb") as stream:
+            os.fsync(stream.fileno())
+    # Persist staged source directories before any release pointer selects them.
+    for directory in sorted((p for p in root.rglob("*") if p.is_dir()),
+                            key=lambda p:len(p.parts),reverse=True):
+        fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:os.fsync(fd)
+        finally:os.close(fd)
+    fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:os.fsync(fd)
+    finally:os.close(fd)
 
 
 def snapshot(root, allowlist, validate):
@@ -232,8 +244,9 @@ def stage_assets(root, job_id, blob, validate):
     revisions.chmod(0o755)
     destination = revisions / job_id
     if destination.exists():
-        existing = entries(snapshot(destination, ("v3", "ui"), lambda _: None),
-                           lambda _: None)
+        existing = {name:item for name,item in entries(
+            snapshot(destination, ("v3", "ui"), lambda _: None), lambda _: None).items()
+            if not name.startswith("v3/.code-index/")}
         if existing != files:
             raise ValueError("frozen UI asset release changed")
     else:
@@ -258,12 +271,28 @@ def current_asset_id(root):
     return job_id
 
 
+def verify_index(destination, job_id, candidate_digest=None):
+    # Installed broker loads only its protected scanner. Unit tests load the
+    # reviewed checkout adapter; no module inside a candidate is executed.
+    scanner = Path(__file__).with_name("index-scanner.py")
+    if not scanner.exists():
+        scanner = Path(__file__).parent.parent / "code_index/adapter.py"
+    spec = importlib.util.spec_from_file_location("published_index", scanner)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _blob, manifest = module.read_published(Path(destination), job_id)
+    if candidate_digest is not None and manifest["candidate_sha256"] != candidate_digest:
+        raise ValueError("Published candidate/index digest mismatch")
+    return manifest
+
+
 def activate_assets(root, job_id):
     """Atomically select a complete immutable UI snapshot."""
     uuid.UUID(job_id)
     target = root / "releases" / job_id
     if not target.is_dir() or target.is_symlink():
         raise ValueError("asset release unavailable")
+    verify_index(target, job_id)
     previous = current_asset_id(root)
     temporary = root / ("current-" + uuid.uuid4().hex)
     try:

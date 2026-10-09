@@ -141,28 +141,45 @@ def publish(parent, name, body, mode=0o600):
             pass
 
 
-def install():
+def install(tree=None):
     root_only()
-    source = directory(SOURCE)
+    if tree is not None and not re.fullmatch(r"[a-f0-9]{64}",tree):
+        raise ValueError("Exact isolated task tree hash required")
+    source_path = (V3/"build-jobs/coordination/trees"/tree/"v3/plugins/abilities/Administrator/v3_build"
+                   if tree is not None else SOURCE)
+    source = directory(source_path)
     parent = directory(V3)
     service = None
     try:
         host = read_regular(source, "host.py", 2 * 1024 * 1024, owner=1000)
         bootstrap = read_regular(source, "install.py", 2 * 1024 * 1024, owner=1000)
         release = read_regular(source, "release.py", 2 * 1024 * 1024, owner=1000)
+        index_source = directory(source_path.parent / "code_index")
+        try:
+            scanner = read_regular(index_source, "adapter.py", 2*1024*1024, owner=1000)
+        finally:
+            os.close(index_source)
         service = protected_directory(parent, "host-build-service")
         # Compile without importing or executing source. The installed service
         # subsequently runs its protected copy, never this writable checkout.
         compile(host, "host.py", "exec")
         compile(bootstrap, "bootstrap.py", "exec")
         compile(release, "release.py", "exec")
+        compile(scanner, "index-scanner.py", "exec")
         publish(service, "host.py", host, 0o644)
         publish(service, "bootstrap.py", bootstrap, 0o644)
         publish(service, "release.py", release, 0o644)
-        manifest = {"host_sha256": hashlib.sha256(host).hexdigest(), "bootstrap_sha256": hashlib.sha256(bootstrap).hexdigest(), "release_sha256": hashlib.sha256(release).hexdigest()}
+        publish(service, "index-scanner.py", scanner, 0o644)
+        manifest = {"host_sha256": hashlib.sha256(host).hexdigest(), "bootstrap_sha256": hashlib.sha256(bootstrap).hexdigest(), "release_sha256": hashlib.sha256(release).hexdigest(), "scanner_sha256":hashlib.sha256(scanner).hexdigest()}
         publish(service, "installed.json", json.dumps(manifest, sort_keys=True).encode())
         if read_regular(source, "host.py", 2 * 1024 * 1024, owner=1000) != host or read_regular(source, "install.py", 2 * 1024 * 1024, owner=1000) != bootstrap or read_regular(source, "release.py", 2 * 1024 * 1024, owner=1000) != release:
             raise ValueError("installation raced a source edit; repeat after writers pause")
+        index_source = directory(source_path.parent / "code_index")
+        try:
+            if read_regular(index_source, "adapter.py", 2*1024*1024, owner=1000) != scanner:
+                raise ValueError("installation raced an index parser edit")
+        finally:
+            os.close(index_source)
         return manifest
     finally:
         os.close(source)
@@ -558,7 +575,7 @@ def start():
     service = directory(SERVICE)
     try:
         manifest = json.loads(read_regular(service, "installed.json", 4096, owner=0))
-        for name, key in (("host.py", "host_sha256"), ("bootstrap.py", "bootstrap_sha256"), ("release.py", "release_sha256")):
+        for name, key in (("host.py", "host_sha256"), ("bootstrap.py", "bootstrap_sha256"), ("release.py", "release_sha256"), ("index-scanner.py", "scanner_sha256")):
             body = read_regular(service, name, 2 * 1024 * 1024, owner=0)
             if hashlib.sha256(body).hexdigest() != manifest[key]:
                 raise ValueError("installed broker code digest changed")
@@ -622,11 +639,14 @@ def main():
     actions.add_argument("--install", action="store_true")
     actions.add_argument("--start", action="store_true")
     actions.add_argument("--snapshot", action="store_true")
+    parser.add_argument("--install-tree",help="Reviewed isolated task tree hash; operator install only")
     args = parser.parse_args()
+    if args.install_tree and not args.install:
+        parser.error("--install-tree requires --install")
     if args.snapshot:
         sys.stdout.buffer.write(snapshot())
         return
-    result = install() if args.install else start()
+    result = install(args.install_tree) if args.install else start()
     # Only content-free hashes/PIDs; no container environment or credentials.
     print(json.dumps(result, sort_keys=True))
 

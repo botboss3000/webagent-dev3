@@ -512,7 +512,47 @@ class Runner:
         return release.checkout_matches(self.source, blob, changed, context_digest, standalone=True)
 
     def stage_assets(self, blob, job_id):
-        return release.stage_assets(ASSET_ROOT, job_id, blob, context_digest)
+        destination = release.stage_assets(ASSET_ROOT, job_id, blob, context_digest)
+        index = destination / ".code-index"
+        for orphan in destination.glob(".index-stage-*"):
+            uuid.UUID(orphan.name.removeprefix(".index-stage-"))
+            if orphan.is_symlink() or not orphan.is_dir():
+                raise ValueError("Invalid interrupted index staging directory")
+            shutil.rmtree(orphan)
+        if index.exists():
+            release.verify_index(destination, job_id, context_digest(blob)[0])
+            return destination
+        # Parser code is the installed protected copy, never candidate Python.
+        scanner = SOURCE / "host-build-service/index-scanner.py"
+        if scanner.is_symlink() or not scanner.is_file():
+            raise ValueError("Protected index scanner unavailable")
+        temporary = destination / (".index-stage-" + str(uuid.uuid4()))
+        temporary.mkdir(mode=0o755)
+        try:
+            image = self.inspect(TARGETS[0])["Image"]
+            program = ("import runpy; m=runpy.run_path('/scanner.py'); "
+                       "m['build_published']('/source','/output'," + repr(job_id) +
+                       "," + repr(context_digest(blob)[0]) + ")")
+            self.command(["docker", "run", "--rm", "--network", "none",
+                "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+                "--user", "1000:1000", "--memory", "1g", "--pids-limit", "64",
+                "--tmpfs", "/tmp:rw,size=64m,mode=1777",
+                "-v", str(scanner)+":/scanner.py:ro",
+                "-v", str(destination)+":/source:ro",
+                "-v", str(temporary)+":/output:rw", "--entrypoint", "python3",
+                image, "-B", "-c", program], timeout=120)
+            fd = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:os.fsync(fd)
+            finally:os.close(fd)
+            os.rename(temporary, index)
+            fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:os.fsync(fd)
+            finally:os.close(fd)
+            release.verify_index(destination, job_id, context_digest(blob)[0])
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+        return destination
 
     def validate_ui(self, job_id, changed):
         root = ASSET_ROOT / "releases" / job_id
@@ -2024,7 +2064,7 @@ class Broker:
             self._save(job)
         if not self._sync_job(job, self._current_release_blob(), blob, job.get("changed_paths", ())):
             return
-        self._phase(job, "staging_ui")
+        self._phase(job, "indexing_source")
         self.runner.stage_assets(blob, job["job_id"])
         self.runner.validate_ui(job["job_id"], job["changed_paths"])
         prepared = release.snapshot(Path(job["release_root"]), CONTEXT, context_digest)
@@ -2114,7 +2154,7 @@ class Broker:
                     blob = self._rebase_after_ui(job, blob, tested_runtime=True)
                 if job.get("isolated") and not self._sync_job(job, self._current_release_blob(), blob, job.get("changed_paths", ())):
                     return
-                self._phase(job, "staging_ui")
+                self._phase(job, "indexing_source")
                 self.runner.stage_assets(blob, job["job_id"])
                 self.runner.validate_ui(job["job_id"], job.get("changed_paths", ()))
                 with self.lock:

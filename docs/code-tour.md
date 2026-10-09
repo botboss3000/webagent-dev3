@@ -496,3 +496,15 @@ socket. Removal stops new capture; earlier archive reads remain ownership checke
 See `src/plugin_packages/diagnostics/README.md` for package lifecycle boundaries.
 
 Diagnostics config and archive now reside in the live plugin package. Core reads use fresh read-only connections to its archive; only the child initializes and writes it. Package absence never seeds new config or recreates storage.
+
+### Published and private Code Index
+
+`v3_build/host.py` stages the final merged source under the publication lock
+and runs the installed protected Code Index parser separately from Cargo.
+`v3_build/release.py` validates the source/index binding before atomically
+selecting an assets release. Both full and UI-only releases use that gate.
+`code_index/adapter.py` owns complete physical-line coverage, explicit parser
+limitations/exclusions, immutable published reads and immediate private scans.
+The authorized worker resolves the active release once for published reads
+and workspace seeding; a seed carries its matching private V3 projection.
+Published indexes are derived release metadata, not conversation storage.

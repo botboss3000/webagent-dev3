@@ -567,6 +567,24 @@ class BuildTests(unittest.TestCase):
         target = host.release.release_mounts(loop, root)["Mounts"][0]
         self.assertEqual(str(root / "v3/plugins/abilities"), target["Source"])
 
+    def test_index_gate_failure_blocks_full_and_ui_effects(self):
+        for ui_only in (False, True):
+            with self.subTest(ui_only=ui_only):
+                self.runner.hot_assets=ui_only
+                self.runner.blob=context(extra={"v3/ui/index.html":"<main>baseline</main>"})
+                task_id="index-gate-"+str(ui_only)
+                task=self.call("v3_build_work",dict(action="begin",task_id=task_id,summary="gate",mode="isolated"))
+                path=Path(task["workspace_path"])/("ui/index.html" if ui_only else "README.md")
+                path.write_text("<main>edited</main>" if ui_only else "runtime edit")
+                digest=self.call("v3_build_work",dict(action="status",task_id=task_id))["own"][0]["workspace_inputs_sha256"]
+                self.runner.calls.clear()
+                with patch.object(self.runner,"stage_assets",side_effect=ValueError("incomplete published index")):
+                    job=self.call("v3_build_work",dict(action="finish",task_id=task_id,expected_inputs_sha256=digest))
+                    result=self.wait(job)
+                self.assertEqual("failed",result["status"])
+                self.assertIn("incomplete published index",result["reason"])
+                self.assertFalse(any(c[0] in ("stop","activate_assets","promote") for c in self.runner.calls))
+
     def test_stable_asset_mount_and_atomic_pointer(self):
         root = self.state / "asset-fixture"
         blob = context(extra={"v3/ui/index.html": "<main>ready</main>",
@@ -576,10 +594,17 @@ class BuildTests(unittest.TestCase):
         second = str(uuid.uuid4())
         release = host.release
         release.stage_assets(root, first, blob, host.context_digest)
+        scanner_path=PATH.parent.parent/"code_index/adapter.py"
+        scanner_spec=importlib.util.spec_from_file_location("fixture_scanner",scanner_path)
+        scanner=importlib.util.module_from_spec(scanner_spec);scanner_spec.loader.exec_module(scanner)
+        scanner.build_published(root/"releases"/first,root/"releases"/first/".code-index",
+                                first,host.context_digest(blob)[0])
         self.assertIsNone(release.current_asset_id(root))
         self.assertIsNone(release.activate_assets(root, first))
         self.assertEqual(first, release.current_asset_id(root))
         release.stage_assets(root, second, blob, host.context_digest)
+        scanner.build_published(root/"releases"/second,root/"releases"/second/".code-index",
+                                second,host.context_digest(blob)[0])
         self.assertEqual(first, release.activate_assets(root, second))
         self.assertEqual(second, release.current_asset_id(root))
         release.stage_assets(root, second, blob, host.context_digest)

@@ -76,3 +76,38 @@ Reports show bounded examples with an explicit partial flag. Owner-scoped
 status never reveals other callers' jobs; administrator Builds views may compare
 all callers. Only path names and fingerprints are examined, never credentials
 or runtime databases. Behavioral conflicts across different files still need tests.
+
+## Published Code Index gate
+
+Full and UI-only deployment stage `indexing_source` after final candidate
+rebasing, while holding the existing deployment/publication lock. This runs
+independently of Cargo and image builds. The protected installed
+`index-scanner.py` parses candidate source as data in a networkless, read-only,
+unprivileged Docker process with memory, process and time bounds; candidate
+Python code is never imported.
+
+Each immutable assets release carries `.code-index/index.sqlite` and
+`manifest.json`. The manifest binds the release ID, complete archive digest,
+complete source digest, SQLite digest, schema/index version, parser code digest and
+parser dependency versions. Enumeration/scanner limits reject the release;
+supported files cannot be silently omitted. Unsupported/generated/directory
+exclusions and uncertain/limited parsers are recorded explicitly. Zero physical
+line gaps, stale files and unindexed supported files are mandatory.
+
+Activation validates the pair before atomic pointer replacement and directory
+fsync. Failed staging or an interrupted switch retains the prior pair. Rollback
+must select a release containing a verified pair; historical unindexed assets
+fail closed and need a reviewed backfill/migration rather than silent selection.
+The index is derived metadata, never a session database. Do not copy or inspect
+session databases for this workflow.
+
+Install the reviewed scanner with the protected broker code and restart its
+supervisor only when all builds are idle. For a gate changing broker code, the
+root operator may run the reviewed task's installer with
+`--install --install-tree <exact-64-character-task-tree-hash>` before submitting
+that task. The source is confined to the broker task namespace; source ownership,
+single-link checks and unchanged-input verification still apply. This lets the
+first promoted candidate pass the new gate, without interrupting earlier builds. Do not restart a busy broker. Session
+seeding resolves the active release once; published tools are read only and
+subject to normal Rust authorization. Modified session workspaces and private
+indexes are retained independently.

@@ -226,7 +226,15 @@ async def execute_locked(request, lock):
     if name.startswith("code_index_") and name in {
             "code_index_scan", "code_index_lookup", "code_index_coverage",
             "code_index_trace", "code_index_progress"}:
-        return await asyncio.to_thread(administrator_plugin("code_index").execute, name, args, base)
+        module = administrator_plugin("code_index")
+        if args.get("root") == "published":
+            # Resolve once; concurrent activation cannot mix source and index.
+            selected = Path("/opt/v3/assets/current").resolve(strict=True)
+            if selected.parent != Path("/opt/v3/assets/releases") or not selected.is_dir():
+                raise ValueError("Published release unavailable")
+            uuid.UUID(selected.name)
+            return await asyncio.to_thread(module.execute_published, name, args, selected)
+        return await asyncio.to_thread(module.execute, name, args, base)
     if name == "administrator_git_watch":
         module=administrator_plugin("git_control").adapter
         value=await module.snapshot(base)
@@ -432,7 +440,7 @@ def source_patch(base, args):
             raise ValueError("patch must change 1 to 64 files")
         paths = []
         forbidden = {".git", "target", "data", "workspaces",
-                     ".cache", "deployment-secrets"}
+                     ".cache", ".code-index", "deployment-secrets"}
         for record in records:
             fields = record.split(b"\t", 2)
             if len(fields) != 3 or not fields[0].isdigit() or not fields[1].isdigit():
@@ -491,7 +499,7 @@ def _seed_capture(path, include_git=False):
     def walk(fd, prefix):
         nonlocal count, size
         for name in sorted(os.listdir(fd)):
-            if not prefix and name == ".git" and not include_git:
+            if not prefix and (name == ".code-index" or name == ".git" and not include_git):
                 continue
             info = os.stat(name, dir_fd=fd, follow_symlinks=False)
             if stat.S_ISDIR(info.st_mode):
@@ -542,7 +550,7 @@ def _seed_inner(spec):
     if before["files"] == 0 or (template / ".git").exists():
         raise ValueError("invalid source template")
     stage.mkdir(mode=0o700)
-    shutil.copytree(template, stage, dirs_exist_ok=True)
+    shutil.copytree(template, stage, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".code-index"))
     if _seed_capture(template, True) != before or _seed_capture(stage, True) != before:
         raise ValueError("seed copy changed")
     env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(stage),
@@ -574,15 +582,26 @@ def _seed_inner(spec):
     config = git("config", "--local", "--name-only", "--list").splitlines()
     if any(key not in {"core.repositoryformatversion", "core.filemode", "core.bare", "core.logallrefupdates"} for key in config):
         raise ValueError("unexpected seed Git configuration")
+    (stage/".git/info/exclude").write_text(".code-index/\n")
     git("add", "-A")
     git("-c", "user.name=WebAgent v3", "-c", "user.email=webagent-v3@localhost", "commit", "--quiet", "-m", "Imported v3 source snapshot")
     baseline = git("rev-parse", "HEAD")
     if git("status", "--porcelain") or _seed_capture(stage) != before or _seed_capture(template, True) != before:
         raise ValueError("seed baseline changed")
+    index = template.parent/".code-index"
+    index_digest = None
+    if spec.get("published") and not index.is_dir():
+        raise ValueError("Published source/index pair unavailable")
+    if index.is_dir() and not index.is_symlink():
+        # Source and bootstrap index use the same already-resolved template.
+        module = administrator_plugin("code_index")
+        module.seed_private_index(template.parent,stage)
+        index_digest = module.read_published(stage)[1]["index_sha256"]
     os.chmod(stage, 0o770)
     info = stage.stat(follow_symlinks=False)
     return {"stage": spec["stage"], "identity": [info.st_dev, info.st_ino],
-            "snapshot": _seed_capture(stage, True), "source": before, "baseline_commit": baseline}
+            "snapshot": _seed_capture(stage, True), "source": before, "baseline_commit": baseline,
+            "index_sha256":index_digest}
 
 
 def _seed_spec(base):
@@ -590,12 +609,21 @@ def _seed_spec(base):
     if base.is_symlink() or not base.is_dir():
         raise ValueError("invalid workspace")
     base = base.resolve(strict=True)
-    if not TEMPLATE.is_dir() or TEMPLATE.is_symlink():
+    if TEMPLATE.is_symlink():
+        raise ValueError("source template unavailable")
+    selected = TEMPLATE.resolve(strict=True)
+    if not selected.is_dir():
         raise ValueError("source template unavailable")
     target = base / "webagent-v3"
     if target.exists() or target.is_symlink():
         raise ValueError("workspace source already initialized")
-    return {"base": str(base), "template": str(TEMPLATE.resolve(strict=True)), "stage": ".v3-seed-" + uuid.uuid4().hex}
+    published = selected.parent.parent.name == "releases"
+    if published:
+        uuid.UUID(selected.parent.name)
+        if not (selected.parent/".code-index").is_dir():
+            raise ValueError("Published source/index pair unavailable")
+    return {"base": str(base), "template": str(selected), "stage": ".v3-seed-" + uuid.uuid4().hex,
+            "published":published}
 
 
 def _seed_argv(spec):
@@ -617,6 +645,13 @@ def _seed_finish(spec, raw):
         info = os.fstat(stagefd)
         if [info.st_dev, info.st_ino] != result["identity"] or _seed_capture(stagefd, True) != result["snapshot"]:
             raise ValueError("seed changed before publication")
+        if result.get("index_sha256") is not None:
+            actual=administrator_plugin("code_index").read_published(
+                Path(spec["base"])/spec["stage"])[1]["index_sha256"]
+            if actual != result["index_sha256"]:
+                raise ValueError("Seed index changed before publication")
+        elif (Path(spec["base"])/spec["stage"]/".code-index").exists():
+            raise ValueError("Unexpected seed index")
         with (CONTROL / "dispatch.lock").open("rb") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if (CONTROL / "shutoff").read_text().strip() != "0":
@@ -1240,9 +1275,10 @@ def runner(argv):
     read_paths = ()
     if len(argv) == 5 and argv[:4] == [sys.executable, "-I", str(Path(__file__).resolve()), "--seed-inner"]:
         spec = json.loads(argv[4])
-        if set(spec) != {"base", "template", "stage"} or Path(spec["base"]).resolve() != Path.cwd() or not spec["stage"].startswith(".v3-seed-") or "/" in spec["stage"]:
+        if set(spec) not in ({"base", "template", "stage"}, {"base", "template", "stage", "published"}) or type(spec.get("published",False)) is not bool or Path(spec["base"]).resolve() != Path.cwd() or not spec["stage"].startswith(".v3-seed-") or "/" in spec["stage"]:
             raise ValueError("invalid trusted seed invocation")
-        read_paths = (Path(spec["template"]), Path(__file__).resolve(), Path(__file__).with_name("sandbox.py").resolve())
+        read_paths = (Path(spec["template"]).parent if (Path(spec["template"]).parent/".code-index").is_dir() else Path(spec["template"]), Path(__file__).resolve(), Path(__file__).with_name("sandbox.py").resolve(),
+                      Path(__file__).parent/"plugins/abilities/Administrator/code_index/adapter.py")
     # The development agent's approved shell can work across the mounted checkout.
     # Other worker operations retain their existing scoped sandbox.
     unconfined = os.environ.get("V3_UNRESTRICTED_DEV_SHELL") == "1"

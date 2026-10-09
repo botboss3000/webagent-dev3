@@ -647,6 +647,183 @@ def publish(conn,indexfd,key):
         os.close(tempfd)
         try:os.unlink(temp,dir_fd=indexfd)
         except FileNotFoundError:pass
+
+# The release builder uses the installed, protected copy of this parser. Candidate
+# source is data only; neither its adapter nor any submitted Python is imported.
+INDEX_VERSION = 1
+
+def parser_versions():
+    from importlib.metadata import version, PackageNotFoundError
+    result = {"python_ast":os.sys.version.split()[0], "rust":"lexical", "toml":"lexical"}
+    for package in ("tree-sitter", "tree-sitter-javascript"):
+        try:result[package] = version(package)
+        except PackageNotFoundError:result[package] = "unavailable"
+    return result
+
+def source_digest(root):
+    root = Path(root)
+    rows = []
+    total = 0
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root).as_posix()
+        if rel.split("/")[0] in {".code-index", ".git"}:
+            continue
+        if path.is_symlink():
+            raise ValueError("Published source symlink forbidden")
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise ValueError("Published source must be regular")
+        info = path.stat()
+        if info.st_size > 16 * 1024 * 1024 or len(rows) >= MAX_ENTRIES:
+            raise ValueError("Published source manifest bound exceeded")
+        total += info.st_size
+        if total > 128 * 1024 * 1024:
+            raise ValueError("Published source byte bound exceeded")
+        data = path.read_bytes()
+        rows.append([rel, info.st_mode & 0o100, sha(data)])
+    return sha(json.dumps(rows, separators=(",", ":")).encode())
+
+def build_published(root, output, release_id, candidate_digest):
+    """Build a complete fresh index; publish no files until coverage validates."""
+    uuid.UUID(release_id)
+    if not re.fullmatch("[0-9a-f]{64}", candidate_digest):
+        raise ValueError("Invalid candidate digest")
+    root, output = Path(root), Path(output)
+    before = source_digest(root)
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript(DDL)
+        scan(conn, fd, {"action":"scan", "scope":"", "limit":1, "offset":0})
+        report = coverage(conn, fd, {"action":"report", "limit":1, "offset":0})
+        if any(report[k] for k in ("gaps", "stale_count", "unindexed_count")):
+            raise ValueError("Published index coverage incomplete")
+        if source_digest(root) != before:
+            raise ValueError("Published source changed during indexing")
+        excluded = []
+        supported = set(source_files(fd, "", time.monotonic()+30))
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            if rel not in supported:
+                reason = ("excluded_directory" if any(p in EXCLUDED for p in path.relative_to(root).parts)
+                          else "generated_minified" if path.name.endswith((".min.js", ".min.css"))
+                          else "unsupported_suffix")
+                excluded.append({"path":rel, "reason":reason})
+        blob = conn.serialize()
+        if len(blob) > MAX_DB_BYTES:
+            raise ValueError("Published index database bound exceeded")
+        limitations = [dict(row) for row in conn.execute(
+            "SELECT path,parser_status,parser_notes FROM files WHERE parser_status!='ok' ORDER BY path")]
+        manifest = {"index_version":INDEX_VERSION, "schema_version":1,
+            "parser_sha256":sha(Path(__file__).read_bytes()), "parser_versions":parser_versions(), "release_id":release_id,
+            "candidate_sha256":candidate_digest, "source_sha256":before,
+            "index_sha256":sha(blob), "file_count":report["file_count"],
+            "total_lines":report["total_lines"], "gaps":0, "stale_count":0,
+            "unindexed_count":0, "exclusions":excluded, "parser_limitations":limitations}
+        encoded = json.dumps(manifest,sort_keys=True).encode()
+        if len(encoded) > 2*1024*1024:
+            raise ValueError("Published manifest bound exceeded")
+        output.mkdir(exist_ok=True)
+        (output/"index.sqlite").write_bytes(blob)
+        (output/"manifest.json").write_bytes(encoded)
+        for path in (output/"index.sqlite", output/"manifest.json"):
+            path.chmod(0o644)
+            with path.open("rb") as stream:
+                os.fsync(stream.fileno())
+        return manifest
+    finally:
+        conn.close()
+        os.close(fd)
+
+def read_published(root, expected_release=None):
+    root = Path(root)
+    folder = root/".code-index"
+    if root.is_symlink() or folder.is_symlink():
+        raise ValueError("Published index path invalid")
+    manifest_path, dbpath = folder/"manifest.json", folder/"index.sqlite"
+    if any(p.is_symlink() or not p.is_file() for p in (manifest_path,dbpath)):
+        raise ValueError("Published index unavailable")
+    if manifest_path.stat().st_size>2*1024*1024 or dbpath.stat().st_size>MAX_DB_BYTES:
+        raise ValueError("Published index bound exceeded")
+    manifest = json.loads(manifest_path.read_bytes())
+    blob = dbpath.read_bytes()
+    if (manifest.get("index_version")!=INDEX_VERSION or manifest.get("schema_version")!=1
+        or manifest.get("index_sha256")!=sha(blob)
+        or manifest.get("source_sha256")!=source_digest(root)
+        or any(manifest.get(k)!=0 for k in ("gaps","stale_count","unindexed_count"))
+        or expected_release is not None and manifest.get("release_id")!=expected_release):
+        raise ValueError("Published source/index binding mismatch")
+    return blob, manifest
+
+
+def seed_private_index(release, stage):
+    """Project a verified complete release into its private V3-only seed."""
+    blob, manifest = read_published(release, Path(release).name)
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.deserialize(blob)
+        conn.execute("PRAGMA trusted_schema=OFF")
+        # This is a fresh private projection, not a mutable published database.
+        conn.execute("PRAGMA foreign_keys=OFF")
+        for table, column in (("files","path"),("lines","file_path"),
+                              ("symbols","file_path"),("edges","file_path")):
+            conn.execute(f"DELETE FROM {table} WHERE {column} NOT LIKE 'v3/%'")
+            conn.execute(f"UPDATE {table} SET {column}=substr({column},4)")
+        conn.execute("DELETE FROM batches")
+        conn.commit()
+        if conn.execute("PRAGMA foreign_key_check").fetchone():
+            raise ValueError("Private index projection is inconsistent")
+        private = conn.serialize()
+        manifest = dict(manifest)
+        manifest.update(source_sha256=source_digest(stage), index_sha256=sha(private),
+            file_count=conn.execute("SELECT COUNT(*) FROM files").fetchone()[0],
+            total_lines=conn.execute("SELECT COALESCE(SUM(line_count),0) FROM files").fetchone()[0])
+        for field in ("exclusions","parser_limitations"):
+            manifest[field]=[{**item,"path":item["path"][3:]} for item in manifest[field]
+                             if item["path"].startswith("v3/")]
+        folder=Path(stage)/".code-index";folder.mkdir(mode=0o700)
+        (folder/"index.sqlite").write_bytes(private)
+        (folder/"manifest.json").write_text(json.dumps(manifest,sort_keys=True))
+        read_published(stage)
+    finally:
+        conn.close()
+
+def execute_published(name, args, release):
+    """Called only after Rust authorization; one resolved fixed release per call."""
+    conn = None
+    fd = None
+    try:
+        args = validated(name,args)
+        if name=="code_index_scan" and args["action"]!="discover":
+            raise ValueError("Published index is immutable; scan a private workspace")
+        blob, manifest = read_published(Path(release), Path(release).name)
+        conn = sqlite3.connect(":memory:")
+        conn.deserialize(blob)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA trusted_schema=OFF")
+        conn.execute("PRAGMA query_only=ON")
+        fd = os.open(Path(release),os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        result = dispatch(conn,fd,name,args)
+        result.update(status="success",root="published",source_kind="untrusted_source_index",
+                      publication={k:manifest[k] for k in ("release_id","source_sha256",
+                        "candidate_sha256","index_version","parser_sha256","index_sha256")},
+                      parser_limitations=page(manifest["parser_limitations"],args["offset"],args["limit"]),
+                      exclusions=page(manifest["exclusions"],args["offset"],args["limit"]),
+                      auto_rescan=False)
+        if len(json.dumps(result).encode())>MAX_OUTPUT_BYTES:
+            raise ValueError("Published index result exceeds response limit")
+        return result
+    except (OSError,ValueError,sqlite3.Error,KeyError) as exc:
+        return {"status":"error","error_kind":"index_rejected","output":str(exc)[:300]}
+    finally:
+        if conn is not None:conn.close()
+        if fd is not None:os.close(fd)
+
 def execute(name,args,base):
     """Rust supplies base after caller/session policy. Never accept a runtime DB path."""
     fds=[];conn=None;indexfd=None;key=None;save=False
@@ -672,6 +849,17 @@ def execute(name,args,base):
             if not chunk:break
             raw.extend(chunk)
         if len(raw)>MAX_DB_BYTES:raise ValueError("Derived index exceeds limit")
+        # A newly seeded source may carry an immutable bootstrap index.
+        # Existing private rows always win, including matching isolated edits.
+        if not raw:
+            seeded=Path(base)/args["root"]/".code-index"
+            if seeded.is_dir() and not seeded.is_symlink():
+                try:
+                    blob,_manifest=read_published(Path(base)/args["root"])
+                    raw.extend(blob)
+                except (OSError,ValueError):
+                    # Edited seed before its first scan: rebuild privately.
+                    pass
         conn=sqlite3.connect(":memory:",timeout=1)
         if raw:conn.deserialize(bytes(raw))
         conn.row_factory=sqlite3.Row

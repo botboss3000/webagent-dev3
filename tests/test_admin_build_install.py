@@ -38,6 +38,9 @@ class InstallTests(unittest.TestCase):
         (self.source / "host.py").write_bytes(self.host)
         (self.source / "install.py").write_bytes(b"# fixture bootstrap\n")
         (self.source / "release.py").write_bytes(b"# fixture release\n")
+        index_source=self.source.parent/"code_index"
+        index_source.mkdir()
+        (index_source/"adapter.py").write_bytes(b"# fixture protected parser\n")
         self.fake = FakePrivileges()
         self.patches = [patch.object(installer.shutil, "disk_usage", return_value=types.SimpleNamespace(free=5*1024*1024*1024)),
                         patch.object(installer, "PRIVILEGES", self.fake),
@@ -60,7 +63,21 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(0o644, (service / "host.py").stat().st_mode & 0o777)
         self.assertEqual(0o600, (service / "installed.json").stat().st_mode & 0o777)
         self.assertEqual(0, self.fake.owner((service / "host.py").stat()))
+        self.assertEqual(hashlib.sha256(b"# fixture protected parser\n").hexdigest(),result["scanner_sha256"])
+        self.assertEqual(0,self.fake.owner((service/"index-scanner.py").stat()))
         self.assertEqual(result, installer.install())
+
+    def test_reviewed_tree_install_is_confined_and_protects_parser(self):
+        key="a"*64
+        task=self.v3/"build-jobs/coordination/trees"/key/"v3/plugins/abilities/Administrator"
+        task.mkdir(parents=True)
+        import shutil
+        shutil.copytree(self.source,task/"v3_build")
+        shutil.copytree(self.source.parent/"code_index",task/"code_index")
+        result=installer.install(key)
+        self.assertIn("scanner_sha256",result)
+        for invalid in ("../escape","a"*63,"z"*64):
+            with self.assertRaises(ValueError):installer.install(invalid)
 
     def test_nonroot_and_precreated_unowned_service_rejected(self):
         self.fake.euid = 1000
