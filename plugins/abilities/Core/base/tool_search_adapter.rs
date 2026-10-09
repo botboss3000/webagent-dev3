@@ -6,22 +6,25 @@ use serde_json::{json,Value};
 use std::collections::{BTreeMap,BTreeSet};
 use tokio_util::sync::CancellationToken;
 pub fn owns(name:&str)->bool {name=="search_tools"}
-pub fn schemas()->Vec<Value> {vec![json!({"type":"function","name":"search_tools","description":"Use Jev to score all permitted tools independently. Returns ranked relevance percentages and related tools. Activation replaces this run's shortlist without changing grants. Requires an adopted TypeSafe decision model. Call alone, not in parallel.","parameters":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":4096},"model_entry_id":{"type":["string","null"],"maxLength":128},"activate":{"type":["boolean","null"]},"limit":{"type":["integer","null"],"minimum":1,"maximum":32},"threshold":{"type":["number","null"],"minimum":0,"maximum":1}},"required":["query"],"additionalProperties":false}})]}
+pub fn schemas()->Vec<Value> {vec![json!({"type":"function","name":"search_tools","description":"Use Jev to score all permitted tools independently. Returns ranked relevance percentages and related tools. Activation adds matching tools to this run without removing visible or previously available tools or changing grants. Requires an adopted TypeSafe decision model. Call alone, not in parallel.","parameters":{"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":4096},"model_entry_id":{"type":["string","null"],"maxLength":128},"activate":{"type":["boolean","null"]},"limit":{"type":["integer","null"],"minimum":1,"maximum":32},"threshold":{"type":["number","null"],"minimum":0,"maximum":1}},"required":["query"],"additionalProperties":false}})]}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Args {query:String,#[serde(default)] model_entry_id:Option<String>,#[serde(default)] activate:Option<bool>,#[serde(default)] limit:Option<usize>,#[serde(default)] threshold:Option<f64>}
 fn valid(a:&Args)->bool {!a.query.trim().is_empty() && a.query.len()<=4096 && !a.query.chars().any(|c|c.is_control()&&c!='\n'&&c!='\t') && (1..=32).contains(&a.limit.unwrap_or(16)) && a.threshold.is_none_or(|x|x.is_finite()&&(0.0..=1.0).contains(&x)) && a.model_entry_id.as_ref().is_none_or(|s|!s.is_empty()&&s.len()<=128)}
 pub fn marker(name:&str)->String {format!("tool:{name}")}
-pub fn selected(run:&Value,name:&str)->bool {run["selected_tools"].as_array().is_none_or(|items|name=="search_tools"||crate::abilities::is_discovery(name)||items.iter().any(|v|v.as_str()==Some(name)))}
 pub fn apply_selection(run:&mut Value,result:&Value) {
     if run["pending"]["name"]!="search_tools"||result["status"]!="success"||result["output"]["activated"]!=true {return;}
     let Some(items)=result["output"]["selected_tools"].as_array() else {return;};
     if items.len()>32||items.iter().any(|v|v.as_str().is_none()) {return;}
     let mut loaded=run["loaded_abilities"].as_array().cloned().unwrap_or_default();
-    loaded.retain(|v|!v.as_str().is_some_and(|s|s.starts_with("tool:")));
-    for item in items {loaded.push(json!(marker(item.as_str().unwrap())));}
+    let mut selected=run["selected_tools"].as_array().cloned().unwrap_or_default();
+    for item in items {
+        let tool_marker=json!(marker(item.as_str().unwrap()));
+        if !loaded.contains(&tool_marker) {loaded.push(tool_marker);}
+        if !selected.contains(item) {selected.push(item.clone());}
+    }
     // These markers belong to the run, never persisted session ability state.
-    run["loaded_abilities"]=json!(loaded);run["selected_tools"]=json!(items);
+    run["loaded_abilities"]=json!(loaded);run["selected_tools"]=json!(selected);
 }
 async fn eligible(app:&App,sid:&str,agent:&str)->Result<Vec<Value>> {
     let access=app.store.live_access(app.store.current_user_id(),agent).await?;
@@ -93,14 +96,23 @@ async fn inner(app:&App,sid:&str,run_id:&str,args:&Args,cancel:CancellationToken
     };
     tokio::select! {_=cancel.cancelled()=>bail!("Search cancelled"),result=tokio::time::timeout(std::time::Duration::from_secs(30),operation)=>result.context("Search timed out")?}
 }
-pub fn guidance(app:&App,schemas:&[Value],visibility:&Value)->String {
+// Append guidance for search-exposed tools without replacing visible guidance.
+pub fn additional_guidance(app:&App,schemas:&[Value],visibility:&Value,loaded:&Value,existing:&str)->String {
     let mut out=String::new();let mut owners=BTreeSet::new();
-    for schema in schemas {let name=schema["name"].as_str().unwrap_or("");for owner in app.abilities.tool_abilities(name,visibility,&Value::Null,&Value::Null) {
-        if owners.insert(owner.clone())&&visibility["skill_visibility"][&owner]!="off" {if let Some(s)=app.abilities.configuration_skill(&owner) {push(&mut out,s);}}
-        if let Some(s)=app.abilities.configuration_skill_asset(&owner,"tool",name) {push(&mut out,s);}
+    for schema in schemas {let name=schema["name"].as_str().unwrap_or("");
+        if !loaded.as_array().is_some_and(|items|items.contains(&json!(marker(name)))) {continue;}
+        for owner in app.abilities.tool_abilities(name,visibility,&Value::Null,&Value::Null) {
+        if owners.insert(owner.clone())&&visibility["skill_visibility"][&owner]!="off" {
+            if let Some(s)=app.abilities.configuration_skill(&owner) {append_guidance(&mut out,existing,s);}
+        }
+        if let Some(s)=app.abilities.configuration_skill_asset(&owner,"tool",name) {append_guidance(&mut out,existing,s);}
     }}out
 }
-fn push(out:&mut String,text:&str) {if out.len()+text.len()+2<=24*1024 {out.push_str("\n\n");out.push_str(text);}}
+fn append_guidance(out:&mut String,existing:&str,text:&str) {
+    if !existing.contains(text)&&!out.contains(text)&&existing.len()+out.len()+text.len()+2<=24*1024 {
+        out.push_str("\n\n");out.push_str(text);
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,8 +122,14 @@ mod tests {
         let (rows,names)=ranked(&json!({"answers":{"file_read":{"type":"noul","noul":0.98},"file_edit":{"type":"noul","noul":0.97}}}),&tools,16,0.5).unwrap();assert_eq!(rows[0]["relevance_percent"],98.0);assert_eq!(names,vec!["file_read","file_edit"]);
         for invalid in [json!({"answers":{}}),json!({"answers":{"file_read":{"type":"choice","noul":0.5},"file_edit":{"type":"noul","noul":1.2}}})] {assert!(ranked(&invalid,&tools,16,0.5).is_err());}
     }
-    #[test] fn selection_replaces_markers_but_preserves_loaded_abilities() {
+    #[test] fn selection_adds_markers_and_preserves_previous_tools() {
         let mut run=json!({"pending":{"name":"search_tools"},"loaded_abilities":["base","tool:old"],"selected_tools":["old"]});let result=json!({"status":"success","output":{"activated":true,"selected_tools":["file_read"]}});apply_selection(&mut run,&result);
-        assert_eq!(run["loaded_abilities"],json!(["base","tool:file_read"]));assert!(selected(&run,"search_tools"));assert!(!selected(&run,"old"));let saved=run.clone();apply_selection(&mut run,&json!({"status":"failed"}));assert_eq!(run,saved);
+        assert_eq!(run["loaded_abilities"],json!(["base","tool:old","tool:file_read"]));
+        assert_eq!(run["selected_tools"],json!(["old","file_read"]));
+        let saved=run.clone();
+        apply_selection(&mut run,&result);assert_eq!(run,saved);
+        apply_selection(&mut run,&json!({"status":"failed"}));assert_eq!(run,saved);
+        apply_selection(&mut run,&json!({"status":"success","output":{"activated":false,"selected_tools":["file_edit"]}}));assert_eq!(run,saved);
+        apply_selection(&mut run,&json!({"status":"success","output":{"activated":true,"selected_tools":[]}}));assert_eq!(run,saved);
     }
 }

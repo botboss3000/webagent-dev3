@@ -18,9 +18,11 @@ See [ability port ledger](ability-port-ledger.md) for explicit remaining gaps.
 
 Base's `search_tools` follows `tool_search_adapter.rs`: live grants filter the
 catalog, an adopted TypeSafe decision model scores independent Noul questions,
-and Rust returns ranked percentages. Successful activation replaces run-only
-tool markers. `agent_loop/mod.rs` records them; `run.rs` rebuilds the shortlist
-schemas and guidance. Session grants and approval requirements never change.
+and Rust returns ranked percentages. Successful activation adds run-only
+tool markers without removing existing markers. `agent_loop/mod.rs` records them;
+`run.rs` rebuilds schemas and guidance from live visibility plus loaded tools.
+Visible tools and previously loaded tools remain exposed across searches.
+Session grants, Off settings and approval requirements still apply.
 
 Core's Decision ability follows `plugins/abilities/Core/decision/adapter.rs`
 and `directory_adapter.rs`. The agent can supply bounded System One JSON,

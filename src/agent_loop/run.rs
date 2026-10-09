@@ -131,7 +131,6 @@ pub(crate) async fn execute_run(
                     .into_iter().filter(|schema| {
                         let name=schema["name"].as_str().unwrap_or("");
                         if run["post_run_followup"]==true && !crate::tool_execution::background_capable(name) {return false;}
-                        if !tools::core_tool_search::selected(&run,name) {return false;}
                         if abilities::is_discovery(name) {
                             let installation=access::Permission::from_policy(policy_decision(&policy,name))
                                 .unwrap_or(access::Permission::Deny);
@@ -148,16 +147,8 @@ pub(crate) async fn execute_run(
                 let mut entries=app.abilities.catalog_with(&policy,&visibility,&ability_state);
                 entries.retain_mut(|entry|filter_ability_entry(&app,&access,entry,
                     &policy,&visibility,&ability_state,&run["loaded_abilities"],read_only));
-                // After selection the main model receives only the shortlist, not
-                // the catalog which Jev scored. Discovery remains an escape hatch.
-                if run["selected_tools"].is_array() {
-                    entries.retain_mut(|entry| {
-                        if let Some(items)=entry["tools"].as_array_mut() {
-                            items.retain(|t|tools::core_tool_search::selected(&run,t["name"].as_str().unwrap_or("")));
-                            !items.is_empty()
-                        } else {false}
-                    });
-                }
+                // Search adds tool markers; live visibility and loaded abilities
+                // continue to expose their authorized schemas and guidance.
                 let index=abilities::Catalog::model_index(&entries,&schemas);
                 let visible=app.abilities.visible_guidance_filtered(&policy,&visibility,
                     &ability_state,
@@ -165,9 +156,8 @@ pub(crate) async fn execute_run(
                     |name|live_tool_decision(&app,&access,name,&policy,&visibility,
                         &ability_state,&run["loaded_abilities"],read_only)
                         .permission!=access::Permission::Deny);
-                let visible=if run["selected_tools"].is_array() {
-                    tools::core_tool_search::guidance(&app,&schemas,&visibility)
-                } else {visible};
+                let extra=tools::core_tool_search::additional_guidance(&app,&schemas,&visibility,&run["loaded_abilities"],&visible);
+                let visible=format!("{visible}{extra}");
                 let names=schemas.iter().filter_map(|schema|schema["name"].as_str().map(str::to_owned)).collect::<Vec<_>>();
                 let execution=crate::tool_execution::guidance(&visibility,&names)?;
                 let guidance=format!("{index}{visible}\n{execution}");

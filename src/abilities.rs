@@ -1035,6 +1035,38 @@ mod tests {
     }
 
     #[test]
+    fn search_activation_preserves_visible_tools_and_respects_denials() {
+        let (_root, catalog) = fixture();
+        let mut policy = policy();
+        let visibility = json!({"visibility":{"codebase_admin":"visible"},
+            "tool_modes":{"file_search":"discoverable","file_edit":"off"}});
+        let state = json!({"active":[],"suppressed":[]});
+        let mut run = json!({"pending":{"name":"search_tools"},"loaded_abilities":[]});
+        let names = |run: &Value, policy: &Value, state: &Value| {
+            catalog.schemas_with(policy, &run["loaded_abilities"], &visibility, state)
+                .into_iter().map(|s|s["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>()
+        };
+        let before = names(&run, &policy, &state);
+        assert!(before.contains(&"file_read".into()));
+        assert!(!before.contains(&"file_search".into()));
+        crate::tools::core_tool_search::apply_selection(&mut run,
+            &json!({"status":"success","output":{"activated":true,
+                "selected_tools":["file_search","file_edit","python"]}}));
+        let after = names(&run, &policy, &state);
+        assert!(before.iter().all(|name|after.contains(name)));
+        assert!(after.contains(&"file_search".into()));
+        assert!(!after.contains(&"file_edit".into()));
+        assert!(!after.contains(&"python".into()));
+        crate::tools::core_tool_search::apply_selection(&mut run,
+            &json!({"status":"success","output":{"activated":true,"selected_tools":[]}}));
+        assert_eq!(names(&run, &policy, &state), after);
+        policy["rules"]["file_search"] = json!("deny");
+        assert!(!names(&run, &policy, &state).contains(&"file_search".into()));
+        assert!(!names(&run, &policy, &json!({"active":[],"suppressed":["codebase_admin"]}))
+            .contains(&"file_read".into()));
+    }
+
+    #[test]
     fn natural_task_search_finds_permitted_ability_and_tools() {
         let (_root, catalog) = fixture();
         let mut run = json!({"loaded_abilities":[]});
