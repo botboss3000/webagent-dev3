@@ -1,6 +1,6 @@
 # WebAgent v3 UI journeys
 
-- Incoming-message manager: /app?tab=agents&agent=<authorized-agent-id>&agentView=identity. Verify Review incoming messages and Acceptance criteria, administrator-only edits, System-model requirement and save/reload persistence. In a disposable conversation, submit an accepted and rejected message; verify review badges after reload, exactly one accepted run, no rejected run and no rejected content in later agent context.
+- Incoming-message manager: /app?tab=agents&agent=<authorized-agent-id>&agentView=identity. Verify row-click and keyboard expansion, a separate On/Off switch, Acceptance prompt saving while off, administrator-only edits, System-model requirement and save/reload persistence. In a disposable conversation, submit an accepted and rejected message; verify review badges after reload, exactly one accepted run, no rejected run and no rejected content in later agent context.
 
 These routes belong to the independent v3 application and must use its development origin. Do not use the v2 route registry to navigate v3.
 

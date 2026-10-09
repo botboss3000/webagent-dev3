@@ -261,6 +261,7 @@ async fn identity_put(State(app): State<App>, Extension(identity): Extension<Val
         settings.validate().map_err(|e|crate::bad(&e.to_string()))?;
         metadata["closing_message"]=serde_json::to_value(settings).map_err(anyhow::Error::from)?;
     }
+    let manager_prompt=body.manager_incoming_message.as_ref().map(|settings|settings.criteria.clone());
     if let Some(settings)=body.manager_incoming_message {
         settings.validate().map_err(|e|crate::bad(&e.to_string()))?;
         if settings.enabled {
@@ -271,18 +272,24 @@ async fn identity_put(State(app): State<App>, Extension(identity): Extension<Val
             scoped.pin_model_plan(&mut plan).await
                 .map_err(|_|crate::bad("System model is unavailable"))?;
         }
-        let next=serde_json::to_value(settings).map_err(anyhow::Error::from)?;
-        if metadata["manager_incoming_message"]!=next {
+        let next=json!({"enabled":settings.enabled});
+        // Prompt edits also withdraw any review pinned to the earlier Identity revision.
+        if manager_prompt.is_some() {
             metadata["manager_incoming_message_revision"]=json!(metadata["manager_incoming_message_revision"]
                 .as_u64().unwrap_or(0).checked_add(1).ok_or_else(||crate::bad("Manager settings revision exhausted"))?);
         }
         metadata["manager_incoming_message"]=next;
     }
+    let mut transaction=store.agent_pool.begin().await.map_err(anyhow::Error::from)?;
     let changed = sqlx::query("UPDATE agents SET name=COALESCE(?,name),description=COALESCE(?,description),metadata=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?")
         .bind(body.name.as_deref().map(str::trim)).bind(body.description.as_deref()).bind(store.seal(&metadata)?)
         .bind(crate::now() as i64).bind(&id).bind(body.revision)
-        .execute(&store.agent_pool).await.map_err(anyhow::Error::from)?;
+        .execute(&mut *transaction).await.map_err(anyhow::Error::from)?;
     if changed.rows_affected()!=1 {return Err(ApiError(StatusCode::CONFLICT,"Identity changed; reload before saving".into()));}
+    if let Some(prompt)=manager_prompt {
+        crate::manager::config::save_prompt(&store.root,&id,&prompt)?;
+    }
+    transaction.commit().await.map_err(anyhow::Error::from)?;
     identity_get(State(app.clone()),Extension(identity),Path(id)).await
 }
 
@@ -1024,9 +1031,40 @@ mod manager_identity_tests {
         let saved=identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(body(revision,"Clothing questions only"))).await.unwrap().0;
         let reloaded=identity_get(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap().0;
         assert_eq!(saved,reloaded);
+        let prompt_path=app.store.root.join("config/prompts.json");
+        let prompt_file:Value=serde_json::from_slice(&std::fs::read(&prompt_path).unwrap()).unwrap();
+        assert_eq!(prompt_file["manager_incoming_message"]["shared_default"],"Clothing questions only");
         assert_eq!(identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(body(revision,"Stale"))).await.unwrap_err().0,StatusCode::CONFLICT);
         let user=app.store.create_user_account("manager-setting-outsider","fixture-only-password").await.unwrap();
         assert_eq!(identity_put(State(app.clone()),Extension(json!({"_user_id":user["user_id"]})),Path("shared_default".into()),Json(body(revision+1,"Forbidden"))).await.unwrap_err().0,StatusCode::FORBIDDEN);
         assert!(identity_put(State(app.clone()),Extension(identity),Path("shared_default".into()),Json(body(revision+1,&"x".repeat(8193)))).await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod manager_disabled_prompt_tests {
+    use super::*;
+    #[tokio::test]
+    async fn save_prompt_while_off_without_system_model_and_reload_from_file() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let identity=json!({"_user_id":"admin"});
+        let mut catalog=app.store.model_catalog().await.unwrap();
+        catalog.agent_models.get_mut("shared_default").unwrap().roles.remove(&crate::model_selection::ModelRole::System);
+        app.store.put("model_catalog",&serde_json::to_value(catalog).unwrap()).await.unwrap();
+        let before=identity_get(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap().0;
+        let body=serde_json::from_value::<IdentityUpdate>(json!({
+            "revision":before["revision"],"manager_incoming_message":{"enabled":false,"criteria":"Clothing store questions"}})).unwrap();
+        let saved=identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(body)).await.unwrap().0;
+        assert_eq!(saved["manager_incoming_message"],json!({"enabled":false,"criteria":"Clothing store questions"}));
+        let path=app.store.root.join("config/prompts.json");
+        let mut prompts:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        prompts["manager_incoming_message"]["shared_default"]=json!("Updated directly in prompts.json");
+        std::fs::write(&path,serde_json::to_vec(&prompts).unwrap()).unwrap();
+        let reload=identity_get(State(app.clone()),Extension(identity),Path("shared_default".into())).await.unwrap().0;
+        assert_eq!(reload["manager_incoming_message"]["criteria"],"Updated directly in prompts.json");
+        assert_eq!(reload["manager_incoming_message"]["enabled"],false);
+        let store=app.store.for_agent("shared_default").await.unwrap();
+        let raw:Vec<u8>=sqlx::query_scalar("SELECT metadata FROM agents WHERE id='shared_default'").fetch_one(&store.agent_pool).await.unwrap();
+        assert!(store.unseal(&raw).unwrap()["manager_incoming_message"].get("criteria").is_none());
     }
 }

@@ -120,7 +120,8 @@ admission; live revocation still applies before dispatch.
 
 The independent V3 incoming-message gate stores submissions as visible user chat
 before admission to the working agent. Agent metadata owns
-manager_incoming_message settings beneath the Identity revision. User-owned
+manager_incoming_message enablement beneath the Identity revision; criteria live
+in config/prompts.json under manager_incoming_message.<agent-id>. User-owned
 manager_review: documents retain submissions, pinned criteria/model plans and
 generation-fenced verdicts; manager_pending: documents are temporary per-session
 queue pointers. Acceptance alone atomically adds the user interaction and agent
