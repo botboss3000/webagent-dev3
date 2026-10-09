@@ -101,13 +101,22 @@ fail closed and need a reviewed backfill/migration rather than silent selection.
 The index is derived metadata, never a session database. Do not copy or inspect
 session databases for this workflow.
 
-Install the reviewed scanner with the protected broker code and restart its
-supervisor only when all builds are idle. For a gate changing broker code, the
-root operator may run the reviewed task's installer with
-`--install --install-tree <exact-64-character-task-tree-hash>` before submitting
-that task. The source is confined to the broker task namespace; source ownership,
-single-link checks and unchanged-input verification still apply. This lets the
-first promoted candidate pass the new gate, without interrupting earlier builds. Do not restart a busy broker. Session
+Before any full or UI-only release is staged, the protected broker requires the
+candidate v3/plugins/abilities/Administrator/code_index/adapter.py bytes to
+match its installed index-scanner.py. A mismatch fails before asset staging or
+the indexing executor, preserving the active release.
+
+Every adapter change requires installing that reviewed task's parser before
+finish. The root operator runs the protected installer with
+--install --install-tree <exact-64-character-task-tree-hash> while preserving
+the exact task source, waits until all builds are idle, and restarts the
+protected broker supervisor. Finishing the same task then creates a source/index
+pair bound to the matching parser. Do not alter a frozen published index or
+finish a task against a mismatched scanner. Gate changes to broker code follow
+the same exact-task install and idle-restart sequence. The source is confined to
+the broker task namespace; source ownership, single-link checks and
+unchanged-input verification still apply. Never restart a busy broker. Session
 seeding resolves the active release once; published tools are read only and
-subject to normal Rust authorization. Modified session workspaces and private
+subject to normal Rust authorization.
+Modified session workspaces and private
 indexes are retained independently.

@@ -175,28 +175,35 @@ def _map_rows(raw):
     return out
 def refresh_features(conn,rootfd):
     indexed={r["path"]:r for r in conn.execute("SELECT path,sha256 FROM files")}
+    # Published archives preserve both v3/ and shared top-level UI namespaces.
+    # Feature bindings belong to the release's v3 tree; shared UI inputs must
+    # never shadow a same-named V3 target. Private workspace indexes keep their
+    # existing root-relative behavior.
+    published=any(p.startswith("v3/") for p in indexed)
+    feature_sources={p:r for p,r in indexed.items() if not published or p.startswith("v3/")}
     normalized={}
-    for p,row in indexed.items():
+    for p,row in feature_sources.items():
         key=_pathnorm(p)
         if key in normalized:raise ValueError("Normalized Code Index feature path collision")
         normalized[key]=(p,row)
     rows=[]
-    for p,r in indexed.items():
+    for p,r in feature_sources.items():
         if Path(p).suffix.lower() not in {".js",".mjs",".cjs",".css",".rs",".py"}:continue
         data=read_source(rootfd,p)
         if sha(data)!=r["sha256"]:raise ValueError("feature source changed during scan")
         rows.extend(_marker_rows(p,data.decode("utf-8"),r["sha256"]))
-    map_path=next((p for p in indexed if _pathnorm(p)==FEATURE_MAP_PATH),None)
+    map_candidates=(p for p in feature_sources if _pathnorm(p)==FEATURE_MAP_PATH)
+    map_path=next(map_candidates,None)
     if map_path:
         raw=read_source(rootfd,map_path)
-        if sha(raw)!=indexed[map_path]["sha256"]:raise ValueError("feature map changed during scan")
+        if sha(raw)!=feature_sources[map_path]["sha256"]:raise ValueError("feature map changed during scan")
         for row in _map_rows(raw):
             target=normalized.get(row[3])
             if target is None:raise ValueError("feature map target is unindexed")
             actual,meta=target;data=read_source(rootfd,actual);lines=data.decode("utf-8").splitlines()
             suffix=Path(actual).suffix.lower()
             if (row[10] and meta["sha256"]!=row[10]) or sha(data)!=meta["sha256"] or row[5]>len(lines) or not any(_has_code_line(x,suffix) for x in lines[row[4]-1:row[5]]):raise ValueError("feature map target is stale")
-            rows.append(row[:1]+(map_path,)+row[2:3]+(actual,)+row[4:10]+(meta["sha256"],indexed[map_path]["sha256"]))
+            rows.append(row[:1]+(map_path,)+row[2:3]+(actual,)+row[4:10]+(meta["sha256"],feature_sources[map_path]["sha256"]))
     if len(rows)>MAX_FILES+MAX_FEATURES*MAX_FEATURE_LOCATIONS:raise ValueError("Code Index feature row limit exceeded")
     conn.execute("DELETE FROM feature_locations")
     conn.executemany("INSERT INTO feature_locations VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",rows)

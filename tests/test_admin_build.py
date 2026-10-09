@@ -1515,6 +1515,66 @@ class BuildTests(unittest.TestCase):
         self.assertEqual({"image": "new", "custom": "yes"}, value["Labels"])
 
 
+class IndexParserPairingTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.source = self.root / "source"
+        (self.source / "host-build-service").mkdir(parents=True)
+        self.assets = self.root / "assets"
+        (self.assets / "releases").mkdir(parents=True)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def blob(self, adapter):
+        return context(extra={host.INDEX_ADAPTER_MEMBER: adapter.decode("utf-8"),
+                              "v3/ui/index.html": "<main>fixture</main>"})
+
+    def runner(self):
+        runner = host.Runner(source=self.source, snapshot_socket=None)
+        runner.inspect = lambda _name: {"Image": "sha256:" + "1" * 64}
+        return runner
+
+    def test_matching_parser_allows_index_stage_and_executor(self):
+        adapter = b"# reviewed parser source\n"
+        (self.source / "host-build-service/index-scanner.py").write_bytes(adapter)
+        runner = self.runner()
+        executed = []
+
+        def execute(argv, timeout=120):
+            executed.append(argv)
+            output_mount = next(arg for arg in argv if arg.endswith(":/output:rw"))
+            output = Path(output_mount.split(":", 1)[0])
+            (output / "manifest.json").write_text("{}", encoding="utf-8")
+            (output / "index.sqlite").write_bytes(b"fixture")
+
+        runner.command = execute
+        with patch.object(host, "ASSET_ROOT", self.assets), \
+             patch.object(host.release, "verify_index", return_value={"index_version": 2}) as verify:
+            job = str(uuid.uuid4())
+            destination = runner.stage_assets(self.blob(adapter), job)
+        self.assertEqual(destination, self.assets / "releases" / job)
+        self.assertTrue((destination / ".code-index/index.sqlite").is_file())
+        self.assertEqual(len(executed), 1)
+        verify.assert_called_once()
+
+    def test_mismatch_preserves_current_release_and_never_calls_executor(self):
+        old = str(uuid.uuid4())
+        (self.assets / "releases" / old).mkdir()
+        (self.assets / "current").symlink_to("releases/" + old)
+        (self.source / "host-build-service/index-scanner.py").write_bytes(b"installed parser v1")
+        runner = self.runner()
+        executed = []
+        runner.command = lambda *args, **kwargs: executed.append(args)
+        with patch.object(host, "ASSET_ROOT", self.assets):
+            with self.assertRaisesRegex(ValueError, "differs.*Install the reviewed Code Index parser.*restart"):
+                runner.stage_assets(self.blob(b"candidate parser v2"), str(uuid.uuid4()))
+        self.assertEqual(host.release.current_asset_id(self.assets), old)
+        self.assertFalse(executed)
+        self.assertEqual({p.name for p in (self.assets / "releases").iterdir()}, {old})
+
+
 class InheritedSocketTests(unittest.IsolatedAsyncioTestCase):
     async def test_codex_and_webagent_share_work_registry(self):
         with tempfile.TemporaryDirectory() as temp:

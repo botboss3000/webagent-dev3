@@ -69,6 +69,58 @@ TASK_CONTEXT = CONTEXT + release.INSPECTION_CONTEXT
 MAX_TASK_CONTEXT = 512 * 1024 * 1024
 
 
+INDEX_ADAPTER_MEMBER = "v3/plugins/abilities/Administrator/code_index/adapter.py"
+MAX_INDEX_PARSER_BYTES = 2 * 1024 * 1024
+
+
+def _protected_parser_sha256(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        raise ValueError("Protected Code Index parser unavailable; install the reviewed parser and restart the protected broker while builds are idle.") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= MAX_INDEX_PARSER_BYTES:
+            raise ValueError("Protected Code Index parser is not a bounded regular file; install the reviewed parser and restart the protected broker while builds are idle.")
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            block = os.read(fd, 65536)
+            if not block:
+                break
+            total += len(block)
+            if total > MAX_INDEX_PARSER_BYTES:
+                raise ValueError("Protected Code Index parser exceeds its bound; install the reviewed parser and restart the protected broker while builds are idle.")
+            digest.update(block)
+        if total != info.st_size:
+            raise ValueError("Protected Code Index parser changed while being read; retry after installation settles.")
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
+
+
+def require_paired_index_parser(blob, protected_path):
+    """Fail closed unless source and protected indexing code are byte-identical."""
+    guidance = "Install the reviewed Code Index parser and restart the protected broker while builds are idle before finishing a build."
+    try:
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:") as archive:
+            matches = [member for member in archive
+                       if member.name.removeprefix("./") == INDEX_ADAPTER_MEMBER]
+            if len(matches) != 1 or not matches[0].isfile() or not 0 < matches[0].size <= MAX_INDEX_PARSER_BYTES:
+                raise ValueError("Candidate Code Index parser is missing, ambiguous, or exceeds its bound. " + guidance)
+            source = archive.extractfile(matches[0])
+            if source is None:
+                raise ValueError("Candidate Code Index parser could not be read. " + guidance)
+            candidate = source.read(MAX_INDEX_PARSER_BYTES + 1)
+            if len(candidate) != matches[0].size or len(candidate) > MAX_INDEX_PARSER_BYTES:
+                raise ValueError("Candidate Code Index parser changed or exceeds its bound. " + guidance)
+    except (tarfile.TarError, OSError) as exc:
+        raise ValueError("Candidate Code Index parser could not be verified. " + guidance) from exc
+    installed = _protected_parser_sha256(protected_path)
+    if hashlib.sha256(candidate).hexdigest() != installed:
+        raise ValueError("Candidate Code Index parser differs from the installed protected parser. " + guidance)
+
+
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
@@ -593,6 +645,8 @@ class Runner:
         return release.checkout_matches(self.source, blob, changed, context_digest, standalone=True)
 
     def stage_assets(self, blob, job_id):
+        scanner = self.source / "host-build-service/index-scanner.py"
+        require_paired_index_parser(blob, scanner)
         destination = release.stage_assets(ASSET_ROOT, job_id, blob, context_digest)
         index = destination / ".code-index"
         for orphan in destination.glob(".index-stage-*"):
@@ -603,10 +657,7 @@ class Runner:
         if index.exists():
             release.verify_index(destination, job_id, context_digest(blob)[0])
             return destination
-        # Parser code is the installed protected copy, never candidate Python.
-        scanner = SOURCE / "host-build-service/index-scanner.py"
-        if scanner.is_symlink() or not scanner.is_file():
-            raise ValueError("Protected index scanner unavailable")
+        # Candidate Python is never executed; the matched protected parser is mounted read-only.
         temporary = destination / (".index-stage-" + str(uuid.uuid4()))
         temporary.mkdir(mode=0o755)
         try:

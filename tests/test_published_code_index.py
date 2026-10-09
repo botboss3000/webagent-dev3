@@ -112,6 +112,29 @@ class PublishedTests(unittest.TestCase):
   self.assertEqual({row["file_path"] for row in private_rows},{"config/settings.json","ui/chat.js","ui/chat.css"})
   self.assertTrue(all(row["stale"] is False for row in private_rows))
 
+ def test_published_feature_map_uses_v3_namespace_when_shared_ui_path_collides(self):
+  marker=b'// @code-index {"version":1,"feature":"chat-footer","aliases":["chat footer"],"purpose":"V3 chat footer behavior","span_lines":2}\nfunction mountV3ChatFooter() {}\n'
+  shared=b'function mountSharedLegacyFooter() {}\n'
+  feature_map=json.dumps({"version":1,"features":[{"id":"chat-footer","aliases":["chat footer"],"purpose":"Chat footer","locations":[{"path":"ui/main-panel/agents/identity/tool-output-policy.js","start_line":2,"end_line":2}]}]}).encode()+b"\n"
+  blob=self.blob({
+   "v3/ui/main-panel/agents/identity/tool-output-policy.js":(420,marker),
+   "ui/main-panel/agents/identity/tool-output-policy.js":(420,shared),
+   "v3/config/code-index-features.json":(420,feature_map),
+  })
+  j,d,m=self.stage(blob)
+  result=idx.execute_published("code_index_lookup",{"root":"published","action":"search","query":"chat footer","limit":20,"offset":0},d)
+  self.assertEqual("success",result["status"],result)
+  rows=[row for row in result["results"] if row.get("feature_id")=="chat-footer"]
+  self.assertEqual({"v3/ui/main-panel/agents/identity/tool-output-policy.js"},{row["file_path"] for row in rows})
+  self.assertTrue(all(row["source_path"]=="v3/config/code-index-features.json" or row["source_path"]==row["file_path"] for row in rows))
+  self.assertNotIn("ui/main-panel/agents/identity/tool-output-policy.js",{row["file_path"] for row in rows})
+  workspace=self.root/"private";workspace.mkdir();shutil.copytree(d/"v3",workspace/"webagent-v3")
+  idx.seed_private_index(d,workspace/"webagent-v3")
+  private=idx.execute("code_index_lookup",{"root":"webagent-v3","action":"search","query":"chat footer","limit":20,"offset":0},workspace)
+  private_rows=[row for row in private["results"] if row.get("feature_id")=="chat-footer"]
+  self.assertEqual({"ui/main-panel/agents/identity/tool-output-policy.js"},{row["file_path"] for row in private_rows})
+  self.assertTrue(all(row["stale"] is False for row in private_rows))
+
  def test_published_search_snippet_are_bound_to_one_immutable_release(self):
   j,d,m=self.stage(self.blob())
   before_source=idx.source_digest(d)
