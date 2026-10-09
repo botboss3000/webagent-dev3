@@ -73,6 +73,87 @@ pub(crate) async fn execute_run(
             app.save(&mut run).await?;
         }
         if run["phase"] == "model" {
+            if run.get("tool_context_state").is_none() {
+                let session=app.store.get(&format!("session:{sid}")).await?;
+                run["tool_context_state"]=session.as_ref().and_then(|s|s.get("tool_context_state")).cloned()
+                    .unwrap_or_else(||json!({"clock":0,"entries":[]}));
+            }
+            // Persist once-per-message admission before any optional retrieval work.
+            // No source read or Decision request may hold the shared dispatch gate.
+            if run["code_index_retrieval_attempted"]!=true && run["post_run_followup"]!=true {
+                run["code_index_retrieval_attempted"]=json!(true);
+                let user_text=run["input"].as_array().unwrap().iter().rev()
+                    .find(|item|item["role"]=="user")
+                    .map(|item| {
+                        if let Some(text)=item["content"].as_str() {text.to_owned()}
+                        else {item["content"].as_array().map(|parts|parts.iter()
+                            .filter_map(|part|part["text"].as_str()).collect::<Vec<_>>().join("\n"))
+                            .unwrap_or_default()}
+                    }).unwrap_or_default();
+                app.save(&mut run).await?;
+                drop(_guard);
+                let retrieval=tokio::time::timeout(Duration::from_secs(40),
+                    tools::code_index_retrieval::retrieve(&app,&sid,&id,&user_text,cancel.clone())).await;
+                let _retrieval_guard=app.gate.lock().await;
+                let mut latest=app.run(&id).await?;
+                if latest["generation"]!=generation || status(&latest)!="running"
+                    || latest["phase"]!="model" || cancel.is_cancelled() || app.shutoff().await? {
+                    return Ok(());
+                }
+                if let Ok(Ok(Some(evidence)))=retrieval {
+                    if tools::code_index_retrieval::authorize_attachment(&app,&sid,&id,evidence["output"]["settings_sha256"].as_str().unwrap_or("")).await.is_err() {
+                        latest["code_index_retrieval_status"]=json!("access_changed");
+                        app.save(&mut latest).await?;
+                        continue;
+                    }
+                    // These are private source read records, never trusted instructions
+                    // and never an external-effect replay. Journal each recallable pair.
+                    let evidence=&evidence["output"];
+                    let mut calls=Vec::new();let mut results=Vec::new();
+                    if let Some(items)=evidence["items"].as_array() {
+                        for item in items.iter().take(5) {
+                            let Some(call_id)=item["call_id"].as_str() else {continue};
+                            let arguments=json!({"action":"snippet","root":item["root"],
+                                "file_path":item["path"],"start_line":item["start_line"],
+                                "end_line":item["end_line"],"max_chars":item["max_chars"]});
+                            calls.push(json!({"type":"function_call","call_id":call_id,
+                                "name":"code_index_lookup","arguments":arguments.to_string()}));
+                            results.push(json!({"type":"function_call_output","call_id":call_id,
+                                "output":json!({"status":"success","source_kind":"untrusted_source_index",
+                                    "output":item}).to_string()}));
+                        }
+                    }
+                    if !calls.is_empty() {
+                        let candidate_id=format!("code_index_auto_{id}_candidates");
+                        calls.push(json!({"type":"function_call","call_id":candidate_id,
+                            "name":"code_index_lookup",
+                            "arguments":json!({"action":"search","root":evidence["root"],
+                                "query":evidence["query"],"limit":evidence["candidate_limit"],"offset":0}).to_string()}));
+                        results.push(json!({"type":"function_call_output","call_id":candidate_id,
+                            "output":json!({"status":"success","source_kind":"untrusted_source_index",
+                                "output":{"ranked_candidates":evidence["ranked_candidates"],
+                                    "index_revision":evidence["index_revision"]}}).to_string()}));
+                        latest["input"].as_array_mut().unwrap().extend(calls.iter().cloned());
+                        // Turn zero is reserved here; working model calls begin at one.
+                        app.store.save_run_observed(&mut latest,"model_output",
+                            &json!({"output":calls})).await?;
+                        for result in results {
+                            latest["input"].as_array_mut().unwrap().push(result);
+                            app.save(&mut latest).await?;
+                        }
+                        latest["code_index_retrieval_status"]=json!("attached");
+                    } else {latest["code_index_retrieval_status"]=json!("no_matches");}
+                } else {
+                    latest["code_index_retrieval_status"]=json!(match retrieval {
+                        Ok(Ok(None))=>"disabled_or_no_matches",
+                        Err(_)=>"timeout",
+                        _=>"unavailable",
+                    });
+                }
+                app.save(&mut latest).await?;
+                context_accounting.reset();
+                continue;
+            }
             if crate::background_tasks::collect(&app,&mut run).await? {
                 context_accounting.reset();
             }
@@ -252,12 +333,34 @@ pub(crate) async fn execute_run(
                 context_accounting.reset();
                 app.save(&mut run).await?;
             }
+            // Project replay only: retain the original journal/input and live policy authority.
+            let retention_policy=match crate::tool_output::effective(&app.store,&agent_id).await {
+                Ok(policy)=>policy,
+                Err(_)=>{run["status"]=json!("paused");run["error"]=json!("Invalid tool output policy; review Identity");app.save(&mut run).await?;return Ok(());}
+            };
+            let retention_prompts=match crate::tool_output::Prompts::read(&app.store.root) {
+                Ok(prompts)=>prompts,
+                Err(_)=>{run["status"]=json!("paused");run["error"]=json!("Invalid tool output prompts; review app prompts configuration");app.save(&mut run).await?;return Ok(());}
+            };
+            run["tool_context_policy"]=serde_json::to_value(&retention_policy)?;
+            if crate::retained_recall::restore(&app,&sid,&agent_id,&mut run,&retention_policy).await? {
+                context_accounting.reset();
+            }
+            crate::tool_output::synchronize(&mut run,&retention_policy);
+            if retention_policy.enabled {
+                gate_schemas.push(crate::tool_output::schema());
+                contributions.push(context_input::Contribution{id:"tool_output_retention".into(),
+                    source:"native_context_policy".into(),lifetime:context_input::Lifetime::Call,
+                    content:retention_prompts.guidance.clone(),turn:run["turns"].as_u64().unwrap_or(0),call:call_number});
+            }
+            let retention_input=crate::tool_output::project(&run,&retention_policy,&retention_prompts.placeholder)?;
+            if retention_input.is_some() {context_accounting.reset();}
             // MODEL-CONTEXT-CEILING: runtime profiles bound the entire envelope;
             // compaction JSON still owns folding policy and summary reserves.
             let model_ceiling = loop_runtime::Config::read(&app.runtime_path)?
                 .context.ceiling(&selection)?.min(workflow_policy.max_context_bytes);
             let assembly_request = context_input::Request {
-                history: run["input"].as_array().unwrap(), base: &instructions,
+                history: retention_input.as_deref().unwrap_or(run["input"].as_array().unwrap()), base: &instructions,
                 guidance, schemas: &gate_schemas, contributions: &contributions,
                 identity: context_input::CallIdentity {
                     turn: run["turns"].as_u64().unwrap_or(0),
@@ -457,7 +560,7 @@ pub(crate) async fn execute_run(
                     })
                 });
                 let compacted = summary.as_deref().ok_or_else(|| context_assembly::Failure::new("summary_missing", "summary_validation").into())
-                    .and_then(|summary| context_compaction::apply_summary(run["input"].as_array().unwrap(), &plan, summary).map_err(context_assembly::compaction_error));
+                    .and_then(|summary| context_compaction::apply_summary(retention_input.as_deref().unwrap_or(run["input"].as_array().unwrap()), &plan, summary).map_err(context_assembly::compaction_error));
                 let compacted = match compacted {
                     Ok(compacted)=>compacted,
                     Err(error)=>{
@@ -531,7 +634,7 @@ pub(crate) async fn execute_run(
             };
             // DISPATCH-HISTORY-TRANSFER: no save may use this consumed local run.
             // Ownership/generation checks below load their own authoritative run.
-            let input = match std::mem::take(&mut run["input"]) {
+            let input = match retention_input.map(Value::Array).unwrap_or_else(||std::mem::take(&mut run["input"])) {
                 Value::Array(items) => items,
                 _ => return Err(anyhow!("Dispatch history must be an array")),
             };
@@ -584,6 +687,11 @@ pub(crate) async fn execute_run(
                 drop(dispatch_guard);
                 let _ = collector.await;
                 continue;
+            }
+            crate::tool_output::advance(&mut current)?;
+            if crate::tool_output::effective(&app.store,&agent_id).await?!=retention_policy
+                || crate::tool_output::Prompts::read(&app.store.root)?!=retention_prompts {
+                drop(sender);drop(dispatch_guard);let _=collector.await;continue;
             }
             workflow::record(&mut current, &workflow_policy,
                 &workflow::Input::ModelDispatch(snapshot), workflow::Decision::Pass)?;
@@ -666,12 +774,20 @@ pub(crate) async fn execute_run(
                     if run["failover_state"].is_object() {
                         run["failover_state"]["response_started"] = json!(true);
                     }
-                    let output = response["output"]
-                        .as_array()
-                        .ok_or_else(|| anyhow!("Missing provider output"))?;
+                    let mut output=response["output"].as_array()
+                        .ok_or_else(||anyhow!("Missing provider output"))?.clone();
+                    let controls=output.iter().filter(|v|v["type"]=="function_call"
+                        && v["name"]==crate::tool_output::CONTROL_NAME).cloned().collect::<Vec<_>>();
+                    for call in controls {
+                        let enabled=run["tool_context_policy"]["enabled"]==true;
+                        let result=crate::tool_output::control(&mut run,&call,enabled);
+                        output.push(json!({"type":"function_call_output","call_id":call["call_id"],
+                            "output":result.to_string()}));
+                    }
+                    let output=&output;
                     let mut calls = output
                         .iter()
-                        .filter(|v| v["type"] == "function_call")
+                        .filter(|v| v["type"] == "function_call" && v["name"]!=crate::tool_output::CONTROL_NAME)
                         .cloned()
                         .collect::<Vec<_>>();
                     for item in output {
@@ -728,7 +844,8 @@ pub(crate) async fn execute_run(
                             let reasoning_only = !output.is_empty()
                                 && output.iter().all(|item| item["type"] == "reasoning");
                             let continuations = run["reasoning_only_completions"].as_u64().unwrap_or(0);
-                            if reasoning_only && continuations < 2 {
+                            let context_only=output.iter().any(|item|item["name"]==crate::tool_output::CONTROL_NAME);
+                            if (reasoning_only || context_only) && continuations < 2 {
                                 run["reasoning_only_completions"] = json!(continuations + 1);
                                 run["phase"] = json!("model");
                                 app.store.save_run_observed(&mut run, "model_output", &json!({"output":output})).await?;

@@ -1783,6 +1783,19 @@ impl Store {
                 .execute(&mut *tx)
                 .await?;
         }
+        // Session metadata shares the existing run lease/revision transaction.
+        if let Some(state)=run.get("tool_context_state") {
+            let session_key=format!("session:{sid}");
+            if let Some(raw)=sqlx::query_scalar::<_,Vec<u8>>("SELECT value FROM docs WHERE key=?")
+                .bind(&session_key).fetch_optional(&mut *tx).await? {
+                let mut session=self.unseal(&raw)?;
+                if state["clock"].as_u64().unwrap_or(0)>=session["tool_context_state"]["clock"].as_u64().unwrap_or(0) {
+                    session["tool_context_state"]=state.clone();
+                    sqlx::query("UPDATE docs SET value=? WHERE key=?").bind(self.encode_user_record(&session)?)
+                        .bind(&session_key).execute(&mut *tx).await?;
+                }
+            }
+        }
         self.stage_run_notification(&mut tx,&persisted).await?;
         self.index_run(&mut tx, &persisted).await?;
         sqlx::query("INSERT INTO loop_events(run_id,schema_version,kind,payload,created_at) VALUES(?,1,?,?,strftime('%s','now'))")

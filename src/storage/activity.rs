@@ -31,6 +31,16 @@ impl Store {
             .fetch_optional(&self.pool).await?;
         row.map(|bytes| self.unseal(&bytes)).transpose()
     }
+    pub async fn tool_call_record(&self, sid:&str, rid:&str, call_id:&str) -> Result<Option<Value>> {
+        let rows:Vec<Vec<u8>>=sqlx::query_scalar(
+            "SELECT item FROM interactions WHERE session_id=? AND run_id=? AND step LIKE 'model:%' ORDER BY seq DESC LIMIT 2048")
+            .bind(sid).bind(rid).fetch_all(&self.pool).await?;
+        for bytes in rows {
+            let item=self.unseal(&bytes)?;
+            if item["type"]=="function_call" && item["call_id"]==call_id {return Ok(Some(item));}
+        }
+        Ok(None)
+    }
     pub async fn tool_call_name(&self, sid:&str, rid:&str, call_id:&str) -> Result<Option<String>> {
         let rows:Vec<Vec<u8>>=sqlx::query_scalar(
             "SELECT item FROM interactions WHERE session_id=? AND run_id=? AND step LIKE 'model:%' ORDER BY seq DESC LIMIT 2048")

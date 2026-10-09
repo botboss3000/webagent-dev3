@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "scope": "code_index",
+  "tools": [],
+  "lifetime_calls": 6,
+  "ordinary_chars": 24000,
+  "promoted_chars": 24000,
+  "refresh_on_recall": true,
+  "promote_on_edit": true
+}

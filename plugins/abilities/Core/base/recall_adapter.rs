@@ -12,7 +12,7 @@ const MAX_OUTPUT_BYTES: usize = 16 * 1024;
 pub fn owns(name: &str) -> bool { name == "recall_compacted" }
 pub fn schemas() -> Vec<Value> {
     vec![json!({"type":"function","name":"recall_compacted",
-        "description":"A first call with no selector lists this session's compacted segments. segment_id must be one of the listed ids. tool_call_id pages a current-run file read instead; never pass a tool_call_id as a segment_id. Reasoning and revocable guidance are withheld.",
+        "description":"A first call with no selector lists this session's compacted segments. segment_id must be one of the listed ids. tool_call_id pages an eligible read result from this session instead; never pass a tool_call_id as a segment_id. Reasoning and revocable guidance are withheld.",
         "parameters":{"type":"object","properties":{
             "segment_id":{"type":"string","minLength":1,"maxLength":128},
             "offset_items":{"type":"integer","minimum":0,"maximum":4096},
@@ -181,8 +181,14 @@ async fn work(app: &App, sid: &str, run_id: &str, args: &Value) -> Result<Value>
         segment_page(&record, entry, sid, &parsed)?
     } else if let Some(call_id) = parsed.tool_call_id.as_deref() {
         let run=current.app.run(run_id).await?;
-        let name=current.app.store.tool_call_name(sid,run_id,call_id).await?;
-        let permitted = matches!(name.as_deref(), Some("file_search"|"file_read"|"file_list"));
+        // Origin comes from the session-owned retention ledger, never a model-supplied run ID.
+        let origin=crate::tool_output::origin_run_id(&run,call_id).unwrap_or(run_id);
+        let origin_run=current.app.run(origin).await?;
+        if origin_run["session_id"]!=sid || origin_run["agent_id"]!=run["agent_id"] {
+            bail!("Tool recall origin is unavailable");
+        }
+        let name=current.app.store.tool_call_name(sid,origin,call_id).await?;
+        let permitted = name.as_deref().is_some_and(crate::tool_output::eligible);
         let result = if permitted {
             let name = name.as_deref().unwrap();
             let agent=session_agent_id(&current.app,sid).await?;
@@ -192,7 +198,13 @@ async fn work(app: &App, sid: &str, run_id: &str, args: &Value) -> Result<Value>
             if live_tool_decision(&current.app,&access,&name,&policy,&visibility,&state,
                 &run["loaded_abilities"],mode["mode"]=="read_only").permission
                 != crate::access::Permission::Deny {
-                if let Some(record)=current.app.store.tool_result(sid,run_id,call_id).await? {
+                if let Some(record)=current.app.store.tool_result(sid,origin,call_id).await? {
+                    let raw = record["output"].as_str().context("Tool result unavailable")?;
+                    if origin != run_id
+                        && !crate::tool_output::verify_origin_output(&run,call_id,name,raw)
+                    {
+                        bail!("Archived tool result does not match retained provenance");
+                    }
                     Some(tool_result_page(&record,call_id,&parsed)?)
                 } else { None }
             } else { None }

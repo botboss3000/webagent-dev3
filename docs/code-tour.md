@@ -528,3 +528,7 @@ authentication and event-reader bearer authentication share live administrator
 checks and connection caps. See [the contract](outbound-notifications.md).
 Widget events, webhook dispatch and Automation subscription tools remain later
 phases; private chat events retain their existing path.
+
+## Tool-output retention
+
+Live app defaults in data/config/tool-output-retention.json and revision-fenced Identity overrides reload each working model call. App-level data/config/prompts.json owns tool_output_retention guidance and placeholders. Expiration defaults off. Only successful native-designated perishable reads are eligible. A metadata-only ledger belongs to user-owned session/run documents, commits with existing run fences, and inherits at execution. Active context can replace expired output with bounded recall receipts; original encrypted interactions remain intact. Promotion has a separate character budget and never grants read permission. Compaction still applies; original source evidence must be reread after edits. Disabling expiration restores un-compacted available replay, with bounded recall for older segments.

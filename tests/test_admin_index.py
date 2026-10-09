@@ -59,6 +59,29 @@ class AdminIndexTests(unittest.TestCase):
         self.assertEqual(progress["status"],"completed")
         self.assertEqual(progress["indexed_files"],5)
         self.assertEqual(self.call("progress")["total"],1)
+    def test_automatic_search_and_snippet_are_bounded_and_freshness_checked(self):
+        self.scan()
+        found=self.call("lookup",action="search",query="worker read",limit=10)
+        self.assertGreater(found["total"],0)
+        candidate=next(row for row in found["results"] if row["file_path"]=="worker.py")
+        self.assertEqual(candidate["kind"],"function")
+        excerpt=self.call("lookup",action="snippet",file_path="worker.py",
+            start_line=candidate["start_line"],end_line=candidate["end_line"],max_chars=512)
+        source=excerpt["results"][0]
+        self.assertEqual(source["sha256"],self.call("lookup",action="file",file_path="worker.py")["results"][0]["sha256"])
+        self.assertIn("def read",source["text"])
+        self.assertFalse(source["stale"])
+        (self.repo/"worker.py").write_text("class Worker:\n    def changed(self):\n        return 7\n",encoding="utf-8")
+        stale=index.execute("code_index_lookup",{"action":"snippet","file_path":"worker.py","start_line":1,"end_line":2},self.base)
+        self.assertEqual(stale["status"],"error")
+        for args in [
+            {"action":"search","query":"   "},
+            {"action":"snippet","file_path":"worker.py","start_line":1,"end_line":81},
+            {"action":"snippet","file_path":"worker.py","start_line":2,"end_line":1},
+            {"action":"snippet","file_path":"worker.py","start_line":1,"end_line":2,"max_chars":12001},
+        ]:
+            self.assertEqual(index.execute("code_index_lookup",args,self.base)["status"],"error",args)
+
     def test_changed_deleted_source_requires_explicit_refresh(self):
         self.scan()
         old=self.call("lookup",action="file",file_path="ui/app.js")["results"][0]["sha256"]

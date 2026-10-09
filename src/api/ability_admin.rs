@@ -403,6 +403,7 @@ pub(crate) async fn settings_set(State(app):State<App>,Extension(identity):Exten
         "git_control"=>body.settings.as_object().is_some_and(|m|m.len()==1 && m.get("notify_repo_changes").is_some_and(Value::is_boolean)),
         "terminal_control"=>body.settings.as_object().is_some_and(|m|m.len()==1 && matches!(m.get("terminal_caution").and_then(Value::as_str),Some("cautious"|"balanced"|"trusted"))),
         "codebase_admin"=>body.settings.as_object().is_some_and(|m|m.len()==1 && matches!(m.get("destructive_caution").and_then(Value::as_str),Some("cautious"|"balanced"|"trusted"))),
+        "code_index"=>crate::tools::code_index_retrieval::validate_settings(&body.settings).is_ok(),
         _=>false,
     };
     if !valid{return Err(bad("Unsupported Administrator settings"));}
@@ -414,4 +415,150 @@ pub(crate) async fn settings_set(State(app):State<App>,Extension(identity):Exten
     value["settings"][ability]=body.settings;value["revision"]=json!(body.expected_revision+1);
     scoped.store.save_agent_abilities(&value,body.expected_revision).await?;
     phase3_api::quiesce_agent(&app,&id).await?;Ok(Json(value))
+}
+#[cfg(test)]
+mod code_index_settings_authority_tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    fn settings(enabled: bool, total_chars: u64) -> Value {
+        json!({"enabled":enabled,"candidate_count":16,"result_count":3,
+            "extra_candidates":4,"total_chars":total_chars,"per_snippet_chars":4000,
+            "minimum_score":2.0,"minimum_confidence":0.5})
+    }
+
+    fn settings_digest(value: &Value) -> String {
+        hex::encode(Sha256::digest(serde_json::to_vec(value).unwrap()))
+    }
+
+    async fn save_settings(app: &App, expected_revision: u64, value: Value) -> Api {
+        settings_set(State(app.clone()), Extension(json!({"_user_id":"admin"})),
+            Path(("shared_default".into(), "code_index".into())),
+            Json(SettingsBody {expected_revision, settings:value})).await
+    }
+
+    async fn ready_index_run(app: &App, sid: &str) -> String {
+        app.store.put("policy", &json!({"version":1,"rules":{
+            "code_index_lookup":"allow","decide_with_jev":"allow"
+        }})).await.unwrap();
+        app.store.put(&crate::key("session_ability_state", sid),
+            &json!({"revision":1,"active":["code_index","decision"],"suppressed":[]})).await.unwrap();
+        let run_id = crate::runtime_tests::queued(app, sid).await;
+        let mut run = app.run(&run_id).await.unwrap();
+        run["loaded_abilities"] = json!(["code_index","decision"]);
+        app.save(&mut run).await.unwrap();
+        let mut run = app.run(&run_id).await.unwrap();
+        assert!(app.store.claim_run(&mut run, "fixture-loop", "index-authority").await.unwrap());
+        run_id
+    }
+
+    async fn grant_index_tier(app: &App) {
+        let mut tier = app.store.entitlement_tier("operator").await.unwrap().unwrap();
+        let revision = tier.revision;
+        tier.ability_permissions.insert("code_index".into(), crate::access::Permission::Auto);
+        tier.ability_permissions.insert("decision".into(), crate::access::Permission::Auto);
+        app.store.save_entitlement_tier(tier, revision).await.unwrap();
+        let mut level = app.store.live_access("admin", "shared_default").await.unwrap().capability_level;
+        level.ability_permissions.insert("code_index".into(), crate::access::Permission::Auto);
+        level.ability_permissions.insert("decision".into(), crate::access::Permission::Auto);
+        app.store.save_capability_level("shared_default", level, 0).await.unwrap();
+    }
+
+    async fn set_index_tools(
+        app: &App,
+        lookup: crate::access::Permission,
+        jev: crate::access::Permission,
+    ) {
+        let current = app.store.agent_tool_permissions("shared_default").await.unwrap();
+        app.store.set_agent_tool_permissions("shared_default",
+            current["revision"].as_u64().unwrap(),
+            [("code_index_lookup".to_owned(), lookup),
+                ("decide_with_jev".to_owned(), jev)].into())
+            .await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn code_index_settings_are_full_validated_persisted_and_revision_fenced() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let before = app.store.agent_abilities().await.unwrap();
+        let revision = before["revision"].as_u64().unwrap();
+        let configured = settings(true, 8_000);
+        let saved = save_settings(&app, revision, configured.clone()).await.unwrap().0;
+        assert_eq!(saved["settings"]["code_index"], configured);
+        assert_eq!(saved["revision"], revision + 1);
+
+        let reloaded = app.store.agent_abilities().await.unwrap();
+        assert_eq!(reloaded["settings"]["code_index"], configured);
+        assert_eq!(reloaded["revision"], revision + 1);
+
+        let invalid = save_settings(&app, revision + 1, settings(true, 24_001)).await.unwrap_err();
+        assert_eq!(invalid.0, StatusCode::BAD_REQUEST);
+        let stale = save_settings(&app, revision, configured).await.unwrap_err();
+        assert_eq!(stale.0, StatusCode::CONFLICT);
+        let unchanged = app.store.agent_abilities().await.unwrap();
+        assert_eq!(unchanged["revision"], revision + 1);
+    }
+
+    #[tokio::test]
+    async fn attachment_authorization_rechecks_grants_mode_and_live_settings() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        grant_index_tier(&app).await;
+        let initial = app.store.agent_abilities().await.unwrap();
+        let saved = save_settings(&app, initial["revision"].as_u64().unwrap(),
+            settings(true, 8_000)).await.unwrap().0;
+        set_index_tools(&app, crate::access::Permission::Auto,
+            crate::access::Permission::Auto).await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let run_id = ready_index_run(&app, &sid).await;
+        let mut live = app.store.agent_abilities().await.unwrap();
+        let current = settings_digest(&live["settings"]["code_index"]);
+        crate::tools::code_index_retrieval::authorize_attachment(
+            &app, &sid, &run_id, &current).await
+            .unwrap_or_else(|error| panic!("initial configured retrieval authority: {error:#}"));
+
+        set_index_tools(&app, crate::access::Permission::Deny,
+            crate::access::Permission::Auto).await;
+        assert!(crate::tools::code_index_retrieval::authorize_attachment(
+            &app, &sid, &run_id, &current).await.is_err());
+        set_index_tools(&app, crate::access::Permission::Auto,
+            crate::access::Permission::Auto).await;
+
+        set_index_tools(&app, crate::access::Permission::Auto,
+            crate::access::Permission::Deny).await;
+        assert!(crate::tools::code_index_retrieval::authorize_attachment(
+            &app, &sid, &run_id, &current).await.is_err());
+        set_index_tools(&app, crate::access::Permission::Auto,
+            crate::access::Permission::Auto).await;
+        app.store.put(&crate::key("session_mode", &sid),
+            &json!({"mode":"read_only","revision":1,"execution_mode":"ask"})).await.unwrap();
+        assert!(crate::tools::code_index_retrieval::authorize_attachment(
+            &app, &sid, &run_id, &current).await.is_ok());
+
+        set_index_tools(&app, crate::access::Permission::Auto,
+            crate::access::Permission::Ask).await;
+        assert!(crate::tools::code_index_retrieval::authorize_attachment(
+            &app, &sid, &run_id, &current).await.is_err());
+
+        app.store.put(&crate::key("session_mode", &sid),
+            &json!({"mode":"write","revision":2,"execution_mode":"auto"})).await.unwrap();
+        set_index_tools(&app, crate::access::Permission::Auto,
+            crate::access::Permission::Auto).await;
+
+        let expected_revision = live["revision"].as_u64().unwrap();
+        live["settings"]["code_index"] = settings(false, 8_000);
+        live["revision"] = json!(expected_revision + 1);
+        app.store.save_agent_abilities(&live, expected_revision).await.unwrap();
+        assert!(crate::tools::code_index_retrieval::authorize_attachment(
+            &app, &sid, &run_id, &current).await.is_err());
+
+        let live = app.store.agent_abilities().await.unwrap();
+        let expected_revision = live["revision"].as_u64().unwrap();
+        let mut changed_limits = live.clone();
+        changed_limits["settings"]["code_index"] = settings(true, 9_000);
+        changed_limits["revision"] = json!(expected_revision + 1);
+        app.store.save_agent_abilities(&changed_limits, expected_revision).await.unwrap();
+        assert!(crate::tools::code_index_retrieval::authorize_attachment(
+            &app, &sid, &run_id, &current).await.is_err());
+        assert_eq!(saved["settings"]["code_index"], settings(true, 8_000));
+    }
 }

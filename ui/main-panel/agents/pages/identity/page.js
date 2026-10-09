@@ -4,6 +4,7 @@ import { renderVisibility } from './visibility.js';
 import { renderClosing } from './closing.js';
 import { renderManager } from './manager.js';
 import { renderCompaction } from './compaction.js';
+import { renderToolOutputPolicy } from './tool-output-policy.js';
 // Adapted V2 Identity fields; V3 transport, tenant permissions and revision fencing.
 export async function renderIdentity(host, request, {agentId, onSaved = () => {}}) {
   const path = '/models/agents/' + encodeURIComponent(agentId) + '/identity';
@@ -60,6 +61,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
     queue=task.catch(()=>{}); return task;
   };
   renderCompaction(content, agent, persist);
+  renderToolOutputPolicy(content, agent, persist);
   const title = document.createElement('h3'); title.textContent = 'Chat modes'; content.append(title);
   const hint = document.createElement('p'); hint.className = 'ac-hint';
   hint.textContent = 'Default mode applies to new conversations. Read-only modes cannot execute mutating tools. Each mode adds its own instruction before model calls; existing permissions and approvals still apply.'; content.append(hint);

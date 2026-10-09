@@ -654,6 +654,12 @@ async fn run_process() -> Result<()> {
     if crate::session_naming::config::initialize(&root).is_err() {
         tracing::warn!("Naming prompt initialization unavailable; preserving existing prompts");
     }
+    // Mutable retention defaults reload at model-call boundaries.
+    match OpenOptions::new().write(true).create_new(true).open(root.join("config/tool-output-retention.json")) {
+        Ok(mut file) => {file.write_all(include_bytes!("../config/tool-output-retention.json"))?;file.sync_all()?;},
+        Err(error) if error.kind()==std::io::ErrorKind::AlreadyExists=>{},
+        Err(error)=>return Err(error.into()),
+    }
     let store = Store::open(&root).await?;
     diagnostics::init(&root, &store, &role).await;
     store.migrate_agent_storage(&root).await?;

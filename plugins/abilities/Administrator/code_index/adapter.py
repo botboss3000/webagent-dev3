@@ -528,12 +528,12 @@ def scan(conn,rootfd,args):
         raise
 
 ACTIONS={"code_index_scan":{"discover","scan","scan_file"},
-    "code_index_lookup":{"file","line","symbol","edge"},
+    "code_index_lookup":{"file","line","symbol","edge","search","snippet"},
     "code_index_coverage":{"report","gaps","stale"},
     "code_index_trace":{"symbol","selector","event","endpoint","data_attribute","import","asset"},
     "code_index_progress":{"list","get"}}
 FIELDS={"code_index_scan":{"scope","file_path","batch_id","expected_revision"},
-    "code_index_lookup":{"query","file_path","line_no"},
+    "code_index_lookup":{"query","file_path","line_no","start_line","end_line","max_chars"},
     "code_index_coverage":set(),"code_index_trace":{"kind","value"},
     "code_index_progress":{"batch_id"}}
 def validated(name,args):
@@ -548,7 +548,8 @@ def validated(name,args):
         "code_index_scan":{"discover":{"scope"},"scan":{"scope","batch_id","expected_revision"},
             "scan_file":{"file_path","batch_id","expected_revision"}},
         "code_index_lookup":{"file":{"file_path"},"line":{"file_path","line_no"},
-            "symbol":{"query","file_path"},"edge":{"query","file_path"}},
+            "symbol":{"query","file_path"},"edge":{"query","file_path"},
+            "search":{"query"},"snippet":{"file_path","start_line","end_line","max_chars"}},
         "code_index_coverage":{"report":set(),"gaps":set(),"stale":set()},
         "code_index_trace":{kind:{"value"} for kind in ACTIONS["code_index_trace"]},
         "code_index_progress":{"list":set(),"get":{"batch_id"}},
@@ -561,8 +562,10 @@ def validated(name,args):
     if result.get("batch_id")=="" and name=="code_index_scan":result.pop("batch_id")
     if result.get("file_path")=="" and name=="code_index_lookup" and action in {"symbol","edge"}:
         result.pop("file_path")
-    if name=="code_index_scan" and action=="scan_file" or name=="code_index_lookup" and action in {"file","line"}:
+    if name=="code_index_scan" and action=="scan_file" or name=="code_index_lookup" and action in {"file","line","snippet"}:
         if not result.get("file_path"):raise ValueError("This action requires file_path")
+    if name=="code_index_lookup" and action=="search" and not result.get("query", "").strip():
+        raise ValueError("Search requires a non-empty query")
     if name=="code_index_progress" and action=="get" and not result.get("batch_id"):
         raise ValueError("get progress requires batch_id")
     if type(result["limit"]) is not int or not 1<=result["limit"]<=200 or type(result["offset"]) is not int or not 0<=result["offset"]<=MAX_FILES:
@@ -575,12 +578,21 @@ def validated(name,args):
             raise ValueError("Invalid query bound")
     if "line_no" in result and (type(result["line_no"]) is not int or not 1<=result["line_no"]<=MAX_LINES):
         raise ValueError("Invalid line number")
+    for field in ("start_line","end_line"):
+        if field in result and (type(result[field]) is not int or not 1<=result[field]<=MAX_LINES):
+            raise ValueError("Invalid snippet line bound")
+    if name=="code_index_lookup" and action=="snippet":
+        if result.get("start_line",0)>result.get("end_line",0) or result.get("end_line",0)-result.get("start_line",0)>79:
+            raise ValueError("Snippet may contain at most 80 ordered lines")
+        result.setdefault("max_chars",12000)
+        if type(result["max_chars"]) is not int or not 256<=result["max_chars"]<=12000:
+            raise ValueError("Invalid snippet character bound")
     if "expected_revision" in result and (type(result["expected_revision"]) is not int or not 0<=result["expected_revision"]<2**63):
         raise ValueError("Invalid index revision")
     if "batch_id" in result and (not isinstance(result["batch_id"],str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}",result["batch_id"])):
         raise ValueError("Invalid batch_id")
     return result
-def lookup(conn,args):
+def lookup(conn,rootfd,args):
     action=args["action"];path=args.get("file_path");query=args.get("query","")
     if action=="file":
         rows=conn.execute("SELECT * FROM files WHERE (? IS NULL OR path=?) ORDER BY path",(path,path)).fetchall()
@@ -589,8 +601,44 @@ def lookup(conn,args):
         rows=conn.execute("SELECT * FROM lines WHERE file_path=? AND line_no=?",(path,args["line_no"])).fetchall()
     elif action=="symbol":
         rows=conn.execute("SELECT * FROM symbols WHERE instr(name,?)>0 AND (? IS NULL OR file_path=?) ORDER BY file_path,start_line,name LIMIT 5001",(query,path,path)).fetchall()
-    else:
+    elif action=="edge":
         rows=conn.execute("SELECT * FROM edges WHERE instr(value,?)>0 AND (? IS NULL OR file_path=?) ORDER BY file_path,line_no,value LIMIT 5001",(query,path,path)).fetchall()
+    elif action=="search":
+        terms=sorted({term.lower() for term in re.findall(r"[A-Za-z0-9_]{2,}",query)})[:24]
+        if not terms:raise ValueError("Search query has no indexable terms")
+        candidates={}
+        for row in conn.execute("SELECT file_path,name,kind,start_line,end_line,signature FROM symbols ORDER BY file_path,start_line LIMIT 20000"):
+            haystack=(row["file_path"]+" "+row["name"]+" "+row["signature"]).lower()
+            hits=sum(1 for term in terms if term in haystack)
+            if hits:
+                key=(row["file_path"],row["start_line"],row["end_line"])
+                candidates[key]={"file_path":row["file_path"],"start_line":row["start_line"],"end_line":row["end_line"],"label":row["name"],"kind":row["kind"],"score":round(hits/len(terms),4)}
+        for row in conn.execute("SELECT file_path,line_no,edge_kind,value FROM edges ORDER BY file_path,line_no LIMIT 20000"):
+            haystack=(row["file_path"]+" "+row["edge_kind"]+" "+row["value"]).lower()
+            hits=sum(1 for term in terms if term in haystack)
+            if hits:
+                key=(row["file_path"],row["line_no"],row["line_no"])
+                candidates.setdefault(key,{"file_path":row["file_path"],"start_line":row["line_no"],"end_line":row["line_no"],"label":row["value"],"kind":row["edge_kind"],"score":round(hits/len(terms),4)})
+        for row in conn.execute("SELECT path FROM files ORDER BY path LIMIT 5000"):
+            hits=sum(1 for term in terms if term in row["path"].lower())
+            if hits:candidates.setdefault((row["path"],1,1),{"file_path":row["path"],"start_line":1,"end_line":1,"label":row["path"],"kind":"file","score":round(hits/len(terms),4)})
+        rows=sorted(candidates.values(),key=lambda item:(-item["score"],item["file_path"],item["start_line"]))[:MAX_FILES+1]
+        result=page(rows,args["offset"],args["limit"]);result["result_cap_reached"]=len(rows)>MAX_FILES
+        return result
+    elif action=="snippet":
+        path=args["file_path"];metadata=conn.execute("SELECT sha256 FROM files WHERE path=?",(path,)).fetchone()
+        if metadata is None:raise ValueError("File is not indexed")
+        data=read_source(rootfd,path)
+        if sha(data)!=metadata["sha256"]:raise ValueError("Indexed source is stale; rescan before reading")
+        lines=data.decode("utf-8").splitlines();start=args["start_line"];end=args["end_line"]
+        if end>len(lines):raise ValueError("Snippet line range exceeds source")
+        text="\n".join(lines[start-1:end])
+        while len(text.encode("utf-8"))>args["max_chars"] and end>start:
+            end-=1;text="\n".join(lines[start-1:end])
+        if len(text.encode("utf-8"))>args["max_chars"]:raise ValueError("Single source line exceeds snippet character bound")
+        return {"results":[{"file_path":path,"start_line":start,"end_line":end,"sha256":metadata["sha256"],"text":text,"stale":False}],"offset":0,"limit":1,"total":1,"result_cap_reached":False}
+    else:
+        raise ValueError("Unsupported lookup action")
     result=page([dict(row) for row in rows[:MAX_FILES]],args["offset"],args["limit"])
     result["result_cap_reached"]=len(rows)>MAX_FILES
     return result
@@ -625,7 +673,7 @@ def dispatch(conn,rootfd,name,args):
         known={row["path"]:row["sha256"] for row in conn.execute("SELECT path,sha256 FROM files")}
         records=snapshot(rootfd,paths,time.monotonic()+30)
         return page([{"path":p,"indexed":p in known,"stale":p in known and sha(data)!=known[p]} for p,data in records],args["offset"],args["limit"])
-    if name=="code_index_lookup":return annotate_freshness(conn,rootfd,lookup(conn,args))
+    if name=="code_index_lookup":return annotate_freshness(conn,rootfd,lookup(conn,rootfd,args))
     if name=="code_index_coverage":return coverage(conn,rootfd,args)
     if name=="code_index_trace":return annotate_freshness(conn,rootfd,trace(conn,args))
     if args["action"]=="get":
@@ -919,7 +967,7 @@ def schemas():
     extra={
         "code_index_scan":{"scope":path,"file_path":path,"batch_id":{"type":"string","maxLength":80},
             "expected_revision":{"type":"integer","minimum":0}},
-        "code_index_lookup":{"query":text,"file_path":path,"line_no":{"type":"integer","minimum":1,"maximum":MAX_LINES}},
+        "code_index_lookup":{"query":text,"file_path":path,"line_no":{"type":"integer","minimum":1,"maximum":MAX_LINES},"start_line":{"type":"integer","minimum":1,"maximum":MAX_LINES},"end_line":{"type":"integer","minimum":1,"maximum":MAX_LINES},"max_chars":{"type":"integer","minimum":256,"maximum":12000}},
         "code_index_coverage":{},
         "code_index_trace":{"kind":{"type":"string","enum":sorted(ACTIONS["code_index_trace"])},"value":text},
         "code_index_progress":{"batch_id":{"type":"string","maxLength":80}}}

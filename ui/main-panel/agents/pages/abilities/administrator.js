@@ -19,8 +19,62 @@ const settingsSpec = {
   codebase_admin: ['destructive_caution', 'Destructive operation caution'],
   git_control: ['notify_repo_changes', 'Notify repository changes'],
 };
+function buildCodeIndexControls({ ability, data, request, scope, levelId, previewUser, status, rerender }) {
+  const panel = node('div', 'ac-list v3-administrator-settings');
+  const enabled = !levelId && !previewUser;
+  panel.append(node('p', 'ac-hint', enabled
+    ? 'Automatic retrieval runs once for each new user message, uses the Code Index and Jev Decision ability, and sends only bounded source excerpts to scoring.'
+    : 'Code Index retrieval settings are read-only while previewing a user or capability level.'));
+  const defaults = { enabled: false, candidate_count: 16, result_count: 3, extra_candidates: 4,
+    total_chars: 8000, per_snippet_chars: 4000, minimum_score: 2, minimum_confidence: 0.5 };
+  const current = { ...defaults, ...(data.settings?.[ability.id] || {}) };
+  const sourceRoot = node('select', 'ac-input ac-config-sel');
+  sourceRoot.setAttribute('aria-label', 'Code Index source');
+  for (const [value, label] of [['published', 'Published codebase'], ['webagent-v3', 'Session workspace']]) {
+    const option = node('option', '', label); option.value = value; sourceRoot.append(option);
+  }
+  sourceRoot.value = current.root === 'webagent-v3' ? 'webagent-v3' : 'published';
+  sourceRoot.disabled = !enabled;
+  panel.append(row('Index source', sourceRoot, 'Published codebase is immutable and works without a session seed. Session workspace uses its isolated index.'));
+  const active = field('Enable automatic source retrieval', '', 'checkbox'); active.checked = current.enabled === true;
+  active.disabled = !enabled;
+  panel.append(row('Automatic retrieval', active, 'Off by default. Requires automatic code_index_lookup access and a configured Decision role.'));
+  const specs = [
+    ['candidate_count', 'Candidates scored', 1, 32, 1], ['result_count', 'Source excerpts', 1, 5, 1],
+    ['extra_candidates', 'Extra ranked candidates', 0, 8, 1], ['total_chars', 'Total character budget', 512, 24000, 256],
+    ['per_snippet_chars', 'Per-excerpt character limit', 256, 12000, 256],
+    ['minimum_score', 'Minimum Jev score', 0, 4, 0.1], ['minimum_confidence', 'Minimum Jev confidence', 0, 1, 0.05],
+  ];
+  const controls = {};
+  for (const [key, title, min, max, step] of specs) {
+    const input = field(title, String(current[key]), 'number');
+    input.min = String(min); input.max = String(max); input.step = String(step); input.disabled = !enabled;
+    controls[key] = input; panel.append(row(title, input));
+  }
+  const save = node('button', 'ac-btn ac-btn-sm', 'Save retrieval settings'); save.type = 'button'; save.disabled = !enabled;
+  save.onclick = async () => {
+    if (!enabled || save.disabled) return;
+    const settings = { enabled: active.checked, root: sourceRoot.value };
+    for (const [key, input] of Object.entries(controls)) settings[key] = Number(input.value);
+    if (Object.values(controls).some(input => input.value === '' || !Number.isFinite(Number(input.value)))) {
+      status.textContent = 'Enter valid numeric values before saving.'; return;
+    }
+    save.disabled = true; status.textContent = 'Saving Code Index retrieval settings…';
+    try {
+      await request(scope + '/abilities/' + encodeURIComponent(ability.id) + '/settings', 'PUT',
+        { expected_revision: data.revision, settings });
+      await rerender({ administratorNotice: 'Code Index retrieval settings saved.' });
+    } catch (error) { status.textContent = message(error); save.disabled = false; }
+  };
+  panel.append(row('Save retrieval settings', save, 'Saves ability-specific retrieval controls.'));
+  return panel;
+}
+
 export function buildAdministratorControls({ ability, data, repository, request, scope,
   levelId, previewUser, status, rerender }) {
+  if (ability.id === 'code_index' && data.authority?.can_manage === true) {
+    return buildCodeIndexControls({ ability, data, request, scope, levelId, previewUser, status, rerender });
+  }
   const spec = settingsSpec[ability.id];
   if (!spec || data.authority?.can_manage !== true) return null;
   const panel = node('div', 'ac-list v3-administrator-settings');

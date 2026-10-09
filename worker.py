@@ -609,14 +609,17 @@ def _seed_spec(base):
     if base.is_symlink() or not base.is_dir():
         raise ValueError("invalid workspace")
     base = base.resolve(strict=True)
-    if TEMPLATE.is_symlink():
-        raise ValueError("source template unavailable")
-    selected = TEMPLATE.resolve(strict=True)
-    if not selected.is_dir():
-        raise ValueError("source template unavailable")
     target = base / "webagent-v3"
     if target.exists() or target.is_symlink():
         raise ValueError("workspace source already initialized")
+    if TEMPLATE.is_symlink():
+        raise ValueError("source template unavailable")
+    try:
+        selected = TEMPLATE.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("source template unavailable") from exc
+    if not selected.is_dir():
+        raise ValueError("source template unavailable")
     published = selected.parent.parent.name == "releases"
     if published:
         uuid.UUID(selected.parent.name)

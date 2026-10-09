@@ -1347,6 +1347,44 @@ async fn agent_loop_creates_reviewable_proposal_without_dispatching_broker() {
 }
 
 #[tokio::test]
+async fn automatic_code_index_retrieval_is_attempted_once_but_off_by_default() {
+    use axum::routing::post;
+    let (_root, mut app) = fixture().await;
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = requests.clone();
+    let mock = Router::new().route("/responses", post(
+        |State(requests): State<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
+            let mut requests=requests.lock().await;
+            requests.push(body);
+            let output=json!([{"type":"message","role":"assistant",
+                "content":[{"type":"output_text","text":"No source retrieval was enabled."}]}]);
+            let event=json!({"type":"response.completed","response":{"status":"completed","output":output}});
+            ([ ("content-type","text/event-stream") ],format!("data: {event}\n\n"))
+        }
+    )).with_state(captured);
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address=listener.local_addr().unwrap();
+    let server=tokio::spawn(async move { axum::serve(listener,mock).await.unwrap(); });
+    app.provider=provider::Provider::for_test(format!("http://{address}/responses"));
+    let sid=conversation(&app).await;
+    let id=queued(&app,&sid).await;
+    running(&app,&id,"auto-index-disabled").await;
+    execute_run(app.clone(),id.clone(),"auto-index-disabled".into(),CancellationToken::new()).await.unwrap();
+    let run=app.run(&id).await.unwrap();
+    assert_eq!(run["status"],"completed");
+    assert_eq!(run["code_index_retrieval_attempted"],true);
+    assert_eq!(run["code_index_retrieval_status"],"disabled_or_no_matches");
+    assert_eq!(run["workflow"]["receipts"]["publication"]["result"]["decision"],"pass");
+    assert!(!run["input"].as_array().unwrap().iter().any(|item|item["source"]=="automatic_code_index"));
+    let (messages,_)=app.store.chat_snapshot(&sid).await.unwrap();
+    assert_eq!(messages.iter().filter(|item|item["role"]=="assistant").count(),1);
+    let requests=requests.lock().await;
+    assert_eq!(requests.len(),1);
+    assert!(!requests[0]["input"].as_array().unwrap().iter().any(|item|item["source"]=="automatic_code_index"));
+    server.abort();
+}
+
+#[tokio::test]
 async fn reasoning_only_completion_continues_to_one_final_publication() {
     use axum::routing::post;
     let (_root, mut app) = fixture().await;
@@ -6478,4 +6516,136 @@ async fn normal_dispatch_reloads_base_each_turn_and_retains_pinned_slots() {
         assert!(instructions.contains("CLOSING") && instructions.contains("JEV"));
     }
     server.abort();
+}
+
+#[tokio::test]
+async fn tool_output_control_can_accompany_final_reply_without_an_extra_call() {
+    use axum::routing::post;
+    let (root, mut app) = fixture().await;
+    std::fs::create_dir_all(root.path().join("config")).unwrap();
+    let policy=crate::tool_output::Policy {enabled:true,scope:crate::tool_output::Scope::AllEligible,
+        ..Default::default()};
+    std::fs::write(root.path().join("config/tool-output-retention.json"),
+        serde_json::to_vec(&policy).unwrap()).unwrap();
+    let requests=Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured=requests.clone();
+    let mock=Router::new().route("/responses",post(
+        |State(requests):State<Arc<Mutex<Vec<Value>>>>,Json(body):Json<Value>| async move {
+            requests.lock().await.push(body);
+            let event=json!({"type":"response.completed","response":{"status":"completed","output":[
+                {"type":"function_call","call_id":"retain-important","name":"manage_tool_context",
+                    "arguments":json!({"action":"promote","call_ids":["read-important"],"reason":"Needed for the next change"}).to_string()},
+                {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Kept the relevant source."}]}
+            ]}});
+            ([("content-type","text/event-stream")],format!("data: {event}\n\n"))
+        })).with_state(captured);
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address=listener.local_addr().unwrap();
+    let server=tokio::spawn(async move {axum::serve(listener,mock).await.unwrap();});
+    app.provider=provider::Provider::for_test(format!("http://{address}/responses"));
+    let sid=conversation(&app).await;
+    let id=queued(&app,&sid).await;
+    let mut run=app.run(&id).await.unwrap();
+    run["input"].as_array_mut().unwrap().extend([
+        json!({"type":"function_call","call_id":"read-important","name":"file_read",
+            "arguments":json!({"path":"src/example.rs"}).to_string()}),
+        json!({"type":"function_call_output","call_id":"read-important",
+            "output":json!({"status":"success","path":"src/example.rs","content":"fn important() {}"}).to_string()})
+    ]);
+    app.save(&mut run).await.unwrap();
+    running(&app,&id,"retention-final").await;
+    execute_run(app.clone(),id.clone(),"retention-final".into(),CancellationToken::new()).await.unwrap();
+    let run=app.run(&id).await.unwrap();
+    assert_eq!(run["status"],"completed");
+    assert!(run["tool_context_state"]["entries"].as_array().unwrap().iter()
+        .any(|e|e["call_id"]=="read-important" && e["promoted"]==true));
+    let session=app.store.get(&format!("session:{sid}")).await.unwrap().unwrap();
+    assert_eq!(session["tool_context_state"],run["tool_context_state"]);
+    let (messages,_)=app.store.chat_snapshot(&sid).await.unwrap();
+    assert_eq!(messages.iter().filter(|m|m["role"]=="assistant").count(),1);
+    let requests=requests.lock().await;
+    assert_eq!(requests.len(),1);
+    assert!(requests[0]["tools"].as_array().unwrap().iter().any(|t|t["name"]=="manage_tool_context"));
+    server.abort();
+}
+#[tokio::test]
+async fn retained_read_recall_resolves_only_verified_same_session_origin() {
+    use sha2::Digest;
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let origin_id = queued(&app, &sid).await;
+    let foreign_sid = conversation(&app).await;
+    let foreign_origin = queued(&app, &foreign_sid).await;
+    let mut policy = app.store.get("policy").await.unwrap().unwrap();
+    policy["rules"]["file_read"] = json!("allow");
+    policy["rules"]["recall_compacted"] = json!("allow");
+    app.store.put("policy", &policy).await.unwrap();
+    let mut tier = app.store.entitlement_tier("operator").await.unwrap().unwrap();
+    let tier_revision = tier.revision;
+    tier.ability_permissions.insert("base".into(), access::Permission::Auto);
+    app.store.save_entitlement_tier(tier, tier_revision).await.unwrap();
+    let mut level = app.store.live_access("admin", "shared_default").await.unwrap().capability_level;
+    level.ability_permissions.insert("base".into(), access::Permission::Auto);
+    app.store.save_capability_level("shared_default", level, 0).await.unwrap();
+    activate_codebase(&app, &sid).await;
+    session_ability_set(State(app.clone()), Path((sid.clone(), "base".into())),
+        Json(SessionAbilityBody {state:"active".into(), expected_revision:1}))
+        .await.unwrap();
+    let current_permissions = app.store.agent_tool_permissions("shared_default").await.unwrap();
+    app.store.set_agent_tool_permissions("shared_default",
+        current_permissions["revision"].as_u64().unwrap(),
+        [("file_read".to_owned(), access::Permission::Auto)].into()).await.unwrap();
+    let raw = "retained source excerpt";
+    let call_id = "cross-run-read";
+    let call = json!({"type":"function_call","call_id":call_id,"name":"file_read","arguments":"{}"});
+    let mut origin = app.run(&origin_id).await.unwrap();
+    app.store.save_run(&mut origin, "model_output", &json!({"output":[call]})).await.unwrap();
+    origin["input"].as_array_mut().unwrap().push(json!({
+        "type":"function_call_output","call_id":call_id,"output":raw
+    }));
+    app.store.save_run(&mut origin, "tool_result", &json!({"run_id":origin_id,
+        "name":"file_read","result":{"status":"success","output":"retained source excerpt"}})).await.unwrap();
+    let mut origin = app.run(&origin_id).await.unwrap();
+    origin["status"] = json!("completed");
+    origin["turns"] = json!(1);
+    origin["pending"] = Value::Null;
+    app.save(&mut origin).await.unwrap();
+    let recall_id = queued(&app, &sid).await;
+    let mut recall = app.run(&recall_id).await.unwrap();
+    recall["loaded_abilities"] = json!(["base","codebase_admin"]);
+    recall["tool_context_state"] = json!({"clock":1,"entries":[{
+        "call_id":call_id,"origin_run_id":origin_id,"tool_name":"file_read",
+        "output_sha256":hex::encode(sha2::Sha256::digest(raw.as_bytes())),
+        "output_chars":raw.chars().count(),"promoted":false,"first_seen":1,"last_used":1
+    }]});
+    app.save(&mut recall).await.unwrap();
+    let request = json!({"tool_call_id":call_id,"offset_chars":0,"limit_chars":4096});
+    let result = crate::tools::core_recall::execute(
+        &app,&sid,&recall_id,"recall_compacted",&request,CancellationToken::new()).await.unwrap();
+    assert_eq!(result["status"],"success", "{result}");
+    assert_eq!(result["output"]["content"],raw);
+    let mut tampered = app.run(&recall_id).await.unwrap();
+    tampered["tool_context_state"]["entries"][0]["output_sha256"] = json!("0".repeat(64));
+    app.save(&mut tampered).await.unwrap();
+    let rejected = crate::tools::core_recall::execute(
+        &app,&sid,&recall_id,"recall_compacted",&request,CancellationToken::new()).await.unwrap();
+    assert_ne!(rejected["output"]["content"],raw);
+    let mut foreign = app.run(&recall_id).await.unwrap();
+    foreign["tool_context_state"]["entries"][0]["output_sha256"] =
+        json!(hex::encode(sha2::Sha256::digest(raw.as_bytes())));
+    foreign["tool_context_state"]["entries"][0]["origin_run_id"] = json!(foreign_origin);
+    app.save(&mut foreign).await.unwrap();
+    let rejected = crate::tools::core_recall::execute(
+        &app,&sid,&recall_id,"recall_compacted",&request,CancellationToken::new()).await.unwrap();
+    assert_ne!(rejected["output"]["content"],raw);
+    let current_permissions = app.store.agent_tool_permissions("shared_default").await.unwrap();
+    app.store.set_agent_tool_permissions("shared_default",
+        current_permissions["revision"].as_u64().unwrap(),
+        [("file_read".to_owned(), access::Permission::Deny)].into()).await.unwrap();
+    let mut permitted_origin = app.run(&recall_id).await.unwrap();
+    permitted_origin["tool_context_state"]["entries"][0]["origin_run_id"] = json!(origin_id);
+    app.save(&mut permitted_origin).await.unwrap();
+    let rejected = crate::tools::core_recall::execute(
+        &app,&sid,&recall_id,"recall_compacted",&request,CancellationToken::new()).await.unwrap();
+    assert_ne!(rejected["output"]["content"],raw);
 }

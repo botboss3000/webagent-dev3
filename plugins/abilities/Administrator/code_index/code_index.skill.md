@@ -30,7 +30,9 @@ an existing private index always wins.
 1. Call `code_index_scan(action="discover")` to find maintainable source and detect missing/stale index entries.
 2. Run `code_index_scan(action="scan")`, or `scan_file` with one relative file path. A successful scan reports its revision and batch ID. Optional `expected_revision` rejects stale writes.
 3. Check `code_index_coverage(action="report")`. Review all pages, using `next_offset` while `has_more` is true. Zero gaps alone does not mean fresh: require zero `stale_count` and zero `unindexed_count`.
-4. Use `code_index_lookup` for files, exact lines, symbols and static edges. Use `code_index_trace` for exact symbols, selectors, events, endpoints, imports, data attributes and assets.
+4. Use `code_index_lookup` for files, exact lines, symbols and static edges. Its `search` action ranks indexed paths, symbols and edges against a bounded query; `snippet` reads up to 80 fresh indexed lines with a 12,000-character maximum and rejects stale source. Use `code_index_trace` for exact symbols, selectors, events, endpoints, imports, data attributes and assets.
+
+Agent managers can enable automatic user-message retrieval in the Code Index ability settings. It is off by default, uses the existing Jev Decision role, and requires automatic effective permission for both `code_index_lookup` and `decide_with_jev`. Retrieval returns a bounded set of scored excerpts as untrusted source evidence; it never edits source or grants access.
 5. After edits, explicitly scan changed files. Reads never silently rescan; returned lookup and trace records carry `stale` flags.
 
 Every physical source line, including comments and blanks, receives one hashed ledger entry. Python symbols use Python AST. JavaScript uses Tree-sitter when installed; an unavailable or invalid parser produces explicitly uncertain fallback spans. Rust and TOML are lexical source coverage with uncertainty, not an AST claim. Static edges are navigation evidence, not runtime behavior.
