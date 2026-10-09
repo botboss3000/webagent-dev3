@@ -492,3 +492,5 @@ Live diagnostics: the API's core bridge discovers the administrator-installed
 versioned UID-checked local IPC for archive writes. The loop connects to the same
 socket. Removal stops new capture; earlier archive reads remain ownership checked.
 See `src/plugin_packages/diagnostics/README.md` for package lifecycle boundaries.
+
+Diagnostics config and archive now reside in the live plugin package. Core reads use fresh read-only connections to its archive; only the child initializes and writes it. Package absence never seeds new config or recreates storage.

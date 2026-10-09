@@ -30,9 +30,15 @@ async fn handle(mut stream: UnixStream, pool: SqlitePool, root: &Path) -> Result
     if request["version"] != 1 {
         bail!("Version rejected")
     }
-    let (c, digest) = config::Config::read(&root.join("config/diagnostics.json"))?;
+    let (c, digest) = config::Config::read(&root.join("diagnostics.json"))?;
     let event = &request["event"];
     match request["operation"].as_str() {
+        Some("configuration") => {
+            let bytes = serde_json::to_vec(&serde_json::json!({"config":c,"digest":digest}))?;
+            stream.write_u32(bytes.len() as u32).await?;
+            stream.write_all(&bytes).await?;
+            return Ok(());
+        }
         Some("heartbeat") => {
             let role = event["role"]
                 .as_str()
@@ -75,7 +81,7 @@ async fn handle(mut stream: UnixStream, pool: SqlitePool, root: &Path) -> Result
                     bail!("Ciphertext rejected")
                 }
                 let (current, current_digest) =
-                    config::Config::read(&root.join("config/diagnostics.json"))?;
+                    config::Config::read(&root.join("diagnostics.json"))?;
                 if current_digest != digest
                     || !current.selected(event["session_id"].as_str().unwrap_or(""), now())
                 {
@@ -94,19 +100,20 @@ unsafe extern "C" {
 }
 #[tokio::main]
 async fn main() -> Result<()> {
-    let root = std::path::PathBuf::from(std::env::var("V3_PLUGIN_STATE")?);
+    let root = std::path::PathBuf::from(std::env::var("V3_PLUGIN_PACKAGE")?);
+    let state = std::path::PathBuf::from(std::env::var("V3_PLUGIN_STATE")?);
+    let runtime = state.join("diagnostics");
+    tokio::fs::create_dir_all(&runtime).await?;
+    use std::os::unix::fs::PermissionsExt;
+    tokio::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).await?;
     let pool = open(&root).await?;
-    let socket = root.join("diagnostics/plugin.sock");
-    let ready = root.join("diagnostics/plugin.ready");
+    let socket = runtime.join("plugin.sock");
+    let ready = runtime.join("plugin.ready");
     if socket.exists() {
         std::fs::remove_file(&socket)?;
     }
     let listener = UnixListener::bind(&socket)?;
-    std::fs::write(
-        root.join("diagnostics/plugin.pid"),
-        std::process::id().to_string(),
-    )?;
-    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(runtime.join("plugin.pid"), std::process::id().to_string())?;
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
     let alive = ready.clone();
     tokio::spawn(async move {
@@ -124,7 +131,7 @@ async fn main() -> Result<()> {
     loop {
         tokio::select! {
          _=interval.tick()=>{
-          if ticks%60==0 {if let Ok((c,_))=config::Config::read(&root.join("config/diagnostics.json")){let _=prune(&pool,&c).await;}}ticks=ticks.wrapping_add(1);},
+          if ticks%60==0 {if let Ok((c,_))=config::Config::read(&root.join("diagnostics.json")){let _=prune(&pool,&c).await;}}ticks=ticks.wrapping_add(1);},
          accepted=listener.accept()=>{let (stream,_)=accepted?;
           // One bounded frame at a time; excess clients remain in the bounded socket backlog.
           let _=tokio::time::timeout(Duration::from_secs(10),handle(stream,pool.clone(),&root)).await;
@@ -133,12 +140,9 @@ async fn main() -> Result<()> {
     }
 }
 async fn open(root: &Path) -> anyhow::Result<SqlitePool> {
-    let dir = root.join("diagnostics");
-    tokio::fs::create_dir_all(&dir).await?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        tokio::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).await?;
+    let dir = root;
+    if !dir.is_dir() {
+        bail!("Package missing")
     }
     let options = SqliteConnectOptions::new()
         .filename(dir.join("logs.db"))
@@ -149,6 +153,11 @@ async fn open(root: &Path) -> anyhow::Result<SqlitePool> {
         .max_connections(2)
         .connect_with(options)
         .await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.join("logs.db"), std::fs::Permissions::from_mode(0o600))?;
+    }
     for statement in [
   "CREATE TABLE IF NOT EXISTS diagnostics(id INTEGER PRIMARY KEY,ts INTEGER NOT NULL,category TEXT NOT NULL,run_id TEXT,session_id TEXT,payload TEXT NOT NULL)",
   "CREATE INDEX IF NOT EXISTS diagnostics_ts ON diagnostics(ts)",
@@ -184,12 +193,11 @@ mod tests {
         let mut c = config::Config::disabled();
         c.enabled = true;
         std::fs::write(
-            root.path().join("config/diagnostics.json"),
+            root.path().join("diagnostics.json"),
             serde_json::to_vec(&c).unwrap(),
         )
         .unwrap();
-        let (_, digest) =
-            config::Config::read(&root.path().join("config/diagnostics.json")).unwrap();
+        let (_, digest) = config::Config::read(&root.path().join("diagnostics.json")).unwrap();
         let pool = open(root.path()).await.unwrap();
         for (version, owner, success) in [
             (1, "public", false),

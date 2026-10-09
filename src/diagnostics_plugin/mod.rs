@@ -98,17 +98,13 @@ pub(crate) async fn init(root: &Path, _store: &Store, role: &str) {
         return;
     }
     bridge::init(root, role).await;
-    let path = root.join("config/diagnostics.json");
-    // First start seeds once, preserving every existing operator setting.
-    if let Err(error) = seed(&path) {
-        tracing::warn!(kind=?error.kind(),"Diagnostics configuration seed unavailable");
-    }
-    let pool = match open(root).await {
+    // Package absence disables capture; never recreate a removed package.
+    let folder = bridge::folder();
+    let path = folder.join("diagnostics.json");
+    let loop_role = role == "loop";
+    let pool = match reader(&folder) {
         Ok(pool) => pool,
-        Err(_) => {
-            tracing::error!("Diagnostic archive unavailable");
-            return;
-        }
+        Err(_) => return,
     };
     let (tx, mut rx) = mpsc::channel(4096);
     let (snapshots, mut sx) = mpsc::channel::<Snapshot>(8);
@@ -163,7 +159,23 @@ pub(crate) async fn init(root: &Path, _store: &Store, role: &str) {
         loop {
             interval.tick().await;
             let p = path.clone();
-            let refreshed = tokio::task::spawn_blocking(move || Settings::read(&p)).await;
+            // Loop has no live-checkout mount: read package settings through trusted IPC.
+            let refreshed = if loop_role {
+                Ok(match bridge::configuration().await {
+                    Ok((config, digest)) => Settings {
+                        config,
+                        digest: Some(digest),
+                        error: None,
+                    },
+                    Err(_) => Settings {
+                        config: Config::disabled(),
+                        digest: None,
+                        error: Some("invalid_or_missing_configuration"),
+                    },
+                })
+            } else {
+                tokio::task::spawn_blocking(move || Settings::read(&p)).await
+            };
             let Some(r) = RECORDER.get() else {
                 return;
             };
@@ -183,6 +195,7 @@ pub(crate) async fn init(root: &Path, _store: &Store, role: &str) {
         }
     });
 }
+#[cfg(test)]
 fn seed(path: &Path) -> std::io::Result<()> {
     use std::io::Write;
     std::fs::create_dir_all(path.parent().unwrap())?;
@@ -196,6 +209,19 @@ fn seed(path: &Path) -> std::io::Result<()> {
         Err(e) => Err(e),
     }
 }
+// Fresh read pools follow package replacement rather than a retained old inode.
+// Only the standalone plugin initializes archive/schema.
+fn reader(folder: &Path) -> anyhow::Result<SqlitePool> {
+    let options = SqliteConnectOptions::new()
+        .filename(folder.join("logs.db"))
+        .read_only(true)
+        .create_if_missing(false)
+        .busy_timeout(Duration::from_secs(2));
+    Ok(SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect_lazy_with(options))
+}
+#[cfg(test)]
 async fn open(root: &Path) -> anyhow::Result<SqlitePool> {
     let dir = root.join("diagnostics");
     tokio::fs::create_dir_all(&dir).await?;
@@ -721,10 +747,15 @@ async fn read(
     {
         return Err(crate::bad("Invalid diagnostic filter"));
     }
+    let folder = bridge::folder();
+    if !folder.join("logs.db").is_file() {
+        return Ok(Json(json!({"enabled":false,"records":[]})));
+    }
+    let pool = reader(&folder)?;
     let rows:Vec<(i64,i64,String)>=sqlx::query_as("SELECT id,ts,payload FROM diagnostics WHERE (? IS NULL OR run_id=?) AND (? IS NULL OR session_id=?) AND id<? AND json_extract(payload,'$.owner')='admin' AND (? IS NULL OR category=?) AND (? IS NULL OR json_extract(payload,'$.level')=?) ORDER BY id DESC LIMIT ?")
   .bind(&filter.run_id).bind(&filter.run_id).bind(&filter.session_id).bind(&filter.session_id).bind(filter.before.unwrap_or(i64::MAX))
   .bind(&filter.category).bind(&filter.category).bind(&filter.level).bind(&filter.level).bind(filter.limit.unwrap_or(100).clamp(1,500))
-  .fetch_all(&r.pool).await.map_err(anyhow::Error::from)?;
+  .fetch_all(&pool).await.map_err(anyhow::Error::from)?;
     Ok(Json(
         json!({"enabled":bridge::available() && settings().is_some_and(|s|s.config.active()),"records":rows.into_iter().map(|(id,ts,payload)|json!({"id":id,"ts":ts,"event":serde_json::from_str::<Value>(&payload).unwrap_or(Value::Null)})).collect::<Vec<_>>()}),
     ))
@@ -737,20 +768,27 @@ async fn status(
     let Some(r) = RECORDER.get() else {
         return Ok(Json(json!({"available":false,"enabled":false})));
     };
+    let folder = bridge::folder();
+    if !folder.join("logs.db").is_file() {
+        return Ok(Json(
+            json!({"available":false,"current_process":status_value(r)}),
+        ));
+    }
+    let pool = reader(&folder)?;
     let rows: Vec<(String, i64, String)> =
         sqlx::query_as("SELECT role,ts,payload FROM diagnostic_processes")
-            .fetch_all(&r.pool)
+            .fetch_all(&pool)
             .await
             .map_err(anyhow::Error::from)?;
     let metadata_rows: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM diagnostics WHERE json_extract(payload,'$.owner')='admin'",
     )
-    .fetch_one(&r.pool)
+    .fetch_one(&pool)
     .await
     .map_err(anyhow::Error::from)?;
     let snapshots: (i64, i64) =
         sqlx::query_as("SELECT COUNT(*),COALESCE(SUM(bytes),0) FROM context_snapshots")
-            .fetch_one(&r.pool)
+            .fetch_one(&pool)
             .await
             .map_err(anyhow::Error::from)?;
     Ok(Json(
@@ -775,7 +813,15 @@ pub(crate) async fn context(
             "Snapshot unavailable".into(),
         ));
     };
-    read_snapshot(&r.pool, store, sid, rid, attempt).await
+    let folder = bridge::folder();
+    if !folder.join("logs.db").is_file() {
+        return Err(crate::ApiError(
+            axum::http::StatusCode::NOT_FOUND,
+            "Snapshot unavailable".into(),
+        ));
+    }
+    let pool = reader(&folder)?;
+    read_snapshot(&pool, store, sid, rid, attempt).await
 }
 async fn read_snapshot(
     pool: &SqlitePool,

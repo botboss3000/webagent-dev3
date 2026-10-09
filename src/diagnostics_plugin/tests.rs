@@ -478,6 +478,14 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
     let rid = crate::runtime_tests::queued(&app, &sid).await;
     let packages = root.path().join("plugins");
     let package = packages.join("diagnostics");
+    std::env::set_var("V3_PLUGIN_TEST_ROOT", &packages);
+    init(root.path(), &app.store, "api").await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert!(
+        !package.exists(),
+        "Absent package must not be seeded at startup"
+    );
+    assert!(!root.path().join("config/diagnostics.json").exists());
     std::fs::create_dir_all(&package).unwrap();
     let binary = std::env::var("V3_DIAGNOSTICS_TEST_BINARY")
         .expect("Standalone diagnostics acceptance needs V3_DIAGNOSTICS_TEST_BINARY");
@@ -493,6 +501,11 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
         include_bytes!("../plugin_packages/diagnostics/plugin.json"),
     )
     .unwrap();
+    std::fs::write(
+        package.join("diagnostics.json"),
+        serde_json::to_vec(&Config::disabled()).unwrap(),
+    )
+    .unwrap();
     std::env::set_var("V3_PLUGIN_TEST_ROOT", &packages);
     init(root.path(), &app.store, "api").await;
     tokio::time::timeout(Duration::from_secs(7), async {
@@ -503,7 +516,7 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
     .await
     .unwrap();
     assert!(!settings().unwrap().config.active());
-    let path = root.path().join("config/diagnostics.json");
+    let path = package.join("diagnostics.json");
     let config = enabled(&sid).config;
     let next = path.with_extension("next");
     std::fs::write(&next, serde_json::to_vec(&config).unwrap()).unwrap();
@@ -515,6 +528,9 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
     })
     .await
     .unwrap();
+    let (loop_config, loop_digest) = bridge::configuration().await.unwrap();
+    assert!(loop_config.active());
+    assert_eq!(loop_digest, settings().unwrap().digest.unwrap());
     let history = vec![
         json!({"role":"user","content":"PRIVATE context"}),
         json!({"type":"function_call","call_id":"pending","name":"read","arguments":"PRIVATE"}),
@@ -650,6 +666,33 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
     .await
     .unwrap();
     assert!(assembly(&app.store, &run, &request, &prepared).is_none());
+    assert!(
+        !package.exists(),
+        "Host must not recreate a removed package"
+    );
+    let missing = context(&app.store, &sid, &rid, &attempt).await.unwrap_err();
+    assert_eq!(missing.0, axum::http::StatusCode::NOT_FOUND);
+    let response = crate::api::router(app.clone())
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/v3/admin/diagnostics")
+                .header("cookie", format!("v3_session={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["records"],
+        json!([])
+    );
+    assert!(moved.join("logs.db").is_file());
+    assert!(moved.join("diagnostics.json").is_file());
+    assert!(!root.path().join("config/diagnostics.json").exists());
     std::fs::rename(&moved, &package).unwrap();
     tokio::time::timeout(Duration::from_secs(8), async {
         while !bridge::available() {
@@ -679,8 +722,9 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
             .unwrap()["history"],
         json!(history)
     );
+    let writer = open(&packages).await.unwrap();
     sqlx::query("DROP TABLE context_snapshots")
-        .execute(&r.pool)
+        .execute(&writer)
         .await
         .unwrap();
     let _ = assembly(&app.store, &run, &request, &prepared);

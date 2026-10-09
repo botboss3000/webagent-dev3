@@ -5,13 +5,13 @@ Adding/removing that folder starts/stops the supervised recorder without rebuild
 the main app. The trusted core bridge remains under `src/diagnostics_plugin/`:
 it owns scope, bounded observations, encryption and authorized archive reads.
 Package build inputs and installation details are in
-`src/plugin_packages/diagnostics/README.md`. Package removal preserves evidence.
+`src/plugin_packages/diagnostics/README.md`. Moving the package preserves evidence; deleting it deletes its archive.
 
 ## Configuration
 
-`config/diagnostics.json` is the checked-in template. First startup seeds
-`data/config/diagnostics.json` once; both processes read `/state/config/diagnostics.json`.
-Use atomic replacement to edit it. Reload occurs within five seconds; missing or
+`config/diagnostics.json` is the checked-in template. Install the package with
+`plugins/diagnostics/diagnostics.json`; the API reads `/live-checkout/plugins/diagnostics/diagnostics.json`.
+The loop reads these settings through the UID-checked plugin socket because it has no checkout mount. Use atomic replacement to edit it. Reload occurs within five seconds; missing or
 invalid settings disable new capture without stopping chat. Configuration
 `version` is 1 and `capture_scope` must be `fixed_admin`. The fixed account ID
 `admin` is the only capture subject and reader, regardless of other accounts' roles.
@@ -44,7 +44,7 @@ all allocator overhead. Serialization/encryption/writes occur in the background,
 except bounded input measurement and making the owned selected-session copy.
 Oversized snapshots are skipped whole. Capture errors never pause chat.
 
-The archive is `data/diagnostics/logs.db`; this is operational evidence, not a
+The archive is `plugins/diagnostics/logs.db`; this is operational evidence, not a
 session database. Five-second reload/status heartbeats and 120-second bounded
 retention pruning continue while capture is disabled. Disabling discards queued
 unwritten evidence; it does not delete retained evidence. Retention byte limits
@@ -66,7 +66,7 @@ recovery timeline; lifecycle paths outside the observed save wrappers need separ
   `category=provider|context_assembly|run|tool|recovery` and `level=info|warning|error`.
 * `GET /api/v3/admin/diagnostics/status`: per-process configuration digest,
   switches, queues, drops, write errors and capture skips; heartbeat older than
-  15 seconds is marked stale. Disabled capture still permits retained reads.
+  15 seconds is marked stale. Disabled capture still permits retained reads while the package is present.
 * `GET /api/v3/sessions/{sid}/runs/{rid}/diagnostics`: content-free latest
   assembly attempt, distinct from numeric last-successful context accounting.
 * `GET /api/v3/sessions/{sid}/runs/{rid}/diagnostics/context/{attempt_id}`:
@@ -87,3 +87,5 @@ Measurement on temporary state:
 Measurements cover fixture capture cost and retained bytes, not complete service
 latency or allocator counts. Use the pinned remote Rust environment and capture
 source inputs before and after each run.
+
+The installed package owns diagnostics.json and logs.db (including SQLite WAL sidecars). Removing the folder removes archive access and capture; moving it preserves its settings and evidence. The host does not recreate it. Ephemeral socket/PID/ready files remain under /state/diagnostics. Snapshot ciphertext still requires the originating installation key to decrypt; a package alone does not carry that key.

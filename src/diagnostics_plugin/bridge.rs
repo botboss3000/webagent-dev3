@@ -9,6 +9,12 @@ use tokio::{
     process::{Child, Command},
 };
 static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+pub(super) fn folder() -> PathBuf {
+    PathBuf::from(
+        std::env::var("V3_PLUGIN_TEST_ROOT").unwrap_or_else(|_| "/live-checkout/plugins".into()),
+    )
+    .join("diagnostics")
+}
 pub(super) fn available() -> bool {
     ROOT.get().is_some_and(|root| {
         std::fs::read_to_string(root.join("diagnostics/plugin.ready"))
@@ -48,6 +54,36 @@ pub(super) async fn send(
     })
     .await??;
     Ok(())
+}
+pub(super) async fn configuration() -> anyhow::Result<(super::config::Config, String)> {
+    let root = ROOT
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Plugin not initialized"))?;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        let mut stream = UnixStream::connect(root.join("diagnostics/plugin.sock")).await?;
+        if stream.peer_cred()?.uid() != 1100 && std::env::var("V3_PLUGIN_TEST_ROOT").is_err() {
+            anyhow::bail!("Plugin peer rejected")
+        }
+        let request = serde_json::to_vec(&json!({"version":1,"operation":"configuration"}))?;
+        stream.write_u32(request.len() as u32).await?;
+        stream.write_all(&request).await?;
+        let size = stream.read_u32().await? as usize;
+        if size > 65536 {
+            anyhow::bail!("Configuration oversized")
+        }
+        let mut bytes = vec![0; size];
+        stream.read_exact(&mut bytes).await?;
+        let response: Value = serde_json::from_slice(&bytes)?;
+        let config: super::config::Config = serde_json::from_value(response["config"].clone())?;
+        config.validate()?;
+        let digest = response["digest"]
+            .as_str()
+            .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            .ok_or_else(|| anyhow::anyhow!("Configuration digest rejected"))?
+            .to_owned();
+        Ok((config, digest))
+    })
+    .await?
 }
 fn package(root: &Path) -> Option<String> {
     use std::os::unix::fs::PermissionsExt;
@@ -120,6 +156,7 @@ pub(super) async fn init(root: &Path, role: &str) {
                     command
                         .env_clear()
                         .env("V3_PLUGIN_STATE", &root)
+                        .env("V3_PLUGIN_PACKAGE", &folder)
                         .env("PATH", "/usr/bin:/bin")
                         .env("LANG", "C.UTF-8")
                         .stdin(std::process::Stdio::null())

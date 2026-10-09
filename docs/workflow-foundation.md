@@ -258,10 +258,12 @@ transaction. No deployment or end-to-end acceptance is implied by these modules.
 
 ## Live diagnostic plugin archive
 
-`data/diagnostics/logs.db` owns fixed-admin operational evidence and sealed
+`plugins/diagnostics/logs.db` owns fixed-admin operational evidence and sealed
 context snapshots. The standalone diagnostics process writes and prunes it; the
-trusted core bridge initializes compatible schema and provides authenticated read
-projections. Existing seven-day metadata and 24-hour snapshot defaults remain.
+trusted core bridge provides authenticated read-only projections without creating
+archive files. Existing seven-day metadata and 24-hour snapshot defaults remain.
 No plugin reads session databases through the protocol, and credentials/keys are
 never transmitted. Installed executables run as administrator-trusted application
-code, not as untrusted tool workers. Removal retains archive and operational config.
+code, not as untrusted tool workers. The archive and operational config travel with the installed package.
+
+The installed package owns diagnostics.json and logs.db (including SQLite WAL sidecars). Removing the folder removes archive access and capture; moving it preserves its settings and evidence. The host does not recreate it. Ephemeral socket/PID/ready files remain under /state/diagnostics. Snapshot ciphertext still requires the originating installation key to decrypt; a package alone does not carry that key.
