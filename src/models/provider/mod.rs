@@ -131,6 +131,43 @@ fn transport_failure(error:reqwest::Error,started:bool,detail:&str)->anyhow::Err
         detail:detail.into(),http_status:error.status().map(|s|s.as_u16()),transport:Some(TransportDiagnostic {timeout:error.is_timeout(),connect:error.is_connect(),
         body:error.is_body(),decode:error.is_decode(),request:error.is_request(),status:error.status().map(|s|s.as_u16()),io_kind})}.into()
 }
+// Classify provider-declared failure events separately from invalid stream frames.
+// Unknown upstream failures may be transient, but deterministic contracts and
+// incomplete output limits must never replay the same request automatically.
+fn event_failure_kind(value: &Value) -> crate::model_selection::FailureKind {
+    use crate::model_selection::FailureKind::*;
+    let error = value.get("error")
+        .or_else(|| value.get("response").and_then(|r| r.get("error")))
+        .unwrap_or(value);
+    let code = error["code"].as_str().unwrap_or("");
+    let error_type = error["type"].as_str().unwrap_or("");
+    if matches!(code, "content_filter" | "policy_violation")
+        || matches!(error_type, "permission_error" | "authentication_error") {
+        return if error_type == "authentication_error" { InvalidCredentials } else { PolicyRejected };
+    }
+    if error_type == "invalid_request_error" || matches!(code,
+        "invalid_encrypted_content" | "invalid_argument" | "invalid_request") {
+        return MalformedRequest;
+    }
+    if value["response"]["incomplete_details"]["reason"] == "content_filter" {
+        return PolicyRejected;
+    }
+    if value["response"]["incomplete_details"]["reason"] == "max_output_tokens" {
+        return Protocol;
+    }
+    let status = error["status"].as_u64().or_else(|| error["status_code"].as_u64());
+    match status {
+        Some(401) => return InvalidCredentials,
+        Some(403) => return PolicyRejected,
+        Some(408 | 429 | 500..=599) => {},
+        Some(400..=499) => return MalformedRequest,
+        _ => {},
+    }
+    match failure_kind(value) {
+        Protocol => Transient,
+        kind => kind,
+    }
+}
 fn failure_kind(value: &Value) -> crate::model_selection::FailureKind {
     use crate::model_selection::FailureKind::*;
     match failure_detail(value) {
@@ -718,6 +755,7 @@ impl Provider {
         if !response.status().is_success() {
             return Err(response_failure(response, &cancel).await);
         }
+        let http_status = response.status().as_u16();
         let mut stream = response.bytes_stream();
         let mut frames = Frames::default();
         let mut completed_items = Vec::<Value>::new();
@@ -778,7 +816,12 @@ impl Provider {
                         return Ok(response);
                     }
                     "response.failed" | "response.incomplete" | "error" => {
-                        return Err(typed_failure(failure_kind(&event), response_started, format!("Provider did not complete response: {}", failure_detail(&event))))
+                        return Err(ProviderFailure {
+                            kind: event_failure_kind(&event),
+                            response_started: response_started || event["response"]["output"].as_array().is_some_and(|items| !items.is_empty()),
+                            detail: format!("Provider did not complete response: {}", failure_detail(&event)),
+                            transport: None, http_status: Some(http_status),
+                        }.into())
                     }
                     _ => {}
                 }
@@ -790,6 +833,30 @@ impl Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn provider_failure_events_use_structural_contract_guards() {
+        use crate::model_selection::FailureKind::*;
+        for event_type in ["response.failed", "response.incomplete", "error"] {
+            assert_eq!(event_failure_kind(&json!({"type":event_type})), Transient);
+        }
+        for (error, expected) in [
+            (json!({"code":"invalid_encrypted_content"}), MalformedRequest),
+            (json!({"type":"invalid_request_error"}), MalformedRequest),
+            (json!({"type":"authentication_error"}), InvalidCredentials),
+            (json!({"type":"permission_error"}), PolicyRejected),
+            (json!({"code":"insufficient_quota"}), QuotaExhausted),
+            (json!({"code":"model_not_found"}), ModelUnavailable),
+            (json!({"code":"server_error"}), Transient),
+            (json!({"status_code":400}), MalformedRequest),
+            (json!({"status":403}), PolicyRejected),
+            (json!({"status":503}), Transient),
+        ] {
+            assert_eq!(event_failure_kind(&json!({"response":{"error":error}})), expected);
+        }
+        assert_eq!(event_failure_kind(&json!({"response":{"incomplete_details":{"reason":"max_output_tokens"}}})), Protocol);
+        assert_eq!(event_failure_kind(&json!({"response":{"incomplete_details":{"reason":"content_filter"}}})), PolicyRejected);
+    }
+
     #[test]
     fn configured_base_instructions_loads_and_recovers_from_file_changes() {
         let path = "config/prompts.json";

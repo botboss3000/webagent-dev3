@@ -288,11 +288,20 @@ fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
         state.retries += 1;
         NextAction::Retry
     } else { NextAction::Terminal };
+    let resumable = kind == FailureKind::Transient && !state.response_started
+        && !state.uncertain_tool_effect;
+    // This encrypted marker permits an explicit new retry budget, never an
+    // automatic reset. Partial responses and uncertain effects cannot set it.
+    run["provider_recovery"] = if resumable && action == NextAction::Terminal {
+        json!({"version":1,"safe_to_resume":true})
+    } else { Value::Null };
+    run["provider_retry_at"] = if action != NextAction::Terminal { json!(now()+2) } else { Value::Null };
     run["failover_state"] = serde_json::to_value(state)?;
-    run["status"] = json!(match action { NextAction::Retry | NextAction::Backup => "queued", NextAction::Terminal => "failed" });
+    run["status"] = json!(match action { NextAction::Retry | NextAction::Backup => "queued", NextAction::Terminal if resumable => "stopped", NextAction::Terminal => "failed" });
     run["error"] = json!(match action {
         NextAction::Retry => format!("Transient provider failure; bounded retry: {error}"),
         NextAction::Backup => format!("Primary/backup provider failed; trying the next configured connection: {error}"),
+        NextAction::Terminal if resumable => format!("Provider recovery budget exhausted; resume to try again: {error}"),
         NextAction::Terminal => format!("Provider request failed; no safe retry or eligible backup remains: {error}"),
     });
     Ok(())
@@ -306,7 +315,7 @@ fn trusted_model_failure(store:&Store,run:&mut Value,error:&anyhow::Error,system
     if system {system_model_failure(run,error)?;}else{model_failure(run,error)?;}
     if let Some(evidence)=evidence {
         let next=if system {run["system_failover_state"]["candidate_index"].as_u64()}else{run["failover_state"]["candidate_index"].as_u64()};
-        let action=if next.unwrap_or(0)>evidence["candidate_index"].as_u64().unwrap_or(0){"backup"}else if run["status"]=="queued"{"retry"}else{"terminal"};
+        let action=if next.unwrap_or(0)>evidence["candidate_index"].as_u64().unwrap_or(0){"backup"}else if run["status"]=="queued"{"retry"}else if run["provider_recovery"]["safe_to_resume"]==true{"resume_required"}else{"terminal"};
         diagnostics::failure(store,&evidence,error,action);
     }
     Ok(())
@@ -326,6 +335,9 @@ fn system_model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     let mut system=system_dispatch_run(run)?;
     model_failure(&mut system,error)?;
     run["system_failover_state"]=system["failover_state"].clone();
+    run["provider_recovery"]=system["provider_recovery"].clone();
+    if run["provider_recovery"].is_object() { run["provider_recovery"]["system"]=json!(true); }
+    run["provider_retry_at"]=system["provider_retry_at"].clone();
     run["status"]=system["status"].clone();
     run["error"]=system["error"].clone();
     Ok(())

@@ -340,7 +340,7 @@ pub(crate) fn failure(store: &Store, run: &Value, error: &anyhow::Error, action:
   "provider":serde_json::from_value::<crate::provider::ProviderId>(run["provider_selection"]["provider"].clone()).ok(),
   "model":identifier(&run["provider_selection"]["model"]),"kind":failure.map(|f|f.kind),
   "response_started":failure.map(|f|f.response_started),"http_status":failure.and_then(|f|f.http_status),"transport":failure.and_then(|f|f.transport.clone()),
-  "action":match action {"retry"=>"retry","backup"=>"backup",_=>"terminal"}}),
+  "action":match action {"retry"=>"retry","backup"=>"backup","resume_required"=>"resume_required",_=>"terminal"}}),
     );
 }
 // Observe only committed transitions. No raw payload, errors, arguments or results enter telemetry.

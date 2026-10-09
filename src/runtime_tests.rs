@@ -6649,3 +6649,113 @@ async fn retained_read_recall_resolves_only_verified_same_session_origin() {
         &app,&sid,&recall_id,"recall_compacted",&request,CancellationToken::new()).await.unwrap();
     assert_ne!(rejected["output"]["content"],raw);
 }
+
+#[tokio::test]
+async fn provider_recovery_exhaustion_persists_and_explicit_resume_is_idempotent() {
+    let (root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    let mut run = app.run(&id).await.unwrap();
+    let error = provider::typed_failure(model_selection::FailureKind::Transient, false, "Provider connection failed");
+    model_failure(&mut run, &error).unwrap();
+    assert_eq!(run["status"], "queued");
+    assert_eq!(run["failover_state"]["retries"], 1);
+    app.save(&mut run).await.unwrap();
+    assert!(!app.store.claim_run(&mut run, "other-loop", "too-early").await.unwrap());
+    model_failure(&mut run, &error).unwrap();
+    assert_eq!(run["status"], "stopped");
+    assert_eq!(run["provider_recovery"]["safe_to_resume"], true);
+    app.save(&mut run).await.unwrap();
+    let mut reopened = app.clone();
+    reopened.store = Store::open(root.path()).await.unwrap();
+    let restored = reopened.run(&id).await.unwrap();
+    assert_eq!(restored["provider_recovery"], run["provider_recovery"]);
+    recover(&reopened, true).await.unwrap();
+    assert_eq!(reopened.run(&id).await.unwrap()["status"], "stopped");
+    let body = json!({"client_request_id":"provider-resume"});
+    command(State(reopened.clone()), Path((id.clone(), "resume".into())), Json(body.clone())).await.unwrap();
+    let mut resumed = reopened.run(&id).await.unwrap();
+    assert_eq!(resumed["failover_state"]["retries"], 0);
+    assert_eq!(resumed["selection_plan"], run["selection_plan"]);
+    model_failure(&mut resumed, &error).unwrap();
+    reopened.save(&mut resumed).await.unwrap();
+    command(State(reopened.clone()), Path((id.clone(), "resume".into())), Json(body)).await.unwrap();
+    assert_eq!(reopened.run(&id).await.unwrap()["failover_state"]["retries"], 1);
+    control(State(reopened.clone()), Json(json!({"client_request_id":uuid(),"shutoff":true}))).await.unwrap();
+    assert!(command(State(reopened.clone()), Path((id, "resume".into())), Json(json!({"client_request_id":uuid()}))).await.is_err());
+}
+
+#[tokio::test]
+async fn provider_recovery_never_marks_partial_or_uncertain_or_contract_failures_safe() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    let baseline = app.run(&id).await.unwrap();
+    for kind in [model_selection::FailureKind::MalformedRequest, model_selection::FailureKind::Cancelled,
+        model_selection::FailureKind::PolicyRejected, model_selection::FailureKind::Protocol] {
+        let mut run = baseline.clone();
+        model_failure(&mut run, &provider::typed_failure(kind, false, "fixture failure")).unwrap();
+        assert_eq!(run["status"], "failed");
+        assert!(run["provider_recovery"].is_null());
+    }
+    for (started, uncertain) in [(true, false), (false, true)] {
+        let mut run = baseline.clone();
+        run["uncertain"] = json!(uncertain);
+        model_failure(&mut run, &provider::typed_failure(model_selection::FailureKind::Transient, started, "fixture failure")).unwrap();
+        assert_eq!(run["status"], "failed");
+        assert!(run["provider_recovery"].is_null());
+    }
+    let mut run = baseline.clone();
+    let chat_state = run["failover_state"].clone();
+    let error = provider::typed_failure(model_selection::FailureKind::Transient, false, "summary connection failure");
+    system_model_failure(&mut run, &error).unwrap();
+    system_model_failure(&mut run, &error).unwrap();
+    assert_eq!(run["status"], "stopped");
+    assert_eq!(run["provider_recovery"]["system"], true);
+    app.save(&mut run).await.unwrap();
+    command(State(app.clone()), Path((id.clone(), "resume".into())), Json(json!({"client_request_id":uuid()}))).await.unwrap();
+    let resumed = app.run(&id).await.unwrap();
+    assert_eq!(resumed["system_failover_state"]["retries"], 0);
+    assert_eq!(resumed["failover_state"], chat_state);
+}
+
+#[tokio::test]
+async fn provider_recovery_retries_stream_failure_and_publishes_one_final_reply() {
+    use axum::{routing::post, Router};
+    use std::sync::atomic::AtomicUsize;
+    let (_root, mut app) = fixture().await;
+    let count = Arc::new(AtomicUsize::new(0));
+    let seen = count.clone();
+    let mock = Router::new().route("/responses", post(move || {
+        let seen = seen.clone();
+        async move {
+            let event = if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                json!({"type":"response.failed","response":{"status":"failed","error":{"code":"upstream_connection_failed","message":"private provider details"}}})
+            } else {
+                json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Recovered reply"}]}]}})
+            };
+            ([("content-type","text/event-stream")], format!("data: {event}\n\n"))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap(); });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    running(&app, &id, "first-attempt").await;
+    execute_run(app.clone(), id.clone(), "first-attempt".into(), CancellationToken::new()).await.unwrap();
+    let retry = app.run(&id).await.unwrap();
+    assert_eq!(retry["status"], "queued");
+    assert_eq!(retry["failover_state"]["retries"], 1);
+    assert!(!retry["error"].as_str().unwrap().contains("private provider details"));
+    // execute_run's existing bounded delay has elapsed; the durable claim still
+    // enforces cooldown independently of that process-local sleep.
+    running(&app, &id, "second-attempt").await;
+    execute_run(app.clone(), id.clone(), "second-attempt".into(), CancellationToken::new()).await.unwrap();
+    assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+    let (chat, _) = app.store.chat_snapshot(&sid).await.unwrap();
+    assert_eq!(chat.iter().filter(|row| row["role"] == "assistant").count(), 1);
+    server.abort();
+}

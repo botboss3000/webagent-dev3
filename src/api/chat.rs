@@ -466,6 +466,23 @@ pub(crate) async fn command(
             }) {
                 return Err(conflict("Another run owns this conversation"));
             }
+            if run["provider_recovery"]["version"] == 1
+                && run["provider_recovery"]["safe_to_resume"] == true {
+                let field = if run["provider_recovery"]["system"] == true {
+                    "system_failover_state"
+                } else { "failover_state" };
+                let mut state: model_selection::FailoverState = serde_json::from_value(run[field].clone())
+                    .map_err(|_| conflict("Provider recovery state is invalid"))?;
+                if state.response_started || state.uncertain_tool_effect {
+                    return Err(conflict("Provider response cannot be safely replayed"));
+                }
+                // Keep the pinned candidate and failover history. Only a human
+                // resume grants another bounded attempt on this connection.
+                state.retries = 0;
+                run[field] = serde_json::to_value(state).map_err(anyhow::Error::from)?;
+                run["provider_recovery"] = Value::Null;
+            }
+            run["provider_retry_at"] = Value::Null;
             let external=run["pending"]["external_job"]["kind"]=="v3_build";
             run["status"] = json!(if external {"waiting_external"}else{"queued"});
             run["error"] = Value::Null;

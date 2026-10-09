@@ -1831,6 +1831,10 @@ impl Store {
             .bind(format!("run:{rid}")).fetch_optional(&mut *tx).await?;
         let Some(raw)=raw else {return Ok(false)};
         let previous=self.decode_document(&mut tx,&raw).await?;
+        // Backoff belongs to the durable claim, so restarts or competing loop
+        // processes cannot bypass a queued provider retry's cooldown.
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
+        if previous["provider_retry_at"].as_u64().is_some_and(|due| due > now) { return Ok(false); }
         if previous["status"]!="queued" || previous["generation"]!=run["generation"]
             || previous["lease_epoch"]!=run["lease_epoch"]
             || previous["run_revision"]!=run["run_revision"] {return Ok(false);}
