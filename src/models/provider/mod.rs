@@ -2,6 +2,7 @@
 use anyhow::{anyhow, bail, Result};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -421,6 +422,44 @@ impl Default for Provider {
     }
 }
 impl Provider {
+    /// Refresh the installation base while retaining admission-pinned agent slots.
+    pub(crate) fn instructions_for_turn(pinned: &str) -> String {
+        let slots = pinned.strip_prefix(DEFAULT_INSTRUCTIONS).unwrap_or(pinned);
+        format!("{}{}", Self::configured_base_instructions(), slots)
+    }
+    fn configured_base_instructions() -> String {
+        static CACHE: OnceLock<Mutex<(Option<(u128, u128)>, String)>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| Mutex::new((None, DEFAULT_INSTRUCTIONS.to_string())));
+        let mut cache = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let path = std::path::Path::new("config/prompts.json");
+        let loaded = (|| -> Result<((u128, u128), String)> {
+            let metadata = std::fs::metadata(path)?;
+            let modified = metadata.modified()?.duration_since(UNIX_EPOCH)?.as_nanos();
+            let bytes = std::fs::read(path)?;
+            let hash = bytes.iter().fold(0u128, |state, byte| state.wrapping_mul(31).wrapping_add(u128::from(*byte)));
+            let freshness = (modified, hash);
+            if cache.0 == Some(freshness) {
+                return Ok((freshness, cache.1.clone()));
+            }
+            let value: Value = serde_json::from_slice(&bytes)?;
+            let mut parts = Vec::new();
+            for key in ["base_instructions", "closing_reporting", "jev_guidance"] {
+                let text = value.get(key).and_then(Value::as_str)
+                    .ok_or_else(|| anyhow!("Invalid prompt field: {key}"))?.trim();
+                if !text.is_empty() { parts.push(text.to_owned()); }
+            }
+            Ok((freshness, parts.join("\n\n")))
+        })();
+        match loaded {
+            Ok((freshness, composed)) => {
+                cache.0 = Some(freshness);
+                cache.1 = composed;
+            }
+            Err(error) => eprintln!("Warning: could not load config/prompts.json: {error}"),
+        }
+        cache.1.clone()
+    }
+
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::builder()
@@ -576,7 +615,7 @@ impl Provider {
             input,
             tools,
             session,
-            DEFAULT_INSTRUCTIONS,
+            &Self::configured_base_instructions(),
             delta,
             cancel,
         )
@@ -628,7 +667,7 @@ impl Provider {
             input,
             tools,
             session,
-            DEFAULT_INSTRUCTIONS,
+            &Self::configured_base_instructions(),
             delta,
             cancel,
         )
@@ -751,6 +790,39 @@ impl Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn configured_base_instructions_loads_and_recovers_from_file_changes() {
+        let path = "config/prompts.json";
+        let original = std::fs::read(path).expect("read original prompts file");
+        struct RestorePrompts(Vec<u8>);
+        impl Drop for RestorePrompts {
+            fn drop(&mut self) {
+                let _ = std::fs::write("config/prompts.json", &self.0);
+            }
+        }
+        let restore = RestorePrompts(original.clone());
+        let good = json!({
+            "base_instructions": "BASE_MARKER",
+            "closing_reporting": "CLOSING_MARKER",
+            "jev_guidance": "JEV_MARKER"
+        });
+        std::fs::write(path, good.to_string()).expect("write valid prompts file");
+        let last_good = Provider::configured_base_instructions();
+        assert!(last_good.contains("BASE_MARKER"));
+        assert!(last_good.contains("CLOSING_MARKER"));
+        assert!(last_good.contains("JEV_MARKER"));
+
+        std::fs::write(path, "{ malformed json").expect("write malformed prompts file");
+        assert_eq!(Provider::configured_base_instructions(), last_good);
+        std::fs::remove_file(path).expect("remove prompts file");
+        assert_eq!(Provider::configured_base_instructions(), last_good);
+
+        std::fs::write(path, &original).expect("restore original prompts file");
+        assert_eq!(std::fs::read(path).expect("re-read restored prompts file"), original);
+        drop(restore);
+        Provider::configured_base_instructions();
+        assert_eq!(std::fs::read(path).expect("verify restored prompts file"), original);
+    }
     #[test]
     fn provider_failures_use_fixed_labels_without_echoing_secrets() {
         assert_eq!(failure_detail(&json!({"error":{"code":"model_not_found","message":"secret account model"}})),

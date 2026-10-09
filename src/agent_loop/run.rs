@@ -73,6 +73,9 @@ pub(crate) async fn execute_run(
             app.save(&mut run).await?;
         }
         if run["phase"] == "model" {
+            if crate::background_tasks::collect(&app,&mut run).await? {
+                context_accounting.reset();
+            }
             // Older runs had no selection; bind once before any model dispatch.
             let selection = match run.get("provider_selection") {
                 Some(value) => provider::ProviderSelection::parse(value, DEFAULT_AGENT_MODEL),
@@ -97,19 +100,21 @@ pub(crate) async fn execute_run(
                     run["agent_id"].as_str().unwrap_or("shared_default")).await?);
                 app.save(&mut run).await?;
             }
-            let instructions = run["instructions"]
-                .as_str()
-                .ok_or_else(|| anyhow!("Invalid pinned agent instructions"))?
-                .to_owned();
-            if run["turns"].as_u64().unwrap() >= workflow_policy.max_turns || run["attempt"].as_u64().unwrap() >= workflow_policy.max_attempts {
-                run["status"] = json!("paused");
-                run["error"] = json!("Run limit reached; explicit continuation required");
+            let instructions = provider::Provider::instructions_for_turn(
+                run["instructions"].as_str()
+                    .ok_or_else(|| anyhow!("Invalid pinned agent instructions"))?);
+            if run["turns"].as_u64().unwrap() >= if run["post_run_followup"]==true {workflow_policy.max_turns.min(3)} else {workflow_policy.max_turns} || run["attempt"].as_u64().unwrap() >= workflow_policy.max_attempts {
+                run["status"] = json!(if run["post_run_followup"]==true {"failed"} else {"paused"});
+                run["error"] = json!(if run["post_run_followup"]==true {"Read-only follow-up budget exhausted"} else {"Run limit reached; explicit continuation required"});
                 app.save(&mut run).await?;
                 return Ok(());
             }
             let (policy, _, visibility, ability_state) = ability_controls(&app, &sid).await?;
             let mode = session_mode(&app, &sid).await?;
-            let read_only=mode["mode"]=="read_only";
+            let authorization_mode=if run["post_run_followup"]==true {
+                json!({"mode":"read_only","execution_mode":"ask","revision":mode["revision"]})
+            } else {mode.clone()};
+            let read_only=authorization_mode["mode"]=="read_only";
             // Old skill results are historical evidence, never continuing authority.
             // Mask derived recovery context; original interaction journal stays intact.
             if tools::core_skills::mask_withdrawn_history(&app,&sid,&id,
@@ -125,6 +130,7 @@ pub(crate) async fn execute_run(
                 let schemas = app.abilities.schemas_with(&policy, &run["loaded_abilities"], &visibility, &ability_state)
                     .into_iter().filter(|schema| {
                         let name=schema["name"].as_str().unwrap_or("");
+                        if run["post_run_followup"]==true && !crate::tool_execution::background_capable(name) {return false;}
                         if !tools::core_tool_search::selected(&run,name) {return false;}
                         if abilities::is_discovery(name) {
                             let installation=access::Permission::from_policy(policy_decision(&policy,name))
@@ -162,15 +168,24 @@ pub(crate) async fn execute_run(
                 let visible=if run["selected_tools"].is_array() {
                     tools::core_tool_search::guidance(&app,&schemas,&visibility)
                 } else {visible};
-                let guidance=format!("{index}{visible}");
+                let names=schemas.iter().filter_map(|schema|schema["name"].as_str().map(str::to_owned)).collect::<Vec<_>>();
+                let execution=crate::tool_execution::guidance(&visibility,&names)?;
+                let guidance=format!("{index}{visible}\n{execution}");
                 context_assets = Some((asset_key, schemas, guidance));
             }
             let (assembled_asset_key, base_schemas, guidance) = context_assets.as_ref().unwrap();
             let assembled_asset_key=assembled_asset_key.clone();
             let mut gate_schemas = base_schemas.clone();
+            for schema in &mut gate_schemas {
+                let name=schema["name"].as_str().unwrap_or("");
+                if crate::tool_execution::background_capable(name) && run["post_run_followup"]!=true
+                    && crate::tool_execution::resolve(&visibility,name)?.mode=="model" {
+                    schema["parameters"]["properties"]["_execution_mode"]=json!({"type":"string","enum":["foreground","background"],"description":"Return a durable task handle immediately when background is selected"});
+                }
+            }
             let mut mode_content = format!("Current session capability mode: {} (revision {}). Recheck authorization before every tool call.",
-                mode["mode"].as_str().unwrap(), mode["revision"].as_u64().unwrap());
-            if let Some(label)=mode["definition"]["label"].as_str() {
+                if run["post_run_followup"]==true {"read_only (post-run ceiling)"} else {mode["mode"].as_str().unwrap()}, mode["revision"].as_u64().unwrap());
+            if let Some(label)=mode["definition"]["label"].as_str().filter(|_|run["post_run_followup"]!=true) {
                 mode_content.push_str(&format!("\nExecution mode: {label}\n{}",mode["definition"]["prompt"].as_str().unwrap_or("")));
             }
             let call_number = run["attempt"].as_u64().unwrap_or(0) + 1;
@@ -188,7 +203,7 @@ pub(crate) async fn execute_run(
             let promotion_mode=if before_model.iter().any(|item|item.id==gate_registry::MESSAGE_VISIBILITY) {
                 agent_visibility.mode
             } else { gate_controls::PromotionMode::None };
-            if promotion_mode==gate_controls::PromotionMode::Manual {
+            if promotion_mode==gate_controls::PromotionMode::Manual && run["post_run_followup"]!=true {
                 let mut config=gate_registry::visibility_config()?;
                 if !agent_visibility.guidance.is_empty() {
                     config.guidance.push_str("\nAdditional agent guidance:\n");
@@ -203,7 +218,7 @@ pub(crate) async fn execute_run(
             }
             let before_publication = gate_registry::selected(&workflow_policy,
                 workflow::Checkpoint::Publication)?;
-            if before_publication.iter().any(|item|item.id==gate_registry::CLOSING_STATUS) {
+            if run["post_run_followup"]!=true && before_publication.iter().any(|item|item.id==gate_registry::CLOSING_STATUS) {
                 let config=gate_registry::closing_config()?;
                 gate_schemas.push(gate_controls::closing_schema(&config));
                 // Closing notification guidance accompanies the fixed status protocol.
@@ -215,13 +230,26 @@ pub(crate) async fn execute_run(
                 });
             }
             // COMPACTION CONFIG: reread the single external JSON at each call boundary.
-            // Keep this snapshot through planning, prompting and validation; edits apply
-            // next boundary. See context_compaction::Config and deploy.sh for the path.
-            let compaction_config = match context_compaction::Config::read(&app.compaction_config_path) {
+            // Agent Identity can override the two history thresholds. Hold the
+            // resolved settings through planning and summary validation for this call.
+            let defaults = match context_compaction::Config::read(&app.compaction_config_path) {
                 Ok(config) => config,
                 Err(error) => {
                     run["status"] = json!("paused");
                     run["error"] = json!(format!("Invalid context-compaction.json: {error}"));
+                    app.save(&mut run).await?;
+                    return Ok(());
+                }
+            };
+            let compaction_config = match context_compaction::agent_thresholds(&app.store,&agent_id).await
+                .and_then(|settings| match settings {
+                    Some(settings) => settings.apply(&defaults),
+                    None => Ok(defaults),
+                }) {
+                Ok(config) => config,
+                Err(_) => {
+                    run["status"] = json!("paused");
+                    run["error"] = json!("Invalid agent compaction thresholds; review Identity settings");
                     app.save(&mut run).await?;
                     return Ok(());
                 }
@@ -666,7 +694,7 @@ pub(crate) async fn execute_run(
                     // CLOSING-SAME-RESPONSE: the private status tool may accompany
                     // the final prose. Validate it here, then let the existing
                     // terminal transaction publish that prose exactly once.
-                    if closing_enabled && calls.len()==1
+                    if run["post_run_followup"]!=true && closing_enabled && calls.len()==1
                         && calls[0]["name"]=="set_closer_status"
                         && !text.trim().is_empty() {
                         let config=gate_registry::closing_config()?;
@@ -815,6 +843,16 @@ pub(crate) async fn execute_run(
                 Some(Ok(v)) if v.is_object() => v,
                 _ => json!({"invalid_arguments":true}),
             };
+            if run["post_run_followup"]==true && !crate::tool_execution::background_capable(&name) {
+                workflow::record(&mut run,&workflow_policy,&workflow::Input::PreTool(workflow::PreToolInput {
+                    name:name.clone(),arguments_digest:digest(&args),policy_version:0,mode_revision:0,visibility_revision:0,ability_state_revision:0,
+                }),workflow::Decision::Reject {reason:"Post-run follow-up permits vetted reads only".into()})?;
+                run["pending"]=json!({"call_id":call["call_id"]});
+                let result=json!({"status":"denied","output":"Post-run follow-up cannot change state, escalate mode, or launch tasks"});
+                append_tool(&mut run,&result)?;
+                app.store.save_run(&mut run,"tool_result",&json!({"run_id":id,"name":name,"result":result})).await?;
+                continue;
+            }
             if name != "set_closer_status" {
                 // A later tool means the earlier closer no longer describes
                 // the eventual final reply.
@@ -886,7 +924,10 @@ pub(crate) async fn execute_run(
             let (policy, mode_revision, visibility, mut ability_state) =
                 ability_controls(&app, &sid).await?;
             let mode=session_mode(&app,&sid).await?;
-            let read_only=mode["mode"]=="read_only";
+            let authorization_mode=if run["post_run_followup"]==true {
+                json!({"mode":"read_only","execution_mode":"ask","revision":mode["revision"]})
+            } else {mode.clone()};
+            let read_only=authorization_mode["mode"]=="read_only";
             let mut effective=if abilities::is_discovery(&name) {
                 let installation=access::Permission::from_policy(policy_decision(&policy,&name))
                     .unwrap_or(access::Permission::Deny);
@@ -895,7 +936,7 @@ pub(crate) async fn execute_run(
                 live_tool_decision(&app,&access,&name,&policy,&visibility,
                     &ability_state,&run["loaded_abilities"],read_only)
             };
-            effective=effective.for_execution_mode(&mode);
+            effective=effective.for_execution_mode(&authorization_mode);
             workflow::record(&mut run, &workflow_policy,
                 &workflow::Input::PreTool(workflow::PreToolInput {
                     name:name.clone(), arguments_digest:digest(&args),

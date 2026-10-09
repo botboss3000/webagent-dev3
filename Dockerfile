@@ -45,6 +45,7 @@ COPY ui/vendor/lucide /opt/v3/shared-ui/vendor/lucide
 COPY ui/favicon.svg /opt/v3/shared-ui/
 ENV PATH=/opt/rust/bin:$PATH
 ENV V3_LISTEN=0.0.0.0:8080 V3_STATE_ROOT=/state V3_WORKSPACE_ROOT=/workspaces V3_SECURE_COOKIE=true
+WORKDIR /state
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 CMD curl --fail http://127.0.0.1:8080/health/ready || exit 1
 ENTRYPOINT ["/usr/bin/tini","--"]
@@ -58,6 +59,7 @@ COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/gates /opt/v3/plugins/gates
 ENV V3_PROCESS_ROLE=loop V3_STATE_ROOT=/state V3_WORKSPACE_ROOT=/workspaces
+WORKDIR /state
 USER 1100:1100
 HEALTHCHECK --interval=5s --timeout=3s --start-period=20s --retries=3 CMD ["env","V3_PROCESS_ROLE=health","/usr/local/bin/webagent-v3"]
 ENTRYPOINT ["/usr/bin/tini","--"]

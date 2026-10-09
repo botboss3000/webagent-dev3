@@ -152,7 +152,7 @@ async fn chat_ui_config_reads_data_config_on_each_request_and_requires_auth() {
     }
 }
 
-async fn activate_codebase(app: &App, sid: &str) {
+pub(crate) async fn activate_codebase(app: &App, sid: &str) {
     let state = session_ability_set(
         State(app.clone()),
         Path((sid.to_owned(), "codebase_admin".into())),
@@ -293,7 +293,7 @@ async fn old_default_model_is_migrated_once_and_new_choices_are_preserved() {
     );
 }
 
-async fn conversation(app: &App) -> String {
+pub(crate) async fn conversation(app: &App) -> String {
     create_session(
         State(app.clone()),
         Json(json!({"client_request_id":uuid(),"title":"Test"})),
@@ -306,7 +306,7 @@ async fn conversation(app: &App) -> String {
         .to_owned()
 }
 
-async fn queued(app: &App, sid: &str) -> String {
+pub(crate) async fn queued(app: &App, sid: &str) -> String {
     send(
         State(app.clone()),
         Path(sid.to_owned()),
@@ -4891,10 +4891,19 @@ async fn rolling_compaction_uses_explicit_system_model_and_persists_checkpoint()
     server.abort();
 }
 #[tokio::test]
-async fn parallel_batch_overlaps_reads_rejects_write_and_preserves_result_order() {
+async fn parallel_batch_overlaps_reads_denies_write_by_policy_and_preserves_result_order() {
     use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};
     use tokio::net::UnixListener;
     let (_root,app)=fixture().await;
+    let mut policy=policy_default();
+    policy["rules"]["file_write"]=json!("deny");
+    app.store.put("policy",&policy).await.unwrap();
+    let mut visibility=app.store.agent_abilities().await.unwrap();
+    let revision=visibility["revision"].as_u64().unwrap();
+    visibility["tool_execution"]=json!({"file_list":{
+        "mode":"foreground","max_concurrency":2,"on_run_end":"stop"}});
+    visibility["revision"]=json!(revision+1);
+    app.store.save_agent_abilities(&visibility,revision).await.unwrap();
     let sid=conversation(&app).await;
     activate_codebase(&app,&sid).await;
     let id=queued(&app,&sid).await;
@@ -5004,26 +5013,10 @@ async fn parallel_writes_need_independent_approvals_and_reconcile_uncertain_call
     app.save(&mut run).await.unwrap();
     let policy=current_workflow_policy(&app).await.unwrap();
     let access=app.store.live_access(app.store.current_user_id(),"shared_default").await.unwrap();
-    running(&app,&id,"first").await;
-    for generation in ["first","second"] {
-        let guard=app.gate.lock().await;
-        parallel_batch::execute_parallel_batch(&app,&id,generation,
-            &CancellationToken::new(),&policy,&access,app.run(&id).await.unwrap(),guard)
-            .await.unwrap();
-        let waiting=app.run(&id).await.unwrap();
-        assert_eq!(waiting["status"],"waiting_approval");
-        let approval_id=waiting["pending"]["id"].as_str().unwrap().to_owned();
-        approval(State(app.clone()),Path(approval_id),Json(json!({
-            "client_request_id":format!("approve-{generation}"),"decision":"approve"
-        }))).await.unwrap();
-        if generation=="first" {running(&app,&id,"second").await;}
-    }
-    running(&app,&id,"third").await;
     let listener=UnixListener::bind(&app.tool_socket).unwrap();
     let worker=tokio::spawn(async move {
-        let (first,_)=listener.accept().await.unwrap();
-        let (second,_)=listener.accept().await.unwrap();
-        for stream in [first,second] {
+        for _ in 0..2 {
+            let (stream,_)=listener.accept().await.unwrap();
             let mut reader=BufReader::new(stream);
             let mut line=String::new();reader.read_line(&mut line).await.unwrap();
             let request:Value=serde_json::from_str(&line).unwrap();
@@ -5033,6 +5026,27 @@ async fn parallel_writes_need_independent_approvals_and_reconcile_uncertain_call
             reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
         }
     });
+    running(&app,&id,"first").await;
+    for generation in ["first","second"] {
+        let guard=app.gate.lock().await;
+        parallel_batch::execute_parallel_batch(&app,&id,generation,
+            &CancellationToken::new(),&policy,&access,app.run(&id).await.unwrap(),guard)
+            .await.unwrap();
+        let waiting=app.run(&id).await.unwrap();
+        assert_eq!(waiting["status"],"waiting_approval");
+        if generation=="second" {
+            assert_eq!(waiting["batch"][0]["state"],"done");
+            assert_eq!(waiting["batch"][0]["result"]["status"],"success");
+            assert_eq!(waiting["batch"][0]["pending"]["human_approved"],true);
+            assert_eq!(waiting["batch"][1]["state"],"waiting");
+        }
+        let approval_id=waiting["pending"]["id"].as_str().unwrap().to_owned();
+        approval(State(app.clone()),Path(approval_id),Json(json!({
+            "client_request_id":format!("approve-{generation}"),"decision":"approve"
+        }))).await.unwrap();
+        if generation=="first" {running(&app,&id,"second").await;}
+    }
+    running(&app,&id,"third").await;
     let guard=app.gate.lock().await;
     tokio::time::timeout(Duration::from_secs(5),
         parallel_batch::execute_parallel_batch(&app,&id,"third",
@@ -5150,6 +5164,147 @@ async fn switching_waiting_parallel_writes_to_auto_runs_without_approval() {
 }
 
 
+
+#[tokio::test]
+async fn parallel_batch_overflow_queues_reads_despite_legacy_reject() {
+    use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};
+    use tokio::net::UnixListener;
+    let (_root,app)=fixture().await;
+    let mut config=loop_runtime::Config::read(&app.runtime_path).unwrap();
+    config.tools.max_parallel_calls=1;
+    config.tools.parallel_modes.insert("file_list".into(),"reject".into());
+    config.persist(&app.runtime_path).unwrap();
+    let mut visibility=app.store.agent_abilities().await.unwrap();
+    let revision=visibility["revision"].as_u64().unwrap();
+    visibility["tool_execution"]=json!({"file_list":{
+        "mode":"foreground","max_concurrency":1,"on_run_end":"stop"}});
+    visibility["revision"]=json!(revision+1);
+    app.store.save_agent_abilities(&visibility,revision).await.unwrap();
+    let sid=conversation(&app).await;
+    activate_codebase(&app,&sid).await;
+    let id=queued(&app,&sid).await;
+    let mut run=app.run(&id).await.unwrap();
+    run["phase"]=json!("tools");
+    run["loaded_abilities"]=json!(["codebase_admin"]);
+    run["calls"]=json!((0..3).map(|index|json!({
+        "type":"function_call","call_id":format!("queued-read-{index}"),
+        "name":"file_list","arguments":json!({"path":format!("read-{index}")}).to_string()
+    })).collect::<Vec<_>>());
+    for call in run["calls"].as_array().unwrap().clone() {
+        run["input"].as_array_mut().unwrap().push(call);
+    }
+    app.save(&mut run).await.unwrap();
+    running(&app,&id,"overflow").await;
+    let listener=UnixListener::bind(&app.tool_socket).unwrap();
+    let worker=tokio::spawn(async move {
+        let mut paths=std::collections::BTreeSet::new();
+        for _ in 0..3 {
+            let (stream,_)=listener.accept().await.unwrap();
+            let mut reader=BufReader::new(stream);
+            let mut line=String::new();reader.read_line(&mut line).await.unwrap();
+            let request:Value=serde_json::from_str(&line).unwrap();
+            assert!(paths.insert(request["arguments"]["path"].as_str().unwrap().to_owned()));
+            assert!(tokio::time::timeout(Duration::from_millis(100),listener.accept()).await.is_err());
+            let reply=json!({"id":request["id"],"status":"success","output":request["arguments"]["path"]});
+            reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+        }
+        assert_eq!(paths.len(),3);
+    });
+    let policy=current_workflow_policy(&app).await.unwrap();
+    let access=app.store.live_access(app.store.current_user_id(),"shared_default").await.unwrap();
+    let guard=app.gate.lock().await;
+    tokio::time::timeout(Duration::from_secs(5),
+        parallel_batch::execute_parallel_batch(&app,&id,"overflow",&CancellationToken::new(),
+            &policy,&access,app.run(&id).await.unwrap(),guard)).await.unwrap().unwrap();
+    worker.await.unwrap();
+    let after=app.run(&id).await.unwrap();
+    assert!(after["batch"].as_array().unwrap().iter().all(|item|
+        item["state"]=="done" && item["result"]["status"]=="success"));
+    let guard=app.gate.lock().await;
+    parallel_batch::execute_parallel_batch(&app,&id,"overflow",&CancellationToken::new(),
+        &policy,&access,after,guard).await.unwrap();
+    let finished=app.run(&id).await.unwrap();
+    assert_eq!(finished["call_index"],3);
+    for index in 0..3 {
+        assert!(finished["workflow"]["batch_receipts"][format!("queued-read-{index}")].is_object());
+    }
+}
+
+#[tokio::test]
+async fn parallel_batch_read_completes_before_independent_write_approval() {
+    use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};
+    use tokio::net::UnixListener;
+    let (_root,app)=fixture().await;
+    let mut config=loop_runtime::Config::read(&app.runtime_path).unwrap();
+    config.tools.parallel_modes.remove("file_list");
+    config.persist(&app.runtime_path).unwrap();
+    let sid=conversation(&app).await;
+    session_mode_set(State(app.clone()),Path(sid.clone()),Json(SessionModeBody {
+        mode:"write".into(),expected_revision:Some(0),confirm_write:true,
+    })).await.unwrap();
+    activate_codebase(&app,&sid).await;
+    let id=queued(&app,&sid).await;
+    let mut run=app.run(&id).await.unwrap();
+    run["phase"]=json!("tools");
+    run["loaded_abilities"]=json!(["codebase_admin"]);
+    run["calls"]=json!([
+        {"type":"function_call","call_id":"approval-write","name":"file_write",
+            "arguments":json!({"path":"write","content":"value"}).to_string()},
+        {"type":"function_call","call_id":"permitted-read","name":"file_list",
+            "arguments":json!({"path":"read"}).to_string()}
+    ]);
+    for call in run["calls"].as_array().unwrap().clone() {
+        run["input"].as_array_mut().unwrap().push(call);
+    }
+    app.save(&mut run).await.unwrap();
+    running(&app,&id,"independent").await;
+    let listener=UnixListener::bind(&app.tool_socket).unwrap();
+    let worker_app=app.clone();let worker_id=id.clone();let worker_sid=sid.clone();
+    let worker=tokio::spawn(async move {
+        let (stream,_)=listener.accept().await.unwrap();
+        let mut reader=BufReader::new(stream);
+        let mut line=String::new();reader.read_line(&mut line).await.unwrap();
+        let request:Value=serde_json::from_str(&line).unwrap();
+        assert_eq!(request["arguments"]["path"],"read");
+        let executing=worker_app.run(&worker_id).await.unwrap();
+        assert_eq!(executing["status"],"running");
+        assert!(executing["pending"].is_null());
+        assert_eq!(executing["batch"][0]["state"],"waiting");
+        assert_eq!(executing["batch"][1]["state"],"executing");
+        assert!(!worker_app.store.events(&worker_sid,0).await.unwrap().iter()
+            .any(|event|event["kind"]=="approval_required"));
+        let reply=json!({"id":request["id"],"status":"success","output":"read completed"});
+        reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+    });
+    let policy=current_workflow_policy(&app).await.unwrap();
+    let access=app.store.live_access(app.store.current_user_id(),"shared_default").await.unwrap();
+    let guard=app.gate.lock().await;
+    tokio::time::timeout(Duration::from_secs(5),
+        parallel_batch::execute_parallel_batch(&app,&id,"independent",&CancellationToken::new(),
+            &policy,&access,app.run(&id).await.unwrap(),guard)).await.unwrap().unwrap();
+    worker.await.unwrap();
+    let waiting=app.run(&id).await.unwrap();
+    assert_eq!(waiting["status"],"waiting_approval");
+    assert_eq!(waiting["pending"]["call_id"],"approval-write");
+    assert_eq!(waiting["batch"][1]["state"],"done");
+    assert_eq!(waiting["batch"][1]["result"]["output"],"read completed");
+    let approval_id=waiting["pending"]["id"].as_str().unwrap().to_owned();
+    approval(State(app.clone()),Path(approval_id),Json(json!({
+        "client_request_id":"deny-independent-write","decision":"deny"
+    }))).await.unwrap();
+    running(&app,&id,"independent-denied").await;
+    let guard=app.gate.lock().await;
+    parallel_batch::execute_parallel_batch(&app,&id,"independent-denied",&CancellationToken::new(),
+        &policy,&access,app.run(&id).await.unwrap(),guard).await.unwrap();
+    let done=app.run(&id).await.unwrap();
+    assert_eq!(done["phase"],"model");
+    assert_eq!(done["call_index"],2);
+    assert!(done["workflow"]["batch_receipts"]["approval-write"].is_object());
+    assert!(done["workflow"]["batch_receipts"]["permitted-read"].is_object());
+    assert_eq!(app.store.events(&sid,0).await.unwrap().iter()
+        .filter(|event|event["kind"]=="approval_required").count(),1);
+}
+
 #[tokio::test]
 async fn web_access_api_support_auth_csrf_revision_and_persistence() {
     let (root, app)=fixture().await;
@@ -5202,10 +5357,10 @@ async fn web_access_native_dispatch_needs_no_worker_and_cancels() {
     let (_root,app)=fixture().await;let sid=conversation(&app).await;
     let args=json!({"action":"distance","lat":0,"lon":0,"lat2":0,"lon2":1});
     assert!(!app.tool_socket.exists());
-    let result=tools::call(app.clone(),sid.clone(),uuid(),"fixture-generation".into(),"maps_geocode".into(),args.clone(),uuid(),1,CancellationToken::new()).await.unwrap();
+    let result=tools::call_raw(app.clone(),sid.clone(),uuid(),"fixture-generation".into(),"maps_geocode".into(),args.clone(),uuid(),1,CancellationToken::new()).await.unwrap();
     assert_eq!(result["status"],"success");assert_eq!(result["output"]["km"],111.195);
     let cancel=CancellationToken::new();cancel.cancel();
-    assert!(tools::call(app,sid,uuid(),"fixture-generation".into(),"maps_geocode".into(),args,uuid(),1,cancel).await.is_err());
+    assert!(tools::call_raw(app,sid,uuid(),"fixture-generation".into(),"maps_geocode".into(),args,uuid(),1,cancel).await.is_err());
     for name in ["web_search","get_weather","maps_geocode"] {assert!(tools::is_read(name));}
 }
 
@@ -5636,4 +5791,689 @@ async fn run_logs_route_is_admin_authenticated_and_run_scoped() {
     let page:Value=serde_json::from_slice(&axum::body::to_bytes(next.into_body(),65536)
         .await.unwrap()).unwrap();
     assert!(page["events"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn wake_reads_require_fresh_approval_in_auto_serial_and_batch() {
+    for count in [1, 2] {
+        let (_root, app) = fixture().await;
+        let sid = conversation(&app).await;
+        app.store.put(&key("session_mode", &sid), &json!({
+            "mode":"write","execution_mode":"auto","revision":1
+        })).await.unwrap();
+        activate_codebase(&app, &sid).await;
+        let mut policy = policy_default();
+        policy["rules"]["file_read"] = json!("require_approval");
+        app.store.put("policy", &policy).await.unwrap();
+        let id = queued(&app, &sid).await;
+        let mut run = app.run(&id).await.unwrap();
+        run["post_run_followup"] = json!(true);
+        run["phase"] = json!("tools");
+        run["loaded_abilities"] = json!(["codebase_admin"]);
+        let calls = (0..count).map(|index| json!({
+            "type":"function_call","call_id":format!("wake-read-{index}"),
+            "name":"file_read","arguments":json!({"path":"fixture"}).to_string()
+        })).collect::<Vec<_>>();
+        for call in &calls {
+            run["input"].as_array_mut().unwrap().push(call.clone());
+        }
+        run["calls"] = json!(calls);
+        app.save(&mut run).await.unwrap();
+        running(&app, &id, "wake-ask").await;
+        tokio::time::timeout(Duration::from_secs(5), execute_run(
+            app.clone(), id.clone(), "wake-ask".into(), CancellationToken::new()
+        )).await.unwrap().unwrap();
+        let waiting = app.run(&id).await.unwrap();
+        assert_eq!(waiting["status"], "waiting_approval");
+        assert_eq!(waiting["pending"]["call_id"], "wake-read-0");
+        assert_ne!(waiting["pending"]["human_approved"], true);
+        assert_eq!(waiting["post_run_followup"], true);
+        assert_eq!(session_mode(&app, &sid).await.unwrap()["execution_mode"], "auto");
+        if count == 2 {
+            assert!(waiting["batch"].as_array().unwrap().iter()
+                .all(|item| item["state"] == "waiting"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn background_approved_reads_pin_authority_and_claim_identity() {
+    for batched in [false, true] {
+        let (_root, app) = fixture().await;
+        let sid = conversation(&app).await;
+        activate_codebase(&app, &sid).await;
+        let mut policy = policy_default();
+        policy["rules"]["file_read"] = json!("require_approval");
+        app.store.put("policy", &policy).await.unwrap();
+        let rid = queued(&app, &sid).await;
+        running(&app, &rid, "background-origin").await;
+        let mut run = app.run(&rid).await.unwrap();
+        run["loaded_abilities"] = json!(["codebase_admin"]);
+        let (policy, mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
+        let access = app.store.live_access(app.store.current_user_id(), "shared_default").await.unwrap();
+        let args = json!({"path":"fixture"});
+        let mut pending = json!({
+            "id":"background-pending","name":"file_read","call_id":"background-call",
+            "arguments":args,"digest":digest(&args),"policy_version":policy["version"],
+            "mode_revision":mode_revision,"visibility_revision":visibility["revision"],
+            "ability_state_revision":state["revision"],"access_revision":access.revision,
+            "state":"executing","decision":"consumed","human_approved":false
+        });
+        if batched {
+            run["pending"] = Value::Null;
+            run["batch"] = json!([{"state":"executing","pending":pending}]);
+        } else {run["pending"] = pending.clone();}
+        app.save(&mut run).await.unwrap();
+        let settings = tool_execution::resolve(&visibility, "file_read").unwrap();
+        let version = policy["version"].as_u64().unwrap_or(0);
+        assert!(background_tasks::submit(&app, &sid, &rid, "background-origin", "file_read",
+            &args, "background-pending", version, &settings).await.is_err());
+        pending["human_approved"] = json!(true);
+        if batched {run["batch"][0]["pending"] = pending;} else {run["pending"] = pending;}
+        app.save(&mut run).await.unwrap();
+        let handle = background_tasks::submit(&app, &sid, &rid, "background-origin", "file_read",
+            &args, "background-pending", version, &settings).await.unwrap();
+        assert_eq!(background_tasks::submit(&app, &sid, &rid, "background-origin", "file_read",
+            &args, "background-pending", version, &settings).await.unwrap(), handle);
+        assert_eq!(app.store.background_scan(Some(&sid)).await.unwrap().len(), 1);
+        let task_id = handle["task_id"].as_str().unwrap();
+        let mut task = app.store.background_get(task_id).await.unwrap().unwrap();
+        assert!(background_tasks::permitted(&app, &task).await.unwrap());
+        for field in ["policy_version", "mode_revision", "visibility_revision", "ability_state_revision", "access_revision"] {
+            let mut stale = task.clone();
+            stale["authorization"][field] = json!("stale");
+            assert!(!background_tasks::permitted(&app, &stale).await.unwrap());
+        }
+        let mut unapproved = task.clone();
+        unapproved["authorization"]["human_approved"] = json!(false);
+        assert!(!background_tasks::permitted(&app, &unapproved).await.unwrap());
+        task["status"] = json!("running");
+        task["claim_id"] = json!("claim-one");
+        task["lease_until"] = json!(now()+60);
+        assert!(app.store.background_cas(&task, Some(0)).await.unwrap());
+        assert_eq!(background_tasks::dispatch_authorized(&app, &sid, &rid, "claim-one", task_id,
+            "file_read", &args).await.unwrap(), Some(true));
+        task["claim_id"] = json!("claim-two");
+        assert!(app.store.background_cas(&task, Some(1)).await.unwrap());
+        assert_eq!(background_tasks::dispatch_authorized(&app, &sid, &rid, "claim-one", task_id,
+            "file_read", &args).await.unwrap(), Some(false));
+        assert_eq!(background_tasks::dispatch_authorized(&app, &sid, &rid, "claim-two", task_id,
+            "file_read", &args).await.unwrap(), Some(true));
+        let mut recovered = app.run(&rid).await.unwrap();
+        recovered["generation"] = json!("recovered-source-generation");
+        recovered["loaded_abilities"] = json!(["codebase_admin", "later-activation"]);
+        app.store.put(&key("run", &rid), &recovered).await.unwrap();
+        assert!(background_tasks::permitted(&app, &task).await.unwrap());
+        for source_status in ["running", "waiting_approval", "waiting_external", "queued"] {
+            recovered["status"] = json!(source_status);
+            app.store.put(&key("run", &rid), &recovered).await.unwrap();
+            assert_eq!(background_tasks::dispatch_authorized(&app, &sid, &rid, "claim-two", task_id,
+                "file_read", &args).await.unwrap(), Some(true));
+        }
+        for source_status in ["paused", "stopped", "cancelled", "failed"] {
+            recovered["status"] = json!(source_status);
+            app.store.put(&key("run", &rid), &recovered).await.unwrap();
+            assert!(!background_tasks::permitted(&app, &task).await.unwrap());
+            assert_eq!(background_tasks::dispatch_authorized(&app, &sid, &rid, "claim-two", task_id,
+                "file_read", &args).await.unwrap(), Some(false));
+        }
+        recovered["status"] = json!("completed");
+        app.store.put(&key("run", &rid), &recovered).await.unwrap();
+        assert_eq!(background_tasks::dispatch_authorized(&app, &sid, &rid, "claim-two", task_id,
+            "file_read", &args).await.unwrap(), Some(false));
+        recovered["status"] = json!("running");
+        app.store.put(&key("run", &rid), &recovered).await.unwrap();
+        let mut revoked = policy.clone();
+        revoked["version"] = json!(version+1);
+        revoked["rules"]["file_read"] = json!("deny");
+        app.store.put("policy", &revoked).await.unwrap();
+        assert!(!background_tasks::permitted(&app, &task).await.unwrap());
+    }
+}
+
+#[tokio::test]
+async fn foreground_queue_revocation_denies_before_worker_dispatch() {
+    let (_root, app) = fixture().await;
+    let mut visibility = app.store.agent_abilities().await.unwrap();
+    let revision = visibility["revision"].as_u64().unwrap();
+    visibility["tool_execution"] = json!({"file_list":{
+        "mode":"foreground","max_concurrency":1,"on_run_end":"stop"
+    }});
+    visibility["revision"] = json!(revision+1);
+    app.store.save_agent_abilities(&visibility, revision).await.unwrap();
+    let sid = conversation(&app).await;
+    activate_codebase(&app, &sid).await;
+    let rid = queued(&app, &sid).await;
+    running(&app, &rid, "queued-revocation").await;
+    let mut run = app.run(&rid).await.unwrap();
+    run["loaded_abilities"] = json!(["codebase_admin"]);
+    let args = json!({"path":"fixture"});
+    let (policy, mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
+    let access = app.store.live_access(app.store.current_user_id(), "shared_default").await.unwrap();
+    run["pending"] = json!({
+        "id":"queued-revocation-pending","name":"file_list","call_id":"queued-revocation-call",
+        "arguments":args,"digest":digest(&args),"policy_version":policy["version"],
+        "mode_revision":mode_revision,"visibility_revision":visibility["revision"],
+        "ability_state_revision":state["revision"],"access_revision":access.revision,
+        "state":"executing","decision":"consumed","human_approved":false
+    });
+    app.save(&mut run).await.unwrap();
+    let settings = tool_execution::resolve(&visibility, "file_list").unwrap();
+    let cancel = CancellationToken::new();
+    let blocker = tokio::time::timeout(Duration::from_secs(5), tool_execution::acquire(
+        app.store.current_user_id(), "shared_default", "file_list", &settings, &cancel
+    )).await.unwrap().unwrap();
+    let listener = tokio::net::UnixListener::bind(&app.tool_socket).unwrap();
+    let operation = tools::call(app.clone(), sid, rid, "queued-revocation".into(),
+        "file_list".into(), args, "queued-revocation-pending".into(),
+        policy["version"].as_u64().unwrap_or(0), cancel);
+    tokio::pin!(operation);
+    assert!(tokio::time::timeout(Duration::from_millis(100), &mut operation).await.is_err());
+    let mut revoked = policy.clone();
+    revoked["version"] = json!(policy["version"].as_u64().unwrap_or(0)+1);
+    revoked["rules"]["file_list"] = json!("deny");
+    app.store.put("policy", &revoked).await.unwrap();
+    drop(blocker);
+    let result = tokio::time::timeout(Duration::from_secs(5), &mut operation)
+        .await.unwrap().unwrap();
+    assert_eq!(result["status"], "denied");
+    assert!(tokio::time::timeout(Duration::from_millis(50), listener.accept()).await.is_err());
+}
+
+#[tokio::test]
+async fn background_auto_reads_reauthorize_live_grants_without_inheriting_approval() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    activate_codebase(&app, &sid).await;
+    let rid = queued(&app, &sid).await;
+    running(&app, &rid, "auto-background").await;
+    let mut run = app.run(&rid).await.unwrap();
+    run["loaded_abilities"] = json!(["codebase_admin"]);
+    let (policy, mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
+    let access = app.store.live_access(app.store.current_user_id(), "shared_default").await.unwrap();
+    let args = json!({"path":"fixture"});
+    run["pending"] = json!({
+        "id":"auto-background-pending","name":"file_read","call_id":"auto-background-call",
+        "arguments":args,"digest":digest(&args),"policy_version":policy["version"],
+        "mode_revision":mode_revision,"visibility_revision":visibility["revision"],
+        "ability_state_revision":state["revision"],"access_revision":access.revision,
+        "state":"executing","decision":"consumed","human_approved":false
+    });
+    app.save(&mut run).await.unwrap();
+    let settings = tool_execution::resolve(&visibility, "file_read").unwrap();
+    let handle = background_tasks::submit(&app, &sid, &rid, "auto-background", "file_read",
+        &args, "auto-background-pending", policy["version"].as_u64().unwrap_or(0), &settings)
+        .await.unwrap();
+    let task = app.store.background_get(handle["task_id"].as_str().unwrap()).await.unwrap().unwrap();
+    let mut changed_state = state.clone();
+    changed_state["revision"] = json!(state["revision"].as_u64().unwrap()+1);
+    app.store.put(&key("session_ability_state", &sid), &changed_state).await.unwrap();
+    let mut current_policy = policy.clone();
+    current_policy["version"] = json!(policy["version"].as_u64().unwrap_or(0)+1);
+    current_policy["rules"]["file_read"] = json!("allow");
+    app.store.put("policy", &current_policy).await.unwrap();
+    assert!(background_tasks::permitted(&app, &task).await.unwrap());
+    let mut approved = task.clone();
+    approved["authorization"]["human_approved"] = json!(true);
+    assert!(!background_tasks::permitted(&app, &approved).await.unwrap());
+    let mut changed_args = task.clone();
+    changed_args["arguments"]["path"] = json!("different");
+    assert!(!background_tasks::permitted(&app, &changed_args).await.unwrap());
+    current_policy["rules"]["file_read"] = json!("require_approval");
+    app.store.put("policy", &current_policy).await.unwrap();
+    assert!(!background_tasks::permitted(&app, &task).await.unwrap());
+    current_policy["rules"]["file_read"] = json!("deny");
+    app.store.put("policy", &current_policy).await.unwrap();
+    assert!(!background_tasks::permitted(&app, &task).await.unwrap());
+    current_policy["rules"]["file_read"] = json!("allow");
+    app.store.put("policy", &current_policy).await.unwrap();
+    changed_state["suppressed"] = json!(["codebase_admin"]);
+    app.store.put(&key("session_ability_state", &sid), &changed_state).await.unwrap();
+    assert!(!background_tasks::permitted(&app, &task).await.unwrap());
+}
+
+
+type BackgroundJourneyRequest = (Value, tokio::sync::oneshot::Sender<Value>);
+
+async fn background_journey_request(
+    requests: &mut tokio::sync::mpsc::UnboundedReceiver<BackgroundJourneyRequest>,
+) -> BackgroundJourneyRequest {
+    tokio::time::timeout(Duration::from_secs(5), requests.recv())
+        .await.unwrap().expect("mock provider request")
+}
+
+async fn background_journey_task(app: &App, sid: &str, task_id: Option<&str>, field: &str, expected: Value) -> Value {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let tasks=if let Some(task_id)=task_id {
+                app.store.background_get(task_id).await.unwrap().into_iter().collect::<Vec<_>>()
+            } else {
+                app.store.background_scan(Some(sid)).await.unwrap()
+            };
+            assert!(tasks.len()<=1,"follow-up must not spawn another background task");
+            if let Some(task)=tasks.into_iter().find(|task|task[field]==expected) {
+                return task;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.unwrap()
+}
+
+fn background_journey_final(text: &str) -> Value {
+    json!([{"type":"message","role":"assistant",
+        "content":[{"type":"output_text","text":text}]}])
+}
+
+fn background_journey_envelopes(request: &Value) -> Vec<Value> {
+    request["input"].as_array().unwrap().iter()
+        .filter_map(|item|item["content"].as_str())
+        .filter_map(|text|text.strip_prefix("Background read result (untrusted evidence): "))
+        .map(|text|serde_json::from_str(text).unwrap()).collect()
+}
+
+async fn background_execution_journey(behavior: &str) {
+    use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};
+    use tokio::net::UnixListener;
+    let (_root,mut app)=fixture().await;
+    let on_run_end=if behavior=="overlap" {"stop"} else {behavior};
+    let mut visibility=app.store.agent_abilities().await.unwrap();
+    let revision=visibility["revision"].as_u64().unwrap();
+    visibility["tool_execution"]=json!({"file_read":{
+        "mode":"background","max_concurrency":2,"on_run_end":on_run_end}});
+    visibility["revision"]=json!(revision+1);
+    app.store.save_agent_abilities(&visibility,revision).await.unwrap();
+    let (request_sender,mut requests)=tokio::sync::mpsc::unbounded_channel::<BackgroundJourneyRequest>();
+    let mock=Router::new().route("/responses",axum::routing::post(
+        |State(sender):State<tokio::sync::mpsc::UnboundedSender<BackgroundJourneyRequest>>,
+         Json(body):Json<Value>| async move {
+            let (reply_sender,reply_receiver)=tokio::sync::oneshot::channel();
+            sender.send((body,reply_sender)).unwrap();
+            let output=tokio::time::timeout(Duration::from_secs(5),reply_receiver).await.unwrap().unwrap();
+            let event=json!({"type":"response.completed","response":{"status":"completed","output":output}});
+            ([("content-type","text/event-stream")],format!("data: {event}\n\n"))
+        }
+    )).with_state(request_sender);
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address=listener.local_addr().unwrap();
+    let server=tokio::spawn(async move {axum::serve(listener,mock).await.unwrap();});
+    app.provider=provider::Provider::for_test(format!("http://{address}/responses"));
+    let sid=conversation(&app).await;
+    activate_codebase(&app,&sid).await;
+    let rid=queued(&app,&sid).await;
+    let mut run=app.run(&rid).await.unwrap();
+    run["loaded_abilities"]=json!(["codebase_admin"]);
+    app.save(&mut run).await.unwrap();
+    running(&app,&rid,"background-journey").await;
+    let listener=UnixListener::bind(&app.tool_socket).unwrap();
+    let (arrived_sender,arrived_receiver)=tokio::sync::oneshot::channel();
+    let (release_sender,release_receiver)=tokio::sync::oneshot::channel::<()>();
+    let wake=behavior=="wake";
+    let worker=tokio::spawn(async move {
+        tokio::time::timeout(Duration::from_secs(5),async {
+            let (stream,_)=listener.accept().await.unwrap();
+            let mut reader=BufReader::new(stream);
+            let mut line=String::new();reader.read_line(&mut line).await.unwrap();
+            let request:Value=serde_json::from_str(&line).unwrap();
+            assert_eq!(request["arguments"]["path"],"background-evidence");
+            assert!(request["arguments"].get("_execution_mode").is_none());
+            arrived_sender.send(()).unwrap();
+            let mut extra=String::new();
+            tokio::select! {
+                released=release_receiver=>{released.unwrap();},
+                closed=reader.read_line(&mut extra)=>{
+                    assert_eq!(closed.unwrap(),0,"stop must close the outstanding worker connection");
+                    return (true,1);
+                },
+            }
+            let reply=json!({"id":request["id"],"status":"success","output":"BACKGROUND_JOURNEY_EVIDENCE"});
+            reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+            drop(reader);
+            if wake {
+                let (stream,_)=listener.accept().await.unwrap();
+                let mut reader=BufReader::new(stream);
+                let mut line=String::new();reader.read_line(&mut line).await.unwrap();
+                let request:Value=serde_json::from_str(&line).unwrap();
+                assert_eq!(request["arguments"]["path"],"followup-read");
+                assert!(request["arguments"].get("_execution_mode").is_none());
+                let reply=json!({"id":request["id"],"status":"success","output":"FOLLOWUP_READ_EVIDENCE"});
+                reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+                return (false,2);
+            }
+            (false,1)
+        }).await.unwrap()
+    });
+    let service=tokio::spawn(background_tasks::service(app.clone()));
+    let loop_app=app.clone();let loop_rid=rid.clone();
+    let origin=tokio::spawn(async move {
+        execute_run(loop_app,loop_rid,"background-journey".into(),CancellationToken::new()).await.unwrap();
+    });
+    let (_,reply)=background_journey_request(&mut requests).await;
+    reply.send(json!([{"type":"function_call","call_id":"journey-background","name":"file_read",
+        "arguments":json!({"path":"background-evidence"}).to_string()}])).unwrap();
+    let (advanced,reply)=background_journey_request(&mut requests).await;
+    tokio::time::timeout(Duration::from_secs(5),arrived_receiver).await.unwrap().unwrap();
+    let task=background_journey_task(&app,&sid,None,"status",json!("running")).await;
+    let task_id=task["id"].as_str().unwrap().to_owned();
+    assert!(background_journey_envelopes(&advanced).is_empty());
+    let handles=advanced["input"].as_array().unwrap().iter()
+        .filter(|item|item["type"]=="function_call_output" && item["call_id"]=="journey-background")
+        .map(|item|serde_json::from_str::<Value>(item["output"].as_str().unwrap()).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(handles.len(),1);
+    assert_eq!(handles[0]["status"],"task_start");
+    assert_eq!(handles[0]["task_id"],task_id);
+    if behavior=="overlap" {
+        reply.send(json!([{"type":"function_call","call_id":"while-background","name":"get_time",
+            "arguments":"{}"}])).unwrap();
+        let (foreground,reply)=background_journey_request(&mut requests).await;
+        assert_eq!(app.store.background_get(&task_id).await.unwrap().unwrap()["status"],"running");
+        assert!(background_journey_envelopes(&foreground).is_empty());
+        assert!(foreground["input"].as_array().unwrap().iter().any(|item|
+            item["type"]=="function_call_output" && item["call_id"]=="while-background"));
+        release_sender.send(()).unwrap();
+        background_journey_task(&app,&sid,Some(&task_id),"status",json!("completed")).await;
+        reply.send(json!([{"type":"function_call","call_id":"next-boundary","name":"get_time",
+            "arguments":"{}"}])).unwrap();
+        let (boundary,reply)=background_journey_request(&mut requests).await;
+        let envelopes=background_journey_envelopes(&boundary);
+        assert_eq!(envelopes.len(),1);
+        assert_eq!(envelopes[0]["background_task_id"],task_id);
+        assert_eq!(envelopes[0]["source_kind"],"untrusted_tool_result");
+        assert_eq!(envelopes[0]["post_run_result"],false);
+        assert_eq!(envelopes[0]["untrusted_tool_result"]["output"],"BACKGROUND_JOURNEY_EVIDENCE");
+        reply.send(background_journey_final("Overlap completed.")).unwrap();
+        tokio::time::timeout(Duration::from_secs(5),origin).await.unwrap().unwrap();
+        assert_eq!(worker.await.unwrap(),(false,1));
+        let mut finished=app.run(&rid).await.unwrap();
+        assert_eq!(finished["status"],"completed");
+        assert!(!background_tasks::collect(&app,&mut finished).await.unwrap());
+        assert_eq!(finished["background_delivered"],json!([task_id]));
+    } else {
+        reply.send(background_journey_final("Origin completed.")).unwrap();
+        tokio::time::timeout(Duration::from_secs(5),origin).await.unwrap().unwrap();
+        assert_eq!(app.run(&rid).await.unwrap()["status"],"completed");
+        if behavior=="stop" {
+            background_journey_task(&app,&sid,Some(&task_id),"status",json!("cancelled")).await;
+            assert_eq!(tokio::time::timeout(Duration::from_secs(5),worker).await.unwrap().unwrap(),(true,1));
+            drop(release_sender);
+            let task=app.store.background_get(&task_id).await.unwrap().unwrap();
+            assert!(task["wake_run_id"].is_null());
+            assert!(task["delivery_run_id"].is_null());
+            let mut finished=app.run(&rid).await.unwrap();
+            assert!(!background_tasks::collect(&app,&mut finished).await.unwrap());
+        } else {
+            assert_eq!(app.store.background_get(&task_id).await.unwrap().unwrap()["status"],"running");
+            release_sender.send(()).unwrap();
+            background_journey_task(&app,&sid,Some(&task_id),"status",json!("completed")).await;
+            if behavior=="silent" {
+                let task=background_journey_task(&app,&sid,Some(&task_id),"notified",json!(true)).await;
+                assert!(task["wake_run_id"].is_null());
+                assert!(task["delivery_run_id"].is_null());
+                assert!(requests.try_recv().is_err(),"silent completion must not call the provider");
+                assert_eq!(worker.await.unwrap(),(false,1));
+                let next=queued(&app,&sid).await;
+                running(&app,&next,"silent-next-turn").await;
+                let next_app=app.clone();let next_id=next.clone();
+                let next_run=tokio::spawn(async move {
+                    execute_run(next_app,next_id,"silent-next-turn".into(),CancellationToken::new()).await.unwrap();
+                });
+                let (request,reply)=background_journey_request(&mut requests).await;
+                let envelopes=background_journey_envelopes(&request);
+                assert_eq!(envelopes.len(),1);
+                assert_eq!(envelopes[0]["background_task_id"],task_id);
+                assert_eq!(envelopes[0]["origin_run_id"],rid);
+                assert_eq!(envelopes[0]["post_run_result"],true);
+                assert_eq!(envelopes[0]["untrusted_tool_result"]["output"],"BACKGROUND_JOURNEY_EVIDENCE");
+                reply.send(background_journey_final("Silent result acknowledged.")).unwrap();
+                tokio::time::timeout(Duration::from_secs(5),next_run).await.unwrap().unwrap();
+                let mut next_finished=app.run(&next).await.unwrap();
+                assert_eq!(next_finished["status"],"completed");
+                assert!(!background_tasks::collect(&app,&mut next_finished).await.unwrap());
+            } else {
+                let task=tokio::time::timeout(Duration::from_secs(5),async {
+                    loop {
+                        let task=app.store.background_get(&task_id).await.unwrap().unwrap();
+                        if task["wake_run_id"].is_string() {break task;}
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }).await.unwrap();
+                let follow_id=task["wake_run_id"].as_str().unwrap().to_owned();
+                let follow=app.run(&follow_id).await.unwrap();
+                assert_eq!(follow["post_run_followup"],true);
+                assert!(follow["pending"].is_null());
+                assert_eq!(follow["source_background_task"],task_id);
+                let evidence:Value=serde_json::from_str(follow["input"][0]["content"].as_str().unwrap()).unwrap();
+                assert_eq!(evidence["source_kind"],"untrusted_delayed_tool_result");
+                assert_eq!(evidence["result"]["output"],"BACKGROUND_JOURNEY_EVIDENCE");
+                running(&app,&follow_id,"wake-followup").await;
+                let follow_app=app.clone();let follow_run_id=follow_id.clone();
+                let follow_run=tokio::spawn(async move {
+                    execute_run(follow_app,follow_run_id,"wake-followup".into(),CancellationToken::new()).await.unwrap();
+                });
+                let (_,reply)=background_journey_request(&mut requests).await;
+                reply.send(json!([
+                    {"type":"function_call","call_id":"forbidden-followup-write","name":"file_write",
+                        "arguments":json!({"path":"forbidden","content":"no"}).to_string()},
+                    {"type":"function_call","call_id":"foreground-followup-read","name":"file_read",
+                        "arguments":json!({"path":"followup-read","_execution_mode":"background"}).to_string()}
+                ])).unwrap();
+                let (request,reply)=background_journey_request(&mut requests).await;
+                for (call_id,expected) in [("forbidden-followup-write","denied"),("foreground-followup-read","success")] {
+                    let output=request["input"].as_array().unwrap().iter().find(|item|
+                        item["type"]=="function_call_output" && item["call_id"]==call_id).unwrap();
+                    let result:Value=serde_json::from_str(output["output"].as_str().unwrap()).unwrap();
+                    assert_eq!(result["status"],expected);
+                }
+                let source_task=app.store.background_get(&task_id).await.unwrap().unwrap();
+                assert_eq!(source_task["status"],"completed");
+                assert_eq!(source_task["delivery_run_id"],follow_id);
+                assert_eq!(source_task["wake_run_id"],follow_id);
+                let task_count:i64=sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM background_task_index WHERE session_id=?")
+                    .bind(&sid).fetch_one(&app.store.pool).await.unwrap();
+                assert_eq!(task_count,1,"follow-up must not create any additional task");
+                reply.send(background_journey_final("Wake result acknowledged.")).unwrap();
+                tokio::time::timeout(Duration::from_secs(5),follow_run).await.unwrap().unwrap();
+                assert_eq!(worker.await.unwrap(),(false,2));
+                assert_eq!(app.run(&follow_id).await.unwrap()["status"],"completed");
+                let task=app.store.background_get(&task_id).await.unwrap().unwrap();
+                background_followup::process(&app,&task).await.unwrap();
+                assert_eq!(app.store.background_get(&task_id).await.unwrap().unwrap()["wake_run_id"],follow_id);
+            }
+            assert_eq!(app.store.chat_events(&sid,0).await.unwrap().iter()
+                .filter(|event|event["id"]==format!("working:{rid}:background:{task_id}")).count(),1);
+        }
+        assert_eq!(app.run(&rid).await.unwrap()["status"],"completed");
+    }
+    let expected_replies=match behavior {
+        "overlap"=>vec!["Overlap completed."],
+        "silent"=>vec!["Origin completed.","Silent result acknowledged."],
+        "wake"=>vec!["Origin completed.","Wake result acknowledged."],
+        _=>vec!["Origin completed."],
+    };
+    let history=app.store.context(&sid).await.unwrap();
+    for expected in expected_replies {
+        assert_eq!(history.iter().filter(|item|item["role"]=="assistant"
+            && item.to_string().contains(expected)).count(),1,"one durable final reply");
+    }
+    assert!(requests.try_recv().is_err(),"unexpected extra provider request");
+    app.stop.cancel();
+    tokio::time::timeout(Duration::from_secs(5),service).await.unwrap().unwrap();
+    server.abort();
+    let _=server.await;
+}
+
+#[tokio::test]
+async fn background_read_overlaps_model_and_delivers_at_next_boundary() {
+    background_execution_journey("overlap").await;
+}
+
+#[tokio::test]
+async fn background_stop_cancels_outstanding_worker_after_final_reply() {
+    background_execution_journey("stop").await;
+}
+
+#[tokio::test]
+async fn background_silent_continues_then_delivers_on_next_user_turn() {
+    background_execution_journey("silent").await;
+}
+
+#[tokio::test]
+async fn background_wake_runs_one_restricted_followup() {
+    background_execution_journey("wake").await;
+}
+
+#[tokio::test]
+async fn background_reclaimed_submission_preserves_original_task_and_receipt() {
+    for batched in [false, true] {
+        let (_root, app) = fixture().await;
+        let sid = conversation(&app).await;
+        activate_codebase(&app, &sid).await;
+        let rid = queued(&app, &sid).await;
+        running(&app, &rid, "first-background-generation").await;
+        let mut run = app.run(&rid).await.unwrap();
+        run["loaded_abilities"] = json!(["codebase_admin"]);
+        let args = json!({"path":"fixture"});
+        let (policy, mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
+        let access = app.store.live_access(app.store.current_user_id(), "shared_default").await.unwrap();
+        let pending = json!({
+            "id":"first-pending","name":"file_read","call_id":"stable-background-call",
+            "arguments":args,"digest":digest(&args),"policy_version":policy["version"],
+            "mode_revision":mode_revision,"visibility_revision":visibility["revision"],
+            "ability_state_revision":state["revision"],"access_revision":access.revision,
+            "state":"executing","decision":"consumed","human_approved":false
+        });
+        if batched {
+            run["pending"] = Value::Null;
+            run["batch"] = json!([{"state":"executing","pending":pending}]);
+        } else {run["pending"] = pending;}
+        app.save(&mut run).await.unwrap();
+        let settings = tool_execution::resolve(&visibility, "file_read").unwrap();
+        let handle = background_tasks::submit(&app, &sid, &rid, "first-background-generation",
+            "file_read", &args, "first-pending", policy["version"].as_u64().unwrap_or(0), &settings)
+            .await.unwrap();
+        let task_id = handle["task_id"].as_str().unwrap();
+        let original = app.store.background_get(task_id).await.unwrap().unwrap();
+        let mut current_policy = policy.clone();
+        current_policy["version"] = json!(policy["version"].as_u64().unwrap_or(0)+1);
+        current_policy["rules"]["file_read"] = json!("require_approval");
+        app.store.put("policy", &current_policy).await.unwrap();
+        let mut visibility = app.store.agent_abilities().await.unwrap();
+        let revision = visibility["revision"].as_u64().unwrap();
+        visibility["revision"] = json!(revision+1);
+        visibility["tool_execution"]["file_read"] = json!({
+            "mode":"model","max_concurrency":1,"on_run_end":"wake"
+        });
+        app.store.save_agent_abilities(&visibility, revision).await.unwrap();
+        let (policy, mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
+        let access = app.store.live_access(app.store.current_user_id(), "shared_default").await.unwrap();
+        run["generation"] = json!("reclaimed-background-generation");
+        run["loaded_abilities"] = json!(["codebase_admin", "later-activation"]);
+        let mut pending = json!({
+            "id":"reclaimed-pending","name":"file_read","call_id":"stable-background-call",
+            "arguments":args,"digest":digest(&args),"policy_version":policy["version"],
+            "mode_revision":mode_revision,"visibility_revision":visibility["revision"],
+            "ability_state_revision":state["revision"],"access_revision":access.revision,
+            "state":"executing","decision":"consumed","human_approved":true
+        });
+        if batched {run["batch"][0]["pending"] = pending.clone();}
+        else {run["pending"] = pending.clone();}
+        app.store.put(&key("run", &rid), &run).await.unwrap();
+        let settings = tool_execution::resolve(&visibility, "file_read").unwrap();
+        let version = policy["version"].as_u64().unwrap_or(0);
+        assert_eq!(background_tasks::submit(&app, &sid, &rid, "reclaimed-background-generation",
+            "file_read", &args, "reclaimed-pending", version, &settings).await.unwrap(), handle);
+        assert_eq!(app.store.background_get(task_id).await.unwrap().unwrap(), original);
+        assert!(!background_tasks::permitted(&app, &original).await.unwrap());
+        let mut completed = original.clone();
+        completed["status"] = json!("completed");
+        completed["result"] = json!({"status":"success","output":"original read result"});
+        assert!(app.store.background_cas(&completed, Some(0)).await.unwrap());
+        let completed = app.store.background_get(task_id).await.unwrap().unwrap();
+        assert_eq!(background_tasks::submit(&app, &sid, &rid, "reclaimed-background-generation",
+            "file_read", &args, "reclaimed-pending", version, &settings).await.unwrap(), handle);
+        assert_eq!(app.store.background_get(task_id).await.unwrap().unwrap(), completed);
+        assert_eq!(app.store.background_scan(Some(&sid)).await.unwrap().len(), 1);
+        let different_args = json!({"path":"different"});
+        pending["arguments"] = different_args.clone();
+        pending["digest"] = json!(digest(&different_args));
+        if batched {run["batch"][0]["pending"] = pending;} else {run["pending"] = pending;}
+        app.store.put(&key("run", &rid), &run).await.unwrap();
+        assert!(background_tasks::submit(&app, &sid, &rid, "reclaimed-background-generation",
+            "file_read", &different_args, "reclaimed-pending", version, &settings).await.is_err());
+        if batched {
+            run["batch"][0]["pending"]["arguments"] = args.clone();
+            run["batch"][0]["pending"]["digest"] = json!(digest(&args));
+        } else {
+            run["pending"]["arguments"] = args.clone();
+            run["pending"]["digest"] = json!(digest(&args));
+        }
+        app.store.put(&key("run", &rid), &run).await.unwrap();
+        current_policy["rules"]["file_read"] = json!("deny");
+        app.store.put("policy", &current_policy).await.unwrap();
+        assert!(background_tasks::submit(&app, &sid, &rid, "reclaimed-background-generation",
+            "file_read", &args, "reclaimed-pending", version, &settings).await.is_err());
+        assert_eq!(app.store.background_get(task_id).await.unwrap().unwrap(), completed);
+    }
+}
+
+#[tokio::test]
+async fn normal_dispatch_reloads_base_each_turn_and_retains_pinned_slots() {
+    use axum::routing::post;
+    let path = std::path::Path::new("config/prompts.json");
+    struct Restore(Vec<u8>);
+    impl Drop for Restore {
+        fn drop(&mut self) { std::fs::write("config/prompts.json", &self.0).unwrap(); }
+    }
+    let _restore = Restore(std::fs::read(path).unwrap());
+    let prompts = |marker: &str| json!({
+        "base_instructions":marker, "closing_reporting":"CLOSING", "jev_guidance":"JEV"
+    });
+    std::fs::write(path, prompts("BASE_FIRST").to_string()).unwrap();
+    let (_root, mut app) = fixture().await;
+    let slot = app.store.upsert_prompt_slot("coding", "PINNED_SLOT", None, None, None, 0).await.unwrap();
+    let sid = conversation(&app).await;
+    let rid = queued(&app, &sid).await;
+    app.store.upsert_prompt_slot("coding", "LATER_SLOT", None, None, None,
+        slot["revision"].as_i64().unwrap()).await.unwrap();
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = requests.clone();
+    let mock = Router::new().route("/responses", post(move |Json(body): Json<Value>| {
+        let captured = captured.clone();
+        async move {
+            let mut captured = captured.lock().await;
+            captured.push(body);
+            let output = if captured.len() == 1 {
+                std::fs::write("config/prompts.json", json!({
+                    "base_instructions":"BASE_SECOND", "closing_reporting":"CLOSING", "jev_guidance":"JEV"
+                }).to_string()).unwrap();
+                json!([{"type":"function_call","call_id":"discover","name":"list_abilities","arguments":"{}"}])
+            } else {
+                json!([{"type":"message","role":"assistant",
+                    "content":[{"type":"output_text","text":"Done."}]}])
+            };
+            let event = json!({"type":"response.completed",
+                "response":{"status":"completed","output":output}});
+            ([("content-type","text/event-stream")], format!("data: {event}\n\n"))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener,mock).await.unwrap(); });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    running(&app,&rid,"prompt-reload").await;
+    execute_run(app.clone(),rid.clone(),"prompt-reload".into(),CancellationToken::new()).await.unwrap();
+    assert_eq!(app.run(&rid).await.unwrap()["status"],"completed");
+    let captured = requests.lock().await;
+    assert_eq!(captured.len(),2);
+    assert!(captured[0]["instructions"].as_str().unwrap().contains("BASE_FIRST"));
+    assert!(captured[1]["instructions"].as_str().unwrap().contains("BASE_SECOND"));
+    assert!(!captured[1]["instructions"].as_str().unwrap().contains("BASE_FIRST"));
+    for request in captured.iter() {
+        let instructions = request["instructions"].as_str().unwrap();
+        assert!(instructions.contains("PINNED_SLOT"));
+        assert!(!instructions.contains("LATER_SLOT"));
+        assert!(instructions.contains("CLOSING") && instructions.contains("JEV"));
+    }
+    server.abort();
 }

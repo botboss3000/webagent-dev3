@@ -297,6 +297,7 @@ mod system_budget_tests {
 }
 fn policy_default() -> Value {
     let mut policy=json!({"version":1,"rules":{"list_abilities":"allow","load_ability":"allow","list_skills":"allow","load_skill":"allow","get_time":"allow","get_date":"allow","calculate":"allow","read_attachment":"allow","search_this_session":"allow","read_own_prompt":"allow","web_search":"allow","get_weather":"allow","maps_geocode":"allow","file_list":"allow","file_read":"allow","file_search":"allow","state_inspect":"allow","prompt_slot_read":"allow","prompt_slot_write":"require_approval","file_write":"require_approval","file_edit":"require_approval","workspace_seed":"require_approval","source_review":"allow","source_patch":"require_approval","promotion_propose":"allow","shell":"require_approval","python":"require_approval"}});
+    for name in ["task_status","task_wait","task_cancel"] {policy["rules"][name]=json!("allow");}
     for schema in tools::administrator::schemas() {
         let name=schema["name"].as_str().unwrap();
         policy["rules"][name]=json!(if tools::is_read(name){"allow"}else{"require_approval"});
@@ -423,6 +424,9 @@ async fn effective_policy(app: &App, sid: &str) -> Result<(Value, u64)> {
     // New Base discovery is available by default; an explicit saved denial wins.
     if policy["rules"].get("search_tools").is_none() {
         policy["rules"]["search_tools"]=json!("allow");
+    }
+    for name in ["task_status","task_wait","task_cancel"] {
+        if policy["rules"].get(name).is_none() {policy["rules"][name]=json!("allow");}
     }
     let mode = session_mode(app, sid).await?;
     if mode["mode"] == "read_only" {
@@ -601,6 +605,13 @@ async fn run_process() -> Result<()> {
             .map_err(|_|anyhow!("Another v3 loop owns this state"))?;
         Some(lock)
     } else {None};
+    // Seed mutable prompt configuration once; both roles reload it per turn.
+    std::fs::create_dir_all(root.join("config"))?;
+    match OpenOptions::new().write(true).create_new(true).open(root.join("config/prompts.json")) {
+        Ok(mut file) => file.write_all(include_bytes!("../config/prompts.json"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+        Err(error) => return Err(error.into()),
+    }
     let store = Store::open(&root).await?;
     store.migrate_agent_storage(&root).await?;
     let (runtime, runtime_path) = loop_runtime::Config::initialize(&root, &store).await?;

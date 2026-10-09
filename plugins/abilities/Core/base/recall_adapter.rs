@@ -12,7 +12,7 @@ const MAX_OUTPUT_BYTES: usize = 16 * 1024;
 pub fn owns(name: &str) -> bool { name == "recall_compacted" }
 pub fn schemas() -> Vec<Value> {
     vec![json!({"type":"function","name":"recall_compacted",
-        "description":"List compacted sources, page one segment, or page a current-run file result by call ID. Reasoning and revocable guidance are withheld.",
+        "description":"A first call with no selector lists this session's compacted segments. segment_id must be one of the listed ids. tool_call_id pages a current-run file read instead; never pass a tool_call_id as a segment_id. Reasoning and revocable guidance are withheld.",
         "parameters":{"type":"object","properties":{
             "segment_id":{"type":"string","minLength":1,"maxLength":128},
             "offset_items":{"type":"integer","minimum":0,"maximum":4096},
@@ -46,7 +46,7 @@ fn validate(args: &Args) -> Result<()> {
         || (args.segment_id.is_none() && args.offset_items != 0)
         || (args.tool_call_id.is_none() && args.segment_id.is_none() && args.offset_chars != 0)
         || (args.segment_id.is_some() && args.offset_chars != 0 && args.limit_items != 1)
-        || (args.segment_id.is_some() && args.tool_call_id.is_some()) {
+        {
         bail!("Invalid compacted segment selector");
     }
     Ok(())
@@ -172,35 +172,42 @@ async fn work(app: &App, sid: &str, run_id: &str, args: &Value) -> Result<Value>
     let session = current.app.store.get(&format!("session:{sid}")).await?
         .context("Current session unavailable")?;
     let entries = metadata(&session)?;
-    let output = if let Some(call_id) = parsed.tool_call_id.as_deref() {
-        let run=current.app.run(run_id).await?;
-        let name=current.app.store.tool_call_name(sid,run_id,call_id).await?
-            .context("Tool call unavailable in current run")?;
-        if !matches!(name.as_str(),"file_search"|"file_read"|"file_list") {
-            bail!("Result recall is limited to current-run file reads");
-        }
-        let agent=session_agent_id(&current.app,sid).await?;
-        let (policy,_,visibility,state)=ability_controls(&current.app,sid).await?;
-        let mode=session_mode(&current.app,sid).await?;
-        let access=current.app.store.live_access(current.app.store.current_user_id(),&agent).await?;
-        if live_tool_decision(&current.app,&access,&name,&policy,&visibility,&state,
-            &run["loaded_abilities"],mode["mode"]=="read_only").permission
-            == crate::access::Permission::Deny {
-            bail!("File result recall unavailable under current access");
-        }
-        let record=current.app.store.tool_result(sid,run_id,call_id).await?
-            .context("Full tool result unavailable")?;
-        tool_result_page(&record,call_id,&parsed)?
-    } else if let Some(id) = parsed.segment_id.as_deref() {
-        let entry = entries.iter().find(|entry|entry["segment_id"]==id)
-            .context("Compacted segment unavailable in current session")?;
+    let segment_entry = parsed.segment_id.as_deref().and_then(|id|
+        entries.iter().find(|entry| entry["segment_id"] == id));
+    let output = if let Some(entry) = segment_entry {
+        let id = parsed.segment_id.as_deref().unwrap();
         let record = current.app.store.get(&format!("compaction_segment:{sid}:{id}")).await?
             .context("Compacted segment unavailable")?;
         segment_page(&record, entry, sid, &parsed)?
+    } else if let Some(call_id) = parsed.tool_call_id.as_deref() {
+        let run=current.app.run(run_id).await?;
+        let name=current.app.store.tool_call_name(sid,run_id,call_id).await?;
+        let permitted = matches!(name.as_deref(), Some("file_search"|"file_read"|"file_list"));
+        let result = if permitted {
+            let name = name.as_deref().unwrap();
+            let agent=session_agent_id(&current.app,sid).await?;
+            let (policy,_,visibility,state)=ability_controls(&current.app,sid).await?;
+            let mode=session_mode(&current.app,sid).await?;
+            let access=current.app.store.live_access(current.app.store.current_user_id(),&agent).await?;
+            if live_tool_decision(&current.app,&access,&name,&policy,&visibility,&state,
+                &run["loaded_abilities"],mode["mode"]=="read_only").permission
+                != crate::access::Permission::Deny {
+                if let Some(record)=current.app.store.tool_result(sid,run_id,call_id).await? {
+                    Some(tool_result_page(&record,call_id,&parsed)?)
+                } else { None }
+            } else { None }
+        } else { None };
+        result.unwrap_or_else(|| {
+            let recent = entries.iter().rev().take(32).cloned().collect::<Vec<_>>();
+            json!({"segments":recent,"count":recent.len(),"total_segments":entries.len(),
+                "source_kind":"current_session_compaction_index",
+                "note":"Supplied selectors matched nothing."})
+        })
     } else {
         let recent = entries.iter().rev().take(32).cloned().collect::<Vec<_>>();
         json!({"segments":recent,"count":recent.len(),"total_segments":entries.len(),
-            "source_kind":"current_session_compaction_index"})
+            "source_kind":"current_session_compaction_index",
+            "note":if parsed.segment_id.is_some() { Some("Supplied selectors matched nothing.") } else { None }})
     };
     if serde_json::to_vec(&output)?.len() > MAX_OUTPUT_BYTES {
         bail!("Compacted segment list exceeds 16 KiB");
@@ -212,7 +219,7 @@ async fn work(app: &App, sid: &str, run_id: &str, args: &Value) -> Result<Value>
     // is read. Confirm the selected provenance still belongs to this session.
     let latest = current.app.store.get(&format!("session:{sid}")).await?
         .context("Current session unavailable")?;
-    if parsed.segment_id.is_some() && metadata(&latest)?.iter().all(|entry|
+    if segment_entry.is_some() && metadata(&latest)?.iter().all(|entry|
         entry["segment_id"] != parsed.segment_id.as_deref().unwrap()) {
         bail!("Compacted segment index changed during read");
     }
@@ -268,5 +275,74 @@ mod tests {
         assert!(serde_json::from_value::<Args>(json!({"session_id":"foreign"})).is_err());
         assert!(validate(&Args {segment_id:Some("../foreign".into()),
             offset_items:0,limit_items:1,tool_call_id:None,offset_chars:0,limit_chars:4096}).is_err());
+    }
+    async fn recall_fixture() -> (tempfile::TempDir, App, String, String) {
+        let (root, app) = crate::runtime_tests::fixture().await;
+        let mut tier = app.store.entitlement_tier("operator").await.unwrap().unwrap();
+        let revision = tier.revision;
+        tier.ability_permissions.insert("base".into(), crate::access::Permission::Auto);
+        app.store.save_entitlement_tier(tier, revision).await.unwrap();
+        let mut level = app.store.live_access("admin", "shared_default").await.unwrap().capability_level;
+        level.ability_permissions.insert("base".into(), crate::access::Permission::Auto);
+        app.store.save_capability_level("shared_default", level, 0).await.unwrap();
+        let sid = crate::runtime_tests::conversation(&app).await;
+        crate::runtime_tests::activate_codebase(&app, &sid).await;
+        crate::session_ability_set(crate::State(app.clone()), crate::Path((sid.clone(), "base".into())),
+            crate::Json(crate::SessionAbilityBody {state:"active".into(), expected_revision:1}))
+            .await.unwrap();
+        let rid = crate::runtime_tests::queued(&app, &sid).await;
+        let mut run = app.run(&rid).await.unwrap();
+        run["loaded_abilities"] = json!(["base", "codebase_admin"]);
+        app.save(&mut run).await.unwrap();
+        let source = vec![json!({"type":"message","role":"user","content":"remember me"})];
+        let digest = crate::digest(&source);
+        let entry = json!({"segment_id":"listed-1","source_digest":digest,"item_count":1,"created_at":1});
+        let mut session = app.store.get(&format!("session:{sid}")).await.unwrap().unwrap();
+        session["compaction_segments"] = json!([entry]);
+        app.store.put(&format!("session:{sid}"), &session).await.unwrap();
+        app.store.put(&format!("compaction_segment:{sid}:listed-1"), &json!({
+            "schema_version":1,"session_id":sid,"segment_id":"listed-1",
+            "source_digest":digest,"source":source})).await.unwrap();
+        (root, app, sid, rid)
+    }
+    async fn dispatch(app: &App, sid: &str, rid: &str, args: Value) -> Value {
+        execute(app, sid, rid, "recall_compacted", &args, CancellationToken::new()).await.unwrap()
+    }
+    #[tokio::test]
+    async fn unlisted_segment_falls_back_to_file_result_page() {
+        let (_root, app, sid, rid) = recall_fixture().await;
+        let mut tx = app.store.pool.begin().await.unwrap();
+        app.store.insert_interaction(&mut tx,&sid,&rid,"model:1",&json!({
+            "type":"function_call","call_id":"read-call","name":"file_read","arguments":"{}"})).await.unwrap();
+        app.store.insert_interaction(&mut tx,&sid,&rid,"tool:read-call",&json!({
+            "type":"function_call_output","call_id":"read-call","output":"abcdef"})).await.unwrap();
+        tx.commit().await.unwrap();
+        let result = dispatch(&app,&sid,&rid,json!({"segment_id":"not-listed",
+            "tool_call_id":"read-call","offset_chars":2,"limit_chars":4,"limit_items":1})).await;
+        assert_eq!(result["status"],"success", "{result}");
+        assert_eq!(result["output"]["content"],"cdef");
+        assert_eq!(result["output"]["source_kind"],"current_run_tool_result");
+        let preferred = dispatch(&app,&sid,&rid,json!({"segment_id":"listed-1","tool_call_id":"read-call"})).await;
+        assert_eq!(preferred["status"],"success", "{preferred}");
+        assert_eq!(preferred["output"]["source_kind"],"compacted_provider_history");
+    }
+    #[tokio::test]
+    async fn unmatched_selectors_return_listing_with_note() {
+        let (_root, app, sid, rid) = recall_fixture().await;
+        for args in [json!({"segment_id":"missing-segment"}),json!({"tool_call_id":"missing-call"})] {
+            let result = dispatch(&app,&sid,&rid,args).await;
+            assert_eq!(result["status"],"success", "{result}");
+            assert_eq!(result["output"]["segments"][0]["segment_id"],"listed-1");
+            assert_eq!(result["output"]["note"],"Supplied selectors matched nothing.");
+        }
+    }
+    #[tokio::test]
+    async fn both_unmatched_selectors_return_listing_with_note() {
+        let (_root, app, sid, rid) = recall_fixture().await;
+        let result = dispatch(&app,&sid,&rid,json!({"segment_id":"missing-segment","tool_call_id":"missing-call"})).await;
+        assert_eq!(result["status"],"success", "{result}");
+        assert_eq!(result["output"]["source_kind"],"current_session_compaction_index");
+        assert_eq!(result["output"]["count"],1);
+        assert_eq!(result["output"]["note"],"Supplied selectors matched nothing.");
     }
 }

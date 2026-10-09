@@ -25,10 +25,13 @@ schemas and guidance. Session grants and approval requirements never change.
 Core's Decision ability follows `plugins/abilities/Core/decision/adapter.rs`
 and `directory_adapter.rs`. The agent can supply bounded System One JSON,
 or ask for one directory page to be scored without first listing its entries.
-Rust checks file_list permission, the worker lists names, and Rust sends them
-to the session agent's assigned TypeSafe Decision model. Jev cannot read files
-or execute tools; directory scores use names only and need source verification.
-The ordinary tool gate still decides whether this call is allowed.
+Rust checks file_list permission, then the worker can recursively find
+basename-filtered files and return up to 32 relative paths per page. An
+explicit content option also requires automatic file_read permission and sends
+only bounded source excerpts. Rust sends the resulting state and score
+questions to the assigned TypeSafe Decision model. Jev cannot read files
+or execute tools itself; scores need source verification. The ordinary tool
+gate still decides whether this call is allowed.
 
 This is a map for someone reading v3 code for the first time. The
 [README](../README.md) has deployment commands and the detailed contracts.
@@ -147,6 +150,17 @@ existing storage and API contracts stay stable through this source move.
    measures append-only history, and [context/assembly.rs](../src/context/assembly.rs)
    combines and validates the request, [context/compaction.rs](../src/context/compaction.rs) plans and validates
    history compaction, and [models/provider/mod.rs](../src/models/provider/mod.rs) sends it.
+   Each model-call boundary layers this agent's Identity trigger and verbatim-tail
+   metadata over the data-root compaction defaults. The Identity API revision-fences
+   those agent overrides; the summary safety limits remain app-wide.
+   Normal chat reloads the three fields of config/prompts.json before each turn's
+   context assembly, preserving admission-pinned agent prompt slots and
+   passing the result to complete_selected_with_instructions. Provider convenience
+   entry points also reload the base at each call,
+   retaining its last good composition if the file is missing or malformed.
+   Runtime images work in /state; startup seeds /state/config/prompts.json once
+   from the shipped config/prompts.json. Operators edit the mutable state file
+   (host data/config/prompts.json) for changes without rebuilding.
    Ask, Plan, and Auto mode prompts provide call-scoped message formatting.
    Agent identity selects no working-message promotion, manual promotion through
    the private control, or automatic promotion of every nonfinal assistant message.
@@ -386,3 +400,13 @@ and tests/chat-controls.test.cjs / tests/composer-media.test.cjs. These use
 isolated stores and local providers. Browser and live-provider acceptance require
 deployment of both matching V3 API and loop images; fixture success alone does
 not establish live microphone/provider acceptance.
+
+## Shared tool execution policy and scheduling
+
+`src/tool_execution.rs` owns strict per-tool settings, the vetted read allowlist, effective trusted guidance, and the cancellation-safe shared execution limiter. Agent settings resolve from `agent_abilities.tool_execution[tool_name]`. The parent runtime wires the module and calls guidance during model context assembly; generic foreground/background dispatch uses the same acquire wrapper, while background submit and task-wait controls bypass it. Keep the permit only around actual authorized execution (background jobs hold it until actual completion), never around submission or waiting for a task handle. Rust strips reserved `_execution_mode` before actual schema validation; model mode allows optional foreground/background selection.
+
+One executor process shares a cap of four and per-agent/tool counters across all users/sessions. Changed limits reuse counters and respect active lower ceilings. An installation-wide RwLock permits only concurrency-eligible reads concurrently and makes all other tools exclusive, protecting shared live-checkout access across agents. Resource-lock waits hold no total slot; cancellation/drop release guards and counters, removing idle tool keys. This OnceLock is process-local: multiple tool-executing processes need a cross-process coordinator for a true installation aggregate cap.
+
+Shared bundled usage guidance is `plugins/abilities/Core/base/base.skill.md`, loaded by the catalog’s standard ability-skill path; trusted effective flags come from the runtime helper. Generic background handles/completions and stop/silent/wake are distinct from V3 Build’s durable broker finish/recovery contract. Silent still notifies the user and carries leftover results to the next user turn without a loop; wake has a read-only ceiling, no mode escalation, no new background spawn, and no inherited approvals. Results remain untrusted and settings never grant permission.
+
+Background capability and concurrency capability are separate. In addition to the six background-vetted tools, get_time, get_date, calculate, web_search, get_weather and maps_geocode allow foreground concurrency up to four and use the shared installation read guard, but cannot background or silent/wake. Other stateful discovery/native controls stay concurrency one and exclusive. The API can report max_supported_concurrency(name); omitted/null tool_execution maps or null tool entries resolve to defaults.
