@@ -7,25 +7,32 @@ export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
   const config=()=>getProfile()?.user_turn_anchor||{};
   // Durable row IDs keep the cooldown across transcript reprojections. Only
   // reader movement rearms a consumed anchor; layout and smooth snaps cannot.
-  const consumed=new Set();
+  const consumed={up:new Set(),down:new Set()};
   const setting=(name,fallback)=>px(config()[name],fallback);
+  // Up approaches a pin from below (larger scrollTop); down from above.
+  const directionSetting=(direction,name,fallback)=>px(config()[direction]?.[name],setting(name,fallback));
   const users=()=>Array.from(inner.querySelectorAll('.chat-bubble.user[data-public-id]'));
   const pad=()=>Math.max(px(config().landing_gap_px,62),header.getBoundingClientRect().bottom-scroller.getBoundingClientRect().top+setting('header_clearance_px',8));
   const target=row=>Math.max(0,scroller.scrollTop+row.getBoundingClientRect().top-scroller.getBoundingClientRect().top-pad());
   function reachable(top){const shortfall=top-Math.max(0,scroller.scrollHeight-scroller.clientHeight);if(shortfall>0){const extra=px(inner.style.getPropertyValue('--v3-anchor-extra'),0);inner.style.setProperty('--v3-anchor-extra',(extra+shortfall)+'px');void inner.offsetHeight;}}
   function finishSnap(){snapping=false;clearTimeout(snapFallback);snapFallback=0;}
   function release(){focusedId=null;following=false;clearTimeout(snapTimer);finishSnap();scroller.scrollTo({top:scroller.scrollTop,behavior:'instant'});intentUntil=performance.now()+setting('scroll_intent_ms',2000);}
-  function land(){if(!focusedId||config().enabled===false)return;const row=users().find(row=>row.dataset.publicId===focusedId);if(!row)return;if(!active&&performance.now()>deadline){focusedId=null;return;}const top=target(row);reachable(top);scroller.scrollTop=top;consumed.add(row.dataset.publicId);}
+  function land(){if(!focusedId||config().enabled===false)return;const row=users().find(row=>row.dataset.publicId===focusedId);if(!row)return;if(!active&&performance.now()>deadline){focusedId=null;return;}const top=target(row);reachable(top);scroller.scrollTop=top;consumed.up.add(row.dataset.publicId);consumed.down.add(row.dataset.publicId);}
   function changed(){cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{if(focusedId)land();else if(following)scroller.scrollTop=scroller.scrollHeight;});}
   function focus(row=users().at(-1)){if(!row||config().enabled===false){following=true;changed();return;}focusedId=row.dataset.publicId;deadline=performance.now()+setting('focus_hold_ms',6000);following=false;changed();}
-  function reset(){release();consumed.clear();inner.style.removeProperty('--v3-anchor-extra');following=true;active=false;intentUntil=0;}
+  function reset(){release();consumed.up.clear();consumed.down.clear();inner.style.removeProperty('--v3-anchor-extra');following=true;active=false;intentUntil=0;}
   function rearm() {
     const current=scroller.scrollTop,max=Math.max(0,scroller.scrollHeight-scroller.clientHeight);
     // Keep the rearm boundary outside the capture margin even with overlapping
     // settings, so leaving the landing by a few pixels never recaptures it.
-    const distance=Math.max(setting('snap_rearm_distance_px',100),setting('snap_distance_px',20));
     for(const row of users()) {
-      if(Math.abs(Math.min(max,target(row))-current)>=distance)consumed.delete(row.dataset.publicId);
+      const offset=current-Math.min(max,target(row));
+      for(const direction of ['up','down']) {
+        const distance=Math.max(directionSetting(direction,'snap_rearm_distance_px',100),directionSetting(direction,'snap_distance_px',20));
+        // Each side must leave its own boundary. Crossing the opposite side
+        // neither consumes nor rearms this direction's cooldown.
+        if((direction==='up'?offset:-offset)>=distance)consumed[direction].delete(row.dataset.publicId);
+      }
     }
   }
   function settle() {
@@ -34,16 +41,17 @@ export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
     let nearest=null;
     for(const row of users()) {
       const id=row.dataset.publicId;
-      if(consumed.has(id))continue;
       const top=Math.min(max,target(row)),distance=Math.abs(top-current);
-      if(distance<=setting('snap_distance_px',20)&&(!nearest||distance<nearest.distance))nearest={top,distance,id};
+      const direction=current>=top?'up':'down';
+      if(consumed[direction].has(id)||config()[direction]?.snap_enabled===false)continue;
+      if(distance<=directionSetting(direction,'snap_distance_px',20)&&(!nearest||distance<nearest.distance))nearest={top,distance,id,direction};
     }
     if(!nearest)return;
-    consumed.add(nearest.id);
-    if(nearest.distance<=setting('snap_tolerance_px',2))return;
+    consumed[nearest.direction].add(nearest.id);
+    if(nearest.distance<=directionSetting(nearest.direction,'snap_tolerance_px',2))return;
     snapping=true;
     scroller.scrollTo({top:nearest.top,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
-    snapFallback=setTimeout(finishSnap,setting('snap_complete_fallback_ms',1000));
+    snapFallback=setTimeout(finishSnap,directionSetting(nearest.direction,'snap_complete_fallback_ms',1000));
   }
   for(const type of ['wheel','touchstart','pointerdown'])scroller.addEventListener(type,release,{passive:true,signal:abort.signal});
   scroller.addEventListener('keydown',event=>{if(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)&&!event.target.closest('input,textarea,[contenteditable=true]'))release();},{signal:abort.signal});

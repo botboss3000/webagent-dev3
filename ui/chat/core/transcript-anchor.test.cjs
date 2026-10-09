@@ -52,3 +52,26 @@ test('disabled snap and overlapping boundaries do not repeatedly capture',()=>{
   const disabled=fixture({snap_enabled:false});disabled.move(510);assert.equal(disabled.calls.length,0);
   const f=fixture({snap_distance_px:20,snap_rearm_distance_px:5});f.move(510);f.finish();f.move(510);assert.equal(f.calls.length,1);
 });
+
+test('up and down consume and rearm only their own cooldown',()=>{
+  const f=fixture();f.move(510);f.finish();f.move(490);f.finish();
+  assert.equal(f.calls.length,2);
+  f.move(510);f.move(490);assert.equal(f.calls.length,2);
+  f.move(600,false);f.move(490);assert.equal(f.calls.length,2);
+  f.move(510);f.finish();assert.equal(f.calls.length,3);
+  f.move(400,false);f.move(510);assert.equal(f.calls.length,3);
+  f.move(490);assert.equal(f.calls.length,4);
+});
+test('direction margins and distances differ within a device profile',()=>{
+  const f=fixture({up:{snap_distance_px:10,snap_rearm_distance_px:150},down:{snap_distance_px:30,snap_rearm_distance_px:80}});
+  f.move(515);assert.equal(f.calls.length,0);f.move(510);f.finish();
+  f.move(470);f.finish();assert.equal(f.calls.length,2);
+  f.move(600,false);f.move(510);assert.equal(f.calls.length,2);
+  f.move(650,false);f.move(510);f.finish();assert.equal(f.calls.length,3);
+  f.move(421,false);f.move(480);assert.equal(f.calls.length,3);
+  f.move(420,false);f.move(480);assert.equal(f.calls.length,4);
+});
+test('one direction can be disabled without disabling the other',()=>{
+  const f=fixture({up:{snap_enabled:false},down:{snap_enabled:true}});
+  f.move(510);assert.equal(f.calls.length,0);f.move(490);assert.deepEqual(f.calls,[500]);
+});
