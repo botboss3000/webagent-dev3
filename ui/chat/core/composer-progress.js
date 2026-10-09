@@ -37,12 +37,12 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
     for(const node of wanted)panel.append(node);
     bar.classList.toggle('has-tools',rows.length>0);if(!rows.length)close();
     const pending=rows.find(r=>!r.events.some(e=>e.kind==='tool_result'));
-    const phase={queued:'Queued…',waiting_approval:'Waiting for approval…',waiting_gate:'Checking response…',running:'Working…'};
+    const phase={queued:'Queued…',waiting_approval:'Waiting for approval…',waiting_gate:'Checking response…',waiting_external:'Waiting for build…',running:'Working…'};
     setLabel(optimistic||(run?(run.status!=='running'?phase[run.status]:pending?'Calling '+pending.events[0].payload.tool+'…':'Working…'):''));
   }
   function reset(id=''){++generation;stop?.();stop=null;session=id;run=null;events=[];optimistic='';panel.replaceChildren();close();setLabel('');}
   function open(id){reset(id);const epoch=generation;setLabel('Assessing…');if(id&&isAdmin())stop=watchActivity({sessionId:id,request:(cursor,signal)=>fetch('/api/v3/sessions/'+encodeURIComponent(id)+'/activity?after='+cursor,{credentials:'same-origin',cache:'no-store',signal}),onChange:value=>{if(session!==id||epoch!==generation)return;events=value.events;details();},onError:error=>{if(epoch!==generation)return;if([401,403,404].includes(error.status)){events=[];panel.replaceChildren();close();details();}}});}
-  function update(runs){const next=runs.filter(r=>!r.session_id||r.session_id===session).find(r=>['queued','running','waiting_approval','waiting_gate'].includes(r.status));if(next?.id!==run?.id)close();run=next||null;optimistic='';details();}
+  function update(runs){const next=runs.filter(r=>!r.session_id||r.session_id===session).find(r=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(r.status));if(next?.id!==run?.id)close();run=next||null;optimistic='';details();}
   const timer=setInterval(render,1000);
   const observer=new MutationObserver(render);observer.observe(root.querySelector('#chat-input-area'),{attributes:true,attributeFilter:['class']});
   return {open,update,note(value){optimistic=value;setLabel(value);},reset,destroy(){reset();disposed=true;clearInterval(timer);observer.disconnect();bar.onclick=null;wrap.remove();css.remove();}};

@@ -69,7 +69,7 @@ function paint() {
     node._group=group;
     const parts=Object.entries(group.counts).filter(([,count])=>count)
       .map(([kind,count])=>count+' '+(count===1?kind.replace(/s$/,''):kind));
-    const phase={running:'Working…',queued:'Queued…',finalizing:'Checking response…',
+    const phase={running:'Working…',queued:'Queued…',waiting_external:'Waiting for build…',finalizing:'Checking response…',
       stopping:'Stopping…',completed:'Completed',failed:'Failed',cancelled:'Stopped',
       finished:'Finished'}[group.state] || group.state;
     const progress=group.kind==='compaction' && ['queued','running','finalizing'].includes(group.state)
