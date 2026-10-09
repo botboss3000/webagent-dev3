@@ -230,6 +230,45 @@ export function mountBuilds(panel, onStatus = () => {}) {
         note.textContent = cancelMessages.get(job.job_id);
         card.append(note);
       }
+      if (job.queue_preflight) {
+        const report = job.queue_preflight;
+        const section = document.createElement('section');
+        section.setAttribute('aria-label', 'Queue compatibility');
+        const title = document.createElement('h4');
+        title.textContent = 'Queue compatibility · ' + phaseLabel(report.status);
+        const note = document.createElement('p');
+        note.textContent = 'Checked before compilation. Shared builds are rechecked at admission, with up to eight tasks per build.';
+        section.append(title, note);
+        const peers = document.createElement('ul');
+        for (const peer of report.peers || []) {
+          const row = document.createElement('li');
+          const link = document.createElement('a');
+          link.href = '/app?tab=builds&job_id=' + encodeURIComponent(peer.job_id);
+          link.textContent = peer.job_id;
+          row.append(link, document.createTextNode(' · ' + peer.reason));
+          if (peer.paths?.length) {
+            const files = document.createElement('div');
+            files.textContent = (peer.conflict_count ? 'Conflicting files: ' : 'Overlapping files: ') +
+              peer.paths.join(', ') + (peer.paths_truncated ? ' (more files omitted)' : '');
+            row.append(files);
+          }
+          peers.append(row);
+        }
+        section.append(peers);
+        if (!(report.peers || []).length && report.status === 'checked') {
+          const empty = document.createElement('p');
+          empty.textContent = 'No other pending tasks to compare.';
+          section.append(empty);
+        }
+        if (report.truncated || report.status === 'unavailable') {
+          const partial = document.createElement('p');
+          partial.textContent = report.status === 'unavailable'
+            ? 'Source comparison unavailable; admission will check again.'
+            : 'Partial queue preview; more comparisons are available on other job cards.';
+          section.append(partial);
+        }
+        card.append(section);
+      }
       const facts = document.createElement('dl');
       facts.className = 'build-facts';
       if (job.phase !== 'finished') fact(facts, 'Current phase', phaseLabel(job.phase));

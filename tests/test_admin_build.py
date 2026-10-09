@@ -181,6 +181,71 @@ class BuildTests(unittest.TestCase):
         return self.call("v3_build_image", {"request_id": request_id, "expected_inputs_sha256": digest})
 
 
+    def queue_fixture(self, edits, base=None, user="fixture-user", workspace=None):
+        job_id = str(uuid.uuid4())
+        folder = self.state / job_id
+        folder.mkdir()
+        baseline = base or context(extra={"v3/README.md": "baseline"})
+        after = context(extra=edits)
+        (folder / "base.tar").write_bytes(baseline)
+        (folder / "task.tar").write_bytes(after)
+        job = {"job_id": job_id, "status": "queued", "phase": "waiting",
+               "operation": "build_deploy", "isolated": True,
+               "created_at": len(self.broker.jobs), "user_id": user,
+               "workspace": workspace or self.workspace, "access_fingerprint": "f" * 64}
+        self.broker.jobs[job_id] = job
+        return job
+
+    def test_queue_preflight_conflicts_identical_edits_and_no_effects(self):
+        first = self.queue_fixture({"v3/README.md": "first"})
+        second = self.queue_fixture({"v3/README.md": "second"})
+        before = copy.deepcopy(self.broker.jobs)
+        report = self.broker._view(first)["queue_preflight"]
+        self.assertEqual(report["status"], "conflicts")
+        self.assertEqual(report["peers"][0]["paths"], ["v3/README.md"])
+        self.assertFalse(report["peers"][0]["shared_build_eligible"])
+        self.assertEqual(self.broker.jobs, before)
+        self.assertEqual(self.runner.calls, [])
+        (self.state / second["job_id"] / "task.tar").write_bytes(context(extra={"v3/README.md": "first"}))
+        peer = self.broker._queue_preflight(first)["peers"][0]
+        self.assertTrue(peer["compatible"])
+        self.assertTrue(peer["shared_build_eligible"])
+
+    def test_queue_preflight_disjoint_sequential_and_delete_conflicts(self):
+        first = self.queue_fixture({"v3/README.md": "baseline", "v3/src/a.rs": "one"})
+        other = self.queue_fixture({"v3/README.md": "baseline", "v3/src/b.rs": "two"})
+        self.assertEqual(self.broker._queue_preflight(first)["peers"][0]["overlap_count"], 0)
+        self.broker.jobs.clear()
+        first = self.queue_fixture({"v3/README.md": "first"})
+        sequential = self.queue_fixture({"v3/README.md": "next"},
+                                       base=context(extra={"v3/README.md": "first"}))
+        self.assertTrue(self.broker._queue_preflight(first)["peers"][0]["compatible"])
+        (self.state / first["job_id"] / "task.tar").write_bytes(context())
+        self.assertFalse(self.broker._queue_preflight(first)["peers"][0]["compatible"])
+
+    def test_queue_preflight_authority_and_started_build_reasons(self):
+        first = self.queue_fixture({"v3/README.md": "first"})
+        other = self.queue_fixture({"v3/README.md": "baseline", "v3/src/private.rs": "other"},
+                                   user="other-user", workspace=str(uuid.uuid4()))
+        self.assertEqual(self.broker._queue_preflight(first)["peer_count"], 0)
+        peer = self.broker._queue_preflight(first, administrator=True)["peers"][0]
+        self.assertEqual(peer["reason"], "Different caller or authorization")
+        other["user_id"], other["workspace"] = first["user_id"], first["workspace"]
+        other["status"] = "running"
+        self.assertEqual(self.broker._queue_preflight(first)["peers"][0]["reason"], "Build already started")
+        other["status"], other["operation"] = "queued", "ui_deploy"
+        self.assertEqual(self.broker._queue_preflight(first)["peers"][0]["reason"], "UI releases run separately")
+
+    def test_queue_preflight_bounded_and_unavailable(self):
+        first = self.queue_fixture({"v3/README.md": "first"})
+        for number in range(24):
+            self.queue_fixture({"v3/README.md": "edit-" + str(number)})
+        report = self.broker._queue_preflight(first)
+        self.assertTrue(report["truncated"])
+        self.assertLessEqual(len(host.canonical(report)), 1536)
+        (self.state / first["job_id"] / "base.tar").write_bytes(b"invalid archive")
+        self.assertEqual(self.broker._queue_preflight(first)["status"], "unavailable")
+
     def drift_fixture(self):
         self.runner.blob = context(extra={"v3/README.md":"released",
                                           "v3/src/release.rs":"must survive"})

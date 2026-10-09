@@ -708,6 +708,7 @@ class Broker:
         self.active_ui = None
         self.jobs = {}
         self.job_cancellations = {}
+        self.queue_index = {}
         self.requests = {}
         self.active = None
         self.stopping = False
@@ -1026,7 +1027,74 @@ class Broker:
                 "disposition": "stop_requested" if parent["status"] in ("queued", "running")
                                else parent["status"]}
 
-    def _view(self, job):
+    def _queue_changes(self, job):
+        folder = self.state / job["job_id"]
+        paths = [folder / name for name in ("base.tar", "task.tar")]
+        stamp = tuple((p.stat().st_size, p.stat().st_mtime_ns) for p in paths)
+        cached = self.queue_index.get(job["job_id"])
+        if cached and cached[0] == stamp:
+            return cached[1]
+        # Retain only fingerprints, never source bodies, in the read cache.
+        base, task = [release.entries(p.read_bytes(), context_digest) for p in paths]
+        changed = {name: ((base[name][0], hashlib.sha256(base[name][1]).hexdigest()) if name in base else None,
+                          (task[name][0], hashlib.sha256(task[name][1]).hexdigest()) if name in task else None)
+                   for name in sorted(set(base) | set(task)) if base.get(name) != task.get(name)}
+        if len(self.queue_index) >= 64:
+            self.queue_index.pop(next(iter(self.queue_index)))
+        self.queue_index[job["job_id"]] = (stamp, changed)
+        return changed
+
+    def _queue_preflight(self, job, administrator=False):
+        pending = ("queued", "running", "needs_decision")
+        if not job.get("isolated") or job["status"] not in pending:
+            return None
+        peers = sorted((peer for peer in self.jobs.values()
+                        if peer["job_id"] != job["job_id"] and peer.get("isolated")
+                        and peer["status"] in pending and not peer.get("batch_parent")
+                        and (administrator or (peer["user_id"], peer["workspace"]) ==
+                             (job["user_id"], job["workspace"]))),
+                       key=lambda peer: (peer.get("operation") != "ui_deploy", peer["created_at"], peer["job_id"]))
+        report = {"checked_at": time.time(), "peers": [], "peer_count": len(peers),
+                  "truncated": False, "advisory": True}
+        try:
+            own = self._queue_changes(job)
+        except (OSError, ValueError, KeyError, tarfile.TarError):
+            return report | {"status": "unavailable"}
+        conflicts = 0
+        for peer in peers[:16]:
+            item = {"job_id": peer["job_id"]}
+            try:
+                other = self._queue_changes(peer)
+                overlap = sorted(set(own) & set(other))
+                first, second = (own, other) if (
+                    job.get("operation") != "ui_deploy", job["created_at"], job["job_id"]) <= (
+                    peer.get("operation") != "ui_deploy", peer["created_at"], peer["job_id"]) else (other, own)
+                bad = [name for name in overlap if first[name][1] not in second[name]]
+                conflicts += bool(bad)
+                same_caller = (job["user_id"], job["workspace"], job.get("access_fingerprint")) == (
+                    peer["user_id"], peer["workspace"], peer.get("access_fingerprint"))
+                reason = ("Conflicting edits" if bad else
+                          "Different caller or authorization" if not same_caller else
+                          "Build already started" if job["status"] == "running" or peer["status"] == "running" else
+                          "Source decision pending" if "needs_decision" in (job["status"], peer["status"]) else
+                          "UI releases run separately" if job["operation"] != "build_deploy" or peer["operation"] != "build_deploy" else
+                          "Compatible changes; may share a build")
+                item.update(reason=reason, compatible=not bad,
+                            shared_build_eligible=reason == "Compatible changes; may share a build",
+                            overlap_count=len(overlap), conflict_count=len(bad),
+                            paths=(bad or overlap)[:3], paths_truncated=len(bad or overlap) > 3)
+            except (OSError, ValueError, KeyError, tarfile.TarError):
+                item.update(reason="Queued source unavailable", compatible=None, shared_build_eligible=False)
+            # Dashboard/tool responses remain bounded even with a large queue.
+            if len(canonical(report | {"peers": report["peers"] + [item]})) > 1472:
+                report["truncated"] = True
+                break
+            report["peers"].append(item)
+        report["truncated"] |= len(report["peers"]) < len(peers)
+        report["status"] = "conflicts" if conflicts else "checked"
+        return report
+
+    def _view(self, job, administrator=False):
         raw = scrub(job.get("log", ""), self.runner.secrets).encode("utf-8")
         tail = raw[-PUBLIC_LOG:].decode("utf-8", "replace")
         # Replacement characters from a split UTF-8 sequence must not expand
@@ -1037,6 +1105,9 @@ class Broker:
         if "reason" in job:
             # Compiler failures are at the end of a bounded build transcript.
             view["reason"] = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
+        preflight = self._queue_preflight(job, administrator)
+        if preflight is not None:
+            view["queue_preflight"] = preflight
         parent = self.jobs.get(job.get("batch_parent"), job)
         pending = parent["status"] in ("queued", "running", "needs_decision")
         view["cancellation"] = {"available": pending and not parent.get("cancel_request"),
@@ -1208,7 +1279,7 @@ class Broker:
                 # Adopted releases remain addressable by ID but are no longer pending in the queue.
                 recent = (job for job in self.jobs.values() if not job.get("operator_adopted_at"))
                 for job in sorted(recent, key=lambda row: row["created_at"], reverse=True)[:20]:
-                    view = self._view(job)
+                    view = self._view(job, administrator=True)
                     view.pop("access_fingerprint", None)
                     view["log"] = view["log"][-2048:]
                     view["task_id"] = tasks.get(job["job_id"], {}).get("task_id")
@@ -1260,7 +1331,7 @@ class Broker:
                     return {"job": None}
                 # Return a single durable job, including older jobs outside the
                 # dashboard's 20-row window; never expose its host lease.
-                view = self._view(job)
+                view = self._view(job, administrator=True)
                 view.pop("access_fingerprint", None)
                 view["started_at"] = job.get("started_at")
                 view["finished_at"] = job.get("finished_at")

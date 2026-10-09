@@ -63,3 +63,16 @@ never overrides live deployment authorization or uncertainty reconciliation.
 After deployment, a promotion failure remains uncertain and includes a refreshed
 synchronization report; never replay its external effects. Legacy direct-checkout
 builds require synchronization or migration to an isolated task before proceeding.
+
+## Queue compatibility preview
+
+Pending job projections include an advisory `queue_preflight` report before
+compilation. Builds cards link peer jobs and show conflicting or overlapping
+source paths, same-caller eligibility, already-started builds, separate UI
+releases and pending source decisions. Identical edits are compatible; sequential
+edits are checked in queue order. The preview does not start, cancel or combine
+jobs. Admission retains the authoritative merge and eight-task batch limit.
+Reports show bounded examples with an explicit partial flag. Owner-scoped
+status never reveals other callers' jobs; administrator Builds views may compare
+all callers. Only path names and fingerprints are examined, never credentials
+or runtime databases. Behavioral conflicts across different files still need tests.
