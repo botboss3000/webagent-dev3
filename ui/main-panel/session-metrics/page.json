@@ -3,5 +3,6 @@
   "label": "Session Metrics",
   "order": 3,
   "html": "session-metrics.html",
+  "entry": "session-metrics.js",
   "css": ["session-metrics.css"]
 }

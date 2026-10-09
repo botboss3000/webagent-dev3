@@ -53,6 +53,9 @@ function updateRows(node,group) {
 function paint() {
   if(!journal || !publicState || !container || session!==app.currentSessionId) return;
   const groups=activityGroups(journal,publicState.runs), keep=new Set(), tails=new Map();
+  const progressActive=document.querySelector('#chat-above-pill.visible')!==null;
+  document.querySelector('#session-dropdown-icon')?.classList.toggle('activity-running',progressActive);
+  const lastGroup=groups[groups.length-1];
   for(const group of groups) {
     const boundary=[...container.children].find(n=>n.dataset.publicId===group.boundary_item_id);
     if(!boundary) continue; // The corresponding public page has not loaded.
@@ -77,6 +80,7 @@ function paint() {
     node.firstElementChild.textContent='Activity'+(parts.length?' · '+parts.join(' · '):'')+
       ' · '+(error || progress)+(group.boundary_quality==='legacy_unverified'?' · Legacy boundary unverified':'');
     node.setAttribute('aria-label','Activity group');
+    node.classList.toggle('v2-activity-group-glimmer',progressActive && group===lastGroup);
     if(node.open) updateRows(node,group);
     const anchor=tails.get(group.boundary_item_id) || boundary;
     if(anchor.nextSibling!==node) container.insertBefore(node,anchor.nextSibling);
@@ -87,6 +91,7 @@ function paint() {
 }
 function disconnectActivity() {
   stop?.();stop=null;
+  document.querySelector('#session-dropdown-icon')?.classList.remove('activity-running');
   for(const node of nodes.values()) {node._transcript?.dispose();node.remove();}
   nodes.clear();session=null;journal=null;publicState=null;container=null;error='';
 }
