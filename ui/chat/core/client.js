@@ -11,7 +11,7 @@ export function createChatClient({request, note, EventSourceClass = EventSource}
     button.title = connecting ? 'Chat connecting…' : 'Toggle chat panel';
   }
   function disconnect() { ++epoch; administratorNotices.stop(); source?.close(); source = null; setConnecting(false); }
-  async function open(id, render, publish) {
+  async function open(id, render, publish, metadataChanged = () => {}) {
     disconnect();
     const turn = epoch;
     const data = await request('/sessions/' + encodeURIComponent(id));
@@ -21,6 +21,9 @@ export function createChatClient({request, note, EventSourceClass = EventSource}
     let last = data.last_seq || 0;
     source = new EventSourceClass('/api/v3/sessions/' + encodeURIComponent(id) + '/events?after=' + last);
     setConnecting(true);
+    source.addEventListener('session_updated', () => {
+      if (turn === epoch) metadataChanged();
+    });
     source.onmessage = event => {
       if (turn !== epoch) return;
       try {

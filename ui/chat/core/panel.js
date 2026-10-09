@@ -109,7 +109,7 @@ function components(items){
 function watchFocus(){const source=document.activeElement;let moved=false;const onFocus=()=>{if(document.activeElement!==source)moved=true;};document.addEventListener('focusin',onFocus);return {unchanged:()=>!moved&&(document.activeElement===source||(!source.isConnected&&document.activeElement===document.body)),stop:()=>document.removeEventListener('focusin',onFocus)};}
 function shouldFocusComposer(kind){const value=currentChatProfile()?.composer?.keyboard_focus?.[kind];return kind==='new_session'?value!==false:value===true;}
 async function sessions(){const data=await client.sessions();$('sessions').replaceChildren();for(const item of data.sessions){const option=document.createElement('option');option.value=item.id;option.textContent=(item.title||'Conversation')+' — '+(item.agent_id||'shared_default');$('sessions').append(option);}$('sessions').value=session;sessionItems=data.sessions;sessionList.update(sessionItems,session);return data.sessions;}
-async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{anchor.reset();progress.open(id);notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);controls.open(id).catch(error=>{if(id===session)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);runs(data.runs||[]);anchor.focus();},item=>{message(item);media.published(item);if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true);anchor.published(item);});if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
+async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{anchor.reset();progress.open(id);notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);controls.open(id).catch(error=>{if(id===session)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);runs(data.runs||[]);anchor.focus();},item=>{message(item);media.published(item);if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true);anchor.published(item);},()=>{void sessions().catch(error=>note(error.message));});if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
 async function cancel(id){progress.note('Stopping…');try{await client.cancel(id,{client_request_id:keyId('cancel:'+id)});}finally{await refresh();}}
 function failedRunMessages(items){
   const target=$('chat-messages-inner');
@@ -145,15 +145,15 @@ if(run.pending && run.status==='waiting_approval'){
 if(run.uncertain || run.status==='recovery'){const text=document.createElement('p');text.textContent='The previous action may have completed. Verify its outcome before retrying.';const output=document.createElement('textarea');output.placeholder='Known result to accept';output.setAttribute('aria-label','Known action result');card.append(text,output);for(const decision of ['accept','retry','abandon'])card.append(button({accept:'Accept known result',retry:'Authorize retry',abandon:'Abandon run'}[decision],async()=>{await client.recover(run.id,{decision,output:output.value,client_request_id:keyId('recovery:'+run.id+':'+decision+':'+output.value)});await refresh();}));}
 if(!run.uncertain && ['paused','stopped'].includes(run.status))card.append(button('Resume run',async()=>{await client.resume(run.id,{client_request_id:crypto.randomUUID()});await refresh();}));if(active?.id===run.id)card.append(button('Cancel run',()=>cancel(run.id)));$('runs').append(card);}}
 $('sessions').onchange=guard(()=>open($('sessions').value));
-async function ensureSession(title='New conversation'){
+async function ensureSession(){
   if(session)return session;
   if(creatingSession)return creatingSession;
   const epoch=sessionGeneration;
   creatingSession=(async()=>{
     const focusWatch=watchFocus();
     try {
-      const requestKey='session:'+getAgentId()+':'+title;
-      const item=await client.create({title:title.slice(0,60),agent_id:getAgentId(),client_request_id:keyId(requestKey)});
+      const requestKey='session:'+getAgentId();
+      const item=await client.create({agent_id:getAgentId(),client_request_id:keyId(requestKey)});
       forgetKey(requestKey);
       if(epoch!==sessionGeneration)throw Error('Conversation changed; repeat the action in the selected conversation.');
       await sessions();
@@ -166,7 +166,7 @@ async function ensureSession(title='New conversation'){
 $('new').onclick=guard(async()=>{
   const focusWatch=watchFocus();
   try{
-    const item=await client.create({title:'New conversation',agent_id:getAgentId(),client_request_id:crypto.randomUUID()});
+    const item=await client.create({agent_id:getAgentId(),client_request_id:crypto.randomUUID()});
     await sessions();
     await open(item.id,'push','new_session',focusWatch);
   }finally{focusWatch.stop();}
@@ -176,9 +176,9 @@ async function submit(text,clearInput=false){
   const origin=session,epoch=sessionGeneration,draft=$('chat-input').value;
   progress.note('Sending…');submitting=true;$('chat-send').disabled=true;$('chat-continue-btn').disabled=true;
   try{
-    const sid=await ensureSession(text||'Attachments');
+    const sid=await ensureSession();
     if((origin&&origin!==session)||(epoch!==sessionGeneration&&session!==sid))throw Error('Conversation changed; message was not sent.');
-    const ids=media.snapshot(sid),content=text||'Please review the attached files.';
+    const ids=media.snapshot(sid),content=text;
     const requestKey='message:'+sid+':'+content+':'+ids.join(',');
     await client.send(sid,{text:content,attachment_ids:ids,client_message_id:keyId(requestKey)});
     forgetKey(requestKey);media.committed(sid,ids);
