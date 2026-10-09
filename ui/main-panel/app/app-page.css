@@ -46,3 +46,9 @@
 #app-functions-page label{display:flex;flex-direction:column;gap:6px;margin:14px 0}
 #app-functions-page input{padding:8px;background:var(--bg-1);color:var(--fg-1);border:1px solid var(--border);border-radius:4px;width:100%;box-sizing:border-box}
 #app-functions-page p{color:var(--fg-2);line-height:1.5;font-size:13px}
+
+#app-functions-page .app-runtime-reference{margin-top:16px;border:1px solid var(--border);border-radius:8px}
+#app-functions-page .app-runtime-reference > div{padding:0 14px 14px;overflow-x:auto}
+#app-functions-page table{width:100%;border-collapse:collapse;font-size:12px}
+#app-functions-page th,#app-functions-page td{text-align:left;vertical-align:top;padding:10px;border-bottom:1px solid var(--border);overflow-wrap:anywhere;min-width:140px}
+#app-functions-page th{color:var(--fg-1)}

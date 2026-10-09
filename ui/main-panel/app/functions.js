@@ -1,4 +1,5 @@
 'use strict';
+import { runtimeHelp, renderRuntimeReference } from './runtime-help.js';
 export function mountFunctions(host) {
  const fields=[
  ['max_active_runs','Maximum concurrent runs',0,16],
@@ -12,9 +13,12 @@ export function mountFunctions(host) {
  if(key==='max_unresolved_runs'){const h=document.createElement('h3');h.textContent='More configuration';form.append(h);}
  const lab=document.createElement('label');lab.textContent=label;
  const input=document.createElement('input');input.name=key;input.type='number';input.min=min;input.max=max;input.step='1';input.required=key!=='max_active_runs';lab.append(input);form.append(lab);
- if(key==='max_active_runs'){input.placeholder='Unlimited';const p=document.createElement('p');p.textContent='Blank or 0 means unlimited scheduler concurrency. Positive values from 1 to 16 set a limit. Account and queue limits still apply.';form.append(p);}
+ const help=runtimeHelp['scheduler.'+key]||runtimeHelp['tools.'+key];
+ const description=document.createElement('p');description.id='runtime-help-'+key;description.textContent=help.purpose+' Used by: '+help.used+'. Takes effect: '+help.effect+'.';input.setAttribute('aria-describedby',description.id);form.append(description);
+ if(key==='max_active_runs')input.placeholder='Unlimited';
  }
  const note=document.createElement('p');note.textContent='Save updates the configuration. Restart the loop for concurrency, polling or recovery changes. Queue-limit changes also require an API restart. Tool batch changes apply on the next call. Existing runs are retained.';form.append(note);
+ const reference=document.createElement('details');reference.className='app-runtime-reference';reference.innerHTML='<summary>All configuration settings</summary><div></div>';host.append(reference);
  const button=document.createElement('button');button.type='submit';button.className='members-btn';button.textContent='Save configuration';button.disabled=true;form.append(button);
  let digest='',busy=false;
  async function request(method='GET',settings){
@@ -29,7 +33,7 @@ export function mountFunctions(host) {
  return data;
  }
  function render(data){
- digest=data.digest;
+ digest=data.digest;renderRuntimeReference(reference.querySelector('div'),data.config);
  for(const input of form.querySelectorAll('input'))input.value=String((input.name==='max_parallel_calls'?data.config.tools:data.config.scheduler)[input.name]);
  const value=data.config.scheduler.max_active_runs;host.querySelector('[data-limit]').textContent=value===0?'Unlimited':String(value);
  }
