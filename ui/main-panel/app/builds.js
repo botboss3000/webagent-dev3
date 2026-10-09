@@ -14,8 +14,11 @@ const deploymentPhases = [
 const phasesFor = job => [
   ...(job.operation === 'build' || job.operation === 'build_deploy'
     ? ['building_api', 'building_loop'] : []),
+  ...(['deploy', 'build_deploy', 'ui_deploy'].includes(job.operation)
+    ? ['indexing_source'] : []),
   ...(job.operation === 'deploy' || job.operation === 'build_deploy'
     ? deploymentPhases : []),
+  ...(job.operation === 'ui_deploy' ? ['switching_ui', 'checking_ui'] : []),
   ...(job.isolated ? ['promoting_checkout'] : []),
   'finished'
 ];
@@ -69,7 +72,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
   const heading = document.createElement('h2');
   heading.textContent = 'Builds';
   const subtitle = document.createElement('p');
-  subtitle.textContent = 'Development builds, tests, and deployments';
+  subtitle.textContent = 'Development builds, source indexing, tests, and deployments';
   intro.append(heading, subtitle);
   const update = document.createElement('button');
   update.type = 'button';
