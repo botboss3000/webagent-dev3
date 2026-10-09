@@ -8,6 +8,9 @@ export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
   // Durable row IDs keep the cooldown across transcript reprojections. Only
   // reader movement rearms a consumed anchor; layout and smooth snaps cannot.
   const consumed={up:new Set(),down:new Set()};
+  // A landing owns one shared exclusion zone. Neighboring bubbles cannot take
+  // turns pulling the reader around until a reader scroll leaves this zone.
+  let neighborhoodLanding=null;
   const setting=(name,fallback)=>px(config()[name],fallback);
   // Up approaches a pin from below (larger scrollTop); down from above.
   const directionSetting=(direction,name,fallback)=>px(config()[direction]?.[name],setting(name,fallback));
@@ -17,12 +20,18 @@ export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
   function reachable(top){const shortfall=top-Math.max(0,scroller.scrollHeight-scroller.clientHeight);if(shortfall>0){const extra=px(inner.style.getPropertyValue('--v3-anchor-extra'),0);inner.style.setProperty('--v3-anchor-extra',(extra+shortfall)+'px');void inner.offsetHeight;}}
   function finishSnap(){snapping=false;clearTimeout(snapFallback);snapFallback=0;}
   function release(){focusedId=null;following=false;clearTimeout(snapTimer);finishSnap();scroller.scrollTo({top:scroller.scrollTop,behavior:'instant'});intentUntil=performance.now()+setting('scroll_intent_ms',2000);}
-  function land(){if(!focusedId||config().enabled===false)return;const row=users().find(row=>row.dataset.publicId===focusedId);if(!row)return;if(!active&&performance.now()>deadline){focusedId=null;return;}const top=target(row);reachable(top);scroller.scrollTop=top;consumed.up.add(row.dataset.publicId);consumed.down.add(row.dataset.publicId);}
+  function land(){if(!focusedId||config().enabled===false)return;const row=users().find(row=>row.dataset.publicId===focusedId);if(!row)return;if(!active&&performance.now()>deadline){focusedId=null;return;}const top=target(row);reachable(top);scroller.scrollTop=top;neighborhoodLanding=top;consumed.up.add(row.dataset.publicId);consumed.down.add(row.dataset.publicId);}
   function changed(){cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{if(focusedId)land();else if(following)scroller.scrollTop=scroller.scrollHeight;});}
   function focus(row=users().at(-1)){if(!row||config().enabled===false){following=true;changed();return;}focusedId=row.dataset.publicId;deadline=performance.now()+setting('focus_hold_ms',6000);following=false;changed();}
-  function reset(){release();consumed.up.clear();consumed.down.clear();inner.style.removeProperty('--v3-anchor-extra');following=true;active=false;intentUntil=0;}
+  function reset(){release();neighborhoodLanding=null;consumed.up.clear();consumed.down.clear();inner.style.removeProperty('--v3-anchor-extra');following=true;active=false;intentUntil=0;}
   function rearm() {
     const current=scroller.scrollTop,max=Math.max(0,scroller.scrollHeight-scroller.clientHeight);
+    if(neighborhoodLanding!==null) {
+      const offset=current-neighborhoodLanding;
+      const direction=offset>=0?'up':'down';
+      const distance=Math.max(directionSetting(direction,'snap_rearm_distance_px',100),directionSetting(direction,'snap_distance_px',20));
+      if(Math.abs(offset)>=distance)neighborhoodLanding=null;
+    }
     // Keep the rearm boundary outside the capture margin even with overlapping
     // settings, so leaving the landing by a few pixels never recaptures it.
     for(const row of users()) {
@@ -36,7 +45,7 @@ export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
     }
   }
   function settle() {
-    if(config().enabled===false||config().snap_enabled===false||snapping)return;
+    if(config().enabled===false||config().snap_enabled===false||snapping||neighborhoodLanding!==null)return;
     const current=scroller.scrollTop,max=Math.max(0,scroller.scrollHeight-scroller.clientHeight);
     let nearest=null;
     for(const row of users()) {
@@ -47,6 +56,7 @@ export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
       if(distance<=directionSetting(direction,'snap_distance_px',20)&&(!nearest||distance<nearest.distance))nearest={top,distance,id,direction};
     }
     if(!nearest)return;
+    neighborhoodLanding=nearest.top;
     consumed[nearest.direction].add(nearest.id);
     if(nearest.distance<=directionSetting(nearest.direction,'snap_tolerance_px',2))return;
     snapping=true;

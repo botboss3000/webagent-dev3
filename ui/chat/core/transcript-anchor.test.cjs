@@ -1,6 +1,6 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-function fixture(profile={}) {
+function fixture(profile={},positions=[500,1000]) {
   const timers=new Map(),frames=new Map();let serial=0,rows=[],calls=[];
   const listeners={};
   const scroller={scrollTop:0,scrollHeight:2000,clientHeight:400,
@@ -9,7 +9,7 @@ function fixture(profile={}) {
     addEventListener(name,fn){listeners[name]=fn;}};
   const inner={querySelectorAll:()=>rows,style:{getPropertyValue:()=>0,setProperty(){},removeProperty(){}}};
   const row=(id,top)=>({dataset:{publicId:id},getBoundingClientRect:()=>({top:top-scroller.scrollTop+62})});
-  rows=[row('one',500),row('two',1000)];
+  rows=positions.map((top,i)=>row(String(i),top));
   const context={AbortController,performance:{now:()=>10},matchMedia:()=>({matches:false}),
     ResizeObserver:class{observe(){}disconnect(){}},
     setTimeout(fn){const id=++serial;timers.set(id,fn);return id;},clearTimeout:id=>timers.delete(id),
@@ -20,7 +20,7 @@ function fixture(profile={}) {
   const api=context.mountTranscriptAnchor({scroller,inner,header:{getBoundingClientRect:()=>({bottom:0})},getProfile:()=>({user_turn_anchor:profile})});
   const flush=map=>{const tasks=[...map.values()];map.clear();tasks.forEach(fn=>fn());};
   function move(top,settle=true){listeners.wheel();scroller.scrollTop=top;listeners.scroll();if(settle)flush(timers);}
-  return {api,move,calls,scroller,flushFrames:()=>flush(frames),finish:()=>listeners.scrollend(),reproject:()=>{rows=[row('one',500),row('two',1000)];}};
+  return {api,move,calls,scroller,flushFrames:()=>flush(frames),finish:()=>listeners.scrollend(),reproject:()=>{rows=positions.map((top,i)=>row(String(i),top));}};
 }
 test('snap once, ignore nearby movement, rearm at 100px in either direction',()=>{
   for(const sign of [-1,1]){
@@ -53,19 +53,17 @@ test('disabled snap and overlapping boundaries do not repeatedly capture',()=>{
   const f=fixture({snap_distance_px:20,snap_rearm_distance_px:5});f.move(510);f.finish();f.move(510);assert.equal(f.calls.length,1);
 });
 
-test('up and down consume and rearm only their own cooldown',()=>{
-  const f=fixture();f.move(510);f.finish();f.move(490);f.finish();
-  assert.equal(f.calls.length,2);
-  f.move(510);f.move(490);assert.equal(f.calls.length,2);
-  f.move(600,false);f.move(490);assert.equal(f.calls.length,2);
-  f.move(510);f.finish();assert.equal(f.calls.length,3);
-  f.move(400,false);f.move(510);assert.equal(f.calls.length,3);
-  f.move(490);assert.equal(f.calls.length,4);
+test('shared landing zone blocks both directions while preserving per-side cooldowns',()=>{
+  const f=fixture();f.move(510);f.finish();f.move(490);assert.equal(f.calls.length,1);
+  f.move(600,false);f.move(490);f.finish();assert.equal(f.calls.length,2);
+  f.move(510);assert.equal(f.calls.length,2);
+  f.move(400,false);f.move(510);f.finish();assert.equal(f.calls.length,3);
+  f.move(490);assert.equal(f.calls.length,3);
 });
 test('direction margins and distances differ within a device profile',()=>{
   const f=fixture({up:{snap_distance_px:10,snap_rearm_distance_px:150},down:{snap_distance_px:30,snap_rearm_distance_px:80}});
   f.move(515);assert.equal(f.calls.length,0);f.move(510);f.finish();
-  f.move(470);f.finish();assert.equal(f.calls.length,2);
+  f.move(420,false);f.move(470);f.finish();assert.equal(f.calls.length,2);
   f.move(600,false);f.move(510);assert.equal(f.calls.length,2);
   f.move(650,false);f.move(510);f.finish();assert.equal(f.calls.length,3);
   f.move(421,false);f.move(480);assert.equal(f.calls.length,3);
@@ -74,4 +72,23 @@ test('direction margins and distances differ within a device profile',()=>{
 test('one direction can be disabled without disabling the other',()=>{
   const f=fixture({up:{snap_enabled:false},down:{snap_enabled:true}});
   f.move(510);assert.equal(f.calls.length,0);f.move(490);assert.deepEqual(f.calls,[500]);
+});
+
+test('close bubbles cannot alternate snaps within the 500px landing zone',()=>{
+  for(const sign of [-1,1]) {
+    const f=fixture({snap_distance_px:100,snap_rearm_distance_px:500},[500,550]);
+    f.move(510);f.finish();assert.deepEqual(f.calls,[500]);
+    f.move(540);f.move(490);f.move(560);assert.equal(f.calls.length,1);
+    f.reproject();f.move(540);assert.equal(f.calls.length,1);
+    f.move(500+sign*499,false);f.move(540);assert.equal(f.calls.length,1);
+    f.move(500+sign*500,false);f.move(540);f.finish();
+    assert.deepEqual(f.calls,[500,550]);
+    f.move(510);assert.equal(f.calls.length,2);
+  }
+});
+test('programmatic snap completion and layout do not unlock the neighborhood',()=>{
+  const f=fixture({snap_distance_px:100,snap_rearm_distance_px:500},[500,550]);
+  f.move(510);f.finish();f.api.changed();f.flushFrames();f.move(540);
+  assert.equal(f.calls.length,1);
+  f.api.reset();f.move(540);assert.deepEqual(f.calls,[500,550]);
 });
