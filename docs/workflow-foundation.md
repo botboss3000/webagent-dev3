@@ -255,3 +255,13 @@ Leased interrupted safe reads may be reclaimed after expiration. The renewable l
 Postrun classification, durable notices and read-only wake admission are owned
 by background_followup; its delivery claims must share the delivery receipt
 transaction. No deployment or end-to-end acceptance is implied by these modules.
+
+## Live diagnostic plugin archive
+
+`data/diagnostics/logs.db` owns fixed-admin operational evidence and sealed
+context snapshots. The standalone diagnostics process writes and prunes it; the
+trusted core bridge initializes compatible schema and provides authenticated read
+projections. Existing seven-day metadata and 24-hour snapshot defaults remain.
+No plugin reads session databases through the protocol, and credentials/keys are
+never transmitted. Installed executables run as administrator-trusted application
+code, not as untrusted tool workers. Removal retains archive and operational config.

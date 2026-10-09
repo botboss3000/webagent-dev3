@@ -127,7 +127,7 @@ async fn snapshot_encryption_identity_expiry_and_retention() {
         .await
         .unwrap();
     assert!(bytes <= 150);
-    persist(&pool, &json!({"owner":"admin","category":"provider"}))
+    persist_fixture(&pool, &json!({"owner":"admin","category":"provider"}))
         .await
         .unwrap();
     sqlx::query("UPDATE diagnostics SET ts=0")
@@ -347,7 +347,7 @@ async fn capture_accounting_measurement() {
     let start = std::time::Instant::now();
     for _ in 0..50 {
         let report = measure(&request);
-        persist(
+        persist_fixture(
             &pool,
             &json!({"owner":"admin","category":"context_assembly","report":report}),
         )
@@ -476,7 +476,32 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
     let (root, app) = crate::runtime_tests::fixture().await;
     let sid = crate::runtime_tests::conversation(&app).await;
     let rid = crate::runtime_tests::queued(&app, &sid).await;
-    init(root.path(), &app.store, "loop").await;
+    let packages = root.path().join("plugins");
+    let package = packages.join("diagnostics");
+    std::fs::create_dir_all(&package).unwrap();
+    let binary = std::env::var("V3_DIAGNOSTICS_TEST_BINARY")
+        .expect("Standalone diagnostics acceptance needs V3_DIAGNOSTICS_TEST_BINARY");
+    std::fs::copy(&binary, package.join("webagent-diagnostics")).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        package.join("webagent-diagnostics"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("plugin.json"),
+        include_bytes!("../plugin_packages/diagnostics/plugin.json"),
+    )
+    .unwrap();
+    std::env::set_var("V3_PLUGIN_TEST_ROOT", &packages);
+    init(root.path(), &app.store, "api").await;
+    tokio::time::timeout(Duration::from_secs(7), async {
+        while !bridge::available() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
     assert!(!settings().unwrap().config.active());
     let path = root.path().join("config/diagnostics.json");
     let config = enabled(&sid).config;
@@ -615,6 +640,45 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
         .await
         .unwrap();
     assert!(!String::from_utf8_lossy(&bytes).contains("PRIVATE"));
+    let moved = packages.join("removed-diagnostics");
+    std::fs::rename(&package, &moved).unwrap();
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while bridge::available() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(assembly(&app.store, &run, &request, &prepared).is_none());
+    std::fs::rename(&moved, &package).unwrap();
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while !bridge::available() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let pid_file = root.path().join("diagnostics/plugin.pid");
+    let before = std::fs::read_to_string(&pid_file).unwrap();
+    let update = package.join("webagent-diagnostics.next");
+    std::fs::copy(&binary, &update).unwrap();
+    std::fs::set_permissions(&update, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::rename(update, package.join("webagent-diagnostics")).unwrap();
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while std::fs::read_to_string(&pid_file).ok().as_deref() == Some(before.as_str())
+            || !bridge::available()
+        {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        read_snapshot(&r.pool, &app.store, &sid, &rid, &attempt)
+            .await
+            .unwrap()["history"],
+        json!(history)
+    );
     sqlx::query("DROP TABLE context_snapshots")
         .execute(&r.pool)
         .await
@@ -674,4 +738,17 @@ fn existing_configuration_gains_compatible_category_defaults() {
     let c: Config = serde_json::from_value(value).unwrap();
     assert!(c.categories.run && c.categories.tool && c.categories.recovery);
     assert!(!c.enabled);
+}
+
+// Seed archive fixtures directly; production writes require the standalone protocol.
+async fn persist_fixture(pool: &SqlitePool, event: &Value) -> anyhow::Result<()> {
+    sqlx::query("INSERT INTO diagnostics(ts,category,run_id,session_id,payload) VALUES(?,?,?,?,?)")
+        .bind(crate::now() as i64)
+        .bind(event["category"].as_str())
+        .bind(event["run_id"].as_str())
+        .bind(event["session_id"].as_str())
+        .bind(event.to_string())
+        .execute(pool)
+        .await?;
+    Ok(())
 }

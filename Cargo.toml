@@ -30,3 +30,7 @@ tempfile = "3"
 
 [dev-dependencies]
 http-body-util = "0.1"
+
+[[bin]]
+name = "webagent-diagnostics"
+path = "src/plugin_packages/diagnostics/main.rs"

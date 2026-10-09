@@ -20,7 +20,8 @@ RUN --mount=type=cache,id=webagent-v3-registry,target=/usr/local/cargo/registry,
     --mount=type=cache,id=webagent-v3-target,target=/build/target,sharing=locked \
     cargo test --locked -- --test-threads=1 \
     && cargo build --release --locked \
-    && install -Dm755 /build/target/release/webagent-v3 /out/webagent-v3
+    && install -Dm755 /build/target/release/webagent-v3 /out/webagent-v3 \
+    && install -Dm755 /build/target/release/webagent-diagnostics /out/webagent-diagnostics
 
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS api
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates curl tini git ripgrep build-essential pkg-config chromium chromium-driver python3-selenium \
@@ -29,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-cert
     && useradd -u 1101 -g 1100 -M -s /usr/sbin/nologin v3tools
 COPY --from=preview_tunnel /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
+COPY --from=tested_builder /out/webagent-diagnostics /usr/local/bin/webagent-diagnostics
 COPY --from=tested_builder /usr/local/rustup/toolchains/1.90.0-x86_64-unknown-linux-gnu /opt/rust
 COPY v3/worker.py v3/sandbox.py v3/launch.py v3/promote.py /opt/v3/
 COPY v3/plugins/abilities /opt/v3/plugins/abilities

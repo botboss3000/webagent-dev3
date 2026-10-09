@@ -1,9 +1,11 @@
 # Fixed-admin v3 diagnostics
 
-The optional Rust module lives under `src/diagnostics_plugin/`, inside the protected
-broker source allowlist. `build.rs` detects its `mod.rs`; removing this directory
-and rebuilding activates the no-op hooks. The legacy `plugins/diagnostics/`
-location is not used by this implementation.
+The live standalone Rust package is installed under `plugins/diagnostics/`.
+Adding/removing that folder starts/stops the supervised recorder without rebuilding
+the main app. The trusted core bridge remains under `src/diagnostics_plugin/`:
+it owns scope, bounded observations, encryption and authorized archive reads.
+Package build inputs and installation details are in
+`src/plugin_packages/diagnostics/README.md`. Package removal preserves evidence.
 
 ## Configuration
 

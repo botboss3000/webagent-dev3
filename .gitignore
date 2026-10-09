@@ -23,3 +23,6 @@ node_modules/
 
 # Public source template; runtime app settings remain ignored.
 !/config/app-settings.json
+
+# Live administrator-installed application plugins are packaged independently.
+/plugins/diagnostics/

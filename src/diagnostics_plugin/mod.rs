@@ -1,4 +1,5 @@
 //! Admin-only evidence. No global server/HTTP content or public-user events.
+mod bridge;
 mod config;
 #[cfg(test)]
 mod tests;
@@ -21,6 +22,7 @@ use std::{
 };
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 static RECORDER: OnceLock<Recorder> = OnceLock::new();
+static HEARTBEAT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 const SNAPSHOT_QUEUE_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Clone)]
 struct Settings {
@@ -95,6 +97,7 @@ pub(crate) async fn init(root: &Path, _store: &Store, role: &str) {
     if RECORDER.get().is_some() {
         return;
     }
+    bridge::init(root, role).await;
     let path = root.join("config/diagnostics.json");
     // First start seeds once, preserving every existing operator setting.
     if let Err(error) = seed(&path) {
@@ -156,7 +159,7 @@ pub(crate) async fn init(root: &Path, _store: &Store, role: &str) {
     });
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
-        let mut ticks = 0u64;
+
         loop {
             interval.tick().await;
             let p = path.clone();
@@ -169,17 +172,14 @@ pub(crate) async fn init(root: &Path, _store: &Store, role: &str) {
                     *state = s;
                 }
             }
-            if heartbeat(r).await.is_err() {
-                r.write_errors.fetch_add(1, Ordering::Relaxed);
-            }
-            if ticks.is_multiple_of(24) {
-                if let Some(s) = settings() {
-                    if prune(&r.pool, &s.config).await.is_err() {
+            if let Ok(permit) = HEARTBEAT.try_acquire() {
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    if heartbeat(r).await.is_err() {
                         r.write_errors.fetch_add(1, Ordering::Relaxed);
                     }
-                }
+                });
             }
-            ticks = ticks.wrapping_add(1);
         }
     });
 }
@@ -229,16 +229,8 @@ fn event_allowed(s: &Settings, event: &Value) -> bool {
         && event["config_digest"].as_str() == s.digest.as_deref()
         && permits(s, event["category"].as_str().unwrap_or(""))
 }
-async fn persist(pool: &SqlitePool, event: &Value) -> anyhow::Result<()> {
-    sqlx::query("INSERT INTO diagnostics(ts,category,run_id,session_id,payload) VALUES(?,?,?,?,?)")
-        .bind(crate::now() as i64)
-        .bind(event["category"].as_str().unwrap_or("context_assembly"))
-        .bind(event["run_id"].as_str())
-        .bind(event["session_id"].as_str())
-        .bind(event.to_string())
-        .execute(pool)
-        .await?;
-    Ok(())
+async fn persist(_pool: &SqlitePool, event: &Value) -> anyhow::Result<()> {
+    bridge::send("event", event.clone(), None).await
 }
 async fn persist_snapshot(pool: &SqlitePool, snapshot: Snapshot) -> anyhow::Result<()> {
     let Some(s) = settings() else {
@@ -263,8 +255,9 @@ async fn persist_snapshot(pool: &SqlitePool, snapshot: Snapshot) -> anyhow::Resu
     if !snapshot_allowed(&s, &payload) {
         return Ok(());
     }
-    insert_snapshot(pool, &payload, &sealed, bytes, &s.config).await?;
-    prune(pool, &s.config).await
+    let _ = pool;
+    let event = json!({"owner":"admin","category":"context_assembly","config_digest":payload["config_digest"],"attempt_id":payload["attempt_id"],"session_id":payload["session_id"],"run_id":payload["run_id"]});
+    bridge::send("snapshot", event, Some((&sealed, bytes))).await
 }
 fn snapshot_allowed(s: &Settings, payload: &Value) -> bool {
     event_allowed(s, payload)
@@ -305,13 +298,13 @@ fn emit(event: Value) {
     }
 }
 pub(crate) fn provider_enabled(store: &Store) -> bool {
-    scope(store) && settings().is_some_and(|s| permits(&s, "provider"))
+    scope(store) && bridge::available() && settings().is_some_and(|s| permits(&s, "provider"))
 }
 pub(crate) fn failure(store: &Store, run: &Value, error: &anyhow::Error, action: &str) {
     if !scope(store) {
         return;
     }
-    let Some(s) = settings().filter(|s| permits(s, "provider")) else {
+    let Some(s) = settings().filter(|s| bridge::available() && permits(s, "provider")) else {
         return;
     };
     let failure = error.downcast_ref::<crate::provider::ProviderFailure>();
@@ -326,7 +319,7 @@ pub(crate) fn failure(store: &Store, run: &Value, error: &anyhow::Error, action:
 }
 // Observe only committed transitions. No raw payload, errors, arguments or results enter telemetry.
 pub(crate) fn committed(store: &Store, run: &Value, kind: &str, recovery: bool) {
-    if !scope(store) {
+    if !scope(store) || !bridge::available() {
         return;
     }
     let Some(s) = settings() else {
@@ -451,7 +444,7 @@ fn capture_attempt(
     if !scope(store) {
         return None;
     }
-    let s = settings().filter(|s| permits(s, "context_assembly"))?;
+    let s = settings().filter(|s| bridge::available() && permits(s, "context_assembly"))?;
     let selected = s
         .config
         .selected(run["session_id"].as_str().unwrap_or(""), crate::now());
@@ -657,7 +650,7 @@ pub(crate) fn validation(
     if !scope(store) {
         return None;
     }
-    let s = settings().filter(|s| permits(s, "context_assembly"))?;
+    let s = settings().filter(|s| bridge::available() && permits(s, "context_assembly"))?;
     let event = json!({"owner":"admin","category":"context_assembly","level":"warning","config_digest":s.digest,
   "attempt_id":crate::uuid(),"parent_attempt_id":run["latest_context_assembly"]["attempt_id"],
   "session_id":identifier(&run["session_id"]),"run_id":identifier(&run["id"]),
@@ -671,16 +664,17 @@ fn status_value(r: &Recorder) -> Value {
         digest: None,
         error: Some("configuration_lock_unavailable"),
     });
-    json!({"role":r.role,"capture_scope":"fixed_admin","enabled":s.config.active(),"config_digest":s.digest,"configuration_error":s.error,
+    json!({"role":r.role,"capture_scope":"fixed_admin","enabled":s.config.active() && bridge::available(),"plugin_available":bridge::available(),"config_digest":s.digest,"configuration_error":s.error,
   "categories":s.config.categories,"assembly_successes":s.config.assembly_successes,"full_context":s.config.full_context,
   "retention":s.config.retention,"queue_depth":r.tx.max_capacity()-r.tx.capacity(),
   "snapshot_queue_depth":r.snapshots.max_capacity()-r.snapshots.capacity(),"snapshot_queue_estimated_bytes":SNAPSHOT_QUEUE_BYTES-r.budget.available_permits(),
   "dropped":r.dropped.load(Ordering::Relaxed),"write_errors":r.write_errors.load(Ordering::Relaxed),"skipped_snapshots":r.skipped.load(Ordering::Relaxed)})
 }
 async fn heartbeat(r: &Recorder) -> anyhow::Result<()> {
-    sqlx::query("INSERT INTO diagnostic_processes(role,ts,payload) VALUES(?,?,?) ON CONFLICT(role) DO UPDATE SET ts=excluded.ts,payload=excluded.payload")
-  .bind(&r.role).bind(crate::now() as i64).bind(status_value(r).to_string()).execute(&r.pool).await?;
-    Ok(())
+    if !bridge::available() {
+        return Ok(());
+    }
+    bridge::send("heartbeat", status_value(r), None).await
 }
 async fn authorize(app: &crate::App, identity: &Value) -> Result<(), crate::ApiError> {
     if !scope(&app.store) {
@@ -732,7 +726,7 @@ async fn read(
   .bind(&filter.category).bind(&filter.category).bind(&filter.level).bind(&filter.level).bind(filter.limit.unwrap_or(100).clamp(1,500))
   .fetch_all(&r.pool).await.map_err(anyhow::Error::from)?;
     Ok(Json(
-        json!({"enabled":settings().is_some_and(|s|s.config.active()),"records":rows.into_iter().map(|(id,ts,payload)|json!({"id":id,"ts":ts,"event":serde_json::from_str::<Value>(&payload).unwrap_or(Value::Null)})).collect::<Vec<_>>()}),
+        json!({"enabled":bridge::available() && settings().is_some_and(|s|s.config.active()),"records":rows.into_iter().map(|(id,ts,payload)|json!({"id":id,"ts":ts,"event":serde_json::from_str::<Value>(&payload).unwrap_or(Value::Null)})).collect::<Vec<_>>()}),
     ))
 }
 async fn status(

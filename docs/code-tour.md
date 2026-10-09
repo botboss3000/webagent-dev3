@@ -486,3 +486,9 @@ paginated reports are exposed in work preflight, status, job receipts and the bu
 dashboard. finish/decide bind explicit choices to the full comparison digest.
 _start_next and the pre-effect checkpoint recheck drift; Rust finish/recovery
 returns needs_decision to the model instead of waiting indefinitely.
+
+Live diagnostics: the API's core bridge discovers the administrator-installed
+`plugins/diagnostics/` package, supervises its standalone Rust process and uses
+versioned UID-checked local IPC for archive writes. The loop connects to the same
+socket. Removal stops new capture; earlier archive reads remain ownership checked.
+See `src/plugin_packages/diagnostics/README.md` for package lifecycle boundaries.
