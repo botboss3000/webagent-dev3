@@ -6651,6 +6651,105 @@ async fn retained_read_recall_resolves_only_verified_same_session_origin() {
 }
 
 #[tokio::test]
+async fn persisted_code_index_status_survives_snapshot_and_legacy_view_hydration() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+
+    let attached_id = queued(&app, &sid).await;
+    let mut attached = app.run(&attached_id).await.unwrap();
+    attached["code_index_retrieval_attempted"] = json!(true);
+    attached["code_index_retrieval_status"] = json!("attached");
+    attached["code_index_retrieval_stage"] = json!("complete");
+    attached["code_index_query"] = json!("private retrieval query");
+    attached["code_index_source"] = json!("private source excerpt");
+    app.store
+        .save_run(&mut attached, "model_dispatch", &json!({}))
+        .await
+        .unwrap();
+    attached["status"] = json!("failed");
+    attached["error"] = json!("fixture terminal");
+    app.store
+        .save_run(&mut attached, "run_status", &json!({}))
+        .await
+        .unwrap();
+    let attached_view = app.store.get(&format!("run_view:{attached_id}")).await.unwrap().unwrap();
+    assert!(attached_view["model"].is_object());
+    assert_eq!(attached_view["code_index_retrieval_attempted"], true);
+    assert_eq!(attached_view["code_index_retrieval_status"], "attached");
+    assert_eq!(attached_view["code_index_retrieval_stage"], "complete");
+
+    let legacy_id = queued(&app, &sid).await;
+    let mut legacy_run = app.run(&legacy_id).await.unwrap();
+    legacy_run["code_index_retrieval_attempted"] = json!(true);
+    legacy_run["code_index_retrieval_status"] = json!("attached_candidates");
+    legacy_run["code_index_retrieval_stage"] = json!("complete");
+    legacy_run["code_index_query"] = json!("second private query");
+    legacy_run["code_index_source"] = json!("second private source");
+    app.store
+        .save_run(&mut legacy_run, "model_dispatch", &json!({}))
+        .await
+        .unwrap();
+    legacy_run["status"] = json!("failed");
+    legacy_run["error"] = json!("fixture terminal");
+    app.store
+        .save_run(&mut legacy_run, "run_status", &json!({}))
+        .await
+        .unwrap();
+    let mut legacy_view = app.store.get(&format!("run_view:{legacy_id}")).await.unwrap().unwrap();
+    assert!(legacy_view["model"].is_object());
+    for key in [
+        "code_index_retrieval_attempted",
+        "code_index_retrieval_status",
+        "code_index_retrieval_stage",
+    ] {
+        legacy_view.as_object_mut().unwrap().remove(key);
+    }
+    app.store
+        .put(&format!("run_view:{legacy_id}"), &legacy_view)
+        .await
+        .unwrap();
+
+    let preflight_id = queued(&app, &sid).await;
+    let preflight_view = app.store.get(&format!("run_view:{preflight_id}")).await.unwrap().unwrap();
+    assert_eq!(preflight_view["code_index_retrieval_attempted"], false);
+    assert_eq!(preflight_view["code_index_retrieval_status"], "not_attempted");
+    assert_eq!(preflight_view["code_index_retrieval_stage"], "not_started");
+
+    let token = uuid();
+    app.store
+        .put(
+            &format!("auth:{}", digest(&json!(token))),
+            &json!({"csrf":"fixture","expires":now()+3600,"generation":"fixture-generation"}),
+        )
+        .await
+        .unwrap();
+    let request = Request::builder()
+        .uri(format!("/api/v3/sessions/{sid}"))
+        .header("cookie", format!("v3_session={token}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = router(app.clone()).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    let snapshot: Value = serde_json::from_slice(&bytes).unwrap();
+    let runs = snapshot["runs"].as_array().unwrap();
+    let attached_public = runs.iter().find(|run| run["id"] == attached_id).unwrap();
+    let legacy_public = runs.iter().find(|run| run["id"] == legacy_id).unwrap();
+    let preflight_public = runs.iter().find(|run| run["id"] == preflight_id).unwrap();
+    assert_eq!(attached_public["code_index_retrieval"], json!({"status":"attached","stage":"complete"}));
+    assert_eq!(legacy_public["code_index_retrieval"], json!({"status":"attached_candidates","stage":"complete"}));
+    assert_eq!(preflight_public["code_index_retrieval"], json!({"status":"not_attempted","stage":"not_started"}));
+    let rendered = snapshot.to_string();
+    for secret in ["private retrieval query","private source excerpt","second private query","second private source"] {
+        assert!(!rendered.contains(secret));
+    }
+    let unchanged_legacy = app.store.get(&format!("run_view:{legacy_id}")).await.unwrap().unwrap();
+    assert!(unchanged_legacy.get("code_index_retrieval_attempted").is_none());
+}
+
+#[tokio::test]
 async fn provider_recovery_exhaustion_persists_and_explicit_resume_is_idempotent() {
     let (root, app) = fixture().await;
     let sid = conversation(&app).await;

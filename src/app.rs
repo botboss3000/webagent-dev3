@@ -101,6 +101,76 @@ fn public_context_summary(run: &Value) -> Value {
     summary.insert("accounting".into(),json!("serialized_json_bytes_not_provider_tokens"));
     Value::Object(summary)
 }
+fn bounded_model_authorization_failure_stage(error: &anyhow::Error) -> &'static str {
+    if error.downcast_ref::<serde_json::Error>().is_some()
+        || error.chain().any(|cause| cause.is::<serde_json::Error>())
+    {
+        return "plan_decode";
+    }
+    if error.downcast_ref::<sqlx::Error>().is_some()
+        || error.chain().any(|cause| cause.is::<sqlx::Error>())
+        || error.downcast_ref::<std::io::Error>().is_some()
+        || error.chain().any(|cause| cause.is::<std::io::Error>())
+    {
+        return "storage";
+    }
+    const KNOWN: &[(&str, &str)] = &[
+        ("Legacy run has no pinned role; start a new message after configuring Standard", "plan_missing"),
+        ("Invalid pinned model plan identity", "plan_identity"),
+        ("Candidate missing", "candidate_missing"),
+        ("Selection candidates exhausted", "candidate_missing"),
+        ("Model entry removed", "candidate_missing"),
+        ("Model connection removed", "candidate_missing"),
+        ("Pinned model is no longer available to this caller", "model_grant"),
+        ("Model grant revoked", "model_grant"),
+        ("Candidate grant revoked", "candidate_grant"),
+        ("Pinned model candidate is no longer authorized", "candidate_grant"),
+        ("Model candidate is not authorized", "candidate_grant"),
+        ("Platform provenance removed", "platform"),
+        ("Platform provenance changed", "platform"),
+        ("Platform provenance missing from plan", "platform"),
+        ("Published model lacks role capability", "platform"),
+        ("Selected model connection is unavailable", "candidate_grant"),
+        ("Agent model roster required", "candidate_grant"),
+        ("Invalid agent model roster", "candidate_grant"),
+        ("Invalid or duplicate role backup candidates", "candidate_grant"),
+        ("Standard model required", "model_grant"),
+        ("Premium model required", "model_grant"),
+        ("Image In model required", "model_grant"),
+        ("Image Out model required", "model_grant"),
+        ("System model required", "model_grant"),
+        ("Voice model required", "model_grant"),
+        ("Decision model required", "model_grant"),
+        ("BYO model outside tier", "model_grant"),
+        ("Adopted platform transport changed", "platform"),
+        ("Selected model is outside agent roster", "candidate_grant"),
+        ("Role entry missing", "candidate_grant"),
+        ("Model connection missing", "candidate_grant"),
+        ("Role model is incompatible or not authorized", "candidate_grant"),
+        ("Account not found", "account"),
+        ("Account identity conflict", "account"),
+        ("Invalid access identity", "account"),
+        ("Guest access is not enabled", "account"),
+        ("Entitlement tier not found", "tier"),
+        ("Tier identity conflict", "tier"),
+        ("Invalid entitlement tier", "tier"),
+        ("Invalid entitlement grant", "tier"),
+        ("Membership identity or revision conflict", "membership"),
+        ("Membership capability level is missing", "membership"),
+        ("Agent directory entry missing", "agent_owner"),
+        ("Agent owner conflict", "agent_owner"),
+        ("Invalid agent metadata", "agent_owner"),
+    ];
+    for cause in error.chain() {
+        // Compare only exact internal messages; never return or log message text.
+        let message = cause.to_string();
+        if let Some((_, stage)) = KNOWN.iter().find(|(known, _)| *known == message.as_str()) {
+            return stage;
+        }
+    }
+    "unknown"
+}
+
 // Publish model identity at the pinned failover cursor, never credentials.
 fn public_run_model(run: &Value) -> Value {
     if run["model"].is_object(){return json!({"entry_id":run["model"]["entry_id"],"model":run["model"]["model"]});}
@@ -116,7 +186,10 @@ async fn public_runs(app:&App,views:Vec<Value>)->Result<Vec<Value>>{
     for view in views{
         // Old encrypted views may lack a model projection; read the owning run
         // through Store, then project only safe fields without rewriting its state.
-        if view["model"].is_null(){
+        let has_retrieval_marker = view["code_index_retrieval_attempted"].is_boolean()
+            && view["code_index_retrieval_status"].as_str().is_some()
+            && view["code_index_retrieval_stage"].as_str().is_some();
+        if view["model"].is_null() || !has_retrieval_marker{
             let run=app.run(view["id"].as_str().ok_or_else(||anyhow!("Run id missing"))?).await?;
             result.push(public_run(&run));
         }else{result.push(public_run(&view));}
@@ -126,6 +199,7 @@ async fn public_runs(app:&App,views:Vec<Value>)->Result<Vec<Value>>{
 fn public_code_index_retrieval(run: &Value) -> Value {
     let attempted = run["code_index_retrieval_attempted"] == true;
     let status = match run["code_index_retrieval_status"].as_str() {
+        Some("not_attempted") if !attempted => "not_attempted",
         Some("attached") => "attached",
         Some("attached_candidates") => "attached_candidates",
         Some("no_matches" | "disabled_or_no_matches") => "no_matches",
@@ -363,6 +437,33 @@ fn validate_system_summary_input(context:&loop_runtime::Context,selection:&provi
 #[cfg(test)]
 mod code_index_run_projection_tests {
     use super::*;
+    #[test]
+    fn model_authorization_failure_stage_is_bounded_and_content_free() {
+        let malformed: serde_json::Error = serde_json::from_str::<Value>("{").unwrap_err();
+        assert_eq!(
+            bounded_model_authorization_failure_stage(&anyhow::Error::new(malformed)),
+            "plan_decode"
+        );
+        assert_eq!(
+            bounded_model_authorization_failure_stage(&anyhow::Error::new(sqlx::Error::RowNotFound)),
+            "storage"
+        );
+        assert_eq!(
+            bounded_model_authorization_failure_stage(&anyhow::anyhow!("BYO model outside tier")),
+            "model_grant"
+        );
+        assert_eq!(
+            bounded_model_authorization_failure_stage(&anyhow::anyhow!("Role model is incompatible or not authorized")),
+            "candidate_grant"
+        );
+        assert_eq!(
+            bounded_model_authorization_failure_stage(&anyhow::anyhow!("Agent owner conflict")),
+            "agent_owner"
+        );
+        let hostile = anyhow::anyhow!("account secret: bearer-token and private model label");
+        assert_eq!(bounded_model_authorization_failure_stage(&hostile), "unknown");
+    }
+
     #[test]
     fn public_code_index_outcome_is_an_allowlisted_content_free_projection() {
         let run=json!({"id":"run","session_id":"session","status":"running",
@@ -616,7 +717,17 @@ impl App {
         Ok(())
     }
     async fn run_model_authorized(&self,run:&Value)->bool {
-        self.run_candidate(run).await.is_ok()
+        match self.run_candidate(run).await {
+            Ok(_) => true,
+            Err(error) => {
+                tracing::warn!(
+                    run_id=run["id"].as_str().unwrap_or("unknown"),
+                    stage=bounded_model_authorization_failure_stage(&error),
+                    "Pinned model authorization failed"
+                );
+                false
+            }
+        }
     }
     async fn run_candidate(&self, run: &Value) -> Result<Option<model_selection::Candidate>> {
         // Recovery cannot invent a role for an old run that never pinned one.
@@ -632,9 +743,11 @@ impl App {
         // Membership, account ceiling and roster revocation remain live even for recovered plans.
         let candidate = plan.candidates.get(state.candidate_index).ok_or_else(||anyhow!("Candidate missing"))?;
         let access=self.store.live_access(self.store.current_user_id(),&plan.agent_id).await?;
-        if !access.admitted() || (candidate.platform.is_none() && !access.model_allowed(&candidate.upstream_model))
-            || catalog.agent_models.get(&plan.agent_id).is_none_or(|m|!m.entry_ids.contains(&candidate.entry_id)) {
-            return Err(anyhow!("Pinned model is no longer available to this caller"));
+        if !access.admitted() || (candidate.platform.is_none() && !access.model_allowed(&candidate.upstream_model)) {
+            return Err(anyhow!("Model grant revoked"));
+        }
+        if catalog.agent_models.get(&plan.agent_id).is_none_or(|m|!m.entry_ids.contains(&candidate.entry_id)) {
+            return Err(anyhow!("Candidate grant revoked"));
         }
         let candidate=plan.authorize_candidate(state.candidate_index, &catalog.entries, &catalog.connections)?.clone();
         if let Some(pin)=&candidate.platform {

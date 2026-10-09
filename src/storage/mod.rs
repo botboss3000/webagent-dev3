@@ -77,6 +77,39 @@ fn recovery_manifest(reference: &Value, count: usize) -> Result<Option<Vec<(Stri
     }
 }
 
+fn bounded_code_index_run_fields(run: &Value) -> Value {
+    let attempted = run["code_index_retrieval_attempted"] == true;
+    let status = if !attempted {
+        "not_attempted"
+    } else {
+        match run["code_index_retrieval_status"].as_str() {
+            Some("attached") => "attached",
+            Some("attached_candidates") => "attached_candidates",
+            Some("no_matches" | "disabled_or_no_matches") => "disabled_or_no_matches",
+            Some("access_changed") => "access_changed",
+            Some("timeout") => "timeout",
+            Some("unavailable") => "unavailable",
+            _ => "unavailable",
+        }
+    };
+    let stage = if !attempted {
+        "not_started"
+    } else {
+        match run["code_index_retrieval_stage"].as_str() {
+            Some("preflight") => "preflight",
+            Some("lookup") => "lookup",
+            Some("pre_jev") => "pre_jev",
+            Some("jev_parse") => "jev_parse",
+            Some("snippet") => "snippet",
+            Some("authorization") => "authorization",
+            Some("complete") => "complete",
+            Some("unknown") => "unknown",
+            _ => "unknown",
+        }
+    };
+    json!({"attempted":attempted,"status":status,"stage":stage})
+}
+
 const PROMPT_SLOT_NAME_MAX: usize = 128;
 const PROMPT_SLOT_CONTENT_MAX: usize = 16 * 1024;
 const PROMPT_SLOT_COUNT_MAX: usize = 32;
@@ -1486,7 +1519,9 @@ impl Store {
             // Aggregates are read from the database; they must not use the doc cache.
             self.cache.lock().unwrap().invalidate(&[usage_key]);
         }
+        let retrieval = bounded_code_index_run_fields(run);
         let view = serde_json::json!({"usage":new_usage,"model":crate::public_run_model(run),"attachments":run["attachments"],"run_revision":run["run_revision"],"context_assembly_report":run["context_assembly_report"],"context_controls":run["context_controls"],"compactions":run["compactions"],"dispatch_mode":run["dispatch_mode"],"chat_model_revision":run["chat_model_revision"],"id":run["id"],"session_id":run["session_id"],"status":run["status"],"error":run["error"],
+            "code_index_retrieval_attempted":retrieval["attempted"],"code_index_retrieval_status":retrieval["status"],"code_index_retrieval_stage":retrieval["stage"],
             "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],"phase":run["phase"],"updated_at":run["updated_at"]});
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .bind(format!("run_view:{}",run["id"].as_str().unwrap())).bind(self.encode_user_record(&view)?).execute(&mut **tx).await?;

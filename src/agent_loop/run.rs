@@ -122,11 +122,34 @@ pub(crate) async fn execute_run(
             match apply_chat_model_preference(&app,&mut run).await {
                 Ok(true)=>{context_accounting.reset();app.save(&mut run).await?;}
                 Ok(false)=>{},
-                Err(_)=>{run["status"]=json!("paused");run["error"]=json!("Selected model unavailable; choose a permitted connected model and resume");app.save(&mut run).await?;return Ok(());}
+                Err(ref error)=>{
+                    tracing::warn!(
+                        run_id=%id,
+                        stage=crate::bounded_model_authorization_failure_stage(error),
+                        "Composer model preference could not be applied"
+                    );
+                    run["status"]=json!("paused");
+                    run["error"]=json!("Selected model unavailable; choose a permitted connected model and resume");
+                    app.save(&mut run).await?;
+                    return Ok(());
+                }
             }
         }
         let agent_id=run["agent_id"].as_str().unwrap_or("shared_default").to_owned();
         let access=app.store.live_access(app.store.current_user_id(),&agent_id).await;
+        match &access {
+            Err(error) => tracing::warn!(
+                run_id=%id,
+                stage=crate::bounded_model_authorization_failure_stage(error),
+                "Live model access check failed"
+            ),
+            Ok(access) if !access.admitted() => tracing::warn!(
+                run_id=%id,
+                stage="access_denied",
+                "Live model access check denied"
+            ),
+            _ => {}
+        }
         if access.as_ref().map_or(true, |access| !access.admitted()) || !app.run_model_authorized(&run).await {
             run["status"]=json!("stopped");
             run["error"]=json!("Access changed; run stopped");

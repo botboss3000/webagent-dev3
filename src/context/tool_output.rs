@@ -2,7 +2,7 @@
 //!
 //! Raw outputs remain in durable run input. This module stores only bounded
 //! references and returns a projected copy for one model request.
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -22,8 +22,6 @@ const MAX_PLACEHOLDER_CHARS: usize = 2048;
 const MAX_LIFETIME_CALLS: u64 = 1_000;
 const MAX_OUTPUT_CHARS: usize = 262_144;
 const MAX_POLICY_BYTES: usize = 64 * 1024;
-const FALLBACK_GUIDANCE: &str = "Older successful read results may be summarized in context. Use their recall reference to retrieve details when needed.";
-const FALLBACK_PLACEHOLDER: &str = "Earlier output from {{tool_name}} (call {{call_id}}) was retained by the context policy. Recall it from run {{origin_run_id}} using this reference. Source digest: {{source_sha256}}.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -164,22 +162,31 @@ pub struct Prompts {
     pub placeholder: String,
 }
 
+fn embedded_prompt_defaults(template: &Value) -> Result<(String, String)> {
+    let fields = template
+        .get("tool_output_retention")
+        .and_then(Value::as_object)
+        .context("Embedded tool output retention prompt section is missing or invalid")?;
+    let field = |name: &str| -> Result<String> {
+        let text = fields
+            .get(name)
+            .and_then(Value::as_str)
+            .with_context(|| format!("Embedded tool output retention {name} prompt is missing or invalid"))?;
+        if text.trim().is_empty() || text.len() > 8192 {
+            bail!("Embedded tool output retention prompt is invalid");
+        }
+        Ok(text.to_owned())
+    };
+    Ok((field("guidance")?, field("placeholder")?))
+}
+
 impl Prompts {
-    /// Read live prompts. Missing section/keys fall back to the embedded source
-    /// template; malformed present values fail closed.
+    /// Read live prompts. Missing section/keys fall back to validated embedded JSON;
+    /// malformed present values fail closed.
     pub fn read(root: &Path) -> Result<Self> {
-        let template: Value = serde_json::from_slice(include_bytes!("../../config/prompts.json"))?;
-        let defaults = template
-            .get("tool_output_retention")
-            .and_then(Value::as_object);
-        let guidance_default = defaults
-            .and_then(|fields| fields.get("guidance"))
-            .and_then(Value::as_str)
-            .unwrap_or(FALLBACK_GUIDANCE);
-        let placeholder_default = defaults
-            .and_then(|fields| fields.get("placeholder"))
-            .and_then(Value::as_str)
-            .unwrap_or(FALLBACK_PLACEHOLDER);
+        let template: Value = serde_json::from_slice(include_bytes!("../../config/prompts.json"))
+            .context("Embedded prompt configuration is malformed")?;
+        let (guidance_default, placeholder_default) = embedded_prompt_defaults(&template)?;
         let path = root.join("config/prompts.json");
         let live = match fs::read(path) {
             Ok(bytes) => serde_json::from_slice::<Value>(&bytes)?,
@@ -197,14 +204,14 @@ impl Prompts {
             let Some(text) = value.as_str() else {
                 bail!("Invalid tool output retention prompt");
             };
-            if text.len() > 8192 {
-                bail!("Tool output retention prompt exceeds limit");
+            if text.trim().is_empty() || text.len() > 8192 {
+                bail!("Tool output retention prompt is invalid");
             }
             Ok(text.to_owned())
         };
         Ok(Self {
-            guidance: field("guidance", guidance_default)?,
-            placeholder: field("placeholder", placeholder_default)?,
+            guidance: field("guidance", &guidance_default)?,
+            placeholder: field("placeholder", &placeholder_default)?,
         })
     }
 }
@@ -1281,6 +1288,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let prompts = Prompts::read(dir.path()).unwrap();
         assert!(!prompts.guidance.is_empty());
+        assert!(!prompts.placeholder.is_empty());
+        assert_eq!(
+            embedded_prompt_defaults(&json!({"tool_output_retention":{
+                "guidance":"Configured guidance", "placeholder":"Configured placeholder"
+            }})).unwrap(),
+            ("Configured guidance".into(), "Configured placeholder".into())
+        );
+        assert!(embedded_prompt_defaults(&json!({})).is_err());
+        assert!(embedded_prompt_defaults(&json!({"tool_output_retention":{"guidance":false}})).is_err());
         let path = dir.path().join("config/prompts.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, r#"{"tool_output_retention":{"guidance":false}}"#).unwrap();
