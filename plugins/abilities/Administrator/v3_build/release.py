@@ -10,6 +10,16 @@ import tarfile
 import uuid
 
 
+# Task-only troubleshooting data; never part of an image/release candidate.
+INSPECTION_CONTEXT = ("v3/data/user_data/admin", "v3/data/agent_data/shared_default")
+MAX_INSPECTION_FILE = 256 * 1024 * 1024
+
+
+def inspection_path(name):
+    return any(name == prefix or name.startswith(prefix + "/")
+               for prefix in INSPECTION_CONTEXT)
+
+
 def entries(blob, validate):
     validate(blob)
     result = {}
@@ -74,7 +84,7 @@ def snapshot(root, allowlist, validate):
             if "__pycache__" in entry.parts or name.endswith((".pyc", ".pyo")):
                 continue
             info = entry.stat()
-            if info.st_size > 16 * 1024 * 1024 or len(files) > 20000:
+            if info.st_size > (MAX_INSPECTION_FILE if inspection_path(name) else 16 * 1024 * 1024) or len(files) > 20000:
                 raise ValueError("source workspace input bound exceeded")
             files[name] = (info.st_mode & 0o777, entry.read_bytes())
     return archive(files, validate)
@@ -83,6 +93,12 @@ def snapshot(root, allowlist, validate):
 def candidate(base_blob, task_blob, live_blob, validate):
     base, task, live = (entries(value, validate) for value in
                         (base_blob, task_blob, live_blob))
+    # Inspection bytes attest the task, but cannot enter release merging.
+    if any(base.get(name) != task.get(name) for name in set(base) | set(task)
+           if inspection_path(name)):
+        raise ValueError("read-only inspection snapshot changed")
+    base, task, live = ({name: value for name, value in files.items()
+                         if not inspection_path(name)} for files in (base, task, live))
     changed = [name for name in sorted(set(base) | set(task))
                if base.get(name) != task.get(name)]
     if not changed or len(changed) > 256 or any(

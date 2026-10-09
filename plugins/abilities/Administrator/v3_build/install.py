@@ -24,6 +24,11 @@ import subprocess
 import sys
 import time
 import uuid
+import sqlite3
+import tempfile
+
+INSPECTION_CONTEXT = ("v3/data/user_data/admin", "v3/data/agent_data/shared_default")
+MAX_INSPECTION_FILE = 256 * 1024 * 1024
 
 V3 = Path("/home/ar/webagent-dev3")
 SHARED_SOURCE = Path("/home/ar/webagent-dev2")
@@ -312,6 +317,55 @@ def archive_rollbacks():
             os.close(fd)
 
 
+
+def backup_database(parent, name):
+    """Root-only fixed-scope SQLite backup, including committed WAL frames.
+
+    Keep the parent directory pinned, reject links and special files, and
+    check source identities again before releasing any bytes to the broker.
+    Never checkpoint, chmod, decrypt or otherwise mutate the live database.
+    """
+    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_INSPECTION_FILE:
+        raise ValueError("bounded single-link database required")
+    for suffix in ("-wal", "-shm"):
+        try:
+            sidecar = os.stat(name + suffix, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(sidecar.st_mode) or sidecar.st_nlink != 1:
+            raise ValueError("database sidecar link rejected")
+    uri = Path("/proc/self/fd/" + str(parent) + "/" + name).as_uri() + "?mode=ro"
+    deadline = time.monotonic() + 15
+    def progress(status, remaining, total):
+        if time.monotonic() > deadline or total * page_size > MAX_INSPECTION_FILE:
+            raise ValueError("database backup exceeds bound")
+    with tempfile.TemporaryDirectory(prefix="v3-inspection-") as temporary:
+        destination = Path(temporary) / "backup.db"
+        try:
+            source = sqlite3.connect(uri, uri=True, timeout=1)
+            target = None
+            try:
+                target = sqlite3.connect(destination)
+                page_size = source.execute("PRAGMA page_size").fetchone()[0]
+                source.execute("PRAGMA query_only=ON")
+                source.backup(target, pages=256, progress=progress, sleep=.01)
+            finally:
+                source.close()
+                if target is not None:
+                    target.close()
+            after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if (info.st_dev, info.st_ino) != (after.st_dev, after.st_ino):
+                raise ValueError("database identity changed during backup")
+            fd = directory(temporary)
+            try:
+                return read_regular(fd, "backup.db", MAX_INSPECTION_FILE)
+            finally:
+                os.close(fd)
+        except sqlite3.Error as error:
+            raise ValueError("consistent database backup unavailable") from error
+
+
 def snapshot_context(context):
     root_only()
     origin = directory(V3)
@@ -322,16 +376,29 @@ def snapshot_context(context):
             for name in context:
                 if not isinstance(name, str) or name.startswith("/") or ".." in Path(name).parts or not name.startswith(("v3/", "ui/")):
                     raise ValueError("fixed source context rejected")
-                if name.startswith("v3/data/") and name not in ("v3/data/config/gates/message_visibility_v1.json", "v3/data/config/gates/closing_status_v1.json"):
+                if name.startswith("v3/data/") and name not in ("v3/data/config/gates/message_visibility_v1.json", "v3/data/config/gates/closing_status_v1.json", *INSPECTION_CONTEXT):
                     raise ValueError("runtime data outside gate allowlist")
                 if name.startswith(("v3/workspaces/", "v3/build-jobs/", "v3/rollback/", "v3/runtime/", "v3/target/")):
                     raise ValueError("runtime directory rejected")
                 # Preserve archive names while reading V3 from its independent root.
+                inspection = name in INSPECTION_CONTEXT
                 source = V3 / name.removeprefix("v3/") if name.startswith("v3/") else SHARED_SOURCE / name
                 parent_path, leaf = source.parent, source.name
-                parent = directory(parent_path)
                 try:
-                    info = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+                    parent = directory(parent_path)
+                except FileNotFoundError:
+                    if inspection:
+                        continue
+                    raise
+                try:
+                    try:
+                        info = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+                    except FileNotFoundError:
+                        if inspection:
+                            continue
+                        raise
+                    if inspection and not stat.S_ISDIR(info.st_mode):
+                        raise ValueError("inspection root must be a directory")
                     if stat.S_ISDIR(info.st_mode):
                         top = os.open(leaf, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
                         try:
@@ -344,12 +411,18 @@ def snapshot_context(context):
                                     if child.endswith((".pyc", ".pyo")):
                                         continue
                                     rel = str(Path(name) / relative / child)
-                                    if child.endswith((".db", ".sqlite", ".sqlite3", ".db-wal", ".db-shm")) or child == "encryption.key":
+                                    if child == "encryption.key":
+                                        raise ValueError("encryption key is not an inspection input")
+                                    if inspection and child.endswith(("-wal", "-shm", "-journal")):
+                                        # Backup produces one self-contained SQLite file.
+                                        continue
+                                    is_database = child.endswith((".db", ".sqlite", ".sqlite3"))
+                                    if not inspection and (is_database or child.endswith((".db-wal", ".db-shm"))):
                                         raise ValueError("database files are not build inputs")
-                                    body = read_regular(fd, child, 16*1024*1024)
-                                    mode = os.stat(child, dir_fd=fd, follow_symlinks=False).st_mode & 0o777
+                                    body = backup_database(fd, child) if inspection and is_database else read_regular(fd, child, 16*1024*1024)
+                                    mode = 0o440 if inspection else os.stat(child, dir_fd=fd, follow_symlinks=False).st_mode & 0o777
                                     total += len(body); count += 1
-                                    if total > 128*1024*1024 or count > 10000:
+                                    if total > 512*1024*1024 or count > 10000:
                                         raise ValueError("fixed source context exceeds bound")
                                     member = tarfile.TarInfo(rel); member.size = len(body); member.mode = mode
                                     archive.addfile(member, io.BytesIO(body))
@@ -358,14 +431,14 @@ def snapshot_context(context):
                     else:
                         body = read_regular(parent, leaf, 16*1024*1024)
                         total += len(body); count += 1
-                        if total > 128*1024*1024 or count > 10000:
+                        if total > 512*1024*1024 or count > 10000:
                             raise ValueError("fixed source context exceeds bound")
                         member = tarfile.TarInfo(name); member.size = len(body); member.mode = info.st_mode & 0o777
                         archive.addfile(member, io.BytesIO(body))
                 finally:
                     os.close(parent)
         result = stream.getvalue()
-        if len(result) > 128*1024*1024:
+        if len(result) > 512*1024*1024:
             raise ValueError("tar context exceeds bound")
         return result
     finally:
@@ -385,9 +458,12 @@ def snapshot_server(listener, context, stopping):
             conn.settimeout(60)
             try:
                 _, uid, _ = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-                if uid != 1000 or conn.recv(16) != b"{}\n":
+                if uid != 1000:
                     raise PermissionError("snapshot caller denied")
-                blob = snapshot_context(context)
+                request = conn.recv(64)
+                if request not in (b"{}\n", b'{"inspection":true}\n'):
+                    raise PermissionError("snapshot request denied")
+                blob = snapshot_context(context + INSPECTION_CONTEXT if request != b"{}\n" else context)
                 conn.sendall(struct.pack("!Q", len(blob)))
                 conn.sendall(blob)
             except (OSError, ValueError, PermissionError):

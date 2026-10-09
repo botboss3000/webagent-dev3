@@ -27,6 +27,8 @@ import tarfile
 import threading
 import time
 import uuid
+import sqlite3
+import base64
 from urllib.parse import quote
 
 SOURCE = Path("/home/ar/webagent-dev3")
@@ -63,6 +65,8 @@ _release_spec = importlib.util.spec_from_file_location(
     "v3_build_release", _release_file)
 release = importlib.util.module_from_spec(_release_spec)
 _release_spec.loader.exec_module(release)
+TASK_CONTEXT = CONTEXT + release.INSPECTION_CONTEXT
+MAX_TASK_CONTEXT = 512 * 1024 * 1024
 
 
 def canonical(value):
@@ -79,7 +83,7 @@ def scrub(text, secrets=()):
 
 
 def context_digest(blob):
-    if len(blob) > MAX_CONTEXT:
+    if len(blob) > MAX_TASK_CONTEXT:
         raise ValueError("build context exceeds bound")
     entries = {}
     with tarfile.open(fileobj=io.BytesIO(blob), mode="r:") as archive:
@@ -88,7 +92,7 @@ def context_digest(blob):
             if name.startswith("./"):
                 name = name[2:]
             parts = Path(name).parts
-            if name.startswith("/") or ".." in parts or not any(name == p or name.startswith(p + "/") for p in CONTEXT):
+            if name.startswith("/") or ".." in parts or not any(name == p or name.startswith(p + "/") for p in TASK_CONTEXT):
                 raise ValueError("snapshot escaped build allowlist")
             if "__pycache__" in parts or name.endswith((".pyc", ".pyo")):
                 raise ValueError("generated Python cache is not a build input")
@@ -96,7 +100,7 @@ def context_digest(blob):
                 continue
             if not member.isfile() or name in entries:
                 raise ValueError("snapshot symlink or duplicate forbidden")
-            if member.size > 16 * 1024 * 1024:
+            if member.size > (release.MAX_INSPECTION_FILE if release.inspection_path(name) else 16 * 1024 * 1024):
                 raise ValueError("snapshot file exceeds bound")
             body = archive.extractfile(member).read()
             entries[name] = (member.mode & 0o777, len(body), hashlib.sha256(body).hexdigest())
@@ -111,6 +115,81 @@ def context_digest(blob):
             if name not in entries or entries[name][2] != expected:
                 raise ValueError("shared UI baseline changed")
     return hashlib.sha256(canonical(entries)).hexdigest(), len(entries)
+
+
+
+def read_sqlite_snapshot(path, offset, limit):
+    """Paginated text export from an immutable task backup, never a live DB.
+
+    No model SQL, extensions, decryption key or writable SQLite connection.
+    BLOBs are explicit base64 chunks; plaintext JSON envelopes stay visible.
+    """
+    if offset > 1000000 or path.stat().st_size > release.MAX_INSPECTION_FILE:
+        raise ValueError("database export exceeds bound")
+    db = sqlite3.connect(path.as_uri() + "?mode=ro&immutable=1", uri=True, timeout=1)
+    deadline = time.monotonic() + 5
+    db.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
+    db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 16 * 1024 * 1024)
+    db.execute("PRAGMA query_only=ON")
+    def lines():
+        yield "SQLite task snapshot: read-only; BLOB encoding is base64; sealed values remain ciphertext."
+        tables = db.execute("SELECT name,sql FROM sqlite_schema WHERE type='table' ORDER BY name").fetchall()
+        if len(tables) > 256:
+            raise ValueError("database table count exceeds bound")
+        for table, schema in tables:
+            yield json.dumps({"table": table, "schema": schema}, ensure_ascii=True)
+            if table.startswith("sqlite_") or "CREATE VIRTUAL TABLE" in (schema or "").upper():
+                yield json.dumps({"table": table, "rows": "not exported: internal or virtual table"})
+                continue
+            quoted = '"' + table.replace('"', '""') + '"'
+            cursor = db.execute("SELECT * FROM " + quoted)
+            columns = [item[0] for item in cursor.description]
+            for row_index, row in enumerate(cursor):
+                if time.monotonic() > deadline or row_index >= 100000:
+                    raise ValueError("database export scan exceeds bound; narrow the page")
+                yield json.dumps({"table": table, "row": row_index, "columns": columns})
+                for column, value in zip(columns, row):
+                    if isinstance(value, bytes):
+                        try:
+                            parsed = json.loads(value)
+                        except (ValueError, UnicodeError):
+                            parsed = None
+                        if isinstance(parsed, dict) and parsed.get("format") == "v3-admin-plaintext-v1":
+                            value = value.decode("utf-8")
+                            encoding = "plaintext-envelope-unverified"
+                        else:
+                            value = base64.b64encode(value).decode("ascii")
+                            encoding = "base64"
+                    elif isinstance(value, str):
+                        encoding = "text"
+                    else:
+                        yield json.dumps({"column": column, "value": value})
+                        continue
+                    for part in range(0, max(1, len(value)), 512):
+                        yield json.dumps({"column": column, "encoding": encoding,
+                                          "part": part // 512, "text": value[part:part + 512]}, ensure_ascii=True)
+    try:
+        selected = []
+        consumed = 0
+        for number, line in enumerate(lines(), 1):
+            consumed = number
+            if time.monotonic() > deadline:
+                raise ValueError("database export scan exceeds bound")
+            if number < offset:
+                continue
+            if len(selected) >= limit or len(canonical(selected + [line])) > 16000:
+                if not selected:
+                    raise ValueError("database export line exceeds result bound")
+                return {"lines": selected, "total_lines": None, "has_more": True,
+                        "next_offset": offset + len(selected), "format": "sqlite-text-export"}
+            selected.append(line)
+            consumed = number
+        return {"lines": selected, "total_lines": consumed, "has_more": False,
+                "next_offset": offset + len(selected), "format": "sqlite-text-export"}
+    except sqlite3.Error as error:
+        raise ValueError("read-only database export failed or exceeded bound") from error
+    finally:
+        db.close()
 
 
 def source_git(root, arguments, patch):
@@ -448,7 +527,7 @@ class Runner:
                         pass
                     proc.wait()
 
-    def snapshot(self):
+    def snapshot(self, inspection=False):
         # Helper path is service configuration, never a tool argument. It must
         # be root-owned and immutable to the development source identity.
         if self.snapshot_socket:
@@ -456,7 +535,7 @@ class Runner:
             conn.settimeout(60)
             try:
                 conn.connect(self.snapshot_socket)
-                conn.sendall(b"{}\n")
+                conn.sendall(b'{"inspection":true}\n' if inspection else b"{}\n")
                 def receive(count):
                     data = bytearray()
                     while len(data) < count:
@@ -466,13 +545,15 @@ class Runner:
                         data.extend(part)
                     return bytes(data)
                 size = struct.unpack("!Q", receive(8))[0]
-                if not 0 < size <= MAX_CONTEXT:
+                if not 0 < size <= (MAX_TASK_CONTEXT if inspection else MAX_CONTEXT):
                     raise ValueError("protected snapshot size rejected")
                 blob = receive(size)
                 context_digest(blob)
                 return blob
             finally:
                 conn.close()
+        if inspection:
+            raise ValueError("inspection requires protected snapshot socket")
         if self.snapshot_helper:
             helper = Path(self.snapshot_helper)
             info = helper.stat()
@@ -1443,7 +1524,7 @@ class Broker:
                 if not item or item.get("mode") != "isolated" or item["status"] != "open":
                     raise ValueError("open isolated task required")
                 root = self.work_dir / "trees" / key
-                before = context_digest(release.snapshot(root, CONTEXT, context_digest))[0]
+                before = context_digest(release.snapshot(root, TASK_CONTEXT, context_digest))[0]
                 if before != expected:
                     raise ValueError("stale task source inputs")
                 try:
@@ -1452,7 +1533,7 @@ class Broker:
                 except (RuntimeError, TimeoutError, ValueError) as error:
                     log = scrub(str(error))
                     status = "failed"
-                after = context_digest(release.snapshot(root, CONTEXT, context_digest))[0]
+                after = context_digest(release.snapshot(root, TASK_CONTEXT, context_digest))[0]
                 if after != before:
                     status = "stale"
                 return {"task_id": task_id, "task": task, "status": status,
@@ -1522,7 +1603,7 @@ class Broker:
                                  "worker.py", "sandbox.py", "promote.py", "ui-baseline.json"}
                 if (name_path and (not re.fullmatch(r"[A-Za-z0-9_./-]+", name_path)
                         or any(part in ("", ".", "..") for part in parts)
-                        or parts[0] not in allowed_dirs)):
+                        or (parts[0] not in allowed_dirs and not release.inspection_path("v3/" + name_path)))):
                     raise ValueError("source list path denied")
                 if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
                     raise ValueError("bounded source list page required")
@@ -1566,7 +1647,7 @@ class Broker:
                         "offset": offset, "next_offset": offset + len(page),
                         "has_more": offset + len(page) < len(entries),
                         "workspace_inputs_sha256": context_digest(
-                            release.snapshot(root, CONTEXT, context_digest))[0]}
+                            release.snapshot(root, TASK_CONTEXT, context_digest))[0]}
             if name == "v3_source_read":
                 if set(args) - {"task_id", "path", "offset", "limit"} or not {"task_id", "path"} <= set(args):
                     raise ValueError("source read requires task_id and path")
@@ -1576,7 +1657,8 @@ class Broker:
                 if not isinstance(name_path, str) or not re.fullmatch(r"[A-Za-z0-9_./-]{1,240}", name_path):
                     raise ValueError("bounded source path required")
                 parts = name_path.split("/")
-                if any(part in ("", ".", "..") for part in parts) or parts[0] in ("data", "workspaces"):
+                if (any(part in ("", ".", "..") for part in parts) or parts[0] == "workspaces"
+                        or (parts[0] == "data" and not release.inspection_path("v3/" + name_path))):
                     raise ValueError("source read path denied")
                 offset, limit = args.get("offset", 1), args.get("limit", 200)
                 if type(offset) is not int or offset < 1 or type(limit) is not int or not 1 <= limit <= 200:
@@ -1586,7 +1668,11 @@ class Broker:
                 if not item or item.get("mode") != "isolated" or item["status"] != "open":
                     raise ValueError("open isolated task required")
                 root = self.work_dir / "trees" / key
-                source = root / "v3" / name_path
+                source = root / "v3"
+                for part in parts:
+                    source = source / part
+                    if source.is_symlink():
+                        raise ValueError("source file unavailable")
                 if source.is_symlink() or not source.resolve().is_relative_to((root / "v3").resolve()):
                     raise ValueError("source file unavailable")
                 if source.is_dir():
@@ -1595,6 +1681,11 @@ class Broker:
                     raise ValueError("source file does not exist")
                 if not source.is_file():
                     raise ValueError("source file unavailable")
+                if release.inspection_path("v3/" + name_path) and source.suffix in {".db", ".sqlite", ".sqlite3"}:
+                    result = read_sqlite_snapshot(source, offset, limit)
+                    return {"task_id": task_id, "path": name_path, "offset": offset,
+                            **result, "workspace_inputs_sha256": context_digest(
+                                release.snapshot(root, TASK_CONTEXT, context_digest))[0]}
                 data = source.read_bytes()
                 if len(data) > 1024 * 1024 or b"\0" in data:
                     raise ValueError("source read exceeds text bound")
@@ -1606,7 +1697,7 @@ class Broker:
                         "lines": selected,
                         "total_lines": len(lines),
                         "workspace_inputs_sha256": context_digest(
-                            release.snapshot(root, CONTEXT, context_digest))[0]}
+                            release.snapshot(root, TASK_CONTEXT, context_digest))[0]}
             if name == "v3_source_receipt":
                 if set(args) != {"task_id", "request_id"}:
                     raise ValueError("bridge source receipt request denied")
@@ -1626,7 +1717,7 @@ class Broker:
                 if not item or item["status"] != "open" or item.get("mode") != "isolated":
                     raise ValueError("open isolated task required")
                 tree = self.work_dir / "trees" / item["key"]
-                current, _ = context_digest(release.snapshot(tree, CONTEXT, context_digest))
+                current, _ = context_digest(release.snapshot(tree, TASK_CONTEXT, context_digest))
                 if current != args["expected_inputs_sha256"]:
                     raise ValueError("stale source inputs")
                 patch = prepare_new_source_files(args["files"])
@@ -1680,7 +1771,7 @@ class Broker:
                     raise ValueError("build active; source apply denied")
                 tree = self.work_dir / "trees" / item["key"] if isolated else self.runner.source
                 current, _ = context_digest(
-                    release.snapshot(tree, CONTEXT, context_digest) if isolated else self.runner.snapshot())
+                    release.snapshot(tree, TASK_CONTEXT, context_digest) if isolated else self.runner.snapshot())
                 if current != args["expected_inputs_sha256"]:
                     raise ValueError("stale source inputs")
                 source = tree / "v3"
@@ -1713,7 +1804,7 @@ class Broker:
                                 mode=i.get("mode", "shared"), workspace_path=i.get("workspace_path"),
                                 synchronization=i.get("synchronization"),
                                 workspace_inputs_sha256=(context_digest(release.snapshot(
-                                    self.work_dir / "trees" / i["key"], CONTEXT, context_digest))[0]
+                                    self.work_dir / "trees" / i["key"], TASK_CONTEXT, context_digest))[0]
                                     if i.get("mode") == "isolated" and i["status"] == "open" else None))
                            for i in self.work.values() if self._owned(i, trusted, workspace)
                            and (selected is None or i["task_id"] == selected)]
@@ -1737,7 +1828,7 @@ class Broker:
                         task = (self.state / job["job_id"] / "task.tar").read_bytes()
                     elif item["status"] == "open":
                         base = (folder / "baseline.tar").read_bytes()
-                        task = release.snapshot(folder, CONTEXT, context_digest)
+                        task = release.snapshot(folder, TASK_CONTEXT, context_digest)
                     else:
                         raise ValueError("Task cannot be checked or decided")
                     if job and job.get("batch_parent"):
@@ -1807,6 +1898,16 @@ class Broker:
                             "created_at": time.time(), "mode": mode, "key": key, "applies": {}}
                     if mode == "isolated":
                         blob = self._current_release_blob()
+                        # Only authenticated admin and the fixed local operator receive
+                        # private troubleshooting snapshots, never another task owner.
+                        if trusted["user_id"] == "admin" or (
+                                trusted.get("local_caller") is True and
+                                trusted["user_id"] == "codex-local" and workspace == LOCAL_WORKSPACE):
+                            files = release.entries(blob, context_digest)
+                            inspection = release.entries(self.runner.snapshot(inspection=True), context_digest)
+                            files.update({name: value for name, value in inspection.items()
+                                          if release.inspection_path(name)})
+                            blob = release.archive(files, context_digest)
                         folder = self.work_dir / "trees" / key
                         release.extract(folder, blob, context_digest)
                         (folder / "baseline.tar").write_bytes(blob)
@@ -1839,7 +1940,7 @@ class Broker:
                             "open_count": len(self._open_work())}
                 if item.get("mode") == "isolated":
                     folder = self.work_dir / "trees" / key
-                    task_blob = release.snapshot(folder, CONTEXT, context_digest)
+                    task_blob = release.snapshot(folder, TASK_CONTEXT, context_digest)
                     current, _ = context_digest(task_blob)
                     if current != expected:
                         raise ValueError("stale work inputs")
@@ -1850,7 +1951,9 @@ class Broker:
                         candidate, current_changed = release.candidate(base_blob, task_blob, live, context_digest)
                     except ValueError:
                         # Existing stale-task admission remains a durable failed job.
-                        candidate, current_changed = task_blob, changed
+                        candidate = release.archive({name: value for name, value in release.entries(task_blob, context_digest).items()
+                                                     if not release.inspection_path(name)}, context_digest)
+                        current_changed = changed
                     report = self._sync_report(live, candidate, current_changed)
                     item["synchronization"] = report
                     self._save_work()

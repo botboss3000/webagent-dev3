@@ -1,4 +1,5 @@
 import hashlib
+import sqlite3
 import importlib.util
 import json
 import os
@@ -177,6 +178,58 @@ class InstallTests(unittest.TestCase):
             with self.assertRaises(ValueError): installer.snapshot_context((invalid,))
         (src / "secret.db").write_bytes(b"SQLite format 3")
         with self.assertRaisesRegex(ValueError, "database"): installer.snapshot_context(("v3/src",))
+
+    def test_inspection_snapshot_backups_committed_wal_and_keeps_exact_scope(self):
+        admin = self.v3 / "data/user_data/admin"
+        agent = self.v3 / "data/agent_data/shared_default"
+        admin.mkdir(parents=True)
+        agent.mkdir(parents=True)
+        live = sqlite3.connect(admin / "admin.db")
+        try:
+            live.execute("PRAGMA journal_mode=WAL")
+            live.execute("PRAGMA wal_autocheckpoint=0")
+            live.execute("CREATE TABLE docs (key TEXT, value BLOB)")
+            live.execute("INSERT INTO docs VALUES (?,?)", ("wal-only", b"plaintext fixture"))
+            live.commit()
+            with sqlite3.connect(agent / "shared_default.db") as db:
+                db.execute("CREATE TABLE settings (value TEXT)")
+                db.execute("INSERT INTO settings VALUES ('agent fixture')")
+            (admin / "notes.txt").write_text("all directory files included")
+            blob = installer.snapshot_context(installer.INSPECTION_CONTEXT)
+            with installer.tarfile.open(fileobj=installer.io.BytesIO(blob)) as archive:
+                names = archive.getnames()
+                self.assertIn("v3/data/user_data/admin/notes.txt", names)
+                self.assertFalse(any(name.endswith(("-wal", "-shm")) for name in names))
+                for member, table, expected in (
+                    ("v3/data/user_data/admin/admin.db", "docs", "wal-only"),
+                    ("v3/data/agent_data/shared_default/shared_default.db", "settings", "agent fixture")):
+                    backup = self.root / (table + ".db")
+                    backup.write_bytes(archive.extractfile(member).read())
+                    with sqlite3.connect(backup.as_uri() + "?mode=ro&immutable=1", uri=True) as db:
+                        self.assertEqual("ok", db.execute("PRAGMA integrity_check").fetchone()[0])
+                        self.assertEqual(expected, db.execute("SELECT * FROM " + table).fetchone()[0])
+                    self.assertEqual(0o440, archive.getmember(member).mode)
+            for denied in ("v3/data", "v3/data/user_data", "v3/data/user_data/other", "v3/data/agent_data/other", "v3/data/encryption.key", "v3/data/runtime.sqlite"):
+                with self.assertRaises(ValueError): installer.snapshot_context((denied,))
+        finally:
+            live.close()
+
+    def test_inspection_rejects_key_and_database_links(self):
+        admin = self.v3 / "data/user_data/admin"
+        admin.mkdir(parents=True)
+        (admin / "encryption.key").write_bytes(b"secret")
+        with self.assertRaisesRegex(ValueError, "encryption key"):
+            installer.snapshot_context((installer.INSPECTION_CONTEXT[0],))
+        (admin / "encryption.key").unlink()
+        outside = self.root / "outside.db"
+        with sqlite3.connect(outside) as db: db.execute("CREATE TABLE t(v)")
+        (admin / "admin.db").symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, "single-link"):
+            installer.snapshot_context((installer.INSPECTION_CONTEXT[0],))
+        (admin / "admin.db").unlink()
+        os.link(outside, admin / "admin.db")
+        with self.assertRaisesRegex(ValueError, "single-link"):
+            installer.snapshot_context((installer.INSPECTION_CONTEXT[0],))
 
     def test_snapshot_maps_standalone_and_shared_roots_without_symlinks(self):
         shared = self.root / "shared-v2"

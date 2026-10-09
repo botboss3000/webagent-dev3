@@ -1,4 +1,5 @@
 import copy
+import sqlite3
 import asyncio
 import os
 import socket
@@ -70,8 +71,8 @@ class FakeRunner:
         self.calls.append(("prepare_space", host.MIN_SEQUENCE_FREE))
         return self.check_space(host.MIN_SEQUENCE_FREE)
 
-    def snapshot(self):
-        return self.blob
+    def snapshot(self, inspection=False):
+        return getattr(self, "inspection_blob", self.blob) if inspection else self.blob
 
     def inspect(self, name):
         self.calls.append(("inspect", name))
@@ -765,6 +766,67 @@ class BuildTests(unittest.TestCase):
             self.call("v3_source_list", {"task_id": "another-task", "path": "ui"})
         with self.assertRaisesRegex(ValueError, "not a directory"):
             self.call("v3_source_list", {"task_id": "list-task", "path": "ui/main-panel/builds/page.json"})
+
+    def test_admin_inspection_text_export_attestation_and_release_exclusion(self):
+        files = host.release.entries(self.runner.blob, host.context_digest)
+        for directory, filename in (("data/user_data/admin", "admin.db"), ("data/agent_data/shared_default", "shared_default.db")):
+            db_path = Path(self.temp.name) / filename
+            with sqlite3.connect(db_path) as db:
+                db.execute("CREATE TABLE docs (key TEXT, value BLOB)")
+                envelope = json.dumps({"format":"v3-admin-plaintext-v1", "value":{"fixture":"usable plaintext"}}).encode()
+                db.execute("INSERT INTO docs VALUES (?,?)", ("config:fixture", envelope))
+                db.execute("INSERT INTO docs VALUES (?,?)", ("sealed", b"ciphertext\x00fixture"))
+            files["v3/" + directory + "/" + filename] = (0o440, db_path.read_bytes())
+        self.runner.inspection_blob = host.release.archive(files, host.context_digest)
+        admin = {**self.trusted, "user_id": "admin"}
+        begun = self.call("v3_build_work", {"action":"begin", "task_id":"inspect-task", "summary":"Inspect", "mode":"isolated"}, trusted=admin)
+        source = Path(begun["workspace_path"])
+        for directory, filename in (("data/user_data/admin", "admin.db"), ("data/agent_data/shared_default", "shared_default.db")):
+            listed = self.call("v3_source_list", {"task_id":"inspect-task", "path":directory}, trusted=admin)
+            self.assertEqual(filename, listed["entries"][0]["name"])
+            first = self.call("v3_source_read", {"task_id":"inspect-task", "path":directory+"/"+filename, "limit":2}, trusted=admin)
+            self.assertEqual("sqlite-text-export", first["format"])
+            self.assertTrue(first["has_more"])
+            rest = self.call("v3_source_read", {"task_id":"inspect-task", "path":directory+"/"+filename, "offset":first["next_offset"]}, trusted=admin)
+            self.assertIn("usable plaintext", "\n".join(rest["lines"]))
+            self.assertIn("base64", "\n".join(rest["lines"]))
+            patch_text = f"diff --git a/{directory}/note.txt b/{directory}/note.txt\nnew file mode 100644\n--- /dev/null\n+++ b/{directory}/note.txt\n@@ -0,0 +1 @@\n+write denied\n"
+            with self.assertRaisesRegex(ValueError, "path denied"):
+                self.call("v3_source_apply", {"task_id":"inspect-task", "request_id":"deny-"+filename.replace(".", "_"), "expected_inputs_sha256":begun["workspace_inputs_sha256"], "patch":patch_text}, trusted=admin)
+            for tool,args in (("v3_source_prepare", {"files":[{"path":directory+"/note.txt", "content":"write denied\n"}]}),):
+                with self.assertRaisesRegex(ValueError, "path denied"):
+                    self.call(tool, {"task_id":"inspect-task", "expected_inputs_sha256":begun["workspace_inputs_sha256"], **args}, trusted=admin)
+        for denied in ("data", "data/user_data", "data/user_data/other", "data/agent_data", "data/agent_data/shared_default_other", "data/encryption.key", "data/runtime.sqlite"):
+            for tool in ("v3_source_list", "v3_source_read"):
+                with self.assertRaisesRegex(ValueError, "path denied"):
+                    self.call(tool, {"task_id":"inspect-task", "path":denied}, trusted=admin)
+        (source / "src").mkdir(exist_ok=True)
+        (source / "src/binary.rs").write_bytes(b"binary\0guard")
+        with self.assertRaisesRegex(ValueError, "text bound"):
+            self.call("v3_source_read", {"task_id":"inspect-task", "path":"src/binary.rs"}, trusted=admin)
+        baseline = (source.parent / "baseline.tar").read_bytes()
+        task_blob = host.release.snapshot(source.parent, host.TASK_CONTEXT, host.context_digest)
+        digest_before = host.context_digest(task_blob)[0]
+        candidate, changed = host.release.candidate(baseline, task_blob, baseline, host.context_digest)
+        self.assertFalse(any(host.release.inspection_path(p) for p in host.release.entries(candidate, host.context_digest)))
+        target = source / "data/user_data/admin/admin.db"
+        target.chmod(0o600)
+        with sqlite3.connect(target) as db: db.execute("INSERT INTO docs VALUES ('new',NULL)")
+        modified = host.release.snapshot(source.parent, host.TASK_CONTEXT, host.context_digest)
+        self.assertNotEqual(digest_before, host.context_digest(modified)[0])
+        with self.assertRaisesRegex(ValueError, "inspection snapshot changed"):
+            host.release.candidate(baseline, modified, baseline, host.context_digest)
+
+    def test_nonadmin_task_never_requests_private_inspection_snapshot(self):
+        seen = []
+        def snapshot(inspection=False):
+            seen.append(inspection)
+            return context()
+        self.runner.snapshot = snapshot
+        self.call("v3_build_work", {"action":"begin", "task_id":"private-denied", "summary":"User source", "mode":"isolated"})
+        self.assertNotIn(True, seen)
+        with self.assertRaisesRegex(ValueError, "does not exist"):
+            self.call("v3_source_list", {"task_id":"private-denied", "path":"data/user_data/admin"})
 
     def test_isolated_source_read_is_task_scoped_and_bounded(self):
         task = self.call("v3_build_work", {"action": "begin", "task_id": "read-task",
