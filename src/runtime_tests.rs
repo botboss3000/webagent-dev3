@@ -1730,7 +1730,7 @@ async fn failed_context_summary_keeps_original_input_for_resume() {
     .unwrap();
     let paused = app.run(&id).await.unwrap();
     assert_eq!(paused["status"], "paused");
-    assert_eq!(paused["error"], "Context summary failed validation; resume to retry");
+    assert_eq!(paused["error"], "Context summary paused: summary_validation/summary_length; review this run");
     assert_eq!(paused["input"], json!(original));
     let session = app.store.get(&key("session", &sid)).await.unwrap().unwrap();
     assert_eq!(session["checkpoint_through"], 0);
@@ -4062,7 +4062,9 @@ async fn diagnostics_route_is_authenticated_session_bound_and_redacted() {
     assert_eq!(body["context_summary"]["accounting"], "serialized_json_bytes_not_provider_tokens");
     assert_eq!(body["context_summary"].as_object().unwrap().len(), 8);
     assert_eq!(body["reasoning_cleanup_logical_bytes_removed"],0);
-    assert_eq!(body.as_object().unwrap().len(), 7);
+    assert!(body["latest_context_assembly"].is_null());
+    assert_eq!(body["last_successful_assembly"],body["context_summary"]);
+    assert_eq!(body.as_object().unwrap().len(), 9);
 }
 
 #[tokio::test]

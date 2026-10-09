@@ -410,3 +410,18 @@ One executor process shares a cap of four and per-agent/tool counters across all
 Shared bundled usage guidance is `plugins/abilities/Core/base/base.skill.md`, loaded by the catalog’s standard ability-skill path; trusted effective flags come from the runtime helper. Generic background handles/completions and stop/silent/wake are distinct from V3 Build’s durable broker finish/recovery contract. Silent still notifies the user and carries leftover results to the next user turn without a loop; wake has a read-only ceiling, no mode escalation, no new background spawn, and no inherited approvals. Results remain untrusted and settings never grant permission.
 
 Background capability and concurrency capability are separate. In addition to the six background-vetted tools, get_time, get_date, calculate, web_search, get_weather and maps_geocode allow foreground concurrency up to four and use the shared installation read guard, but cannot background or silent/wake. Other stateful discovery/native controls stay concurrency one and exclusive. The API can report max_supported_concurrency(name); omitted/null tool_execution maps or null tool entries resolve to defaults.
+
+## Optional admin-only assembly evidence
+
+`src/diagnostics.rs` routes to the optional `src/diagnostics_plugin` module,
+which the broker includes as Rust source. Startup seeds diagnostics configuration;
+API and loop refresh it every five seconds. The agent loop supplies its trusted
+user Store before constructing provider or context evidence. Public users and
+unscoped HTTP/server hooks are excluded. Assembly failures retain typed fixed
+codes; the session diagnostic projection allowlists fields rather than exposing
+raw reports. Selected-session context copies are sealed explicitly and written
+through bounded background queues to the separate diagnostic archive, with
+idle retention cleanup. Snapshot reads recheck fixed-admin ownership and live
+session/agent authority. This evidence never authorizes dispatch or recovery.
+
+See [diagnostics configuration and read APIs](../src/diagnostics_plugin/README.md).

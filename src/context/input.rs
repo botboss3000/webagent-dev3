@@ -13,6 +13,7 @@ pub struct CallIdentity { pub turn: u64, pub call: u64 }
 /// Borrowed call ingredients plus resolved model and budget policies.
 /// This is not an assembled payload: history and schemas stay borrowed, and
 /// assembly combines instructions only after contribution selection succeeds.
+#[derive(Clone, Copy)]
 pub struct Request<'a> {
     pub history: &'a [Value],
     pub base: &'a str,

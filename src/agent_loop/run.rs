@@ -266,7 +266,7 @@ pub(crate) async fn execute_run(
             // compaction JSON still owns folding policy and summary reserves.
             let model_ceiling = loop_runtime::Config::read(&app.runtime_path)?
                 .context.ceiling(&selection)?.min(workflow_policy.max_context_bytes);
-            let assembled = match context_assembly::prepare_incremental(context_input::Request {
+            let assembly_request = context_input::Request {
                 history: run["input"].as_array().unwrap(), base: &instructions,
                 guidance, schemas: &gate_schemas, contributions: &contributions,
                 identity: context_input::CallIdentity {
@@ -275,11 +275,16 @@ pub(crate) async fn execute_run(
                 },
                 selection: &selection, max_bytes: model_ceiling,
                 compaction: &compaction_config,
-            }, &mut context_accounting) {
+            };
+            let prepared = context_assembly::prepare_incremental(assembly_request, &mut context_accounting);
+            let assembly_diagnostic=diagnostics::assembly(&app.store,&run,&assembly_request,&prepared);
+            let assembled = match prepared {
                 Ok(prepared) => prepared,
-                Err(_) => {
+                Err(error) => {
+                    if let Some(report)=assembly_diagnostic {run["latest_context_assembly"]=report;}
+                    let (code,stage)=context_assembly::failure_code(&error);
                     run["status"] = json!("paused");
-                    run["error"] = json!("Context assembly failed budget or safe compaction validation; review this run");
+                    run["error"] = json!(format!("Context assembly paused: {stage}/{code}; review this run"));
                     app.save(&mut run).await?;
                     return Ok(());
                 }
@@ -295,6 +300,7 @@ pub(crate) async fn execute_run(
                             _ => {
                                 run["status"]=json!("paused");
                                 run["error"]=json!("Manual compaction has no safe completed boundary; review this run");
+                                if let Some(report)=diagnostics::validation(&app.store,&run,"manual_no_safe_boundary","compaction_plan") {run["latest_context_assembly"]=report;}
                                 app.save(&mut run).await?;
                                 return Ok(());
                             }
@@ -305,12 +311,14 @@ pub(crate) async fn execute_run(
             } else { assembled };
             // The assembler only plans; the loop owns summarization and persistence.
             if let context_assembly::Prepared::Compact(plan) = assembled {
+                if let Some(report)=assembly_diagnostic {run["latest_context_assembly"]=report;}
                 // Compaction dispatches only its admission-pinned System role and backup cursor.
                 let system_run=match system_dispatch_run(&run) {
                     Ok(value)=>value,
                     Err(error)=>{
                         run["status"]=json!("paused");
                         run["error"]=json!(error.to_string());
+                        if let Some(report)=diagnostics::validation(&app.store,&run,"system_summary_input_unavailable","summary_input") {run["latest_context_assembly"]=report;}
                         app.save(&mut run).await?;
                         return Ok(());
                     }
@@ -321,21 +329,23 @@ pub(crate) async fn execute_run(
                     Err(_) => {
                         run["status"] = json!("paused");
                         run["error"] = json!("Context summary source is too large; review this run");
+                        if let Some(report)=diagnostics::validation(&app.store,&run,"summary_source_limit","summary_input") {run["latest_context_assembly"]=report;}
                         app.save(&mut run).await?;
                         return Ok(());
                     }
                 };
                 // Validate the exact summary envelope against System, including on a backup retry.
-                let summary_input=match system_summary_input(
-                    &loop_runtime::Config::read(&app.runtime_path)?.context,&selection,prompt,workflow_policy.max_context_bytes) {
-                    Ok(input)=>input,
-                    Err(error)=>{
-                        run["status"]=json!("paused");
-                        run["error"]=json!(error.to_string());
-                        app.save(&mut run).await?;
-                        return Ok(());
-                    }
-                };
+                let summary_context=loop_runtime::Config::read(&app.runtime_path)?.context;
+                let summary_input=vec![json!({"role":"user","content":prompt})];
+                let validation=validate_system_summary_input(&summary_context,&selection,&summary_input,workflow_policy.max_context_bytes);
+                let summary_request=context_input::Request{history:&summary_input,base:provider::DEFAULT_INSTRUCTIONS,guidance:"",schemas:&[],contributions:&[],
+                    identity:context_input::CallIdentity{turn:run["turns"].as_u64().unwrap_or(0),call:run["attempt"].as_u64().unwrap_or(0)+1},
+                    selection:&selection,max_bytes:summary_context.ceiling(&selection)?.min(workflow_policy.max_context_bytes),compaction:&compaction_config};
+                if let Some(report)=diagnostics::summary(&app.store,&run,&summary_request,&validation){run["latest_context_assembly"]=report;app.save(&mut run).await?;}
+                if validation.is_err(){
+                    run["status"]=json!("paused");run["error"]=json!("System summary input exceeds its context budget; review this run");
+                    app.save(&mut run).await?;return Ok(());
+                }
                 drop(_guard);
                 let tokens = match app.tokens_for(&selection, &system_run).await {
                     Ok(value) => value,
@@ -343,7 +353,7 @@ pub(crate) async fn execute_run(
                         let _guard = app.gate.lock().await;
                         let mut run = app.run(&id).await?;
                         if run["generation"] == generation && status(&run) == "running" {
-                            system_model_failure(&mut run, &error)?;
+                            trusted_model_failure(&app.store, &mut run, &error, true)?;
                             app.save(&mut run).await?;
                         }
                         return Ok(());
@@ -440,7 +450,7 @@ pub(crate) async fn execute_run(
                     return Ok(());
                 }
                 if let Err(error) = &response {
-                    system_model_failure(&mut run, error)?;
+                    trusted_model_failure(&app.store, &mut run, error, true)?;
                     app.save(&mut run).await?;
                     return Ok(());
                 }
@@ -456,14 +466,18 @@ pub(crate) async fn execute_run(
                             .join("")
                     })
                 });
-                let compacted = summary.as_deref().and_then(|summary| {
-                    context_compaction::apply_summary(run["input"].as_array().unwrap(), &plan, summary).ok()
-                });
-                let Some(compacted) = compacted else {
+                let compacted = summary.as_deref().ok_or_else(|| context_assembly::Failure::new("summary_missing", "summary_validation").into())
+                    .and_then(|summary| context_compaction::apply_summary(run["input"].as_array().unwrap(), &plan, summary).map_err(context_assembly::compaction_error));
+                let compacted = match compacted {
+                    Ok(compacted)=>compacted,
+                    Err(error)=>{
                     run["status"] = json!("paused");
-                    run["error"] = json!("Context summary failed validation; resume to retry");
+                    let (code,stage)=context_assembly::failure_code(&error);
+                    run["error"] = json!(format!("Context summary paused: {stage}/{code}; review this run"));
+                    if let Some(report)=diagnostics::validation(&app.store,&run,code,stage) {run["latest_context_assembly"]=report;}
                     app.save(&mut run).await?;
                     return Ok(());
+                    }
                 };
                 // COMPACTION PERSISTENCE: Store::save_run below atomically saves run,
                 // event and session checkpoint under its existing ownership fences.
@@ -496,6 +510,7 @@ pub(crate) async fn execute_run(
             // Durable input remains intact; this local run is reloaded after dispatch.
             let input_digest = digest(envelope.input);
             let schemas = envelope.schemas.to_vec();
+            if let Some(report)=assembly_diagnostic {run["latest_context_assembly"]=report;}
             run["attempt"] = json!(run["attempt"].as_u64().unwrap() + 1);
             run["context_assembly_report"] = report;
             run["dispatch_mode"]=json!({"execution_mode":mode["execution_mode"],"mode":mode["mode"],"revision":mode["revision"]});
@@ -516,7 +531,7 @@ pub(crate) async fn execute_run(
                     let _guard = app.gate.lock().await;
                     let mut run = app.run(&id).await?;
                     if run["generation"] == generation && status(&run) == "running" {
-                        model_failure(&mut run, &error)?;
+                        trusted_model_failure(&app.store, &mut run, &error, false)?;
                         app.save(&mut run).await?;
                     }
                     drop(_guard);
@@ -645,7 +660,7 @@ pub(crate) async fn execute_run(
                         run["status"] = json!("stopped");
                         run["error"] = json!("Provider request interrupted");
                     } else {
-                        model_failure(&mut run, &error)?;
+                        trusted_model_failure(&app.store, &mut run, &error, false)?;
                     }
                     let payload=json!({"run_id":id,
                         "failover_state":run["failover_state"],"error":run["error"]});

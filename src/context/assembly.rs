@@ -8,6 +8,33 @@ use crate::{context_compaction, context_input, provider};
 use crate::context_input::{Request, CallIdentity};
 use crate::context_accounting::HistoryReport;
 
+/// Fixed, content-free failures survive the pause boundary.
+#[derive(Debug)]
+pub struct Failure {pub code:&'static str,pub stage:&'static str}
+impl Failure {pub fn new(code:&'static str,stage:&'static str)->Self {Self {code,stage}}}
+impl std::fmt::Display for Failure {
+ fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {write!(f,"{}: {}",self.stage,self.code)}
+}
+impl std::error::Error for Failure {}
+pub fn failure_code(error:&anyhow::Error)->(&'static str,&'static str) {
+ error.downcast_ref::<Failure>().map(|e|(e.code,e.stage)).unwrap_or(("assembly_internal","assembly"))
+}
+
+/// Normalize the compactor's existing fixed errors at the assembly boundary.
+/// No private reason string is copied into a diagnostic or public run status.
+pub fn compaction_error(error:anyhow::Error)->anyhow::Error {
+    if error.downcast_ref::<Failure>().is_some(){return error;}
+    let (code,stage)=match error.to_string().as_str(){
+        "Invalid compaction measurements or budget"=>("invalid_measurements","compaction_plan"),
+        "Context exceeds budget without a completed turn or tool exchange to summarize"=>("no_safe_boundary","compaction_plan"),
+        "Stale or invalid context compaction plan"=>("stale_plan","summary_validation"),
+        "Context summary has invalid length"=>("summary_length","summary_validation"),
+        "Compacted context did not shrink toward the budget"=>("summary_did_not_shrink","summary_validation"),
+        _=>return error,
+    };
+    Failure::new(code,stage).into()
+}
+
 /// Provider-neutral envelope using v3's existing Responses-shaped history.
 /// This is deliberately NOT the final provider-specific HTTP request body.
 pub struct Envelope<'a> {
@@ -75,13 +102,13 @@ pub fn prepare<'a>(request: Request<'a>) -> Result<Prepared<'a>> {
 pub fn prepare_incremental<'a>(request: Request<'a>, state: &mut crate::context_accounting::ContextAccounting) -> Result<Prepared<'a>> {
     state.sync(request.history)?;
     // Input selects once; assembly alone combines the selected ingredients in stable order.
-    let selected = context_input::select(request.contributions, request.identity)?;
+    let selected = context_input::select(request.contributions, request.identity).map_err(|_| Failure::new("invalid_contribution", "selection"))?;
     let mut instructions = format!("{}{}", request.base, request.guidance);
     for decision in &selected {
         if decision.disposition == "included" { instructions.push('\n'); instructions.push_str(&decision.item.content); }
     }
     if instructions.is_empty() || instructions.len() > 96 * 1024 {
-        bail!("Invalid assembled provider instructions");
+        return Err(Failure::new("instruction_limit", "instructions").into());
     }
     // Keep the existing logical-envelope budget semantics, without allocating JSON buffers.
     let instruction_json_bytes = size(&instructions)?;
@@ -90,16 +117,16 @@ pub fn prepare_incremental<'a>(request: Request<'a>, state: &mut crate::context_
     // Empty history contributes two brackets. No transcript/schema copies are needed.
     let overhead = framing + instruction_json_bytes + schemas_json_bytes + 2;
     let history_budget = request.max_bytes.checked_sub(overhead).filter(|remaining| *remaining > 2)
-        .ok_or_else(|| anyhow::anyhow!("Instructions and schemas exceed context budget"))?;
+        .ok_or_else(|| Failure::new("overhead_exceeds_budget", "budget"))?;
     // Assembly owns the envelope ceiling; only the compaction module owns folding policy.
     let reserve = request.compaction.summary_reserve_bytes;
-    if history_budget <= reserve { bail!("Instructions and tool schemas exceed context budget; review required"); }
+    if history_budget <= reserve { return Err(Failure::new("summary_reserve_unavailable", "budget").into()); }
     let (sizes, characters) = state.measurements();
-    let plan = context_compaction::plan_cached(request.history, history_budget, request.compaction, sizes, characters)?;
+    let plan = context_compaction::plan_cached(request.history, history_budget, request.compaction, sizes, characters).map_err(compaction_error)?;
     if let Some(plan) = plan { return Ok(Prepared::Compact(plan)); }
     let history_json_bytes = state.bytes();
     let envelope_bytes = framing + instruction_json_bytes + schemas_json_bytes + history_json_bytes;
-    if envelope_bytes > request.max_bytes { bail!("Assembled context exceeds budget"); }
+    if envelope_bytes > request.max_bytes { return Err(Failure::new("envelope_exceeds_budget", "budget").into()); }
     let selection = request.selection.value();
     let report = Report {
         version: 1, scope: "logical_call_envelope", accounting: "serialized_json_bytes_not_provider_tokens",

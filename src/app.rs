@@ -135,6 +135,29 @@ fn public_run(run: &Value) -> Value {
         "chat_model_revision":run["chat_model_revision"].as_u64(),
         "context_summary":public_context_summary(run)})
 }
+// Explicit allowlists prevent arbitrary persisted fields becoming diagnostic text.
+fn public_assembly_attempt(event:&Value)->Value {
+    let Some(attempt)=event["attempt_id"].as_str().filter(|s|uuid::Uuid::parse_str(s).is_ok()) else{return Value::Null;};
+    let source=&event["report"];let mut report=serde_json::Map::new();
+    for field in ["max_bytes","instructions_json_bytes","base_content_bytes","guidance_content_bytes","schemas_json_bytes",
+        "history_json_bytes","framing_bytes","history_budget_bytes","summary_reserve_bytes","trigger_tokens_estimated",
+        "tail_tokens_estimated","characters_per_token"] {
+        if let Some(n)=source[field].as_u64(){report.insert(field.into(),json!(n));}
+    }
+    let outcome=match source["outcome"].as_str(){Some("ready")=>"ready",Some("compaction_required")=>"compaction_required",Some("failed")=>"failed",_=>"unknown"};
+    let code=source["failure_code"].as_str().filter(|c|matches!(*c,
+        "instruction_limit"|"invalid_contribution"|"overhead_exceeds_budget"|"summary_reserve_unavailable"|"envelope_exceeds_budget"|
+        "invalid_measurements"|"no_safe_boundary"|"stale_plan"|"summary_length"|"summary_did_not_shrink"|"summary_missing"|
+        "summary_source_limit"|"system_summary_input_unavailable"|"manual_no_safe_boundary"|"assembly_internal")).unwrap_or_default();
+    let stage=source["stage"].as_str().filter(|s|matches!(*s,"assembly"|"selection"|"instructions"|"budget"|"compaction_plan"|"summary_input"|"summary_validation")).unwrap_or("unknown");
+    report.insert("outcome".into(),json!(outcome));report.insert("failure_code".into(),json!(code));report.insert("stage".into(),json!(stage));
+    let mut compaction=serde_json::Map::new();
+    for field in ["candidate_boundaries","pending_calls","duplicate_calls","unmatched_calls_or_results","source_limit_rejections","tail_byte_rejections","tail_character_rejections"] {
+        if let Some(n)=source["compaction"][field].as_u64(){compaction.insert(field.into(),json!(n));}
+    }
+    report.insert("compaction".into(),Value::Object(compaction));
+    json!({"attempt_id":attempt,"report":report})
+}
 fn run_diagnostics(run: &Value) -> Value {
     const CHECKPOINTS: [&str; 8] = ["admission", "attachment_preparation", "context_assembly",
         "model_dispatch", "model_output", "pre_tool", "tool_result", "publication"];
@@ -156,7 +179,9 @@ fn run_diagnostics(run: &Value) -> Value {
     }).collect::<Vec<_>>();
     json!({"run_id":run["id"],"session_id":run["session_id"],"status":run["status"],
         "uncertain":run["uncertain"],"checkpoints":checkpoints,
-        "context_summary":public_context_summary(run)})
+        "context_summary":public_context_summary(run),
+        "latest_context_assembly":public_assembly_attempt(&run["latest_context_assembly"]),
+        "last_successful_assembly":public_context_summary(run)})
 }
 async fn run_diagnostics_api(
     State(app): State<App>,
@@ -211,8 +236,6 @@ async fn assembled_agent_instructions(store: &Store, agent_id: &str) -> Result<S
 /// Advance a pinned cursor only for a typed, safe pre-response failure.
 fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     use model_selection::{FailureKind, FailoverState, NextAction, SelectionPlan};
-    let failed_selection = run["provider_selection"].clone();
-    let failed_candidate = run["failover_state"]["candidate_index"].as_u64();
     let failure = error.downcast_ref::<provider::ProviderFailure>();
     let kind = failure.map(|e| e.kind).unwrap_or(FailureKind::Protocol);
     let mut state: FailoverState = run.get("failover_state").filter(|v| !v.is_null())
@@ -242,9 +265,20 @@ fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
         NextAction::Backup => format!("Primary/backup provider failed; trying the next configured connection: {error}"),
         NextAction::Terminal => format!("Provider request failed; no safe retry or eligible backup remains: {error}"),
     });
-    let diagnostic_run=json!({"id":run["id"],"session_id":run["session_id"],
-        "provider_selection":failed_selection,"failed_candidate_index":failed_candidate,"failover_state":run["failover_state"]});
-    diagnostics::failure(&diagnostic_run, error, match action { NextAction::Retry => "retry", NextAction::Backup => "backup", NextAction::Terminal => "terminal" });
+    Ok(())
+}
+// Diagnostic ownership comes from the caller's Store, never model/run arguments.
+fn trusted_model_failure(store:&Store,run:&mut Value,error:&anyhow::Error,system:bool)->Result<()> {
+    let evidence=if diagnostics::provider_enabled(store) {
+        let selected=if system {system_dispatch_run(run).ok().map(|r|r["provider_selection"].clone())}else{Some(run["provider_selection"].clone())};
+        Some(json!({"id":run["id"],"session_id":run["session_id"],"provider_selection":selected,"candidate_index":if system {run["system_failover_state"]["candidate_index"].clone()}else{run["failover_state"]["candidate_index"].clone()}}))
+    }else{None};
+    if system {system_model_failure(run,error)?;}else{model_failure(run,error)?;}
+    if let Some(evidence)=evidence {
+        let next=if system {run["system_failover_state"]["candidate_index"].as_u64()}else{run["failover_state"]["candidate_index"].as_u64()};
+        let action=if next.unwrap_or(0)>evidence["candidate_index"].as_u64().unwrap_or(0){"backup"}else if run["status"]=="queued"{"retry"}else{"terminal"};
+        diagnostics::failure(store,&evidence,error,action);
+    }
     Ok(())
 }
 // Compaction has its own pinned System cursor. Failover must never rewrite the chat role.
@@ -267,17 +301,23 @@ fn system_model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     Ok(())
 }
 // System requests use their own model ceiling, including instructions and JSON framing.
+#[cfg(test)]
 fn system_summary_input(context: &loop_runtime::Context, selection: &provider::ProviderSelection,
     prompt: String, max_bytes: usize) -> Result<Vec<Value>> {
-    #[derive(serde::Serialize)]
-    struct Envelope<'a> { instructions: &'a str, tools: [Value;0], input: &'a [Value] }
     let input=vec![json!({"role":"user","content":prompt})];
-    let envelope=Envelope {instructions:provider::DEFAULT_INSTRUCTIONS,tools:[],input:&input};
-    if context_accounting::json_size(&envelope)? > context.ceiling(selection)?.min(max_bytes) {
-        return Err(anyhow!("System model context limit is too small for this compaction source"));
-    }
+    validate_system_summary_input(context,selection,&input,max_bytes)?;
     Ok(input)
 }
+fn validate_system_summary_input(context:&loop_runtime::Context,selection:&provider::ProviderSelection,input:&[Value],max_bytes:usize)->Result<()> {
+    #[derive(serde::Serialize)]
+    struct Envelope<'a>{instructions:&'a str,tools:[Value;0],input:&'a [Value]}
+    let envelope=Envelope{instructions:provider::DEFAULT_INSTRUCTIONS,tools:[],input};
+    if context_accounting::json_size(&envelope)?>context.ceiling(selection)?.min(max_bytes){
+        return Err(context_assembly::Failure::new("system_summary_input_unavailable","summary_input").into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod system_budget_tests {
     use super::*;
@@ -583,7 +623,6 @@ async fn run_process() -> Result<()> {
         .init();
     let root = PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
     let role=std::env::var("V3_PROCESS_ROLE").unwrap_or_else(|_|"api".into());
-    if role != "health" { diagnostics::init(&root).await; }
     if role=="health" {
         let url=format!("sqlite://{}?mode=ro",root.join("db/app.db").display());
         let pool=sqlx::SqlitePool::connect(&url).await?;
@@ -613,6 +652,7 @@ async fn run_process() -> Result<()> {
         Err(error) => return Err(error.into()),
     }
     let store = Store::open(&root).await?;
+    diagnostics::init(&root, &store, &role).await;
     store.migrate_agent_storage(&root).await?;
     let (runtime, runtime_path) = loop_runtime::Config::initialize(&root, &store).await?;
     // One data-root authority, reread at call boundaries. Legacy JSON is only
