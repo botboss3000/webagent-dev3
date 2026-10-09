@@ -223,3 +223,11 @@ sandboxed seeding, fixed Cargo tasks, browser protocol boundaries, preview proxy
 authentication, and durable host job revisions/revocation. Real authenticated API
 acceptance, Chromium fixture validation, stable full image inputs and deployment
 health are still outstanding. No UI journeys are required by the user.
+
+## Outbound notifications — Phase 1
+
+The lifecycle outbox/read foundation is implemented in src/storage/notifications.rs
+and src/api/notifications.rs. It does not implement Automation subscriptions,
+scheduling or delivery channels, or inbound event triggers. Those declarations
+remain pending until Phase 2 acceptance. See docs/outbound-notifications.md for
+the reviewed scope, storage ownership and read API contracts.

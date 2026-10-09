@@ -19,6 +19,7 @@ mod file_manager;
 mod build_dashboard;
 mod app_settings;
 mod loop_settings;
+pub(crate) mod notifications;
 pub(crate) mod repository;
 pub(crate) use auth::*;
 pub(crate) use admin::*;
@@ -53,10 +54,19 @@ async fn context_config_put(State(app): State<App>, Json(body): Json<Value>) -> 
 }
 
 pub(super) fn router(app: App) -> Router {
+    let event_aliases=Router::new()
+        .route("/admin/events",get(notifications::read))
+        .route("/admin/events/stream",get(notifications::stream))
+        .route_layer(middleware::from_fn_with_state(app.clone(),admin_auth))
+        .route_layer(middleware::from_fn_with_state(app.clone(),auth));
     let messaging = user_api::messaging_router()
         .route_layer(middleware::from_fn_with_state(app.clone(), message_api_auth));
     let admin_api = Router::new()
         .merge(diagnostics::router())
+        .route("/admin/event-readers",get(notifications::readers).post(notifications::issue_reader))
+        .route("/admin/event-readers/{id}",axum::routing::delete(notifications::revoke_reader))
+        .route("/admin/events",get(notifications::read))
+        .route("/admin/events/stream",get(notifications::stream))
         .route("/status", get(overview))
         .route("/settings", put(settings))
         .route("/admin/app-settings/encryption", get(app_settings::read).put(app_settings::update))
@@ -118,7 +128,7 @@ pub(super) fn router(app: App) -> Router {
         .route_layer(middleware::from_fn_with_state(app.clone(), auth));
     let ui = std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into());
     let shared = std::env::var("V3_SHARED_UI_ROOT").unwrap_or_else(|_| "/opt/v3/shared-ui".into());
-    Router::new().route("/api/v3/pages/catalog",get(ui_pages::catalog))
+    Router::new().merge(event_aliases).route("/api/v3/pages/catalog",get(ui_pages::catalog))
         .route("/api/v3/auth/login",post(login))
         .route("/api/v3/auth/register",post(registration::register))
         .route("/api/v3/auth/guest-login",post(registration::guest_login))

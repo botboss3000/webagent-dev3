@@ -131,6 +131,7 @@ mod tests {
     #[tokio::test]
     async fn boundaries_split_at_promotion_and_retries_keep_original_anchor() {
         let root=tempfile::tempdir().unwrap();let store=Store::open(root.path()).await.unwrap();
+        store.put("session:s",&json!({"id":"s","agent_id":"shared_default","status":"active"})).await.unwrap();
         let mut tx=store.pool.begin().await.unwrap();
         store.insert_chat(&mut tx,"s","r","user",&json!("Hello")).await.unwrap();
         let first=json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"PRIVATE step"}]});

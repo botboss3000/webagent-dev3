@@ -752,6 +752,7 @@ async fn run_process() -> Result<()> {
     )
     .await?;
     tracing::info!("WebAgent v3 API ready");
+    let notification_relay=tokio::spawn(api::notifications::service(app.clone()));
     let administrator_watch=tokio::spawn(administrator_services::watch(app.clone()));
     let shutdown = app.clone();
     axum::serve(listener, router(app.clone()))
@@ -761,10 +762,12 @@ async fn run_process() -> Result<()> {
                     .expect("signal handler");
             tokio::select! {_=signal.recv()=>{},_=tokio::signal::ctrl_c()=>{}}
             shutdown.ready.store(false, Ordering::Release);
+            shutdown.stop.cancel();
         })
         .await?;
     app.stop.cancel();
     let _=administrator_watch.await;
+    let _=notification_relay.await;
     app.store.pool.close().await;
     app.store.agent_pool.close().await;
     app.store.app_pool.close().await;

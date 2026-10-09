@@ -508,3 +508,15 @@ limitations/exclusions, immutable published reads and immediate private scans.
 The authorized worker resolves the active release once for published reads
 and workspace seeding; a seed carries its matching private V3 projection.
 Published indexes are derived release metadata, not conversation storage.
+
+## Outbound lifecycle events
+
+Lifecycle transactions in storage/mod.rs stage six metadata-only notifications
+through storage/notifications.rs. The API process starts api/notifications.rs's
+relay, which publishes bounded user staging batches into the canonical app
+outbox and prunes history. Its administrator long-poll/SSE routes support
+cursor backfill, gap responses and scoped revocable read credentials. Browser
+authentication and event-reader bearer authentication share live administrator
+checks and connection caps. See [the contract](outbound-notifications.md).
+Widget events, webhook dispatch and Automation subscription tools remain later
+phases; private chat events retain their existing path.

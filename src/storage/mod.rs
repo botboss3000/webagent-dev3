@@ -10,6 +10,7 @@ mod naming;
 mod background_tasks;
 mod background_followup;
 mod reasoning_cleanup;
+pub(crate) mod notifications;
 
 use crate::access;
 use crate::cache::{Cache, ContextCache};
@@ -193,6 +194,7 @@ pub(crate) async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<S
         .execute(&pool)
         .await?;
     if events {
+        notifications::schema(&pool, runs).await?;
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, kind TEXT NOT NULL, payload BLOB NOT NULL);
             CREATE INDEX IF NOT EXISTS events_session ON events(session_id,seq);
             CREATE TABLE IF NOT EXISTS legacy_event_map(legacy_seq INTEGER PRIMARY KEY,new_seq INTEGER NOT NULL UNIQUE);")
@@ -1266,7 +1268,12 @@ impl Store {
         let inserted = sqlx::query("INSERT OR IGNORE INTO chat(id,session_id,run_id,role,content,created_at,terminal_run_id) VALUES(?,?,?,?,?,strftime('%s','now'),?)")
             .bind(id).bind(sid).bind(run_id).bind(role)
             .bind(self.encode_user_record(content)?).bind(terminal).execute(&mut **tx).await?;
-        if inserted.rows_affected() > 0 { self.touch_session_activity(tx, sid).await?; }
+        if inserted.rows_affected() > 0 {
+            self.touch_session_activity(tx, sid).await?;
+            if role == "user" {
+                self.stage_notification(tx,&format!("message:{run_id}"),"message.received",sid,Some(run_id),None).await?;
+            }
+        }
         Ok(())
     }
     async fn insert_working_message(
@@ -1776,6 +1783,7 @@ impl Store {
                 .execute(&mut *tx)
                 .await?;
         }
+        self.stage_run_notification(&mut tx,&persisted).await?;
         self.index_run(&mut tx, &persisted).await?;
         sqlx::query("INSERT INTO loop_events(run_id,schema_version,kind,payload,created_at) VALUES(?,1,?,?,strftime('%s','now'))")
             .bind(rid).bind(kind).bind(self.encode_user_record(&json!({"schema_version":1,"run_id":rid,
@@ -1823,6 +1831,7 @@ impl Store {
         let until=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64+30;
         self.write_document(&mut tx,&format!("run:{rid}"),&claimed).await?;
         self.index_run(&mut tx,&claimed).await?;
+        self.stage_notification(&mut tx,&format!("started:{rid}"),"run.started",claimed["session_id"].as_str().unwrap(),Some(&rid),Some("running")).await?;
         sqlx::query("UPDATE run_index SET lease_epoch=?,lease_owner=?,lease_expires_at=? WHERE id=?")
             .bind(epoch+1).bind(owner).bind(until).bind(&rid).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO loop_events(run_id,schema_version,kind,payload,created_at) VALUES(?,1,'claimed',?,strftime('%s','now'))")
@@ -1966,6 +1975,7 @@ impl Store {
             self.write_document(&mut tx,&key,&value).await?;
             if key.starts_with("run:") {
                 self.index_run(&mut tx, &value).await?;
+                self.stage_run_notification(&mut tx,&value).await?;
             }
         }
         if matches!(kind,"message"|"manager_submission") && payload["role"] == "user" {
@@ -1987,6 +1997,9 @@ impl Store {
                 self.insert_interaction(&mut tx,sid,run_id,"user",
                     &json!({"role":"user","content":context_content})).await?;
             }
+        }
+        if kind == "session_created" {
+            self.stage_notification(&mut tx,&format!("created:{sid}"),"session.created",sid,None,None).await?;
         }
         if kind != "message" {
             sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,?,?)")
@@ -3025,6 +3038,7 @@ mod tests {
     async fn command_ack_and_lease_takeover_fence_terminal_publication() {
         let root=tempfile::tempdir().unwrap();
         let store=Store::open(root.path()).await.unwrap();
+        store.put("session:s1",&json!({"id":"s1","agent_id":"shared_default","status":"active"})).await.unwrap();
         let run=json!({"id":"r1","session_id":"s1","status":"queued","generation":"",
             "input":[],"turns":1,"updated_at":1});
         store.atomic_docs_event(vec![

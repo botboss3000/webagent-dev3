@@ -41,6 +41,14 @@ pub(crate) async fn message_api_auth(State(app): State<App>, mut request: Reques
     response
 }
 pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Next) -> Response {
+    let method=request.method().clone();
+    let path=request.uri().path().to_owned();
+    let headers=request.headers().clone();
+    if let Some(identity)=super::notifications::bearer_identity(&app,&method,&path,&headers).await {
+        request.extensions_mut().insert(app.clone());
+        request.extensions_mut().insert(identity);
+        return next.run(request).await;
+    }
     let cookie = request
         .headers()
         .get("cookie")

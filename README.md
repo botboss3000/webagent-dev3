@@ -1001,3 +1001,10 @@ label and a 60-second retry cooldown. A bounded recovery sweep starts after 30
 seconds and runs every 60 seconds. Successful naming locks the automatic title;
 existing sessions are not enrolled or renamed retroactively. Session updates
 refresh the UI through named metadata SSE events that do not alter chat cursors.
+
+## Outbound notifications
+
+Phase 1 adds a transactional metadata-only lifecycle outbox with administrator
+long-poll/SSE reads, cursor backfill, 30-day/one-million-row retention and scoped
+revocable event-reader credentials. See [the implementation contract](docs/outbound-notifications.md).
+Webhook subscriptions and delivery remain Phase 2; widget engagement is excluded.

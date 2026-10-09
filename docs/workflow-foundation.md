@@ -267,3 +267,18 @@ never transmitted. Installed executables run as administrator-trusted applicatio
 code, not as untrusted tool workers. The archive and operational config travel with the installed package.
 
 The installed package owns diagnostics.json and logs.db (including SQLite WAL sidecars). Removing the folder removes archive access and capture; moving it preserves its settings and evidence. The host does not recreate it. Ephemeral socket/PID/ready files remain under /state/diagnostics. Snapshot ciphertext still requires the originating installation key to decrypt; a package alone does not carry that key.
+
+## Outbound notification ownership (Phase 1)
+
+The reviewed [outbound notification contract](outbound-notifications.md) adds
+application-owned notification_outbox, notification_relay and notification_retention
+tables plus sealed notification_reader: credential documents. User-owned
+notification_stage and notification_emitted tables commit metadata projections
+with lifecycle changes. The relay watermark makes acknowledgement retries safe
+after canonical pruning. Exported IDs, timestamps and fixed status metadata are
+plaintext and installation-admin-only; no conversation content or secrets leave
+the user plane. Reader credentials bind live administrator authority, generation
+and expiration and grant only event reads. Schema creation is additive and
+idempotent; retain rollback data and follow the existing backup contract.
+Canonical history expires after 30 days or one million rows; source markers
+follow source-resource retention and staging is acknowledged after relay.
