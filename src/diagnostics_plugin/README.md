@@ -51,8 +51,17 @@ records; snapshots are best-effort evidence rather than recovery authority.
 
 ## Read APIs
 
+Committed run transitions, approval checkpoints, tool-result checkpoints and recovery
+overrides now use the same fixed-admin queue. Events are emitted only after the
+user transaction commits, and correlate by session/run/revision, generation and
+lease epoch. They contain fixed states and counters, never raw errors, model text,
+tool arguments or results. Category switches `run`, `tool` and `recovery` default
+to true when omitted from existing configurations. Capture still requires the
+master switch. This is checkpoint evidence, not tool latency metrics or a complete
+recovery timeline; lifecycle paths outside the observed save wrappers need separate producers.
+
 * `GET /api/v3/admin/diagnostics`: existing session/run/pagination filters plus
-  `category=provider|context_assembly` and `level=info|warning|error`.
+  `category=provider|context_assembly|run|tool|recovery` and `level=info|warning|error`.
 * `GET /api/v3/admin/diagnostics/status`: per-process configuration digest,
   switches, queues, drops, write errors and capture skips; heartbeat older than
   15 seconds is marked stale. Disabled capture still permits retained reads.

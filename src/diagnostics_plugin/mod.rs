@@ -85,6 +85,9 @@ fn permits(settings: &Settings, category: &str) -> bool {
         && match category {
             "provider" => settings.config.categories.provider,
             "context_assembly" => settings.config.categories.context_assembly,
+            "run" => settings.config.categories.run,
+            "tool" => settings.config.categories.tool,
+            "recovery" => settings.config.categories.recovery,
             _ => false,
         }
 }
@@ -321,6 +324,55 @@ pub(crate) fn failure(store: &Store, run: &Value, error: &anyhow::Error, action:
   "action":match action {"retry"=>"retry","backup"=>"backup",_=>"terminal"}}),
     );
 }
+// Observe only committed transitions. No raw payload, errors, arguments or results enter telemetry.
+pub(crate) fn committed(store: &Store, run: &Value, kind: &str, recovery: bool) {
+    if !scope(store) {
+        return;
+    }
+    let Some(s) = settings() else {
+        return;
+    };
+    if let Some(event) = transition(&s, run, kind, recovery) {
+        emit(event);
+    }
+}
+fn transition(s: &Settings, run: &Value, kind: &str, recovery: bool) -> Option<Value> {
+    let category = if recovery {
+        "recovery"
+    } else {
+        match kind {
+            "tool_result" | "approval_required" => "tool",
+            "run_status" | "resumed" | "context_compacted" => "run",
+            _ => return None,
+        }
+    };
+    if !permits(s, category) {
+        return None;
+    }
+    let status = match run["status"].as_str()? {
+        v @ ("queued" | "running" | "completed" | "cancelled" | "failed" | "stopped" | "paused"
+        | "recovery" | "waiting_approval") => v,
+        _ => "other",
+    };
+    let pending_state = match run["pending"]["state"].as_str() {
+        Some(
+            v @ ("requested" | "approved" | "denied" | "executing" | "completed" | "uncertain"),
+        ) => Some(v),
+        _ => None,
+    };
+    Some(
+        json!({"owner":"admin","category":category,"level":if matches!(status,"failed"|"paused"|"recovery") {"warning"} else {"info"},
+        "config_digest":s.digest,"message":"Committed execution transition",
+        "event_kind":match kind {"tool_result"=>"tool_result","approval_required"=>"approval_required","resumed"=>"resumed","context_compacted"=>"context_compacted",_=>"run_status"},
+        "session_id":identifier(&run["session_id"]),"run_id":identifier(&run["id"]),"agent_id":identifier(&run["agent_id"]),
+        "status":status,"phase":match run["phase"].as_str() {Some(v @ ("model"|"tool"|"publication"|"approval"))=>Some(v),_=>None},
+        "run_revision":run["run_revision"].as_u64(),"generation":run["generation"].as_u64(),"lease_epoch":run["lease_epoch"].as_u64(),
+        "turns":run["turns"].as_u64(),"call_index":run["call_index"].as_u64(),
+        "call_id":identifier(&run["pending"]["call_id"]),"pending_state":pending_state,"uncertain":run["uncertain"]==true,
+        "recovery_override":recovery}),
+    )
+}
+
 // These unscoped hooks deliberately capture nothing.
 pub(crate) fn backend_error() {}
 pub(crate) async fn http_errors(
@@ -663,14 +715,15 @@ async fn read(
             return Err(crate::bad("Invalid diagnostic filter"));
         }
     }
-    if filter
-        .category
+    if filter.category.as_deref().is_some_and(|c| {
+        !matches!(
+            c,
+            "provider" | "context_assembly" | "run" | "tool" | "recovery"
+        )
+    }) || filter
+        .level
         .as_deref()
-        .is_some_and(|c| !matches!(c, "provider" | "context_assembly"))
-        || filter
-            .level
-            .as_deref()
-            .is_some_and(|c| !matches!(c, "info" | "warning" | "error"))
+        .is_some_and(|c| !matches!(c, "info" | "warning" | "error"))
     {
         return Err(crate::bad("Invalid diagnostic filter"));
     }

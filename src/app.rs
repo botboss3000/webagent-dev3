@@ -519,13 +519,13 @@ impl App {
         }
         let public=public_run(run);
         self.store
-            .save_run(run, "run_status", &public)
+            .save_run_observed(run, "run_status", &public)
             .await
     }
     async fn save_override(&self, run:&mut Value) -> Result<()> {
         run["updated_at"]=json!(now());
         let public=public_run(run);
-        self.store.save_run_override(run,"run_status",&public).await
+        self.store.save_run_override_observed(run,"run_status",&public).await
     }
     async fn selection(&self) -> Result<provider::ProviderSelection> {
         let value = self.store.agent_model().await?;

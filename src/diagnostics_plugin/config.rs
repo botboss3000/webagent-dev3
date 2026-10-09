@@ -17,6 +17,12 @@ pub(super) struct Config {
 pub(super) struct Categories {
     pub provider: bool,
     pub context_assembly: bool,
+    #[serde(default = "category_default")]
+    pub run: bool,
+    #[serde(default = "category_default")]
+    pub tool: bool,
+    #[serde(default = "category_default")]
+    pub recovery: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +44,9 @@ pub(super) struct FullContext {
 pub(super) struct Session {
     pub session_id: String,
     pub expires_at: String,
+}
+fn category_default() -> bool {
+    true
 }
 impl Config {
     pub fn disabled() -> Self {

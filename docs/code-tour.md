@@ -431,3 +431,7 @@ App → Functions uses administrator-only /api/v3/admin/loop-runtime.
 Digest-fenced edits preserve unrelated settings in config/loop-runtime.json.
 Blank or zero removes the scheduler concurrency cap; 1–16 sets a startup limit.
 Scheduler changes require a loop restart. Account and queue limits still apply.
+
+Committed run transitions feed fixed-admin metadata through `diagnostics::committed`
+after the observed Store save wrappers commits. See `docs/diagnostics-parity.md` for the
+staged V2 parity work and remaining coverage boundaries.

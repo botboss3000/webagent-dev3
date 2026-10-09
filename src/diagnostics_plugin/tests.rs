@@ -522,6 +522,34 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
     let r = RECORDER.get().unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
+            let rows: Vec<String> =
+                sqlx::query_scalar("SELECT payload FROM diagnostics WHERE category='run'")
+                    .fetch_all(&r.pool)
+                    .await
+                    .unwrap();
+            if !rows.is_empty() {
+                let event: Value = serde_json::from_str(rows.last().unwrap()).unwrap();
+                assert_eq!(event["run_id"], rid);
+                assert_eq!(event["run_revision"], run["run_revision"]);
+                assert!(!event.to_string().contains("PRIVATE"));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let mut stale = run.clone();
+    stale["run_revision"] = json!(999999);
+    assert!(app.save(&mut stale).await.is_err());
+    let committed_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM diagnostics WHERE category='run'")
+            .fetch_one(&r.pool)
+            .await
+            .unwrap();
+    assert_eq!(committed_rows, 1);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
             let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM context_snapshots")
                 .fetch_one(&r.pool)
                 .await
@@ -546,6 +574,8 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
         .unwrap();
     assert!(assembly(&public, &run, &request, &prepared).is_none());
     assert!(!provider_enabled(&public));
+    committed(&public, &run, "tool_result", false);
+    committed(&public, &run, "run_status", true);
     let token = crate::uuid();
     app.store.put(&format!("auth:{}",crate::digest(&json!(token))),&json!({"user_id":"admin","expires":crate::now()+3600,"generation":"fixture-generation","csrf":"fixture"})).await.unwrap();
     let uri = format!("/api/v3/sessions/{sid}/runs/{rid}/diagnostics/context/{attempt}");
@@ -607,4 +637,41 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
     .unwrap();
     assert!(assembly(&app.store, &run, &request, &prepared).is_none());
     println!("Verified live reload, private encrypted snapshot API, public-user exclusion, redaction, storage failure isolation, and disable.");
+}
+
+#[test]
+fn committed_transition_projection_excludes_private_text_and_honors_categories() {
+    let mut s = enabled("3c7e770c-82a2-484d-9e5a-8ad035f2ef4f");
+    let run = json!({"id":"run","session_id":"session","status":"paused","phase":"model","run_revision":8,
+        "error":"PRIVATE_ERROR","input":[{"text":"PRIVATE_INPUT"}],"pending":{"arguments":"PRIVATE_ARGUMENT","state":"executing","call_id":"call"}});
+    let event = transition(&s, &run, "run_status", false).unwrap();
+    assert_eq!(event["category"], "run");
+    assert_eq!(event["run_revision"], 8);
+    assert_eq!(event["level"], "warning");
+    assert!(!event.to_string().contains("PRIVATE"));
+    assert_eq!(
+        transition(&s, &run, "tool_result", false).unwrap()["category"],
+        "tool"
+    );
+    assert_eq!(
+        transition(&s, &run, "run_status", true).unwrap()["category"],
+        "recovery"
+    );
+    assert!(transition(&s, &run, "working_message", false).is_none());
+    s.config.categories.tool = false;
+    assert!(transition(&s, &run, "tool_result", false).is_none());
+    s.config.categories.recovery = false;
+    assert!(transition(&s, &run, "run_status", true).is_none());
+    s.config.enabled = false;
+    assert!(transition(&s, &run, "run_status", false).is_none());
+}
+#[test]
+fn existing_configuration_gains_compatible_category_defaults() {
+    let mut value = serde_json::to_value(Config::disabled()).unwrap();
+    for k in ["run", "tool", "recovery"] {
+        value["categories"].as_object_mut().unwrap().remove(k);
+    }
+    let c: Config = serde_json::from_value(value).unwrap();
+    assert!(c.categories.run && c.categories.tool && c.categories.recovery);
+    assert!(!c.enabled);
 }

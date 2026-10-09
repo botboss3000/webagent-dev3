@@ -490,7 +490,7 @@ pub(crate) async fn execute_run(
                 run["error"] = Value::Null;
                 let segment_id=format!("{}-{}",id,run["compactions"].as_u64().unwrap());
                 app.store
-                    .save_run(
+                    .save_run_observed(
                         &mut run,
                         "context_compacted",
                         &json!({"run_id":id,"source_digest":plan.source_digest,
@@ -664,7 +664,7 @@ pub(crate) async fn execute_run(
                     }
                     let payload=json!({"run_id":id,
                         "failover_state":run["failover_state"],"error":run["error"]});
-                    app.store.save_run(&mut run, "model_selection_failure", &payload).await?;
+                    app.store.save_run_observed(&mut run, "model_selection_failure", &payload).await?;
                     drop(_guard);
                     if !cancel.is_cancelled() {
                         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -741,7 +741,7 @@ pub(crate) async fn execute_run(
                             if reasoning_only && continuations < 2 {
                                 run["reasoning_only_completions"] = json!(continuations + 1);
                                 run["phase"] = json!("model");
-                                app.store.save_run(&mut run, "model_output", &json!({"output":output})).await?;
+                                app.store.save_run_observed(&mut run, "model_output", &json!({"output":output})).await?;
                                 continue;
                             }
                             let kinds = output.iter().map(|item| item["type"].as_str().unwrap_or("unknown"))
@@ -751,7 +751,7 @@ pub(crate) async fn execute_run(
                             run["status"] = json!("failed");
                             run["error"] = json!("Provider completed without a final reply; verify the selected model");
                             app.store
-                                .save_run(&mut run, "model_output", &json!({"output":output}))
+                                .save_run_observed(&mut run, "model_output", &json!({"output":output}))
                                 .await?;
                             return Ok(());
                         }
@@ -775,7 +775,7 @@ pub(crate) async fn execute_run(
                                 workflow::Decision::Reject { reason: "Publication exceeds configured limit".into() })?;
                             run["status"] = json!("paused");
                             run["error"] = json!("Publication exceeds configured limit; review required");
-                            app.store.save_run(&mut run, "model_output", &json!({"output":output})).await?;
+                            app.store.save_run_observed(&mut run, "model_output", &json!({"output":output})).await?;
                             return Ok(());
                         }
                         let gate_input=gate_protocol::PublicationGateInput {
@@ -801,7 +801,7 @@ pub(crate) async fn execute_run(
                                         reason:format!("Publication module {module_id} rejected: {reason_code}") })?;
                                 run["status"]=json!("paused");
                                 run["error"]=json!("Publication rejected by configured gate");
-                                app.store.save_run(&mut run,"model_output",&json!({"output":output})).await?;
+                                app.store.save_run_observed(&mut run,"model_output",&json!({"output":output})).await?;
                                 return Ok(());
                             },
                             gate_protocol::GateOutcome::Skipped{module_id,reason_code}=>{
@@ -822,11 +822,11 @@ pub(crate) async fn execute_run(
                         // rejected public row must not leave a half-saved model turn.
                         run["status"]=json!("paused");
                         run["error"]=json!("Auto promotion message exceeds 16384 bytes");
-                        app.store.save_run(&mut run,"model_output",&json!({"output":output})).await?;
+                        app.store.save_run_observed(&mut run,"model_output",&json!({"output":output})).await?;
                         return Ok(());
                     }
                     app.store
-                        .save_run(&mut run, "model_output", &json!({"output":output,
+                        .save_run_observed(&mut run, "model_output", &json!({"output":output,
                             "auto_promote":auto_promote}))
                         .await?;
                 }
@@ -865,7 +865,7 @@ pub(crate) async fn execute_run(
                 run["pending"]=json!({"call_id":call["call_id"]});
                 let result=json!({"status":"denied","output":"Post-run follow-up cannot change state, escalate mode, or launch tasks"});
                 append_tool(&mut run,&result)?;
-                app.store.save_run(&mut run,"tool_result",&json!({"run_id":id,"name":name,"result":result})).await?;
+                app.store.save_run_observed(&mut run,"tool_result",&json!({"run_id":id,"name":name,"result":result})).await?;
                 continue;
             }
             if name != "set_closer_status" {
@@ -928,10 +928,10 @@ pub(crate) async fn execute_run(
                 append_tool(&mut run,&result)?;
                 if let Some(text)=working_text {
                     let message_id=format!("working:{id}:{}:{idx}",run["turns"]);
-                    app.store.save_run(&mut run,"working_message",
+                    app.store.save_run_observed(&mut run,"working_message",
                         &json!({"id":message_id,"text":text})).await?;
                 } else {
-                    app.store.save_run(&mut run,"tool_result",
+                    app.store.save_run_observed(&mut run,"tool_result",
                         &json!({"run_id":id,"name":name,"result":result})).await?;
                 }
                 continue;
@@ -1000,7 +1000,7 @@ pub(crate) async fn execute_run(
                 if effective.permission == access::Permission::Deny {
                     let result=json!({"status":"denied","output":"Ability discovery unavailable"});
                     append_tool(&mut run,&result)?;
-                    app.store.save_run(&mut run,"tool_result",
+                    app.store.save_run_observed(&mut run,"tool_result",
                         &json!({"run_id":id,"name":name,"result":result})).await?;
                     continue;
                 }
@@ -1010,7 +1010,7 @@ pub(crate) async fn execute_run(
                     run["pending"]["state"]=json!("waiting");
                     let mut payload=run["pending"].clone();
                     payload["run_id"]=json!(id);
-                    app.store.save_run(&mut run,"approval_required",&payload).await?;
+                    app.store.save_run_observed(&mut run,"approval_required",&payload).await?;
                     return Ok(());
                 }
                 let mut result = app.abilities.discover_with(
@@ -1066,7 +1066,7 @@ pub(crate) async fn execute_run(
                 }
                 append_tool(&mut run, &result)?;
                 app.store
-                    .save_run(
+                    .save_run_observed(
                         &mut run,
                         "tool_result",
                         &json!({"run_id":id,"name":name,"result":result}),
@@ -1085,7 +1085,7 @@ pub(crate) async fn execute_run(
                 let result = json!({"status":"denied","output":"Tool invocation denied by policy or invalid arguments"});
                 append_tool(&mut run, &result)?;
                 app.store
-                    .save_run(
+                    .save_run_observed(
                         &mut run,
                         "tool_result",
                         &json!({"run_id":id,"name":name,"result":result}),
@@ -1099,7 +1099,7 @@ pub(crate) async fn execute_run(
                 let mut payload = run["pending"].clone();
                 payload["run_id"] = json!(id);
                 app.store
-                    .save_run(&mut run, "approval_required", &payload)
+                    .save_run_observed(&mut run, "approval_required", &payload)
                     .await?;
                 return Ok(());
             }
@@ -1189,7 +1189,7 @@ pub(crate) async fn execute_run(
                         run["manual_compaction_requested"]=json!(true);
                     }
                     app.store
-                        .save_run(
+                        .save_run_observed(
                             &mut run,
                             "tool_result",
                             &json!({"run_id":id,"name":name,"result":value}),

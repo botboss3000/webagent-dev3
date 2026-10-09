@@ -4,7 +4,10 @@
   "capture_scope": "fixed_admin",
   "categories": {
     "provider": true,
-    "context_assembly": true
+    "context_assembly": true,
+    "run": true,
+    "tool": true,
+    "recovery": true
   },
   "assembly_successes": false,
   "retention": {
