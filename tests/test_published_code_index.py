@@ -115,6 +115,34 @@ class PublishedTests(unittest.TestCase):
   self.assertEqual(before_source,idx.source_digest(d))
   self.assertEqual(before_index,(d/".code-index/index.sqlite").read_bytes())
 
+ def test_published_search_prefers_explicit_path_and_keeps_multiline_metadata_bound(self):
+  target=b"pub fn project(\n    history: &[Value],\n    now: Instant,\n) -> Vec<Value> {\n    history.iter().filter(|item| item.is_read_only()).cloned().collect()\n}\n"
+  j,d,m=self.stage(self.blob({"v3/src/context/tool_output.rs":(420,target),
+      "v3/src/unrelated.rs":(420,b"pub fn project_test_helper() {}\n")}))
+  before_source=idx.source_digest(d);before_index=(d/".code-index/index.sqlite").read_bytes()
+  query="src/context/tool_output.rs project. Use supplied snippets only; call no tools."
+  search=idx.execute_published("code_index_lookup",
+   {"root":"published","action":"search","query":query,"limit":10,"offset":0},d)
+  self.assertEqual("success",search["status"])
+  self.assertEqual(j,search["publication"]["release_id"])
+  candidate=search["results"][0]
+  self.assertEqual("v3/src/context/tool_output.rs",candidate["file_path"])
+  self.assertEqual("project",candidate["label"])
+  self.assertEqual(6,candidate["line_count"])
+  self.assertEqual("uncertain",candidate["parser_status"])
+  self.assertGreaterEqual(candidate["ranking_score"],candidate["score"])
+  snippet=idx.execute_published("code_index_lookup",
+   {"root":"published","action":"snippet","file_path":candidate["file_path"],
+    "start_line":candidate["start_line"],"end_line":min(candidate["start_line"]+39,candidate["line_count"]),"max_chars":12000},d)
+  self.assertEqual("success",snippet["status"])
+  self.assertEqual(search["publication"],snippet["publication"])
+  source=snippet["results"][0]
+  self.assertEqual(6,source["end_line"])
+  self.assertIn("history.iter().filter",source["text"])
+  self.assertIn("collect()",source["text"])
+  self.assertEqual(before_source,idx.source_digest(d))
+  self.assertEqual(before_index,(d/".code-index/index.sqlite").read_bytes())
+
  def test_seed_pins_one_release_and_copies_private_bootstrap(self):
   worker=load("published_seed_worker",ROOT/"worker.py")
   j,d,m=self.stage(self.blob());rel.activate_assets(self.assets,j)

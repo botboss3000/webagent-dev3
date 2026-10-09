@@ -1,4 +1,96 @@
 use super::*;
+
+fn automatic_code_index_journal(
+    evidence: &Value,
+    run_id: &str,
+) -> (Vec<Value>, Vec<Value>, &'static str) {
+    let mut calls = Vec::new();
+    let mut results = Vec::new();
+    if let Some(items) = evidence["items"].as_array() {
+        for item in items.iter().take(5) {
+            let Some(call_id) = item["call_id"].as_str() else {
+                continue;
+            };
+            let arguments = json!({
+                "action":"snippet",
+                "root":item["root"],
+                "file_path":item["path"],
+                "start_line":item["start_line"],
+                "end_line":item["end_line"],
+                "max_chars":item["max_chars"]
+            });
+            calls.push(json!({
+                "type":"function_call",
+                "call_id":call_id,
+                "name":"code_index_lookup",
+                "arguments":arguments.to_string()
+            }));
+            results.push(json!({
+                "type":"function_call_output",
+                "call_id":call_id,
+                "output":json!({
+                    "status":"success",
+                    "source_kind":"untrusted_source_index",
+                    "output":item
+                }).to_string()
+            }));
+        }
+    }
+    let ranked = evidence["ranked_candidates"].as_array();
+    if let Some(ranked) = ranked.filter(|items| !items.is_empty()) {
+        let candidate_id = format!("code_index_auto_{run_id}_candidates");
+        calls.push(json!({
+            "type":"function_call",
+            "call_id":candidate_id,
+            "name":"code_index_lookup",
+            "arguments":json!({
+                "action":"search",
+                "root":evidence["root"],
+                "query":evidence["query"],
+                "limit":evidence["candidate_limit"],
+                "offset":0
+            }).to_string()
+        }));
+        results.push(json!({
+            "type":"function_call_output",
+            "call_id":candidate_id,
+            "output":json!({
+                "status":"success",
+                "source_kind":"untrusted_source_index",
+                "output":{
+                    "ranked_candidates":ranked,
+                    "index_revision":evidence["index_revision"]
+                }
+            }).to_string()
+        }));
+    }
+    let status = if evidence["items"].as_array().is_some_and(|items| !items.is_empty()) {
+        "attached"
+    } else if ranked.is_some_and(|items| !items.is_empty()) {
+        "attached_candidates"
+    } else {
+        "no_matches"
+    };
+    (calls, results, status)
+}
+#[cfg(test)]
+mod automatic_code_index_journal_tests {
+    use super::*;
+    #[test]
+    fn ranked_candidates_are_journaled_without_snippets_as_untrusted_pairs() {
+        let evidence=json!({"root":"published","query":"private query","candidate_limit":16,
+            "index_revision":{"release_id":"release","source_sha256":"sha","index_sha256":"index"},
+            "ranked_candidates":[{"path":"src/a.rs","start_line":3,"end_line":3,"score":1.0,"confidence":0.9,"selected":false}],"items":[]});
+        let (calls,results,status)=automatic_code_index_journal(&evidence,"run-1");
+        assert_eq!(status,"attached_candidates");assert_eq!(calls.len(),1);assert_eq!(results.len(),1);
+        assert_eq!(calls[0]["type"],"function_call");assert_eq!(results[0]["type"],"function_call_output");
+        assert_eq!(calls[0]["call_id"],results[0]["call_id"]);assert_eq!(calls[0]["name"],"code_index_lookup");
+        let output:Value=serde_json::from_str(results[0]["output"].as_str().unwrap()).unwrap();
+        assert_eq!(output["source_kind"],"untrusted_source_index");
+        assert_eq!(output["output"]["ranked_candidates"],evidence["ranked_candidates"]);
+        assert!(output["output"].get("query").is_none());
+    }
+}
 // Recheck all context authority after credential retrieval, under the dispatch gate.
 async fn dispatch_asset_key(app:&App,sid:&str,agent_id:&str,loaded:&Value,selected:&Value)->Result<String> {
     let access=app.store.live_access(app.store.current_user_id(),agent_id).await?;
@@ -82,6 +174,7 @@ pub(crate) async fn execute_run(
             // No source read or Decision request may hold the shared dispatch gate.
             if run["code_index_retrieval_attempted"]!=true && run["post_run_followup"]!=true {
                 run["code_index_retrieval_attempted"]=json!(true);
+                run["code_index_retrieval_stage"]=json!("preflight");
                 let user_text=run["input"].as_array().unwrap().iter().rev()
                     .find(|item|item["role"]=="user")
                     .map(|item| {
@@ -103,52 +196,34 @@ pub(crate) async fn execute_run(
                 if let Ok(Ok(Some(evidence)))=retrieval {
                     if tools::code_index_retrieval::authorize_attachment(&app,&sid,&id,evidence["output"]["settings_sha256"].as_str().unwrap_or("")).await.is_err() {
                         latest["code_index_retrieval_status"]=json!("access_changed");
+                        latest["code_index_retrieval_stage"]=json!("authorization");
                         app.save(&mut latest).await?;
                         continue;
                     }
                     // These are private source read records, never trusted instructions
                     // and never an external-effect replay. Journal each recallable pair.
                     let evidence=&evidence["output"];
-                    let mut calls=Vec::new();let mut results=Vec::new();
-                    if let Some(items)=evidence["items"].as_array() {
-                        for item in items.iter().take(5) {
-                            let Some(call_id)=item["call_id"].as_str() else {continue};
-                            let arguments=json!({"action":"snippet","root":item["root"],
-                                "file_path":item["path"],"start_line":item["start_line"],
-                                "end_line":item["end_line"],"max_chars":item["max_chars"]});
-                            calls.push(json!({"type":"function_call","call_id":call_id,
-                                "name":"code_index_lookup","arguments":arguments.to_string()}));
-                            results.push(json!({"type":"function_call_output","call_id":call_id,
-                                "output":json!({"status":"success","source_kind":"untrusted_source_index",
-                                    "output":item}).to_string()}));
-                        }
-                    }
+                    let (calls,results,retrieval_status)=automatic_code_index_journal(evidence,&id);
                     if !calls.is_empty() {
-                        let candidate_id=format!("code_index_auto_{id}_candidates");
-                        calls.push(json!({"type":"function_call","call_id":candidate_id,
-                            "name":"code_index_lookup",
-                            "arguments":json!({"action":"search","root":evidence["root"],
-                                "query":evidence["query"],"limit":evidence["candidate_limit"],"offset":0}).to_string()}));
-                        results.push(json!({"type":"function_call_output","call_id":candidate_id,
-                            "output":json!({"status":"success","source_kind":"untrusted_source_index",
-                                "output":{"ranked_candidates":evidence["ranked_candidates"],
-                                    "index_revision":evidence["index_revision"]}}).to_string()}));
                         latest["input"].as_array_mut().unwrap().extend(calls.iter().cloned());
                         // Turn zero is reserved here; working model calls begin at one.
-                        app.store.save_run_observed(&mut latest,"model_output",
-                            &json!({"output":calls})).await?;
+                        app.store.save_run_observed(&mut latest,"model_output",&json!({"output":calls})).await?;
                         for result in results {
                             latest["input"].as_array_mut().unwrap().push(result);
                             app.save(&mut latest).await?;
                         }
-                        latest["code_index_retrieval_status"]=json!("attached");
-                    } else {latest["code_index_retrieval_status"]=json!("no_matches");}
+                    }
+                    latest["code_index_retrieval_status"]=json!(retrieval_status);
+                    latest["code_index_retrieval_stage"]=json!("complete");
                 } else {
-                    latest["code_index_retrieval_status"]=json!(match retrieval {
-                        Ok(Ok(None))=>"disabled_or_no_matches",
-                        Err(_)=>"timeout",
-                        _=>"unavailable",
-                    });
+                    let (status,stage)=match retrieval {
+                        Ok(Ok(None))=>("disabled_or_no_matches","complete"),
+                        Err(_)=>("timeout","unknown"),
+                        Ok(Err(ref error))=>("unavailable",tools::code_index_retrieval::bounded_failure_stage(error)),
+                        _=>("unavailable","unknown"),
+                    };
+                    latest["code_index_retrieval_status"]=json!(status);
+                    latest["code_index_retrieval_stage"]=json!(stage);
                 }
                 app.save(&mut latest).await?;
                 context_accounting.reset();

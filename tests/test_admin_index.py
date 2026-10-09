@@ -82,6 +82,28 @@ class AdminIndexTests(unittest.TestCase):
         ]:
             self.assertEqual(index.execute("code_index_lookup",args,self.base)["status"],"error",args)
 
+    def test_explicit_path_and_symbol_rank_with_bounded_context_metadata(self):
+        target=self.repo/"src/context/tool_output.rs"
+        target.parent.mkdir(parents=True)
+        target.write_text("pub fn project(\n    history: &[Value],\n    now: Instant,\n) -> Vec<Value> {\n    history.iter().filter(|item| item.is_read_only()).cloned().collect()\n}\n",encoding="utf-8")
+        (self.repo/"src/unrelated.rs").write_text("pub fn project_test_helper() {}\n",encoding="utf-8")
+        self.scan()
+        query="src/context/tool_output.rs project. Use supplied snippets only; call no tools."
+        found=self.call("lookup",action="search",query=query,limit=10)
+        candidate=found["results"][0]
+        self.assertEqual("src/context/tool_output.rs",candidate["file_path"])
+        self.assertEqual("project",candidate["label"])
+        self.assertEqual(6,candidate["line_count"])
+        self.assertEqual("uncertain",candidate["parser_status"])
+        self.assertIsInstance(candidate["score"],float)
+        self.assertGreaterEqual(candidate["ranking_score"],candidate["score"])
+        excerpt=self.call("lookup",action="snippet",file_path=candidate["file_path"],
+            start_line=candidate["start_line"],end_line=min(candidate["start_line"]+39,candidate["line_count"]),max_chars=12000)
+        source=excerpt["results"][0]
+        self.assertEqual(6,source["end_line"])
+        self.assertIn("history.iter().filter",source["text"])
+        self.assertIn("collect()",source["text"])
+
     def test_changed_deleted_source_requires_explicit_refresh(self):
         self.scan()
         old=self.call("lookup",action="file",file_path="ui/app.js")["results"][0]["sha256"]

@@ -592,6 +592,32 @@ def validated(name,args):
     if "batch_id" in result and (not isinstance(result["batch_id"],str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}",result["batch_id"])):
         raise ValueError("Invalid batch_id")
     return result
+SEARCH_PATH_RE = re.compile(r"(?<![\w./-])(?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]{1,12}(?![\w./-])")
+SEARCH_STOP_WORDS = {"a", "an", "and", "are", "as", "at", "be", "call", "codebase", "do", "explain", "for", "from", "grounded", "how", "if", "in", "is", "it", "no", "of", "only", "or", "please", "retrieved", "short", "snippets", "source", "supplied", "the", "this", "to", "tools", "use", "using", "with"}
+def search_path_key(value):
+    parts=[part.lower() for part in value.replace("\\", "/").split("/") if part not in ("", ".")]
+    while parts and parts[0] in {"v3", "webagent-v3"}:
+        parts.pop(0)
+    return "/".join(parts)
+def search_terms(query, paths):
+    residual=query
+    for path in paths:
+        residual=residual.replace(path, " ")
+    return sorted({term.lower() for term in re.findall(r"[A-Za-z0-9_]{2,}",residual)
+                   if term.lower() not in SEARCH_STOP_WORDS})[:24]
+def search_path_rank(candidate, paths):
+    candidate_key=search_path_key(candidate)
+    rank=0
+    for path in paths:
+        key=search_path_key(path)
+        if candidate_key==key:
+            rank=max(rank,3)
+        elif candidate_key.endswith("/"+key):
+            rank=max(rank,2)
+        elif key.endswith("/"+candidate_key):
+            rank=max(rank,1)
+    return rank
+
 def lookup(conn,rootfd,args):
     action=args["action"];path=args.get("file_path");query=args.get("query","")
     if action=="file":
@@ -604,25 +630,44 @@ def lookup(conn,rootfd,args):
     elif action=="edge":
         rows=conn.execute("SELECT * FROM edges WHERE instr(value,?)>0 AND (? IS NULL OR file_path=?) ORDER BY file_path,line_no,value LIMIT 5001",(query,path,path)).fetchall()
     elif action=="search":
-        terms=sorted({term.lower() for term in re.findall(r"[A-Za-z0-9_]{2,}",query)})[:24]
+        explicit_paths=SEARCH_PATH_RE.findall(query)
+        terms=search_terms(query,explicit_paths)
+        if not terms:
+            terms=[term.lower() for term in re.findall(r"[A-Za-z0-9_]{2,}",query) if term.lower() not in SEARCH_STOP_WORDS][:24]
         if not terms:raise ValueError("Search query has no indexable terms")
+        # The files table is bounded to MAX_FILES; load its display metadata once
+        # rather than issuing a query for every candidate result.
+        metadata={row["path"]:{"line_count":row["line_count"],"parser_status":row["parser_status"]}
+                  for row in conn.execute("SELECT path,line_count,parser_status FROM files ORDER BY path LIMIT 5000")}
         candidates={}
+        def add_candidate(key,item,haystack,symbol_name=None):
+            hits=sum(1 for term in terms if term in haystack.lower())
+            path_rank=search_path_rank(item["file_path"],explicit_paths)
+            symbol_rank=2 if symbol_name and symbol_name.lower() in terms else 1 if symbol_name and any(term in symbol_name.lower() for term in terms) else 0
+            if not hits and not path_rank:return
+            item["score"]=round(hits/len(terms),4)
+            # score is lexical overlap; ranking_score adds deterministic path/symbol
+            # boosts for ordering and is not a Jev/provider confidence score.
+            item["ranking_score"]=round(path_rank*100+symbol_rank*10+item["score"],4)
+            item.update(metadata.get(item["file_path"],{}))
+            item["_path_rank"]=path_rank
+            item["_symbol_rank"]=symbol_rank
+            previous=candidates.get(key)
+            if previous is None or (path_rank,symbol_rank,item["score"])>(previous["_path_rank"],previous["_symbol_rank"],previous["score"]):
+                candidates[key]=item
         for row in conn.execute("SELECT file_path,name,kind,start_line,end_line,signature FROM symbols ORDER BY file_path,start_line LIMIT 20000"):
-            haystack=(row["file_path"]+" "+row["name"]+" "+row["signature"]).lower()
-            hits=sum(1 for term in terms if term in haystack)
-            if hits:
-                key=(row["file_path"],row["start_line"],row["end_line"])
-                candidates[key]={"file_path":row["file_path"],"start_line":row["start_line"],"end_line":row["end_line"],"label":row["name"],"kind":row["kind"],"score":round(hits/len(terms),4)}
+            item={"file_path":row["file_path"],"start_line":row["start_line"],"end_line":row["end_line"],"label":row["name"],"kind":row["kind"]}
+            add_candidate((row["file_path"],row["start_line"],row["end_line"]),item,
+                row["file_path"]+" "+row["name"]+" "+row["signature"],row["name"])
         for row in conn.execute("SELECT file_path,line_no,edge_kind,value FROM edges ORDER BY file_path,line_no LIMIT 20000"):
-            haystack=(row["file_path"]+" "+row["edge_kind"]+" "+row["value"]).lower()
-            hits=sum(1 for term in terms if term in haystack)
-            if hits:
-                key=(row["file_path"],row["line_no"],row["line_no"])
-                candidates.setdefault(key,{"file_path":row["file_path"],"start_line":row["line_no"],"end_line":row["line_no"],"label":row["value"],"kind":row["edge_kind"],"score":round(hits/len(terms),4)})
-        for row in conn.execute("SELECT path FROM files ORDER BY path LIMIT 5000"):
-            hits=sum(1 for term in terms if term in row["path"].lower())
-            if hits:candidates.setdefault((row["path"],1,1),{"file_path":row["path"],"start_line":1,"end_line":1,"label":row["path"],"kind":"file","score":round(hits/len(terms),4)})
-        rows=sorted(candidates.values(),key=lambda item:(-item["score"],item["file_path"],item["start_line"]))[:MAX_FILES+1]
+            item={"file_path":row["file_path"],"start_line":row["line_no"],"end_line":row["line_no"],"label":row["value"],"kind":row["edge_kind"]}
+            add_candidate((row["file_path"],row["line_no"],row["line_no"]),item,
+                row["file_path"]+" "+row["edge_kind"]+" "+row["value"])
+        for path in metadata:
+            item={"file_path":path,"start_line":1,"end_line":1,"label":path,"kind":"file"}
+            add_candidate((path,1,1),item,path)
+        rows=sorted(candidates.values(),key=lambda item:(-item["_path_rank"],-item["_symbol_rank"],-item["score"],item["file_path"],item["start_line"]))[:MAX_FILES+1]
+        rows=[{key:value for key,value in item.items() if not key.startswith("_")} for item in rows]
         result=page(rows,args["offset"],args["limit"]);result["result_cap_reached"]=len(rows)>MAX_FILES
         return result
     elif action=="snippet":

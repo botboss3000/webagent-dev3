@@ -32,8 +32,11 @@ an existing private index always wins.
 3. Check `code_index_coverage(action="report")`. Review all pages, using `next_offset` while `has_more` is true. Zero gaps alone does not mean fresh: require zero `stale_count` and zero `unindexed_count`.
 4. Use `code_index_lookup` for files, exact lines, symbols and static edges. Its `search` action ranks indexed paths, symbols and edges against a bounded query; `snippet` reads up to 80 fresh indexed lines with a 12,000-character maximum and rejects stale source. Use `code_index_trace` for exact symbols, selectors, events, endpoints, imports, data attributes and assets.
 
-Agent managers can enable automatic user-message retrieval in the Code Index ability settings. It is off by default, uses the existing Jev Decision role, and requires automatic effective permission for both `code_index_lookup` and `decide_with_jev`. Retrieval returns a bounded set of scored excerpts as untrusted source evidence; it never edits source or grants access.
 5. After edits, explicitly scan changed files. Reads never silently rescan; returned lookup and trace records carry `stale` flags.
+
+Search `score` is lexical term overlap; `ranking_score` adds explicit-path and symbol-match boosts for ordering. These are separate from Jev's model scores and confidence.
+
+Agent managers can enable automatic user-message retrieval in the Code Index ability settings. It is off by default, reads published source by default, uses the existing Jev Decision role, and requires automatic effective permission for both `code_index_lookup` and `decide_with_jev`. Jev scores each candidate separately. Retrieval returns bounded excerpts as untrusted source evidence and preserves ranked suggestions even when score or confidence filters reject all excerpts. Single-line lexical hits include nearby code when the indexed file bounds permit; character and line limits still apply. It never edits source or grants access. The run API exposes only a bounded retrieval status and stage for troubleshooting.
 
 Every physical source line, including comments and blanks, receives one hashed ledger entry. Python symbols use Python AST. JavaScript uses Tree-sitter when installed; an unavailable or invalid parser produces explicitly uncertain fallback spans. Rust and TOML are lexical source coverage with uncertainty, not an AST claim. Static edges are navigation evidence, not runtime behavior.
 

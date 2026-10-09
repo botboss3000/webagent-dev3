@@ -123,8 +123,38 @@ async fn public_runs(app:&App,views:Vec<Value>)->Result<Vec<Value>>{
     }
     Ok(result)
 }
+fn public_code_index_retrieval(run: &Value) -> Value {
+    let attempted = run["code_index_retrieval_attempted"] == true;
+    let status = match run["code_index_retrieval_status"].as_str() {
+        Some("attached") => "attached",
+        Some("attached_candidates") => "attached_candidates",
+        Some("no_matches" | "disabled_or_no_matches") => "no_matches",
+        Some("access_changed") => "access_changed",
+        Some("timeout") => "timeout",
+        Some("unavailable") => "unavailable",
+        None if !attempted => "not_attempted",
+        _ => "unavailable",
+    };
+    let stage = if !attempted {
+        "not_started"
+    } else {
+        match run["code_index_retrieval_stage"].as_str() {
+            Some("preflight") => "preflight",
+            Some("lookup") => "lookup",
+            Some("pre_jev") => "pre_jev",
+            Some("jev_parse") => "jev_parse",
+            Some("snippet") => "snippet",
+            Some("authorization") => "authorization",
+            Some("complete") => "complete",
+            Some("unknown") => "unknown",
+            _ => "unknown",
+        }
+    };
+    json!({"status":status,"stage":stage})
+}
 fn public_run(run: &Value) -> Value {
     json!({"id":run["id"],"session_id":run["session_id"],"status":run["status"],"error":run["error"],
+        "code_index_retrieval":public_code_index_retrieval(run),
         "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],
         "attachments":run["attachments"].as_array().cloned().unwrap_or_default(),
         "model":public_run_model(run),
@@ -316,6 +346,31 @@ fn validate_system_summary_input(context:&loop_runtime::Context,selection:&provi
         return Err(context_assembly::Failure::new("system_summary_input_unavailable","summary_input").into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod code_index_run_projection_tests {
+    use super::*;
+    #[test]
+    fn public_code_index_outcome_is_an_allowlisted_content_free_projection() {
+        let run=json!({"id":"run","session_id":"session","status":"running",
+            "code_index_retrieval_attempted":true,"code_index_retrieval_status":"secret query and source excerpt",
+            "code_index_retrieval_stage":"provider said: secret","code_index_query":"private query",
+            "code_index_source":"private source","code_index_retrieval_error":"upstream body"});
+        let public=public_run(&run);
+        assert_eq!(public["code_index_retrieval"],json!({"status":"unavailable","stage":"unknown"}));
+        let rendered=public.to_string();
+        for secret in ["secret query","provider said","private query","private source","upstream body"] {
+            assert!(!rendered.contains(secret));
+        }
+    }
+    #[test]
+    fn public_code_index_outcome_exposes_only_valid_status_and_stage() {
+        let run=json!({"code_index_retrieval_attempted":true,"code_index_retrieval_status":"attached_candidates",
+            "code_index_retrieval_stage":"complete","code_index_query":"private"});
+        assert_eq!(public_code_index_retrieval(&run),json!({"status":"attached_candidates","stage":"complete"}));
+        assert_eq!(public_code_index_retrieval(&json!({})),json!({"status":"not_attempted","stage":"not_started"}));
+    }
 }
 
 #[cfg(test)]
