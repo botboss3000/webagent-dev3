@@ -36,3 +36,13 @@
 #tab-app details[open] > .ac-ability-body{display:block}
 #tab-app .v3-user-form,#tab-app .ac-ability-body form{display:flex;flex-direction:column;gap:10px}
 #tab-app .members-policy form label{display:flex;flex-direction:column;gap:4px;margin:8px 0}
+
+#app-functions-page{padding:16px;color:var(--fg-1)}
+#app-functions-page .app-runtime{border:1px solid var(--border);border-radius:8px}
+#app-functions-page summary{display:flex;align-items:center;justify-content:space-between;gap:16px;cursor:pointer;padding:14px}
+#app-functions-page summary:focus-visible{outline:2px solid var(--accent)}
+#app-functions-page summary strong{color:var(--accent)}
+#app-functions-page form{padding:0 14px 14px;max-width:620px}
+#app-functions-page label{display:flex;flex-direction:column;gap:6px;margin:14px 0}
+#app-functions-page input{padding:8px;background:var(--bg-1);color:var(--fg-1);border:1px solid var(--border);border-radius:4px;width:100%;box-sizing:border-box}
+#app-functions-page p{color:var(--fg-2);line-height:1.5;font-size:13px}

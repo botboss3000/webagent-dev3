@@ -425,3 +425,9 @@ idle retention cleanup. Snapshot reads recheck fixed-admin ownership and live
 session/agent authority. This evidence never authorizes dispatch or recovery.
 
 See [diagnostics configuration and read APIs](../src/diagnostics_plugin/README.md).
+
+## Loop settings
+App → Functions uses administrator-only /api/v3/admin/loop-runtime.
+Digest-fenced edits preserve unrelated settings in config/loop-runtime.json.
+Blank or zero removes the scheduler concurrency cap; 1–16 sets a startup limit.
+Scheduler changes require a loop restart. Account and queue limits still apply.

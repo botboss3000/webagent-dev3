@@ -701,7 +701,7 @@ async fn run_process() -> Result<()> {
         refresh: Arc::new(Mutex::new(())),
         login: Arc::new(RwLock::new(None)),
         active: Arc::new(Mutex::new(HashMap::new())),
-        slots: Arc::new(Semaphore::new(max_active_runs)),
+        slots: Arc::new(Semaphore::new(if max_active_runs == 0 { Semaphore::MAX_PERMITS } else { max_active_runs })),
         ready: Arc::new(AtomicBool::new(false)),
         stop: CancellationToken::new(),
         login_attempts: Arc::new(Mutex::new(Vec::new())),

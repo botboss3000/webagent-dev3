@@ -2,6 +2,7 @@
 import { renderAgentDirectory } from '../agents/pages/catalog.js';
 import { mountUsers, mountPolicies, mountPageAccess } from './users/users.js';
 import { mountAppSettings } from './settings.js';
+import { mountFunctions } from './functions.js';
 import { mountAppModels } from './models/models.js';
 import { wirePageTabDrag } from '../../shared/page-tabs.js';
 import { startView as startFiles, stopView as stopFiles, resetExplorerForRemount } from './explorer-view.js';
@@ -28,7 +29,7 @@ export async function start(mount) {
   if (!Array.isArray(pages) || pages.some(page => !/^[a-z][a-z0-9-]*$/.test(page.id) || !page.title)) throw Error('Invalid App catalog');
   mount.innerHTML = '<div class="app-page-framework"><div class="agent-card active agent-card-tabs-only"><div class="agent-card-tabs-wrap"><div class="agent-card-tabs" role="tablist" aria-label="App pages"></div></div></div><div class="agent-detail-panel"><div class="agent-detail-content"><div id="app-config-page" class="agent-detail-body"></div><section id="app-files-page" class="agent-detail-body" hidden><h2>File Manager</h2><p role="status">Checking V3 File Manager…</p></section></div></div></div>';
   for(const page of pages) if(!mount.querySelector('#'+page.panelId)){const panel=document.createElement('section');panel.id=page.panelId;panel.className='agent-detail-body';panel.hidden=true;mount.querySelector('.agent-detail-content').append(panel);}
-  if(me?.is_admin){mountAppSettings(mount.querySelector('#app-settings-page'));}
+  if(me?.is_admin){mountFunctions(mount.querySelector('#app-functions-page'));mountAppSettings(mount.querySelector('#app-settings-page'));}
   if(me?.is_admin){await mountUsers(mount.querySelector('#app-users-page'));if(!active())return;await mountPolicies(mount.querySelector('#app-user-policies-page'));if(!active())return;await mountPageAccess(mount.querySelector('#app-page-access-page'));if(!active())return;const dispose=await mountAppModels(mount.querySelector('#app-models-page'));if(!active()){dispose();return;}mount._appModelsDispose=dispose;}
   const strip = mount.querySelector('[role=tablist]');
   const all = [{id:'config',title:'Config',panelId:'app-config-page'}, ...pages];

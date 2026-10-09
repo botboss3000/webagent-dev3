@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::{Path, PathBuf}, io::Write};
 use crate::workflow;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Scheduler { pub max_active_runs:usize, pub max_unresolved_runs:usize, pub poll_interval_ms:u64, pub recovery_interval_ms:u64 }
+pub struct Scheduler { #[serde(default)] pub max_active_runs:usize, pub max_unresolved_runs:usize, pub poll_interval_ms:u64, pub recovery_interval_ms:u64 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Context {
@@ -56,7 +56,7 @@ pub struct Workflow { pub max_turns:u64, pub max_attempts:u64, pub max_publicati
 #[serde(deny_unknown_fields)]
 pub struct Config { pub schema_version:u32, pub scheduler:Scheduler, pub context:Context, pub cache:Cache, #[serde(default)] pub tools:Tools, pub workflow:Workflow }
 // Bootstrap only. Once present, the validated data file is the sole authority.
-impl Default for Config { fn default()->Self { Self {schema_version:2,scheduler:Scheduler {max_active_runs:1,max_unresolved_runs:200,poll_interval_ms:300,recovery_interval_ms:10000},context:Context {max_context_bytes:262144,model_profiles:BTreeMap::new()},cache:Cache {document_budget_bytes:67108864,context_budget_bytes:16777216},tools:Tools::default(),workflow:Workflow {max_turns:50,max_attempts:3,max_publication_bytes:262144,modules:BTreeMap::new()}} } }
+impl Default for Config { fn default()->Self { Self {schema_version:2,scheduler:Scheduler {max_active_runs:0,max_unresolved_runs:200,poll_interval_ms:300,recovery_interval_ms:10000},context:Context {max_context_bytes:262144,model_profiles:BTreeMap::new()},cache:Cache {document_budget_bytes:67108864,context_budget_bytes:16777216},tools:Tools::default(),workflow:Workflow {max_turns:50,max_attempts:3,max_publication_bytes:262144,modules:BTreeMap::new()}} } }
 impl Config {
  pub fn policy(&self)->Result<workflow::Policy> { workflow::Policy::resolve(Some(&serde_json::json!({"schema_version":1,"max_turns":self.workflow.max_turns,"max_attempts":self.workflow.max_attempts,"max_publication_bytes":self.workflow.max_publication_bytes,"modules":self.workflow.modules,"max_context_bytes":self.context.max_context_bytes}))) }
  pub fn apply_policy(&mut self,p:&workflow::Policy) { self.context.max_context_bytes=p.max_context_bytes;self.workflow=Workflow {max_turns:p.max_turns,max_attempts:p.max_attempts,max_publication_bytes:p.max_publication_bytes,modules:p.modules.clone()}; }
@@ -71,7 +71,7 @@ impl Config {
   if !crate::tools::schemas().iter().any(|schema|schema["name"]==name.as_str())
    || !matches!(mode.as_str(),"concurrent"|"reject") {bail!("Invalid parallel tool mode");}
  }
- if self.schema_version!=2 || !(1..=16).contains(&self.scheduler.max_active_runs) || self.scheduler.max_unresolved_runs<self.scheduler.max_active_runs || self.scheduler.max_unresolved_runs>200 || !(10..=60000).contains(&self.scheduler.poll_interval_ms) || !(1000..=3600000).contains(&self.scheduler.recovery_interval_ms) || self.cache.document_budget_bytes>268435456 || self.cache.context_budget_bytes>67108864 { bail!("Invalid loop runtime configuration"); } Ok(()) }
+ if self.schema_version!=2 || self.scheduler.max_active_runs>16 || self.scheduler.max_unresolved_runs==0 || self.scheduler.max_unresolved_runs<self.scheduler.max_active_runs || self.scheduler.max_unresolved_runs>200 || !(10..=60000).contains(&self.scheduler.poll_interval_ms) || !(1000..=3600000).contains(&self.scheduler.recovery_interval_ms) || self.cache.document_budget_bytes>268435456 || self.cache.context_budget_bytes>67108864 { bail!("Invalid loop runtime configuration"); } Ok(()) }
  pub fn read(path:&Path)->Result<Self> { let mut value:serde_json::Value=serde_json::from_slice(&std::fs::read(path)?)?;
  // Schema 1's reserve was redundant. Preserve all other settings and reject unknown fields.
  if value["schema_version"]==1 { value["schema_version"]=serde_json::json!(2); if let Some(c)=value["context"].as_object_mut(){c.remove("summary_reserve_bytes");} }
@@ -83,7 +83,7 @@ impl Config {
  let original=std::fs::read(&path)?;let v:serde_json::Value=serde_json::from_slice(&original)?;
  if v["schema_version"]==1 {let backup=path.with_extension("json.v1.bak");match std::fs::OpenOptions::new().write(true).create_new(true).open(&backup){Ok(mut f)=>{f.write_all(&original)?;f.sync_all()?;},Err(e) if e.kind()==std::io::ErrorKind::AlreadyExists=>{if std::fs::read(&backup)?!=original {bail!("Conflicting loop runtime migration backup");}},Err(e)=>return Err(e.into())};c.persist(&path)?;}c},Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{let mut c=Self::default();if let Some(old)=store.get("workflow_policy").await? {let mut old=old; if let Some(o)=old.as_object_mut(){o.remove("summary_reserve_bytes");} let p=workflow::Policy::resolve(Some(&old))?;c.apply_policy(&p);} c.persist(&path)?;c},Err(e)=>return Err(e.into()) };Ok((config,path)) }
 }
-#[cfg(test)] mod tests { use super::*; #[test] fn defaults_and_validation(){let c=Config::default();c.validate().unwrap();assert_eq!(c.scheduler.max_active_runs,1);let mut c=c;c.scheduler.max_active_runs=0;assert!(c.validate().is_err());} #[test] fn atomic_roundtrip_and_invalid_present(){let d=tempfile::tempdir().unwrap();let p=d.path().join("config/loop-runtime.json");Config::default().persist(&p).unwrap();assert_eq!(Config::read(&p).unwrap().context.max_context_bytes,262144);std::fs::write(&p,b"{}").unwrap();assert!(Config::read(&p).is_err());} }
+#[cfg(test)] mod tests { use super::*; #[test] fn defaults_and_validation(){let c=Config::default();c.validate().unwrap();assert_eq!(c.scheduler.max_active_runs,0);let mut c=c;c.scheduler.max_active_runs=16;c.validate().unwrap();c.scheduler.max_active_runs=17;assert!(c.validate().is_err());} #[test] fn atomic_roundtrip_and_invalid_present(){let d=tempfile::tempdir().unwrap();let p=d.path().join("config/loop-runtime.json");Config::default().persist(&p).unwrap();assert_eq!(Config::read(&p).unwrap().context.max_context_bytes,262144);std::fs::write(&p,b"{}").unwrap();assert!(Config::read(&p).is_err());} }
 
 #[cfg(test)] mod migration_tests {
  use super::*;

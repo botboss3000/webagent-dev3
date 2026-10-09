@@ -143,3 +143,7 @@ Full dropdown port acceptance remains open for hidden-session and custom-order
 contracts, family grouping, both-theme/narrow-layout regression, and active
 container configuration provenance. Reference functions remain pending in
 `v3/v2_ref` because their containing UI port is incomplete.
+
+- App Functions: /app?tab=app&appView=functions. Verify saved concurrency in
+  the clickable summary, expanded settings, save/reload persistence and restart
+  notice. Blank or zero means unlimited concurrency. Nonadmins cannot access it.

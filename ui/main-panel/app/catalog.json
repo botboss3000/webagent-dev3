@@ -1,6 +1,14 @@
 {
   "pages": [
     {
+      "id": "functions",
+      "title": "Functions",
+      "description": "Configure run concurrency and loop scheduling.",
+      "panelId": "app-functions-page",
+      "admin": true,
+      "order": 1
+    },
+    {
       "id": "settings",
       "title": "App Settings",
       "description": "Configure application storage and troubleshooting.",
