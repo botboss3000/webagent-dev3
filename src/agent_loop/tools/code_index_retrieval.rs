@@ -142,6 +142,63 @@ fn settings(value: &Value) -> Result<Option<Settings>> {
     }))
 }
 
+/// Select the two retrieval dependencies in this run only, using the same
+/// live gate as normal tool exposure. Later retrieval checkpoints re-evaluate
+/// these grants; this helper never activates session state.
+pub(crate) async fn prepare_run_dependencies(app: &App, sid: &str, run: &mut Value) -> Result<bool> {
+    if run["session_id"] != sid || run["status"] != "running" {
+        bail!("Retrieval run is unavailable");
+    }
+    let agent = session_agent_id(app, sid).await?;
+    if run["agent_id"].as_str().unwrap_or("shared_default") != agent {
+        bail!("Retrieval session agent changed");
+    }
+    let mut scoped = app.clone();
+    scoped.store = app.store.for_agent(&agent).await?;
+    let agent_abilities = scoped.store.agent_abilities_for(&agent).await?;
+    if settings(&agent_abilities)?.is_none() {
+        return Ok(false);
+    }
+    let access = scoped
+        .store
+        .live_access(scoped.store.current_user_id(), &agent)
+        .await?;
+    if !access.admitted() {
+        return Ok(false);
+    }
+    let (policy, _, visibility, state) = ability_controls(&scoped, sid).await?;
+    let mode = session_mode(&scoped, sid).await?;
+    let mut loaded = run["loaded_abilities"]
+        .as_array()
+        .cloned()
+        .context("Invalid run ability state")?;
+    let dependencies = ["code_index_lookup", "decide_with_jev"];
+    for name in dependencies {
+        let marker = json!(crate::tools::core_tool_search::marker(name));
+        if !loaded.contains(&marker) {
+            loaded.push(marker);
+        }
+    }
+    for name in dependencies {
+        let decision = live_tool_decision(
+            &scoped,
+            &access,
+            name,
+            &policy,
+            &visibility,
+            &state,
+            &json!(loaded),
+            mode["mode"] == "read_only",
+        )
+        .for_execution_mode(&mode);
+        if decision.permission != crate::access::Permission::Auto {
+            return Ok(false);
+        }
+    }
+    run["loaded_abilities"] = json!(loaded);
+    Ok(true)
+}
+
 async fn require_lookup(
     app: &App,
     sid: &str,

@@ -196,6 +196,10 @@ pub(crate) async fn execute_run(
             // Persist once-per-message admission before any optional retrieval work.
             // No source read or Decision request may hold the shared dispatch gate.
             if run["code_index_retrieval_attempted"]!=true && run["post_run_followup"]!=true {
+                let _ = tools::code_index_retrieval::prepare_run_dependencies(
+                    &app, &sid, &mut run,
+                )
+                .await;
                 run["code_index_retrieval_attempted"]=json!(true);
                 run["code_index_retrieval_stage"]=json!("preflight");
                 let user_text=run["input"].as_array().unwrap().iter().rev()

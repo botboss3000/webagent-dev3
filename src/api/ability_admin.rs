@@ -499,6 +499,114 @@ mod code_index_settings_authority_tests {
         assert_eq!(unchanged["revision"], revision + 1);
     }
 
+    async fn set_discoverable_dependencies(app: &App) {
+        let mut value = app.store.agent_abilities().await.unwrap();
+        let revision = value["revision"].as_u64().unwrap();
+        value["visibility"]["code_index"] = json!("discoverable");
+        value["visibility"]["decision"] = json!("discoverable");
+        value["tool_modes"]["code_index_lookup"] = json!("discoverable");
+        value["tool_modes"]["decide_with_jev"] = json!("discoverable");
+        value["settings"]["code_index"] = settings(true, 8_000);
+        value["revision"] = json!(revision + 1);
+        app.store.save_agent_abilities(&value, revision).await.unwrap();
+    }
+
+    async fn fresh_unactivated_index_run(app: &App, sid: &str) -> String {
+        let id = crate::runtime_tests::queued(app, sid).await;
+        let mut run = app.run(&id).await.unwrap();
+        assert!(run["loaded_abilities"].as_array().unwrap().is_empty());
+        assert!(app.store.claim_run(&mut run, "fixture-loop", "fresh-code-index").await.unwrap());
+        id
+    }
+
+    #[tokio::test]
+    async fn fresh_discoverable_run_prepares_only_granted_dependencies_and_rechecks_before_attachment() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        grant_index_tier(&app).await;
+        set_discoverable_dependencies(&app).await;
+        set_index_tools(&app, crate::access::Permission::Auto,
+            crate::access::Permission::Auto).await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let run_id = fresh_unactivated_index_run(&app, &sid).await;
+        let mut run = app.run(&run_id).await.unwrap();
+        assert!(crate::tools::code_index_retrieval::prepare_run_dependencies(
+            &app, &sid, &mut run).await.unwrap());
+        let markers = run["loaded_abilities"].as_array().unwrap();
+        assert!(markers.contains(&json!("tool:code_index_lookup")));
+        assert!(markers.contains(&json!("tool:decide_with_jev")));
+        let state = app.store.get(&crate::key("session_ability_state", &sid)).await.unwrap();
+        assert!(state.is_none(), "run-local preparation must not activate session abilities");
+        app.save(&mut run).await.unwrap();
+        let current = app.store.agent_abilities().await.unwrap();
+        let digest = settings_digest(&current["settings"]["code_index"]);
+        crate::tools::code_index_retrieval::authorize_attachment(
+            &app, &sid, &run_id, &digest).await
+            .unwrap_or_else(|error| panic!("prepared discoverable dependencies: {error:#}"));
+        set_index_tools(&app, crate::access::Permission::Deny,
+            crate::access::Permission::Auto).await;
+        assert!(crate::tools::code_index_retrieval::authorize_attachment(
+            &app, &sid, &run_id, &digest).await.is_err(),
+            "revoked tool grant must block retrieval publication");
+    }
+
+    #[tokio::test]
+    async fn automatic_dependency_preparation_respects_suppression_off_denial_and_disabled_settings() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        grant_index_tier(&app).await;
+        set_discoverable_dependencies(&app).await;
+        set_index_tools(&app, crate::access::Permission::Auto,
+            crate::access::Permission::Auto).await;
+
+        let suppressed_sid = crate::runtime_tests::conversation(&app).await;
+        app.store.put(&crate::key("session_ability_state", &suppressed_sid),
+            &json!({"revision":1,"active":[],"suppressed":["decision"]})).await.unwrap();
+        let suppressed_run = fresh_unactivated_index_run(&app, &suppressed_sid).await;
+        let mut run = app.run(&suppressed_run).await.unwrap();
+        assert!(!crate::tools::code_index_retrieval::prepare_run_dependencies(
+            &app, &suppressed_sid, &mut run).await.unwrap());
+        assert!(run["loaded_abilities"].as_array().unwrap().is_empty());
+
+        let mut abilities = app.store.agent_abilities().await.unwrap();
+        let revision = abilities["revision"].as_u64().unwrap();
+        abilities["visibility"]["decision"] = json!("off");
+        abilities["revision"] = json!(revision + 1);
+        app.store.save_agent_abilities(&abilities, revision).await.unwrap();
+        let off_sid = crate::runtime_tests::conversation(&app).await;
+        let off_run = fresh_unactivated_index_run(&app, &off_sid).await;
+        let mut run = app.run(&off_run).await.unwrap();
+        assert!(!crate::tools::code_index_retrieval::prepare_run_dependencies(
+            &app, &off_sid, &mut run).await.unwrap());
+        assert!(run["loaded_abilities"].as_array().unwrap().is_empty());
+
+        abilities = app.store.agent_abilities().await.unwrap();
+        let revision = abilities["revision"].as_u64().unwrap();
+        abilities["visibility"]["decision"] = json!("discoverable");
+        abilities["revision"] = json!(revision + 1);
+        app.store.save_agent_abilities(&abilities, revision).await.unwrap();
+        set_index_tools(&app, crate::access::Permission::Auto,
+            crate::access::Permission::Deny).await;
+        let denied_sid = crate::runtime_tests::conversation(&app).await;
+        let denied_run = fresh_unactivated_index_run(&app, &denied_sid).await;
+        let mut run = app.run(&denied_run).await.unwrap();
+        assert!(!crate::tools::code_index_retrieval::prepare_run_dependencies(
+            &app, &denied_sid, &mut run).await.unwrap());
+        assert!(run["loaded_abilities"].as_array().unwrap().is_empty());
+
+        set_index_tools(&app, crate::access::Permission::Auto,
+            crate::access::Permission::Auto).await;
+        abilities = app.store.agent_abilities().await.unwrap();
+        let revision = abilities["revision"].as_u64().unwrap();
+        abilities["settings"]["code_index"] = settings(false, 8_000);
+        abilities["revision"] = json!(revision + 1);
+        app.store.save_agent_abilities(&abilities, revision).await.unwrap();
+        let disabled_sid = crate::runtime_tests::conversation(&app).await;
+        let disabled_run = fresh_unactivated_index_run(&app, &disabled_sid).await;
+        let mut run = app.run(&disabled_run).await.unwrap();
+        assert!(!crate::tools::code_index_retrieval::prepare_run_dependencies(
+            &app, &disabled_sid, &mut run).await.unwrap());
+        assert!(run["loaded_abilities"].as_array().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn attachment_authorization_rechecks_grants_mode_and_live_settings() {
         let (_root, app) = crate::runtime_tests::fixture().await;
