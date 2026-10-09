@@ -21,3 +21,29 @@ into the shared checkout if those paths still match the prior or new release.
 A conflicting direct checkout edit holds subsequent releases for reconciliation.
 
 Codex uses the same broker through server-side `buildctl.py`: `begin` defaults to an isolated workspace, `inputs --task ID` reads its digest, `finish ID --expected DIGEST` queues one release, and `wait ID` polls without creating a job. The V2 Python bridge uses the same task registry and its own authenticated caller identity. Legacy shared-checkout work must not overlap isolated tasks.
+
+
+## Source synchronization decisions
+
+Call v3_build_work(action="preflight", task_id=...) before finish. The content-free
+report compares all allowlisted V3 checkout source with the deployed release,
+lists missing/modified/checkout-only paths and flags paths touched by this build
+and promotion conflicts. Runtime data and file contents are excluded. Page with
+offset when next_offset is present. Status and the Builds dashboard also flag drift.
+
+With drift, finish keeps the task open and returns needs_decision. Choose
+sync_decision="synchronize", "proceed" or "cancel" and pass expected_sync_digest
+from the current report alongside the normal expected_inputs_sha256. Synchronize
+returns needs_synchronization without overwriting source: review and reconcile
+the listed files, then preflight/finish again. Proceed uses the frozen deployed
+release and preserves its changes, but does not repair checkout drift or authorize
+overwriting source conflicts. Cancel abandons the open task.
+
+Admission and pre-deployment checks can pause an already queued job with
+needs_decision. Use action="decide" with the same task_id, choice and fresh digest;
+this resumes or cancels that same durable job, never submits another finish.
+Changes to checkout, release or candidate invalidate the decision. A decision
+never overrides live deployment authorization or uncertainty reconciliation.
+After deployment, a promotion failure remains uncertain and includes a refreshed
+synchronization report; never replay its external effects. Legacy direct-checkout
+builds require synchronization or migration to an isolated task before proceeding.

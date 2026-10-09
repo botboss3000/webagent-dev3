@@ -1,5 +1,7 @@
 """Frozen task contexts and versioned development release mounts."""
 import io
+import hashlib
+import json
 import os
 from pathlib import Path
 import stat
@@ -275,3 +277,37 @@ def activate_assets(root, job_id):
     finally:
         temporary.unlink(missing_ok=True)
     return previous
+
+def checkout_drift(live_blob, checkout_blob, candidate_blob, changed, validate, offset=0):
+    """Content-free report over allowlisted V3 source, never runtime data."""
+    def source(blob):
+        # Git source identity tracks owner executable status, not ACL masks
+        # or checkout read/write permissions. ACL masks can expose group execute
+        # in st_mode even when no file entry grants execute.
+        return {name: (mode & 0o100, body)
+                for name, (mode, body) in entries(blob, validate).items()
+                if name.startswith("v3/") and not name.startswith("v3/data/")}
+    live, checkout, candidate = map(source, (live_blob, checkout_blob, candidate_blob))
+    def fingerprint(values):
+        return [(name, mode, hashlib.sha256(body).hexdigest())
+                for name, (mode, body) in sorted(values.items())]
+    changed = set(changed)
+    rows = []
+    for name in sorted(set(live) | set(checkout)):
+        previous, current, target = live.get(name), checkout.get(name), candidate.get(name)
+        if current == previous:
+            continue
+        rows.append({"path": name.removeprefix("v3/"),
+            "kind": "missing" if current is None else "checkout_only" if previous is None else "modified",
+            "affected_by_build": name in changed,
+            "promotion_conflict": name in changed and current not in (previous, target),
+            "matches_candidate": current == target})
+    digest = hashlib.sha256(json.dumps([fingerprint(live), fingerprint(checkout),
+        fingerprint(candidate), sorted(changed)], separators=(",", ":")).encode()).hexdigest()
+    return {"status": "drift" if rows else "synchronized", "digest": digest,
+        "total": len(rows), "affected": sum(row["affected_by_build"] for row in rows),
+        "promotion_conflicts": sum(row["promotion_conflict"] for row in rows),
+        "files": rows[offset:offset+40], "offset": offset,
+        "next_offset": offset+40 if len(rows)>offset+40 else None,
+        "choices": ["synchronize", "proceed", "cancel"] if rows else [],
+        "guidance": "Synchronize the listed source first, proceed using the frozen deployed release without overwriting conflicts, or cancel. Proceed preserves deployed changes but does not repair checkout drift." if rows else "Checkout source matches the deployed release."}

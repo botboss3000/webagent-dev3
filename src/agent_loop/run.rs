@@ -1160,7 +1160,8 @@ pub(crate) async fn execute_run(
             }
             match result {
                 Ok(value) => {
-                    if name=="v3_build_work" && args["action"]=="finish" && value["status"]=="success" {
+                    if name=="v3_build_work" && args["action"]=="finish" && value["status"]=="success"
+                        && value["output"]["status"]=="closed" {
                         // The broker owns the job across our own container replacement.
                         // Keep this model call pending; recovery reads its receipt and
                         // returns one result under the original call_id.

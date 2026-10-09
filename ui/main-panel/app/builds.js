@@ -20,7 +20,9 @@ const phasesFor = job => [
   'finished'
 ];
 const stoppedStatuses = new Set(['failed', 'cancelled', 'stale', 'uncertain', 'interrupted']);
-const stateFor = job => job.status === 'completed'
+const stateFor = job => job.status === 'needs_decision'
+  ? {tone: 'danger', icon: '⚑', label: 'Decision required · source synchronization'}
+  : job.status === 'completed'
   ? {tone: 'success', icon: '⚑', label: 'Complete'}
   : stoppedStatuses.has(job.status)
     ? {tone: 'danger', icon: '⚑', label: 'Incomplete · ' + phaseLabel(job.status)}
@@ -78,7 +80,9 @@ export function mountBuilds(panel, onStatus = () => {}) {
   list.className = 'build-list';
   list.setAttribute('aria-label', 'Recent development builds');
   header.append(intro, update);
-  panel.append(header, status, filters, controls, list);
+  const synchronization = document.createElement('div');
+  synchronization.setAttribute('role', 'status');
+  panel.append(header, status, synchronization, filters, controls, list);
 
   const fact = (facts, label, value) => {
     const item = document.createElement('div');
@@ -90,7 +94,30 @@ export function mountBuilds(panel, onStatus = () => {}) {
     item.append(term, description);
     facts.append(item);
   };
+  function showSynchronization(target, report) {
+    target.replaceChildren();
+    if (!report?.total && report?.status !== 'unavailable') return;
+    const title = document.createElement('p');
+    title.textContent = report.status === 'unavailable'
+      ? 'Source synchronization could not be checked.'
+      : report.total + ' source files differ from the deployed release; ' + report.affected + ' touched by this build, ' + report.promotion_conflicts + ' promotion conflicts.';
+    const guidance = document.createElement('p');
+    guidance.textContent = report.guidance || '';
+    const files = document.createElement('ul');
+    for (const file of report.files || []) {
+      const row = document.createElement('li');
+      row.textContent = file.path + ' · ' + file.kind + (file.promotion_conflict ? ' · promotion conflict' : '');
+      files.append(row);
+    }
+    target.append(title, guidance, files);
+    if (report.next_offset != null) {
+      const more = document.createElement('p');
+      more.textContent = 'More files are available in the agent preflight report.';
+      target.append(more);
+    }
+  }
   function render() {
+    showSynchronization(synchronization, snapshot.synchronization);
     const jobs = snapshot.jobs;
     const statuses = [...new Set(jobs.map(job => String(job.status || 'unknown')))].sort();
     for (const statusName of statuses) if (!enabledStatuses.has(statusName)) enabledStatuses.set(statusName, true);
@@ -171,6 +198,9 @@ export function mountBuilds(panel, onStatus = () => {}) {
           [container.state, container.health].filter(Boolean).join(' / ') || 'Unavailable');
       }
       card.append(facts);
+      const sourceStatus = document.createElement('div');
+      showSynchronization(sourceStatus, job.synchronization);
+      card.append(sourceStatus);
       if (job.reason) {
         const reason = document.createElement('p');
         reason.className = 'build-reason';

@@ -128,6 +128,9 @@ class FakeRunner:
         self.calls.append(("promote", tuple(changed)))
         self.blob = after
 
+    def promote_live_ui(self, before, after, changed):
+        return False
+
     def checkout_matches(self, blob, changed):
         return host.release.entries(self.blob, host.context_digest) == host.release.entries(blob, host.context_digest)
 
@@ -176,6 +179,199 @@ class BuildTests(unittest.TestCase):
     def build(self, request_id="build-fixture"):
         digest = host.context_digest(self.runner.snapshot())[0]
         return self.call("v3_build_image", {"request_id": request_id, "expected_inputs_sha256": digest})
+
+
+    def drift_fixture(self):
+        self.runner.blob = context(extra={"v3/README.md":"released",
+                                          "v3/src/release.rs":"must survive"})
+        base = self.runner.blob
+        seed = self.call("v3_build_work", {"action":"begin", "task_id":"sync-seed", "summary":"seed", "mode":"isolated"})
+        Path(seed["workspace_path"],"README.md").write_text("released seed")
+        seed_digest=self.call("v3_build_work",dict(action="status",task_id="sync-seed"))["own"][0]["workspace_inputs_sha256"]
+        seed_job = self.call("v3_build_work", {"action":"finish", "task_id":"sync-seed",
+            "expected_inputs_sha256":seed_digest})
+        self.assertEqual("completed", self.wait(seed_job)["status"])
+        base = self.runner.blob
+        task = self.call("v3_build_work", {"action":"begin", "task_id":"sync-task", "summary":"edit", "mode":"isolated"})
+        Path(task["workspace_path"], "README.md").write_text("new task")
+        digest = self.call("v3_build_work", {"action":"status", "task_id":"sync-task"})["own"][0]["workspace_inputs_sha256"]
+        self.runner.calls.clear()
+        return base, digest
+
+    def test_sync_guard_reports_conflicts_without_effects_and_can_cancel(self):
+        base, digest = self.drift_fixture()
+        self.runner.blob = context(extra={"v3/README.md":"private local work"})
+        result = self.call("v3_build_work", {"action":"finish", "task_id":"sync-task", "expected_inputs_sha256":digest})
+        self.assertEqual("needs_decision", result["status"])
+        report = result["synchronization"]
+        self.assertEqual(2, report["total"])
+        self.assertEqual(1, report["promotion_conflicts"])
+        self.assertEqual(["synchronize","proceed","cancel"], report["choices"])
+        self.assertNotIn("private local work", json.dumps(report))
+        self.assertFalse(self.runner.calls)
+        self.assertEqual("open", self.call("v3_build_work", {"action":"status", "task_id":"sync-task"})["own"][0]["status"])
+        choice = dict(action="finish", task_id="sync-task", expected_inputs_sha256=digest,
+                      expected_sync_digest=report["digest"], sync_decision="synchronize")
+        self.assertEqual("needs_synchronization", self.call("v3_build_work", choice)["status"])
+        self.assertFalse(self.runner.calls)
+        choice["sync_decision"] = "cancel"
+        self.assertEqual("abandoned", self.call("v3_build_work", choice)["status"])
+        self.assertFalse(self.runner.calls)
+
+    def test_sync_decision_is_bound_to_checkout_and_task(self):
+        base, digest = self.drift_fixture()
+        self.runner.blob = context(extra={"v3/README.md":"local"})
+        report = self.call("v3_build_work", {"action":"preflight", "task_id":"sync-task"})["synchronization"]
+        self.runner.blob = context(extra={"v3/README.md":"changed again"})
+        result = self.call("v3_build_work", dict(action="finish", task_id="sync-task",
+            expected_inputs_sha256=digest, expected_sync_digest=report["digest"], sync_decision="proceed"))
+        self.assertEqual("needs_decision", result["status"])
+        self.assertNotEqual(report["digest"], result["synchronization"]["digest"])
+        folder = next(i["workspace_path"] for i in self.call("v3_build_work", {"action":"status"})["own"] if i["task_id"]=="sync-task")
+        Path(folder,"README.md").write_text("another candidate")
+        newer = self.call("v3_build_work", {"action":"preflight", "task_id":"sync-task"})["synchronization"]
+        self.assertNotEqual(newer["digest"], result["synchronization"]["digest"])
+        self.assertFalse(self.runner.calls)
+
+    def test_sync_proceed_uses_release_and_preserves_other_deployed_files(self):
+        base, digest = self.drift_fixture()
+        self.runner.blob = context(extra={"v3/README.md":"local"})
+        report = self.call("v3_build_work", {"action":"preflight", "task_id":"sync-task"})["synchronization"]
+        result = self.call("v3_build_work", dict(action="finish", task_id="sync-task",
+            expected_inputs_sha256=digest, expected_sync_digest=report["digest"], sync_decision="proceed"))
+        self.assertEqual("completed", self.wait(result)["status"])
+        candidate = host.release.entries((self.state/result["job_id"]/"candidate.tar").read_bytes(),host.context_digest)
+        self.assertEqual(b"must survive", candidate["v3/src/release.rs"][1])
+        self.assertEqual(b"new task", candidate["v3/README.md"][1])
+
+    def test_queued_job_detects_new_drift_and_resumes_same_job(self):
+        base, digest = self.drift_fixture()
+        self.broker.active = "held"
+        result = self.call("v3_build_work",dict(action="finish",task_id="sync-task",expected_inputs_sha256=digest))
+        self.runner.blob = context(extra={"v3/README.md":"local"})
+        self.broker.active = None
+        self.broker._start_next()
+        job = self.broker.jobs[result["job_id"]]
+        self.assertEqual("needs_decision",job["status"])
+        self.assertFalse(self.runner.calls)
+        report = self.call("v3_build_work",dict(action="preflight",task_id="sync-task"))["synchronization"]
+        stale = self.call("v3_build_work",dict(action="decide",task_id="sync-task",sync_decision="proceed",expected_sync_digest="0"*64))
+        self.assertEqual("needs_decision",stale["status"])
+        self.runner.blob = base
+        report = self.call("v3_build_work",dict(action="preflight",task_id="sync-task"))["synchronization"]
+        resumed = self.call("v3_build_work",dict(action="decide",task_id="sync-task",sync_decision="proceed",expected_sync_digest=report["digest"]))
+        self.assertEqual(result["job_id"],resumed["job_id"])
+        self.assertEqual("completed",self.wait(result)["status"])
+
+    def test_drift_during_build_pauses_before_effects_and_survives_restart(self):
+        base, digest = self.drift_fixture()
+        self.runner.block = threading.Event()
+        result = self.call("v3_build_work",dict(action="finish",task_id="sync-task",expected_inputs_sha256=digest))
+        self.runner.blob = context(extra={"v3/README.md":"new local work"})
+        self.runner.block.set()
+        deadline=time.time()+3
+        while self.broker.jobs[result["job_id"]]["status"] in ("running","queued") and time.time()<deadline:time.sleep(.01)
+        job=self.broker.jobs[result["job_id"]]
+        self.assertEqual("needs_decision",job["status"])
+        self.assertFalse(any(c[0] in ("stop","activate_assets","promote") for c in self.runner.calls))
+        self.broker.shutdown()
+        self.broker=host.Broker(self.state,self.runner)
+        self.assertEqual("needs_decision",self.broker.jobs[result["job_id"]]["status"])
+        report=self.call("v3_build_work",dict(action="preflight",task_id="sync-task"))["synchronization"]
+        cancelled=self.call("v3_build_work",dict(action="decide",task_id="sync-task",sync_decision="cancel",expected_sync_digest=report["digest"]))
+        self.assertEqual("cancelled",cancelled["status"])
+
+    def test_sync_report_ignores_acl_masks_but_tracks_executable_status(self):
+        base=context()
+        entries=host.release.entries(base,host.context_digest)
+        acl={name: (0o674,body) for name,(mode,body) in entries.items()}
+        acl_blob=host.release.archive(acl,host.context_digest)
+        clean=host.release.checkout_drift(base,base,base,(),host.context_digest)
+        report=host.release.checkout_drift(base,acl_blob,base,(),host.context_digest)
+        self.assertEqual(0,report["total"])
+        self.assertEqual(clean["digest"],report["digest"])
+        name="v3/Dockerfile"
+        acl[name]=(0o774,acl[name][1])
+        executable=host.release.archive(acl,host.context_digest)
+        self.assertEqual(1,host.release.checkout_drift(base,executable,base,(),host.context_digest)["total"])
+
+    def test_sync_report_is_bounded_and_excludes_runtime_data(self):
+        files={"v3/src/f%d.rs"%i:"sensitive contents" for i in range(90)}
+        base=context()
+        report=host.release.checkout_drift(base,context(extra=files),base,(),host.context_digest)
+        page=host.release.checkout_drift(base,context(extra=files),base,(),host.context_digest,40)
+        self.assertEqual(90,report["total"])
+        self.assertEqual(40,len(report["files"]))
+        self.assertEqual(report["digest"],page["digest"])
+        self.assertNotIn("sensitive contents",json.dumps(report))
+        changed=context(extra={"v3/data/config/gates/closing_status_v1.json":'{"enabled":true}'})
+        self.assertEqual(0,host.release.checkout_drift(base,changed,base,(),host.context_digest)["total"])
+
+
+    def test_paused_batch_keeps_all_task_changes_under_one_decision(self):
+        base,digest=self.drift_fixture()
+        peer=self.call("v3_build_work",dict(action="begin",task_id="sync-peer",summary="peer",mode="isolated"))
+        Path(peer["workspace_path"],"src/peer.rs").write_text("peer survives")
+        peer_digest=self.call("v3_build_work",dict(action="status",task_id="sync-peer"))["own"][0]["workspace_inputs_sha256"]
+        self.broker.active="held"
+        first=self.call("v3_build_work",dict(action="finish",task_id="sync-task",expected_inputs_sha256=digest))
+        second=self.call("v3_build_work",dict(action="finish",task_id="sync-peer",expected_inputs_sha256=peer_digest))
+        self.runner.block=threading.Event()
+        self.broker.active=None
+        self.broker._start_next()
+        self.runner.blob=context(extra={"v3/README.md":"other local edit"})
+        self.runner.block.set()
+        deadline=time.time()+3
+        while self.broker.active and time.time()<deadline:time.sleep(.01)
+        self.assertEqual("needs_decision",self.broker.jobs[first["job_id"]]["status"])
+        redirected=self.call("v3_build_work",dict(action="preflight",task_id="sync-peer"))
+        self.assertEqual("sync-task",redirected["decision_task_id"])
+        report=self.call("v3_build_work",dict(action="preflight",task_id="sync-task"))["synchronization"]
+        chosen=self.call("v3_build_work",dict(action="decide",task_id="sync-task",sync_decision="proceed",expected_sync_digest=report["digest"]))
+        self.assertEqual(first["job_id"],chosen["job_id"])
+        self.assertEqual("completed",self.wait(first)["status"])
+        self.assertEqual("completed",self.wait(second)["status"])
+        candidate=host.release.entries((self.state/first["job_id"]/"candidate.tar").read_bytes(),host.context_digest)
+        self.assertEqual(b"peer survives",candidate["v3/src/peer.rs"][1])
+        self.assertEqual(b"new task",candidate["v3/README.md"][1])
+
+    def test_sync_choice_cannot_override_revoked_authority(self):
+        base,digest=self.drift_fixture()
+        self.broker.active="held"
+        result=self.call("v3_build_work",dict(action="finish",task_id="sync-task",expected_inputs_sha256=digest))
+        self.runner.blob=context(extra={"v3/README.md":"local"})
+        self.broker.active=None;self.broker._start_next()
+        job=self.broker.jobs[result["job_id"]];job["revoked"]=True
+        report=self.call("v3_build_work",dict(action="preflight",task_id="sync-task"))["synchronization"]
+        with self.assertRaisesRegex(PermissionError,"authorization changed"):
+            self.call("v3_build_work",dict(action="decide",task_id="sync-task",sync_decision="proceed",expected_sync_digest=report["digest"]))
+        self.assertFalse(self.runner.calls)
+
+    def test_live_ui_promotes_only_ui_and_keeps_conflict_check(self):
+        root=Path(self.temp.name)/"live-checkout"
+        (root/"data/config").mkdir(parents=True)
+        (root/"ui").mkdir()
+        (root/"data/config/app-settings.json").write_text('{"development":{"live_ui_editing":true}}')
+        (root/"ui/app.js").write_text("old")
+        (root/"README.md").write_text("old")
+        before=context(extra={"v3/ui/app.js":"old","v3/README.md":"old"})
+        after=context(extra={"v3/ui/app.js":"new","v3/README.md":"new"})
+        runner=host.Runner(source=root)
+        self.assertTrue(runner.promote_live_ui(before,after,["v3/ui/app.js","v3/README.md"]))
+        self.assertEqual("new",(root/"ui/app.js").read_text())
+        self.assertEqual("old",(root/"README.md").read_text())
+        (root/"ui/app.js").write_text("another writer")
+        with self.assertRaisesRegex(ValueError,"checkout changed"):
+            runner.promote_live_ui(before,after,["v3/ui/app.js"])
+        self.assertEqual("another writer",(root/"ui/app.js").read_text())
+
+    def test_proceed_does_not_overwrite_promotion_conflict(self):
+        before=context(extra={"v3/README.md":"old"})
+        after=context(extra={"v3/README.md":"new"})
+        root=Path(self.temp.name)/"checkout";root.mkdir();(root/"README.md").write_text("other writer")
+        with self.assertRaisesRegex(ValueError,"checkout changed"):
+            host.release.promote_checkout(root,before,after,["v3/README.md"],host.context_digest,standalone=True)
+        self.assertEqual("other writer",(root/"README.md").read_text())
 
     def test_dashboard_is_admin_scoped_and_reports_confirmed_milestones(self):
         job_id = self.build()["job_id"]
@@ -241,8 +437,11 @@ class BuildTests(unittest.TestCase):
                       "--- a/README.md\n+++ b/README.md\n"
                       "@@ -1 +1 @@\n-before\n+after\n")
         with patch.object(host, "SOURCE", root):
-            with self.assertRaisesRegex(ValueError, "hunk count in README.md"):
-                host.inspect_source_patch(source, patch_text + "+ignored trailing line\n")
+            paths, corrected = host.inspect_source_patch_corrected(source, patch_text + "+ignored trailing line\n")
+            self.assertEqual(["README.md"], paths)
+            self.assertIn("@@ -1,1 +1,2 @@", corrected)
+            self.assertIn("+ignored trailing line\n", corrected)
+            self.assertEqual("before\n", target.read_text())
             self.assertEqual(["README.md"], host.inspect_source_patch(source, patch_text))
             host.source_git(source, ["apply", "--whitespace=error", "-"], patch_text.encode())
         self.assertEqual("after\n", target.read_text())
@@ -443,9 +642,9 @@ class BuildTests(unittest.TestCase):
                "new file mode 100644\n--- /dev/null\n"
                "+++ b/ui/main-panel/session-metrics/page.html\n"
                "@@ -0,0 +1,38 @@\n+one\n+two\n")
-        with self.assertRaisesRegex(ValueError,
-                r"page.html: header declares -0/\+38 lines; body has -0/\+2"):
-            host.validate_source_hunks(bad)
+        corrected = host.validate_source_hunks(bad)
+        self.assertIn("@@ -0,0 +1,2 @@", corrected)
+        self.assertTrue(corrected.endswith("+one\n+two\n"))
 
     def test_isolated_source_list_and_read_errors(self):
         task = self.call("v3_build_work", {"action": "begin", "task_id": "list-task",

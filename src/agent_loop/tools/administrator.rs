@@ -75,12 +75,14 @@ pub(crate) async fn host_fingerprint(app:&App,sid:&str,run_id:&str,name:&str)->R
 }
 fn build_work_arguments(args:&Value)->Result<Value> {
     let object=args.as_object().ok_or_else(||anyhow!("Build work arguments must be an object"))?;
-    const KNOWN:&[&str]=&["action","task_id","summary","mode","expected_inputs_sha256"];
+    const KNOWN:&[&str]=&["action","task_id","summary","mode","expected_inputs_sha256","sync_decision","expected_sync_digest","offset"];
     if object.keys().any(|key|!KNOWN.contains(&key.as_str())) {bail!("Unknown build work argument");}
     let relevant:&[&str]=match args["action"].as_str().unwrap_or("") {
         "status"=>&["action","task_id"],
         "begin"=>&["action","task_id","summary","mode"],
-        "finish"=>&["action","task_id","expected_inputs_sha256"],
+        "finish"=>&["action","task_id","expected_inputs_sha256","sync_decision","expected_sync_digest"],
+        "preflight"=>&["action","task_id","offset"],
+        "decide"=>&["action","task_id","sync_decision","expected_sync_digest"],
         "abandon"=>&["action","task_id"],
         _=>bail!("Unknown build work action"),
     };
@@ -89,11 +91,11 @@ fn build_work_arguments(args:&Value)->Result<Value> {
     Ok(Value::Object(forwarded))
 }
 async fn host(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:CancellationToken)->Result<Value> {
-    let fingerprint_name=if name=="v3_build_work" && args["action"]=="finish" {"v3_build_work_finish"} else {name};
+    let fingerprint_name=if name=="v3_build_work" && matches!(args["action"].as_str(),Some("finish"|"decide")) {"v3_build_work_finish"} else {name};
     let fingerprint=host_fingerprint(app,sid,run_id,fingerprint_name).await?;
     let trusted=json!({"user_id":app.store.current_user_id(),"session_id":sid,
         "lease_until":now()+30,"access_fingerprint":fingerprint});
-    if matches!(name,"v3_build_image"|"v3_worker_submit") || (name=="v3_build_work" && args["action"]=="finish") {
+    if matches!(name,"v3_build_image"|"v3_worker_submit") || (name=="v3_build_work" && matches!(args["action"].as_str(),Some("finish"|"decide"))) {
         app.store.put(&format!("administrator_host:{sid}"),&json!({"session_id":sid,
             "run_id":run_id,"tool_name":fingerprint_name,"access_fingerprint":fingerprint})).await?;
     }
@@ -240,6 +242,10 @@ pub fn valid_development_path(path:&str,sid:&str,agent:&str)->bool {
         assert_eq!(build_work_arguments(&finish).unwrap(),json!({"action":"finish",
             "task_id":"v3-rust-parallel-1005a","expected_inputs_sha256":zero}));
         assert!(build_work_arguments(&json!({"action":"begin","unknown":true})).is_err());
+        let decision=json!({"action":"decide","task_id":"sync-task","sync_decision":"proceed","expected_sync_digest":zero});
+        assert_eq!(build_work_arguments(&decision).unwrap(),decision);
+        let preflight=json!({"action":"preflight","task_id":"sync-task","offset":40});
+        assert_eq!(build_work_arguments(&preflight).unwrap(),preflight);
     }
     #[test] fn routes_are_current_session_and_fixed_origin(){
         assert!(valid_development_path("/app?session_id=own","own","agent-a"));

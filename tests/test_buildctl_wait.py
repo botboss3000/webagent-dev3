@@ -61,6 +61,15 @@ class WaitTests(unittest.TestCase):
         self.assertEqual("success", complete["result"])
         self.assert_read_only(broker)
 
+    def test_paused_job_returns_decision_report_without_submitting(self):
+        report={"total":1,"digest":"f"*64,"choices":["synchronize","proceed","cancel"]}
+        broker=FakeBroker([receipt("job-1")],[job("needs_decision","checking_checkout") | {"synchronization":report}])
+        result,code=client.wait_task("task-1",30,request=broker)
+        self.assertEqual(client.DECISION_EXIT,code)
+        self.assertEqual("needs_decision",result["result"])
+        self.assertEqual(report,result["synchronization"])
+        self.assert_read_only(broker)
+
     def test_last_finisher_waits_for_terminal_success(self):
         broker = FakeBroker([receipt("job-1")],
                             [job("queued", "queued"), job("running", "building"), job()])

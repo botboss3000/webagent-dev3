@@ -10,8 +10,9 @@ import uuid
 SOCKET = "/home/ar/webagent-dev3/runtime/build/build.sock"
 POLL_SECONDS = 15
 MAX_WAIT_SECONDS = 30 * 60
-TERMINAL = {"completed", "failed", "stale", "cancelled", "uncertain", "interrupted"}
+TERMINAL = {"completed", "failed", "stale", "cancelled", "uncertain", "interrupted", "needs_decision"}
 PENDING_EXIT = 3
+DECISION_EXIT = 4
 
 
 def call(name, arguments):
@@ -51,6 +52,9 @@ def wait_task(task_id, timeout, request=call, clock=time.monotonic, pause=time.s
         result.update(result="failed", reason="task receipt unavailable to this caller")
         return result, 1
     job_id = receipt.get("job_id")
+    if not job_id and (receipt.get("synchronization") or {}).get("total"):
+        result.update(result="needs_decision", synchronization=receipt["synchronization"])
+        return result, DECISION_EXIT
     if not job_id:
         result["reason"] = ("waiting for other registered tasks" if receipt["status"] == "closed"
                             else "task has not finished" if receipt["status"] == "open"
@@ -73,6 +77,9 @@ def wait_task(task_id, timeout, request=call, clock=time.monotonic, pause=time.s
         if result["status"] in TERMINAL:
             result["reason"] = _excerpt(job.get("reason"))
             result["log_excerpt"] = _excerpt(job.get("log"))
+            if result["status"] == "needs_decision":
+                result.update(result="needs_decision", synchronization=job.get("synchronization"))
+                return result, DECISION_EXIT
             if result["status"] != "completed":
                 result["result"] = "failed"
                 return result, 1
@@ -111,6 +118,15 @@ def main():
     finish = commands.add_parser("finish")
     finish.add_argument("task_id")
     finish.add_argument("--expected", required=True, help="inputs_sha256 obtained from inputs")
+    finish.add_argument("--sync-decision", choices=("synchronize", "proceed", "cancel"))
+    finish.add_argument("--sync-digest", help="exact digest returned by preflight")
+    preflight = commands.add_parser("preflight", help="read content-free checkout drift for a task")
+    preflight.add_argument("task_id")
+    preflight.add_argument("--offset", type=int, default=0)
+    decide = commands.add_parser("decide", help="decide an existing paused job; never create a duplicate")
+    decide.add_argument("task_id")
+    decide.add_argument("sync_decision", choices=("synchronize", "proceed", "cancel"))
+    decide.add_argument("--sync-digest", required=True)
     abandon = commands.add_parser("abandon")
     abandon.add_argument("task_id")
     job = commands.add_parser("job")
@@ -138,7 +154,7 @@ def main():
         result = call("v3_worker_job", {"job_id": args.job_id})
     else:
         arguments = {"action": args.command}
-        if args.command in ("begin", "finish", "abandon"):
+        if args.command in ("begin", "finish", "abandon", "preflight", "decide"):
             arguments["task_id"] = args.task_id
         if args.command == "begin":
             arguments["summary"] = args.summary
@@ -146,6 +162,13 @@ def main():
                 arguments["mode"] = "isolated"
         if args.command == "finish":
             arguments["expected_inputs_sha256"] = args.expected
+            if args.sync_decision:
+                arguments["sync_decision"] = args.sync_decision
+                arguments["expected_sync_digest"] = args.sync_digest
+        if args.command == "preflight":
+            arguments["offset"] = args.offset
+        if args.command == "decide":
+            arguments.update(sync_decision=args.sync_decision, expected_sync_digest=args.sync_digest)
         result = call("v3_build_work", arguments)
     print(json.dumps(result, sort_keys=True))
     return 0

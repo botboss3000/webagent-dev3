@@ -469,3 +469,13 @@ queue naming alongside the first successful terminal publication.
 `src/storage/naming.rs` owns encrypted state, leases and conditional commits.
 Manual title patches lock this state, including while a naming call is running.
 No assistant text enters the title prompt and no naming result enters chat history.
+
+
+## Broker source synchronization guard
+
+The protected V3 Build broker uses release.checkout_drift to compare allowlisted
+source bytes/modes with the current release and frozen task candidate. Content-free,
+paginated reports are exposed in work preflight, status, job receipts and the build
+dashboard. finish/decide bind explicit choices to the full comparison digest.
+_start_next and the pre-effect checkpoint recheck drift; Rust finish/recovery
+returns needs_decision to the model instead of waiting indefinitely.

@@ -471,6 +471,19 @@ class Runner:
     def promote_checkout(self, before, after, changed):
         return release.promote_checkout(self.source, before, after, changed, context_digest, standalone=True)
 
+    def promote_live_ui(self, before, after, changed):
+        # The app deliberately serves the checkout in live-editing mode.
+        # Once this release is active/healthy, promote only conflict-free UI
+        # before checking served bytes. Final full promotion stays checked.
+        settings = self.source / "data/config/app-settings.json"
+        try:
+            enabled = json.loads(settings.read_text())["development"]["live_ui_editing"] is True
+        except (OSError, ValueError, KeyError, TypeError):
+            enabled = False
+        if enabled:
+            self.promote_checkout(before, after, [p for p in changed if p.startswith(UI_SOURCE_PREFIX)])
+        return enabled
+
     def checkout_matches(self, blob, changed):
         return release.checkout_matches(self.source, blob, changed, context_digest, standalone=True)
 
@@ -778,6 +791,22 @@ class Broker:
             return blob
         return self.runner.snapshot()
 
+
+    def _sync_report(self, live, candidate, changed, offset=0):
+        return release.checkout_drift(live, self.runner.snapshot(), candidate,
+                                      changed, context_digest, offset)
+
+    def _sync_job(self, job, live, candidate, changed):
+        # Recheck at admission and before the first external effect.
+        report = self._sync_report(live, candidate, changed)
+        job["synchronization"] = report
+        if report["total"] and job.get("sync_ack_digest") != report["digest"]:
+            job.update(status="needs_decision", phase="checking_checkout",
+                       reason="Checkout differs from the deployed release; choose synchronize, proceed or cancel")
+            self._save(job)
+            return False
+        return True
+
     def _can_start_parallel_ui(self):
         if self.active_ui is not None or self.active is None or self.stopping:
             return False
@@ -798,6 +827,8 @@ class Broker:
             candidate, changed = release.candidate(base, task, live, context_digest)
             if not all(path.startswith(UI_SOURCE_PREFIX) for path in changed):
                 raise ValueError("parallel UI release contains non-UI source")
+            if not self._sync_job(job, live, candidate, changed):
+                return
             digest, _ = context_digest(candidate)
             release_root = folder / "release"
             (folder / "candidate.tar").write_bytes(candidate)
@@ -852,9 +883,15 @@ class Broker:
                 base = (folder / "base.tar").read_bytes()
                 task = (folder / "task.tar").read_bytes()
                 live = self._current_release_blob()
+                resuming = job.pop("sync_resume", False) and (folder / "admitted_base.tar").is_file()
+                if resuming:
+                    base = (folder / "admitted_base.tar").read_bytes()
+                    task = (folder / "candidate.tar").read_bytes()
                 candidate, changed = release.candidate(base, task, live, context_digest)
-                members = []
-                if job["operation"] == "build_deploy":
+                if not self._sync_job(job, live, candidate, changed):
+                    continue
+                members = [self.jobs[jid] for jid in job.get("batch_members", ())] if resuming else []
+                if not resuming and job["operation"] == "build_deploy" and not job["synchronization"]["total"]:
                     # Merge compatible queued work from the same caller before
                     # compiling. Each task retains its own durable job receipt.
                     for follower in pending:
@@ -873,6 +910,9 @@ class Broker:
                             peer = self.state / follower["job_id"]
                             peer_base = (peer / "base.tar").read_bytes()
                             peer_task = (peer / "task.tar").read_bytes()
+                            peer_candidate, peer_changed = release.candidate(peer_base, peer_task, live, context_digest)
+                            if not self._sync_job(follower, live, peer_candidate, peer_changed):
+                                continue
                             candidate, peer_changed = release.candidate(
                                 peer_base, peer_task, candidate, context_digest)
                             changed = sorted(set(changed) | set(peer_changed))
@@ -885,6 +925,9 @@ class Broker:
                 digest, _ = context_digest(candidate)
                 release_root = folder / "release"
                 (folder / "candidate.tar").write_bytes(candidate)
+                (folder / "admitted_base.tar").write_bytes(live)
+                if release_root.exists() and context_digest(release.snapshot(release_root, CONTEXT, context_digest))[0] != digest and resuming:
+                    release_root = folder / ("release-" + digest)
                 if release_root.exists():
                     if context_digest(release.snapshot(release_root, CONTEXT, context_digest))[0] != digest:
                         raise ValueError("prepared release changed across broker restart")
@@ -918,7 +961,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest") if key in job}
         if "reason" in job:
             # Compiler failures are at the end of a bounded build transcript.
             view["reason"] = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
@@ -955,6 +998,7 @@ class Broker:
                         "effects_started"):
                 if key in job:
                     member[key] = job[key]
+            member["synchronization"] = job.get("synchronization")
             self._save(member)
 
     def _incoming_lease(self, trusted):
@@ -1117,7 +1161,9 @@ class Broker:
                                             "health": state.get("Health", {}).get("Status", "unknown")}
                     except Exception:
                         containers[role] = {"state": "unavailable", "health": "unknown"}
-                return {"jobs": jobs, "busy": self.active is not None or self.active_ui is not None, "containers": containers}
+                live = self._current_release_blob()
+                return {"jobs": jobs, "busy": self.active is not None or self.active_ui is not None,
+                        "containers": containers, "synchronization": self._sync_report(live, live, ())}
             if name == "v3_build_result":
                 if (trusted["user_id"] != "admin"
                         or workspace != "00000000-0000-0000-0000-000000000000"
@@ -1459,7 +1505,7 @@ class Broker:
                 self._save_work()
                 return dict(receipt)
             if name == "v3_build_work":
-                if set(args) - {"action", "task_id", "summary", "expected_inputs_sha256", "mode"}:
+                if set(args) - {"action", "task_id", "summary", "expected_inputs_sha256", "mode", "sync_decision", "expected_sync_digest", "offset"}:
                     raise ValueError("unsupported work argument")
                 action = args.get("action")
                 if action == "status":
@@ -1471,6 +1517,7 @@ class Broker:
                     own = [dict(task_id=i["task_id"], status=i["status"], summary=i["summary"],
                                 inputs_sha256=i.get("inputs_sha256"), job_id=i.get("job_id"),
                                 mode=i.get("mode", "shared"), workspace_path=i.get("workspace_path"),
+                                synchronization=i.get("synchronization"),
                                 workspace_inputs_sha256=(context_digest(release.snapshot(
                                     self.work_dir / "trees" / i["key"], CONTEXT, context_digest))[0]
                                     if i.get("mode") == "isolated" and i["status"] == "open" else None))
@@ -1478,13 +1525,64 @@ class Broker:
                            and (selected is None or i["task_id"] == selected)]
                     return {"open_count": len(self._open_work()), "own": own if selected else own[-20:],
                             "busy": self.active is not None or self.active_ui is not None}
-                if action not in ("begin", "finish", "abandon"):
+                if action not in ("begin", "finish", "abandon", "preflight", "decide"):
                     raise ValueError("unsupported work action")
                 task_id = args.get("task_id")
                 if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", task_id):
                     raise ValueError("bounded stable task_id required")
                 key = hashlib.sha256(canonical([trusted["user_id"], workspace, task_id])).hexdigest()
                 item = self.work.get(key)
+                if action in ("preflight", "decide"):
+                    allowed = {"action", "task_id", "offset"} if action == "preflight" else {"action", "task_id", "sync_decision", "expected_sync_digest"}
+                    if set(args) - allowed or not item or item.get("mode") != "isolated":
+                        raise ValueError("Owned isolated task required")
+                    folder = self.work_dir / "trees" / key
+                    job = self.jobs.get(item.get("job_id"))
+                    if job:
+                        base = (self.state / job["job_id"] / "base.tar").read_bytes()
+                        task = (self.state / job["job_id"] / "task.tar").read_bytes()
+                    elif item["status"] == "open":
+                        base = (folder / "baseline.tar").read_bytes()
+                        task = release.snapshot(folder, CONTEXT, context_digest)
+                    else:
+                        raise ValueError("Task cannot be checked or decided")
+                    if job and job.get("batch_parent"):
+                        parent = self.jobs[job["batch_parent"]]
+                        parent_task = next((i["task_id"] for i in self.work.values() if i.get("job_id") == parent["job_id"]), None)
+                        return {"status": "needs_decision", "decision_task_id": parent_task,
+                                "synchronization": parent.get("synchronization")}
+                    if job and job["status"] == "needs_decision" and (self.state / job["job_id"] / "admitted_base.tar").is_file():
+                        base = (self.state / job["job_id"] / "admitted_base.tar").read_bytes()
+                        task = (self.state / job["job_id"] / "candidate.tar").read_bytes()
+                    live = self._current_release_blob()
+                    candidate, changed = release.candidate(base, task, live, context_digest)
+                    offset = args.get("offset", 0)
+                    if type(offset) is not int or offset < 0:
+                        raise ValueError("Nonnegative offset required")
+                    report = self._sync_report(live, candidate, changed, offset)
+                    if action == "preflight":
+                        return {"task_id": task_id, "synchronization": report}
+                    if not job or job["status"] != "needs_decision":
+                        raise ValueError("Only a paused pre-effect job can be decided")
+                    if args.get("expected_sync_digest") != report["digest"]:
+                        return {"task_id": task_id, "status": "needs_decision", "reason": "Synchronization decision is stale", "synchronization": report}
+                    decision = args.get("sync_decision")
+                    if decision == "synchronize":
+                        return {"task_id": task_id, "status": "needs_synchronization", "synchronization": report}
+                    if decision == "cancel":
+                        job.update(status="cancelled", phase="finished", reason="Cancelled before deployment", finished_at=time.time())
+                    elif decision == "proceed":
+                        deadline, fingerprint = self._incoming_lease(trusted)
+                        if job.get("revoked") or job.get("access_fingerprint") != fingerprint:
+                            raise PermissionError("Deployment authorization changed")
+                        job.update(status="queued", phase="waiting", sync_ack_digest=report["digest"], lease_until=deadline, synchronization=report, sync_resume=True)
+                    else:
+                        raise ValueError("Choose synchronize, proceed or cancel")
+                    self._save(job)
+                    if decision == "cancel":
+                        self._mirror_batch(job)
+                    self._start_next()
+                    return {"task_id": task_id, "job_id": job["job_id"], "status": job["status"], "synchronization": report}
                 if action == "begin":
                     if set(args) not in (
                             {"action", "task_id", "summary"},
@@ -1531,7 +1629,7 @@ class Broker:
                     item.update(status="abandoned", finished_at=time.time())
                     self._save_work()
                     return {"task_id": task_id, "status": "abandoned", "open_count": len(self._open_work())}
-                if set(args) != {"action", "task_id", "expected_inputs_sha256"}:
+                if set(args) - {"action", "task_id", "expected_inputs_sha256", "sync_decision", "expected_sync_digest"} or not {"action", "task_id", "expected_inputs_sha256"} <= set(args):
                     raise ValueError("finish requires task_id and expected_inputs_sha256")
                 expected = args["expected_inputs_sha256"]
                 if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
@@ -1553,6 +1651,27 @@ class Broker:
                         raise ValueError("stale work inputs")
                     base_blob = (folder / "baseline.tar").read_bytes()
                     _, changed = release.candidate(base_blob, task_blob, base_blob, context_digest)
+                    live = self._current_release_blob()
+                    try:
+                        candidate, current_changed = release.candidate(base_blob, task_blob, live, context_digest)
+                    except ValueError:
+                        # Existing stale-task admission remains a durable failed job.
+                        candidate, current_changed = task_blob, changed
+                    report = self._sync_report(live, candidate, current_changed)
+                    item["synchronization"] = report
+                    self._save_work()
+                    decision = args.get("sync_decision")
+                    if decision is not None and decision not in ("synchronize", "proceed", "cancel"):
+                        raise ValueError("Choose synchronize, proceed or cancel")
+                    if report["total"] or decision is not None:
+                        if args.get("expected_sync_digest") != report["digest"]:
+                            return {"task_id": task_id, "status": "needs_decision", "reason": "Fresh synchronization decision required", "synchronization": report}
+                        if decision == "cancel":
+                            item.update(status="abandoned", finished_at=time.time())
+                            self._save_work()
+                            return {"task_id": task_id, "status": "abandoned", "synchronization": report}
+                        if decision != "proceed":
+                            return {"task_id": task_id, "status": "needs_synchronization" if decision == "synchronize" else "needs_decision", "synchronization": report}
                     ui_only = all(path.startswith(UI_SOURCE_PREFIX) for path in changed)
                     lease_until, fingerprint = self._incoming_lease(trusted)
                     job_id = str(uuid.uuid4())
@@ -1568,6 +1687,9 @@ class Broker:
                            "images": {}, "log": "", "tool_name": "v3_build_work",
                            "lease_until": max(lease_until, time.time() + 4 * 3600),
                            "access_fingerprint": fingerprint, "revoked": False}
+                    if decision == "proceed":
+                        job["sync_ack_digest"] = report["digest"]
+                    job["synchronization"] = report
                     if ui_only:
                         job["rust_tests"] = {"status": "not_required",
                             "summary": "UI assets only; no Rust build or tests required"}
@@ -1605,7 +1727,9 @@ class Broker:
                     except Exception:
                         containers[role] = {"state": "unavailable"}
                 jobs = [self._view(j) for j in sorted(self.jobs.values(), key=lambda j: j["created_at"], reverse=True) if self._owned(j, trusted, workspace)][:3]
-                return {"inputs_sha256": digest, "input_files": count, "containers": containers, "jobs": jobs, "busy": self.active is not None or self.active_ui is not None}
+                live = self._current_release_blob()
+                return {"inputs_sha256": digest, "input_files": count, "containers": containers, "jobs": jobs, "busy": self.active is not None or self.active_ui is not None,
+                        "synchronization": self._sync_report(live, live, ())}
             if name == "v3_worker_job":
                 if set(args) != {"job_id"}:
                     raise ValueError("job_id required")
@@ -1647,6 +1771,11 @@ class Broker:
             current, _ = context_digest(blob)
             if current != expected:
                 raise ValueError("stale build inputs")
+            live = self._current_release_blob()
+            report = self._sync_report(live, blob, ())
+            if report["total"]:
+                return {"status": "needs_synchronization", "synchronization": report,
+                        "reason": "Legacy checkout builds require synchronization first; use an isolated task to preserve deployed changes"}
             images = {}
             source_job = None
             if operation == "deploy":
@@ -1739,6 +1868,8 @@ class Broker:
         with self.lock:
             job["hot_assets"] = True
             self._save(job)
+        if not self._sync_job(job, self._current_release_blob(), blob, job.get("changed_paths", ())):
+            return
         self._phase(job, "staging_ui")
         self.runner.stage_assets(blob, job["job_id"])
         self.runner.validate_ui(job["job_id"], job["changed_paths"])
@@ -1759,6 +1890,7 @@ class Broker:
             job["effects_started"] = True
             self._save(job)
         self.runner.activate_assets(job["job_id"])
+        self.runner.promote_live_ui(self._current_release_blob(), blob, job["changed_paths"])
         self._phase(job, "checking_ui")
         self.runner.verify_ui(job["changed_paths"])
         for role, name in zip(("api", "loop"), TARGETS):
@@ -1766,6 +1898,7 @@ class Broker:
                 raise RuntimeError("V3 " + role + " unhealthy after UI switch")
         self._phase(job, "promoting_checkout")
         self.runner.promote_checkout(self._current_release_blob(), blob, job["changed_paths"])
+        job["synchronization"] = self._sync_report(blob, blob, ())
         with self.lock:
             self._batch_lease(job)
             job.update(status="completed", phase="finished", reason="UI assets served from frozen release",
@@ -1818,6 +1951,8 @@ class Broker:
                     raise ValueError("uncertain release must be reconciled before deployment")
                 if job.get("isolated") and job["operation"] == "build_deploy":
                     blob = self._rebase_after_ui(job, blob, tested_runtime=True)
+                if job.get("isolated") and not self._sync_job(job, self._current_release_blob(), blob, job.get("changed_paths", ())):
+                    return
                 self._phase(job, "staging_ui")
                 self.runner.stage_assets(blob, job["job_id"])
                 self.runner.validate_ui(job["job_id"], job.get("changed_paths", ()))
@@ -1889,11 +2024,13 @@ class Broker:
                     if not self.runner.healthy(name, job["images"][role]):
                         raise RuntimeError("replacement V3 " + role + " not healthy; rollback material retained")
                 if self.runner.ui_hot_swappable():
+                    self.runner.promote_live_ui(self._current_release_blob(), blob, job.get("changed_paths", ()))
                     self._phase(job, "checking_ui")
                     self.runner.verify_ui(job.get("changed_paths", ()))
             if job.get("isolated"):
                 self._phase(job, "promoting_checkout")
                 self.runner.promote_checkout(self._current_release_blob(), blob, job["changed_paths"])
+                job["synchronization"] = self._sync_report(blob, blob, ())
             after, _ = context_digest(
                 release.snapshot(Path(job["release_root"]), CONTEXT, context_digest)
                 if job.get("isolated") else self.runner.snapshot())
@@ -1910,6 +2047,12 @@ class Broker:
                 job["status"] = "uncertain" if mutated or job.get("effects_started") else ("cancelled" if isinstance(error, PermissionError) else "failed")
                 job["reason"] = scrub(str(error), self.runner.secrets)
                 job["finished_at"] = time.time()
+                if job.get("isolated") and job.get("phase") == "promoting_checkout":
+                    try:
+                        job["synchronization"] = self._sync_report(self._current_release_blob(), blob, job.get("changed_paths", ()))
+                        job["synchronization"]["post_deployment"] = True
+                    except Exception:
+                        job["synchronization"] = {"status": "unavailable", "guidance": "Inspect source synchronization before another release"}
                 if job.get("rust_tests", {}).get("status") == "running":
                     job["rust_tests"] = {"status": "unconfirmed",
                         "summary": "Image build stopped before Rust test success was confirmed"}

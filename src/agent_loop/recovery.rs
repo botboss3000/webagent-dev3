@@ -81,11 +81,11 @@ async fn build_result(app:&App,run:&Value)->Result<Option<Value>> {
     if response["status"]!="success" {bail!("Build job receipt unavailable");}
     let job=&response["output"];
     let state=job["status"].as_str().unwrap_or("");
-    if !matches!(state,"completed"|"failed"|"stale"|"cancelled"|"uncertain"|"interrupted") {
+    if !matches!(state,"completed"|"failed"|"stale"|"cancelled"|"uncertain"|"interrupted"|"needs_decision") {
         return Ok(None);
     }
     let mut output=json!({"task_id":task,"job_id":job_id,"status":state,
-        "phase":job["phase"],"reason":job["reason"],"log":job["log"]});
+        "phase":job["phase"],"reason":job["reason"],"log":job["log"],"synchronization":job["synchronization"]});
     if state=="completed" {
         let health=tools::execute_trusted("v3_build_status",&json!({}),sid,
             socket,Some(trusted),CancellationToken::new()).await?;
