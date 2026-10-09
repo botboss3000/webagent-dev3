@@ -286,7 +286,25 @@ fn decision_request(
     let mut questions = serde_json::Map::new();
     for (index, candidate) in candidates.iter().enumerate() {
         let id = format!("candidate_{index}");
-        entries.push(json!({"id":id,"path":candidate["file_path"],"label":candidate["label"],"kind":candidate["kind"],"start_line":candidate["start_line"],"end_line":candidate["end_line"]}));
+        let mut entry=json!({"id":id,"path":candidate["file_path"],"label":candidate["label"],"kind":candidate["kind"],"start_line":candidate["start_line"],"end_line":candidate["end_line"]});
+        if candidate["kind"]=="code_index_feature" {
+            if let Some(feature_id)=candidate["feature_id"].as_str().filter(|value|value.len()<=48 && value.bytes().all(|byte|byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte==b'-')) {
+                entry["feature_id"]=json!(feature_id);
+                for field in ["purpose","location_purpose"] {
+                    if let Some(value)=candidate[field].as_str().filter(|value|!value.trim().is_empty() && value.len()<=512) {entry[field]=json!(value);}
+                }
+                if let Some(origin)=candidate["feature_origin"].as_str().filter(|value|*value=="comment" || *value=="map") {entry["feature_origin"]=json!(origin);}
+                if let Some(source_path)=candidate["source_path"].as_str().filter(|value|value.len()<=512 && !value.starts_with('/') && !value.contains("..")) {entry["source_path"]=json!(source_path);}
+                for field in ["source_sha256","target_sha256"] {
+                    if let Some(value)=candidate[field].as_str().filter(|value|value.len()==64 && value.bytes().all(|byte|byte.is_ascii_hexdigit())) {entry[field]=json!(value);}
+                }
+                if let Some(values)=candidate["aliases"].as_array() {
+                    let aliases=values.iter().filter_map(Value::as_str).filter(|value|!value.trim().is_empty() && value.len()<=128).take(16).collect::<Vec<_>>();
+                    if !aliases.is_empty() {entry["aliases"]=json!(aliases);}
+                }
+            }
+        }
+        entries.push(entry);
         let candidate_question = candidate_template
             .replace("{candidate_id}", &id)
             .replace("{candidate_index}", &index.to_string());
@@ -616,6 +634,18 @@ mod tests {
         invalid = defaults();
         invalid["unbounded"] = json!(true);
         assert!(validate_settings(&invalid).is_err());
+    }
+
+    #[test]
+    fn feature_breadcrumb_metadata_stays_in_untrusted_state() {
+        let candidates=[json!({"file_path":"config/chat-ui.json","label":"chat-footer","kind":"code_index_feature","start_line":1,"end_line":4,"feature_id":"chat-footer","aliases":["message composer"],"purpose":"Shared chat footer","location_purpose":"JSON settings","feature_origin":"map"})];
+        let template="Assess only {candidate_id} for the request at {candidate_index}.";
+        let request=decision_request("find the chat footer",&candidates,"Use live retrieval guidance",template).unwrap();
+        let entry=&request["state"]["candidates"][0];
+        assert_eq!(entry["feature_id"],"chat-footer");
+        assert_eq!(entry["aliases"][0],"message composer");
+        assert_eq!(entry["location_purpose"],"JSON settings");
+        assert!(!request["questions"]["candidate_0"]["instructions"].as_str().unwrap().contains("JSON settings"));
     }
     #[test]
     fn candidate_questions_are_specific_without_interpolating_untrusted_fields() {

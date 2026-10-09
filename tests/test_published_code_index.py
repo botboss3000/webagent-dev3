@@ -92,6 +92,26 @@ class PublishedTests(unittest.TestCase):
   self.assertEqual(before,workspace.capture(a/"webagent-v3"))
   self.assertEqual("success",idx.execute_published("code_index_coverage",{"root":"published"},d)["status"])
 
+
+ def test_published_feature_breadcrumbs_survive_private_seed_projection(self):
+  target=b'{"composer":"enabled"}\n';digest=idx.sha(target)
+  js=b'// @code-index {"version":1,"feature":"chat-footer","aliases":["chat footer"],"purpose":"Chat footer JavaScript","span_lines":2}\nfunction mountChat() {}\n'
+  css=b'/* @code-index {"version":1,"feature":"chat-footer","aliases":["chat footer"],"purpose":"Chat footer CSS","span_lines":2} */\n.chat-footer { display:flex; }\n'
+  feature_map=json.dumps({"version":1,"features":[{"id":"chat-footer","aliases":["chat footer"],"purpose":"Shared chat footer","locations":[{"path":"config/settings.json","start_line":1,"end_line":1,"sha256":digest}]}]}).encode()+b"\n"
+  blob=self.blob({"v3/config/settings.json":(420,target),"v3/config/code-index-features.json":(420,feature_map),
+                  "v3/ui/chat.js":(420,js),"v3/ui/chat.css":(420,css)})
+  release,folder,manifest=self.stage(blob)
+  result=idx.execute_published("code_index_lookup",{"root":"published","action":"search","query":"chat footer","limit":20,"offset":0},folder)
+  rows=[row for row in result["results"] if row.get("feature_id")=="chat-footer"]
+  self.assertEqual({row["file_path"] for row in rows},{"v3/config/settings.json","v3/ui/chat.js","v3/ui/chat.css"})
+  self.assertTrue(all(row["source_path"]=="v3/config/code-index-features.json" or row["source_path"]==row["file_path"] for row in rows))
+  workspace=self.root/"private";workspace.mkdir();shutil.copytree(folder/"v3",workspace/"webagent-v3")
+  idx.seed_private_index(folder,workspace/"webagent-v3")
+  private=idx.execute("code_index_lookup",{"root":"webagent-v3","action":"search","query":"chat footer","limit":20,"offset":0},workspace)
+  private_rows=[row for row in private["results"] if row.get("feature_id")=="chat-footer"]
+  self.assertEqual({row["file_path"] for row in private_rows},{"config/settings.json","ui/chat.js","ui/chat.css"})
+  self.assertTrue(all(row["stale"] is False for row in private_rows))
+
  def test_published_search_snippet_are_bound_to_one_immutable_release(self):
   j,d,m=self.stage(self.blob())
   before_source=idx.source_digest(d)

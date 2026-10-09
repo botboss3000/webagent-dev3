@@ -238,4 +238,153 @@ class AdminIndexTests(unittest.TestCase):
             expected_revision=-1)
         self.assertEqual(result["total"],5)
 
+
+    def test_feature_breadcrumbs_group_comment_and_map_locations(self):
+        config=self.repo/"config";config.mkdir()
+        js=self.repo/"ui/chat-footer.js";css=self.repo/"ui/chat-footer.css";target=config/"chat-ui.json"
+        js.write_text('// @code-index {"version":1,"feature":"chat-footer","aliases":["message composer","chat footer"],"purpose":"Locates the JavaScript footer behavior","span_lines":2}\nfunction mountFooter() {\n  return true;\n}\n',encoding="utf-8")
+        (self.repo/"ui/chat-sidebar.js").write_text('// @code-index {"version":1,"feature":"chat-sidebar","aliases":["chat navigation"],"purpose":"The chat sidebar navigation"}\nfunction sidebar() {}\n',encoding="utf-8")
+        css.write_text('/* @code-index {"version":1,"feature":"chat-footer","aliases":["message composer","chat footer"],"purpose":"Locates the composer footer styles","span_lines":2} */\n#chat-footer { display: flex; }\n* { box-sizing: border-box; }\n',encoding="utf-8")
+        target.write_text('{"footer":"chat composer"}\n',encoding="utf-8")
+        digest=index.sha(target.read_bytes())
+        (config/"code-index-features.json").write_text(json.dumps({"version":1,"features":[
+            {"id":"chat-footer","aliases":["message composer","chat footer"],"purpose":"The shared chat composer footer",
+             "locations":[{"path":"config/chat-ui.json","start_line":1,"end_line":1,"purpose":"The JSON footer configuration"},{"path":"ui/chat-footer.css","start_line":2,"end_line":3,"purpose":"CSS ID and universal selector rules"}]}
+        ]}),encoding="utf-8")
+        self.scan()
+        found=self.call("lookup",action="search",query="I need to update the chat footer in the composer",limit=20)
+        rows=[row for row in found["results"] if row.get("feature_id")=="chat-footer"]
+        self.assertEqual({row["file_path"] for row in rows},{"ui/chat-footer.js","ui/chat-footer.css","config/chat-ui.json"})
+        first_three=self.call("lookup",action="search",query="please update chat footer",limit=3)
+        self.assertEqual({row["file_path"] for row in first_three["results"] if row.get("feature_id")=="chat-footer"},
+            {"ui/chat-footer.js","ui/chat-footer.css","config/chat-ui.json"})
+        described=self.call("lookup",action="search",query="composer footer styles",limit=20)
+        self.assertTrue(any(row.get("feature_id")=="chat-footer" for row in described["results"]))
+        self.assertTrue(all(row["kind"]=="code_index_feature" for row in rows))
+        self.assertIn("JSON footer configuration",next(row for row in rows if row["file_path"]=="config/chat-ui.json")["location_purpose"])
+        keys=[(row["feature_id"],row["file_path"],row["start_line"],row["end_line"]) for row in rows]
+        self.assertEqual(len(keys),len(set(keys)))
+        first=self.call("lookup",action="search",query="chat footer",limit=1,offset=0)
+        second=self.call("lookup",action="search",query="chat footer",limit=1,offset=1)
+        self.assertNotEqual(first["results"][0]["file_path"],second["results"][0]["file_path"])
+        map_path=config/"code-index-features.json"
+        map_path.write_text(map_path.read_text(encoding="utf-8").replace("The shared chat composer footer","The updated chat composer footer"),encoding="utf-8")
+        stale=self.call("lookup",action="search",query="chat footer",limit=20)
+        self.assertTrue(any(row["stale"] for row in stale["results"] if row.get("feature_id")=="chat-footer"))
+        self.call("scan",action="scan_file",file_path="config/code-index-features.json",batch_id="feature-map-refresh")
+
+    def test_feature_parser_ignores_string_literals_and_retires_removed_markers(self):
+        source='const a = "// @code-index {bad}";\nconst b = '+chr(96)+'/* @code-index {bad} */'+chr(96)+';\n'
+        self.assertEqual(index._marker_rows("x.js",source,index.sha(source.encode())),[])
+        css='/* @code-index {"version":1,"feature":"css-selectors","aliases":[],"purpose":"CSS selector examples"} */\n#chat-footer { display: flex; }\n* { box-sizing: border-box; }\n'
+        css_rows=index._marker_rows("x.css",css,index.sha(css.encode()))
+        self.assertEqual(css_rows[0][0],"css-selectors")
+        self.assertEqual((css_rows[0][4],css_rows[0][5]),(2,3))
+        css_line='// @code-index {"version":1,"feature":"fake","aliases":[],"purpose":"fake"}\n.x { display: block; }\n'
+        self.assertEqual(index._marker_rows("x.css",css_line,index.sha(css_line.encode())),[])
+        multiline='/* @code-index {\n"version":1} */\n.x {}\n'
+        with self.assertRaises(ValueError):index._marker_rows("x.css",multiline,index.sha(multiline.encode()))
+        rust='const S: &str = r###"// @code-index {bad}"###;\nfn main() {}\n'
+        self.assertEqual(index._marker_rows("x.rs",rust,index.sha(rust.encode())),[])
+        long_raw='const S = r'+('#'*20)+'"before\n// @code-index {ignored}\nfn hidden() {}'+('"'+('#'*20))+';\nfn main() {}\n'
+        self.assertEqual(index._marker_rows("x.rs",long_raw,index.sha(long_raw.encode())),[])
+        ordinary='// This comment discusses @code-index syntax.\nfn main() {}\n'
+        self.assertEqual(index._marker_rows("x.rs",ordinary,index.sha(ordinary.encode())),[])
+        py='text = """# @code-index {bad}"""\n'
+        self.assertEqual(index._marker_rows("x.py",py,index.sha(py.encode())),[])
+        path=self.repo/"ui/marked.js"
+        path.write_text('// @code-index {"version":1,"feature":"marked","aliases":[],"purpose":"marked behavior"}\nfunction marked() {}\n',encoding="utf-8")
+        self.scan()
+        self.assertGreater(self.call("lookup",action="search",query="marked behavior",limit=10)["total"],0)
+        path.write_text("function marked() {}\n",encoding="utf-8")
+        self.call("scan",action="scan_file",file_path="ui/marked.js",batch_id="marker-retire")
+        self.assertFalse(any(row.get("feature_id")=="marked" for row in self.call("lookup",action="search",query="marked behavior",limit=10)["results"]))
+
+    def test_feature_map_rejects_stale_target_and_duplicate_ids(self):
+        config=self.repo/"config";config.mkdir()
+        target=config/"component.json";target.write_text('{"component":true}\n',encoding="utf-8")
+        digest=index.sha(target.read_bytes());map_path=config/"code-index-features.json"
+        feature={"id":"one","aliases":["component"],"purpose":"component config","locations":[{"path":"config/component.json","start_line":1,"end_line":1,"sha256":digest}]}
+        map_path.write_text(json.dumps({"version":1,"features":[feature,feature]}),encoding="utf-8")
+        result=index.execute("code_index_scan",{"action":"scan","scope":"","limit":20,"offset":0},self.base)
+        self.assertEqual(result["status"],"error")
+        feature["locations"][0]["path"]="../outside.json"
+        map_path.write_text(json.dumps({"version":1,"features":[feature]}),encoding="utf-8")
+        self.assertEqual(index.execute("code_index_scan",{"action":"scan","scope":"","limit":20,"offset":0},self.base)["status"],"error")
+        feature["locations"][0]["path"]="config/component.json"
+        map_path.write_text(json.dumps({"version":1,"features":[feature]}),encoding="utf-8")
+        self.scan();target.write_text('{"component":false}\n',encoding="utf-8")
+        result=index.execute("code_index_scan",{"action":"scan_file","file_path":"config/component.json","batch_id":"stale-feature","limit":20,"offset":0},self.base)
+        self.assertEqual(result["status"],"error")
+
+
+    def test_feature_markers_support_python_rust_and_reject_malformed_payloads(self):
+        py='# @code-index {"version":1,"feature":"py-feature","aliases":["python path"],"purpose":"Python operation"}\ndef run():\n    return 1\n'
+        rs='// @code-index {"version":1,"feature":"rust-feature","aliases":["rust path"],"purpose":"Rust operation"}\nfn run() {}\n'
+        self.assertEqual(index._marker_rows("worker.py",py,index.sha(py.encode()))[0][0],"py-feature")
+        self.assertEqual(index._marker_rows("main.rs",rs,index.sha(rs.encode()))[0][0],"rust-feature")
+        for text in [
+            '// @code-index {"version":1,"feature":"bad","aliases":[],"purpose":"x","unknown":true}\nfn x() {}\n',
+            '// @code-index {"version":1,"feature":"bad","aliases":"wrong","purpose":"x"}\nfn x() {}\n',
+            '// @code-index {"version":1,"feature":"bad","aliases":[],"purpose":"x"\nfn x() {}\n',
+        ]:
+            with self.assertRaises(ValueError):index._marker_rows("x.rs",text,index.sha(text.encode()))
+
+
+    def test_feature_schema_rejects_bad_types_duplicate_keys_and_bounds(self):
+        valid='// @code-index {payload}\nfn run() {{}}\n'
+        base={"version":1,"feature":"valid-id","aliases":[],"purpose":"valid purpose"}
+        invalid=[]
+        for version in (1.0,True,2):
+            obj={**base,"version":version};invalid.append(json.dumps(obj))
+        for span in (0,81,None,True):
+            invalid.append(json.dumps({**base,"span_lines":span}))
+        invalid.extend([
+            json.dumps({**base,"feature":"bad_id"}),
+            json.dumps({**base,"aliases":["Footer"," footer "]}),
+            json.dumps({**base,"aliases":["x"]*17}),
+            json.dumps({**base,"aliases":["bad\x01alias"]}),
+            json.dumps({**base,"purpose":" "}),
+            json.dumps({**base,"purpose":"x"*513}),
+            '{"version":1,"feature":"a","feature":"b","aliases":[],"purpose":"p"}',
+        ])
+        for payload in invalid:
+            text=valid.format(payload=payload)
+            with self.subTest(payload=payload[:100]),self.assertRaises(ValueError):
+                index._marker_rows("x.rs",text,index.sha(text.encode()))
+
+        target={"path":"src/worker.py","start_line":1,"end_line":1}
+        feature={"id":"valid-id","aliases":[],"purpose":"valid purpose","locations":[target]}
+        malformed=[]
+        for version in (1.0,True,2):
+            malformed.append(json.dumps({"version":version,"features":[feature]}))
+        malformed.extend([
+            '{"version":1,"version":1,"features":[]}',
+            json.dumps({"version":1,"features":[{**feature,"extra":1}]}),
+            json.dumps({"version":1,"features":[{**feature,"id":"bad_id"}]}),
+            json.dumps({"version":1,"features":[{**feature,"aliases":["Footer"," footer "]}]}),
+            json.dumps({"version":1,"features":[{**feature,"aliases":["bad\x01alias"]}]}),
+            json.dumps({"version":1,"features":[{**feature,"aliases":["x"]*17}]}),
+            json.dumps({"version":1,"features":[{**feature,"purpose":" " }]}),
+            json.dumps({"version":1,"features":[{**feature,"purpose":"x"*513}]}),
+            json.dumps({"version":1,"features":[{**feature,"locations":[{**target,"end_line":81}]}]}),
+            json.dumps({"version":1,"features":[{**feature,"locations":[target]*17}]}),
+            '{"version":1,"features":[{"id":"valid-id","id":"other","aliases":[],"purpose":"p","locations":[{"path":"src/worker.py","start_line":1,"end_line":1}]}]}',
+        ])
+        for raw in malformed:
+            with self.subTest(map=raw[:100]),self.assertRaises(ValueError):
+                index._map_rows(raw.encode())
+
+    def test_explicit_path_ranks_ordinary_candidate_ahead_of_unrelated_feature(self):
+        config=self.repo/"config";config.mkdir()
+        worker=self.repo/"src/worker.py";worker.parent.mkdir(parents=True,exist_ok=True)
+        worker.write_text("def update_chat_footer_worker():\n    return True\n",encoding="utf-8")
+        feature_file=self.repo/"ui/feature.js"
+        feature_file.write_text('// @code-index {"version":1,"feature":"chat-footer","aliases":["chat footer"],"purpose":"chat footer behavior"}\nfunction unrelatedFooter() {}\n',encoding="utf-8")
+        (config/"code-index-features.json").write_text(json.dumps({"version":1,"features":[]}),encoding="utf-8")
+        self.scan()
+        result=self.call("lookup",action="search",query="src/worker.py chat footer",limit=20)
+        self.assertTrue(result["results"])
+        self.assertEqual(result["results"][0]["file_path"],"src/worker.py")
+
 if __name__=="__main__":unittest.main()

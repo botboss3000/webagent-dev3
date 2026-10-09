@@ -9,6 +9,8 @@ import fcntl
 import hashlib
 import heapq
 import json
+import io
+import tokenize
 import os
 import re
 import sqlite3
@@ -55,8 +57,150 @@ CREATE TABLE IF NOT EXISTS symbols(file_path TEXT NOT NULL REFERENCES files(path
 CREATE INDEX IF NOT EXISTS symbols_name ON symbols(name);
 CREATE TABLE IF NOT EXISTS edges(file_path TEXT NOT NULL REFERENCES files(path) ON DELETE CASCADE,line_no INTEGER NOT NULL,edge_kind TEXT NOT NULL,value TEXT NOT NULL,owner_symbol TEXT);
 CREATE INDEX IF NOT EXISTS edges_value ON edges(value);
+CREATE TABLE IF NOT EXISTS feature_locations(feature_id TEXT,source_path TEXT,source_line INTEGER,file_path TEXT,start_line INTEGER,end_line INTEGER,aliases TEXT,purpose TEXT,location_purpose TEXT,origin TEXT,target_sha256 TEXT,source_sha256 TEXT,PRIMARY KEY(feature_id,source_path,source_line,file_path,start_line,end_line));
+CREATE INDEX IF NOT EXISTS feature_locations_id ON feature_locations(feature_id);
 CREATE TABLE IF NOT EXISTS batches(batch_id TEXT PRIMARY KEY,scope TEXT NOT NULL,status TEXT NOT NULL,requested_files INTEGER NOT NULL,indexed_files INTEGER NOT NULL,started_at TEXT NOT NULL,completed_at TEXT,error TEXT NOT NULL,revision INTEGER);
 """
+
+MAX_FEATURES=128
+MAX_FEATURE_LOCATIONS=16
+FEATURE_ID_RE=re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
+FEATURE_MAP_PATH="config/code-index-features.json"
+RUST_RAW_RE=re.compile(r"(?:br|rb|r)(#+)?\"")
+RUST_CHAR_RE=re.compile(r"'(?:\\.|[^'\\])'")
+def _unique_json(text):
+    def pairs(items):
+        out={}
+        for k,v in items:
+            if k in out:raise ValueError("duplicate JSON key")
+            out[k]=v
+        return out
+    return json.loads(text,object_pairs_hook=pairs)
+def _comments(source,suffix):
+    if suffix==".py":
+        try:
+            for t in tokenize.generate_tokens(io.StringIO(source).readline):
+                if t.type==tokenize.COMMENT:yield t.start[0],t.string[1:]
+        except (tokenize.TokenError,IndentationError):return
+        return
+    i=0;line=1;n=len(source)
+    while i<n:
+        c=source[i]
+        if c=="\n":line+=1;i+=1;continue
+        raw=RUST_RAW_RE.match(source,i) if suffix==".rs" and c in "rb" else None
+        if raw:
+            close="\""+raw.group(1);j=source.find(close,i+len(raw.group(0)))
+            if j<0:return
+            line+=source[i:j+len(close)].count("\n");i=j+len(close);continue
+        if suffix==".rs" and c==chr(39):
+            char=RUST_CHAR_RE.match(source,i)
+            if char:i+=len(char.group(0));continue
+            i+=1;continue
+        if c in (chr(39),chr(34),chr(96)):
+            q=c;i+=1
+            while i<n:
+                if source[i]=="\\":i+=2;continue
+                if source[i]==q:i+=1;break
+                if source[i]=="\n":line+=1
+                i+=1
+            continue
+        if source.startswith("//",i):
+            j=source.find("\n",i);j=n if j<0 else j
+            yield line,source[i+2:j];i=j;continue
+        if source.startswith("/*",i):
+            start=i+2;j=start;depth=1
+            while j<n and depth:
+                if suffix==".rs" and source.startswith("/*",j):depth+=1;j+=2;continue
+                if source.startswith("*/",j):depth-=1
+                j+=2 if source.startswith("*/",j) else 1
+            if depth:yield line,source[start:];return
+            yield line,source[start:j-2];line+=source[i:j].count("\n");i=j;continue
+        i+=1
+def _pathnorm(path):
+    parts=relative_parts(path)
+    if parts[0] in {"v3","webagent-v3"}:parts=parts[1:]
+    if not parts:raise ValueError("invalid feature path")
+    return "/".join(parts)
+def _has_code_line(line,suffix):
+    text=line.strip()
+    if not text:return False
+    if suffix==".py":return not text.startswith("#")
+    if suffix==".css":return not text.startswith(("/*","//","*/"))
+    return not text.startswith(("//","/*"))
+def _marker_rows(path,source,digest):
+    suffix=Path(path).suffix.lower()
+    if suffix not in {".js",".mjs",".cjs",".css",".rs",".py"}:return []
+    lines=source.splitlines();rows=[];seen=set()
+    for line,body in _comments(source,suffix):
+        if not body.lstrip().startswith("@code-index"):continue
+        if "\n" in body or "\r" in body:raise ValueError("Code Index feature marker must be single-line")
+        text=lines[line-1].lstrip() if 0<line<=len(lines) else ""
+        starts=text.startswith("#") if suffix==".py" else text.startswith("/*") if suffix==".css" else text.startswith("//")
+        if not starts:continue
+        m=re.fullmatch(r"\s*@code-index\s+(\{.*\})\s*",body,re.S)
+        if not m or len(m.group(1).encode())>2048:raise ValueError("malformed Code Index feature marker")
+        obj=_unique_json(m.group(1))
+        if not isinstance(obj,dict) or not {"version","feature","aliases","purpose"}<=set(obj) or set(obj)-{"version","feature","aliases","purpose","span_lines"}:raise ValueError("invalid Code Index feature marker fields")
+        fid,aliases,purpose,span=obj["feature"],obj["aliases"],obj["purpose"],obj.get("span_lines",40)
+        if type(obj["version"]) is not int or obj["version"]!=1 or not isinstance(fid,str) or not FEATURE_ID_RE.fullmatch(fid):raise ValueError("invalid Code Index feature marker identity")
+        if fid in seen:raise ValueError("duplicate Code Index feature in file")
+        if not isinstance(aliases,list) or len(aliases)>16 or any(not isinstance(x,str) or not x.strip() or len(x.encode())>128 or any(ord(c)<32 for c in x) for x in aliases) or len({x.strip().casefold() for x in aliases})!=len(aliases):raise ValueError("invalid Code Index feature aliases")
+        if not isinstance(purpose,str) or not purpose.strip() or len(purpose.encode())>512:raise ValueError("invalid Code Index feature purpose")
+        if not isinstance(span,int) or isinstance(span,bool) or not 1<=span<=80:raise ValueError("invalid Code Index feature span")
+        seen.add(fid);start=line+1;end=min(len(lines),start+(span or 40)-1)
+        code=[x for x in lines[start-1:end] if _has_code_line(x,suffix)]
+        if not code:raise ValueError("Code Index marker span has no code")
+        rows.append((fid,path,line,path,start,end,json.dumps(aliases,ensure_ascii=False),purpose.strip(),purpose.strip(),"comment",digest,digest))
+    return rows
+def _map_rows(raw):
+    if len(raw)>128*1024:raise ValueError("Code Index feature map exceeds limit")
+    doc=_unique_json(raw.decode("utf-8"))
+    if not isinstance(doc,dict) or set(doc)!={"version","features"} or type(doc["version"]) is not int or doc["version"]!=1:raise ValueError("invalid Code Index feature map")
+    if not isinstance(doc["features"],list) or len(doc["features"])>128:raise ValueError("invalid Code Index feature list")
+    seen=set();out=[]
+    for f in doc["features"]:
+        if not isinstance(f,dict) or set(f)!={"id","aliases","purpose","locations"}:raise ValueError("invalid Code Index feature entry")
+        fid=f["id"]
+        if not isinstance(fid,str) or not FEATURE_ID_RE.fullmatch(fid) or fid in seen:raise ValueError("invalid or duplicate feature map ID")
+        seen.add(fid);aliases=f["aliases"];purpose=f["purpose"];locs=f["locations"]
+        if not isinstance(aliases,list) or len(aliases)>16 or any(not isinstance(x,str) or not x.strip() or len(x.encode())>128 or any(ord(c)<32 for c in x) for x in aliases) or len({x.strip().casefold() for x in aliases})!=len(aliases):raise ValueError("invalid feature map aliases")
+        if not isinstance(purpose,str) or not purpose.strip() or len(purpose.encode())>512:raise ValueError("invalid feature map purpose")
+        if not isinstance(locs,list) or not 1<=len(locs)<=16:raise ValueError("invalid feature map locations")
+        for loc in locs:
+            if not isinstance(loc,dict) or not {"path","start_line","end_line"}<=set(loc) or set(loc)-{"path","start_line","end_line","purpose","sha256"}:raise ValueError("invalid feature map location")
+            target=_pathnorm(loc["path"]);start,end=loc["start_line"],loc["end_line"];desc=loc.get("purpose",purpose);digest=loc.get("sha256")
+            if any(not isinstance(x,int) or isinstance(x,bool) for x in (start,end)) or start<1 or end<start or end-start>=80:raise ValueError("invalid feature map line range")
+            if not isinstance(desc,str) or not desc.strip() or len(desc.encode())>512 or (digest is not None and (not isinstance(digest,str) or not re.fullmatch(r"[0-9a-f]{64}",digest))):raise ValueError("invalid feature map target binding")
+            out.append((fid,FEATURE_MAP_PATH,1,target,start,end,json.dumps(aliases,ensure_ascii=False),purpose.strip(),desc.strip(),"map",digest,""))
+    return out
+def refresh_features(conn,rootfd):
+    indexed={r["path"]:r for r in conn.execute("SELECT path,sha256 FROM files")}
+    normalized={}
+    for p,row in indexed.items():
+        key=_pathnorm(p)
+        if key in normalized:raise ValueError("Normalized Code Index feature path collision")
+        normalized[key]=(p,row)
+    rows=[]
+    for p,r in indexed.items():
+        if Path(p).suffix.lower() not in {".js",".mjs",".cjs",".css",".rs",".py"}:continue
+        data=read_source(rootfd,p)
+        if sha(data)!=r["sha256"]:raise ValueError("feature source changed during scan")
+        rows.extend(_marker_rows(p,data.decode("utf-8"),r["sha256"]))
+    map_path=next((p for p in indexed if _pathnorm(p)==FEATURE_MAP_PATH),None)
+    if map_path:
+        raw=read_source(rootfd,map_path)
+        if sha(raw)!=indexed[map_path]["sha256"]:raise ValueError("feature map changed during scan")
+        for row in _map_rows(raw):
+            target=normalized.get(row[3])
+            if target is None:raise ValueError("feature map target is unindexed")
+            actual,meta=target;data=read_source(rootfd,actual);lines=data.decode("utf-8").splitlines()
+            suffix=Path(actual).suffix.lower()
+            if (row[10] and meta["sha256"]!=row[10]) or sha(data)!=meta["sha256"] or row[5]>len(lines) or not any(_has_code_line(x,suffix) for x in lines[row[4]-1:row[5]]):raise ValueError("feature map target is stale")
+            rows.append(row[:1]+(map_path,)+row[2:3]+(actual,)+row[4:10]+(meta["sha256"],indexed[map_path]["sha256"]))
+    if len(rows)>MAX_FILES+MAX_FEATURES*MAX_FEATURE_LOCATIONS:raise ValueError("Code Index feature row limit exceeded")
+    conn.execute("DELETE FROM feature_locations")
+    conn.executemany("INSERT INTO feature_locations VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",rows)
+
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 def now():
@@ -508,6 +652,7 @@ def scan(conn,rootfd,args):
             removed=[p for p in known if (not prefix or p==prefix or p.startswith(prefix+"/")) and p not in paths]
             conn.executemany("DELETE FROM files WHERE path=?",[(p,) for p in removed])
         for item in scans:store_scan(conn,item)
+        refresh_features(conn,rootfd)
         if conn.execute("SELECT COALESCE(SUM(line_count),0) FROM files").fetchone()[0]>MAX_TOTAL_LINES:
             raise ValueError("Stored index line limit exceeded")
         if conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]>MAX_FILES:raise ValueError("Stored file count exceeds limit")
@@ -666,8 +811,57 @@ def lookup(conn,rootfd,args):
         for path in metadata:
             item={"file_path":path,"start_line":1,"end_line":1,"label":path,"kind":"file"}
             add_candidate((path,1,1),item,path)
-        rows=sorted(candidates.values(),key=lambda item:(-item["_path_rank"],-item["_symbol_rank"],-item["score"],item["file_path"],item["start_line"]))[:MAX_FILES+1]
-        rows=[{key:value for key,value in item.items() if not key.startswith("_")} for item in rows]
+        feature_groups={}
+        for row in conn.execute("SELECT * FROM feature_locations ORDER BY feature_id,file_path,start_line LIMIT ?",(MAX_FILES+MAX_FEATURES*MAX_FEATURE_LOCATIONS,)):
+            group=feature_groups.setdefault(row["feature_id"],{"aliases":[],"purpose":row["purpose"],"map_purpose":None,"rows":[]})
+            if row["origin"]=="map":group["map_purpose"]=row["purpose"]
+            group["rows"].append(row)
+            for alias in json.loads(row["aliases"]):
+                if len(group["aliases"])<16 and alias.casefold() not in {existing.casefold() for existing in group["aliases"]}:
+                    group["aliases"].append(alias)
+        query_norm=" ".join(re.findall(r"[a-z0-9]+",query.lower()))
+        linked=[]
+        for fid,group in feature_groups.items():
+            labels=[fid.replace("-"," "),*group["aliases"]]
+            normalized=[" ".join(re.findall(r"[a-z0-9]+",label.lower())) for label in labels]
+            padded=" "+query_norm+" "
+            exact_len=max((len(label) for label in normalized if label and (" "+label+" ") in padded),default=0)
+            purpose=group["map_purpose"] or group["purpose"]
+            purposes=" ".join(dict.fromkeys(row["location_purpose"] for row in group["rows"][:16]))
+            hay=" ".join([fid,*group["aliases"],purpose,purposes]).lower()
+            hits=sum(1 for term in terms if term in hay)
+            if not exact_len and not hits:continue
+            per_file={}
+            for row in group["rows"]:
+                item_hay=(hay+" "+row["location_purpose"]).lower()
+                local_hits=sum(1 for term in terms if term in item_hay)
+                path_rank=search_path_rank(row["file_path"],explicit_paths)
+                item={"file_path":row["file_path"],"start_line":row["start_line"],"end_line":row["end_line"],
+                    "label":fid,"kind":"code_index_feature","feature_id":fid,"aliases":group["aliases"],
+                    "purpose":purpose,"location_purpose":row["location_purpose"],"feature_origin":row["origin"],
+                    "source_path":row["source_path"],"source_sha256":row["source_sha256"],"target_sha256":row["target_sha256"],
+                    "score":round(max(hits,local_hits)/len(terms),4),
+                    "ranking_score":round(1000+exact_len*10+path_rank*10+max(hits,local_hits)/len(terms),4),
+                    "_exact_len":exact_len,"_path_rank":path_rank,"_hits":max(hits,local_hits),**metadata.get(row["file_path"],{})}
+                previous=per_file.get(row["file_path"])
+                if previous is None or (item["_path_rank"],item["_hits"],-item["start_line"])>(previous["_path_rank"],previous["_hits"],-previous["start_line"]):
+                    per_file[row["file_path"]]=item
+            linked.append(((-exact_len,-max((x["_path_rank"] for x in per_file.values()),default=0),-hits,fid),list(per_file.values())))
+        linked.sort(key=lambda pair:pair[0])
+        features=[]
+        for _,items in linked:
+            items.sort(key=lambda x:(-x["_path_rank"],-x["_hits"],x["file_path"],x["start_line"]))
+            features.extend(items[:MAX_FEATURE_LOCATIONS])
+        feature_keys={(x["file_path"],x["start_line"],x["end_line"]) for x in features}
+        ordinary=sorted(candidates.values(),key=lambda item:(-item["_path_rank"],-item["_symbol_rank"],-item["score"],item["file_path"],item["start_line"]))
+        ordinary=[item for item in ordinary
+                  if (item["file_path"],item["start_line"],item["end_line"]) not in feature_keys]
+        rows=features+ordinary
+        if explicit_paths:
+            rows.sort(key=lambda item:(-item.get("_path_rank",search_path_rank(item["file_path"],explicit_paths)),
+                0 if item["kind"]=="code_index_feature" else 1,-item.get("_exact_len",0),-item.get("_hits",0),
+                -item.get("_symbol_rank",0),-item["score"],item["file_path"],item["start_line"]))
+        rows=[{key:value for key,value in item.items() if not key.startswith("_")} for item in rows][:MAX_FILES+1]
         result=page(rows,args["offset"],args["limit"]);result["result_cap_reached"]=len(rows)>MAX_FILES
         return result
     elif action=="snippet":
@@ -698,6 +892,7 @@ def trace(conn,args):
     return result
 def annotate_freshness(conn,rootfd,result):
     paths={row.get("file_path",row.get("path")) for row in result["results"]}
+    paths.update(row["source_path"] for row in result["results"] if row.get("source_path"))
     state={};total=0
     for path in sorted(paths):
         expected=conn.execute("SELECT sha256 FROM files WHERE path=?",(path,)).fetchone()
@@ -708,7 +903,7 @@ def annotate_freshness(conn,rootfd,result):
         if total>MAX_TOTAL_BYTES:raise ValueError("Lookup freshness byte limit exceeded")
         state[path]=stale
     for row in result["results"]:
-        row["stale"]=state[row.get("file_path",row.get("path"))]
+        row["stale"]=state[row.get("file_path",row.get("path"))] or bool(row.get("source_path") and state.get(row["source_path"],True))
     result.update(stale_count=sum(state.values()),freshness_scope="returned_files")
     return result
 def dispatch(conn,rootfd,name,args):
@@ -743,7 +938,7 @@ def publish(conn,indexfd,key):
 
 # The release builder uses the installed, protected copy of this parser. Candidate
 # source is data only; neither its adapter nor any submitted Python is imported.
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 
 def parser_versions():
     from importlib.metadata import version, PackageNotFoundError
@@ -867,6 +1062,9 @@ def seed_private_index(release, stage):
                               ("symbols","file_path"),("edges","file_path")):
             conn.execute(f"DELETE FROM {table} WHERE {column} NOT LIKE 'v3/%'")
             conn.execute(f"UPDATE {table} SET {column}=substr({column},4)")
+        conn.execute("DELETE FROM feature_locations WHERE file_path NOT LIKE 'v3/%'")
+        conn.execute("UPDATE feature_locations SET file_path=substr(file_path,4) WHERE file_path LIKE 'v3/%'")
+        conn.execute("UPDATE feature_locations SET source_path=substr(source_path,4) WHERE source_path LIKE 'v3/%'")
         conn.execute("DELETE FROM batches")
         conn.commit()
         if conn.execute("PRAGMA foreign_key_check").fetchone():
