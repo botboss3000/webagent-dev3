@@ -911,14 +911,29 @@ async fn run_process() -> Result<()> {
         ),
     };
     if role=="loop" {
+        let progress=agent_loop::watchdog::Progress::new();
+        let _watchdog=agent_loop::watchdog::Watchdog::start(progress.clone())?;
         marker(&app, app.shutoff().await?)?;
         recover(&app, true).await?;
         app.ready.store(true, Ordering::Release);
-        let scheduler=tokio::spawn(scheduler(app.clone()));
+        let mut scheduler=tokio::spawn(scheduler_with_progress(app.clone(),progress));
         let mut signal=tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-        tokio::select! {_=signal.recv()=>{},_=tokio::signal::ctrl_c()=>{}}
+        tokio::select! {
+            _=signal.recv()=>{},
+            _=tokio::signal::ctrl_c()=>{},
+            result=&mut scheduler=>{
+                // A dispatcher panic/early return must terminate the supervised
+                // process rather than leave healthy lease renewers running alone.
+                return Err(anyhow!("Loop dispatcher exited unexpectedly: {}", if result.is_err() {"task failure"} else {"early return"}));
+            }
+        }
         app.ready.store(false, Ordering::Release);
-        let _=scheduler.await;
+        app.stop.cancel();
+        for token in app.active.lock().await.values() {token.cancel();}
+        // A stuck gate must not make SIGTERM wait forever.
+        if tokio::time::timeout(Duration::from_secs(12),&mut scheduler).await.is_err() {
+            scheduler.abort();
+        }
         let deadline=tokio::time::Instant::now()+Duration::from_secs(12);
         while !app.active.lock().await.is_empty() && tokio::time::Instant::now()<deadline {
             tokio::time::sleep(Duration::from_millis(100)).await;

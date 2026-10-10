@@ -36,7 +36,13 @@ async fn reasoning_cleanup_worker(app: App) {
 }
 // This is the loop container's dispatcher: announce that it is alive, notice
 // queued work, claim a lease, and start at most the configured number of runs.
+#[cfg(test)]
 pub(crate) async fn scheduler(app: App) {
+    scheduler_with_progress(app, watchdog::Progress::new()).await;
+}
+
+pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progress) {
+    use watchdog::Stage;
     let naming=tokio::spawn(crate::session_naming::service(app.clone()));
     let cleanup=tokio::spawn(reasoning_cleanup_worker(app.clone()));
     let manager=tokio::spawn(crate::manager::scheduler(app.clone()));
@@ -48,6 +54,7 @@ pub(crate) async fn scheduler(app: App) {
         if app.stop.is_cancelled() || !app.ready.load(Ordering::Acquire) {
             break;
         }
+        progress.at(Stage::Heartbeat);
         if now().saturating_sub(last_heartbeat)>=2 {
             if let Err(error)=app.store.write_loop_heartbeat(&owner).await {
                 tracing::error!("Loop heartbeat failed: {error}");
@@ -55,22 +62,27 @@ pub(crate) async fn scheduler(app: App) {
             last_heartbeat=now();
         }
         if now() - last_recovery >= app.runtime.read().await.scheduler.recovery_interval_ms.div_ceil(1000) {
+            progress.at(Stage::Recovery);
             if recover(&app, false).await.is_err() {
                 tracing::error!("Recovery scan failed");
             }
             last_recovery = now();
         }
+        progress.at(Stage::DispatchGate);
         let _guard = app.gate.lock().await;
         if let Ok(false) = app.shutoff().await {
+            progress.at(Stage::UserScan);
             let users=match user_apps(&app).await {
                 Ok(users)=>users,
                 Err(error)=>{tracing::error!("User queue scan failed: {}",error);Vec::new()}
             };
             for user_app in users {
+            progress.at(Stage::Commands);
             if let Err(error)=user_app.store.acknowledge_loop_commands().await {
                 tracing::error!("Loop command validation failed: {error}");
                 continue;
             }
+            progress.at(Stage::RunScan);
             if let Ok(runs) = user_app.store.active_runs().await {
                 for view in runs {
                     let id = view["id"].as_str().unwrap().to_owned();
@@ -81,6 +93,7 @@ pub(crate) async fn scheduler(app: App) {
                         continue;
                     }
                     if status(&view) != "queued" {continue;}
+                    progress.at(Stage::Claim);
                     let mut run = match user_app.run(&id).await {
                         Ok(r) => r,
                         Err(_) => continue,
@@ -145,6 +158,7 @@ pub(crate) async fn scheduler(app: App) {
             }
         }
         drop(_guard);
+        progress.at(Stage::Idle);
         tokio::time::sleep(Duration::from_millis(app.runtime.read().await.scheduler.poll_interval_ms)).await;
     }
     naming.abort();

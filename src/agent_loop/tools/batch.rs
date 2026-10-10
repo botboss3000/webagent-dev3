@@ -1,7 +1,22 @@
 //! A model turn may request several independent tools. Rust authorizes each
 //! one; the Python worker only receives calls that passed its own gate.
 use super::*;
-use futures_util::{stream::FuturesUnordered, StreamExt};
+use tokio::task::JoinSet;
+
+// A result commit takes the same gate as tool authorization. Tool futures must
+// keep being polled while that commit waits, including the future holding the
+// gate. A parent-polled FuturesUnordered can deadlock at this boundary.
+fn spawn_batch_calls<T, F>(calls: impl IntoIterator<Item = F>) -> JoinSet<T>
+where
+    T: Send + 'static,
+    F: std::future::Future<Output = T> + Send + 'static,
+{
+    let mut tasks = JoinSet::new();
+    for call in calls {
+        tasks.spawn(call);
+    }
+    tasks
+}
 
 fn denied(message:&str)->Value { json!({"status":"denied","output":message}) }
 
@@ -170,18 +185,21 @@ pub(super) async fn execute_parallel_batch(
     app.save(&mut run).await?;
     if !dispatch.is_empty() {
         drop(guard);
-        let mut futures=FuturesUnordered::new();
-        for (idx,name,args,pending_id,policy_version) in dispatch {
+        let mut futures=spawn_batch_calls(dispatch.into_iter().map(|(idx,name,args,pending_id,policy_version)| {
             let task_app=app.clone();let task_sid=sid.clone();let task_run=id.to_owned();
             let task_cancel=cancel.clone();
             let task_generation=generation.to_owned();
-            futures.push(async move {
+            async move {
                 let result=tools::call(task_app,task_sid,task_run,task_generation,name.clone(),args,
                     pending_id.clone(),policy_version,task_cancel).await;
                 (idx,name,pending_id,result)
-            });
-        }
-        while let Some((idx,name,pending_id,result))=futures.next().await {
+            }
+        }));
+        while let Some(completed)=futures.join_next().await {
+            // Dropping the JoinSet aborts outstanding tasks. Durable executing
+            // checkpoints remain authoritative for safe-read/uncertain-write recovery.
+            let (idx,name,pending_id,result)=completed
+                .map_err(|_|anyhow!("Parallel tool task interrupted; recovery required"))?;
             let _result_guard=app.gate.lock().await;
             let mut current=app.run(id).await?;
             if current["generation"]!=generation
@@ -255,4 +273,65 @@ pub(super) async fn execute_parallel_batch(
         return Ok(());
     }
     Ok(())
+}
+
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+    use futures_util::{future::BoxFuture, stream::FuturesUnordered, StreamExt};
+    use tokio::sync::oneshot;
+
+    fn contending_calls(gate: Arc<Mutex<()>>) -> (Vec<BoxFuture<'static, usize>>, oneshot::Sender<()>) {
+        let (held_tx, held_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let ready: BoxFuture<'static, usize> = Box::pin(async move {
+            held_rx.await.unwrap();
+            1
+        });
+        let holding: BoxFuture<'static, usize> = Box::pin(async move {
+            let guard = gate.lock().await;
+            held_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            drop(guard);
+            2
+        });
+        (vec![ready, holding], release_tx)
+    }
+
+    #[tokio::test]
+    async fn parent_polled_calls_reproduce_result_commit_deadlock() {
+        let gate = Arc::new(Mutex::new(()));
+        let (calls, release) = contending_calls(gate.clone());
+        let mut calls: FuturesUnordered<_> = calls.into_iter().collect();
+        assert_eq!(calls.next().await, Some(1));
+        release.send(()).unwrap();
+        // A woken child owns the gate, but next() is no longer polling it.
+        assert!(tokio::time::timeout(Duration::from_millis(50), gate.lock()).await.is_err());
+        drop(calls);
+        assert!(tokio::time::timeout(Duration::from_secs(1), gate.lock()).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn parallel_result_commit_allows_gate_owner_to_finish() {
+        let gate = Arc::new(Mutex::new(()));
+        let (calls, release) = contending_calls(gate.clone());
+        let mut calls = spawn_batch_calls(calls);
+        assert_eq!(calls.join_next().await.unwrap().unwrap(), 1);
+        release.send(()).unwrap();
+        let guard = tokio::time::timeout(Duration::from_secs(1), gate.lock())
+            .await.expect("result commit must not starve the gate owner");
+        drop(guard);
+        assert_eq!(calls.join_next().await.unwrap().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn dropping_parallel_calls_aborts_gate_owner() {
+        let gate = Arc::new(Mutex::new(()));
+        let (calls, _release) = contending_calls(gate.clone());
+        let mut calls = spawn_batch_calls(calls);
+        assert_eq!(calls.join_next().await.unwrap().unwrap(), 1);
+        drop(calls);
+        assert!(tokio::time::timeout(Duration::from_secs(1), gate.lock()).await.is_ok());
+    }
 }

@@ -17,7 +17,10 @@ pub(super) fn append_tool(run: &mut Value, result: &Value) -> Result<()> {
 }
 mod recovery;
 pub(crate) use recovery::{attach_external_build_result, reconcile_late_tool_result, user_apps, recover};
+pub(crate) mod watchdog;
 mod scheduler;
-pub(crate) use scheduler::{scheduler,requeue_auto_approval};
+#[cfg(test)]
+pub(crate) use scheduler::scheduler;
+pub(crate) use scheduler::{scheduler_with_progress,requeue_auto_approval};
 // Follow one claimed run through the fixed workflow. At the relevant
 // checkpoints, reread access and policy so earlier permission cannot linger.
