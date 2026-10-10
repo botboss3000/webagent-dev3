@@ -154,3 +154,20 @@ Reminders are UI metadata and do not change tool permission. Reviewing one
 does not make artifacts eligible for pruning. Investigate unique edits,
 ownership and uncertain effects before using the existing abandon or operator
 reconciliation workflow.
+
+
+### Automatic rebuildable check-cache retention
+
+The protected broker expires direct `target` and `cargo` directories under
+`build-jobs/checks/<task-key>` and legacy `build-jobs/coordination/checks/<task-id>`
+after two hours without cache writes or broker-recorded task activity. Open,
+failed and uncertain tasks can retain their source and evidence while losing
+rebuildable outputs. The minute post-process removes at most four cache folders
+per cycle, shares the host artifact-prune lock, defers pending builds and external
+compilers, and pins running-container mounts. Symlinks and overly large inspection
+trees fail closed. Receipts under `build-jobs/cache-pruning` record intended and
+completed removal. Source snapshots, logs, experiment scratch directories, job
+receipts, runtime data and rollback releases are outside this cache policy.
+Operator checks must start Cargo before writing these caches and must mount any
+cache used by a disposable container; prefer broker Cargo checks for admission
+coordination. Expired caches rebuild on the next check.

@@ -1077,6 +1077,93 @@ class Broker:
             return {"notice_id": notice["id"], "status": "reviewed"}
         raise ValueError("Leftover notice changed; refresh before reviewing")
 
+    def prune_check_caches(self, now=None):
+        """Expire only rebuildable outputs, never source, logs or job artifacts."""
+        now = time.time() if now is None else now
+        def atomic_json(path, value):
+            temporary = path.with_suffix(".tmp")
+            with temporary.open("x") as output:
+                json.dump(value, output)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, path)
+        with self.lock:
+            if self.stopping or self.active or self.active_ui or any(
+                    j.get("status") in {"queued", "running", "needs_decision"}
+                    for j in self.jobs.values()):
+                return {"status": "deferred", "reason": "broker work active"}
+            # External operator checks are outside our admission lock. Fail closed
+            # on inventory errors; mounted cache directories are always pinned.
+            processes = self.runner.command(["ps", "-eo", "comm="], timeout=5)
+            if any(p.strip() in {"cargo", "rustc", "rustdoc", "buildx"}
+                   for p in processes.splitlines()):
+                return {"status": "deferred", "reason": "compiler active"}
+            ids = self.runner.command(["docker", "ps", "-q"], timeout=5).split()
+            containers = json.loads(self.runner.command(["docker", "inspect", *ids], timeout=10, private_raw=True)) if ids else []
+            mounts = [Path(m["Source"]).resolve() for c in containers
+                      for m in c.get("Mounts", []) if m.get("Source") and Path(m["Source"]).resolve() != self.state.parent.resolve()]
+            removed = []
+            # The host terminal-artifact pruner shares this lock. Its task and
+            # release retention remains independent from rebuildable cache expiry.
+            with (self.state / ".v3-prune.lock").open("a") as pruning_lock:
+                try:
+                    fcntl.flock(pruning_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return {"status": "deferred", "reason": "artifact pruning active"}
+                for base in (self.state / "checks", self.work_dir / "checks"):
+                    if base.is_symlink() or not base.is_dir():
+                        continue
+                    for owner in sorted(base.iterdir()):
+                        if owner.is_symlink() or not owner.is_dir():
+                            continue
+                        # Fixed direct children only: scratch directories can
+                        # contain unique experiments and are deliberately retained.
+                        for name in ("target", "cargo"):
+                            cache = owner / name
+                            if cache.is_symlink() or not cache.is_dir():
+                                continue
+                            resolved = cache.resolve()
+                            if any(resolved == m or resolved in m.parents or m in resolved.parents for m in mounts):
+                                continue
+                            item = self.work.get(owner.name) or next((t for t in self.work.values()
+                                if t.get("task_id") == owner.name), {})
+                            newest = max(cache.stat().st_mtime, item.get("last_activity_at", 0))
+                            entries = 0
+                            for directory, dirs, files in os.walk(cache, followlinks=False):
+                                for entry in (*dirs, *files):
+                                    entries += 1
+                                    newest = max(newest, (Path(directory) / entry).lstat().st_mtime)
+                                if entries > 100000 or now - newest < 7200:
+                                    break
+                            if entries > 100000 or now - newest < 7200:
+                                continue
+                            # Recheck external activity immediately before deletion.
+                            processes = self.runner.command(["ps", "-eo", "comm="], timeout=5)
+                            if any(p.strip() in {"cargo", "rustc", "rustdoc", "buildx"} for p in processes.splitlines()):
+                                return {"status": "deferred", "reason": "compiler started", "removed": removed}
+                            current_ids = self.runner.command(["docker", "ps", "-q"], timeout=5).split()
+                            current_containers = json.loads(self.runner.command(["docker", "inspect", *current_ids], timeout=10, private_raw=True)) if current_ids else []
+                            current_mounts = [Path(m["Source"]).resolve() for c in current_containers
+                                for m in c.get("Mounts", []) if m.get("Source") and Path(m["Source"]).resolve() != self.state.parent.resolve()]
+                            if any(resolved == m or resolved in m.parents or m in resolved.parents for m in current_mounts):
+                                continue
+                            size = int(self.runner.command(["du", "-s", "-B1", "--one-file-system", "--", str(cache)], timeout=10).split()[0])
+                            receipt = {"path": str(cache.relative_to(self.state)), "bytes": size,
+                                       "expired_at": now, "idle_seconds": now - newest,
+                                       "kind": "rebuildable_check_cache"}
+                            # Persist intent before effects; receipts remain even
+                            # when interruption leaves a partially removed cache.
+                            receipts = self.state / "cache-pruning"
+                            receipts.mkdir(exist_ok=True)
+                            receipt_path = receipts / (uuid.uuid4().hex + ".json")
+                            atomic_json(receipt_path, dict(receipt, status="removing"))
+                            shutil.rmtree(cache)
+                            atomic_json(receipt_path, dict(receipt, status="removed"))
+                            removed.append(receipt)
+                            if len(removed) >= 4:
+                                return {"status": "completed", "removed": removed}
+            return {"status": "completed", "removed": removed}
+
     def reconcile_leftovers(self):
         # Disk accounting occurs outside the broker lock with a bounded budget.
         # Delayed counts are accepted only for the same still-unreviewed notice.
@@ -2857,6 +2944,13 @@ def main():
                     await asyncio.to_thread(broker.reconcile_leftovers)
                 except Exception:
                     print("Leftover notice reconciliation deferred", flush=True)
+                try:
+                    result = await asyncio.to_thread(broker.prune_check_caches)
+                    if result.get("removed"):
+                        print("Check-cache pruning: " + str(len(result["removed"])) + " folders removed", flush=True)
+                except Exception:
+                    # Fixed diagnostic only: Docker inspection contains private configuration.
+                    print("Check-cache pruning deferred", flush=True)
                 await asyncio.sleep(60)
         notices = asyncio.create_task(notice_postprocess())
         def stop():
