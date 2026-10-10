@@ -41,6 +41,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
     catch { return new Set(); }
   };
   let dismissed = readDismissed();
+  let activeOnly = false;
   const enabledStatuses = new Map();
   const cancelRequests = new Map();
   const cancelMessages = new Map();
@@ -129,6 +130,13 @@ export function mountBuilds(panel, onStatus = () => {}) {
     for (const statusName of statuses) if (!enabledStatuses.has(statusName)) enabledStatuses.set(statusName, true);
     for (const statusName of [...enabledStatuses.keys()]) if (!statuses.includes(statusName)) enabledStatuses.delete(statusName);
     filters.replaceChildren();
+    const activeLabel = document.createElement('label');
+    const activeFilter = document.createElement('input');
+    activeFilter.type = 'checkbox';
+    activeFilter.checked = activeOnly;
+    activeFilter.addEventListener('change', () => { activeOnly = activeFilter.checked; render(); });
+    activeLabel.append(activeFilter, document.createTextNode(' Active'));
+    filters.append(activeLabel);
     for (const statusName of statuses) {
       const label = document.createElement('label');
       const chip = document.createElement('input');
@@ -150,15 +158,20 @@ export function mountBuilds(panel, onStatus = () => {}) {
       persistDismissed(); render();
     };
     reset.onclick = () => {
+      activeOnly = false;
       dismissed.clear(); persistDismissed();
       for (const statusName of statuses) enabledStatuses.set(statusName, true);
       render();
     };
     const linkedId = new URL(location.href).searchParams.get('job_id');
     list.replaceChildren();
-    const visibleJobs = jobs.filter(job => !dismissed.has(job.job_id) && enabledStatuses.get(String(job.status || 'unknown')) !== false);
+    // Keep resumable decision waits visible; finished and stopped receipts are inactive.
+    const visibleJobs = jobs.filter(job => !dismissed.has(job.job_id)
+      && (!activeOnly || (job.status !== 'completed' && !stoppedStatuses.has(job.status)))
+      && enabledStatuses.get(String(job.status || 'unknown')) !== false);
     if (!visibleJobs.length) {
-      status.textContent = 'No development builds recorded.';
+      status.textContent = activeOnly ? 'No active builds match the filters.'
+        : jobs.length ? 'No builds match the filters.' : 'No development builds recorded.';
       return;
     }
     status.textContent = snapshot.busy ? 'A development build is active.' : visibleJobs.length + ' recent builds';
@@ -172,6 +185,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
       const card = document.createElement('article');
       card.className = 'build-card';
       card.dataset.status = stateFor(job).tone;
+      card.dataset.active = String(job.status !== 'completed' && !stoppedStatuses.has(job.status));
       if (job.job_id === linkedId) card.classList.add('linked');
       const top = document.createElement('div');
       top.className = 'build-card-top';
