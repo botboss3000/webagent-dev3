@@ -11,11 +11,13 @@ export function start(mount) {
     spinner.hidden = true;
     target.append(spinner);
   }
-  function setActive(busy) {
-    const active = Boolean(busy);
+  function setActive(count) {
+    const active = count > 0;
     for (const target of headerTargets) {
-      target.querySelector('.build-header-spinner').hidden = !active;
-      if (active) target.setAttribute('aria-label', 'Builds — build in progress');
+      const spinner = target.querySelector('.build-header-spinner');
+      spinner.hidden = !active;
+      spinner.textContent = active ? String(count) : '';
+      if (active) target.setAttribute('aria-label', 'Builds — ' + count + ' active build' + (count === 1 ? '' : 's'));
       else target.removeAttribute('aria-label');
     }
     document.body.classList.toggle('v3-build-active', active);
@@ -24,7 +26,7 @@ export function start(mount) {
   let generation = 0;
   async function syncIdentity() {
     const current = ++generation;
-    setActive(false);
+    setActive(0);
     const response = await fetch('/api/v3/auth/me', {credentials: 'same-origin'});
     const me = response.ok ? await response.json() : null;
     if (current !== generation) return;

@@ -23,6 +23,7 @@ const phasesFor = job => [
   'finished'
 ];
 const stoppedStatuses = new Set(['failed', 'cancelled', 'stale', 'uncertain', 'interrupted']);
+const isActive = job => job.status !== 'completed' && !stoppedStatuses.has(job.status);
 const stateFor = job => job.status === 'needs_decision'
   ? {tone: 'danger', icon: '⚑', label: 'Decision required · source synchronization'}
   : job.status === 'completed'
@@ -89,7 +90,10 @@ export function mountBuilds(panel, onStatus = () => {}) {
   header.append(intro, update);
   const synchronization = document.createElement('div');
   synchronization.setAttribute('role', 'status');
-  panel.append(header, status, synchronization, filters, controls, list);
+  const toolbar = document.createElement('div');
+  toolbar.className = 'build-toolbar';
+  toolbar.append(filters, controls);
+  panel.append(header, status, synchronization, toolbar, list);
 
   const fact = (facts, label, value) => {
     const item = document.createElement('div');
@@ -130,21 +134,30 @@ export function mountBuilds(panel, onStatus = () => {}) {
     for (const statusName of statuses) if (!enabledStatuses.has(statusName)) enabledStatuses.set(statusName, true);
     for (const statusName of [...enabledStatuses.keys()]) if (!statuses.includes(statusName)) enabledStatuses.delete(statusName);
     filters.replaceChildren();
-    const activeLabel = document.createElement('label');
-    const activeFilter = document.createElement('input');
-    activeFilter.type = 'checkbox';
-    activeFilter.checked = activeOnly;
-    activeFilter.addEventListener('change', () => { activeOnly = activeFilter.checked; render(); });
-    activeLabel.append(activeFilter, document.createTextNode(' Active'));
-    filters.append(activeLabel);
+    const addChip = (key, title, enabled, toggle) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'build-filter-chip';
+      chip.dataset.filter = key;
+      chip.setAttribute('aria-pressed', String(enabled));
+      const flag = document.createElement('span');
+      flag.setAttribute('aria-hidden', 'true');
+      flag.textContent = '⚑';
+      chip.append(flag, document.createTextNode(title));
+      chip.addEventListener('click', () => {
+        toggle();
+        render();
+        // Rendering refreshes the chips; retain keyboard focus on the same filter.
+        [...filters.children].find(item => item.dataset.filter === key)?.focus?.();
+      });
+      filters.append(chip);
+    };
+    addChip('active', 'Active', activeOnly, () => { activeOnly = !activeOnly; });
     for (const statusName of statuses) {
-      const label = document.createElement('label');
-      const chip = document.createElement('input');
-      chip.type = 'checkbox';
-      chip.checked = enabledStatuses.get(statusName) !== false;
-      chip.addEventListener('change', () => { enabledStatuses.set(statusName, chip.checked); render(); });
-      label.append(chip, document.createTextNode(' ' + phaseLabel(statusName)));
-      filters.append(label);
+      const title = phaseLabel(statusName);
+      addChip(statusName, title[0].toUpperCase() + title.slice(1),
+        enabledStatuses.get(statusName) !== false,
+        () => { enabledStatuses.set(statusName, enabledStatuses.get(statusName) === false); });
     }
     const persistDismissed = () => { try { localStorage.setItem(dismissedKey, JSON.stringify([...dismissed])); } catch {} };
     clearButton.onclick = () => {
@@ -167,8 +180,9 @@ export function mountBuilds(panel, onStatus = () => {}) {
     list.replaceChildren();
     // Keep resumable decision waits visible; finished and stopped receipts are inactive.
     const visibleJobs = jobs.filter(job => !dismissed.has(job.job_id)
-      && (!activeOnly || (job.status !== 'completed' && !stoppedStatuses.has(job.status)))
-      && enabledStatuses.get(String(job.status || 'unknown')) !== false);
+      && (!activeOnly || isActive(job))
+      && enabledStatuses.get(String(job.status || 'unknown')) !== false)
+      .sort((a, b) => Number(isActive(b)) - Number(isActive(a)));
     if (!visibleJobs.length) {
       status.textContent = activeOnly ? 'No active builds match the filters.'
         : jobs.length ? 'No builds match the filters.' : 'No development builds recorded.';
@@ -185,7 +199,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
       const card = document.createElement('article');
       card.className = 'build-card';
       card.dataset.status = stateFor(job).tone;
-      card.dataset.active = String(job.status !== 'completed' && !stoppedStatuses.has(job.status));
+      card.dataset.active = String(isActive(job));
       if (job.job_id === linkedId) card.classList.add('linked');
       const top = document.createElement('div');
       top.className = 'build-card-top';
@@ -356,9 +370,9 @@ export function mountBuilds(panel, onStatus = () => {}) {
       if (!response.ok) throw Error('Build status unavailable (' + response.status + ')');
       const data = await response.json();
       if (!Array.isArray(data.jobs)) throw Error('Build status response is invalid');
-      if (!stopped) { snapshot = data; onStatus(Boolean(data.busy)); render(); }
+      if (!stopped) { snapshot = data; onStatus(data.jobs.filter(isActive).length); render(); }
     } catch (error) {
-      if (!stopped) { onStatus(false); status.textContent = error.message; }
+      if (!stopped) { onStatus(0); status.textContent = error.message; }
     } finally {
       loading = false;
       update.disabled = false;
@@ -367,5 +381,5 @@ export function mountBuilds(panel, onStatus = () => {}) {
   update.addEventListener('click', () => { void load(); });
   void load();
   const timer = setInterval(load, 5000);
-  return () => { stopped = true; clearInterval(timer); onStatus(false); };
+  return () => { stopped = true; clearInterval(timer); onStatus(0); };
 }

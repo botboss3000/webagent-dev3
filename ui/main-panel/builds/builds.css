@@ -1,5 +1,14 @@
 #tab-builds{width:100%;padding:clamp(16px,2vw,32px);color:var(--fg-1)}
 #tab-builds .build-header,#tab-builds .build-list,#tab-builds .build-summary{max-width:1200px;margin-left:auto;margin-right:auto}
+#tab-builds .build-toolbar{max-width:1200px;margin:0 auto 14px;display:flex;align-items:center;gap:12px;overflow-x:auto;padding:2px 2px 6px}
+#tab-builds .build-filters,#tab-builds .build-clear-controls{display:flex;align-items:center;gap:6px;flex:none;white-space:nowrap}
+#tab-builds .build-clear-controls{margin-left:auto}
+#tab-builds .build-filter-chip,#tab-builds .build-clear-controls button,#tab-builds .build-clear-controls select{font:inherit;font-size:.78rem;line-height:1.2;padding:6px 9px;border:var(--border-width) solid var(--border);border-radius:var(--r-md);background:var(--bg-elev);color:var(--fg-1);cursor:pointer}
+#tab-builds .build-filter-chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;color:var(--fg-3)}
+#tab-builds .build-filter-chip[aria-pressed=true]{background:var(--accent-soft);border-color:var(--accent);color:var(--fg-1)}
+#tab-builds .build-filter-chip:hover,#tab-builds .build-clear-controls button:hover{background:var(--accent-soft)}
+#tab-builds .build-toolbar :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#tab-builds .build-summary{max-width:1200px;margin-left:auto;margin-right:auto}
 #tab-builds .build-header{display:flex;align-items:center;justify-content:space-between;gap:16px}
 #tab-builds .build-header h2{margin:0;font-size:1.55rem}
 #tab-builds .build-header p{margin:4px 0 0;color:var(--fg-3)}
@@ -39,7 +48,9 @@ body.light-mode #tab-builds .build-card[data-active="true"]{background:white}
 @media(max-width:700px){#tab-builds .build-card-top{flex-direction:column}#tab-builds .build-flag{white-space:normal}#tab-builds .build-card{padding:14px}}
 
 /* The admin Builds feed drives this header indicator while the page is in the background. */
-.build-header-spinner{display:inline-block;width:13px;height:13px;flex:none;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:build-header-spin .75s linear infinite}
+.build-header-spinner{position:relative;display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 4px;flex:none;font-size:11px;font-weight:700;line-height:1;color:var(--fg-1)}
+.build-header-spinner[hidden]{display:none}
+.build-header-spinner::before{content:"";position:absolute;inset:0;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:build-header-spin .75s linear infinite}
 @keyframes build-header-spin{to{transform:rotate(360deg)}}
 body.v3-build-active:has(#tab-builds.active) #mobile-back-main-btn::after{content:'';display:inline-block;width:13px;height:13px;margin-left:7px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:build-header-spin .75s linear infinite}
-@media(prefers-reduced-motion:reduce){.build-header-spinner,body.v3-build-active #mobile-back-main-btn::after{animation:none}}
+@media(prefers-reduced-motion:reduce){.build-header-spinner::before,body.v3-build-active #mobile-back-main-btn::after{animation:none}}
