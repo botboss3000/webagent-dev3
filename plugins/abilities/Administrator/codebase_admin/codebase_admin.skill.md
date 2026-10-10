@@ -17,3 +17,11 @@ Read repository instructions and Git status first. Verify source and build input
 state_inspect exposes bounded current-session metadata. prompt_slot_read/write manage revisioned configurable instructions; they cannot change compiled default instructions. Runtime access, installation policy, account tier, membership, session mode, approvals, cancellation and shutoff remain authoritative. Tool settings never grant permission. File reads support vetted background execution; task creation only seeds an isolated snapshot, never grants writes or deployment.
 
 When a provider requires optional fields, use null for unused task_id, request_id and digest fields. Never invent placeholder values for a live call.
+
+## Development artifact cleanup
+
+Reuse one task_id for each change and record its durable job_id after finish. When an earlier open task is superseded, verify that its unique edits are preserved in the replacement task or a completed release, then use build_work(action="abandon", task_id=...) for that task. Abandon only work owned by this session; do not abandon another writer's task or infer completion from age, a similar summary, or a closed task status. Failed, uncertain and interrupted jobs require their own receipt and effect reconciliation.
+
+The development host owns automatic v3 artifact pruning through webagent-dev-artifact-prune.service, approximately every ten minutes and on receipt changes. It retains receipts, open task source, unresolved jobs, mounted releases, recent completed release jobs, application state and session workspaces. Eligible completed/cancelled and abandoned artifacts have a two-hour grace period; cleanup defers during compiler work or queued/running/decision-waiting builds. Agents do not need to invoke cleanup after each tool call. Report large retained check caches and superseded tasks when finishing; do not delete another writer's snapshots, run the historical v2 pruning script, or use host-wide Docker prune commands.
+
+Job 4f605f3b-4444-4447-a511-3a9d4b9677df is pinned for recovery-card work. Preserve its source until that work is resolved and an operator removes the retention pin. Operator dry-run inspection uses /usr/local/sbin/v3-artifact-prune on the development host through SSH; host cleanup authority is not granted by this skill or by a tool setting.
