@@ -7,7 +7,13 @@ export function renderCompaction(host, agent, persist) {
   const hint = document.createElement('p');
   hint.className = 'ac-hint';
   hint.textContent = 'Older completed exchanges are summarized when estimated history reaches the trigger. The newest tail stays verbatim when a safe boundary permits. Changes apply at the next model call.';
-  host.append(title, hint);
+  const fallback = document.createElement('p');
+  fallback.className = 'ac-hint';
+  fallback.textContent = 'Context-limit fallback: if the summary trigger is higher than the System model’s effective input budget, compaction starts earlier at that budget, allowing for instructions and summary-request overhead. Your saved trigger stays unchanged. Each summary chunk must fit the System budget; if even the required instructions and minimum summary request cannot fit, the run pauses with a budget error.';
+  const estimate = document.createElement('p');
+  estimate.className = 'ac-hint';
+  estimate.textContent = 'Token sizing is estimated, so actual provider counts can differ. Set per-model input and output budgets on Primary Models.';
+  host.append(title, hint, fallback, estimate);
   const fields = [
     ['trigger_tokens', 'Summary trigger', 'Estimated history tokens before compaction'],
     ['tail_tokens', 'Verbatim tail', 'Recent estimated tokens to keep word for word'],
