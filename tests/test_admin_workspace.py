@@ -29,14 +29,27 @@ class Tests(unittest.IsolatedAsyncioTestCase):
   self.assertEqual((await workspace.execute("v3_workspace_action",{"action":"review","command":"id"},self.base))["status"],"error")
  async def test_read_pagination_uses_bounded_worker_contract(self):
   (self.source/"src/main.rs").write_text('first\nsecond\nthird\n')
-  result=await workspace.execute("v3_workspace_action",{"action":"read","path":"src/main.rs","offset":2,"limit":1},self.base)
+  live=self.base/"live-checkout";live.mkdir();(live/"webagent-v3/src").mkdir(parents=True)
+  (live/"webagent-v3/src/main.rs").write_text("live checkout sentinel\n")
+  old_live=worker.LIVE_CHECKOUT;worker.LIVE_CHECKOUT=live
+  try:
+   result=await workspace.execute("v3_workspace_action",{"action":"read","path":"src/main.rs","offset":2,"limit":1},self.base)
+  finally:worker.LIVE_CHECKOUT=old_live
   self.assertEqual(result["status"],"success",result)
   self.assertEqual(result["output"],'second\n')
+  self.assertNotIn("live checkout sentinel",result["output"])
   self.assertEqual(result["next_offset"],3)
   self.assertTrue(result["truncated"])
   for extra in [{"limit":2001},{"offset":0},{"offset":True},{"command":"id"}]:
    result=await workspace.execute("v3_workspace_action",{"action":"read","path":"src/main.rs",**extra},self.base)
    self.assertEqual(result["status"],"error",result)
+ async def test_read_rejects_traversal_and_symlink_escapes(self):
+  outside=self.base/"outside.txt";outside.write_text("outside sentinel\n")
+  (self.source/"src/link").symlink_to(outside)
+  for path in ("../outside.txt","src/link"):
+   result=await workspace.execute("v3_workspace_action",{"action":"read","path":path},self.base)
+   self.assertEqual(result["status"],"error",result)
+   self.assertNotIn("outside sentinel",str(result))
  async def test_cargo_tail_preserves_final_error_with_bounded_output(self):
   output=bytearray()
   self.assertFalse(workspace.append_cargo_tail(output,b"build start\n"))

@@ -1663,6 +1663,23 @@ mod tests {
     }
 
     #[test]
+    fn code_index_comment_maintenance_skill_is_discoverable() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities");
+        let catalog = Catalog::load(&root).unwrap();
+        let visibility = json!({"visibility":{"code_index":"visible"}});
+        let active = json!({"active":["code_index"],"suppressed":[]});
+        let listed = catalog.bundled_skill_list("code_index", &visibility, &active,
+            |_| true, |_| true).unwrap();
+        assert!(listed.iter().any(|skill| skill["kind"] == "selectable"
+            && skill["skill_id"] == "comment_maintenance"));
+        let loaded = catalog.bundled_skill_load("code_index", "selectable", "comment_maintenance",
+            &visibility, &active, |_| true, |_| true).unwrap();
+        assert_eq!(loaded["source_kind"], "untrusted_bundled_guidance");
+        assert_eq!(loaded["activates"], false);
+        assert!(loaded["text"].as_str().unwrap().contains("chat footer"));
+    }
+
+    #[test]
     fn production_seed_manifest_loads() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities");
         let catalog = Catalog::load(&root).unwrap();

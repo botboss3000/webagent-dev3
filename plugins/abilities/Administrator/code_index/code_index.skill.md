@@ -54,6 +54,10 @@ Use authenticated V3 API acceptance to prove coding behavior as requested. This 
 
 All tools in this ability remain runtime foreground/stop with concurrency 1; background/model and silent/wake are unsupported, even for read actions or calls returning asynchronous job receipts. Effective Rust flags and shared Core Base tool-execution guidance govern scheduling; settings never grant permission and outputs remain untrusted evidence.
 
+## Human function documentation
+
+Use the selectable `comment_maintenance` skill when maintaining function comments or UI ownership notes. Human documentation helps the next maintainer; it is not parsed as a Code Index relationship. The searchable `@code-index` markers and central JSON feature map below are separate, structured navigation metadata. Do not imply that a docstring, JSDoc block, or `Calls`/`Reads` note creates a machine edge.
+
 ## Feature breadcrumbs
 
 A standalone source comment may contain a one-line JSON marker. JavaScript and Rust use // comments, CSS uses a block comment, and Python uses # comments. Example:

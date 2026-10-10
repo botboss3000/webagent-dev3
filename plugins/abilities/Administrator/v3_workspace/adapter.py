@@ -22,6 +22,38 @@ def source(base):
  if not root.is_dir() or root.is_symlink() or root.resolve().parent!=base:raise Rejected("Session source snapshot unavailable")
  if not (root/".git").is_dir() or (root/".git").is_symlink():raise Rejected("Session Git baseline unavailable")
  return root
+def read_source_file(root,raw,offset=1,limit=2000):
+ if type(offset) is not int or not 1<=offset<=10_000_000:raise Rejected("offset must be a positive line number")
+ if type(limit) is not int or not 1<=limit<=2000:raise Rejected("limit must be between 1 and 2000 lines")
+ rootfd=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW);directory=os.dup(rootfd)
+ try:
+  parts=raw.split("/")
+  for part in parts[:-1]:
+   child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=directory);os.close(directory);directory=child
+  fd=os.open(parts[-1],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+  try:
+   before=os.fstat(fd)
+   if not stat.S_ISREG(before.st_mode):raise Rejected("Only regular source files can be read")
+   if before.st_size>32*LIMIT:raise Rejected("Source file exceeds inspection limit")
+   output=[];output_size=0;total=0;next_offset=None;truncated=False;size=0
+   with os.fdopen(fd,"rb",closefd=False) as stream:
+    while True:
+     line=stream.readline(LIMIT+1)
+     if not line:break
+     size+=len(line)
+     if size>32*LIMIT or len(line)>LIMIT:raise Rejected("Source file exceeds inspection limit")
+     total+=1
+     if total<offset or next_offset is not None:continue
+     if total>=offset+limit or output_size+len(line)>LIMIT:
+      next_offset=total;truncated=True;continue
+     output.append(line);output_size+=len(line)
+   after=os.fstat(fd)
+   if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns) or size!=before.st_size:
+    raise Rejected("Source file changed during read")
+   return {"status":"success","output":b"".join(output).decode(errors="replace"),
+           "offset":offset,"limit":limit,"total_lines":total,"next_offset":next_offset,"truncated":truncated}
+  finally:os.close(fd)
+ finally:os.close(directory);os.close(rootfd)
 def capture(root):
  entries=[];total=0
  def walk(fd,parts):
@@ -77,13 +109,10 @@ async def execute(name,args,base):
    if not isinstance(args["patch"],str) or not 0<len(args["patch"].encode())<=LIMIT:raise Rejected("Patch exceeds limit")
    return await asyncio.to_thread(WORKER.source_patch,Path(base),{"patch":args["patch"],"expected_review_sha256":args["expected_review_sha256"]})
   if action=="read":
-   exact(args,{"action","path","offset","limit"},{"path"});source(base)
+   exact(args,{"action","path","offset","limit"},{"path"});root=source(base)
    raw=args["path"]
    if not isinstance(raw,str) or not raw or len(raw.encode())>512 or "\\" in raw or raw.startswith("/") or any(p in ("",".","..") for p in raw.split("/")) or raw.split("/")[0] in READ_EXCLUDED:raise Rejected("Read must name a source-relative file")
-   read_args={"path":"webagent-v3/"+raw}
-   for key in ("offset","limit"):
-    if key in args:read_args[key]=args[key]
-   return await asyncio.to_thread(WORKER.file_operation,{"workspace":Path(base).name},Path(base),read_args,"file_read")
+   return await asyncio.to_thread(read_source_file,root,raw,args.get("offset",1),args.get("limit",2000))
   raise Rejected("Unknown fixed workspace action")
  except asyncio.CancelledError:raise
  except Exception as error:return {"status":"error","error_kind":"workspace_rejected","output":str(error) if isinstance(error,Rejected) else "Session source action rejected"}
