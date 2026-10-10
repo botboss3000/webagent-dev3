@@ -208,7 +208,15 @@ pub(crate) async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<S
         .parent()
         .ok_or_else(|| anyhow!("Database path has no parent"))?;
     std::fs::create_dir_all(parent)?;
-    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+    // Checkout data remains editable by the administrator worker. Only other
+    // user/agent profiles keep private modes; fixed admin profiles are exceptions.
+    let family = parent.parent().and_then(Path::file_name);
+    let profile = parent.file_name();
+    let private_profile = (family == Some(std::ffi::OsStr::new("user_data"))
+        && profile != Some(std::ffi::OsStr::new("admin")))
+        || (family == Some(std::ffi::OsStr::new("agent_data"))
+            && profile != Some(std::ffi::OsStr::new("shared_default")));
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(if private_profile { 0o700 } else { 0o770 }))?;
     let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
         .create_if_missing(true)
         .foreign_keys(true)
@@ -223,7 +231,7 @@ pub(crate) async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<S
         .max_connections(4)
         .connect_with(options)
         .await?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(if private_profile { 0o600 } else { 0o660 }))?;
     sqlx::query("CREATE TABLE IF NOT EXISTS docs (key TEXT PRIMARY KEY, value BLOB NOT NULL)")
         .execute(&pool)
         .await?;
@@ -2123,6 +2131,27 @@ impl Store {
 mod message_admission;
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn only_fixed_admin_profiles_keep_worker_permissions_on_reopen() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        for (relative, directory_mode, file_mode) in [
+            ("user_data/admin/admin.db", 0o770, 0o660),
+            ("agent_data/shared_default/shared_default.db", 0o770, 0o660),
+            ("user_data/other/other.db", 0o700, 0o600),
+            ("agent_data/other/other.db", 0o700, 0o600),
+            ("db/app.db", 0o770, 0o660),
+        ] {
+            let path = root.path().join(relative);
+            for _ in 0..2 {
+                let pool = super::open_pool(&path, false, false).await.unwrap();
+                assert_eq!(std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777, directory_mode);
+                assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, file_mode);
+                pool.close().await;
+            }
+        }
+    }
+
     #[tokio::test]
     async fn legacy_agent_docs_and_prompt_slots_migrate_into_canonical_tables() {
         let root = tempfile::tempdir().unwrap();

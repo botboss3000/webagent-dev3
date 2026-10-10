@@ -28,10 +28,9 @@ def directory(path, uid, mode):
     os.chmod(path, mode)
 
 
-# Preserve the operator ACLs that let build identities traverse to the two
-# gate configs. The ACL mask permits traversal only; sibling state denies
-# those identities, and the state directory remains unlistable to them.
-directory("/state", 1100, 0o710)
+# Preserve worker access to live checkout data across startup.
+# Other tenant profiles retain private modes beneath the listable state root.
+directory("/state", 1100, 0o770)
 directory("/workspaces", 1101, 0o770)
 directory("/run/v3", 0, 0o700)
 directory("/run/v3/control", 0, 0o700)
