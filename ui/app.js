@@ -113,7 +113,7 @@ function renderAgentCards(){
   document.querySelector('#agents-detail-region .agent-row').dataset.agentId=agentId;
 }
 async function loadAgentRoster(){
-  const data=await api('/agents');
+  const data=await api('/models/agents');
   if(!Array.isArray(data.agents))throw Error('Agent list unavailable');
   agentRoster=data.agents;
   if(agentRoster.length&&!agentRoster.some(agent=>agent.id===agentId)){
