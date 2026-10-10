@@ -313,3 +313,27 @@ follow source-resource retention and staging is acknowledged after relay.
 ## Tool-output retention
 
 Live app defaults in data/config/tool-output-retention.json and revision-fenced Identity overrides reload each working model call. App-level data/config/prompts.json owns tool_output_retention guidance and placeholders. Expiration defaults off. Only successful native-designated perishable reads are eligible. A metadata-only ledger belongs to user-owned session/run documents, commits with existing run fences, and inherits at execution. Active context can replace expired output with bounded recall receipts; original encrypted interactions remain intact. Promotion has a separate character budget and never grants read permission. Compaction still applies; original source evidence must be reread after edits. Disabling expiration restores un-compacted available replay, with bounded recall for older segments.
+
+### Retained build task reminders
+
+The protected V3 broker owns reminder metadata in its existing
+build-jobs/coordination/items.json task registry. Session storage is not a
+second authority. Each task keeps last_activity_at and an optional
+leftover_notice; its revision includes task identity, outcome, activity and
+operator timing policy. Reviewed revisions persist across restarts.
+Completed, cancelled, abandoned or operator-reconciled work withdraws its
+reminder. A later unresolved revision can create a new reminder.
+
+A bounded post-process reconciles every minute. Open work becomes eligible
+after 24 hours without broker-recorded edits, state changes or Cargo checks;
+failed, interrupted, uncertain and stale terminal jobs qualify immediately.
+Polling does not reset activity. Disk accounting is advisory, capped at four
+two-second inspections per cycle, and cannot authorize cleanup.
+
+The authenticated session notice route projects only tasks with the same user
+and session and current Codebase Admin access. Rust checks access again after
+broker I/O; the browser discards switched-session responses. Administrator Builds
+provides the fallback for operator tasks without a chat session identity.
+Review acknowledges an exact revision and preserves source, receipts and
+uncertain effects. There is no model wake, automatic retry, chat-history
+publication or deletion.

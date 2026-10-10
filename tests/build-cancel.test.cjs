@@ -9,9 +9,9 @@ class Element {
   addEventListener(name, callback) { this.listeners[name] = callback; }
 }
 const flush = async () => { for (let i=0;i<5;i++) await new Promise(setImmediate); };
-function fixture(mode='build_stop', affected=['job'], preflight=null) {
+function fixture(mode='build_stop', affected=['job'], preflight=null, leftovers=[]) {
   const panel = new Element('main'), calls = [], warnings = [];
-  const state = {confirm:true, fail:false, requested:false, hold:null};
+  const state = {confirm:true, fail:false, requested:false, hold:null, reviewed:false, admin:true};
   const source = fs.readFileSync(path.join(__dirname,'../ui/main-panel/app/builds.js'),'utf8');
   const context = {URL, location:{href:'https://dev.webagent.live/app?tab=builds'},
     document:{hidden:false,createElement:tag=>new Element(tag),createTextNode:text=>({textContent:text})},
@@ -20,14 +20,15 @@ function fixture(mode='build_stop', affected=['job'], preflight=null) {
     setInterval(){return 1;},clearInterval(){},
     fetch:async (url, options={})=>{
       calls.push({url,options});
-      if(url.endsWith('/auth/me'))return {ok:true,json:async()=>({is_admin:true,csrf_token:'fixture-csrf'})};
+      if(url.endsWith('/auth/me'))return {ok:true,json:async()=>({is_admin:state.admin,csrf_token:'fixture-csrf'})};
+      if(url.endsWith('/review')) {state.reviewed=true;return {ok:true,json:async()=>({status:'reviewed'})};}
       if(url.endsWith('/cancel')) {
         if(state.hold) await state.hold;
         if(state.fail) throw Error('disconnected');
         state.requested=true;
         return {ok:true,json:async()=>({disposition:'stop_requested'})};
       }
-      return {ok:true,json:async()=>({busy:true,jobs:[{job_id:'job',status:'running',phase:'building_api',
+      return {ok:true,json:async()=>({busy:true,leftovers:state.reviewed?[]:leftovers,leftover_total:state.reviewed?0:leftovers.length,jobs:[{job_id:'job',status:'running',phase:'building_api',
         queue_preflight:preflight, cancellation:{available:!state.requested,requested:state.requested,mode,affected_job_ids:affected}}]})};
     }};
   vm.createContext(context);vm.runInContext(source.replace('export function','function'),context);
@@ -71,4 +72,23 @@ test('unavailable queue comparison is explicit',async()=>{
   const f=fixture('queued',['job'],{status:'unavailable',peers:[]});await flush();
   assert(f.find(node=>node.textContent==='Source comparison unavailable; admission will check again.'));
   f.dispose();
+});
+
+test('retained-task review is exact, CSRF protected and does not cancel or delete work',async()=>{
+ const id='a'.repeat(64),f=fixture('queued',['job'],null,[{id,task_id:'retained-task',origin:'codex',
+ notification:'Investigate unique edits.',retained_bytes:1024,session_id:null}]);
+ await flush();const button=f.find(node=>node.textContent==='Mark reviewed');assert(button);
+ assert(!f.find(node=>node.textContent==='Open originating conversation'));
+ await button.listeners.click();await flush();
+ const writes=f.calls.filter(c=>c.options.method==='POST');assert.equal(writes.length,1);
+ assert.equal(writes[0].url,'/api/v3/admin/builds/leftovers/'+id+'/review');
+ assert.equal(writes[0].options.headers['x-csrf-token'],'fixture-csrf');
+ assert(!f.find(node=>node.textContent==='Mark reviewed'));f.dispose();
+});
+test('revoked administrator cannot review retained work',async()=>{
+ const f=fixture('queued',['job'],null,[{id:'a'.repeat(64),task_id:'retained-task',origin:'v3',
+ notification:'Investigate work.',session_id:'private/session'}]);
+ await flush();f.state.admin=false;
+ await f.find(node=>node.textContent==='Mark reviewed').listeners.click();await flush();
+ assert.equal(f.calls.filter(c=>c.options.method==='POST').length,0);f.dispose();
 });

@@ -25,3 +25,14 @@ Reuse one task_id for each change and record its durable job_id after finish. Wh
 The development host owns automatic v3 artifact pruning through webagent-dev-artifact-prune.service, approximately every ten minutes and on receipt changes. It retains receipts, open task source, unresolved jobs, mounted releases, recent completed release jobs, application state and session workspaces. Eligible completed/cancelled and abandoned artifacts have a two-hour grace period; cleanup defers during compiler work or queued/running/decision-waiting builds. Agents do not need to invoke cleanup after each tool call. Report large retained check caches and superseded tasks when finishing; do not delete another writer's snapshots, run the historical v2 pruning script, or use host-wide Docker prune commands.
 
 Job 4f605f3b-4444-4447-a511-3a9d4b9677df is pinned for recovery-card work. Preserve its source until that work is resolved and an operator removes the retention pin. Operator dry-run inspection uses /usr/local/sbin/v3-artifact-prune on the development host through SSH; host cleanup authority is not granted by this skill or by a tool setting.
+
+### Retained-task reminders
+
+The broker posts private reminders for inactive open work and failed,
+interrupted, uncertain or stale builds. Investigate the originating task and
+existing job; preserve unpublished edits and reconcile uncertain effects
+before clearing it. Never resubmit a finish merely because a reminder appears.
+Mark reviewed acknowledges one revision and preserves all artifacts.
+Use the normal owned-task abandon workflow only when open edits are no longer
+needed. Operator tasks without a conversation identity appear in
+Administrator Builds. Reminders never grant tool access or trigger a model run.

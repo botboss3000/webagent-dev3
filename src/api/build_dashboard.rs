@@ -5,6 +5,25 @@ pub(crate) async fn list(State(app): State<App>) -> Api {
     broker(&app, "v3_build_dashboard", json!({})).await
 }
 
+
+pub(crate) async fn review_leftover(State(app): State<App>, Path(id): Path<String>) -> Api {
+    if id.len() != 64
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(bad("Invalid build notice identifier"));
+    }
+    let value = broker(&app, "v3_build_leftover_review", json!({"notice_id":id})).await?;
+    if value.0["status"] != "reviewed" || value.0["notice_id"] != id {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "Build notice changed; refresh before reviewing".into(),
+        ));
+    }
+    Ok(value)
+}
+
 pub(crate) async fn result(State(app): State<App>, Path(job_id): Path<String>) -> Api {
     if uuid::Uuid::parse_str(&job_id).is_err() {
         return Err(bad("Invalid build job identifier"));

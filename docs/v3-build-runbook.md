@@ -4,11 +4,19 @@ Host- and broker-side material moved out of the V3 Build skill (`plugins/abiliti
 
 ## Storage checks and artifact prune
 
-Check development storage after each terminal build, including a successful UI release. From the server use `df -h /`, `docker system df`, and `python3 -B /home/ar/webagent-dev2/scripts/dev_artifact_prune.py --dry-run`. After a healthy completed release, run `sudo systemctl start webagent-dev-artifact-prune.service` and check `df -h /` again. This service also runs when build receipts change and about every ten minutes. It clears completed or superseded development rollback tars, old stopped V3 containers and images, finished check caches, aged V2 temporary builds, unused development volumes, Docker build cache above 50 GiB root use, and protected root-owned rollback copies after one hour. It retains the current mounted release, open check tasks, active compiler output, application state, workspaces, and unresolved newer job receipts. If root use stays above 50 GiB, inspect the measured development directories and report the remaining owners; do not run a host-wide prune or operate on production containers.
+Check development storage after each terminal build, including UI releases.
+Use df -h /, docker system df, and sudo /usr/local/sbin/v3-artifact-prune
+for a dry run. The v3-only webagent-dev-artifact-prune.service runs about
+every ten minutes and on receipt changes. Its apply mode retains open tasks,
+failed/uncertain/interrupted work, the pinned recovery task, active compilers,
+mounted releases, runtime data and stopped rollback containers. It deletes
+eligible aged completed/cancelled or abandoned task artifacts while preserving
+receipts. Inspect its bounded operator-pruning deletion reports.
+Do not substitute the historical v2 prune script or host-wide Docker prune.
 
-Caution: the prune command above cites a path under `/home/ar/webagent-dev2/` — the V2 checkout — carried over from earlier guidance. Verify the script path against the dev3 checkout before running it.
+Inspect the service result if cleanup fails. Retained rollback containers and
+protected rollback material need a separate reviewed cleanup decision.
 
-The dry run cannot see the root-owned protected copies. Include `sudo du -sh /home/ar/webagent-dev3/rollback/administrator` in the storage check, and inspect the service result with `sudo systemctl status webagent-dev-artifact-prune.service` if cleanup fails.
 
 ## Broker internals
 
@@ -120,3 +128,29 @@ seeding resolves the active release once; published tools are read only and
 subject to normal Rust authorization.
 Modified session workspaces and private
 indexes are retained independently.
+
+
+## Retained task reminder post-process
+
+The protected broker reconciles reminders every 60 seconds, with a default
+inactivity window of 86400 seconds. Operators may create the single-link
+regular JSON file build-jobs/coordination/leftover-notice-policy.json containing
+only {"stale_after_seconds":86400}. Bounds are 60 seconds through 30 days;
+malformed policy fails closed and defers reconciliation.
+
+GET /api/v3/sessions/{sid}/administrator/notices projects private reminders
+with current Codebase Admin access and user/session ownership.
+POST /api/v3/sessions/{sid}/administrator/notices/{id}/review requires browser
+CSRF protection and acknowledges only that revision. Administrator Builds
+shows up to 50 unreviewed reminders with available source, conversation,
+build receipt and retained-space evidence; session reads show up to 20.
+Reviewing entries reveals later entries on refresh.
+
+Operator CLI commands buildctl.py leftovers and buildctl.py review-leftover
+<exact-notice-id> operate within their own caller namespace. Codex tasks have
+no actual Codex conversation ID; Administrator Builds is their fallback.
+The broker does not send messages into Codex chats or start WebAgent model runs.
+Reminders are UI metadata and do not change tool permission. Reviewing one
+does not make artifacts eligible for pruning. Investigate unique edits,
+ownership and uncertain effects before using the existing abandon or operator
+reconciliation workflow.

@@ -89,11 +89,13 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/builds", get(build_dashboard::list))
         .route("/admin/builds/{job_id}/result", get(build_dashboard::result))
         .route("/admin/builds/{job_id}/cancel", post(build_dashboard::cancel))
+        .route("/admin/builds/leftovers/{id}/review", post(build_dashboard::review_leftover))
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth));
     // Model handlers enforce tenant authority themselves; all retain browser auth and CSRF.
     let api = Router::new()
         .route("/sessions/{sid}/administrator/artifacts/{id}",get(administrator::artifact))
         .route("/sessions/{sid}/administrator/notices",get(administrator::notices))
+        .route("/sessions/{sid}/administrator/notices/{id}/review",post(administrator::review_notice))
         .nest("/models", model_selection_api::router())
         .route("/models/me/catalog",get(account_models::read).put(account_models::save))
         .route("/models/me/catalog/default",put(account_models::set_default))

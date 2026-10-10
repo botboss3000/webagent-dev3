@@ -109,6 +109,9 @@ def main():
     parser = argparse.ArgumentParser(description="Coordinate V3 development builds with WebAgent")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
+    commands.add_parser("leftovers", help="read this operator caller’s retained-task notices")
+    review = commands.add_parser("review-leftover", help="acknowledge one unchanged notice; never delete work")
+    review.add_argument("notice_id")
     inputs = commands.add_parser("inputs")
     inputs.add_argument("--task", help="read this task's isolated workspace digest")
     begin = commands.add_parser("begin")
@@ -164,6 +167,10 @@ def main():
                      "expected_job_ids": affected})
         if result.get("job") is None:
             raise ValueError("build job receipt unavailable")
+    elif args.command == "leftovers":
+        result = call("v3_build_leftovers", {})
+    elif args.command == "review-leftover":
+        result = call("v3_build_leftover_review", {"notice_id": args.notice_id})
     elif args.command == "job":
         result = call("v3_worker_job", {"job_id": args.job_id})
     else:

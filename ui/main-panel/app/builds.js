@@ -81,12 +81,16 @@ export function mountBuilds(panel, onStatus = () => {}) {
   const list = document.createElement('div');
   list.className = 'build-list';
   list.setAttribute('aria-label', 'Recent development builds');
+  const leftovers = document.createElement('section');
+  leftovers.setAttribute('aria-label', 'Retained tasks needing investigation');
+  const reviewed = new Set();
+  const reviewErrors = new Map();
   const synchronization = document.createElement('div');
   synchronization.setAttribute('role', 'status');
   const toolbar = document.createElement('div');
   toolbar.className = 'build-toolbar';
   toolbar.append(update, filters, controls);
-  panel.append(toolbar, synchronization, status, list);
+  panel.append(toolbar, synchronization, leftovers, status, list);
 
   const fact = (facts, label, value) => {
     const item = document.createElement('div');
@@ -122,6 +126,66 @@ export function mountBuilds(panel, onStatus = () => {}) {
   }
   function render() {
     status.hidden = true;
+    leftovers.replaceChildren();
+    const notices = Array.isArray(snapshot.leftovers) ? snapshot.leftovers : [];
+    leftovers.hidden = !notices.length;
+    if (notices.length) {
+      const title = document.createElement('h3');
+      title.textContent = 'Retained tasks needing investigation';
+      leftovers.append(title);
+    }
+    for (const notice of notices) {
+      const card = document.createElement('article');
+      card.className = 'build-card';
+      const text = document.createElement('p');
+      text.textContent = notice.notification;
+      const detail = document.createElement('p');
+      detail.textContent = 'Source: ' + notice.origin + ' · Task: ' + notice.task_id +
+        (Number.isSafeInteger(notice.retained_bytes) ? ' · Retained: ' + (notice.retained_bytes / 1024 ** 2).toFixed(1) + ' MiB' : '');
+      card.append(text, detail);
+      if (notice.session_id) {
+        const link = document.createElement('a');
+        link.href = '/app?session_id=' + encodeURIComponent(notice.session_id);
+        link.textContent = 'Open originating conversation';
+        card.append(link);
+      }
+      if (notice.job_id) {
+        const link = document.createElement('a');
+        link.href = '/app?tab=builds&job_id=' + encodeURIComponent(notice.job_id);
+        link.textContent = 'Open build receipt';
+        card.append(link);
+      }
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Mark reviewed';
+      button.title = 'Clear this reminder after investigation. Retained work remains intact.';
+      button.disabled = reviewed.has(notice.id);
+      button.addEventListener('click', async () => {
+        reviewed.add(notice.id); reviewErrors.delete(notice.id); render();
+        try {
+          const identity = await fetch('/api/v3/auth/me', {credentials: 'same-origin', cache: 'no-store'});
+          if (!identity.ok) throw Error('Sign in required');
+          const me = await identity.json();
+          if (!me.is_admin || stopped) throw Error('Administrator access required');
+          const response = await fetch('/api/v3/admin/builds/leftovers/' + encodeURIComponent(notice.id) + '/review', {
+            method: 'POST', credentials: 'same-origin', headers: {'x-csrf-token': me.csrf_token}
+          });
+          if (!response.ok) throw Error('Review could not be saved; refresh before retrying.');
+        } catch (error) { reviewErrors.set(notice.id, error.message); }
+        finally { reviewed.delete(notice.id); if (!stopped) { render(); void load(); } }
+      });
+      card.append(button);
+      if (reviewErrors.has(notice.id)) {
+        const error = document.createElement('p'); error.setAttribute('role', 'status');
+        error.textContent = reviewErrors.get(notice.id); card.append(error);
+      }
+      leftovers.append(card);
+    }
+    if (snapshot.leftover_total > notices.length) {
+      const more = document.createElement('p');
+      more.textContent = 'Showing ' + notices.length + ' of ' + snapshot.leftover_total + ' retained-task notices.';
+      leftovers.append(more);
+    }
     showSynchronization(synchronization, snapshot.synchronization);
     const jobs = snapshot.jobs;
     const statuses = [...new Set(jobs.map(job => String(job.status || 'unknown')))].sort();
@@ -366,7 +430,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
       if (!Array.isArray(data.jobs)) throw Error('Build status response is invalid');
       if (!stopped) { snapshot = data; onStatus(data.jobs.filter(isActive).length); render(); }
     } catch (error) {
-      if (!stopped) { onStatus(0); status.hidden = false; status.textContent = error.message; }
+      if (!stopped) { leftovers.replaceChildren(); onStatus(0); status.hidden = false; status.textContent = error.message; }
     } finally {
       loading = false;
       update.disabled = false;

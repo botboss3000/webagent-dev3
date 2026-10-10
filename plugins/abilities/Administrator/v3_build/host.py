@@ -895,6 +895,7 @@ class Broker:
         self.work = json.loads(self.work_path.read_text()) if self.work_path.exists() else {}
         if not isinstance(self.work, dict) or len(self.work) > 1000:
             raise ValueError("invalid coordination registry")
+        self.work_activity = {key: self._work_content(item) for key, item in self.work.items()}
         for path in sorted(self.state.glob("*.json")):
             if path.is_symlink():
                 raise ValueError("symlink receipt forbidden")
@@ -948,7 +949,18 @@ class Broker:
         finally:
             os.close(directory)
 
+    @staticmethod
+    def _work_content(item):
+        return canonical({key: value for key, value in item.items()
+            if key not in {"last_activity_at", "leftover_notice"}})
+
     def _save_work(self):
+        for key, item in self.work.items():
+            content = self._work_content(item)
+            if self.work_activity.get(key) != content:
+                item["last_activity_at"] = time.time()
+                item.pop("leftover_notice", None)
+                self.work_activity[key] = content
         temporary = self.work_dir / "items.tmp"
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "wb") as stream:
@@ -961,6 +973,138 @@ class Broker:
             os.fsync(directory)
         finally:
             os.close(directory)
+
+
+    def _leftover_policy(self):
+        """Operator-owned timing policy; never accept model-supplied timing."""
+        path = self.work_dir / "leftover-notice-policy.json"
+        if not path.exists() and not path.is_symlink():
+            return {"stale_after_seconds": 86400}
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 4096:
+            raise ValueError("Leftover notice policy unavailable")
+        value = json.loads(path.read_text())
+        seconds = value.get("stale_after_seconds") if isinstance(value, dict) else None
+        if (not isinstance(value, dict) or set(value) != {"stale_after_seconds"} or isinstance(seconds, bool)
+                or not isinstance(seconds, int) or not 60 <= seconds <= 30 * 86400):
+            raise ValueError("Invalid leftover notice policy")
+        return value
+
+    def _leftover_state(self, item, policy, now):
+        if item.get("status") == "abandoned":
+            return None
+        job = self.jobs.get(item.get("job_id"), {})
+        if item.get("status") == "open":
+            last = item.get("last_activity_at", item.get("created_at", now))
+            if now - last < policy["stale_after_seconds"]:
+                return None
+            return "stale_open", int(last)
+        if (item.get("status") == "closed"
+                and job.get("status") in {"failed", "interrupted", "uncertain", "stale"}
+                and not job.get("operator_adopted_at")):
+            return job["status"], int(job.get("finished_at", job.get("created_at", now)))
+        return None
+
+    def _reconcile_leftover_state(self, now=None):
+        # Canonical broker receipts own notice revisions. No session database,
+        # model invocation, source deletion or automatic release is involved.
+        now = time.time() if now is None else now
+        policy = self._leftover_policy()
+        changed = False
+        for key, item in self.work.items():
+            state = self._leftover_state(item, policy, now)
+            old = item.get("leftover_notice")
+            if state is None:
+                if old:
+                    item.pop("leftover_notice", None)
+                    changed = True
+                continue
+            status, since = state
+            identity = hashlib.sha256(canonical([key, status, since,
+                item.get("job_id"), item.get("last_activity_at", item.get("created_at")),
+                policy["stale_after_seconds"]])).hexdigest()
+            if old and old.get("id") == identity:
+                continue
+            task_id = item["task_id"]
+            message = (f"Task {task_id} is inactive and retains unfinished work. "
+                "Investigate its edits; abandon it only after preserving unique work."
+                if status == "stale_open" else
+                f"Task {task_id} has a {status} build. Investigate the retained work and "
+                "reconcile its outcome before clearing it.")
+            item["leftover_notice"] = {"id": identity, "task_id": task_id,
+                "job_id": item.get("job_id"), "status": status, "since": since,
+                "observed_at": int(now), "notification": message,
+                "retained_bytes": None}
+            changed = True
+        if changed:
+            self._save_work()
+        return policy
+
+    def _leftover_views(self, trusted=None, workspace=None, administrator=False):
+        rows = []
+        for item in self.work.values():
+            notice = item.get("leftover_notice")
+            if not notice or notice.get("reviewed_at") is not None:
+                continue
+            if not administrator and not self._owned(item, trusted, workspace):
+                continue
+            row = dict(notice)
+            row["summary"] = item.get("summary", "")[:200]
+            row["origin"] = ("codex" if item["user_id"] == "codex-local" else
+                "v2" if item["user_id"] == "python-v2-admin" else "v3")
+            if administrator:
+                row["user_id"] = item["user_id"]
+                row["session_id"] = item["workspace"] if row["origin"] == "v3" else None
+            rows.append(row)
+        return sorted(rows, key=lambda row: (row["observed_at"], row["id"]), reverse=True)
+
+    def _review_leftover(self, args, trusted, workspace):
+        if set(args) != {"notice_id"} or not isinstance(args["notice_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", args["notice_id"]):
+            raise ValueError("Exact leftover notice identity required")
+        self._incoming_lease(trusted)
+        self._reconcile_leftover_state()
+        administrator = trusted["user_id"] == "admin" and workspace == "00000000-0000-0000-0000-000000000000"
+        for item in self.work.values():
+            notice = item.get("leftover_notice", {})
+            if notice.get("id") != args["notice_id"]:
+                continue
+            if not administrator and not self._owned(item, trusted, workspace):
+                raise PermissionError("Leftover notice unavailable")
+            if notice.get("reviewed_at") is None:
+                notice["reviewed_at"] = int(time.time())
+                self._save_work()
+            # This acknowledges only this revision; artifacts and jobs are intact.
+            return {"notice_id": notice["id"], "status": "reviewed"}
+        raise ValueError("Leftover notice changed; refresh before reviewing")
+
+    def reconcile_leftovers(self):
+        # Disk accounting occurs outside the broker lock with a bounded budget.
+        # Delayed counts are accepted only for the same still-unreviewed notice.
+        with self.lock:
+            self._reconcile_leftover_state()
+            pending = [(key, dict(item["leftover_notice"])) for key, item in self.work.items()
+                if item.get("leftover_notice", {}).get("retained_bytes") is None
+                and item.get("leftover_notice") and item["leftover_notice"].get("reviewed_at") is None]
+        for key, notice in pending[:4]:
+            if not re.fullmatch(r"[0-9a-f]{64}", key):
+                continue
+            if notice.get("job_id") and not re.fullmatch(r"[0-9a-f-]{36}", notice["job_id"]):
+                continue
+            paths = [self.work_dir / "trees" / key, self.state / "checks" / key]
+            if notice.get("job_id"):
+                paths.append(self.state / notice["job_id"])
+            paths = [path for path in paths if path.is_dir() and not path.is_symlink()]
+            try:
+                output = self.runner.command(["du", "-s", "-B1", "--one-file-system", "--",
+                    *(str(path) for path in paths)], timeout=2) if paths else ""
+                size = sum(int(line.split()[0]) for line in output.splitlines())
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+                continue
+            with self.lock:
+                current = self.work.get(key, {}).get("leftover_notice", {})
+                if current.get("id") == notice["id"] and current.get("reviewed_at") is None:
+                    current["retained_bytes"] = size
+                    self._save_work()
 
     def _open_work(self):
         return [item for item in self.work.values() if item["status"] == "open"]
@@ -1610,6 +1754,15 @@ class Broker:
                         "operator_adopted": True, "checkout_promotion": "conflicted"}
             if name == "v3_build_cancel":
                 return self._cancel_job(args, trusted, workspace)
+            if name == "v3_build_leftovers":
+                if args:
+                    raise ValueError("Leftover notice read takes no arguments")
+                self._incoming_lease(trusted)
+                policy = self._reconcile_leftover_state()
+                rows = self._leftover_views(trusted, workspace)
+                return {"notices": rows[:20], "total": len(rows), "policy": policy}
+            if name == "v3_build_leftover_review":
+                return self._review_leftover(args, trusted, workspace)
             if name == "v3_build_dashboard":
                 if args or trusted["user_id"] != "admin" or workspace != "00000000-0000-0000-0000-000000000000":
                     raise PermissionError("administrator build dashboard denied")
@@ -1655,8 +1808,11 @@ class Broker:
                                             "health": state.get("Health", {}).get("Status", "unknown")}
                     except Exception:
                         containers[role] = {"state": "unavailable", "health": "unknown"}
+                policy = self._reconcile_leftover_state()
+                leftovers = self._leftover_views(administrator=True)
                 live = self._current_release_blob()
-                return {"jobs": jobs, "busy": self.active is not None or self.active_ui is not None,
+                return {"leftovers": leftovers[:50], "leftover_total": len(leftovers), "leftover_policy": policy,
+                        "jobs": jobs, "busy": self.active is not None or self.active_ui is not None,
                         "containers": containers, "synchronization": self._sync_report(live, live, ())}
             if name == "v3_build_result":
                 if (trusted["user_id"] != "admin"
@@ -1746,6 +1902,9 @@ class Broker:
                 before = context_digest(release.snapshot(root, TASK_CONTEXT, context_digest))[0]
                 if before != expected:
                     raise ValueError("stale task source inputs")
+                item["last_activity_at"] = time.time()
+                item.pop("leftover_notice", None)
+                self._save_work()
                 try:
                     log = self.runner.cargo_task(root, self.state / "checks" / key, task, timeout)
                     status = "completed"
@@ -1755,6 +1914,8 @@ class Broker:
                 after = context_digest(release.snapshot(root, TASK_CONTEXT, context_digest))[0]
                 if after != before:
                     status = "stale"
+                item["last_activity_at"] = time.time()
+                self._save_work()
                 return {"task_id": task_id, "task": task, "status": status,
                         "inputs_sha256": after, "log_excerpt": scrub(log)[-4096:]}
             if name == "v3_source_read_batch":
@@ -2639,7 +2800,7 @@ async def serve(broker, listener, bridge_listener=None):
                     "access_fingerprint": hashlib.sha256(b"python-v2-build-bridge").hexdigest(),
                     "bridge_caller": True}
             elif uid == 1000:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release", "v3_build_cancel"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": "codex-local", "session_id": LOCAL_WORKSPACE,
@@ -2690,6 +2851,14 @@ def main():
     broker = Broker(runner=Runner(snapshot_helper=arguments.snapshot_helper, snapshot_socket=arguments.snapshot_socket))
     async def run():
         task = asyncio.create_task(serve(broker, listener, bridge_listener))
+        async def notice_postprocess():
+            while True:
+                try:
+                    await asyncio.to_thread(broker.reconcile_leftovers)
+                except Exception:
+                    print("Leftover notice reconciliation deferred", flush=True)
+                await asyncio.sleep(60)
+        notices = asyncio.create_task(notice_postprocess())
         def stop():
             broker.request_shutdown()
             task.cancel()
@@ -2700,6 +2869,9 @@ def main():
             await task
         except asyncio.CancelledError:
             pass
+        finally:
+            notices.cancel()
+            await asyncio.gather(notices, return_exceptions=True)
     try:
         asyncio.run(run())
     finally:

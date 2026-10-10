@@ -51,7 +51,7 @@ test('dedicated DOM renderer never overwrites chat connection errors or uses HTM
  assert.equal(error.textContent,'Connection interrupted');assert.equal(parent.children.length,1);
 });
 test('chat client clears timer and stale EventSource epoch while preserving note callbacks',async()=>{
- const ctx=load(),notes=[],timer=timers(),sources=[];class Events{constructor(){sources.push(this);}close(){this.closed=true;}}
+ const ctx=load(),notes=[],timer=timers(),sources=[];class Events{constructor(){sources.push(this);}addEventListener(){}close(){this.closed=true;}}
  const classes=new Set(),button={title:'Toggle chat panel',classList:{toggle:(name,on)=>on?classes.add(name):classes.delete(name)}};
  ctx.document={getElementById:id=>id==='chat-toggle-btn'?button:null};
  ctx.EventSource=Events;
@@ -59,11 +59,45 @@ test('chat client clears timer and stale EventSource epoch while preserving note
  const clientSource=fs.readFileSync(path.join(__dirname,'../ui/chat/core/client.js'),'utf8')
  .replace(/^import .*;\n/m,'').replace('export function','function');
  vm.runInContext(clientSource,ctx);
- const client=ctx.createChatClient({request:async url=>url.endsWith('/administrator/notices')?{notice:null}:{last_seq:0},
+ const client=ctx.createChatClient({request:async url=>url.endsWith('/administrator/notices')?{notice:null}:{last_seq:0,messages:[],runs:[]},
  note:text=>notes.push(text),EventSourceClass:Events});
  await client.open('first',()=>{},()=>{});assert(classes.has('connection-connecting'));sources[0].onopen();assert(!classes.has('connection-connecting'));
  sources[0].onerror();assert(classes.has('connection-connecting'));assert.equal(notes.length,0);
  await client.open('second',()=>{},()=>{});sources[0].onopen();assert(classes.has('connection-connecting'));
  sources[1].onopen();assert(!classes.has('connection-connecting'));assert.equal(button.title,'Toggle chat panel');
  assert.equal(timer.size(),1);client.disconnect();assert(!classes.has('connection-connecting'));assert.equal(timer.size(),0);
+});
+
+const buildNotice=()=>({id:'b'.repeat(64),task_id:'retained-task',status:'stale_open',notification:'Investigate retained work.',retained_bytes:1024});
+test('build reminders survive absent repository notice, deduplicate and review exact owning session',async()=>{
+ const timer=timers(),renders=[],calls=[];let response={notice:null,build_notices:[buildNotice()]};
+ const helper=load().createAdministratorNotices({...timer,render:()=>{},renderBuilds:(rows,review)=>renders.push({rows,review}),
+ request:async(url,method)=>{calls.push({url,method});if(method==='POST')response={notice:null,build_notices:[]};return response;}});
+ helper.start('owner');await flush();assert.equal(renders.at(-1).rows.length,1);
+ const count=renders.length;timer.tick();await flush();assert.equal(renders.length,count);
+ await renders.at(-1).review('b'.repeat(64));await flush();
+ assert.equal(calls.filter(c=>c.method==='POST')[0].url,'/sessions/owner/administrator/notices/'+'b'.repeat(64)+'/review');
+ assert.equal(renders.at(-1).rows.length,0);helper.stop();
+});
+test('switched sessions and unavailable broker withdraw stale build notices and review callbacks',async()=>{
+ const timer=timers(),renders=[],calls=[];let response={notice:null,build_notices:[buildNotice()]};
+ const helper=load().createAdministratorNotices({...timer,render:()=>{},renderBuilds:(rows,review)=>renders.push({rows,review}),
+ request:async(url,method)=>{calls.push({url,method});return response;}});
+ helper.start('first');await flush();const staleReview=renders.at(-1).review;
+ helper.start('second');await flush();await staleReview('b'.repeat(64));
+ assert.equal(calls.filter(c=>c.method==='POST').length,0);
+ response={notice:null,build_notices:[buildNotice()],build_notices_unavailable:true};
+ timer.tick();await flush();assert.equal(renders.at(-1).rows.length,0);helper.stop();
+});
+test('build reminder DOM renders literal text and reviews only its revision',async()=>{
+ class Element{constructor(){this.children=[];this.listeners={};}setAttribute(){}append(...items){this.children.push(...items);}
+ replaceChildren(){this.children=[];}prepend(child){child.parentNode=this;this.children.unshift(child);}
+ addEventListener(name,fn){this.listeners[name]=fn;}}
+ const parent=new Element(),doc={getElementById:()=>parent,createElement:()=>new Element()},reviewed=[];
+ const render=load().buildNoticeRenderer(doc);
+ render([{...buildNotice(),notification:'<script>literal</script>'}],async id=>reviewed.push(id));
+ const region=parent.children[0],row=region.children[0];
+ assert(row.children[0].textContent.startsWith('<script>literal</script>'));
+ await row.children[1].listeners.click();assert.deepEqual(reviewed,['b'.repeat(64)]);
+ render([],null);assert.equal(region.hidden,true);
 });
