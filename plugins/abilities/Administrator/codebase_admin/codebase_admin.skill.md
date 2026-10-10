@@ -1,6 +1,6 @@
 # Codebase Admin
 
-Choose the target from the request. Explicit direct/live edits and runtime configuration (such as data/config/chat.json) use file tools without task_id. Application source changes intended for a build/release use file tools with one stable task_id, 8-80 letters/digits/underscores/hyphens. Do not ask the user to choose a tool. Do not use live edits as a fallback when a task edit fails.
+Choose the target from the request. Explicit direct/live edits and runtime configuration (such as data/config/chat.json) use file tools without task_id (or with null). Application source changes intended for a build/release use file tools with one stable task_id, 8-80 letters/digits/underscores/hyphens. Do not ask the user to choose a tool. Do not use live edits as a fallback when a task edit fails.
 
 With task_id, file_list/read/search/edit/write automatically create a missing isolated task. Paths are relative to the source root, such as src/example.rs or ui/chat/chat.css; never /live-checkout or a task host path. Reuse the same task_id throughout the change. Without task_id, relative paths start at /live-checkout and absolute container paths retain their usual OS permissions.
 
@@ -13,3 +13,5 @@ After an uncertain write inspect build_work receipt and task source; never blind
 Read repository instructions and Git status first. Verify source and build inputs remain unchanged during checks. Runtime configuration is outside the source build snapshot. Shell and Python support debugging and checks but do not replace task file tools for isolated edits.
 
 state_inspect exposes bounded current-session metadata. prompt_slot_read/write manage revisioned configurable instructions; they cannot change compiled default instructions. Runtime access, installation policy, account tier, membership, session mode, approvals, cancellation and shutoff remain authoritative. Tool settings never grant permission. File reads support vetted background execution; task creation only seeds an isolated snapshot, never grants writes or deployment.
+
+When a provider requires optional fields, use null for unused task_id, request_id and digest fields. Never invent placeholder values for a live call.

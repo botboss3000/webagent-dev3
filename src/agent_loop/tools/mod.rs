@@ -116,7 +116,7 @@ pub fn schemas() -> Vec<Value> {
         for schema in &mut schemas {
             if matches!(schema["name"].as_str(), Some("file_list"|"file_read"|"file_search"|"file_edit"|"file_write")) {
                 let properties = schema["parameters"]["properties"].as_object_mut().unwrap();
-                properties.insert("task_id".into(), json!({"type":"string","pattern":"^[A-Za-z0-9_-]{8,80}$","description":"Omit for live files. Supply one stable ID for an isolated build task; missing tasks are created automatically. Paths then are source-relative."}));
+                properties.insert("task_id".into(), json!({"type":"string","pattern":"^[A-Za-z0-9_-]{8,80}$","description":"Omit or set null for live files; never invent a placeholder ID. Supply one stable ID for an isolated build task; missing tasks are created automatically. Paths then are source-relative."}));
                 if matches!(schema["name"].as_str(), Some("file_edit"|"file_write")) {
                     schema["parameters"]["properties"]["expected_inputs_sha256"] = json!({"type":"string","pattern":"^[a-f0-9]{64}$","description":"Task digest from the latest task read/list/review; required when writing an existing task."});
                     schema["parameters"]["properties"]["request_id"] = json!({"type":"string","pattern":"^[A-Za-z0-9_-]{8,80}$","description":"Stable task-write request ID. Reuse only for identical retries; inspect build_work receipt after uncertainty."});
@@ -145,6 +145,22 @@ pub fn schemas() -> Vec<Value> {
         schemas.extend(core_compaction::schemas());
         schemas.extend(core_recall::schemas());
         schemas.extend(core_mode::schemas());
+        // Responses may require every property: nullable optional fields keep
+        // live file calls and action-specific build arguments representable.
+        for schema in &mut schemas {
+            if matches!(schema["name"].as_str(), Some("file_list"|"file_read"|"file_search"|"file_edit"|"file_write"|"build_work")) {
+                let required = schema["parameters"]["required"].as_array().cloned().unwrap_or_default();
+                for (key, property) in schema["parameters"]["properties"].as_object_mut().unwrap() {
+                    if required.iter().any(|value| value.as_str() == Some(key.as_str())) { continue; }
+                    if let Some(kind) = property["type"].as_str().map(str::to_owned) {
+                        property["type"] = json!([kind, "null"]);
+                    }
+                    if let Some(values) = property.get_mut("enum").and_then(Value::as_array_mut) {
+                        if !values.contains(&Value::Null) { values.push(Value::Null); }
+                    }
+                }
+            }
+        }
         schemas
     }).clone()
 }

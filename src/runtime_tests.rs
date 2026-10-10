@@ -6884,7 +6884,12 @@ fn consolidated_codebase_schema_and_guidance_contract() {
     let schema = tools::schemas();
     for name in ["file_read","file_list","file_search","file_edit","file_write"] {
         let tool=schema.iter().find(|s|s["name"]==name).unwrap();
-        assert_eq!(tool["parameters"]["properties"]["task_id"]["type"],"string");
+        assert_eq!(tool["parameters"]["properties"]["task_id"]["type"],json!(["string","null"]));
+        for (key,property) in tool["parameters"]["properties"].as_object().unwrap() {
+            if !tool["parameters"]["required"].as_array().unwrap().contains(&json!(key)) {
+                assert!(property["type"].as_array().unwrap().contains(&json!("null")),"{name}.{key} must allow omission under strict normalization");
+            }
+        }
         assert!(tools::administrator::owns(name));
     }
     assert!(schema.iter().any(|s|s["name"]=="build_work"));
