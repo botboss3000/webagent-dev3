@@ -51,22 +51,27 @@ function buildCodeIndexControls({ ability, data, request, scope, levelId, previe
     input.min = String(min); input.max = String(max); input.step = String(step); input.disabled = !enabled;
     controls[key] = input; panel.append(row(title, input));
   }
-  const save = node('button', 'ac-btn ac-btn-sm', 'Save retrieval settings'); save.type = 'button'; save.disabled = !enabled;
-  save.onclick = async () => {
-    if (!enabled || save.disabled) return;
+  const inputs = [sourceRoot, active, ...Object.values(controls)];
+  // One revision covers the entire settings object; block overlapping writes.
+  const save = async () => {
+    if (!enabled || inputs.some(input => input.disabled)) return;
     const settings = { enabled: active.checked, root: sourceRoot.value };
     for (const [key, input] of Object.entries(controls)) settings[key] = Number(input.value);
     if (Object.values(controls).some(input => input.value === '' || !Number.isFinite(Number(input.value)))) {
       status.textContent = 'Enter valid numeric values before saving.'; return;
     }
-    save.disabled = true; status.textContent = 'Saving Code Index retrieval settings…';
+    for (const input of inputs) input.disabled = true;
+    status.textContent = 'Saving Code Index retrieval settings…';
     try {
       await request(scope + '/abilities/' + encodeURIComponent(ability.id) + '/settings', 'PUT',
         { expected_revision: data.revision, settings });
       await rerender({ administratorNotice: 'Code Index retrieval settings saved.' });
-    } catch (error) { status.textContent = message(error); save.disabled = false; }
+    } catch (error) {
+      status.textContent = message(error);
+      for (const input of inputs) input.disabled = false;
+    }
   };
-  panel.append(row('Save retrieval settings', save, 'Saves ability-specific retrieval controls.'));
+  for (const input of inputs) input.onchange = save;
   return panel;
 }
 
