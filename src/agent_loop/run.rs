@@ -443,7 +443,7 @@ pub(crate) async fn execute_run(
                     return Ok(());
                 }
             };
-            let compaction_config = match context_compaction::agent_thresholds(&app.store,&agent_id).await
+            let mut compaction_config = match context_compaction::agent_thresholds(&app.store,&agent_id).await
                 .and_then(|settings| match settings {
                     Some(settings) => settings.apply(&defaults),
                     None => Ok(defaults),
@@ -456,6 +456,16 @@ pub(crate) async fn execute_run(
                     return Ok(());
                 }
             };
+            // SYSTEM-COMPACTION-BUDGET: cap automatic/manual folds by the
+            // current pinned System candidate, including after backup selection.
+            // Missing System still pauses only when compaction is needed.
+            if let Ok(system_run) = system_dispatch_run(&run) {
+                let system_selection = provider::ProviderSelection::parse(
+                    &system_run["provider_selection"], DEFAULT_AGENT_MODEL)?;
+                compaction_config.system_input_budget = Some(
+                    loop_runtime::Config::read(&app.runtime_path)?.context
+                        .ceiling(&system_selection)?.min(workflow_policy.max_context_bytes));
+            }
             // The worker may return more than a model or summarizer can accept.
             // Preserve the encrypted tool interaction and bound only provider replay.
             if context_compaction::project_tool_results(

@@ -40,6 +40,9 @@ pub async fn agent_thresholds(store: &crate::store::Store, agent_id: &str) -> Re
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub schema_version: u32,
+    /// Call-scoped resolved System budget; never a persisted policy setting.
+    #[serde(skip)]
+    pub system_input_budget: Option<usize>,
     pub trigger_tokens: usize,
     pub tail_tokens: usize,
     pub summary_tokens: usize,
@@ -146,7 +149,10 @@ impl Config {
         // A summary must not turn revocable bundled skill instructions into
         // durable background guidance. Preserve the original plan identity and
         // project only the provider source; ordinary history remains unchanged.
-        let mut projected = plan.source.clone();
+        self.prompt_source(&plan.source)
+    }
+    fn prompt_source(&self, input: &[Value]) -> Result<String> {
+        let mut projected = input.to_vec();
         crate::tools::core_skills::mask_summary_history(&mut projected);
         let source = serde_json::to_string(&projected.iter()
             .filter(|item| item["type"] != "reasoning").collect::<Vec<_>>())?;
@@ -154,6 +160,14 @@ impl Config {
         // Substitute source last so transcript text cannot expand template placeholders.
         Ok(self.summary_prompt.replace("{summary_characters}",
             &(self.summary_tokens * self.characters_per_token).to_string()).replace("{source}", &source))
+    }
+
+    fn summary_envelope_bytes(&self, input: &[Value]) -> Result<usize> {
+        let prompt = self.prompt_source(input)?;
+        crate::context_accounting::json_size(&json!({
+            "instructions": crate::provider::DEFAULT_INSTRUCTIONS,
+            "tools": [], "input": [{"role":"user", "content":prompt}]
+        }))
     }
 }
 
@@ -315,7 +329,11 @@ fn plan_measured(input: &[Value], max_bytes: usize, config: &Config, rolling: bo
         .ok_or_else(|| anyhow!("Context size overflow"))?;
     let history_triggered = rolling && characters.iter().sum::<usize>()
         > config.trigger_tokens * config.characters_per_token;
-    if total <= max_bytes && !history_triggered && !force {
+    let system_triggered = match config.system_input_budget {
+        Some(budget) => total > config.max_source_bytes || config.summary_envelope_bytes(input)? > budget,
+        None => false,
+    };
+    if total <= max_bytes && !history_triggered && !system_triggered && !force {
         return Ok(None);
     }
 
@@ -329,7 +347,10 @@ fn plan_measured(input: &[Value], max_bytes: usize, config: &Config, rolling: bo
 
     // The tail target never raises the hard serialized-request ceiling. Choose
     // the earliest safe boundary satisfying both, retaining as much as possible.
-    let target = max_bytes - reserve_bytes;
+    let target = match config.system_input_budget {
+        Some(budget) => (max_bytes - reserve_bytes).min(budget.saturating_sub(config.summary_envelope_bytes(&[])? + reserve_bytes)),
+        None => max_bytes - reserve_bytes,
+    };
     let mut tail_chars = vec![0usize; input.len() + 1];
     for i in (0..input.len()).rev() { tail_chars[i] = tail_chars[i + 1] + characters[i]; }
     // Never summarize only the previous checkpoint: a rolling fold must also
@@ -350,11 +371,17 @@ fn plan_measured(input: &[Value], max_bytes: usize, config: &Config, rolling: bo
         prefix[i + 1] = prefix[i].checked_add(sizes[i] + usize::from(i > 0))
             .ok_or_else(|| anyhow!("Context size overflow"))?;
     }
-    let source_fits = |index: usize| prefix[index] <= config.max_source_bytes;
+    let source_fits = |index: usize| -> Result<bool> {
+        if prefix[index] > config.max_source_bytes { return Ok(false); }
+        match config.system_input_budget {
+            Some(budget) => Ok(config.summary_envelope_bytes(&input[..index])? <= budget),
+            None => Ok(true),
+        }
+    };
     for (i, item) in input.iter().enumerate() {
         // Evaluate a boundary before consuming its user turn. This prevents
         // splitting a function call from its corresponding output.
-        if i > 0 && is_user(item) && valid && pending.is_empty() && source_fits(i) {
+        if i > 0 && is_user(item) && valid && pending.is_empty() && source_fits(i)? {
             if fits(i) {
                 let source = input[..i].to_vec();
                 return Ok(Some(Plan {
@@ -375,7 +402,7 @@ fn plan_measured(input: &[Value], max_bytes: usize, config: &Config, rolling: bo
             Some("function_call_output") => match call_id(item) {
                 Some(id) if pending.remove(id) => {
                     // Keep later exchanges verbatim while summarizing completed work.
-                    if valid && pending.is_empty() && source_fits(i + 1) {
+                    if valid && pending.is_empty() && source_fits(i + 1)? {
                         if fits(i + 1) && active_boundary.is_none() {
                             active_boundary = Some(i + 1);
                         } else if !fits(i + 1) {
@@ -646,6 +673,43 @@ mod tests {
         c.summary_reserve_bytes = 300;
         c
     }
+
+    #[test]
+    fn system_budget_triggers_before_configured_history_threshold() {
+        let mut c = Config::configured().unwrap();
+        c.trigger_tokens = 150_000;
+        c.tail_tokens = 40_000;
+        c.summary_reserve_bytes = 300;
+        let input = vec![user(&"old".repeat(500)), assistant("done"),
+            user(&"recent".repeat(500)), assistant("done"), user("continue")];
+        let budget = c.summary_envelope_bytes(&input[..2]).unwrap() + 100;
+        assert!(plan_rolling(&input, 262144, &c).unwrap().is_none());
+        c.system_input_budget = Some(budget);
+        let plan = plan_rolling(&input, 262144, &c).unwrap().unwrap();
+        assert_eq!(plan.drop_until, 2);
+        assert!(c.summary_envelope_bytes(&plan.source).unwrap() <= budget);
+        assert_eq!(c.trigger_tokens, 150_000);
+        assert!(serde_json::to_value(&c).unwrap().get("system_input_budget").is_none());
+    }
+
+    #[test]
+    fn system_budget_counts_json_escaping_and_manual_tool_boundaries() {
+        let mut c = Config::configured().unwrap();
+        c.summary_reserve_bytes = 300;
+        let input = vec![user("work"), call("one"),
+            json!({"type":"function_call_output","call_id":"one","output":"\"\\".repeat(300)}),
+            call("two"),
+            json!({"type":"function_call_output","call_id":"two","output":"\"\\".repeat(300)}),
+            user("continue")];
+        let budget = c.summary_envelope_bytes(&input[..3]).unwrap();
+        c.system_input_budget = Some(budget);
+        let plan = plan_manual(&input, 262144, &c).unwrap().unwrap();
+        assert_eq!(plan.drop_until, 3);
+        assert!(c.summary_envelope_bytes(&plan.source).unwrap() <= budget);
+        c.system_input_budget = Some(budget - 1);
+        assert!(plan_manual(&input, 262144, &c).is_err());
+    }
+
     #[test]
     fn manual_fold_waits_for_a_safe_completed_exchange() {
         let c = rolling_config();
