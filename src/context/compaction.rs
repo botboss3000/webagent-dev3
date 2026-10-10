@@ -149,21 +149,21 @@ impl Config {
         // A summary must not turn revocable bundled skill instructions into
         // durable background guidance. Preserve the original plan identity and
         // project only the provider source; ordinary history remains unchanged.
-        self.prompt_source(&plan.source)
+        self.prompt_source(&plan.source, true)
     }
-    fn prompt_source(&self, input: &[Value]) -> Result<String> {
+    fn prompt_source(&self, input: &[Value], enforce_source_limit: bool) -> Result<String> {
         let mut projected = input.to_vec();
         crate::tools::core_skills::mask_summary_history(&mut projected);
         let source = serde_json::to_string(&projected.iter()
             .filter(|item| item["type"] != "reasoning").collect::<Vec<_>>())?;
-        if source.len() > self.max_source_bytes { bail!("Context summary source is too large"); }
+        if enforce_source_limit && source.len() > self.max_source_bytes { bail!("Context summary source is too large"); }
         // Substitute source last so transcript text cannot expand template placeholders.
         Ok(self.summary_prompt.replace("{summary_characters}",
             &(self.summary_tokens * self.characters_per_token).to_string()).replace("{source}", &source))
     }
 
     fn summary_envelope_bytes(&self, input: &[Value]) -> Result<usize> {
-        let prompt = self.prompt_source(input)?;
+        let prompt = self.prompt_source(input, false)?;
         crate::context_accounting::json_size(&json!({
             "instructions": crate::provider::DEFAULT_INSTRUCTIONS,
             "tools": [], "input": [{"role":"user", "content":prompt}]
@@ -286,8 +286,8 @@ fn plan(input: &[Value], max_bytes: usize, reserve_bytes: usize) -> Result<Optio
     plan_with_config(input, max_bytes, &config, false, false)
 }
 
-/// COMPACTION POLICY: history targets are estimated characters/tokens, not the
-/// serialized request ceiling supplied by context_assembly.rs. Either can trigger a fold.
+/// COMPACTION POLICY: the trigger estimates the complete logical request.
+/// Assembly supplies fixed instructions/schema overhead; only history is folded.
 pub fn plan_rolling(input: &[Value], max_bytes: usize, config: &Config) -> Result<Option<Plan>> {
     config.validate()?;
     plan_with_config(input, max_bytes, config, true, false)
@@ -311,29 +311,38 @@ fn plan_with_config(input: &[Value], max_bytes: usize, config: &Config, rolling:
     }
     let sizes = input.iter().map(encoded_len).collect::<Result<Vec<_>>>()?;
     let characters = input.iter().map(|item| serde_json::to_string(item).map(|text| text.chars().count())).collect::<std::result::Result<Vec<_>, _>>()?;
-    plan_measured(input, max_bytes, config, rolling, force, &sizes, &characters)
+    plan_measured(input, max_bytes, config, rolling, force, &sizes, &characters, 0)
 }
 
 /// Consume append-only accounting without serializing unchanged history. Full source
 /// copying and hashing occur only after a safe compaction boundary is selected.
 pub fn plan_cached(input: &[Value], max_bytes: usize, config: &Config, sizes: &[usize], characters: &[usize]) -> Result<Option<Plan>> {
     config.validate()?;
-    plan_measured(input, max_bytes, config, true, false, sizes, characters)
+    plan_request_cached(input, max_bytes, config, sizes, characters, 0)
 }
-fn plan_measured(input: &[Value], max_bytes: usize, config: &Config, rolling: bool, force: bool, sizes: &[usize], characters: &[usize]) -> Result<Option<Plan>> {
+/// Request overhead is measured from the selected instructions, schemas and framing.
+/// It affects the trigger and retained-history budget, never the summary source.
+pub fn plan_request_cached(input: &[Value], max_bytes: usize, config: &Config, sizes: &[usize], characters: &[usize], request_overhead: usize) -> Result<Option<Plan>> {
+    config.validate()?;
+    plan_measured(input, max_bytes, config, true, false, sizes, characters, request_overhead)
+}
+fn plan_measured(input: &[Value], max_bytes: usize, config: &Config, rolling: bool, force: bool, sizes: &[usize], characters: &[usize], request_overhead: usize) -> Result<Option<Plan>> {
     let reserve_bytes = config.summary_reserve_bytes;
     if sizes.len()!=input.len() || characters.len()!=input.len() || reserve_bytes>=max_bytes { bail!("Invalid compaction measurements or budget"); }
     let total = 2usize
         .checked_add(sizes.iter().sum::<usize>())
         .and_then(|n| n.checked_add(input.len().saturating_sub(1)))
         .ok_or_else(|| anyhow!("Context size overflow"))?;
-    let history_triggered = rolling && characters.iter().sum::<usize>()
-        > config.trigger_tokens * config.characters_per_token;
+    let trigger_bytes = config.trigger_tokens * config.characters_per_token;
+    if rolling && request_overhead >= trigger_bytes {
+        bail!("Compaction trigger cannot fit fixed request overhead");
+    }
+    let request_triggered = rolling && total.saturating_add(request_overhead) >= trigger_bytes;
     let system_triggered = match config.system_input_budget {
-        Some(budget) => total > config.max_source_bytes || config.summary_envelope_bytes(input)? > budget,
+        Some(budget) => config.summary_envelope_bytes(input)? > budget,
         None => false,
     };
-    if total <= max_bytes && !history_triggered && !system_triggered && !force {
+    if total <= max_bytes && !request_triggered && !system_triggered && !force {
         return Ok(None);
     }
 
@@ -351,6 +360,7 @@ fn plan_measured(input: &[Value], max_bytes: usize, config: &Config, rolling: bo
         Some(budget) => (max_bytes - reserve_bytes).min(budget.saturating_sub(config.summary_envelope_bytes(&[])? + reserve_bytes)),
         None => max_bytes - reserve_bytes,
     };
+    let target = if rolling { target.min(trigger_bytes.saturating_sub(request_overhead).saturating_sub(reserve_bytes)) } else { target };
     let mut tail_chars = vec![0usize; input.len() + 1];
     for i in (0..input.len()).rev() { tail_chars[i] = tail_chars[i + 1] + characters[i]; }
     // Never summarize only the previous checkpoint: a rolling fold must also
@@ -827,4 +837,21 @@ mod tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod model_limit_regression {
+ use super::*;
+ #[test]
+ fn summary_chunk_cap_does_not_replace_history_trigger() {
+  let mut c=Config::configured().unwrap();
+  c.system_input_budget=Some(3_688_000);
+  let input=vec![json!({"role":"user","content":"x".repeat(270_000)}),
+      json!({"role":"user","content":"continue"})];
+  assert!(plan_rolling(&input,4_194_304,&c).unwrap().is_none());
+  c.trigger_tokens=50_000;c.tail_tokens=10_000;
+  let plan=plan_rolling(&input,4_194_304,&c);
+  // A single oversized turn cannot be safely split; it must be reported rather than dropped.
+  assert!(plan.is_err());
+ }
 }

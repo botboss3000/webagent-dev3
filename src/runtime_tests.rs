@@ -4417,7 +4417,7 @@ pub(crate) async fn selection_fixture(app: &App) -> model_selection::Catalog {
     // authorizes both the entry and its connection without relying on common ownership.
     for (agent, primary, backup) in [("shared_default", "one", vec![]), ("agent-a", "two", vec!["one".into()])] {
         let revision = catalog.agent_models.get(agent).map(|a|a.revision).unwrap_or(1);
-        catalog.agent_models.insert(agent.into(), AgentModels { agent_id:agent.into(), owner_id:"admin".into(),
+        catalog.agent_models.insert(agent.into(), AgentModels { limits: std::collections::BTreeMap::new(), agent_id:agent.into(), owner_id:"admin".into(),
             entry_ids:vec!["one".into(), "two".into()], revision,
             roles:BTreeMap::from([
                 (ModelRole::Standard, RoleAssignment { entry_id:primary.into(), backup_entry_ids:backup }),
@@ -4649,7 +4649,7 @@ async fn deepseek_pins_transport_and_mixed_provider_backup() {
     assert_eq!(run["provider_selection"]["provider"],"deepseek");
     let selection=provider::ProviderSelection::parse(&run["provider_selection"],"unused").unwrap();
     assert_eq!(app.tokens_for(&selection,&run).await.unwrap()["api_key"],"test-key-no-network");
-    let wrong=provider::ProviderSelection{provider:provider::ProviderId::OpenaiSubscription,model:"deepseek-chat".into()};
+    let wrong=provider::ProviderSelection{limits:None,provider:provider::ProviderId::OpenaiSubscription,model:"deepseek-chat".into()};
     assert!(app.tokens_for(&wrong,&run).await.is_err());
     model_failure(&mut run,&provider::typed_failure(model_selection::FailureKind::ModelUnavailable,false,"unavailable")).unwrap();
     assert_eq!(run["provider_selection"]["provider"],"openai_subscription");
@@ -4905,7 +4905,7 @@ async fn rolling_compaction_uses_explicit_system_model_and_persists_checkpoint()
     app.store.save_model_catalog(&catalog,catalog.revision).await.unwrap();
     let config_path = app.compaction_config_path.clone();
     let mut config = context_compaction::Config::read(&config_path).unwrap();
-    config.trigger_tokens = 500; config.tail_tokens = 100; config.summary_tokens = 100;
+    config.trigger_tokens = 20_000; config.tail_tokens = 100; config.summary_tokens = 100;
     config.persist(&config_path).unwrap();
     let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
     let captured = requests.clone();
@@ -4927,7 +4927,7 @@ async fn rolling_compaction_uses_explicit_system_model_and_persists_checkpoint()
     let sid = conversation(&app).await;
     let id = queued(&app, &sid).await;
     let mut run = app.run(&id).await.unwrap();
-    run["input"] = json!([{"role":"user","content":"old".repeat(1000)},
+    run["input"] = json!([{"role":"user","content":"old".repeat(30_000)},
         {"role":"assistant","content":"done"},{"role":"user","content":"latest"}]);
     app.save(&mut run).await.unwrap();
     running(&app, &id, "rolling-summary").await;
@@ -5799,7 +5799,7 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
     let mut plan=catalog.resolve_role("shared_default",model_selection::ModelRole::Standard).unwrap();
     caller.pin_model_plan(&mut plan).await.unwrap();
     let run=json!({"agent_id":"shared_default","selection_plan":plan,"failover_state":model_selection::FailoverState::default()});
-    let selection=provider::ProviderSelection{provider:provider::ProviderId::Deepseek,model:"fixture".into()};
+    let selection=provider::ProviderSelection{limits:None,provider:provider::ProviderId::Deepseek,model:"fixture".into()};
     assert_eq!(caller.tokens_for(&selection,&run).await.unwrap()["api_key"],"platform-fixture-key");
     assert!(!serde_json::to_string(&run).unwrap().contains("platform-fixture-key"));
     app.store.platform_credential_set("team","model",3,Some("rotated-fixture-key"),"admin").await.unwrap();

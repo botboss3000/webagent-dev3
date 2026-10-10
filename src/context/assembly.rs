@@ -25,6 +25,7 @@ pub fn failure_code(error:&anyhow::Error)->(&'static str,&'static str) {
 pub fn compaction_error(error:anyhow::Error)->anyhow::Error {
     if error.downcast_ref::<Failure>().is_some(){return error;}
     let (code,stage)=match error.to_string().as_str(){
+        "Compaction trigger cannot fit fixed request overhead"=>("trigger_overhead_exceeds_budget","compaction_plan"),
         "Invalid compaction measurements or budget"=>("invalid_measurements","compaction_plan"),
         "Context exceeds budget without a completed turn or tool exchange to summarize"=>("no_safe_boundary","compaction_plan"),
         "Stale or invalid context compaction plan"=>("stale_plan","summary_validation"),
@@ -122,7 +123,7 @@ pub fn prepare_incremental<'a>(request: Request<'a>, state: &mut crate::context_
     let reserve = request.compaction.summary_reserve_bytes;
     if history_budget <= reserve { return Err(Failure::new("summary_reserve_unavailable", "budget").into()); }
     let (sizes, characters) = state.measurements();
-    let plan = context_compaction::plan_cached(request.history, history_budget, request.compaction, sizes, characters).map_err(compaction_error)?;
+    let plan = context_compaction::plan_request_cached(request.history, history_budget, request.compaction, sizes, characters, overhead - 2).map_err(compaction_error)?;
     if let Some(plan) = plan { return Ok(Prepared::Compact(plan)); }
     let history_json_bytes = state.bytes();
     let envelope_bytes = framing + instruction_json_bytes + schemas_json_bytes + history_json_bytes;
@@ -227,6 +228,49 @@ mod tests {
             selection: &selection, max_bytes:4096, compaction:&config }).unwrap() else { panic!("expected history trigger") };
         assert_eq!(plan.reserve_bytes, 300);
         assert_eq!(plan.drop_until, 2);
+    }
+
+    #[test]
+    fn whole_request_trigger_counts_instructions_schemas_and_call_guidance() {
+        let mut config = test_config(300);
+        config.trigger_tokens = 500;
+        config.tail_tokens = 100;
+        config.summary_tokens = 50;
+        let history = vec![json!({"role":"user","content":"x".repeat(1100)}),
+            json!({"role":"assistant","content":"done"}), json!({"role":"user","content":"latest"})];
+        let selection = selection();
+        let identity = CallIdentity {turn:1,call:1};
+        let request = Request {history:&history,base:"base",guidance:"",schemas:&[],
+            contributions:&[],identity,selection:&selection,max_bytes:8192,compaction:&config};
+        assert!(matches!(prepare(request).unwrap(), Prepared::Ready(_)));
+        let schemas = [json!({"name":"file_read","description":"s".repeat(500)})];
+        let overlay = Contribution {id:"mode".into(),source:"native".into(),lifetime:Lifetime::Call,
+            content:"o".repeat(200),turn:1,call:1};
+        let base = "i".repeat(200);
+        let contributions = [overlay];
+        let Prepared::Compact(plan) = prepare(Request {history:&history,base:&base,
+            guidance:"g".repeat(100).as_str(),schemas:&schemas,contributions:&contributions,
+            identity,selection:&selection,max_bytes:8192,compaction:&config}).unwrap()
+            else {panic!("whole request should trigger before history alone");};
+        assert_eq!(plan.drop_until,2);
+        assert_eq!(plan.source,history[..2]);
+        let compacted = context_compaction::apply_summary(&history,&plan,"Prior work completed.").unwrap();
+        assert_eq!(&compacted[1..],&history[2..]);
+        assert!(matches!(prepare(Request {history:&compacted,base:&base,guidance:"",schemas:&schemas,
+            contributions:&contributions,identity,selection:&selection,max_bytes:8192,compaction:&config}).unwrap(),Prepared::Ready(_)));
+    }
+    #[test]
+    fn fixed_overhead_above_trigger_pauses_without_folding_history() {
+        let mut config = test_config(100);
+        config.trigger_tokens = 500;config.tail_tokens = 100;config.summary_tokens = 50;
+        let selection = selection();
+        let history = vec![json!({"role":"user","content":"old"}),json!({"role":"user","content":"latest"})];
+        let base = "i".repeat(2200);
+        let error = prepare(Request {history:&history,base:&base,guidance:"",schemas:&[],
+            contributions:&[],identity:CallIdentity {turn:1,call:1},selection:&selection,
+            max_bytes:8192,compaction:&config}).err().unwrap();
+        assert_eq!(failure_code(&error),("trigger_overhead_exceeds_budget","compaction_plan"));
+        assert_eq!(history[0]["content"],"old");
     }
 
 }

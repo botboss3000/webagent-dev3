@@ -6,16 +6,19 @@ export function renderCompaction(host, agent, persist) {
   title.textContent = 'Context compaction';
   const hint = document.createElement('p');
   hint.className = 'ac-hint';
-  hint.textContent = 'Older completed exchanges are summarized when estimated history reaches the trigger. The newest tail stays verbatim when a safe boundary permits. Changes apply at the next model call.';
+  hint.textContent = 'Older completed exchanges are summarized when the estimated whole model request reaches the trigger. The newest tail stays verbatim when a safe boundary permits. Changes apply at the next model call.';
   const fallback = document.createElement('p');
   fallback.className = 'ac-hint';
   fallback.textContent = 'Context-limit fallback: if the summary trigger is higher than the System model’s effective input budget, compaction starts earlier at that budget, allowing for instructions and summary-request overhead. Your saved trigger stays unchanged. Each summary chunk must fit the System budget; if even the required instructions and minimum summary request cannot fit, the run pauses with a budget error.';
   const estimate = document.createElement('p');
   estimate.className = 'ac-hint';
   estimate.textContent = 'Token sizing is estimated, so actual provider counts can differ. Set per-model input and output budgets on Primary Models.';
-  host.append(title, hint, fallback, estimate);
+  const scope = document.createElement('p');
+  scope.className = 'ac-hint';
+  scope.textContent = 'The trigger counts instructions, tool definitions, history and the verbatim tail together. Only eligible older history is summarized. For example, at a 150,000-token trigger, 50,000 tokens of instructions, tools and retained recent history leave about 100,000 tokens eligible for compaction.';
+  host.append(title, hint, scope, fallback, estimate);
   const fields = [
-    ['trigger_tokens', 'Summary trigger', 'Estimated history tokens before compaction'],
+    ['trigger_tokens', 'Summary trigger', 'Estimated total request tokens, including instructions, tools and the verbatim tail'],
     ['tail_tokens', 'Verbatim tail', 'Recent estimated tokens to keep word for word'],
   ];
   const inputs = new Map();

@@ -52,11 +52,11 @@ export function mountUsageStats({root,client,note}) {
     row(content,'Session cost',usage && !usage.unknown_cost_calls ? '$'+Number(known||0).toFixed(4) : 'Not fully reported');
     row(content,'Compactions this run',num(run?.compactions));
     const head=document.createElement('div'); head.className='cmp-cc-head'; head.textContent='Context compaction'; content.append(head);
-    for(const [label,key] of [['Target history','trigger_tokens'],['Keep verbatim','tail_tokens']]) {
+    for(const [label,key] of [['Whole request trigger','trigger_tokens'],['Keep verbatim','tail_tokens']]) {
       row(content,label,Number.isFinite(run?.context_controls?.[key]) ? num(run.context_controls[key])+' estimated tokens' : 'Not measured yet');
     }
     const location=document.createElement('p');location.className='cmp-cx-hint';
-    location.textContent='Set this agent’s thresholds on Identity.';content.append(location);
+    location.textContent='The trigger counts the whole model request: instructions, tool definitions, history and the verbatim tail. Only eligible older history is summarized. At 150,000 total tokens, 50,000 fixed and retained tokens leave about 100,000 eligible for compaction. A lower System input budget triggers compaction earlier. Set this agent’s thresholds on Identity.';content.append(location);
     const compact=document.createElement('button');compact.type='button';compact.className='cmp-cc-btn v3-backend-pending';compact.disabled=true;
     compact.innerHTML='<i data-lucide="minimize-2"></i><span>Compact now</span>';compact.title='Composer compaction action backend port pending';content.append(compact);
     if(configData?.config) {
