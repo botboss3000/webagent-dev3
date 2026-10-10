@@ -24,6 +24,7 @@ let selectionTable;
 let agentPages=[];
 const $=id=>document.getElementById(id);
 let agentId=new URL(location.href).searchParams.get('agent')||'shared_default';
+let agentRoster=[];
 let explicitAssignment=false;
 const initialTab=new URL(location.href).searchParams.get('tab');
 let agentModel='';
@@ -39,11 +40,6 @@ async function mountAgents(){
   grid.querySelector('.agents-phantom-detail')?.remove();
   const squares=grid.querySelector('.agents-squares');
   squares.replaceChildren();
-  const row=document.createElement('div');
-  row.className='agent-row';
-  row.dataset.agentId=agentId;
-  row.innerHTML='<div class="agent-card agent-square activated"><div class="agent-card-top"><div class="agent-card-icon-wrap color-purple"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="12" cy="12" r="3"/></svg></div><div class="agent-card-meta"><div class="agent-card-name-row"><span class="agent-card-name">WebAgent</span><span class="agent-status-dot"></span></div></div></div></div>';
-  squares.append(row);
   const detail=document.createElement('div');
   detail.className='agent-card active agent-card-tabs-only';
   detail.innerHTML=`<div class="agent-card-tabs-wrap"><div class="agent-card-tabs" role="tablist" aria-label="Agent configuration pages"></div></div>
@@ -86,7 +82,46 @@ async function mountAgents(){
     route.searchParams.set('agent',agentId);
     history.replaceState({},'',route);
   }
-  row.onclick=()=>region.scrollIntoView({block:'start',behavior:'smooth'});
+
+}
+// Caller-scoped discovery; configuration selection never rebinds an open chat.
+function renderAgentCards(){
+  const squares=document.querySelector('#agents-grid .agents-squares');
+  squares.replaceChildren();
+  for(const agent of agentRoster){
+    const row=document.createElement('div');row.className='agent-row';row.dataset.agentId=agent.id;
+    row.innerHTML='<div class="agent-card agent-square activated"><div class="agent-card-top"><div class="agent-card-icon-wrap color-purple"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="12" cy="12" r="3"/></svg></div><div class="agent-card-meta"><div class="agent-card-name-row"><span class="agent-card-name">WebAgent</span><span class="agent-status-dot"></span></div></div></div></div>';
+    const card=row.firstElementChild;
+    card.classList.toggle('activated',agent.id===agentId);
+    card.setAttribute('role','button');card.tabIndex=0;
+    card.setAttribute('aria-label','Configure '+(agent.name||agent.id));
+    card.setAttribute('aria-pressed',String(agent.id===agentId));
+    card.querySelector('.agent-card-name').textContent=agent.name||agent.id;
+    card.querySelector('.agent-status-dot')?.remove();
+    if(agent.description)card.title=agent.description;
+    const select=()=>{
+      if(agent.id===agentId){$('agents-detail-region').scrollIntoView({block:'start',behavior:'smooth'});return;}
+      const route=new URL(location.href);route.searchParams.set('tab','agents');route.searchParams.set('agent',agent.id);
+      // Remount all agent-scoped handlers while preserving the conversation route.
+      location.assign(route.href);
+    };
+    card.onclick=select;
+    card.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();select();}};
+    squares.append(row);
+  }
+  if(!agentRoster.length){const empty=document.createElement('p');empty.textContent='No agents are available to this account.';squares.append(empty);}
+  document.querySelector('#agents-detail-region .agent-row').dataset.agentId=agentId;
+}
+async function loadAgentRoster(){
+  const data=await api('/agents');
+  if(!Array.isArray(data.agents))throw Error('Agent list unavailable');
+  agentRoster=data.agents;
+  if(agentRoster.length&&!agentRoster.some(agent=>agent.id===agentId)){
+    agentId=(agentRoster.find(agent=>agent.id==='shared_default')||agentRoster[0]).id;
+    const route=new URL(location.href);route.searchParams.set('agent',agentId);history.replaceState({},'',route);
+    note('Requested agent is unavailable. Showing an available agent.');
+  }
+  renderAgentCards();
 }
 let mainPages=[];
 let activeMainPage='';
@@ -173,7 +208,7 @@ async function showAgentView(view,routeMode='push'){
   const route=new URL(location.href);
   route.searchParams.set('agentView',selected);
   if(route.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',route);
-  if(selected==='identity')await renderIdentity($('identity-page'),api,{agentId,onSaved:agent=>{document.querySelector('.agent-card-name').textContent=agent.name;}});
+  if(selected==='identity')await renderIdentity($('identity-page'),api,{agentId,onSaved:agent=>{const saved=agentRoster.find(item=>item.id===agentId);if(saved)saved.name=agent.name;renderAgentCards();}});
   if(selected==='abilities')await renderAbilities($('abilities-page'),api,{agentId});
 }
 for(const page of [{id:'config'},...agentPages]){
@@ -215,6 +250,9 @@ async function boot(){
   window.dispatchEvent(new Event('v3-identity-changed'));
   privateVisible(false);
   $('app').hidden=false;
+  await loadAgentRoster();
+  if(!agentRoster.length){$('agents-detail-region').hidden=true;window.__boot?.appReady();return;}
+  $('agents-detail-region').hidden=false;
   await refresh();
   selectionTable?.destroy();
   $('model-page').querySelector('.ac-model-table').hidden=true;
@@ -232,7 +270,7 @@ async function boot(){
       explicitAssignment=!!assignment?.roles?.standard;
       $('model-page').querySelector('.ac-model-table').hidden=true;
       $('settings').hidden=true;
-      document.querySelector('.agent-card-name').textContent=id==='shared_default'?'WebAgent':id;
+      renderAgentCards();
     }
   });
   try{
@@ -244,7 +282,7 @@ async function boot(){
       const route=new URL(location.href);
       route.searchParams.set('agent',agentId);
       history.replaceState({},'',route);
-      document.querySelector('.agent-card-name').textContent='WebAgent';
+      renderAgentCards();
       try{selectionTable=await mountModels();}
       catch(fallbackError){error=fallbackError;selectionTable=null;}
       if(selectionTable)note('Requested agent is unavailable. Showing WebAgent.');
