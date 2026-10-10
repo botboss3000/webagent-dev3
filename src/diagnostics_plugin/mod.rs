@@ -388,6 +388,8 @@ fn transition(s: &Settings, run: &Value, kind: &str, recovery: bool) -> Option<V
         "run_revision":run["run_revision"].as_u64(),"generation":run["generation"].as_u64(),"lease_epoch":run["lease_epoch"].as_u64(),
         "turns":run["turns"].as_u64(),"call_index":run["call_index"].as_u64(),
         "call_id":identifier(&run["pending"]["call_id"]),"pending_state":pending_state,"uncertain":run["uncertain"]==true,
+        "interruption_reason":match run["pending"]["interruption"]["reason"].as_str() {
+            Some(v @ ("timeout"|"cancelled"|"transport_error"|"uncertain"))=>Some(v),_=>None},
         "recovery_override":recovery}),
     )
 }

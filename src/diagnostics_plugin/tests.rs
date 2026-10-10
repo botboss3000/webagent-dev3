@@ -757,6 +757,13 @@ fn committed_transition_projection_excludes_private_text_and_honors_categories()
     assert_eq!(event["run_revision"], 8);
     assert_eq!(event["level"], "warning");
     assert!(!event.to_string().contains("PRIVATE"));
+    let mut interrupted = run.clone();
+    interrupted["pending"]["interruption"] = json!({"reason":"timeout","output":"PRIVATE_OUTPUT"});
+    let event = transition(&s, &interrupted, "run_status", false).unwrap();
+    assert_eq!(event["interruption_reason"], "timeout");
+    assert!(!event.to_string().contains("PRIVATE"));
+    interrupted["pending"]["interruption"]["reason"] = json!("PRIVATE_REASON");
+    assert!(transition(&s, &interrupted, "run_status", false).unwrap()["interruption_reason"].is_null());
     assert_eq!(
         transition(&s, &run, "tool_result", false).unwrap()["category"],
         "tool"

@@ -95,6 +95,14 @@ mod automatic_code_index_journal_tests {
 // that call with a content-free error result so any later context remains valid.
 // Writes retain the existing uncertainty/recovery behavior because their effects
 // cannot be inferred from a lost transport response.
+// Fixed reason codes only; raw worker errors stay private.
+fn record_tool_interruption(run: &mut Value, reason: &str) {
+    let reason = match reason {
+        "timeout" => "timeout", "cancelled" => "cancelled",
+        "transport_error" => "transport_error", _ => "uncertain",
+    };
+    run["pending"]["interruption"] = json!({"reason":reason,"recorded_at":now()});
+}
 fn record_interrupted_tool(run: &mut Value, name: &str) -> Result<Option<Value>> {
     if tools::is_read(name) {
         let result=json!({"status":"error",
@@ -104,6 +112,7 @@ fn record_interrupted_tool(run: &mut Value, name: &str) -> Result<Option<Value>>
         run["error"]=json!("Read tool interrupted");
         Ok(Some(result))
     } else {
+        record_tool_interruption(run, "transport_error");
         run["uncertain"]=json!(true);
         run["status"]=json!("recovery");
         run["error"]=json!("Tool outcome unknown; review before continuing");
@@ -1407,10 +1416,11 @@ pub(crate) async fn execute_run(
                         Some("cancelled" | "timeout" | "uncertain")
                     );
                     if uncertain && !tools::is_read(&name) {
+                        record_tool_interruption(&mut run, value["status"].as_str().unwrap_or("uncertain"));
                         run["uncertain"] = json!(true);
                         run["status"] = json!("recovery");
                         run["error"] = json!("Tool interrupted; review its outcome");
-                        app.save(&mut run).await?;
+                        app.store.save_run_observed(&mut run, "run_status", &json!({"run_id":id})).await?;
                         return Ok(());
                     }
                     append_tool(&mut run, &value)?;
@@ -1442,7 +1452,7 @@ pub(crate) async fn execute_run(
                         app.store.save_run_observed(&mut run,"tool_result",
                             &json!({"run_id":id,"name":name,"result":receipt})).await?;
                     } else {
-                        app.save(&mut run).await?;
+                        app.store.save_run_observed(&mut run, "run_status", &json!({"run_id":id})).await?;
                     }
                     return Ok(());
                 }
@@ -1465,6 +1475,19 @@ mod interrupted_tool_tests {
                 "turn":1,"call_index":0,"result":{"decision":"pass"}}}}})
     }
 
+    #[test]
+    fn interruption_reason_is_bounded_and_preserves_call() {
+        for (reason, expected) in [("timeout","timeout"),("cancelled","cancelled"),
+            ("transport_error","transport_error"),("PRIVATE_ERROR","uncertain")] {
+            let mut run = pending("shell");
+            record_tool_interruption(&mut run, reason);
+            assert_eq!(run["pending"]["interruption"]["reason"], expected);
+            assert!(run["pending"]["interruption"]["recorded_at"].as_i64().is_some());
+            assert_eq!(run["pending"]["call_id"], "call-1");
+            assert!(!run.to_string().contains("PRIVATE_ERROR"));
+            assert_eq!(run["input"].as_array().unwrap().len(), 1);
+        }
+    }
     #[test]
     fn interrupted_read_gets_matching_safe_result_and_fails_closed() {
         let mut run=pending("file_read");

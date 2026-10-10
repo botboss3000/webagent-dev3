@@ -14,6 +14,7 @@ import {currentChatProfile} from '../controls/chat-config.js';
 import { applyChatConfig } from '../controls/chat-config.js';
 import { mountSessionDropdown } from '../controls/session-dropdown/controller.js';
 import { createSessionList } from '../controls/session-dropdown/list.js';
+import {createRecoveryDetails} from './recovery-details.js';
 const mountedPanels = new WeakMap();
 export async function mountChatPanel({request, guard, note, keyId, forgetKey, refresh, getState, getAgentId, getIdentity=()=>({})}) {
   const root = document.getElementById('chat-panel');
@@ -23,6 +24,7 @@ export async function mountChatPanel({request, guard, note, keyId, forgetKey, re
   const activity=createActivityView({app:{get currentSessionId(){return session;}},isAdmin:()=>!!getIdentity().is_admin,chatUiFlag:(key,fallback)=>currentChatProfile()?.[key]??fallback});
   let activityRuns=[];
   const expandedApprovals=new Set();
+  const expandedRecovery=new Set();
   const gutterRuns=new Map();
   function rememberRuns(items){for(const run of items)gutterRuns.set(run.id,run);for(const [id] of [...gutterRuns.entries()].sort((a,b)=>(b[1].updated_at||0)-(a[1].updated_at||0)).slice(100))gutterRuns.delete(id);}
   async function refreshGutterRuns(id=session){const epoch=sessionGeneration;try{const data=await client.snapshot(id);if(id===session&&epoch===sessionGeneration)rememberRuns(data.runs||[]);}catch(error){if(id===session&&epoch===sessionGeneration)note('Message statistics unavailable: '+error.message);}}
@@ -157,7 +159,12 @@ if(run.pending && run.status==='waiting_approval'){
   notifications.showTool({approval:p,run,active,expanded:expandedApprovals,decide:async decision=>{await client.decide(p.id,{decision,client_request_id:keyId('approval:'+p.id+':'+decision)});await refresh();},cancel:()=>cancel(run.id)});
   continue;
 }
-if(run.uncertain || run.status==='recovery'){const text=document.createElement('p');text.textContent='The previous action may have completed. Verify its outcome before retrying.';const output=document.createElement('textarea');output.placeholder='Known result to accept';output.setAttribute('aria-label','Known action result');card.append(text,output);for(const decision of ['accept','retry','abandon'])card.append(button({accept:'Accept known result',retry:'Authorize retry',abandon:'Abandon run'}[decision],async()=>{await client.recover(run.id,{decision,output:output.value,client_request_id:keyId('recovery:'+run.id+':'+decision+':'+output.value)});await refresh();}));}
+if(run.uncertain || run.status==='recovery'){
+  title.remove();
+  card.append(createRecoveryDetails(run,{expanded:expandedRecovery,button,decide:async(decision,output)=>{
+    await client.recover(run.id,{decision,output,client_request_id:keyId('recovery:'+run.id+':'+decision+':'+output)});await refresh();
+  }}));
+}
 if(!run.uncertain && ['paused','stopped'].includes(run.status))card.append(button('Resume run',async()=>{await client.resume(run.id,{client_request_id:crypto.randomUUID()});await refresh();}));if(active?.id===run.id)card.append(button('Cancel run',()=>cancel(run.id)));$('runs').append(card);}}
 $('sessions').onchange=guard(()=>open($('sessions').value));
 async function ensureSession(){
