@@ -2,6 +2,7 @@
 import { mountModelTable } from '../../../shared/models/model-table.js';
 import { initModelAnalytics } from '../../../shared/models/model-analytics.js';
 import { createModelAdapter } from '../../../shared/models/v3-adapter.js';
+import { mountModelLimits } from './model-limits.js';
 
 // Actual v2_ref Models mount: analytics sibling + shared renderer; only the adapter is v3-specific.
 export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
@@ -13,11 +14,16 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   const analyticsHost=document.createElement('div');analyticsHost.className='agent-model-analytics-host';
   const tableHost=document.createElement('div');tableHost.style.marginTop='8px';group.append(analyticsHost,tableHost);host.append(css,pendingCss,group);
   const analytics=initModelAnalytics(analyticsHost,{fetchFn:bridge.blockedFetch,apiPath:p=>p,scope:'user',agentId,description:'Compare the daily usage of every model used with this agent.'});
+  let limits;
   const table=mountModelTable(tableHost,{adapter:bridge.adapter,agentLocalRoster:true,userCatalog:true,inlineCatalogAdd:true,subscriptionScope:'agent',directivePresentation:'inline',directivesEditable:false,manualModelEntry:true,
-    fetchFn:bridge.blockedFetch,onRoster:p=>analytics?.setModelLabels(p),onModelFocus:m=>analytics?.setModelFocus(m),onModelChange:()=>analytics?.reload(),
+    onLimitEdit:(id,field)=>limits?.edit(id,field),modelBudget:id=>limits?.budget(id),
+    fetchFn:bridge.blockedFetch,onRoster:p=>analytics?.setModelLabels(p),onModelFocus:m=>analytics?.setModelFocus(m),onModelChange:()=>{analytics?.reload();limits?.reload();},
     advancedExtra:body=>{
       const row=document.createElement('div');row.className='ac-row v3-pending-feature';row.innerHTML='<div class="ac-ability-row">Reset Usage Counters</div><div class="ac-ability-body"><select class="ac-input" disabled><option>All (input + output + cost)</option><option>Input Tokens only</option><option>Output Tokens only</option><option>Cost only</option></select><button class="ac-btn" disabled>Reset</button></div>';row.firstElementChild.onclick=()=>row.classList.toggle('expanded');body.append(row);
     }});
+  const limitsHost=document.createElement("div");group.append(limitsHost);
+  limits=await mountModelLimits(limitsHost,bridge.adapter,()=>table.reload());
+  await table.reload();
   let stopped=false;
   function markPending(el){if(el)el.classList.add('v3-pending-feature');}
   function pending(){
@@ -38,5 +44,5 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   }
   // Rebuilt rows and expanded details keep their pending color after rerender.
   const observer=new MutationObserver(pending);observer.observe(group,{childList:true,subtree:true});pending();
-  return {reload:()=>table.reload(),getState:()=>table.getState(),destroy:()=>{stopped=true;observer.disconnect();bridge.destroy();table.destroy();analytics?.destroy?.();host.replaceChildren();}};
+  return {reload:async()=>{await table.reload();await limits.reload();},getState:()=>table.getState(),destroy:()=>{stopped=true;observer.disconnect();limits.destroy();bridge.destroy();table.destroy();analytics?.destroy?.();host.replaceChildren();}};
 }

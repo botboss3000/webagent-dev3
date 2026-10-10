@@ -2036,9 +2036,13 @@ export function mountModelTable(host, opts = {}) {
     }
     // The old spec pills became labelled lines: the label now carries the meaning
     // ("Max output"), the value only the number — the same shape as the trio above.
+    const budget = opts.modelBudget?.(p.entry_id);
+    const limitValue = (text, field) => opts.onLimitEdit
+      ? '<button type="button" class="ac-model-meta-v ac-limit-edit" data-limit-field="'+field+'" title="Change this model’s token budget">'+esc(budget?.[field]?.toLocaleString() || 'Set limit')+'</button>'
+      : metaValue(text);
     const specHtml = [
-      ctx ? metaLine('Context:', metaValue(ctx)) : '',
-      out ? metaLine('Max output:', metaValue(out)) : '',
+      (ctx || opts.onLimitEdit) ? metaLine(opts.onLimitEdit ? 'Input budget:' : 'Context:', limitValue(ctx, 'input')) : '',
+      (out || opts.onLimitEdit) ? metaLine('Max output:', limitValue(out, 'output')) : '',
       priceHtml,
     ].filter(Boolean).join('');
     // Usage is a plain summary value. The per-row cost-trend chart that used to
@@ -2170,6 +2174,9 @@ export function mountModelTable(host, opts = {}) {
     body.appendChild(aliasRegion);
     aliasAdd.addEventListener('click', () => openAliasForm(p, aliasRegion, aliasAdd));
 
+    for (const button of body.querySelectorAll('.ac-limit-edit')) {
+      button.addEventListener('click', () => opts.onLimitEdit?.(p.entry_id, button.dataset.limitField));
+    }
     // ── MODEL-PRICE-EDIT: the BYO price is click-to-edit ────────────────────
     // One click swaps the value for a PAIR of rate fields, because a price is a pair
     // (RENAME-FIELD PATTERN: Enter commits, Escape cancels, blur commits, and a `done`

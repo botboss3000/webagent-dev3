@@ -95,6 +95,7 @@ export function createModelAdapter(request, agentId, onAssignment) {
     }
     // Keep records when a row is removed; roster removal must not revoke a shared credential.
     cfg.entry_ids=rowIds;
+    cfg.limits=Object.fromEntries(Object.entries(cfg.limits||{}).filter(([id])=>rowIds.includes(id)));
     const roles={};
     for(const [role,id] of Object.entries(role_assignments)){
       if(!id)continue;
@@ -138,7 +139,34 @@ export function createModelAdapter(request, agentId, onAssignment) {
         id:c.id,display_name:choices.aliases?.[c.id]||c.display_name,name:choices.aliases?.[c.id]||c.display_name,catalog_name:c.display_name,
         ...catalogCapabilityFlags(c.capabilities,c.transport),origin:c.origin}))};
     },
-    fetchModelInfo:async()=>({}),fetchModelUsage:async()=>null,
+    fetchModelInfo:async(model,provider)=>['gpt-6-luna','gpt-6.1-sol','gpt-6-astra'].includes(model)?provider==='openai_subscription'?{context:272000}:{context:1050000,max_output:128000}:{},
+    fetchModelUsage:async()=>null,
+    loadModelLimits:async()=>{
+      await read();
+      const cfg=catalog.agent_models?.[agentId];
+      return {can_manage:data.can_manage,models:(cfg?.entry_ids||[]).map(id=>{
+        const entry=catalog.entries[id];
+        const transport=catalog.connections[entry.connection_id]?.transport;
+        const known=['gpt-6-luna','gpt-6.1-sol','gpt-6-astra'].includes(entry.upstream_model);
+        return {id,name:data.adoptions?.[id]?.alias||entry.display_name,model:entry.upstream_model,
+          transport,context_tokens:known?(transport==='openai_subscription'?272000:1050000):null,
+          published_context_tokens:known?1050000:null,max_output_tokens:known?128000:null,
+          default_output_tokens:8192,limits:cfg.limits?.[id]||null};
+      })};
+    },
+    saveModelLimits:(id,limits)=>{
+      const work=async()=>{
+        await read();
+        if(destroyed||!data.can_manage)throw Error('Agent model management is read-only');
+        const next=structuredClone(catalog),cfg=next.agent_models?.[agentId];
+        if(!cfg?.entry_ids.includes(id))throw Error('Model is no longer in this agent roster');
+        cfg.limits??={};
+        if(limits)cfg.limits[id]=limits;else delete cfg.limits[id];
+        const saved=await request(scope,'PUT',next);data=saved;catalog=saved.catalog;
+        await onAssignment?.(agentId,catalog.agent_models?.[agentId]);
+      };
+      const result=queue.then(work,work);queue=result.catch(()=>{});return result;
+    },
     loadDirectives:async()=>({standard:'',premium:'',system:'',image_in:'',image_out:'',voice:'',custom:{}}),
     saveDirectives:async()=>reject('role prompt injections'),
     saveDefaultEntryId:async(id)=>{
