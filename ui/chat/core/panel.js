@@ -16,7 +16,7 @@ import { mountSessionDropdown } from '../controls/session-dropdown/controller.js
 import { createSessionList } from '../controls/session-dropdown/list.js';
 import {createRecoveryDetails} from './recovery-details.js';
 const mountedPanels = new WeakMap();
-export async function mountChatPanel({request, guard, note, keyId, forgetKey, refresh, getState, getAgentId, getIdentity=()=>({})}) {
+export async function mountChatPanel({request, guard, note, clearNoticeFrom, keyId, forgetKey, refresh, getState, getAgentId, getIdentity=()=>({})}) {
   const root = document.getElementById('chat-panel');
   mountedPanels.get(root)?.destroy();
   const $ = id => root.querySelector('#' + id);
@@ -29,7 +29,7 @@ export async function mountChatPanel({request, guard, note, keyId, forgetKey, re
   function rememberRuns(items){for(const run of items)gutterRuns.set(run.id,run);for(const [id] of [...gutterRuns.entries()].sort((a,b)=>(b[1].updated_at||0)-(a[1].updated_at||0)).slice(100))gutterRuns.delete(id);}
   async function refreshGutterRuns(id=session){const epoch=sessionGeneration;try{const data=await client.snapshot(id);if(id===session&&epoch===sessionGeneration)rememberRuns(data.runs||[]);}catch(error){if(id===session&&epoch===sessionGeneration)note('Message statistics unavailable: '+error.message);}}
   const paintActivity=()=>activity.render({sessionId:session,runs:activityRuns.map(r=>({...r,state:({completed:'completed',failed:'failed',stopped:'cancelled',waiting_approval:'running',waiting_gate:'finalizing'})[r.status]||r.status}))},$('chat-messages-inner'));
-  const client = createChatClient({request, note});
+  const client = createChatClient({request, note, clearNoticeFrom});
   function button(text,fn){const node=document.createElement('button');node.type='button';node.textContent=text;node.onclick=guard(fn);return node;}
 async function mountChat(){
   const response=await fetch('/v3-ui/chat/chat.html?v=chat-partial-20261007-notifications',{credentials:'same-origin'});

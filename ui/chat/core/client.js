@@ -1,7 +1,7 @@
 import { createAdministratorNotices } from './administrator-notices.js';
 
 // V3 transport only: cookie/CSRF request policy is supplied by the shell.
-export function createChatClient({request, note, EventSourceClass = EventSource,
+export function createChatClient({request, note, clearNoticeFrom = () => {}, EventSourceClass = EventSource,
   setTimeoutFn = globalThis.setTimeout, clearTimeoutFn = globalThis.clearTimeout}) {
   const administratorNotices = createAdministratorNotices({ request });
   let source = null, epoch = 0, current = null;
@@ -43,11 +43,12 @@ export function createChatClient({request, note, EventSourceClass = EventSource,
           state.last = Math.max(state.last, data.last_seq || 0);
         } while (state.again && valid(state));
         state.failures = 0;
+        clearNoticeFrom('chat-sync');
       } catch {
         if (!valid(state)) return;
         if (++state.failures <= 3) {
           state.retry = setTimeoutFn(() => {state.retry = null; void recover(state);}, 1000 * 2 ** (state.failures-1));
-        } else note('Chat recovery failed. Reload to recover saved messages.');
+        } else note("Couldn't sync chat history", 'chat-sync');
       } finally { state.inFlight = null; }
     })();
     return state.inFlight;

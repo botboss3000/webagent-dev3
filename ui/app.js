@@ -189,7 +189,7 @@ const note=(text,source='')=>{
 const clearNoticeFrom=source=>{if(noticeSource===source)note('');};
 async function api(path,method='GET',body){const response=await fetch('/api/v3'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...(method==='GET'?{}:{'x-csrf-token':csrf})},...(body===undefined?{}:{body:JSON.stringify(body)})});const data=await response.json().catch(()=>({}));if(!response.ok){if(response.status===401)out();const error=Error(data.error||data.message||'Request failed ('+response.status+')');error.status=response.status;throw error;}return data;}
 const guard=fn=>async event=>{event?.preventDefault();try{await fn(event);note('');}catch(error){note(error.message);}};
-const chat = await mountChatPanel({request:api, guard, note, keyId, forgetKey:key=>ids.delete(key), refresh, getState:()=>state, getAgentId:()=>agentId, getIdentity:()=>accountMe});
+const chat = await mountChatPanel({request:api, guard, note, clearNoticeFrom, keyId, forgetKey:key=>ids.delete(key), refresh, getState:()=>state, getAgentId:()=>agentId, getIdentity:()=>accountMe});
 await loadMainPages();
 
 // Agent pages resolve tenant authority independently; members see effective read-only abilities.
