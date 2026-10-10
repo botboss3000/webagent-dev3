@@ -24,7 +24,8 @@ export function buildNoticeRenderer(documentObject = globalThis.document) {
     if (!parent) return;
     if (!region || region.parentNode !== parent) {
       region = documentObject.createElement('section');
-      region.className = 'ac-hint v3-build-leftovers';
+      // The shared composer visibility rule recognizes repository notice surfaces.
+      region.className = 'ac-hint v3-build-leftovers v3-repository-notice';
       region.setAttribute('role', 'status');
       region.setAttribute('aria-live', 'polite');
       parent.prepend(region);
