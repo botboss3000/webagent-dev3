@@ -495,6 +495,22 @@ function _buildToolStateControl(toolMeta, opts) {
         });
       }
     }
+    const policies = toolMeta.advanced_policies;
+    if (policies?.uncertain_outcome === 'review') {
+      out.push({ separator: true });
+      const lines = [
+        'Uncertain outcome: pauses for review after interruption or an unknown result.',
+        'Retry: requires explicit authorization after checking what happened.',
+        'Auto mode: these recovery rules still apply.',
+        'Read-only sessions: this tool is blocked.',
+        'Classification: applies to the whole tool, including read-only commands or actions.',
+      ];
+      if (policies.build_finish === 'reconcile_existing_job') {
+        lines.push('Build finish: reconciles the existing job and returns its result; do not submit finish again.');
+      }
+      out.push({ disclosure: true, label: 'Advanced policies', lines,
+        note: 'Fixed runtime safeguards. Permission settings do not override them.' });
+    }
     if (showExecution) {
       out.push({ separator: true });
       for (const [key, heading, choices] of [
@@ -582,6 +598,22 @@ export function openFloatingMenu(items, top, left, owner = null) {
       const hr = document.createElement('div');
       hr.className = 'files-tab-menu-sep';
       menu.appendChild(hr);
+      continue;
+    }
+    if (item.disclosure) {
+      menu.classList.add('ac-tool-policy-menu');
+      const details = document.createElement('details');
+      details.className = 'ac-tool-policies';
+      details.addEventListener('toggle', positionMenu);
+      const summary = document.createElement('summary');
+      summary.textContent = item.label;
+      details.appendChild(summary);
+      for (const text of [...item.lines, item.note]) {
+        const paragraph = document.createElement('p');
+        paragraph.textContent = text;
+        details.appendChild(paragraph);
+      }
+      menu.appendChild(details);
       continue;
     }
     if (item.info) {
@@ -685,13 +717,16 @@ export function openFloatingMenu(items, top, left, owner = null) {
 
   document.body.appendChild(menu);
 
-  const menuWidth = 180;
-  const rect = menu.getBoundingClientRect();
-  const menuHeight = rect.height || 8;
-  const clampedTop  = Math.max(8, Math.min(window.innerHeight - menuHeight - 8, top));
-  const clampedLeft = Math.max(8, Math.min(window.innerWidth  - menuWidth  - 8, left));
-  menu.style.top  = clampedTop + 'px';
-  menu.style.left = clampedLeft + 'px';
+  function positionMenu() {
+    const rect = menu.getBoundingClientRect();
+    const menuWidth = rect.width || 180;
+    const menuHeight = rect.height || 8;
+    const clampedTop  = Math.max(8, Math.min(window.innerHeight - menuHeight - 8, top));
+    const clampedLeft = Math.max(8, Math.min(window.innerWidth  - menuWidth  - 8, left));
+    menu.style.top  = clampedTop + 'px';
+    menu.style.left = clampedLeft + 'px';
+  }
+  positionMenu();
 
   _refreshLucideIcons(menu);
 

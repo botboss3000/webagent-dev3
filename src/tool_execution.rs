@@ -14,6 +14,22 @@ pub struct Settings {
     pub on_run_end: String,
 }
 
+/// Fixed recovery rules, projected from the same classification used by dispatch.
+/// These describe runtime safeguards; they are not configurable permission grants.
+pub fn advanced_policies(name: &str) -> Value {
+    if crate::tools::is_read(name) { return Value::Null; }
+    serde_json::json!({
+        "uncertain_outcome": "review",
+        "retry": "explicit_authorization",
+        "applies_in_auto": true,
+        "read_only_session": "blocked",
+        "classification": "tool_name",
+        "build_finish": if matches!(name, "build_work" | "v3_build_work") {
+            Some("reconcile_existing_job")
+        } else { None::<&str> }
+    })
+}
+
 pub fn background_capable(name: &str) -> bool {
     matches!(name, "file_list" | "file_read" | "file_search" | "source_review"
         | "state_inspect" | "prompt_slot_read")
@@ -207,6 +223,27 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::time::Duration;
+
+    #[test]
+    fn advanced_policies_follow_dispatch_classification() {
+        for schema in crate::tools::schemas() {
+            let name = schema["name"].as_str().unwrap();
+            let policies = advanced_policies(name);
+            assert_eq!(policies.is_null(), crate::tools::is_read(name), "{name}");
+            if !policies.is_null() {
+                assert_eq!(policies["applies_in_auto"], true);
+                assert_eq!(policies["retry"], "explicit_authorization");
+                assert_eq!(policies["read_only_session"], "blocked");
+            }
+        }
+        assert!(advanced_policies("file_read").is_null());
+        assert_eq!(advanced_policies("shell")["classification"], "tool_name");
+        assert_eq!(advanced_policies("unknown")["uncertain_outcome"], "review");
+        for name in ["build_work", "v3_build_work"] {
+            assert_eq!(advanced_policies(name)["build_finish"], "reconcile_existing_job");
+        }
+        assert!(advanced_policies("shell")["build_finish"].is_null());
+    }
 
     #[test]
     fn defaults_and_strict_validation() {

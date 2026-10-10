@@ -54,6 +54,20 @@ body {
 .files-tab-menu-sep { height: 1px; background: var(--files-border-strong); margin: 4px 6px; }
 .files-tab-menu-info { padding: 5px 10px 6px; min-width: 248px; font-size: 11px; line-height: 1.35; color: var(--files-text); opacity: 0.85; }
 
+/* Fixed policies expand in place; the tool menu stays within mobile viewports. */
+.files-tab-menu.ac-tool-policy-menu {
+  width: min(320px, calc(100vw - 16px));
+  min-width: 0;
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+}
+.ac-tool-policy-menu .files-tab-menu-info { min-width: 0; }
+.ac-tool-policies { padding: 6px 10px; color: var(--files-text); font-size: 12px; }
+.ac-tool-policies summary { cursor: pointer; color: var(--files-text-strong); }
+.ac-tool-policies summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ac-tool-policies p { margin: 8px 0 0; font-size: 11px; line-height: 1.4; }
+.ac-tool-policies p:last-child { color: var(--fg-3); }
+
 /* Directory rows highlight flush to the container's clipped, rounded edge. */
 #tab-agents .agent-config-topics{padding:0}
 #tab-agents .agent-config-star{align-self:center;margin-right:18px;padding:0;border:0;background:transparent;color:var(--agent-config-icon);cursor:pointer}

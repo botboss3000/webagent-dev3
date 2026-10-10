@@ -101,6 +101,7 @@ async fn catalog(app:&App,identity:&Value,id:&str,params:&HashMap<String,String>
                 let name=tool["name"].as_str().unwrap_or("").to_owned();
                 tool["call_count"]=json!(call_counts.get(&name).copied().unwrap_or(0));
                 tool["execution"]=serde_json::to_value(crate::tool_execution::resolve(&visibility,&name)?).map_err(anyhow::Error::from)?;
+                tool["advanced_policies"]=crate::tool_execution::advanced_policies(&name);
                 tool["background_capable"]=json!(crate::tool_execution::background_capable(&name));
                 tool["max_supported_concurrency"]=json!(crate::tool_execution::max_supported_concurrency(&name));
                 let decision=live_tool_decision(&scoped,&access,&name,&policy,&visibility,&active,&loaded,false);
@@ -319,6 +320,13 @@ mod tests {
             .find(|ability|ability["id"]=="codebase_admin").unwrap()["tools"].as_array().unwrap().iter()
             .find(|entry|entry["name"]=="file_read").unwrap();
         assert_eq!(tool["execution"],settings);
+        assert!(tool["advanced_policies"].is_null());
+        for ability in response.0["abilities"].as_array().unwrap() {
+            for tool in ability["tools"].as_array().unwrap() {
+                let name=tool["name"].as_str().unwrap();
+                assert_eq!(tool["advanced_policies"],crate::tool_execution::advanced_policies(name));
+            }
+        }
         assert_eq!(tool["background_capable"],crate::tool_execution::background_capable("file_read"));
         assert_eq!(tool["max_supported_concurrency"],crate::tool_execution::max_supported_concurrency("file_read"));
         let member=app.store.create_user_account("execution_reader","fixture-only-password-hash").await.unwrap();

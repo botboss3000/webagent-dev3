@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '../ui/shared/ability-row-controls.js'), 'utf8');
-function control({ capable = true, maxConcurrency = capable ? 4 : 1, canEdit = true, save = async () => {}, execution } = {}) {
+function control({ capable = true, maxConcurrency = capable ? 4 : 1, canEdit = true, save = async () => {}, execution, policies } = {}) {
   const handlers = {};
   const tri = {
     classList: { add() {} }, dataset: {}, _paint() {}, setAttribute() {},
@@ -26,6 +26,7 @@ function control({ capable = true, maxConcurrency = capable ? 4 : 1, canEdit = t
   const end = source.indexOf('const _EYE_ON_SVG', start);
   vm.runInNewContext(source.slice(start, end) + '\nglobalThis.build = _buildToolStateControl;', context);
   context.build({
+    advanced_policies: policies,
     name: 'file_read', permMode: 'auto', mode: 'visible', background_capable: capable,
     max_supported_concurrency: maxConcurrency,
     execution: execution || { mode: 'foreground', max_concurrency: capable ? 4 : 1, on_run_end: 'stop' },
@@ -149,4 +150,50 @@ test('end-of-run labels describe user notification, next-turn results and read-o
   assert(items.some(item => item.radio && item.label === 'Wake (read-only)'));
   assert(items.some(item => item.info && /completion note without an agent loop/.test(item.label)
     && /next user turn/.test(item.label) && /read-only continuation/.test(item.label)));
+});
+
+
+test('special policies are collapsed information and do not write settings', () => {
+  let writes = 0;
+  const ui = control({ policies: { uncertain_outcome: 'review', build_finish: 'reconcile_existing_job' },
+    save: () => { writes++; } });
+  const policy = ui.items().find(item => item.disclosure);
+  assert.equal(policy.label, 'Advanced policies');
+  assert(policy.lines.some(line => /Auto mode/.test(line)));
+  assert(policy.lines.some(line => /explicit authorization/.test(line)));
+  assert(policy.lines.some(line => /whole tool/.test(line)));
+  assert(policy.lines.some(line => /existing job/.test(line)));
+  assert.equal(policy.action, undefined);
+  assert.equal(writes, 0);
+  assert.equal(control().items().some(item => item.disclosure), false);
+});
+
+test('policy disclosure renders native collapsed details and clamps to measured menu width', () => {
+  function element(tag) {
+    return { tag, children: [], handlers: {}, height: 300, style: {}, classList: { add() {} },
+      appendChild(child) { this.children.push(child); }, setAttribute() {},
+      addEventListener(name, fn) { this.handlers[name] = fn; }, getBoundingClientRect() { return { width: 320, height: this.height }; } };
+  }
+  const body = element('body');
+  const context = { closeFloatingMenu() {}, _refreshLucideIcons() {},
+    window: { innerWidth: 360, innerHeight: 640 },
+    document: { createElement: element, body, addEventListener() {} } };
+  const start = source.indexOf('export function openFloatingMenu(');
+  const end = source.indexOf('export function _buildAbilitySettingsList', start);
+  vm.runInNewContext(source.slice(start, end).replace('export function', 'function') +
+    '\nglobalThis.open = openFloatingMenu;', context);
+  context.open([{ disclosure: true, label: 'Advanced policies',
+    lines: ['Auto mode: recovery rules still apply.'], note: 'Fixed runtime safeguards.' }], 500, 300);
+  const menu = body.children[0];
+  const details = menu.children[0];
+  assert.equal(details.tag, 'details');
+  assert.equal(details.open, undefined);
+  assert.equal(details.children[0].tag, 'summary');
+  assert.equal(details.children[0].textContent, 'Advanced policies');
+  assert.equal(details.children[1].textContent, 'Auto mode: recovery rules still apply.');
+  assert.equal(menu.style.left, '32px');
+  assert.equal(menu.style.top, '332px');
+  menu.height = 500;
+  details.handlers.toggle();
+  assert.equal(menu.style.top, '132px');
 });
