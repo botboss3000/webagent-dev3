@@ -68,32 +68,25 @@ export function mountBuilds(panel, onStatus = () => {}) {
   controls.className = 'build-clear-controls';
   controls.append(clear, clearButton, reset);
   panel.replaceChildren();
-  const header = document.createElement('div');
-  header.className = 'build-header';
-  const intro = document.createElement('div');
-  const heading = document.createElement('h2');
-  heading.textContent = 'Builds';
-  const subtitle = document.createElement('p');
-  subtitle.textContent = 'Development builds, source indexing, tests, and deployments';
-  intro.append(heading, subtitle);
   const update = document.createElement('button');
   update.type = 'button';
   update.className = 'build-update';
-  update.textContent = 'Update status';
+  update.textContent = '↻';
+  update.setAttribute('aria-label', 'Refresh builds');
+  update.title = 'Refresh builds';
   const status = document.createElement('p');
   status.className = 'build-summary';
   status.setAttribute('role', 'status');
-  status.textContent = 'Loading build status…';
+  status.hidden = true;
   const list = document.createElement('div');
   list.className = 'build-list';
   list.setAttribute('aria-label', 'Recent development builds');
-  header.append(intro, update);
   const synchronization = document.createElement('div');
   synchronization.setAttribute('role', 'status');
   const toolbar = document.createElement('div');
   toolbar.className = 'build-toolbar';
-  toolbar.append(filters, controls);
-  panel.append(header, status, synchronization, toolbar, list);
+  toolbar.append(update, filters, controls);
+  panel.append(toolbar, synchronization, status, list);
 
   const fact = (facts, label, value) => {
     const item = document.createElement('div');
@@ -128,6 +121,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
     }
   }
   function render() {
+    status.hidden = true;
     showSynchronization(synchronization, snapshot.synchronization);
     const jobs = snapshot.jobs;
     const statuses = [...new Set(jobs.map(job => String(job.status || 'unknown')))].sort();
@@ -372,7 +366,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
       if (!Array.isArray(data.jobs)) throw Error('Build status response is invalid');
       if (!stopped) { snapshot = data; onStatus(data.jobs.filter(isActive).length); render(); }
     } catch (error) {
-      if (!stopped) { onStatus(0); status.textContent = error.message; }
+      if (!stopped) { onStatus(0); status.hidden = false; status.textContent = error.message; }
     } finally {
       loading = false;
       update.disabled = false;
