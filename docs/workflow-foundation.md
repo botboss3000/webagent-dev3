@@ -163,6 +163,8 @@ Encrypted content and sensitive metadata follow the sensitivity noted above.
 | `docs`: `agent:`, `agent_abilities:` | Agent; compatibility/configuration document | Private | Migrate to typed agent tables when replaced |
 | `docs`: all remaining keys, including `workflow_policy`, provider tokens, shutoff, auth, model catalog, `storage:split_migrated`, `storage:access_v1`, and `storage:agent_split_v1` | App; canonical policy, secret, control, or migration marker | Security sensitive or secret | Revisioned, revoked, or versioned by family |
 
+| `docs`: `user_agent_page_preferences:` | User; canonical ordered Agent page favorites | Private UI preference | Revision-fenced writes; caller identity selects user file; retained with account |
+
 The `docs` routing is implemented in `Store::pool_for`; new prefixes must be
 declared here and routed deliberately. A key without a declared owner must not
 be treated as user or agent state merely because the generic app fallback can

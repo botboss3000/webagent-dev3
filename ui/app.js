@@ -215,31 +215,58 @@ for(const page of [{id:'config'},...agentPages]){
   $('agent-tab-'+page.id).onclick=guard(()=>showAgentView(page.id));
 }
 // Like V2, the favorite list is also the tab order; Config cannot be removed.
-const agentTabsKey='v3:agent-page-tabs:v1';
-let agentTabOrder;
-try{agentTabOrder=JSON.parse(localStorage.getItem(agentTabsKey));}catch{}
+let agentTabOrder=['config'];
+let agentTabsRevision=0;
+let agentTabsReady=false;
+let agentTabsGeneration=0;
+let agentTabsQueue=Promise.resolve();
 const validAgentTabs=new Set(['config',...agentPages.map(page=>page.id)]);
-agentTabOrder=Array.isArray(agentTabOrder)?[...new Set(agentTabOrder)].filter(id=>validAgentTabs.has(id)):['config'];
-if(!agentTabOrder.includes('config'))agentTabOrder.push('config');
+function applyAgentTabs(snapshot){
+  agentTabOrder=[...new Set(snapshot.page_ids||[])].filter(id=>validAgentTabs.has(id));
+  if(!agentTabOrder.includes('config'))agentTabOrder.push('config');
+  agentTabsRevision=snapshot.revision;
+  syncAgentTabs();
+}
+async function loadAgentTabs(){
+  agentTabsGeneration++;
+  agentTabsReady=false;
+  const snapshot=await api('/user/agent-page-favorites');
+  applyAgentTabs(snapshot);
+  agentTabsReady=true;
+}
 function syncAgentTabs(){
   const strip=document.querySelector('#agents-grid .agent-card-tabs');
   for(const id of agentTabOrder)strip.append($('agent-tab-'+id));
   for(const page of [{id:'config'},...agentPages])$('agent-tab-'+page.id).hidden=!agentTabOrder.includes(page.id);
   renderAgentDirectory($('config-page'),agentPages,view=>guard(()=>showAgentView(view))(),agentTabOrder,id=>{
+    if(!agentTabsReady){note('Agent page preferences are unavailable. Reload to retry.');return;}
     if(agentTabOrder.includes(id))agentTabOrder=agentTabOrder.filter(item=>item!==id);
     else agentTabOrder.unshift(id);
     saveAgentTabs();
   });
 }
 function saveAgentTabs(){
-  try{localStorage.setItem(agentTabsKey,JSON.stringify(agentTabOrder));}catch{}
   syncAgentTabs();
+  const pages=agentTabOrder.slice(),user=accountMe?.user_id||accountMe?.user,generation=agentTabsGeneration;
+  const request=async()=>{
+    if(generation!==agentTabsGeneration||!agentTabsReady||user!==(accountMe?.user_id||accountMe?.user))return;
+    try{
+      const saved=await api('/user/agent-page-favorites','PUT',{page_ids:pages,expected_revision:agentTabsRevision});
+      agentTabsRevision=saved.revision;
+    }catch(error){
+      agentTabsReady=false;
+      note('Agent page favorites were not saved: '+error.message);
+      try{await loadAgentTabs();}catch{note('Agent page favorites could not be loaded. Reload to retry.');}
+    }
+  };
+  agentTabsQueue=agentTabsQueue.then(request,request);
 }
+
 syncAgentTabs();
 wirePageTabDrag(document.querySelector('#agents-grid .agent-card-tabs'), { getOrder: () => agentTabOrder, save: saveAgentTabs, prefix: 'agent-tab-' });
 async function loadGuestPolicy(){try{const policy=await api('/auth/access-mode');$('guest-login').hidden=!policy.guest_access;document.querySelector('.private-access-approval').hidden=!!policy.guest_access;}catch{$('guest-login').hidden=true;}}
 $('guest-login').onclick=async()=>{const btn=$('guest-login');btn.disabled=true;try{const result=await api('/auth/guest-login','POST',{});csrf=result.csrf_token;await boot();}catch(error){$('registration-status').textContent=error.message;}finally{btn.disabled=false;}};
-function out(){availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
+function out(){agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
 async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;$('shutoff').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}if(!$('rules').children.length)for(const [tool,rule]of Object.entries(state.policy?.rules||{})){const label=document.createElement('label');label.textContent=tool;const select=document.createElement('select');select.name=tool;for(const value of ['allow','deny','require_approval']){const option=document.createElement('option');option.value=value;option.textContent=value.replaceAll('_',' ');select.append(option);}select.value=rule;label.append(select);$('rules').append(label);}chat.runs(state.runs||[]);}
 // Explicit role administration replaces the legacy default-model form for every agent.
 async function boot(){
@@ -250,6 +277,8 @@ async function boot(){
   window.dispatchEvent(new Event('v3-identity-changed'));
   privateVisible(false);
   $('app').hidden=false;
+  await agentTabsQueue;
+  await loadAgentTabs();
   await loadAgentRoster();
   if(!agentRoster.length){$('agents-detail-region').hidden=true;window.__boot?.appReady();return;}
   $('agents-detail-region').hidden=false;

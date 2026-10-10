@@ -2,6 +2,7 @@
 //! A run revision and a time-limited lease stop stale processes from replacing
 //! newer progress. See docs/code-tour.md before following the SQL below.
 pub(crate) mod session;
+mod agent_pages;
 pub(crate) mod search;
 pub(crate) mod own_skills;
 pub(crate) mod base_task;
@@ -576,6 +577,7 @@ impl Store {
         } else if key.starts_with("session:")
             || key.starts_with("manager_review:")
             || key.starts_with("manager_pending:")
+            || key.starts_with("user_agent_page_preferences:")
             || key.starts_with("session_mode:")
             || key.starts_with("session_chat_controls:")
             || key.starts_with("session_naming:")

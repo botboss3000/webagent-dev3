@@ -16,6 +16,7 @@ mod service_admin;
 mod administrator;
 mod model_catalog;
 mod account_models;
+mod agent_pages;
 mod file_manager;
 mod build_dashboard;
 mod app_settings;
@@ -116,6 +117,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/agents/{id}/abilities/{ability}/skills/{skill}/visibility",put(ability_admin::skill_named_set))
         .route("/agents/{id}/abilities/{ability}/tools/{tool}/skill-content",get(ability_admin::tool_skill_content))
         .route("/agents/{id}/abilities/{ability}/tools/{tool}/mode",put(ability_admin::tool_set))
+        .route("/user/agent-page-favorites",get(agent_pages::read).put(agent_pages::save))
         .route("/auth/me", get(me))
         .route("/auth/ui-config", get(chat_ui_config))
         .route("/auth/profile", put(update_profile))
