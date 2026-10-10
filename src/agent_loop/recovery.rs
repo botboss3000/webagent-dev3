@@ -30,7 +30,7 @@ pub(crate) async fn user_apps(app:&App) -> Result<Vec<App>> {
     Ok(views)
 }
 fn pending_build_finish(run:&Value)->bool {
-    run["pending"]["name"]=="v3_build_work"
+    matches!(run["pending"]["name"].as_str(),Some("v3_build_work"|"build_work"))
         && run["pending"]["arguments"]["action"]=="finish"
         && run["pending"]["state"]=="executing"
 }
@@ -49,7 +49,8 @@ async fn build_result(app:&App,run:&Value)->Result<Option<Value>> {
     let rid=run["id"].as_str().ok_or_else(||anyhow!("Missing run"))?;
     let task=run["pending"]["arguments"]["task_id"].as_str()
         .ok_or_else(||anyhow!("Missing build task"))?;
-    let fingerprint=tools::administrator::host_fingerprint(app,sid,rid,"v3_build_work_finish").await?;
+    let authority=if run["pending"]["name"]=="build_work" {"build_work_finish"} else {"v3_build_work_finish"};
+    let fingerprint=tools::administrator::host_fingerprint(app,sid,rid,authority).await?;
     let trusted=json!({"user_id":app.store.current_user_id(),"session_id":sid,
         "lease_until":now()+30,"access_fingerprint":fingerprint});
     let socket=std::path::Path::new("/run/v3/build/build.sock");

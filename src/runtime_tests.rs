@@ -1250,6 +1250,23 @@ async fn agent_loop_creates_reviewable_proposal_without_dispatching_broker() {
     use tokio::net::UnixListener;
 
     let (_root, mut app) = fixture().await;
+    // The retired proposal adapter stays covered through an explicit legacy
+    // fixture. It is intentionally absent from the live Codebase Admin catalog.
+    fn copy_catalog(source:&std::path::Path,target:&std::path::Path) {
+        std::fs::create_dir_all(target).unwrap();
+        for entry in std::fs::read_dir(source).unwrap() {
+            let entry=entry.unwrap(); let destination=target.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() { copy_catalog(&entry.path(),&destination); }
+            else { std::fs::copy(entry.path(),destination).unwrap(); }
+        }
+    }
+    let legacy=_root.path().join("legacy-abilities");
+    copy_catalog(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities"),&legacy);
+    let path=legacy.join("Administrator/codebase_admin/codebase_admin.json");
+    let mut manifest:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for tool in ["source_review","promotion_propose"] {manifest["tools"].as_array_mut().unwrap().push(json!(tool));}
+    std::fs::write(&path,manifest.to_string()).unwrap();
+    app.abilities=Arc::new(abilities::Catalog::load(&legacy).unwrap());
     let baseline = "b".repeat(40);
     let expected = hex::encode(Sha256::digest(format!("{baseline}\0patch").as_bytes()));
     let arguments = json!({"expected_review_sha256":expected,"summary":"Verified coding change"});
@@ -1331,7 +1348,8 @@ async fn agent_loop_creates_reviewable_proposal_without_dispatching_broker() {
     .await
     .unwrap();
     assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
-    worker.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10),worker).await
+        .expect("legacy source review must dispatch within the fixture timeout").unwrap();
     let proposals = app.store.list(&format!("promotion:{sid}:")).await.unwrap();
     assert_eq!(proposals.len(), 1);
     assert_eq!(proposals[0]["state"], "proposed");
@@ -6857,4 +6875,70 @@ async fn provider_recovery_retries_stream_failure_and_publishes_one_final_reply(
     let (chat, _) = app.store.chat_snapshot(&sid).await.unwrap();
     assert_eq!(chat.iter().filter(|row| row["role"] == "assistant").count(), 1);
     server.abort();
+}
+
+
+#[test]
+fn consolidated_codebase_schema_and_guidance_contract() {
+    let catalog = abilities::Catalog::load(std::path::Path::new("plugins/abilities")).unwrap();
+    let schema = tools::schemas();
+    for name in ["file_read","file_list","file_search","file_edit","file_write"] {
+        let tool=schema.iter().find(|s|s["name"]==name).unwrap();
+        assert_eq!(tool["parameters"]["properties"]["task_id"]["type"],"string");
+        assert!(tools::administrator::owns(name));
+    }
+    assert!(schema.iter().any(|s|s["name"]=="build_work"));
+    let visibility=json!({"visibility":{"codebase_admin":"visible"}});
+    let state=json!({"active":["codebase_admin"]});
+    assert!(catalog.tool_gate("build_work",&visibility,&state,&json!([])).1);
+    for name in ["v3_source_apply","v3_workspace_action","workspace_seed","source_patch"] {
+        assert!(!catalog.tool_gate(name,&visibility,&state,&json!([])).0);
+    }
+    assert!(provider::DEFAULT_INSTRUCTIONS.contains("without task_id"));
+    assert!(provider::DEFAULT_INSTRUCTIONS.contains("automatically create"));
+}
+
+#[tokio::test]
+async fn consolidated_build_finish_waits_for_receipt_without_replaying_write() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    running(&app, &id, "build-generation").await;
+    let mut run = app.run(&id).await.unwrap();
+    run["phase"] = json!("tools");
+    run["pending"] = json!({"name":"build_work","state":"executing",
+        "call_id":"original-build-call","arguments":{"action":"finish",
+            "task_id":"build-recovery-test","expected_inputs_sha256":"0".repeat(64)}});
+    app.save(&mut run).await.unwrap();
+    recover(&app, true).await.unwrap();
+    let waiting = app.run(&id).await.unwrap();
+    assert_eq!(waiting["status"], "waiting_external");
+    assert_eq!(waiting["uncertain"], false);
+    assert_eq!(waiting["pending"]["call_id"], "original-build-call");
+    assert_eq!(waiting["pending"]["external_job"]["kind"], "v3_build");
+    recover(&app, false).await.unwrap();
+    let repeated = app.run(&id).await.unwrap();
+    assert_eq!(repeated["status"], "waiting_external");
+    assert_eq!(repeated["pending"]["call_id"], "original-build-call");
+    assert_eq!(repeated["call_index"], waiting["call_index"]);
+    let mut stopped=repeated.clone();
+    stopped["status"]=json!("stopped");
+    app.save_override(&mut stopped).await.unwrap();
+    let _=command(State(app.clone()),Path((id.clone(),"resume".into())),
+        Json(json!({"client_request_id":"resume-build-result"}))).await.unwrap();
+    let resumed=app.run(&id).await.unwrap();
+    assert_eq!(resumed["status"], "waiting_external");
+    assert_eq!(resumed["pending"]["state"], "executing");
+    let result=json!({"status":"success","output":{"task_id":"build-recovery-test",
+        "job_id":"existing-job","status":"completed","verified_healthy":true}});
+    let mut settled=resumed.clone();
+    agent_loop::attach_external_build_result(&mut settled,&result).unwrap();
+    assert_eq!(settled["status"], "queued");
+    assert!(agent_loop::attach_external_build_result(&mut settled,&result).is_err());
+    app.store.save_run_override(&mut settled,"tool_result",&result).await.unwrap();
+    let durable=app.run(&id).await.unwrap();
+    assert_eq!(durable["call_index"], json!(1));
+    assert_eq!(durable["input"].as_array().unwrap().last().unwrap()["call_id"],
+        "original-build-call");
+    assert_eq!(durable["pending"], Value::Null);
 }

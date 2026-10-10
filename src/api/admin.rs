@@ -84,6 +84,12 @@ pub(crate) async fn migrate_tool_policy_defaults(store: &Store) -> Result<()> {
     let mut policy = store.get("policy").await?.unwrap_or_else(policy_default);
     let defaults = policy_default();
     let mut changed = false;
+    if policy["rules"]["build_work"].is_null() {
+        let old=[policy_decision(&policy,"v3_build_work"),policy_decision(&policy,"v3_worker_submit")];
+        policy["rules"]["build_work"]=json!(if old.contains(&"deny") {"deny"}
+            else if old.contains(&"require_approval") {"require_approval"} else {"allow"});
+        changed=true;
+    }
     for (name, decision) in defaults["rules"].as_object().unwrap() {
         if policy["rules"][name].is_null() {
             policy["rules"][name] = decision.clone();

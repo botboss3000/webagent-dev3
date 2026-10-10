@@ -997,7 +997,14 @@ def file_operation(request, base, args, name):
                                 scan_limited = True
                                 break
                             names.append(entry.name)
-                    output = "\n".join(sorted(names))
+                    offset, limit = args.get("offset", 0), args.get("limit", 100)
+                    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
+                        raise ValueError("bounded directory page required")
+                    names.sort()
+                    selected = names[offset:offset + limit]
+                    return {"status": "success", "output": "\n".join(selected),
+                        "offset": offset, "next_offset": offset + len(selected),
+                        "has_more": offset + len(selected) < len(names), "truncated": scan_limited}
                 finally:
                     os.close(fd)
             else:

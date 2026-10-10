@@ -1043,7 +1043,7 @@ pub(crate) async fn execute_run(
         } else {
             if run["calls"].as_array().is_some_and(|calls|calls.len()>1
                 && !calls.iter().any(|call|matches!(call["name"].as_str(),
-                    Some("publish_main_message" | "set_closer_status" | "compact_context" | "v3_build_work")))) {
+                    Some("publish_main_message" | "set_closer_status" | "compact_context" | "v3_build_work" | "build_work")))) {
                 // NATIVE-GATE-SERIAL: private controls keep provider order and
                 // never enter a parallel batch or the Python tool worker.
                 run["closing"]=Value::Null;
@@ -1344,7 +1344,7 @@ pub(crate) async fn execute_run(
                 return Ok(());
             }
             if status(&run) != "running" {
-                if !terminal(status(&run)) && name=="v3_build_work" && args["action"]=="finish"
+                if !terminal(status(&run)) && matches!(name.as_str(),"v3_build_work"|"build_work") && args["action"]=="finish"
                     && run["pending"]["state"]=="executing"
                     && result.as_ref().map_or(true,|value|value["status"]=="success") {
                     // A pause or revocation may race the broker acknowledgement.
@@ -1369,7 +1369,7 @@ pub(crate) async fn execute_run(
             }
             match result {
                 Ok(value) => {
-                    if name=="v3_build_work" && args["action"]=="finish" && value["status"]=="success"
+                    if matches!(name.as_str(),"v3_build_work"|"build_work") && args["action"]=="finish" && value["status"]=="success"
                         && value["output"]["status"]=="closed" {
                         // The broker owns the job across our own container replacement.
                         // Keep this model call pending; recovery reads its receipt and
@@ -1407,7 +1407,7 @@ pub(crate) async fn execute_run(
                         .await?;
                 }
                 Err(_) => {
-                    if name=="v3_build_work" && args["action"]=="finish" {
+                    if matches!(name.as_str(),"v3_build_work"|"build_work") && args["action"]=="finish" {
                         // The request may have reached the broker before the socket
                         // closed. Reconcile by task ID; never submit finish again.
                         run["pending"]["external_job"]=json!({"kind":"v3_build",

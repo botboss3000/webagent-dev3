@@ -12,9 +12,20 @@ main branch at the V2 remote for a push.
 
 Read `README.md`, `docs/root-migration.md` and the relevant implementation before
 changes. For workflow/storage changes read `docs/workflow-foundation.md`.
-Never open, query, copy or decrypt session databases; use authenticated APIs.
+Development troubleshooting may inspect session databases directly. Isolated
+broker tasks receive read-only SQLite-backup snapshots of all admin/ and
+shared_default/ data, including their database files. Other users, the encryption
+key and unrelated runtime databases remain outside these inspection snapshots.
+Never patch task inspection data.
 
-Use the protected build broker through
+In-app agents use Codebase Admin file tools with one stable `task_id` for
+source changes intended for a build; a missing task is created automatically.
+Read the task before editing, and use its latest input digest for task writes.
+Use file tools without `task_id` for explicit direct/live edits and runtime
+configuration. `build_work` reviews/checks tasks and explicitly finishes an
+authorized release; task creation and edits never deploy.
+
+Operators use the same protected broker through
 `python3 -B /home/ar/webagent-dev3/plugins/abilities/Administrator/v3_build/buildctl.py`.
 Begin an isolated task before source changes. Its snapshot contains stable
 virtual `v3/` and `ui/` archive paths; the live checkout root contains V3 directly.

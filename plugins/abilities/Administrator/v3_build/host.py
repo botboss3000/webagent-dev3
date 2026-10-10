@@ -1,3 +1,4 @@
+import difflib
 """Fixed development-only build broker. No model-controlled commands or paths.
 
 Install a protected copy, not this writable source, as the host service. Root
@@ -1403,6 +1404,169 @@ class Broker:
         except Exception:
             return False
 
+
+    def unified_files(self, request, trusted, workspace, args):
+        # The same caller/session namespace and checked patch gate own task edits.
+        name = request["name"]
+        task_id = args.get("task_id")
+        if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", task_id):
+            raise ValueError("task_id must be 8-80 letters, digits, underscores or hyphens")
+        allowed = {
+            "file_list": {"task_id", "path", "offset", "limit"},
+            "file_read": {"task_id", "path", "offset", "limit"},
+            "file_search": {"task_id", "path", "query", "regex", "file_glob", "comments_only", "limit"},
+            "file_edit": {"task_id", "path", "old_text", "new_text", "expected_sha256", "expected_inputs_sha256", "request_id"},
+            "file_write": {"task_id", "path", "content", "expected_inputs_sha256", "request_id"},
+        }
+        if set(args) - allowed[name]:
+            raise ValueError("unsupported task file argument")
+        path = args.get("path", "")
+        if path == ".": path = ""
+        if not isinstance(path, str) or len(path) > 240 or (path and (
+                not re.fullmatch(r"[A-Za-z0-9_./-]+", path)
+                or any(part in ("", ".", "..") for part in path.split("/")))):
+            raise ValueError("task path must be source-relative without parent traversal")
+        mutating = name in ("file_edit", "file_write")
+        if mutating and (not path or path.split("/")[0] in
+                {"data", "workspaces", ".git", "target", "deployment-secrets"}):
+            raise ValueError("task write path denied; inspection data is read-only")
+        if mutating and (not isinstance(args.get("request_id"), str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", args["request_id"])):
+            raise ValueError("task writes require a stable 8-80 character request_id")
+        def call(tool, arguments):
+            return self.handle({**request, "name": tool, "arguments": arguments})
+        key = hashlib.sha256(canonical([trusted["user_id"], workspace, task_id])).hexdigest()
+        item = self.work.get(key)
+        created = item is None
+        if created:
+            call("v3_build_work", {"action": "begin", "task_id": task_id,
+                "summary": "Isolated source work: " + task_id, "mode": "isolated"})
+            item = self.work[key]
+        if item.get("mode") != "isolated" or item["status"] != "open":
+            raise ValueError("task is no longer open; use a new task_id")
+        forwarded = {"task_id": task_id, "path": path}
+        if name in ("file_list", "file_read"):
+            forwarded.update({k: args[k] for k in ("offset", "limit") if k in args})
+            result = call("v3_source_list" if name == "file_list" else "v3_source_read", forwarded)
+            if name == "file_read":
+                source = self.work_dir / "trees" / key / "v3" / path
+                with source.open("rb") as stream:
+                    result["sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
+            result["task_created"] = created
+            return result
+        if name == "file_search":
+            if path or args.get("regex") or args.get("file_glob") or args.get("comments_only"):
+                raise ValueError("task search supports a literal query across source; omit path and filters")
+            result = call("v3_source_search", {"task_id": task_id, "query": args.get("query"),
+                "limit": args.get("limit", 30)})
+            result["workspace_inputs_sha256"] = context_digest(release.snapshot(
+                self.work_dir / "trees" / key, TASK_CONTEXT, context_digest))[0]
+            result["task_created"] = created
+            return result
+        fingerprint = hashlib.sha256(canonical(args)).hexdigest()
+        receipt = item.get("applies", {}).get(args["request_id"])
+        if receipt:
+            if receipt.get("file_request_sha256") != fingerprint:
+                raise ValueError("request_id reused with changed file operation")
+            return dict(receipt)
+        tree = self.work_dir / "trees" / key
+        source = tree / "v3" / path
+        cursor = tree / "v3"
+        for part in path.split("/"):
+            cursor = cursor / part
+            if cursor.is_symlink(): raise ValueError("task file path contains symlink")
+        if source.exists() and (not source.is_file() or source.stat().st_nlink != 1):
+            raise ValueError("task file must be a single-link regular file")
+        exists = source.exists()
+        original = source.read_bytes() if exists else b""
+        if len(original) > 1024 * 1024 or b"\0" in original:
+            raise ValueError("task edit exceeds text bound")
+        before = original.decode("utf-8")
+        current = context_digest(release.snapshot(tree, TASK_CONTEXT, context_digest))[0]
+        expected = args.get("expected_inputs_sha256")
+        if expected is not None and expected != current:
+            raise ValueError("stale task inputs; reread the task file")
+        if not created and expected is None:
+            raise ValueError("existing task writes require expected_inputs_sha256 from a task read or review")
+        if name == "file_edit":
+            old, new = args.get("old_text"), args.get("new_text")
+            if not exists or not isinstance(old, str) or not old or not isinstance(new, str):
+                raise ValueError("file_edit requires an existing file and nonempty old_text plus new_text")
+            if before.count(old) != 1: raise ValueError("old_text must match exactly once")
+            if args.get("expected_sha256") is not None and args["expected_sha256"] != hashlib.sha256(original).hexdigest():
+                raise ValueError("file changed since inspection")
+            after = before.replace(old, new, 1)
+        else:
+            after = args.get("content")
+            if not isinstance(after, str): raise ValueError("file_write requires content")
+        if len(after.encode()) > 1024 * 1024 or "\0" in after:
+            raise ValueError("task write exceeds text bound")
+        if before == after and exists:
+            receipt = {"task_id": task_id, "request_id": args["request_id"],
+                "file_request_sha256": fingerprint, "status": "success", "unchanged": True,
+                "workspace_inputs_sha256": current, "paths": [path]}
+            item.setdefault("applies", {})[args["request_id"]] = receipt
+            self._save_work()
+            return dict(receipt)
+        patch = "diff --git a/" + path + " b/" + path + "\n"
+        if not exists: patch += "new file mode 100644\n"
+        for line in difflib.unified_diff(before.splitlines(True), after.splitlines(True),
+                fromfile="a/" + path if exists else "/dev/null", tofile="b/" + path):
+            patch += line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+        if not exists and not after:
+            patch += "--- /dev/null\n+++ b/" + path + "\n"
+        result = call("v3_source_apply", {"task_id": task_id, "request_id": args["request_id"],
+            "patch": patch, "expected_inputs_sha256": current})
+        item["applies"][args["request_id"]]["file_request_sha256"] = fingerprint
+        result["file_request_sha256"] = fingerprint
+        result["workspace_inputs_sha256"] = context_digest(release.snapshot(tree, TASK_CONTEXT, context_digest))[0]
+        result["diff"] = patch[:16000]
+        result["diff_truncated"] = len(patch) > 16000
+        result["task_created"] = created
+        item["applies"][args["request_id"]].update(result)
+        self._save_work()
+        return result
+
+    def unified_build(self, request, args):
+        action = args.get("action")
+        allowed = {"action", "task_id", "summary", "expected_inputs_sha256", "sync_decision",
+            "expected_sync_digest", "offset", "job_id", "request_id", "check", "timeout_seconds"}
+        if set(args) - allowed: raise ValueError("unsupported build_work argument")
+        def call(tool, arguments):
+            return self.handle({**request, "name": tool, "arguments": arguments})
+        if action == "status" and args.get("job_id"):
+            return call("v3_worker_job", {"job_id": args["job_id"]})
+        if action == "check":
+            return call("v3_cargo_task", {"task_id": args.get("task_id"),
+                "task": args.get("check", "check"), "expected_inputs_sha256": args.get("expected_inputs_sha256"),
+                "timeout_seconds": args.get("timeout_seconds", 600)})
+        if action == "receipt":
+            return call("v3_source_receipt", {"task_id": args.get("task_id"), "request_id": args.get("request_id")})
+        if action == "review":
+            status = call("v3_build_work", {"action": "status", "task_id": args.get("task_id")})
+            if not status["own"] or status["own"][0]["status"] != "open":
+                raise ValueError("open task required for review")
+            item = status["own"][0]
+            folder = Path(item["workspace_path"]).parent
+            baseline = release.entries((folder / "baseline.tar").read_bytes(), context_digest)
+            current = release.entries(release.snapshot(folder, TASK_CONTEXT, context_digest), context_digest)
+            paths = [path for path in sorted(set(baseline) | set(current))
+                if baseline.get(path) != current.get(path) and not release.inspection_path(path)]
+            patches = []
+            for path in paths:
+                old = baseline.get(path, (0, b""))[1].decode("utf-8", "replace")
+                new = current.get(path, (0, b""))[1].decode("utf-8", "replace")
+                patches.append("".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True),
+                    fromfile="a/" + path, tofile="b/" + path)))
+                if sum(map(len, patches)) > 16000: break
+            diff = "".join(patches)
+            return {**item, "paths": paths[:64], "paths_truncated": len(paths) > 64,
+                "diff": diff[:16000], "diff_truncated": len(diff) > 16000}
+        forwarded = {k: v for k, v in args.items() if k not in
+            {"job_id", "request_id", "check", "timeout_seconds"}}
+        if action == "begin": forwarded["mode"] = "isolated"
+        return call("v3_build_work", forwarded)
+
     def handle(self, request):
         if not isinstance(request, dict) or set(request) - {"id", "name", "arguments", "workspace", "timeout_seconds", "trusted"}:
             raise ValueError("invalid broker request")
@@ -1420,6 +1584,10 @@ class Broker:
             raise ValueError("arguments must be an object")
         name = request.get("name")
         with self.lock:
+            if name == "build_work":
+                return self.unified_build(request, args)
+            if name in ("file_list", "file_read", "file_search", "file_edit", "file_write"):
+                return self.unified_files(request, trusted, workspace, args)
             if name == "v3_build_adopt_release":
                 if (not trusted.get("local_caller") or trusted["user_id"] != "codex-local"
                         or workspace != LOCAL_WORKSPACE or set(args) != {"job_id"}):
@@ -2463,7 +2631,7 @@ async def serve(broker, listener, bridge_listener=None):
                 raise ValueError("bounded request required")
             request = json.loads(raw)
             if bridge:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task"):
                     raise ValueError("bridge operation denied")
                 request["workspace"] = BRIDGE_WORKSPACE
                 request["trusted"] = {"user_id": "python-v2-admin", "session_id": BRIDGE_WORKSPACE,
@@ -2471,7 +2639,7 @@ async def serve(broker, listener, bridge_listener=None):
                     "access_fingerprint": hashlib.sha256(b"python-v2-build-bridge").hexdigest(),
                     "bridge_caller": True}
             elif uid == 1000:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release", "v3_build_cancel"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release", "v3_build_cancel"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": "codex-local", "session_id": LOCAL_WORKSPACE,

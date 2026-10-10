@@ -96,7 +96,7 @@ pub fn schemas() -> Vec<Value> {
     static SCHEMAS: OnceLock<Vec<Value>> = OnceLock::new();
     SCHEMAS.get_or_init(|| { let mut schemas: Vec<Value> = [
         ("file_list", "List a directory by absolute container path or relative live-checkout path", json!({"path":{"type":"string"}}), vec![]),
-        ("file_read", "Read a bounded page of file lines from a container or live-checkout path", json!({"path":{"type":"string"},"offset":{"type":"integer","minimum":1,"maximum":10000000},"limit":{"type":"integer","minimum":1,"maximum":2000}}), vec!["path"]),
+        ("file_read", "Read a bounded page of file lines from a container or live-checkout path", json!({"path":{"type":"string"},"offset":{"type":"integer","minimum":1,"maximum":10000000},"limit":{"type":"integer","minimum":1,"maximum":200}}), vec!["path"]),
         ("file_search", "Search container or live-checkout files by literal or regex query; outline comments in one file", json!({"path":{"type":"string"},"query":{"type":"string"},"regex":{"type":"boolean"},"file_glob":{"type":"string"},"comments_only":{"type":"boolean"}}), vec![]),
         ("file_write", "Write a container or live-checkout file; policy-gated", json!({"path":{"type":"string"},"content":{"type":"string"}}), vec!["path","content"]),
         ("file_edit", "Replace exactly one matching span in an existing container or live-checkout file; policy-gated", json!({"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"},"expected_sha256":{"type":"string"}}), vec!["path","old_text","new_text"]),
@@ -113,6 +113,22 @@ pub fn schemas() -> Vec<Value> {
         "type":"function", "name":name, "description":description,
         "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}
     })).collect();
+        for schema in &mut schemas {
+            if matches!(schema["name"].as_str(), Some("file_list"|"file_read"|"file_search"|"file_edit"|"file_write")) {
+                let properties = schema["parameters"]["properties"].as_object_mut().unwrap();
+                properties.insert("task_id".into(), json!({"type":"string","pattern":"^[A-Za-z0-9_-]{8,80}$","description":"Omit for live files. Supply one stable ID for an isolated build task; missing tasks are created automatically. Paths then are source-relative."}));
+                if matches!(schema["name"].as_str(), Some("file_edit"|"file_write")) {
+                    schema["parameters"]["properties"]["expected_inputs_sha256"] = json!({"type":"string","pattern":"^[a-f0-9]{64}$","description":"Task digest from the latest task read/list/review; required when writing an existing task."});
+                    schema["parameters"]["properties"]["request_id"] = json!({"type":"string","pattern":"^[A-Za-z0-9_-]{8,80}$","description":"Stable task-write request ID. Reuse only for identical retries; inspect build_work receipt after uncertainty."});
+                }
+                if schema["name"]=="file_list" {
+                    schema["parameters"]["properties"]["offset"] = json!({"type":"integer","minimum":0});
+                    schema["parameters"]["properties"]["limit"] = json!({"type":"integer","minimum":1,"maximum":100});
+                }
+                let description = schema["description"].as_str().unwrap().to_owned();
+                schema["description"] = json!(format!("{description}. Optional task_id selects isolated source for a build and automatically creates the task; omit for explicit live edits or runtime configuration. Never deploys."));
+            }
+        }
         schemas.extend(crate::background_tasks::schemas());
         schemas.extend(administrator::schemas());
         schemas.extend(web_access::schemas());

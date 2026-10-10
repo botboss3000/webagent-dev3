@@ -237,6 +237,10 @@ impl Catalog {
                 let ability_path = folder.path();
                 // Pin exactly the bytes parsed here; live edits withdraw cached authority
                 // until a freshly validated catalog reload adopts the new declaration.
+                // Retired coding abilities keep their backend files for operator
+                // commands and durable recovery, but are no longer catalog entries.
+                if group_id == "Administrator" && matches!(id.as_str(), "v3_build"|"v3_workspace")
+                    && !ability_path.join(format!("{id}.json")).exists() { continue; }
                 let manifest_bytes = read_bytes(&ability_path.join(format!("{id}.json")), MAX_MANIFEST_BYTES)?;
                 let manifest_digest = hex::encode(Sha256::digest(&manifest_bytes));
                 let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
@@ -1662,16 +1666,19 @@ mod tests {
     fn production_seed_manifest_loads() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities");
         let catalog = Catalog::load(&root).unwrap();
-        assert_eq!(catalog.abilities.len(), 83);
-        assert_eq!(catalog.abilities.iter().filter(|entry| Catalog::executable(entry)).count(), 11);
-        assert_eq!(catalog.abilities.iter().filter(|entry| entry.readiness == Readiness::Ready).count(), 10);
+        assert_eq!(catalog.abilities.len(), 81);
+        assert_eq!(catalog.abilities.iter().filter(|entry| Catalog::executable(entry)).count(), 9);
+        assert_eq!(catalog.abilities.iter().filter(|entry| entry.readiness == Readiness::Ready).count(), 8);
         assert_eq!(catalog.abilities.iter().filter(|entry| entry.readiness == Readiness::Partial).count(), 1);
         assert!(catalog.abilities.iter().any(|entry| entry.id == "decision" && entry.tools == ["decide_with_jev", "score_directory_with_jev"]));
         let base = catalog.abilities.iter().find(|entry| entry.id == "base").unwrap();
         let mut installed: Vec<_> = base.tools.iter().filter(|name| Catalog::supported(name)).map(String::as_str).collect();
         installed.sort();
         assert_eq!(installed, ["calculate", "compact_context", "edit_own_prompt", "get_date", "get_task_checkpoint", "get_time", "list_skills", "load_skill", "present_chat_component", "present_plan", "read_attachment", "read_own_prompt", "recall_compacted", "remove_own_skill", "save_own_skill", "search_this_session", "search_tools", "session_search", "set_execution_mode", "similar_sessions", "task_cancel", "task_status", "task_wait", "update_task_checkpoint"]);
-        assert!(catalog.abilities.iter().any(|ability| ability.id == "codebase_admin"));
+        assert!(!catalog.abilities.iter().any(|ability| matches!(ability.id.as_str(), "v3_build"|"v3_workspace")));
+        let coding=catalog.abilities.iter().find(|ability| ability.id=="codebase_admin").unwrap();
+        assert_eq!(coding.tools, ["file_list","file_read","file_search","file_edit","file_write",
+            "build_work","state_inspect","prompt_slot_read","prompt_slot_write","shell","python"]);
         assert!(catalog.abilities.iter().any(|ability| ability.id == "diagnostics"));
         assert!(catalog.abilities.iter().any(|ability| ability.id == "terminal_control"));
     }

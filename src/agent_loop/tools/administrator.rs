@@ -10,7 +10,7 @@ pub fn schemas()->Vec<Value> {
         .expect("compiled Administrator schemas")
 }
 pub fn owns(name:&str)->bool {
-    schemas().iter().any(|s|s["name"]==name)
+    matches!(name, "file_list"|"file_read"|"file_search"|"file_edit"|"file_write") || schemas().iter().any(|s|s["name"]==name)
 }
 fn request_id(args:&Value)->Result<&str> {
     let value=args["request_id"].as_str().unwrap_or("");
@@ -49,23 +49,42 @@ pub(crate) async fn host_fingerprint(app:&App,sid:&str,run_id:&str,name:&str)->R
     let (policy,revision,visibility,state)=ability_controls(&scoped,sid).await?;
     let mode=session_mode(&scoped,sid).await?;
     let access=scoped.store.live_access(scoped.store.current_user_id(),&agent).await?;
-    let work_finish=name=="v3_build_work_finish";
-    let policy_name=if work_finish {"v3_build_work"} else {name};
+    let work_finish=matches!(name,"v3_build_work_finish"|"build_work_finish");
+    let policy_name=if work_finish {"build_work"} else {name};
     let work_permission=live_tool_decision(&scoped,&access,policy_name,
         &policy,&visibility,&state,&run["loaded_abilities"],mode["mode"]=="read_only").for_execution_mode(&mode).permission;
     if !access.principal.administrator() || !access.admitted() || work_permission==access::Permission::Deny {
         bail!("Host build authority revoked");
     }
-    // An Ask finish reaches this host only after explicit approval. Its queued job
-    // retains that authorization while the scoped policy fingerprint stays valid.
-    if work_finish {
-        let deployment_permission=live_tool_decision(&scoped,&access,"v3_worker_submit",
-            &policy,&visibility,&state,&run["loaded_abilities"],mode["mode"]=="read_only").for_execution_mode(&mode).permission;
-        if deployment_permission==access::Permission::Deny
-            || (deployment_permission==access::Permission::Ask && work_permission!=access::Permission::Ask) {
-            bail!("Automatic V3 deployment is not authorized");
+    // Moving public names never removes the old broker authorization ceilings.
+    let legacy = match name {
+        "file_list" => Some("v3_source_list"),
+        "file_read"|"file_search" => Some("v3_source_read"),
+        "file_edit"|"file_write" => Some("v3_source_apply"),
+        "build_work"|"build_work_finish"|"v3_build_work_finish" => Some("v3_build_work"),
+        _ => None,
+    };
+    if let Some(legacy_name)=legacy {
+        let installation=access::Permission::from_policy(policy_decision(&policy,legacy_name))
+            .unwrap_or(access::Permission::Deny);
+        let ceiling=access.tool_decision_for_abilities(legacy_name,&["v3_build".into()],
+            installation,true,true,mode["mode"]=="read_only",tools::is_read(legacy_name))
+            .for_execution_mode(&mode).permission;
+        if ceiling==access::Permission::Deny || (ceiling==access::Permission::Ask && work_permission!=access::Permission::Ask) {
+            bail!("Existing broker authorization requires approval or denies this operation");
         }
     }
+    if work_finish {
+        let installation=access::Permission::from_policy(policy_decision(&policy,"v3_worker_submit"))
+            .unwrap_or(access::Permission::Deny);
+        let ceiling=access.tool_decision_for_abilities("v3_worker_submit",&["v3_build".into()],
+            installation,true,true,mode["mode"]=="read_only",false).for_execution_mode(&mode).permission;
+        if ceiling==access::Permission::Deny || (ceiling==access::Permission::Ask && work_permission!=access::Permission::Ask) {
+            bail!("Existing deployment authorization requires approval or denies finish");
+        }
+    }
+    // An Ask finish reaches this host only after explicit approval. Its queued job
+    // retains that authorization while the scoped policy fingerprint stays valid.
     // A finish can replace this loop's ability bundle while its broker job is
     // still live. Policy, activation, and access remain in the fingerprint;
     // bundle bytes alone cannot revoke the job during its own deployment.
@@ -91,15 +110,16 @@ fn build_work_arguments(args:&Value)->Result<Value> {
     Ok(Value::Object(forwarded))
 }
 async fn host(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:CancellationToken)->Result<Value> {
-    let fingerprint_name=if name=="v3_build_work" && matches!(args["action"].as_str(),Some("finish"|"decide")) {"v3_build_work_finish"} else {name};
+    let fingerprint_name=if name=="build_work" && matches!(args["action"].as_str(),Some("finish"|"decide")) {"build_work_finish"} else if name=="v3_build_work" && matches!(args["action"].as_str(),Some("finish"|"decide")) {"v3_build_work_finish"} else {name};
     let fingerprint=host_fingerprint(app,sid,run_id,fingerprint_name).await?;
     let trusted=json!({"user_id":app.store.current_user_id(),"session_id":sid,
         "lease_until":now()+30,"access_fingerprint":fingerprint});
-    if matches!(name,"v3_build_image"|"v3_worker_submit") || (name=="v3_build_work" && matches!(args["action"].as_str(),Some("finish"|"decide"))) {
+    if matches!(name,"v3_build_image"|"v3_worker_submit") || (matches!(name,"v3_build_work"|"build_work") && matches!(args["action"].as_str(),Some("finish"|"decide"))) {
         app.store.put(&format!("administrator_host:{sid}"),&json!({"session_id":sid,
             "run_id":run_id,"tool_name":fingerprint_name,"access_fingerprint":fingerprint})).await?;
     }
-    let forwarded=if name=="v3_build_work" {build_work_arguments(args)?} else {args.clone()};
+    let mut forwarded=if name=="v3_build_work" {build_work_arguments(args)?} else {args.clone()};
+    if let Some(object)=forwarded.as_object_mut(){object.retain(|_,value|!value.is_null());}
     tools::execute_trusted(name,&forwarded,sid,std::path::Path::new("/run/v3/build/build.sock"),Some(trusted),cancel).await
 }
 
@@ -185,6 +205,20 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
     let run=app.run(run_id).await?;
     if run["session_id"]!=sid || run["agent_id"].as_str().unwrap_or("shared_default")!=agent {bail!("Current run/session mismatch");}
     match name {
+        "file_list"|"file_read"|"file_search"|"file_edit"|"file_write"=>{
+            if args.get("task_id").is_some_and(|value|!value.is_null()) {
+                host(app,sid,run_id,name,args,cancel).await
+            } else {
+                let mut live=args.clone();
+                if let Some(object)=live.as_object_mut(){
+                    object.remove("task_id");
+                    object.retain(|_,value|!value.is_null());
+                    if object.contains_key("expected_inputs_sha256") || object.contains_key("request_id") {bail!("Task write arguments require task_id; live fallback denied");}
+                }
+                worker(app,sid,name,&live,None,cancel).await
+            }
+        },
+        "build_work"=>host(app,sid,run_id,name,args,cancel).await,
         "repository_access"=>repository_access(app,sid,args,cancel).await,
         "read_diagnostics"=>{
             match diagnostics_target(args,run_id) {
