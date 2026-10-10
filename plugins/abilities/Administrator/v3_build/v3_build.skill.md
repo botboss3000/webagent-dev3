@@ -1,5 +1,13 @@
 # V3 development release workflow
 
+## Current Codebase Admin interface
+
+When working through Codebase Admin, follow its standard skill: use file_list/read/search/edit/write with one task_id and current input digest, then build_work for review/check/preflight and authorized finish. Missing tasks are created automatically. New files use file_write; do not handwrite patches for this interface. Load rust_quality for Rust engineering guidance.
+
+The v3_source_* instructions below describe the separate legacy V3 Build interface. Use them only when those exact tools are exposed by the live catalog; never mix their patch arguments with Codebase Admin file tools. Operators using buildctl and checked unified diffs follow repository instructions.
+
+## Legacy V3 Build interface
+
 For V3 source changes use the V3 Build broker (isolated task) unless the task explicitly calls for direct checkout work — this skill is that broker workflow. Use one stable task ID per source change. Call `v3_build_work(action="begin", mode="isolated", task_id=..., summary=...)` before editing. The receipt gives a private task source snapshot and its input digest. Other tasks may stay open or build while this task is edited. Use `v3_source_list` to discover its directories, then `v3_source_read` with an existing file path to inspect conventions before preparing a patch. For main-panel page work, read `docs/ui-pages.md` first — it is the authoritative page contract (folder layout, `page.json`, HTML-entry vs JS-entry). For new files, call `v3_source_prepare` with each complete LF-terminated file and the current task digest. Review its returned exact diff, then call `v3_source_apply_prepared` with `prepared_id`, the task ID, a stable request ID, and that same digest. For edits to existing files, review a standard Git diff and pass it as `patch` to `v3_source_apply`. Keep these calls separate: the prepared tool accepts only an ID, and the raw tool accepts only patch text. The broker checks paths, digest and `git apply --check` before patching only this task's snapshot. After an uncertain apply, follow the receipt rule in the `v3_source_apply` tool skill.
 
 The broker's isolated task source is separate from the session workspace. `v3_workspace_status.seeded=false` does not say whether the broker source exists and does not block `v3_source_list`, `v3_source_read`, or `v3_source_apply`. A directory passed to `v3_source_read` is a usage error; list it and read a returned file path. A missing file means inspect the list, not that the task snapshot is unavailable.

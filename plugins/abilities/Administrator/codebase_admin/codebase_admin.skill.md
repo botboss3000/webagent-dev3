@@ -1,5 +1,7 @@
 # Codebase Admin
 
+For v3 Rust work, load the selectable rust_quality skill in this ability for ownership, async design, correctness, and measured optimization guidance. This standard skill remains authoritative for task editing and release workflow.
+
 Choose the target from the request. Explicit direct/live edits and runtime configuration (such as data/config/chat.json) use file tools without task_id (or with null). Application source changes intended for a build/release use file tools with one stable task_id, 8-80 letters/digits/underscores/hyphens. Do not ask the user to choose a tool. Do not use live edits as a fallback when a task edit fails.
 
 With task_id, file_list/read/search/edit/write automatically create a missing isolated task. Paths are relative to the source root, such as src/example.rs or ui/chat/chat.css; never /live-checkout or a task host path. Reuse the same task_id throughout the change. Without task_id, relative paths start at /live-checkout and absolute container paths retain their usual OS permissions.

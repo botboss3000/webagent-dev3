@@ -1,1 +1,3 @@
+Legacy session-workspace workflow, separate from isolated broker tasks. Use only if the live catalog exposes this tool. It is not a substitute for task-scoped file tools or build_work.
+
 Apply a text-only unified diff to the seeded `webagent-v3/` source. Call `source_review` first and pass its complete `review_sha256` as `expected_review_sha256`; stale or truncated reviews are rejected. This tool requires approval and can change up to 64 files. Inspect the new review and run relevant checks after success. If the outcome is uncertain, inspect the workspace before retrying. This does not promote changes to the live checkout.

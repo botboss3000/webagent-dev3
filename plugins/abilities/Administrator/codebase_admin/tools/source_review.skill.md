@@ -1,3 +1,5 @@
+Legacy session-workspace workflow, separate from isolated broker tasks. Use only if the live catalog exposes this tool. It is not a substitute for task-scoped file tools or build_work.
+
 Inspect the seeded `webagent-v3/` source changes without an approval-gated shell call. The result includes Git status and a unified diff for tracked edits and new files. It does not change the repository index. Use `review_sha256` to identify a complete review bound to the Git baseline; `diff_sha256` identifies the patch text. If `truncated` is true, the diff is incomplete: narrow the change or inspect files individually before presenting it for review. This is a review aid, not permission to deploy or modify the live checkout.
 
 ## Runtime tool execution
