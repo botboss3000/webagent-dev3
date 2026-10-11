@@ -1098,7 +1098,7 @@ class Broker:
             if any(p.strip() in {"cargo", "rustc", "rustdoc", "buildx"}
                    for p in processes.splitlines()):
                 return {"status": "deferred", "reason": "compiler active"}
-            ids = self.runner.command(["docker", "ps", "-q"], timeout=5).split()
+            ids = self.runner.command(["docker", "ps", "-aq", "--filter", "name=webagent-dev.*3"], timeout=5).split()
             containers = json.loads(self.runner.command(["docker", "inspect", *ids], timeout=10, private_raw=True)) if ids else []
             mounts = [Path(m["Source"]).resolve() for c in containers
                       for m in c.get("Mounts", []) if m.get("Source") and Path(m["Source"]).resolve() != self.state.parent.resolve()]
@@ -1110,58 +1110,87 @@ class Broker:
                     fcntl.flock(pruning_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     return {"status": "deferred", "reason": "artifact pruning active"}
+                candidates = []
                 for base in (self.state / "checks", self.work_dir / "checks"):
                     if base.is_symlink() or not base.is_dir():
                         continue
                     for owner in sorted(base.iterdir()):
                         if owner.is_symlink() or not owner.is_dir():
                             continue
-                        # Fixed direct children only: scratch directories can
-                        # contain unique experiments and are deliberately retained.
+                        item = self.work.get(owner.name) or next((t for t in self.work.values()
+                            if t.get("task_id") == owner.name), {})
                         for name in ("target", "cargo"):
-                            cache = owner / name
-                            if cache.is_symlink() or not cache.is_dir():
-                                continue
-                            resolved = cache.resolve()
-                            if any(resolved == m or resolved in m.parents or m in resolved.parents for m in mounts):
-                                continue
-                            item = self.work.get(owner.name) or next((t for t in self.work.values()
-                                if t.get("task_id") == owner.name), {})
-                            newest = max(cache.stat().st_mtime, item.get("last_activity_at", 0))
-                            entries = 0
-                            for directory, dirs, files in os.walk(cache, followlinks=False):
-                                for entry in (*dirs, *files):
-                                    entries += 1
-                                    newest = max(newest, (Path(directory) / entry).lstat().st_mtime)
-                                if entries > 100000 or now - newest < 7200:
-                                    break
-                            if entries > 100000 or now - newest < 7200:
-                                continue
-                            # Recheck external activity immediately before deletion.
-                            processes = self.runner.command(["ps", "-eo", "comm="], timeout=5)
-                            if any(p.strip() in {"cargo", "rustc", "rustdoc", "buildx"} for p in processes.splitlines()):
-                                return {"status": "deferred", "reason": "compiler started", "removed": removed}
-                            current_ids = self.runner.command(["docker", "ps", "-q"], timeout=5).split()
-                            current_containers = json.loads(self.runner.command(["docker", "inspect", *current_ids], timeout=10, private_raw=True)) if current_ids else []
-                            current_mounts = [Path(m["Source"]).resolve() for c in current_containers
-                                for m in c.get("Mounts", []) if m.get("Source") and Path(m["Source"]).resolve() != self.state.parent.resolve()]
-                            if any(resolved == m or resolved in m.parents or m in resolved.parents for m in current_mounts):
-                                continue
-                            size = int(self.runner.command(["du", "-s", "-B1", "--one-file-system", "--", str(cache)], timeout=10).split()[0])
-                            receipt = {"path": str(cache.relative_to(self.state)), "bytes": size,
-                                       "expired_at": now, "idle_seconds": now - newest,
-                                       "kind": "rebuildable_check_cache"}
-                            # Persist intent before effects; receipts remain even
-                            # when interruption leaves a partially removed cache.
-                            receipts = self.state / "cache-pruning"
-                            receipts.mkdir(exist_ok=True)
-                            receipt_path = receipts / (uuid.uuid4().hex + ".json")
-                            atomic_json(receipt_path, dict(receipt, status="removing"))
-                            shutil.rmtree(cache)
-                            atomic_json(receipt_path, dict(receipt, status="removed"))
-                            removed.append(receipt)
-                            if len(removed) >= 4:
-                                return {"status": "completed", "removed": removed}
+                            candidates.append((owner / name, item, "rebuildable_check_cache"))
+                checkout_target = self.state.parent / "target"
+                if not checkout_target.is_symlink():
+                    for name in ("debug", "release", "cargo-home", "session-naming-check/debug"):
+                        candidates.append((checkout_target / name, {}, "rebuildable_checkout_cache"))
+                for key, item in self.work.items():
+                    clearance = item.get("retention_clearance", {})
+                    job = self.jobs.get(item.get("job_id"), {})
+                    if (not re.fullmatch(r"[a-f0-9]{64}", key) or item.get("status") != "closed"
+                            or item.get("job_id") == "4f605f3b-4444-4447-a511-3a9d4b9677df"
+                            or clearance.get("unique_work_preserved") is not True
+                            or clearance.get("effects_reconciled") is not True
+                            or now - clearance.get("at", now) < 7200
+                            or clearance.get("job_digest") != hashlib.sha256(canonical(job)).hexdigest()):
+                        continue
+                    root = self.work_dir / "trees" / key
+                    if root.is_symlink():
+                        continue
+                    if root.is_dir():
+                        if context_digest(release.snapshot(root, TASK_CONTEXT, context_digest))[0] != clearance.get("source_digest"):
+                            continue
+                        candidates.append((root, item, "reconciled_task_source"))
+                    elif not clearance.get("source_removed_at"):
+                        continue
+                    job_id = item.get("job_id", "")
+                    if re.fullmatch(r"[0-9a-f-]{36}", job_id):
+                        candidates.append((self.state / job_id, item, "reconciled_job_artifacts"))
+                for cache, item, kind in candidates:
+                    if any(parent.is_symlink() for parent in (cache, *cache.parents)) or not cache.is_dir():
+                        continue
+                    resolved = cache.resolve()
+                    if any(resolved == m or resolved in m.parents or m in resolved.parents for m in mounts):
+                        continue
+                    newest = max(cache.stat().st_mtime, item.get("last_activity_at", 0))
+                    entries = 0
+                    for directory, dirs, files in os.walk(cache, followlinks=False):
+                        for entry in (*dirs, *files):
+                            entries += 1
+                            newest = max(newest, (Path(directory) / entry).lstat().st_mtime)
+                        if entries > 100000 or now - newest < 7200:
+                            break
+                    if entries > 100000 or now - newest < 7200:
+                        continue
+                    # Recheck external activity immediately before deletion.
+                    processes = self.runner.command(["ps", "-eo", "comm="], timeout=5)
+                    if any(p.strip() in {"cargo", "rustc", "rustdoc", "buildx"} for p in processes.splitlines()):
+                        return {"status": "deferred", "reason": "compiler started", "removed": removed}
+                    current_ids = self.runner.command(["docker", "ps", "-aq", "--filter", "name=webagent-dev.*3"], timeout=5).split()
+                    current_containers = json.loads(self.runner.command(["docker", "inspect", *current_ids], timeout=10, private_raw=True)) if current_ids else []
+                    current_mounts = [Path(m["Source"]).resolve() for c in current_containers
+                        for m in c.get("Mounts", []) if m.get("Source") and Path(m["Source"]).resolve() != self.state.parent.resolve()]
+                    if any(resolved == m or resolved in m.parents or m in resolved.parents for m in current_mounts):
+                        continue
+                    size = int(self.runner.command(["du", "-s", "-B1", "--one-file-system", "--", str(cache)], timeout=10).split()[0])
+                    receipt = {"path": str(cache.relative_to(self.state.parent)), "bytes": size,
+                               "expired_at": now, "idle_seconds": now - newest,
+                               "kind": kind}
+                    # Persist intent before effects; receipts remain even
+                    # when interruption leaves a partially removed cache.
+                    receipts = self.state / "cache-pruning"
+                    receipts.mkdir(exist_ok=True)
+                    receipt_path = receipts / (uuid.uuid4().hex + ".json")
+                    atomic_json(receipt_path, dict(receipt, status="removing"))
+                    shutil.rmtree(cache)
+                    if kind == "reconciled_task_source":
+                        item["retention_clearance"]["source_removed_at"] = now
+                        self._save_work()
+                    atomic_json(receipt_path, dict(receipt, status="removed"))
+                    removed.append(receipt)
+                    if len(removed) >= 4:
+                        return {"status": "completed", "removed": removed}
             return {"status": "completed", "removed": removed}
 
     def reconcile_leftovers(self):
@@ -1841,6 +1870,30 @@ class Broker:
                         "operator_adopted": True, "checkout_promotion": "conflicted"}
             if name == "v3_build_cancel":
                 return self._cancel_job(args, trusted, workspace)
+            if name == "v3_build_retention_clearance":
+                if (not trusted.get("local_caller") or trusted["user_id"] != "codex-local"
+                        or workspace != LOCAL_WORKSPACE):
+                    raise PermissionError("local operator reconciliation required")
+                if set(args) != {"notice_id", "unique_work_preserved", "effects_reconciled"} or args["unique_work_preserved"] is not True or args["effects_reconciled"] is not True:
+                    raise ValueError("Explicit unique-work and effect reconciliation required")
+                if self.active or self.active_ui or any(j.get("status") in {"queued", "running", "needs_decision"} for j in self.jobs.values()):
+                    raise ValueError("build queue must be idle")
+                self._reconcile_leftover_state()
+                key, item = next(((k,t) for k,t in self.work.items()
+                    if t.get("leftover_notice", {}).get("id") == args["notice_id"]), (None, None))
+                if not item or item.get("status") != "closed" or item.get("job_id") == "4f605f3b-4444-4447-a511-3a9d4b9677df":
+                    raise ValueError("unchanged unpinned terminal task notice required")
+                job = self.jobs.get(item.get("job_id"), {})
+                if job.get("status") not in {"failed", "interrupted", "uncertain", "stale"}:
+                    raise ValueError("unresolved terminal job required")
+                root = self.work_dir / "trees" / key
+                source_digest = context_digest(release.snapshot(root, TASK_CONTEXT, context_digest))[0]
+                item["retention_clearance"] = {"at": time.time(), "source_digest": source_digest,
+                    "job_digest": hashlib.sha256(canonical(job)).hexdigest(),
+                    "notice_id": args["notice_id"], "unique_work_preserved": True, "effects_reconciled": True}
+                self._save_work()
+                return {"task_id": item["task_id"], "status": "cleared_for_retention",
+                        "grace_seconds": 7200}
             if name == "v3_build_leftovers":
                 if args:
                     raise ValueError("Leftover notice read takes no arguments")
@@ -2887,7 +2940,7 @@ async def serve(broker, listener, bridge_listener=None):
                     "access_fingerprint": hashlib.sha256(b"python-v2-build-bridge").hexdigest(),
                     "bridge_caller": True}
             elif uid == 1000:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": "codex-local", "session_id": LOCAL_WORKSPACE,

@@ -171,3 +171,23 @@ receipts, runtime data and rollback releases are outside this cache policy.
 Operator checks must start Cargo before writing these caches and must mount any
 cache used by a disposable container; prefer broker Cargo checks for admission
 coordination. Expired caches rebuild on the next check.
+
+
+### Checkout caches and reconciled terminal artifacts
+
+The same broker minute pass expires fixed checkout `target/debug`,
+`target/release`, `target/cargo-home` and `target/session-naming-check/debug`
+after two idle hours. Adjacent logs and evidence remain. Specific V3 container
+mounts, including stopped rollback mounts, are preserved; the broad live checkout
+mount does not pin rebuildable caches.
+
+Failed, interrupted, stale and uncertain task source/job artifacts require an
+explicit local operator investigation before automatic deletion. Preserve unique
+edits elsewhere and reconcile external effects first. Read the current reminder
+identity and use `buildctl.py clear-retention NOTICE_ID --unique-work-preserved
+--effects-reconciled` only when both assertions are true. This records exact source
+and job digests, then starts a two-hour grace period. A changed source or job
+invalidates eligibility. The pinned `4f605f3b-4444-4447-a511-3a9d4b9677df` job is
+excluded. Job JSON receipts and task metadata remain, including original uncertain
+status; clearance is not a build replay or outcome rewrite. Reminder review alone
+does not authorize deletion. No live database or session workspace is eligible.

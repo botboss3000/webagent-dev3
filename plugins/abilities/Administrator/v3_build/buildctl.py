@@ -109,6 +109,10 @@ def main():
     parser = argparse.ArgumentParser(description="Coordinate V3 development builds with WebAgent")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
+    clearance = commands.add_parser("clear-retention", help="record investigated terminal task cleanup clearance")
+    clearance.add_argument("notice_id")
+    clearance.add_argument("--unique-work-preserved", action="store_true", required=True)
+    clearance.add_argument("--effects-reconciled", action="store_true", required=True)
     commands.add_parser("leftovers", help="read this operator caller’s retained-task notices")
     review = commands.add_parser("review-leftover", help="acknowledge one unchanged notice; never delete work")
     review.add_argument("notice_id")
@@ -167,6 +171,9 @@ def main():
                      "expected_job_ids": affected})
         if result.get("job") is None:
             raise ValueError("build job receipt unavailable")
+    elif args.command == "clear-retention":
+        result = call("v3_build_retention_clearance", {"notice_id": args.notice_id,
+            "unique_work_preserved": args.unique_work_preserved, "effects_reconciled": args.effects_reconciled})
     elif args.command == "leftovers":
         result = call("v3_build_leftovers", {})
     elif args.command == "review-leftover":
