@@ -1,7 +1,7 @@
 //! Pure assembly of a model-call envelope beside the runtime loop.
 //! Producers resolve authorization before calling this module. Credentials,
 //! dispatch, approvals and durable history writes remain with the runtime.
-use anyhow::{bail, Result};
+use anyhow::Result;
 use serde::Serialize;
 use serde_json::{json, Value};
 use crate::{context_compaction, context_input, provider};
@@ -82,7 +82,7 @@ pub struct Report {
 }
 fn size<T: Serialize + ?Sized>(value: &T) -> Result<usize> { crate::context_accounting::json_size(value) }
 
-/// Keep existing base/slot ordering and limits when pinning a run's prompt.
+/// Keep existing base/slot ordering when pinning a run's prompt.
 pub fn pinned_instructions(base: &str, slots: &[Value]) -> Result<String> {
     let mut instructions = base.to_owned();
     for slot in slots {
@@ -91,7 +91,6 @@ pub fn pinned_instructions(base: &str, slots: &[Value]) -> Result<String> {
             instructions.push_str(content.trim());
         }
     }
-    if instructions.len() > 96 * 1024 { bail!("Agent instructions exceed provider limit"); }
     Ok(instructions)
 }
 
@@ -108,7 +107,7 @@ pub fn prepare_incremental<'a>(request: Request<'a>, state: &mut crate::context_
     for decision in &selected {
         if decision.disposition == "included" { instructions.push('\n'); instructions.push_str(&decision.item.content); }
     }
-    if instructions.is_empty() || instructions.len() > 96 * 1024 {
+    if instructions.is_empty() {
         return Err(Failure::new("instruction_limit", "instructions").into());
     }
     // Keep the existing logical-envelope budget semantics, without allocating JSON buffers.
@@ -210,6 +209,20 @@ mod tests {
             contributions: &[overlay], identity: CallIdentity { turn: 1, call: 1 },
             selection: &selection, max_bytes: 600, compaction: &test_config(100) }).is_err());
     }
+    #[test]
+    fn large_administrator_instructions_use_whole_request_budget() {
+        let base="a".repeat(110000);let guidance="g".repeat(50000);
+        let selection=selection();let mut config=test_config(100);
+        config.trigger_tokens=200000;config.tail_tokens=10000;
+        let request=Request{history:&[],base:&base,guidance:&guidance,schemas:&[],contributions:&[],
+            identity:CallIdentity{turn:1,call:1},selection:&selection,max_bytes:300000,compaction:&config};
+        assert_eq!(pinned_instructions(&base,&[]).unwrap(),base);
+        let Prepared::Ready(envelope)=prepare(request).unwrap() else {panic!("unexpected compaction")};
+        assert_eq!(envelope.instructions,format!("{base}{guidance}"));
+        let error=prepare(Request{max_bytes:160000,..request}).err().unwrap();
+        assert_eq!(failure_code(&error),("overhead_exceeds_budget","budget"));
+    }
+
     #[test]
     fn pinned_prompt_keeps_order_and_ignores_empty_slots() {
         assert_eq!(pinned_instructions("base", &[json!({"content":" a "}),

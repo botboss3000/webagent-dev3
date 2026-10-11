@@ -213,7 +213,7 @@ async fn agent_tool_off_revokes_schema_and_survives_reopen() {
 }
 
 #[tokio::test]
-async fn discoverable_tool_requires_loading_its_ability() {
+async fn discoverable_tool_requires_its_own_selection() {
     let (_root, app) = fixture().await;
     let result = agent_tool_mode_set(
         State(app.clone()),
@@ -222,8 +222,10 @@ async fn discoverable_tool_requires_loading_its_ability() {
     ).await.unwrap().0;
     let state = json!({"active":["codebase_admin"],"suppressed":[]});
     assert!(!app.abilities.tool_available("file_read", &result, &state, &json!([])));
-    assert!(app.abilities.tool_available("file_read", &result, &state,
+    assert!(!app.abilities.tool_available("file_read", &result, &state,
         &json!(["codebase_admin"])));
+    assert!(app.abilities.tool_available("file_read", &result, &state,
+        &json!(["tool:file_read"])));
 }
 
 #[tokio::test]
@@ -2840,11 +2842,9 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
         .any(|ability| ability["id"] == "codebase_admin"));
     let loaded = result_for(&requests[2], "load");
     assert_eq!(loaded["status"], "ok");
-    assert!(loaded["ability"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tool| tool["name"] == "state_inspect"));
+    assert_eq!(loaded["ability_id"],"codebase_admin");
+    assert_eq!(loaded["context_source"],"live_ability_catalog");
+    assert!(requests[2]["instructions"].as_str().unwrap().contains("Codebase Admin"));
     let inspected = result_for(&requests[3], "inspect");
     assert_eq!(inspected["status"], "success");
     let messages = inspected["output"]["messages"].as_array().unwrap();
@@ -4120,7 +4120,8 @@ async fn diagnostics_route_is_authenticated_session_bound_and_redacted() {
     assert_eq!(body["reasoning_cleanup_logical_bytes_removed"],0);
     assert!(body["latest_context_assembly"].is_null());
     assert_eq!(body["last_successful_assembly"],body["context_summary"]);
-    assert_eq!(body.as_object().unwrap().len(), 9);
+    assert_eq!(body.as_object().unwrap().len(), 10);
+    assert!(body["ability_context"].is_null());
 }
 
 #[tokio::test]
@@ -6946,4 +6947,150 @@ async fn consolidated_build_finish_waits_for_receipt_without_replaying_write() {
     assert_eq!(durable["input"].as_array().unwrap().last().unwrap()["call_id"],
         "original-build-call");
     assert_eq!(durable["pending"], Value::Null);
+}
+
+// Native catalog journeys use isolated storage and exact dispatch, without a
+// Decision model or external worker; grants remain independent of discovery.
+async fn visibility_fixture_base_access(app:&App) {
+    let mut tier=app.store.entitlement_tier("operator").await.unwrap().unwrap();
+    let revision=tier.revision;
+    tier.ability_permissions.insert("base".into(),access::Permission::Auto);
+    app.store.save_entitlement_tier(tier,revision).await.unwrap();
+    let mut level=app.store.live_access("admin","shared_default").await.unwrap().capability_level;
+    level.ability_permissions.insert("base".into(),access::Permission::Auto);
+    app.store.save_capability_level("shared_default",level,0).await.unwrap();
+    let mut visibility=app.store.agent_abilities().await.unwrap();
+    let revision=visibility["revision"].as_u64().unwrap();
+    visibility["visibility"]["base"]=json!("visible");
+    visibility["skill_visibility"]["base"]=json!("visible");
+    visibility["visibility"]["codebase_admin"]=json!("visible");
+    app.store.save_agent_abilities(&visibility,revision).await.unwrap();
+}
+async fn visibility_native_call(app:&App,sid:&str,id:&str,name:&str,args:Value)->Value {
+    let mut run=app.run(id).await.unwrap();
+    run["pending"]=json!({"name":name,"call_id":uuid(),"arguments":args});
+    let policy=workflow::Policy::resolve(None).unwrap();
+    workflow::record(&mut run,&policy,&checkpoint_pre_tool(name),workflow::Decision::Pass).unwrap();
+    app.save(&mut run).await.unwrap();
+    let result=if tools::core_skills::owns(name) {
+        tools::core_skills::execute(app,sid,id,name,&args,CancellationToken::new()).await.unwrap()
+    } else {
+        tools::core_tool_search::execute(app,sid,id,name,&args,CancellationToken::new()).await.unwrap()
+    };
+    let mut run=app.run(id).await.unwrap();
+    append_tool(&mut run,&result).unwrap();
+    app.save(&mut run).await.unwrap();
+    result
+}
+#[tokio::test]
+async fn native_skill_catalog_marks_supplied_guidance_and_rebuilds_selected_after_compaction() {
+    let (_root,app)=fixture().await;
+    visibility_fixture_base_access(&app).await;
+    let sid=conversation(&app).await;
+    let id=queued(&app,&sid).await;
+    running(&app,&id,"skill-visibility").await;
+    let full=visibility_native_call(&app,&sid,&id,"list_skills",
+        json!({"ability_id":"base","include_available":true})).await;
+    assert_eq!(full["status"],"success","{full}");
+    let core=full["output"]["skills"].as_array().unwrap().iter()
+        .find(|row|row["kind"]=="ability").unwrap();
+    assert_eq!(core["availability"],"visible");
+    let core_id=core["skill_id"].clone();
+    let default=visibility_native_call(&app,&sid,&id,"list_skills",json!({"ability_id":"base"})).await;
+    assert!(default["output"]["skills"].as_array().unwrap().iter()
+        .all(|row|row["requires_activation"]==true && row["availability"]=="discoverable"));
+    let ack=visibility_native_call(&app,&sid,&id,"load_skill",json!({
+        "ability_id":"base","kind":"ability","skill_id":core_id})).await;
+    assert_eq!(ack["output"]["status"],"already_available","{ack}");
+    assert!(ack["output"].get("text").is_none());
+    assert!(app.run(&id).await.unwrap()["loaded_skills"].as_array().is_none_or(|items|items.is_empty()));
+    let sentinel="DURABLE_SELECTED_SKILL_GUIDANCE";
+    app.store.mutate_own_skill("journey_steps",Some("when testing visibility"),Some(sentinel),
+        Some("selectable"),0,false,"visibility-create",&id).await.unwrap();
+    let result=visibility_native_call(&app,&sid,&id,"load_skill",json!({
+        "ability_id":"base","kind":"own","skill_id":"journey_steps"})).await;
+    assert_eq!(result["status"],"success","{result}");
+    assert_eq!(result["output"]["text"],sentinel);
+    let mut run=app.run(&id).await.unwrap();
+    assert_eq!(run["loaded_skills"].as_array().unwrap().len(),1);
+    assert!(!run["loaded_skills"].to_string().contains(sentinel));
+    // Simulate replacement of tool history with compacted history; selector
+    // authority persists independently and rehydrates the complete fresh body.
+    run["input"]=json!([{"role":"assistant","content":"Compacted conversation."}]);
+    app.save(&mut run).await.unwrap();
+    assert!(tools::core_skills::active_guidance(&app,&sid,&id).await.unwrap().contains(sentinel));
+    assert_eq!(session_ability_state(&app,&sid).await.unwrap()["active"],json!([]));
+    let default=visibility_native_call(&app,&sid,&id,"list_skills",json!({"ability_id":"base"})).await;
+    assert!(!default["output"]["skills"].as_array().unwrap().iter().any(|row|row["skill_id"]=="journey_steps"));
+    let full=visibility_native_call(&app,&sid,&id,"list_skills",json!({
+        "ability_id":"base","include_available":true})).await;
+    assert_eq!(full["output"]["skills"].as_array().unwrap().iter()
+        .find(|row|row["skill_id"]=="journey_steps").unwrap()["availability"],"activated");
+    let ack=visibility_native_call(&app,&sid,&id,"load_skill",json!({
+        "ability_id":"base","kind":"own","skill_id":"journey_steps"})).await;
+    assert_eq!(ack["output"]["status"],"already_available");
+    assert!(ack["output"].get("text").is_none());
+    app.store.mutate_own_skill("journey_steps",None,Some("REPLACEMENT"),None,1,false,
+        "visibility-edit",&id).await.unwrap();
+    let guidance=tools::core_skills::active_guidance(&app,&sid,&id).await.unwrap();
+    assert!(!guidance.contains(sentinel) && !guidance.contains("REPLACEMENT"));
+    let mut visibility=app.store.agent_abilities().await.unwrap();
+    let revision=visibility["revision"].as_u64().unwrap();
+    visibility["visibility"]["base"]=json!("off");
+    app.store.save_agent_abilities(&visibility,revision).await.unwrap();
+    assert!(tools::core_skills::active_guidance(&app,&sid,&id).await.unwrap().is_empty());
+}
+#[tokio::test]
+async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppression() {
+    let (_root,app)=fixture().await;
+    visibility_fixture_base_access(&app).await;
+    let sid=conversation(&app).await;
+    let id=queued(&app,&sid).await;
+    running(&app,&id,"tool-visibility").await;
+    app.store.put(&key("session_mode",&sid),&json!({"mode":"read_only","revision":1})).await.unwrap();
+    let mut visibility=app.store.agent_abilities().await.unwrap();
+    let revision=visibility["revision"].as_u64().unwrap();
+    visibility["tool_modes"]["state_inspect"]=json!("discoverable");
+    app.store.save_agent_abilities(&visibility,revision).await.unwrap();
+    let listed=visibility_native_call(&app,&sid,&id,"list_tools",json!({})).await;
+    assert_eq!(listed["status"],"success","{listed}");
+    assert!(listed["output"]["tools"].as_array().unwrap().iter()
+        .any(|row|row["name"]=="state_inspect" && row["availability"]=="discoverable"));
+    let loaded=visibility_native_call(&app,&sid,&id,"load_tool",json!({"tool_name":"state_inspect"})).await;
+    assert_eq!(loaded["status"],"success","{loaded}");
+    assert_eq!(loaded["output"]["activated"],true);
+    let run=app.run(&id).await.unwrap();
+    assert!(run["loaded_abilities"].as_array().unwrap().contains(&json!("tool:state_inspect")));
+    assert_eq!(session_ability_state(&app,&sid).await.unwrap()["active"],json!([]));
+    let ack=visibility_native_call(&app,&sid,&id,"load_tool",json!({"tool_name":"state_inspect"})).await;
+    assert_eq!(ack["status"],"already_available","{ack}");
+    let listed=visibility_native_call(&app,&sid,&id,"list_tools",json!({})).await;
+    assert!(!listed["output"]["tools"].as_array().unwrap().iter().any(|row|row["name"]=="state_inspect"));
+    let full=visibility_native_call(&app,&sid,&id,"list_tools",json!({"include_available":true})).await;
+    assert_eq!(full["output"]["tools"].as_array().unwrap().iter()
+        .find(|row|row["name"]=="state_inspect").unwrap()["availability"],"activated");
+    let visible=visibility_native_call(&app,&sid,&id,"load_tool",json!({"tool_name":"file_read"})).await;
+    assert_eq!(visible["status"],"already_available","{visible}");
+    assert!(!app.run(&id).await.unwrap()["loaded_abilities"].as_array().unwrap().contains(&json!("tool:file_read")));
+    let mut visibility=app.store.agent_abilities().await.unwrap();
+    let revision=visibility["revision"].as_u64().unwrap();
+    visibility["tool_modes"]["state_inspect"]=json!("off");
+    app.store.save_agent_abilities(&visibility,revision).await.unwrap();
+    let off=visibility_native_call(&app,&sid,&id,"load_tool",json!({"tool_name":"state_inspect"})).await;
+    assert_eq!(off["status"],"denied","{off}");
+    let mut visibility=app.store.agent_abilities().await.unwrap();
+    let revision=visibility["revision"].as_u64().unwrap();
+    visibility["tool_modes"]["state_inspect"]=json!("discoverable");
+    app.store.save_agent_abilities(&visibility,revision).await.unwrap();
+    let mut policy=app.store.get("policy").await.unwrap().unwrap();
+    policy["rules"]["state_inspect"]=json!("deny");
+    app.store.put("policy",&policy).await.unwrap();
+    let denied=visibility_native_call(&app,&sid,&id,"load_tool",json!({"tool_name":"state_inspect"})).await;
+    assert_eq!(denied["status"],"denied","{denied}");
+    policy["rules"]["state_inspect"]=json!("allow");
+    app.store.put("policy",&policy).await.unwrap();
+    app.store.put(&key("session_ability_state",&sid),&json!({
+        "revision":1,"active":[],"suppressed":["codebase_admin"]})).await.unwrap();
+    let suppressed=visibility_native_call(&app,&sid,&id,"load_tool",json!({"tool_name":"state_inspect"})).await;
+    assert_eq!(suppressed["status"],"denied","{suppressed}");
 }

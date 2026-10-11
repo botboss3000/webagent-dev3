@@ -121,11 +121,12 @@ fn record_interrupted_tool(run: &mut Value, name: &str) -> Result<Option<Value>>
 }
 
 // Recheck all context authority after credential retrieval, under the dispatch gate.
-async fn dispatch_asset_key(app:&App,sid:&str,agent_id:&str,loaded:&Value,selected:&Value)->Result<String> {
+async fn dispatch_asset_key(app:&App,sid:&str,agent_id:&str,loaded:&Value,selected:&Value,skills:&Value)->Result<String> {
     let access=app.store.live_access(app.store.current_user_id(),agent_id).await?;
     let (policy,_,visibility,state)=ability_controls(app,sid).await?;
     let mode=session_mode(app,sid).await?;
-    Ok(digest(&json!([app.abilities.live_version(),policy,visibility,state,loaded,selected,
+    let own=app.store.list_own_skills().await?;
+    Ok(digest(&json!([app.abilities.live_version(),own["revision"],policy,visibility,state,loaded,selected,skills,
         mode,access.context_fingerprint()])))
 }
 pub(crate) async fn execute_run(
@@ -138,7 +139,7 @@ pub(crate) async fn execute_run(
     // CONTEXT-ASSET-CACHE: one entry per executing run, never shared across callers.
     // Fresh live access and all shaping controls below invalidate this derived data;
     // actual tool execution still performs its own live authorization checks.
-    let mut context_assets: Option<(String, Vec<Value>, String)> = None;
+    let mut context_assets: Option<(String, Vec<Value>, String, Vec<abilities::AbilityInclusion>)> = None;
     loop {
         let _guard = app.gate.lock().await;
         let mut run = app.run(&id).await?;
@@ -327,6 +328,26 @@ pub(crate) async fn execute_run(
                 json!({"mode":"read_only","execution_mode":"ask","revision":mode["revision"]})
             } else {mode.clone()};
             let read_only=authorization_mode["mode"]=="read_only";
+            // Rehydrate legacy native load results before removing their replay text.
+            // New results already have content-free selectors saved by append_tool.
+            let prior_skills=run["loaded_skills"].clone();
+            let history=run["input"].as_array().cloned().unwrap_or_default();
+            let mut calls=std::collections::BTreeMap::new();
+            for item in history {
+                if item["type"]=="function_call" && item["name"]=="load_skill" {
+                    if let Some(id)=item["call_id"].as_str() {calls.insert(id.to_owned(),item.clone());}
+                } else if item["type"]=="function_call_output" {
+                    if let Some(call)=item["call_id"].as_str().and_then(|id|calls.remove(id)) {
+                        if let Some(result)=item["output"].as_str().and_then(|raw|serde_json::from_str::<Value>(raw).ok()) {
+                            let mut projection=json!({"pending":{"name":"load_skill","arguments":call["arguments"]},
+                                "loaded_skills":run["loaded_skills"]});
+                            tools::core_skills::apply_selection(&mut projection,&result);
+                            run["loaded_skills"]=projection["loaded_skills"].clone();
+                        }
+                    }
+                }
+            }
+            if run["loaded_skills"]!=prior_skills {app.save(&mut run).await?;}
             // Old skill results are historical evidence, never continuing authority.
             // Mask derived recovery context; original interaction journal stays intact.
             if tools::core_skills::mask_withdrawn_history(&app,&sid,&id,
@@ -336,8 +357,9 @@ pub(crate) async fn execute_run(
             // CONTEXT-ASSET-KEY: include full freshly resolved access (including
             // grants), live bundle validity, policy, visibility, loaded state and session mode.
             // Hash only in memory; never publish private grant data in reports.
-            let asset_key = digest(&json!([app.abilities.live_version(), policy, visibility,
-                ability_state, run["loaded_abilities"], run["selected_tools"], mode, access.context_fingerprint()]));
+            let own_skills=app.store.list_own_skills().await?;
+            let asset_key = digest(&json!([app.abilities.live_version(), own_skills["revision"], policy, visibility,
+                ability_state, run["loaded_abilities"], run["selected_tools"], run["loaded_skills"], mode, access.context_fingerprint()]));
             if context_assets.as_ref().map(|entry| &entry.0) != Some(&asset_key) {
                 let schemas = app.abilities.schemas_with(&policy, &run["loaded_abilities"], &visibility, &ability_state)
                     .into_iter().filter(|schema| {
@@ -362,20 +384,49 @@ pub(crate) async fn execute_run(
                 // Search adds tool markers; live visibility and loaded abilities
                 // continue to expose their authorized schemas and guidance.
                 let index=abilities::Catalog::model_index(&entries,&schemas);
-                let visible=app.abilities.visible_guidance_filtered(&policy,&visibility,
+                let permitted_tools=entries.iter().flat_map(|entry|entry["tools"].as_array().into_iter().flatten())
+                    .filter_map(|tool|tool["name"].as_str()).collect::<std::collections::HashSet<_>>();
+                let visible=app.abilities.visible_guidance_authorized(&policy,&visibility,
                     &ability_state,
                     |id|access.ability_permission(id)!=access::Permission::Deny,
+                    |name|permitted_tools.contains(name),
                     |name|live_tool_decision(&app,&access,name,&policy,&visibility,
                         &ability_state,&run["loaded_abilities"],read_only)
                         .permission!=access::Permission::Deny);
                 let extra=tools::core_tool_search::additional_guidance(&app,&schemas,&visibility,&run["loaded_abilities"],&visible);
-                let visible=format!("{visible}{extra}");
+                let (loaded_guidance,included_skills)=tools::core_skills::context_guidance(&app,&sid,&id,read_only).await?;
+                let visible=format!("{visible}{extra}{loaded_guidance}");
                 let names=schemas.iter().filter_map(|schema|schema["name"].as_str().map(str::to_owned)).collect::<Vec<_>>();
                 let execution=crate::tool_execution::guidance(&visibility,&names)?;
                 let guidance=format!("{index}{visible}\n{execution}");
-                context_assets = Some((asset_key, schemas, guidance));
+                let mut inclusion = app.abilities.context_inclusion(&entries,&schemas,&visibility,&ability_state,&run["loaded_abilities"],&json!([]));
+                if let Some(base)=inclusion.iter_mut().find(|entry|entry.id=="base") {
+                    for skill in own_skills["skills"].as_array().into_iter().flatten() {
+                        let Some(body)=skill["instructions"].as_str() else {continue;};
+                        let included=included_skills.iter().any(|item|item["ability_id"]=="base"
+                            && item["kind"]=="own" && item["skill_id"]==skill["name"]);
+                        let bytes=if included {body.len()} else {0};
+                        base.guidance_bytes+=bytes;
+                        base.skills.push(abilities::SkillInclusion {kind:"own".into(),
+                            id:skill["name"].as_str().unwrap_or("").into(),mode:"discoverable".into(),included,
+                            content_bytes:bytes,reason:if included {"included"} else {"discoverable"}.into()});
+                    }
+                }
+                for asset in &included_skills {
+                    if asset["kind"]=="own" {continue;}
+                    if let Some(entry)=inclusion.iter_mut().find(|entry|asset["ability_id"]==entry.id) {
+                        if let Some(skill)=entry.skills.iter_mut().find(|skill|asset["kind"]==skill.kind&&asset["skill_id"]==skill.id) {
+                            if !skill.included {
+                                skill.included=true;skill.reason="included".into();
+                                skill.content_bytes=asset["bytes"].as_u64().unwrap_or(0) as usize;
+                                entry.guidance_bytes+=skill.content_bytes;
+                            }
+                        }
+                    }
+                }
+                context_assets = Some((asset_key, schemas, guidance, inclusion));
             }
-            let (assembled_asset_key, base_schemas, guidance) = context_assets.as_ref().unwrap();
+            let (assembled_asset_key, base_schemas, guidance, inclusion) = context_assets.as_ref().unwrap();
             let assembled_asset_key=assembled_asset_key.clone();
             let mut gate_schemas = base_schemas.clone();
             for schema in &mut gate_schemas {
@@ -391,6 +442,8 @@ pub(crate) async fn execute_run(
                 mode_content.push_str(&format!("\nExecution mode: {label}\n{}",mode["definition"]["prompt"].as_str().unwrap_or("")));
             }
             let call_number = run["attempt"].as_u64().unwrap_or(0) + 1;
+            run["ability_context"] = serde_json::to_value(abilities::AbilityContext {
+                turn:run["turns"].as_u64().unwrap_or(0), call:call_number, abilities:inclusion.clone() })?;
             let mut contributions = vec![context_input::Contribution {
                 id: "session_mode".into(), source: "native_session_mode".into(),
                 lifetime: context_input::Lifetime::Call, content: mode_content,
@@ -628,7 +681,7 @@ pub(crate) async fn execute_run(
                 || live_choice.as_ref().and_then(|v|v["revision"].as_u64()).unwrap_or(0)!=current["chat_model_revision"].as_u64().unwrap_or(0) {
                 drop(sender);drop(dispatch_guard);let _=drain.await;continue;
             }
-            if !dispatch_asset_key(&app,&sid,&agent_id,&current["loaded_abilities"],&current["selected_tools"]).await
+            if !dispatch_asset_key(&app,&sid,&agent_id,&current["loaded_abilities"],&current["selected_tools"],&current["loaded_skills"]).await
                     .is_ok_and(|key|key==assembled_asset_key) {
                     current["status"]=json!("stopped");
                     current["error"]=json!("Ability access or bundle changed before model dispatch; review and resume");
@@ -822,7 +875,7 @@ pub(crate) async fn execute_run(
                 || live_choice.as_ref().and_then(|v|v["revision"].as_u64()).unwrap_or(0)!=current["chat_model_revision"].as_u64().unwrap_or(0) {
                 drop(sender);drop(dispatch_guard);let _=collector.await;continue;
             }
-            if !dispatch_asset_key(&app,&sid,&agent_id,&current["loaded_abilities"],&current["selected_tools"]).await
+            if !dispatch_asset_key(&app,&sid,&agent_id,&current["loaded_abilities"],&current["selected_tools"],&current["loaded_skills"]).await
                 .is_ok_and(|key|key==assembled_asset_key) {
                 current["status"]=json!("stopped");
                 current["error"]=json!("Ability access or bundle changed before model dispatch; review and resume");
@@ -1283,7 +1336,7 @@ pub(crate) async fn execute_run(
                         entries.retain_mut(|entry|filter_ability_entry(&app,&access,entry,
                             &policy,&visibility,&ability_state,&run["loaded_abilities"],read_only));
                     }
-                } else if result["status"]=="ok" {
+                } else if matches!(result["status"].as_str(), Some("ok" | "already_available")) {
                     let allowed=filter_ability_entry(&app,&access,&mut result["ability"],
                         &policy,&visibility,&ability_state,&run["loaded_abilities"],read_only);
                     if !allowed {

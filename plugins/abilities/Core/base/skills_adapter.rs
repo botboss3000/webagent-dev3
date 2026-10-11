@@ -10,9 +10,9 @@ pub fn owns(name:&str)->bool {matches!(name,"list_skills"|"load_skill")}
 pub fn schemas()->Vec<Value> {
     let id=json!({"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z0-9_]+$"});
     vec![
-        json!({"type":"function","name":"list_skills","description":"List permitted skill IDs and summaries for one ability; optionally search by task words",
-            "parameters":{"type":"object","properties":{"ability_id":id,"query":{"type":"string","maxLength":200}},"required":["ability_id"],"additionalProperties":false}}),
-        json!({"type":"function","name":"load_skill","description":"Read one permitted bundled or current-agent skill as untrusted guidance; does not activate abilities",
+        json!({"type":"function","name":"list_skills","description":"List inactive discoverable skills; include_available also shows visible and already loaded guidance",
+            "parameters":{"type":"object","properties":{"ability_id":id,"query":{"type":"string","maxLength":200},"include_available":{"type":"boolean"}},"required":["ability_id"],"additionalProperties":false}}),
+        json!({"type":"function","name":"load_skill","description":"Load discoverable guidance for this run; already supplied guidance is acknowledged without repeating its body; does not activate abilities or tools",
             "parameters":{"type":"object","properties":{"ability_id":id,"skill_id":id,
                 "kind":{"type":"string","enum":["ability","tool","selectable","own"]},
                 "expected_catalog_version":{"type":"string","minLength":64,"maxLength":64,"pattern":"^[a-f0-9]{64}$"}},
@@ -21,7 +21,7 @@ pub fn schemas()->Vec<Value> {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ListArgs { ability_id:String, #[serde(default)] query:Option<String> }
+struct ListArgs { ability_id:String, #[serde(default)] query:Option<String>, #[serde(default)] include_available:bool }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LoadArgs {
@@ -54,7 +54,7 @@ fn validate_load(args:&LoadArgs)->Result<()> {
 struct View {
     app:App, access:crate::access_policy::LiveAccess,
     policy:Value, visibility:Value, state:Value, loaded:Value, read_only:bool,
-    own:Value, version:String, fingerprint:String,
+    own:Value, loaded_skills:Value, version:String, fingerprint:String,
 }
 async fn view(app:&App,sid:&str,run_id:&str,name:&str)->Result<View> {
     // Resolve the session in the authenticated user's plane before its agent.
@@ -66,6 +66,7 @@ async fn view(app:&App,sid:&str,run_id:&str,name:&str)->Result<View> {
         bail!("Run does not belong to current session and agent");
     }
     let loaded=run["loaded_abilities"].clone();
+    let loaded_skills=run["loaded_skills"].clone();
     let (policy,mode_revision,visibility,state)=ability_controls(&scoped,sid).await?;
     let mode=session_mode(&scoped,sid).await?;
     let read_only=mode["mode"]=="read_only";
@@ -80,16 +81,119 @@ async fn view(app:&App,sid:&str,run_id:&str,name:&str)->Result<View> {
     let bundle_version=scoped.abilities.live_version();
     let version=crate::digest(&json!([bundle_version,own["revision"]]));
     let fingerprint=crate::digest(&json!([version,policy,mode_revision,visibility,state,
-        loaded,mode,access.context_fingerprint()]));
-    Ok(View {app:scoped,access,policy,visibility,state,loaded,read_only,own,version,fingerprint})
+        loaded,loaded_skills,mode,access.context_fingerprint()]));
+    Ok(View {app:scoped,access,policy,visibility,state,loaded,read_only,own,loaded_skills,version,fingerprint})
+}
+fn same_asset(left:&Value,right:&Value)->bool {
+    left["ability_id"]==right["ability_id"] && left["kind"]==right["kind"]
+        && left["skill_id"]==right["skill_id"] && left["sha256"]==right["sha256"]
+        && left["revision"]==right["revision"]
+}
+fn mark_availability(asset:&mut Value,loaded:&Value,tools:&Value) {
+    let tool_selected=asset["kind"]=="tool" && tools.as_array().is_some_and(|items|items.iter()
+        .any(|item|item.as_str()==Some(format!("tool:{}",asset["skill_id"].as_str().unwrap_or("")).as_str())));
+    let available=asset["availability"]=="visible" || asset["availability"]=="activated" || tool_selected
+        || loaded.as_array().is_some_and(|items|items.iter().any(|item|same_asset(item,asset)));
+    if available && asset["availability"]!="visible" {asset["availability"]=json!("activated");}
+    if !available {asset["availability"]=json!("discoverable");}
+    asset["requires_activation"]=json!(!available);
+}
+fn own_asset(record:&Value)->Result<Value> {
+    // Own-skill storage currently supports selectable mode only, never pinned text.
+    if record["mode"]!="selectable" {bail!("Current-agent skill unavailable");}
+    let text=record["instructions"].as_str().context("Invalid own-skill instructions")?;
+    use sha2::{Digest,Sha256};
+    Ok(json!({"ability_id":"base","kind":"own","skill_id":record["name"],
+        "mode":"discoverable","availability":"discoverable","requires_activation":true,
+        "revision":record["revision"],"bytes":text.len(),
+        "sha256":hex::encode(Sha256::digest(text.as_bytes())),"text":text,
+        "source_kind":"untrusted_agent_skill","activates":false}))
+}
+fn skill_tool_allowed(current:&View,tool:&str)->bool {
+    // This selector permits reading tool guidance; it grants no execution state.
+    let mut loaded=current.loaded.as_array().cloned().unwrap_or_default();
+    loaded.push(json!(format!("tool:{tool}")));
+    live_tool_decision(&current.app,&current.access,tool,&current.policy,
+        &current.visibility,&current.state,&json!(loaded),current.read_only)
+        .permission!=crate::access::Permission::Deny
+}
+fn load_asset(current:&View,query:&LoadArgs)->Result<Value> {
+    let allow_ability=|id:&str|current.access.ability_permission(id)!=crate::access::Permission::Deny;
+    let allow_tool=|tool:&str|skill_tool_allowed(current,tool);
+    if query.kind=="own" {
+        current.app.abilities.bundled_skill_list("base",&current.visibility,
+            &current.state,allow_ability,allow_tool)?;
+        let record=current.own["skills"].as_array().context("Invalid own-skill list")?
+            .iter().find(|record|record["name"]==query.skill_id)
+            .context("Current-agent skill unavailable")?;
+        own_asset(record)
+    } else {
+        current.app.abilities.bundled_skill_load(&query.ability_id,&query.kind,
+            &query.skill_id,&current.visibility,&current.state,allow_ability,allow_tool)
+    }
+}
+/// Persist selectors only after the caller fences the current native execution.
+pub(crate) fn apply_selection(run:&mut Value,result:&Value) {
+    if run["pending"]["name"]!="load_skill" || result["status"]!="success" {return;}
+    let asset=&result["output"];
+    let Ok(evidence)=serde_json::from_value::<NativeEvidence>(asset.clone()) else {return;};
+    let args=run["pending"]["arguments"].clone();
+    let selector=if let Some(raw)=args.as_str() {serde_json::from_str::<LoadArgs>(raw)}
+        else {serde_json::from_value::<LoadArgs>(args)};
+    let Ok(selector)=selector else {return;};
+    use sha2::{Digest,Sha256};
+    if validate_load(&selector).is_err() || evidence.activates
+        || evidence.ability_id!=selector.ability_id || evidence.kind!=selector.kind
+        || evidence.skill_id!=selector.skill_id || evidence.bytes!=evidence.text.len()
+        || evidence.sha256!=hex::encode(Sha256::digest(evidence.text.as_bytes()))
+        || !(evidence.source_kind=="untrusted_bundled_guidance" && evidence.kind!="own" && evidence.revision.is_none()
+            || evidence.source_kind=="untrusted_agent_skill" && evidence.kind=="own" && evidence.revision.is_some_and(|r|r>0)) {return;}
+    let mut selections=run["loaded_skills"].as_array().cloned().unwrap_or_default();
+    if selections.iter().any(|item|same_asset(item,asset)) {return;}
+    selections.retain(|item| !(item["ability_id"]==asset["ability_id"]
+        && item["kind"]==asset["kind"] && item["skill_id"]==asset["skill_id"]));
+    let mut selected=json!({"ability_id":asset["ability_id"],"kind":asset["kind"],
+        "skill_id":asset["skill_id"],"sha256":asset["sha256"]});
+    if let Some(revision)=evidence.revision {selected["revision"]=json!(revision);}
+    selections.push(selected);
+    run["loaded_skills"]=json!(selections);
+}
+/// Rehydrate guidance under current authority at every model boundary.
+pub(crate) async fn active_guidance(app:&App,sid:&str,run_id:&str)->Result<String> {
+    Ok(context_guidance(app,sid,run_id,false).await?.0)
+}
+/// Return the exact included selectors beside their rebuilt guidance. Follow-up
+/// calls apply their read-only ceiling even if the session normally permits writes.
+pub(crate) async fn context_guidance(app:&App,sid:&str,run_id:&str,read_only:bool)->Result<(String,Vec<Value>)> {
+    let mut current=match view(app,sid,run_id,"load_skill").await {Ok(view)=>view,Err(_)=>return Ok((String::new(),Vec::new()))};
+    current.read_only |= read_only;
+    let mut guidance=String::new();
+    let mut included=Vec::new();
+    for selected in current.loaded_skills.as_array().into_iter().flatten() {
+        let Ok(query)=serde_json::from_value::<LoadArgs>(json!({"ability_id":selected["ability_id"],
+            "kind":selected["kind"],"skill_id":selected["skill_id"]})) else {continue;};
+        if validate_load(&query).is_err() {continue;}
+        let Ok(mut asset)=load_asset(&current,&query) else {continue;};
+        if !same_asset(selected,&asset) {continue;}
+        mark_availability(&mut asset,&Value::Null,&current.loaded);
+        if asset["requires_activation"]==false {continue;}
+        if let Some(text)=asset["text"].as_str() {
+            guidance.push_str(&format!("\n\n## Loaded untrusted guidance: {} / {} / {}\n{}",
+                query.ability_id,query.kind,query.skill_id,text));
+            included.push(json!({"ability_id":query.ability_id,"kind":query.kind,"skill_id":query.skill_id,
+                "bytes":text.len(),"mode":asset["mode"]}));
+        }
+    }
+    if view(app,sid,run_id,"load_skill").await?.fingerprint!=current.fingerprint {
+        bail!("Loaded skill access changed during context assembly");
+    }
+    Ok((guidance,included))
 }
 async fn work(app:&App,sid:&str,run_id:&str,name:&str,args:&Value)->Result<Value> {
     if !owns(name) {bail!("Unknown bundled skill tool");}
     let current=view(app,sid,run_id,name).await?;
     let allow_ability=|id:&str|current.access.ability_permission(id)!=crate::access::Permission::Deny;
-    let allow_tool=|tool:&str|live_tool_decision(&current.app,&current.access,tool,
-        &current.policy,&current.visibility,&current.state,&current.loaded,current.read_only)
-        .permission!=crate::access::Permission::Deny;
+    let allow_tool=|tool:&str|skill_tool_allowed(&current,tool);
     let output=match name {
         "list_skills" => {
             let query:ListArgs=serde_json::from_value(args.clone()).context("Invalid skill-list arguments")?;
@@ -97,18 +201,21 @@ async fn work(app:&App,sid:&str,run_id:&str,name:&str,args:&Value)->Result<Value
             let mut skills=current.app.abilities.bundled_skill_list(&query.ability_id,
                 &current.visibility,&current.state,allow_ability,allow_tool)?;
             if query.ability_id=="base" {
-                for skill in current.own["skills"].as_array().context("Invalid own-skill list")? {
-                    // Listing carries only the trigger and revision, never body text.
-                    skills.push(json!({"ability_id":"base","kind":"own",
-                        "skill_id":skill["name"],"description":skill["description"],
-                        "mode":skill["mode"],"revision":skill["revision"]}));
+                for record in current.own["skills"].as_array().context("Invalid own-skill list")? {
+                    if record["mode"]=="off" {continue;}
+                    let mut metadata=own_asset(record)?;
+                    metadata.as_object_mut().unwrap().remove("text");
+                    metadata["description"]=record["description"].clone();
+                    skills.push(metadata);
                 }
             }
+            for skill in &mut skills { mark_availability(skill,&current.loaded_skills,&current.loaded); }
+            if !query.include_available {skills.retain(|skill|skill["requires_activation"]==true);}
             if let Some(term) = query.query.as_deref().filter(|term| !term.trim().is_empty()) {
                 if term.len()>200 {bail!("Skill search query is too long");}
                 skills.retain(|skill| skill_matches(skill,term));
             }
-            json!({"ability_id":query.ability_id,"skills":skills,"catalog_version":current.version,
+            json!({"ability_id":query.ability_id,"skills":skills,"include_available":query.include_available,"catalog_version":current.version,
                 "source_kind":"skill_metadata","activates":false})
         }
         "load_skill" => {
@@ -117,22 +224,13 @@ async fn work(app:&App,sid:&str,run_id:&str,name:&str,args:&Value)->Result<Value
             if query.expected_catalog_version.as_ref().is_some_and(|v|v!=&current.version) {
                 bail!("Skill catalog changed; list skills again");
             }
-            let mut skill=if query.kind=="own" {
-                current.app.abilities.bundled_skill_list("base",&current.visibility,
-                    &current.state,allow_ability,allow_tool)?;
-                let record=current.own["skills"].as_array().context("Invalid own-skill list")?
-                    .iter().find(|record|record["name"]==query.skill_id)
-                    .context("Current-agent skill unavailable")?;
-                let text=record["instructions"].as_str().context("Invalid own-skill instructions")?;
-                use sha2::{Digest,Sha256};
-                json!({"ability_id":"base","kind":"own","skill_id":query.skill_id,
-                    "revision":record["revision"],"bytes":text.len(),
-                    "sha256":hex::encode(Sha256::digest(text.as_bytes())),
-                    "text":text,"source_kind":"untrusted_agent_skill","activates":false})
-            } else {
-                current.app.abilities.bundled_skill_load(&query.ability_id,&query.kind,
-                    &query.skill_id,&current.visibility,&current.state,allow_ability,allow_tool)?
-            };
+            let mut skill=load_asset(&current,&query)?;
+            mark_availability(&mut skill,&current.loaded_skills,&current.loaded);
+            if skill["requires_activation"]==false {
+                skill.as_object_mut().context("Invalid skill metadata")?.remove("text");
+                skill["status"]=json!("already_available");
+                skill["message"]=json!("This guidance is already supplied to the current model context.");
+            } else {skill["status"]=json!("ok");}
             skill["catalog_version"]=json!(current.version);
             skill
         }
@@ -158,7 +256,6 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:
 }
 // run.input is derived recovery context and may persist this masked projection.
 // The immutable encrypted interactions journal retains the original evidence.
-const MAX_HISTORY_SKILL_OUTPUT:usize=512*1024;
 #[derive(Deserialize)]
 struct NativeEvidence {
     ability_id:String, kind:String, skill_id:String, sha256:String,
@@ -190,7 +287,7 @@ fn mask_history(input:&mut [Value],allow:impl Fn(&NativeEvidence)->bool)->bool {
         // Consume the completed exchange. Providers may reuse an ID in a later
         // sequential exchange; simultaneous duplicate calls remain ambiguous.
         let Some(selector)=item["call_id"].as_str().and_then(|id|calls.remove(id)).flatten() else {continue;};
-        let Some(raw)=item["output"].as_str().filter(|raw|raw.len()<=MAX_HISTORY_SKILL_OUTPUT) else {continue;};
+        let Some(raw)=item["output"].as_str() else {continue;};
         let Ok(result)=serde_json::from_str::<NativeResult>(raw) else {continue;};
         let evidence=&result.output;
         let bundled=evidence.source_kind=="untrusted_bundled_guidance"
@@ -201,7 +298,7 @@ fn mask_history(input:&mut [Value],allow:impl Fn(&NativeEvidence)->bool)->bool {
         if result.status!="success" || !(bundled || own)
             || evidence.activates || evidence.ability_id!=selector.ability_id
             || evidence.kind!=selector.kind || evidence.skill_id!=selector.skill_id
-            || evidence.text.len()>64*1024 || evidence.bytes!=evidence.text.len()
+            || evidence.bytes!=evidence.text.len()
             || evidence.sha256.len()!=64
             || evidence.sha256!=hex::encode(Sha256::digest(evidence.text.as_bytes())) {continue;}
         if !allow(evidence) {
@@ -233,7 +330,7 @@ fn history_asset_allowed(current:&View,evidence:&NativeEvidence)->bool {
         return current.own["skills"].as_array().is_some_and(|skills|skills.iter().any(|skill| {
             let Some(text)=skill["instructions"].as_str() else {return false};
             use sha2::{Digest,Sha256};
-            skill["name"].as_str()==Some(evidence.skill_id.as_str())
+            skill["mode"]=="selectable" && skill["name"].as_str()==Some(evidence.skill_id.as_str())
                 && skill["revision"].as_i64()==evidence.revision
                 && hex::encode(Sha256::digest(text.as_bytes()))==evidence.sha256
         }));
@@ -284,6 +381,53 @@ mod tests {
                     "text":text,"bytes":text.len(),
                     "sha256":hex::encode(Sha256::digest(text.as_bytes())),
                     "source_kind":"untrusted_agent_skill","activates":false}}).to_string()})]
+    }
+    #[test]
+    fn loaded_skill_selectors_are_content_free_idempotent_and_bound_to_pending_call() {
+        let history=history_pair("load_skill","LOAD BODY");
+        let result:Value=serde_json::from_str(history[1]["output"].as_str().unwrap()).unwrap();
+        let mut run=json!({"pending":{"name":"load_skill","arguments":{
+            "ability_id":"base","kind":"ability","skill_id":"base"}}});
+        apply_selection(&mut run,&result);
+        assert_eq!(run["loaded_skills"].as_array().unwrap().len(),1);
+        assert!(!run.to_string().contains("LOAD BODY"));
+        let saved=run.clone();
+        apply_selection(&mut run,&result);
+        assert_eq!(run,saved);
+        run["pending"]["arguments"]["skill_id"]=json!("different");
+        let before=run.clone();
+        apply_selection(&mut run,&result);
+        assert_eq!(run,before);
+        let mut forged=result;
+        forged["output"]["text"]=json!("TAMPERED");
+        apply_selection(&mut run,&forged);
+        assert_eq!(run,before);
+    }
+    #[test]
+    fn availability_distinguishes_pinned_loaded_and_changed_guidance() {
+        let mut visible=json!({"ability_id":"base","kind":"ability","skill_id":"base",
+            "sha256":"old","availability":"visible"});
+        mark_availability(&mut visible,&Value::Null,&Value::Null);
+        assert_eq!(visible["requires_activation"],false);
+        assert_eq!(visible["availability"],"visible");
+        let mut hidden=json!({"ability_id":"base","kind":"selectable","skill_id":"guide",
+            "sha256":"old","availability":"discoverable"});
+        let selected=json!([hidden.clone()]);
+        mark_availability(&mut hidden,&selected,&Value::Null);
+        assert_eq!(hidden["availability"],"activated");
+        assert_eq!(hidden["requires_activation"],false);
+        hidden["availability"]=json!("discoverable");
+        hidden["sha256"]=json!("replacement");
+        mark_availability(&mut hidden,&selected,&Value::Null);
+        assert_eq!(hidden["requires_activation"],true);
+        let mut tool=json!({"ability_id":"files","kind":"tool","skill_id":"file_read",
+            "sha256":"x","availability":"discoverable"});
+        mark_availability(&mut tool,&Value::Null,&json!(["tool:file_read"]));
+        assert_eq!(tool["availability"],"activated");
+        assert_eq!(tool["requires_activation"],false);
+        assert!(serde_json::from_value::<ListArgs>(json!({"ability_id":"base",
+            "include_available":"true"})).is_err());
+        assert!(!serde_json::from_value::<ListArgs>(json!({"ability_id":"base"})).unwrap().include_available);
     }
     #[test]
     fn withdrawn_own_guidance_is_masked_from_run_and_summary_context() {
@@ -346,7 +490,7 @@ mod tests {
         assert!(!mask_history(&mut mismatched,|_|false));
         assert_eq!(mismatched,original);
         let mut oversized=history_pair("load_skill","x");
-        oversized[1]["output"]=json!("x".repeat(MAX_HISTORY_SKILL_OUTPUT+1));
+        oversized[1]["output"]=json!("x".repeat(512*1024+1));
         assert!(!mask_history(&mut oversized,|_|false));
         let mut duplicate=history_pair("load_skill","ambiguous");
         duplicate.insert(1,duplicate[0].clone());

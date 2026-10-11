@@ -452,14 +452,14 @@ fn pause_classification_and_public_projection_do_not_leak_content() {
     let long = "x".repeat(100000);
     let error = crate::context_assembly::prepare(Request {
         base: &long,
-        max_bytes: 1000000,
+        max_bytes: 99999,
         ..request
     })
     .err()
     .unwrap();
     assert_eq!(
         crate::context_assembly::failure_code(&error),
-        ("instruction_limit", "instructions")
+        ("overhead_exceeds_budget", "budget")
     );
     let event = json!({"attempt_id":crate::uuid(),"report":{"outcome":"failed","failure_code":"PRIVATE","stage":"PRIVATE","private_overlay":"PRIVATE","history_json_bytes":123,"compaction":{"pending_calls":1,"private":"PRIVATE"}}});
     let safe = crate::public_assembly_attempt(&event);

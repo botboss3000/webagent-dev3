@@ -113,7 +113,7 @@ pub(crate) async fn call_raw(
     } else if tools::core_self_edit::owns(&name) {
         tools::core_self_edit::execute(&app,&sid,&run_id,&name,&args,&pending_id,cancel).await
     } else if tools::core_tool_search::owns(&name) {
-        tools::core_tool_search::execute(&app,&sid,&run_id,&args,cancel).await
+        tools::core_tool_search::execute(&app,&sid,&run_id,&name,&args,cancel).await
     } else if tools::core_search::owns(&name) {
         tools::core_search::execute(&app,&sid,&run_id,&name,&args,cancel).await
     } else if tools::core_compaction::owns(&name) {

@@ -285,7 +285,8 @@ fn run_diagnostics(run: &Value) -> Value {
         "uncertain":run["uncertain"],"checkpoints":checkpoints,
         "context_summary":public_context_summary(run),
         "latest_context_assembly":public_assembly_attempt(&run["latest_context_assembly"]),
-        "last_successful_assembly":public_context_summary(run)})
+        "last_successful_assembly":public_context_summary(run),
+        "ability_context":abilities::AbilityContext::public(&run["ability_context"])})
 }
 async fn run_diagnostics_api(
     State(app): State<App>,
@@ -630,8 +631,8 @@ async fn effective_policy(app: &App, sid: &str) -> Result<(Value, u64)> {
         .await?
         .unwrap_or_else(policy_default);
     // New Base discovery is available by default; an explicit saved denial wins.
-    if policy["rules"].get("search_tools").is_none() {
-        policy["rules"]["search_tools"]=json!("allow");
+    for name in ["search_tools","list_tools","load_tool"] {
+        if policy["rules"].get(name).is_none() {policy["rules"][name]=json!("allow");}
     }
     for name in ["task_status","task_wait","task_cancel"] {
         if policy["rules"].get(name).is_none() {policy["rules"][name]=json!("allow");}

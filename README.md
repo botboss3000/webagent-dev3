@@ -1008,3 +1008,9 @@ Phase 1 adds a transactional metadata-only lifecycle outbox with administrator
 long-poll/SSE reads, cursor backfill, 30-day/one-million-row retention and scoped
 revocable event-reader credentials. See [the implementation contract](docs/outbound-notifications.md).
 Webhook subscriptions and delivery remain Phase 2; widget engagement is excluded.
+
+### Visible and discoverable context
+
+Visible ability guidance and configured Visible skills are supplied in full at every model-call boundary. Ability, tool and skill visibility remain independent. `list_abilities`, `list_tools` and `list_skills` default to inactive Discoverable items; `include_available: true` includes items already Visible or Activated. Redundant loads return an acknowledgment without duplicating instructions. `load_tool` selects one exact permitted tool without a Decision model; ranked `search_tools` retains its TypeSafe requirement.
+
+Activated abilities remain session state. Exact tool and skill selectors remain run state across compaction and restart; skill selectors bind to the validated catalog hash and own-skill revision. Rust rebuilds full live guidance and tool schemas alongside boot guidance before compacted conversation history. Only content-free load acknowledgments enter provider replay and summaries; the encrypted interaction journal retains the original evidence. Off settings, suppression and fresh caller policy withdraw guidance and execution independently. The configured full request budget applies; guidance has no separate fixed size cap. Matching-session run diagnostics expose content-free ability/skill inclusion and schema names through `ability_context`.

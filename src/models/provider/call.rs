@@ -65,7 +65,7 @@ impl<'a> CallDraft<'a> {
     }
 
     pub(crate) fn validate(self) -> Result<ValidatedCall<'a>> {
-        if self.instructions.is_empty() || self.instructions.len() > MAX_INSTRUCTIONS {
+        if self.instructions.is_empty() {
             return Err(typed_failure(
                 crate::model_selection::FailureKind::MalformedRequest,
                 false,
@@ -201,6 +201,15 @@ mod tests {
     }
 
     #[test]
+    fn large_instructions_are_valid_when_the_complete_model_input_fits() {
+        for provider in [ProviderId::OpenaiSubscription,ProviderId::Deepseek] {
+            let selection=ProviderSelection{limits:None,provider,model:"fixture".into()};
+            let text="x".repeat(120000);
+            assert!(CallDraft::new(&selection,vec![],vec![],"s",&text).validate().is_ok());
+        }
+    }
+
+    #[test]
     fn instruction_failure_precedes_transport_and_credentials() {
         for provider in [
             ProviderId::OpenaiSubscription,
@@ -211,7 +220,7 @@ mod tests {
                 provider,
                 model: "fixture".into(),
             };
-            for instructions in ["".to_owned(), "x".repeat(MAX_INSTRUCTIONS + 1)] {
+            for instructions in ["".to_owned()] {
                 let error = CallDraft::new(&selection, vec![], vec![], "s", &instructions)
                     .validate()
                     .err()

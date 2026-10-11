@@ -9,9 +9,53 @@ use std::{
 };
 
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
-const MAX_SKILL_BYTES: u64 = 32 * 1024;
-const MAX_SELECTABLE_SKILL_BYTES: u64 = 64 * 1024;
 const MAX_ABILITIES: usize = 128;
+
+/// Content-free evidence generated from the same authorized model-call assets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AbilityContext {
+    pub turn: u64,
+    pub call: u64,
+    pub abilities: Vec<AbilityInclusion>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AbilityInclusion {
+    pub id: String,
+    pub visibility: String,
+    pub availability: String,
+    pub guidance_bytes: usize,
+    pub schemas: Vec<String>,
+    pub skills: Vec<SkillInclusion>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SkillInclusion {
+    pub kind: String,
+    pub id: String,
+    pub mode: String,
+    pub included: bool,
+    pub content_bytes: usize,
+    pub reason: String,
+}
+impl AbilityContext {
+    pub(crate) fn public(value: &Value) -> Option<Self> {
+        let report: Self = serde_json::from_value(value.clone()).ok()?;
+        if report.abilities.len() > MAX_ABILITIES || report.abilities.iter().any(|a|
+            !valid_id(&a.id) || !matches!(a.visibility.as_str(), "visible" | "discoverable")
+            || !matches!(a.availability.as_str(), "visible" | "activated" | "discoverable")
+            || a.schemas.len() > 512 || a.schemas.iter().any(|id| !valid_id(id))
+            || a.skills.len() > 512 || a.skills.iter().any(|s| !valid_id(&s.id)
+                || !matches!(s.kind.as_str(), "ability" | "tool" | "selectable" | "own")
+                || !matches!(s.mode.as_str(), "visible" | "discoverable" | "off")
+                || !matches!(s.reason.as_str(), "included" | "off" | "discoverable" | "unavailable"))) {
+            return None;
+        }
+        Some(report)
+    }
+}
+
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -169,13 +213,13 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
         .with_context(|| format!("Invalid ability manifest: {}", path.display()))
 }
 
-fn optional_skill(path: &Path, limit: u64) -> Result<Option<String>> {
+fn optional_skill(path: &Path) -> Result<Option<String>> {
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
         Ok(_) => {}
     }
-    let bytes = read_bytes(path, limit)?;
+    let bytes = read_bytes(path, fs::symlink_metadata(path)?.len())?;
     let text = String::from_utf8(bytes)
         .with_context(|| format!("Invalid ability skill text: {}", path.display()))?;
     if text.trim().is_empty() {
@@ -294,7 +338,6 @@ impl Catalog {
                     }
                     if let Some(skill) = optional_skill(
                         &ability_path.join("tools").join(format!("{tool}.skill.md")),
-                        MAX_SKILL_BYTES,
                     )? {
                         tool_skills.insert(tool.clone(), skill);
                     }
@@ -311,7 +354,7 @@ impl Catalog {
                         if !valid_id(key) || selectable_skills.len() >= 32 {
                             bail!("Invalid selectable skill identifier: {id}");
                         }
-                        let text = optional_skill(&asset.path(), MAX_SELECTABLE_SKILL_BYTES)?
+                        let text = optional_skill(&asset.path())?
                             .context("Missing selectable skill")?;
                         selectable_skills.insert(key.to_owned(), text);
                     }
@@ -321,7 +364,6 @@ impl Catalog {
                 }
                 let skill = optional_skill(
                     &ability_path.join(format!("{id}.skill.md")),
-                    MAX_SKILL_BYTES,
                 )?;
                 abilities.push(Ability {
                     id,
@@ -380,15 +422,15 @@ impl Catalog {
     // Only cached, validated bundle IDs can select an asset. Live edits withdraw
     // old guidance instead of importing instructions without a catalog reload.
     fn skill_live(ability: &Ability, kind: &str, name: &str, text: &str) -> bool {
-        let (path, limit) = match kind {
-            "ability" if name == ability.id => (ability.path.join(format!("{name}.skill.md")), MAX_SKILL_BYTES),
-            "tool" if valid_id(name) => (ability.path.join("tools").join(format!("{name}.skill.md")), MAX_SKILL_BYTES),
-            "selectable" if valid_id(name) => (ability.path.join("skills").join(format!("{name}.skill.md")), MAX_SELECTABLE_SKILL_BYTES),
+        let path = match kind {
+            "ability" if name == ability.id => ability.path.join(format!("{name}.skill.md")),
+            "tool" if valid_id(name) => ability.path.join("tools").join(format!("{name}.skill.md")),
+            "selectable" if valid_id(name) => ability.path.join("skills").join(format!("{name}.skill.md")),
             _ => return false,
         };
         path.parent().is_some_and(|parent|
             fs::symlink_metadata(parent).is_ok_and(|m| m.file_type().is_dir()))
-            && read_bytes(&path, limit).is_ok_and(|bytes| bytes == text.as_bytes())
+            && read_bytes(&path, text.len() as u64).is_ok_and(|bytes| bytes == text.as_bytes())
     }
 
     /// Bounded validity fingerprint of cached manifests and skill assets only.
@@ -449,14 +491,26 @@ impl Catalog {
         allow_ability: impl Fn(&str) -> bool, allow_tool: impl Fn(&str) -> bool,
     ) -> Result<Vec<Value>> {
         let (ability, assets) = self.bundled_candidates(ability_id, visibility, state, &allow_ability, &allow_tool)?;
-        Ok(assets.into_iter().map(|(kind, name, text)| json!({
-            "ability_id":ability.id,"kind":kind,"skill_id":name,
-            "bytes":text.len(),"sha256":hex::encode(Sha256::digest(text.as_bytes())),
-            "summary":text.lines().take(16).find_map(|line|
-                line.strip_prefix("when_to_use:").or_else(||line.strip_prefix("title:"))
-                    .or_else(||line.strip_prefix("# ")))
-                .map(|line|line.trim().chars().take(240).collect::<String>())
-        })).collect())
+        Ok(assets.into_iter().map(|(kind, name, text)| {
+            let mode = Self::asset_mode(visibility, ability, kind, name, text);
+            let supplied = mode == "visible";
+            json!({"ability_id":ability.id,"kind":kind,"skill_id":name,
+                "mode":mode,"availability":if supplied {"visible"} else {"discoverable"},
+                "requires_activation":!supplied,
+                "bytes":text.len(),"sha256":hex::encode(Sha256::digest(text.as_bytes())),
+                "summary":text.lines().take(16).find_map(|line|
+                    line.strip_prefix("when_to_use:").or_else(||line.strip_prefix("title:"))
+                        .or_else(||line.strip_prefix("# ")))
+                    .map(|line|line.trim().chars().take(240).collect::<String>())})
+        }).collect())
+    }
+
+    fn asset_mode<'a>(visibility: &'a Value, ability: &Ability, kind: &str, name: &str, text: &str) -> &'a str {
+        match kind {
+            "ability" => Self::skill_mode(visibility,&ability.id),
+            "tool" => Self::tool_mode(visibility,name),
+            _ => Self::selectable_mode(visibility,&ability.id,name,text),
+        }
     }
 
     pub(crate) fn bundled_skill_load(
@@ -470,6 +524,9 @@ impl Catalog {
         let (_, _, text) = assets.into_iter().find(|(k, name, _)| *k == kind && *name == skill_id)
             .context("Bundled skill unavailable under current access")?;
         Ok(json!({"ability_id":ability.id,"kind":kind,"skill_id":skill_id,
+            "mode":Self::asset_mode(visibility,ability,kind,skill_id,text),
+            "availability":if Self::asset_mode(visibility,ability,kind,skill_id,text)=="visible" {"visible"} else {"discoverable"},
+            "requires_activation":Self::asset_mode(visibility,ability,kind,skill_id,text)!="visible",
             "bytes":text.len(),"sha256":hex::encode(Sha256::digest(text.as_bytes())),
             "text":text,"source_kind":"untrusted_bundled_guidance","activates":false}))
     }
@@ -606,7 +663,9 @@ impl Catalog {
             "general_skills":general_skills,
             "skill_visibility":Self::skill_mode(visibility, &ability.id),
             "visibility":if off {"off"} else if visible {"visible"} else {"discoverable"},
-            "active":Self::active(state, &ability.id)})
+            "active":Self::active(state, &ability.id),
+            "availability":if visible {"visible"} else if Self::active(state, &ability.id) {"activated"} else {"discoverable"},
+            "requires_activation":!visible && !Self::active(state, &ability.id)})
     }
 
     pub fn catalog_with(&self, policy: &Value, visibility: &Value, state: &Value) -> Vec<Value> {
@@ -693,7 +752,7 @@ impl Catalog {
             visible |= supported
                 && match Self::tool_mode(visibility, name) {
                     "off" => false,
-                    "discoverable" => Self::contains_id(loaded, &ability.id) || selected,
+                    "discoverable" => selected,
                     _ => true,
                 }
                 && (Self::available(ability, visibility, state)
@@ -732,11 +791,11 @@ impl Catalog {
     ) -> Vec<Value> {
         let mut schemas = vec![
             json!({"type":"function","name":"list_abilities",
-                "description":"Search permitted abilities by task words, ability names or tool names; use an empty query to list all. Results are full ability records and can be large: prefer a few task words over an empty query, and when you only need to rank candidate tools, use search_tools instead.",
-                "parameters":{"type":"object","properties":{"query":{"type":"string"}},
+                "description":"Search permitted discoverable, inactive abilities to load. Visible and activated abilities are already available and omitted by default; set include_available=true to inspect the full permitted catalog. Prefer task words to a full listing.",
+                "parameters":{"type":"object","properties":{"query":{"type":"string"},"include_available":{"type":"boolean","description":"Include already visible and activated abilities; no loading is needed for them"}},
                     "required":[],"additionalProperties":false}}),
             json!({"type":"function","name":"load_ability",
-                "description":"Load an ability by ID and read its skill and tool guidance. This returns the ability's main skill plus every tool skill in one large payload; when you need only one tool's guidance, prefer list_skills to see the ability's entries, then load_skill with kind \"tool\" for just that tool.",
+                "description":"Activate a discoverable ability by ID. Visible or already activated abilities return only an acknowledgment. Individual tool and skill visibility still applies; use list_tools/load_tool or search_tools for discoverable tools, and list_skills/load_skill for discoverable guidance.",
                 "parameters":{"type":"object","properties":{"ability_id":{"type":"string"}},
                     "required":["ability_id"],"additionalProperties":false}}),
         ];
@@ -767,15 +826,22 @@ impl Catalog {
         allow_ability: impl Fn(&str) -> bool,
         allow_tool: impl Fn(&str) -> bool,
     ) -> String {
-        const LIMIT: usize = 24 * 1024;
-        const MARKER_RESERVE: usize = 256;
+        self.visible_guidance_authorized(policy,visibility,state,allow_ability,&allow_tool,&allow_tool)
+    }
+
+    pub(crate) fn visible_guidance_authorized(
+        &self, policy: &Value, visibility: &Value, state: &Value,
+        allow_ability: impl Fn(&str)->bool,
+        eligible_tool: impl Fn(&str)->bool,
+        supplied_tool: impl Fn(&str)->bool,
+    ) -> String {
         let mut text = String::new();
         for ability in &self.abilities {
             if !Self::executable(ability)
                 || !allow_ability(&ability.id)
                 || Self::is_off(visibility, &ability.id)
                 || !ability.tools.iter().any(|tool| {
-                    Self::supported(tool) && Self::allowed(policy, tool) && allow_tool(tool)
+                    Self::supported(tool) && Self::allowed(policy, tool) && eligible_tool(tool)
                 })
                 || Self::suppressed(state, &ability.id)
                 || !(Self::is_visible(visibility, &ability.id) || Self::active(state, &ability.id))
@@ -791,12 +857,9 @@ impl Catalog {
                 }
             }
 
-            // SKILL-LIFETIME: activated discoverable guidance is rebuilt from the
-            // catalog, independent of transcript compaction. Off and suppressed
-            // remain authoritative; authorization was checked above.
-            if Self::skill_mode(visibility, &ability.id) == "visible"
-                || (Self::skill_mode(visibility, &ability.id) == "discoverable"
-                    && Self::active(state, &ability.id)) {
+            // Visible core guidance is mandatory. Discoverable skill loads rebuild
+            // their own context layer, independently of ability activation.
+            if Self::skill_mode(visibility, &ability.id) == "visible" {
                 if let Some(skill) = ability.skill.as_ref().filter(|text| Self::skill_live(ability, "ability", &ability.id, text)) {
                     part.push_str("\n");
                     part.push_str(skill);
@@ -804,7 +867,7 @@ impl Catalog {
             }
             for (tool, skill) in &ability.tool_skills {
                 if Self::supported(tool) && Self::allowed(policy, tool)
-                    && allow_tool(tool)
+                    && supplied_tool(tool)
                     && Self::skill_live(ability, "tool", tool, skill)
                     && Self::tool_mode(visibility, tool) == "visible" {
                     part.push_str("\n\nTool ");
@@ -822,28 +885,68 @@ impl Catalog {
                     part.push_str(skill);
                 }
             }
-            if part.len() <= (LIMIT - MARKER_RESERVE).saturating_sub(text.len()) {
-                text.push_str(&part);
-            } else {
-                let marker = format!("\n\nAbility {} guidance omitted due to size. Use load_ability for its full skill.", ability.id);
-                if marker.len() <= LIMIT.saturating_sub(text.len()) {
-                    text.push_str(&marker);
-                }
-            }
+            // Administrator-selected guidance is mandatory; assembly budgets the complete request.
+            text.push_str(&part);
         }
         text
     }
 
-    /// Render a bounded inventory from the exact entries and schemas authorized
+    /// Trace the same typed inclusion predicates used by guidance producers.
+    /// Byte counts refer to included skill content, excluding section headings.
+    pub(crate) fn context_inclusion(&self, entries: &[Value], schemas: &[Value],
+        visibility: &Value, state: &Value, loaded: &Value, loaded_skills: &Value) -> Vec<AbilityInclusion> {
+        let sent = schemas.iter().filter_map(|s|s["name"].as_str()).collect::<HashSet<_>>();
+        entries.iter().filter_map(|entry| {
+            let id = entry["id"].as_str()?;
+            let ability = self.abilities.iter().find(|ability| ability.id == id)?;
+            let names = entry["tools"].as_array()?.iter()
+                .filter_map(|t| t["name"].as_str()).collect::<HashSet<_>>();
+            let selected = |name: &str| sent.contains(name)
+                && Self::contains_id(loaded,&crate::tools::core_tool_search::marker(name));
+            let normal = Self::available(ability,visibility,state) && !names.is_empty();
+            let extra = names.iter().any(|name|selected(name));
+            let mut skills = Vec::new();
+            let mut add = |kind: &str, name: &str, mode: &str, body: &str, natural: bool| {
+                let explicit = mode!="off" && Self::available(ability,visibility,state) && sent.contains("load_skill") && loaded_skills.as_array().is_some_and(|items|items.iter().any(|item|
+                    item["ability_id"]==id && item["kind"]==kind && item["skill_id"]==name
+                        && item["sha256"]==hex::encode(Sha256::digest(body.as_bytes()))));
+                let included = natural || explicit;
+                let reason = if included {"included"} else if mode=="off" {"off"}
+                    else if mode=="discoverable" || entry["availability"]=="discoverable" {"discoverable"}
+                    else {"unavailable"};
+                skills.push(SkillInclusion {kind:kind.into(),id:name.into(),mode:mode.into(),included,
+                    content_bytes:if included {body.len()} else {0},reason:reason.into()});
+            };
+            if let Some(body)=ability.skill.as_ref().filter(|body|Self::skill_live(ability,"ability",id,body)) {
+                let mode=Self::skill_mode(visibility,id);
+                add("ability",id,mode,body,mode=="visible"&&(normal||extra));
+            }
+            for (name,body) in &ability.tool_skills {
+                if names.contains(name.as_str()) && Self::skill_live(ability,"tool",name,body) {
+                    let mode=Self::tool_mode(visibility,name);
+                    add("tool",name,mode,body,sent.contains(name.as_str())
+                        && ((normal&&mode=="visible") || (mode!="off"&&selected(name))));
+                }
+            }
+            for (name,body) in &ability.selectable_skills {
+                if Self::selectable_metadata(name,body).is_some() && Self::skill_live(ability,"selectable",name,body) {
+                    let mode=Self::selectable_mode(visibility,id,name,body);
+                    add("selectable",name,mode,body,normal&&mode=="visible");
+                }
+            }
+            Some(AbilityInclusion {id:id.into(),visibility:entry["visibility"].as_str()?.into(),
+                availability:entry["availability"].as_str()?.into(),
+                guidance_bytes:skills.iter().map(|skill|skill.content_bytes).sum(),
+                schemas:schemas.iter().filter_map(|schema|schema["name"].as_str())
+                    .filter(|name|names.contains(name)).map(str::to_owned).collect(),skills})
+        }).collect()
+    }
+
+    /// Render a complete inventory from the exact entries and schemas authorized
     /// for this model call. Discoverable abilities keep their tool schemas hidden.
     pub fn model_index(entries: &[Value], schemas: &[Value]) -> String {
-        const LIMIT: usize = 8 * 1024;
-        fn add(out: &mut String, line: &str) -> bool {
-            // Reserve room for the truncation notice when a large catalog fills the menu.
-            if out.len() + line.len() + 1 > LIMIT - 64 { return false; }
-            out.push_str(line);
-            out.push('\n');
-            true
+        fn add(out: &mut String, line: &str) {
+            out.push_str(line);out.push('\n');
         }
         fn short(value: &str) -> String {
             value.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -887,36 +990,29 @@ impl Catalog {
         let mut out = String::new();
         add(&mut out, "# [TOOLS]");
         add(&mut out, "These tools can be called now. A call may still require approval.");
-        if can_list { add(&mut out, "- list_abilities — search with task words or use an empty query for the full permitted catalog"); }
-        if can_load { add(&mut out, "- load_ability — load an ability's tools and how-to guidance"); }
-        let mut omitted = false;
+        if can_list { add(&mut out, "- list_abilities — find inactive discoverable abilities; include_available=true also shows visible and activated abilities"); }
+        if can_load { add(&mut out, "- load_ability — activate a discoverable ability; visible and activated abilities need no reload"); }
         for (name, description) in ready_tools {
             let row = if description.is_empty() { format!("- {name}") }
                 else { format!("- {name} — {description}") };
-            if !add(&mut out, &row) { omitted = true; break; }
+            add(&mut out, &row);
         }
         if !loadable_tools.is_empty() {
             add(&mut out, "");
             add(&mut out, "## Load on demand");
-            add(&mut out, "These tools are permitted but their schemas are withheld. Call load_ability with the owning ability ID before using one.");
+            add(&mut out, "These tools are discoverable; their schemas are withheld independently of ability visibility. Use list_tools/load_tool to select an exact tool, or search_tools for model-ranked selection, before use.");
             for (name, id) in loadable_tools {
-                if !add(&mut out, &format!("- {name} — load ability {id}")) { omitted = true; break; }
+                add(&mut out, &format!("- {name} — discoverable tool in ability {id}"));
             }
         }
         if !discoverable.is_empty() {
             add(&mut out, "");
             add(&mut out, "# [ABILITIES]");
-            add(&mut out, "These abilities are available but not loaded. Call load_ability with an ID to reveal its tools and how-to guidance. An empty loaded list does not mean no abilities are available. Search list_abilities with task words or use an empty query for the full permitted catalog.");
+            add(&mut out, "These abilities are available but not loaded. Call load_ability with an ID to activate the ability. Tool and skill visibility are independent; use list_tools/load_tool and list_skills/load_skill for discoverable items. An empty loaded list does not mean no abilities are available. Search list_abilities with task words or an empty query for inactive discoverable abilities. Visible and activated abilities are already available; use their supplied tools directly.");
             for (id, name, summary) in discoverable {
                 let row = if summary.is_empty() { format!("- {id} — {name}") }
                     else { format!("- {id} — {name}: {summary}") };
-                if !add(&mut out, &row) { omitted = true; break; }
-            }
-        }
-        if omitted {
-            let notice = "More entries are available through list_abilities.\n";
-            if out.len() + notice.len() <= LIMIT {
-                out.push_str(notice);
+                add(&mut out, &row);
             }
         }
         out
@@ -937,8 +1033,14 @@ impl Catalog {
                 if query.len() > 200 {
                     return json!({"status":"error","output":"Query is too long"});
                 }
+                let include_available = match args.get("include_available") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(value)) => *value,
+                    _ => return json!({"status":"error","output":"include_available must be a boolean"}),
+                };
                 let mut found = self.catalog_with(policy, visibility, state)
                     .into_iter()
+                    .filter(|ability| include_available || ability["requires_activation"] == true)
                     .filter_map(|ability| {
                         let score = discovery_score(&ability, &query);
                         (query.is_empty() || score > 0).then_some((score, ability))
@@ -950,7 +1052,7 @@ impl Catalog {
                     });
                 }
                 let found = found.into_iter().map(|(_, ability)| ability).collect::<Vec<_>>();
-                json!({"status":"ok","catalog_version":self.version,"abilities":found})
+                json!({"status":"ok","catalog_version":self.version,"include_available":include_available,"abilities":found})
             }
             "load_ability" => {
                 let Some(id) = args["ability_id"].as_str() else {
@@ -972,6 +1074,10 @@ impl Catalog {
                 if ability["tools"].as_array().is_none_or(Vec::is_empty) {
                     return json!({"status":"denied","output":"Ability unavailable under current policy"});
                 }
+                if Self::is_visible(visibility, id) || Self::active(state, id) {
+                    return json!({"status":"already_available","ability":ability,
+                        "message":"This ability is already available. Call its visible tools directly; use list_tools/load_tool or search_tools for discoverable tools and list_skills/load_skill for discoverable guidance."});
+                }
                 if !run["loaded_abilities"].is_array() {
                     run["loaded_abilities"] = json!([]);
                 }
@@ -982,11 +1088,11 @@ impl Catalog {
                 let permitted_skills = entry
                     .tool_skills
                     .iter()
-                    .filter(|(tool, text)| Self::supported(tool) && Self::allowed(policy, tool) && Self::tool_mode(visibility, tool) != "off"
+                    .filter(|(tool, text)| Self::supported(tool) && Self::allowed(policy, tool) && Self::tool_mode(visibility, tool) == "visible"
                         && Self::skill_live(entry, "tool", tool, text))
                     .collect::<BTreeMap<_, _>>();
                 json!({"status":"ok","ability":ability,
-                    "skill":if Self::skill_mode(visibility, id) == "off" {None} else {entry.skill.as_ref().filter(|text| Self::skill_live(entry, "ability", &entry.id, text))},
+                    "skill":if Self::skill_mode(visibility, id) != "visible" {None} else {entry.skill.as_ref().filter(|text| Self::skill_live(entry, "ability", &entry.id, text))},
                     "tool_skills":permitted_skills,
                     "selectable_skills":entry.selectable_skills.iter().filter(|(name, text)| Self::skill_live(entry, "selectable", name, text) && Self::selectable_metadata(name,text).is_some() && Self::selectable_mode(visibility,id,name,text)!="off").map(|(name, _)| name).collect::<Vec<_>>(),
                     "catalog_version":self.version})
@@ -1036,6 +1142,73 @@ mod tests {
         .unwrap();
         let catalog = Catalog::load(root.path()).unwrap();
         (root, catalog)
+    }
+
+    #[test]
+    fn visible_large_guidance_is_complete_and_discovery_is_not_activation() {
+        let (root, _) = fixture();
+        let folder=root.path().join("Administrator/codebase_admin");
+        let core=format!("CORE-BEGIN{}CORE-END", "c".repeat(30000));
+        let tool=format!("TOOL-BEGIN{}TOOL-END", "t".repeat(30000));
+        fs::write(folder.join("codebase_admin.skill.md"), &core).unwrap();
+        fs::write(folder.join("tools/file_edit.skill.md"), &tool).unwrap();
+        let catalog=Catalog::load(root.path()).unwrap();
+        let p=policy(); let v=json!({"visibility":{"codebase_admin":"visible"}});
+        let state=json!({"active":[],"suppressed":[]});
+        let guidance=catalog.visible_guidance(&p,&v,&state);
+        assert!(guidance.contains(&core));assert!(guidance.contains(&tool));
+        assert!(!guidance.contains("omitted"));
+        let mut run=json!({"loaded_abilities":[]});let before=run.clone();
+        let hidden=catalog.discover_with("list_abilities",&json!({}),&mut run,&p,&v,&state);
+        assert!(hidden["abilities"].as_array().unwrap().is_empty());
+        let all=catalog.discover_with("list_abilities",&json!({"include_available":true}),&mut run,&p,&v,&state);
+        assert_eq!(all["abilities"][0]["availability"],"visible");
+        assert_eq!(all["abilities"][0]["requires_activation"],false);
+        let load=catalog.discover_with("load_ability",&json!({"ability_id":"codebase_admin"}),&mut run,&p,&v,&state);
+        assert_eq!(load["status"],"already_available");
+        assert!(load.get("skill").is_none());assert!(load.get("tool_skills").is_none());assert_eq!(run,before);
+        let schemas=catalog.schemas_with(&p,&run["loaded_abilities"],&v,&state);
+        let entries=catalog.catalog_with(&p,&v,&state);
+        let report=catalog.context_inclusion(&entries,&schemas,&v,&state,&json!([]),&json!([]));
+        assert!(report[0].skills.iter().all(|s|s.included));
+        assert!(report[0].schemas.contains(&"file_read".into()));
+        let value=serde_json::to_value(AbilityContext{turn:0,call:1,abilities:report}).unwrap();
+        assert!(!value.to_string().contains("CORE-BEGIN"));
+        assert!(AbilityContext::public(&value).is_some());
+    }
+
+    #[test]
+    fn discoverable_activation_is_durable_without_reloading_or_revealing_discoverable_tools() {
+        let (_root,catalog)=fixture();let p=policy();
+        let v=json!({"visibility":{"codebase_admin":"discoverable"},
+            "tool_modes":{"file_search":"discoverable","file_edit":"off"}});
+        let mut state=json!({"active":[],"suppressed":[]});let mut run=json!({"loaded_abilities":[]});
+        let list=catalog.discover_with("list_abilities",&json!({}),&mut run,&p,&v,&state);
+        assert_eq!(list["abilities"][0]["availability"],"discoverable");
+        assert_eq!(list["abilities"][0]["requires_activation"],true);
+        let first=catalog.discover_with("load_ability",&json!({"ability_id":"codebase_admin"}),&mut run,&p,&v,&state);
+        assert_eq!(first["status"],"ok");
+        state["active"]=json!(["codebase_admin"]);
+        assert!(catalog.visible_guidance(&p,&v,&state).contains("Use scoped workspace tools."));
+        assert!(catalog.tool_available("file_read",&v,&state,&run["loaded_abilities"]));
+        assert!(!catalog.tool_available("file_search",&v,&state,&run["loaded_abilities"]));
+        let saved=run.clone();
+        let repeat=catalog.discover_with("load_ability",&json!({"ability_id":"codebase_admin"}),&mut run,&p,&v,&state);
+        assert_eq!(repeat["status"],"already_available");assert!(repeat.get("skill").is_none());assert_eq!(run,saved);
+        let all=catalog.discover_with("list_abilities",&json!({"include_available":true}),&mut run,&p,&v,&state);
+        assert_eq!(all["abilities"][0]["availability"],"activated");
+        assert!(catalog.discover_with("list_abilities",&json!({}),&mut run,&p,&v,&state)["abilities"].as_array().unwrap().is_empty());
+        let empty=json!({"loaded_abilities":[]});
+        assert!(catalog.schemas_with(&p,&empty["loaded_abilities"],&v,&state).iter().any(|s|s["name"]=="file_read"));
+        state["suppressed"]=json!(["codebase_admin"]);
+        assert!(catalog.visible_guidance(&p,&v,&state).is_empty());
+        assert_eq!(catalog.discover_with("load_ability",&json!({"ability_id":"codebase_admin"}),&mut run,&p,&v,&state)["status"],"denied");
+    }
+
+    #[test]
+    fn diagnostic_projection_rejects_content_and_unknown_identifiers() {
+        let value=json!({"turn":1,"call":1,"abilities":[],"prompt":"PRIVATE"});
+        assert!(AbilityContext::public(&value).is_none());
     }
 
     #[test]
@@ -1185,7 +1358,8 @@ mod tests {
         let mut run = json!({"loaded_abilities":["codebase_admin"]});
         let discovery = catalog.discover_with("load_ability", &json!({"ability_id":"codebase_admin"}),
             &mut run, &policy(), &visible, &active);
-        assert!(!discovery["selectable_skills"].as_array().unwrap().iter().any(|skill|skill=="ui_theming"));
+        assert_eq!(discovery["status"], "already_available");
+        assert!(discovery.get("selectable_skills").is_none());
         fs::remove_file(folder.join("codebase_admin.skill.md")).unwrap();
         fs::remove_file(folder.join("tools/file_edit.skill.md")).unwrap();
         let guidance = catalog.visible_guidance(&policy(), &visible, &active);
@@ -1194,7 +1368,7 @@ mod tests {
         let discovery = catalog.discover_with("load_ability", &json!({"ability_id":"codebase_admin"}),
             &mut run, &policy(), &visible, &active);
         assert!(discovery["skill"].is_null());
-        assert!(discovery["tool_skills"].as_object().unwrap().is_empty());
+        assert!(discovery.get("tool_skills").is_none());
     }
 
     #[cfg(unix)]
@@ -1233,11 +1407,11 @@ mod tests {
         assert!(index.contains("codebase_admin — Codebase Admin"));
         assert!(index.contains("An empty loaded list does not mean no abilities"));
         assert!(!index.contains("- file_read"));
-        assert!(index.len() <= 8 * 1024);
+        assert!(index.contains("codebase_admin"));
         assert!(!index.contains("Use scoped workspace tools."));
         let crowded = Catalog::model_index(&vec![entries[0].clone(); 512], &schemas);
-        assert!(crowded.len() <= 8 * 1024);
-        assert!(crowded.contains("More entries are available through list_abilities."));
+        assert_eq!(crowded.matches("codebase_admin —").count(),512);
+        assert!(!crowded.contains("More entries are available through list_abilities."));
 
         let visible = json!({"visibility":{"codebase_admin":"visible"}});
         let entries = catalog.catalog_with(&policy, &visible, &state);
@@ -1253,7 +1427,7 @@ mod tests {
         let schemas = catalog.schemas_with(&policy, &json!([]), &tool_discoverable, &state);
         let index = Catalog::model_index(&entries, &schemas);
         assert!(index.contains("## Load on demand"));
-        assert!(index.contains("- file_read — load ability codebase_admin"));
+        assert!(index.contains("- file_read — discoverable tool in ability codebase_admin"));
 
         let suppressed = json!({"active":[],"suppressed":["codebase_admin"]});
         assert!(!Catalog::model_index(&catalog.catalog_with(&policy, &visible, &suppressed),
@@ -1425,6 +1599,31 @@ mod tests {
     }
 
     #[test]
+    fn visible_skills_do_not_depend_on_tool_schema_exposure() {
+        let (root,_)=fixture();
+        let path=root.path().join("Administrator/codebase_admin/skills");
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("ui_theme.skill.md"),"---\nid: ui_theme\ntitle: Theme\nwhen_to_use: Edit UI\ndefault_mode: visible\n---\nUI THEME").unwrap();
+        let catalog=Catalog::load(root.path()).unwrap();
+        let p=json!({"rules":{"file_read":"allow","file_edit":"allow"}});
+        let v=json!({"visibility":{"codebase_admin":"visible"},
+            "tool_modes":{"file_read":"discoverable","file_edit":"discoverable"}});
+        let state=json!({"active":[],"suppressed":[]});
+        let guidance=catalog.visible_guidance_authorized(&p,&v,&state,|_|true,|_|true,|_|false);
+        assert!(guidance.contains("Use scoped workspace tools."));
+        assert!(guidance.contains("UI THEME"));
+        assert!(!guidance.contains("Match one exact span."));
+        let entries=catalog.catalog_with(&p,&v,&state);
+        let schemas=catalog.schemas_with(&p,&json!([]),&v,&state);
+        let report=catalog.context_inclusion(&entries,&schemas,&v,&state,&json!([]),&json!([]));
+        let entry=&report[0];
+        assert!(entry.schemas.is_empty());
+        assert!(entry.skills.iter().any(|s|s.kind=="ability"&&s.included));
+        assert!(entry.skills.iter().any(|s|s.kind=="selectable"&&s.included));
+        assert!(entry.skills.iter().filter(|s|s.kind=="tool").all(|s|!s.included));
+    }
+
+    #[test]
     fn visible_guidance_and_schema_respect_suppression() {
         let (_root, catalog) = fixture();
         let policy = policy();
@@ -1552,16 +1751,18 @@ mod tests {
         assert!(!catalog.visible_guidance(&policy, &visibility, &state)
             .contains("Use scoped workspace tools."));
         assert_eq!(catalog.discover_with("load_ability", &json!({"ability_id":"codebase_admin"}),
-            &mut run, &policy, &visibility, &state)["skill"], "Use scoped workspace tools.");
+            &mut run, &policy, &visibility, &state)["status"], "already_available");
     }
 
     // SKILL-LIFETIME-REGRESSION: activation survives transcript folding but not unload.
     #[test]
-    fn activated_skill_is_independent_of_transcript() {
+    fn ability_activation_preserves_independent_skill_visibility() {
         let (_root,catalog)=fixture();let p=policy();
         let v=json!({"visibility":{"codebase_admin":"discoverable"},"skill_visibility":{"codebase_admin":"discoverable"}});
         let active=json!({"active":["codebase_admin"],"suppressed":[]});
-        assert!(catalog.visible_guidance(&p,&v,&active).contains("Use scoped workspace tools."));
+        assert!(!catalog.visible_guidance(&p,&v,&active).contains("Use scoped workspace tools."));
+        let visible=json!({"visibility":{"codebase_admin":"discoverable"},"skill_visibility":{"codebase_admin":"visible"}});
+        assert!(catalog.visible_guidance(&p,&visible,&active).contains("Use scoped workspace tools."));
         let suppressed=json!({"active":[],"suppressed":["codebase_admin"]});
         assert!(!catalog.visible_guidance(&p,&v,&suppressed).contains("Use scoped workspace tools."));
     }
@@ -1631,7 +1832,7 @@ mod tests {
         }
         fs::write(&path, original).unwrap();
         let skill = root.path().join("Administrator/codebase_admin/tools/file_edit.skill.md");
-        fs::write(&skill, vec![b'x'; MAX_SKILL_BYTES as usize + 1]).unwrap();
+        fs::write(&skill, vec![0xff]).unwrap();
         assert!(Catalog::load(root.path()).is_err());
     }
 
@@ -1691,7 +1892,7 @@ mod tests {
         let base = catalog.abilities.iter().find(|entry| entry.id == "base").unwrap();
         let mut installed: Vec<_> = base.tools.iter().filter(|name| Catalog::supported(name)).map(String::as_str).collect();
         installed.sort();
-        assert_eq!(installed, ["calculate", "compact_context", "edit_own_prompt", "get_date", "get_task_checkpoint", "get_time", "list_skills", "load_skill", "present_chat_component", "present_plan", "read_attachment", "read_own_prompt", "recall_compacted", "remove_own_skill", "save_own_skill", "search_this_session", "search_tools", "session_search", "set_execution_mode", "similar_sessions", "task_cancel", "task_status", "task_wait", "update_task_checkpoint"]);
+        assert_eq!(installed, ["calculate", "compact_context", "edit_own_prompt", "get_date", "get_task_checkpoint", "get_time", "list_skills", "list_tools", "load_skill", "load_tool", "present_chat_component", "present_plan", "read_attachment", "read_own_prompt", "recall_compacted", "remove_own_skill", "save_own_skill", "search_this_session", "search_tools", "session_search", "set_execution_mode", "similar_sessions", "task_cancel", "task_status", "task_wait", "update_task_checkpoint"]);
         assert!(!catalog.abilities.iter().any(|ability| matches!(ability.id.as_str(), "v3_build"|"v3_workspace")));
         let coding=catalog.abilities.iter().find(|ability| ability.id=="codebase_admin").unwrap();
         assert_eq!(coding.tools, ["file_list","file_read","file_search","file_edit","file_write",

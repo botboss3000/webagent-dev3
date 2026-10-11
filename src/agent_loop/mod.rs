@@ -5,6 +5,7 @@ pub(crate) use run::execute_run;
 pub(super) fn append_tool(run: &mut Value, result: &Value) -> Result<()> {
     workflow::record_tool_result(run, result)?;
     tools::core_tool_search::apply_selection(run,result);
+    tools::core_skills::apply_selection(run,result);
     crate::tool_output::record(run,result)?;
     let call_id = run["pending"]["call_id"].clone();
     run["input"]

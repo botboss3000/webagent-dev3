@@ -46,7 +46,7 @@ pub fn is_read(name: &str) -> bool {
     matches!(
         name,
         "task_status" | "task_wait" | "task_cancel"
-            | "search_tools"
+            | "search_tools" | "list_tools" | "load_tool"
             | "decide_with_jev"
             | "score_directory_with_jev"
             | "get_time"
