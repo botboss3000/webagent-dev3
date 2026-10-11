@@ -98,13 +98,13 @@ class PublishedTests(unittest.TestCase):
   js=b'// @code-index {"version":1,"feature":"chat-footer","aliases":["chat footer"],"purpose":"Chat footer JavaScript","span_lines":2}\nfunction mountChat() {}\n'
   css=b'/* @code-index {"version":1,"feature":"chat-footer","aliases":["chat footer"],"purpose":"Chat footer CSS","span_lines":2} */\n.chat-footer { display:flex; }\n'
   feature_map=json.dumps({"version":1,"features":[{"id":"chat-footer","aliases":["chat footer"],"purpose":"Shared chat footer","locations":[{"path":"config/settings.json","start_line":1,"end_line":1,"sha256":digest}]}]}).encode()+b"\n"
-  blob=self.blob({"v3/config/settings.json":(420,target),"v3/config/code-index-features.json":(420,feature_map),
+  blob=self.blob({"v3/config/settings.json":(420,target),"v3/plugins/abilities/Administrator/code_index/code-index-features.json":(420,feature_map),
                   "v3/ui/chat.js":(420,js),"v3/ui/chat.css":(420,css)})
   release,folder,manifest=self.stage(blob)
   result=idx.execute_published("code_index_lookup",{"root":"published","action":"search","query":"chat footer","limit":20,"offset":0},folder)
   rows=[row for row in result["results"] if row.get("feature_id")=="chat-footer"]
   self.assertEqual({row["file_path"] for row in rows},{"v3/config/settings.json","v3/ui/chat.js","v3/ui/chat.css"})
-  self.assertTrue(all(row["source_path"]=="v3/config/code-index-features.json" or row["source_path"]==row["file_path"] for row in rows))
+  self.assertTrue(all(row["source_path"]=="v3/plugins/abilities/Administrator/code_index/code-index-features.json" or row["source_path"]==row["file_path"] for row in rows))
   workspace=self.root/"private";workspace.mkdir();shutil.copytree(folder/"v3",workspace/"webagent-v3")
   idx.seed_private_index(folder,workspace/"webagent-v3")
   private=idx.execute("code_index_lookup",{"root":"webagent-v3","action":"search","query":"chat footer","limit":20,"offset":0},workspace)
@@ -119,14 +119,14 @@ class PublishedTests(unittest.TestCase):
   blob=self.blob({
    "v3/ui/main-panel/agents/identity/tool-output-policy.js":(420,marker),
    "ui/main-panel/agents/identity/tool-output-policy.js":(420,shared),
-   "v3/config/code-index-features.json":(420,feature_map),
+   "v3/plugins/abilities/Administrator/code_index/code-index-features.json":(420,feature_map),
   })
   j,d,m=self.stage(blob)
   result=idx.execute_published("code_index_lookup",{"root":"published","action":"search","query":"chat footer","limit":20,"offset":0},d)
   self.assertEqual("success",result["status"],result)
   rows=[row for row in result["results"] if row.get("feature_id")=="chat-footer"]
   self.assertEqual({"v3/ui/main-panel/agents/identity/tool-output-policy.js"},{row["file_path"] for row in rows})
-  self.assertTrue(all(row["source_path"]=="v3/config/code-index-features.json" or row["source_path"]==row["file_path"] for row in rows))
+  self.assertTrue(all(row["source_path"]=="v3/plugins/abilities/Administrator/code_index/code-index-features.json" or row["source_path"]==row["file_path"] for row in rows))
   self.assertNotIn("ui/main-panel/agents/identity/tool-output-policy.js",{row["file_path"] for row in rows})
   workspace=self.root/"private";workspace.mkdir();shutil.copytree(d/"v3",workspace/"webagent-v3")
   idx.seed_private_index(d,workspace/"webagent-v3")

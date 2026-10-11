@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS batches(batch_id TEXT PRIMARY KEY,scope TEXT NOT NULL
 MAX_FEATURES=128
 MAX_FEATURE_LOCATIONS=16
 FEATURE_ID_RE=re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
-FEATURE_MAP_PATH="config/code-index-features.json"
+FEATURE_MAP_PATH="plugins/abilities/Administrator/code_index/code-index-features.json"
 RUST_RAW_RE=re.compile(r"(?:br|rb|r)(#+)?\"")
 RUST_CHAR_RE=re.compile(r"'(?:\\.|[^'\\])'")
 def _unique_json(text):

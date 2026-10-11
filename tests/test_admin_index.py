@@ -30,6 +30,11 @@ class AdminIndexTests(unittest.TestCase):
         self.assertEqual(result["status"],"success",result)
         self.assertLessEqual(len(json.dumps(result,ensure_ascii=False).encode()),index.MAX_OUTPUT_BYTES)
         return result
+    def feature_map(self):
+        """Create the ability-owned feature-map fixture without changing targets."""
+        path=self.repo/"plugins/abilities/Administrator/code_index/code-index-features.json"
+        path.parent.mkdir(parents=True,exist_ok=True)
+        return path
     def scan(self,**args):
         return self.call("scan",action="scan",**args)
     def test_complete_surface_physical_lines_symbols_edges_and_progress(self):
@@ -247,7 +252,7 @@ class AdminIndexTests(unittest.TestCase):
         css.write_text('/* @code-index {"version":1,"feature":"chat-footer","aliases":["message composer","chat footer"],"purpose":"Locates the composer footer styles","span_lines":2} */\n#chat-footer { display: flex; }\n* { box-sizing: border-box; }\n',encoding="utf-8")
         target.write_text('{"footer":"chat composer"}\n',encoding="utf-8")
         digest=index.sha(target.read_bytes())
-        (config/"code-index-features.json").write_text(json.dumps({"version":1,"features":[
+        self.feature_map().write_text(json.dumps({"version":1,"features":[
             {"id":"chat-footer","aliases":["message composer","chat footer"],"purpose":"The shared chat composer footer",
              "locations":[{"path":"config/chat-ui.json","start_line":1,"end_line":1,"purpose":"The JSON footer configuration"},{"path":"ui/chat-footer.css","start_line":2,"end_line":3,"purpose":"CSS ID and universal selector rules"}]}
         ]}),encoding="utf-8")
@@ -267,11 +272,11 @@ class AdminIndexTests(unittest.TestCase):
         first=self.call("lookup",action="search",query="chat footer",limit=1,offset=0)
         second=self.call("lookup",action="search",query="chat footer",limit=1,offset=1)
         self.assertNotEqual(first["results"][0]["file_path"],second["results"][0]["file_path"])
-        map_path=config/"code-index-features.json"
+        map_path=self.feature_map()
         map_path.write_text(map_path.read_text(encoding="utf-8").replace("The shared chat composer footer","The updated chat composer footer"),encoding="utf-8")
         stale=self.call("lookup",action="search",query="chat footer",limit=20)
         self.assertTrue(any(row["stale"] for row in stale["results"] if row.get("feature_id")=="chat-footer"))
-        self.call("scan",action="scan_file",file_path="config/code-index-features.json",batch_id="feature-map-refresh")
+        self.call("scan",action="scan_file",file_path="plugins/abilities/Administrator/code_index/code-index-features.json",batch_id="feature-map-refresh")
 
     def test_feature_parser_ignores_string_literals_and_retires_removed_markers(self):
         source='const a = "// @code-index {bad}";\nconst b = '+chr(96)+'/* @code-index {bad} */'+chr(96)+';\n'
@@ -303,7 +308,7 @@ class AdminIndexTests(unittest.TestCase):
     def test_feature_map_rejects_stale_target_and_duplicate_ids(self):
         config=self.repo/"config";config.mkdir()
         target=config/"component.json";target.write_text('{"component":true}\n',encoding="utf-8")
-        digest=index.sha(target.read_bytes());map_path=config/"code-index-features.json"
+        digest=index.sha(target.read_bytes());map_path=self.feature_map()
         feature={"id":"one","aliases":["component"],"purpose":"component config","locations":[{"path":"config/component.json","start_line":1,"end_line":1,"sha256":digest}]}
         map_path.write_text(json.dumps({"version":1,"features":[feature,feature]}),encoding="utf-8")
         result=index.execute("code_index_scan",{"action":"scan","scope":"","limit":20,"offset":0},self.base)
@@ -381,7 +386,7 @@ class AdminIndexTests(unittest.TestCase):
         worker.write_text("def update_chat_footer_worker():\n    return True\n",encoding="utf-8")
         feature_file=self.repo/"ui/feature.js"
         feature_file.write_text('// @code-index {"version":1,"feature":"chat-footer","aliases":["chat footer"],"purpose":"chat footer behavior"}\nfunction unrelatedFooter() {}\n',encoding="utf-8")
-        (config/"code-index-features.json").write_text(json.dumps({"version":1,"features":[]}),encoding="utf-8")
+        self.feature_map().write_text(json.dumps({"version":1,"features":[]}),encoding="utf-8")
         self.scan()
         result=self.call("lookup",action="search",query="src/worker.py chat footer",limit=20)
         self.assertTrue(result["results"])
