@@ -341,7 +341,7 @@ pub(crate) async fn execute_run(
                         if let Some(result)=item["output"].as_str().and_then(|raw|serde_json::from_str::<Value>(raw).ok()) {
                             let mut projection=json!({"pending":{"name":"load_skill","arguments":call["arguments"]},
                                 "loaded_skills":run["loaded_skills"]});
-                            tools::core_skills::apply_selection(&mut projection,&result);
+                            tools::core_skills::apply_legacy_selection(&mut projection,&result);
                             run["loaded_skills"]=projection["loaded_skills"].clone();
                         }
                     }
@@ -1337,22 +1337,16 @@ pub(crate) async fn execute_run(
                             &policy,&visibility,&ability_state,&run["loaded_abilities"],read_only));
                     }
                 } else if matches!(result["status"].as_str(), Some("ok" | "already_available")) {
-                    let allowed=filter_ability_entry(&app,&access,&mut result["ability"],
-                        &policy,&visibility,&ability_state,&run["loaded_abilities"],read_only);
+                    // Authorization uses the fresh catalog, never the loader acknowledgment.
+                    let allowed=app.abilities.catalog_with(&policy,&visibility,&ability_state)
+                        .into_iter().find(|entry|entry["id"]==args["ability_id"])
+                        .is_some_and(|mut entry|filter_ability_entry(&app,&access,&mut entry,
+                            &policy,&visibility,&ability_state,&run["loaded_abilities"],read_only));
                     if !allowed {
                         if let Some(loaded)=run["loaded_abilities"].as_array_mut() {
                             loaded.retain(|item|item!=&args["ability_id"]);
                         }
                         result=json!({"status":"denied","output":"Ability unavailable under current access"});
-                    } else {
-                        let names=result["ability"]["tools"].as_array().unwrap().iter()
-                            .filter_map(|tool|tool["name"].as_str().map(str::to_owned))
-                            .collect::<std::collections::BTreeSet<_>>();
-                        let skills=result["tool_skills"].as_object().map(|map|map.iter()
-                            .filter(|(name,_)|names.contains(*name))
-                            .map(|(name,value)|(name.clone(),value.clone()))
-                            .collect::<serde_json::Map<String,Value>>());
-                        if let Some(skills)=skills {result["tool_skills"]=Value::Object(skills);}
                     }
                 }
                 if name == "load_ability" && result["status"] == "ok" {

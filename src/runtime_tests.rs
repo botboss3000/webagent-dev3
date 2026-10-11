@@ -7010,7 +7010,12 @@ async fn native_skill_catalog_marks_supplied_guidance_and_rebuilds_selected_afte
     let result=visibility_native_call(&app,&sid,&id,"load_skill",json!({
         "ability_id":"base","kind":"own","skill_id":"journey_steps"})).await;
     assert_eq!(result["status"],"success","{result}");
-    assert_eq!(result["output"]["text"],sentinel);
+    assert_eq!(result["output"]["status"],"loaded");
+    assert!(result["output"].get("text").is_none());
+    assert!(!result.to_string().contains(sentinel));
+    let stored=app.run(&id).await.unwrap();
+    assert!(!stored["input"].to_string().contains(sentinel));
+    assert!(tools::core_skills::active_guidance(&app,&sid,&id).await.unwrap().contains(sentinel));
     let mut run=app.run(&id).await.unwrap();
     assert_eq!(run["loaded_skills"].as_array().unwrap().len(),1);
     assert!(!run["loaded_skills"].to_string().contains(sentinel));
@@ -7059,6 +7064,9 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
     let loaded=visibility_native_call(&app,&sid,&id,"load_tool",json!({"tool_name":"state_inspect"})).await;
     assert_eq!(loaded["status"],"success","{loaded}");
     assert_eq!(loaded["output"]["activated"],true);
+    assert_eq!(loaded["output"]["tool_name"],"state_inspect");
+    assert!(loaded["output"].get("tool").is_none());
+    assert!(loaded["output"].get("description").is_none());
     let run=app.run(&id).await.unwrap();
     assert!(run["loaded_abilities"].as_array().unwrap().contains(&json!("tool:state_inspect")));
     assert_eq!(session_ability_state(&app,&sid).await.unwrap()["active"],json!([]));

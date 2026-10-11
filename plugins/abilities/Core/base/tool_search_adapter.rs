@@ -121,9 +121,9 @@ async fn exact(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:&Cance
     let args=load.context("Missing load arguments")?;
     let tool=tools.into_iter().find(|tool|tool["name"]==args.tool_name).context("Tool unavailable")?;
     if tool["requires_activation"]!=true {
-        return Ok(json!({"status":"already_available","output":{"tool":tool,"activated":false,"selected_tools":[],"scope":"run","permissions_changed":false}}));
+        return Ok(json!({"status":"already_available","output":{"tool_name":args.tool_name,"ability_id":tool["ability_id"],"availability":tool["availability"],"activated":false,"selected_tools":[],"scope":"run","permissions_changed":false,"message":"This tool is already supplied to the current model context."}}));
     }
-    Ok(json!({"status":"success","output":{"tool":tool,"activated":true,"selected_tools":[args.tool_name],"scope":"run","permissions_changed":false}}))
+    Ok(json!({"status":"success","output":{"tool_name":args.tool_name,"ability_id":tool["ability_id"],"availability":"activated","activated":true,"selected_tools":[args.tool_name],"scope":"run","permissions_changed":false,"message":"Tool loaded for this run. Its definition is supplied in the next model context."}}))
 }
 async fn inner(app:&App,sid:&str,run_id:&str,args:&Args,cancel:CancellationToken)->Result<Value> {
     let agent=session_agent_id(app,sid).await?;let run=app.run(run_id).await?;

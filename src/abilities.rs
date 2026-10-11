@@ -1075,8 +1075,10 @@ impl Catalog {
                     return json!({"status":"denied","output":"Ability unavailable under current policy"});
                 }
                 if Self::is_visible(visibility, id) || Self::active(state, id) {
-                    return json!({"status":"already_available","ability":ability,
-                        "message":"This ability is already available. Call its visible tools directly; use list_tools/load_tool or search_tools for discoverable tools and list_skills/load_skill for discoverable guidance."});
+                    return json!({"status":"already_available","ability_id":id,
+                        "availability":ability["availability"],"scope":"session","catalog_version":self.version,
+                        "context_source":"live_ability_catalog",
+                        "message":"This ability is already available; use its supplied tools and guidance directly."});
                 }
                 if !run["loaded_abilities"].is_array() {
                     run["loaded_abilities"] = json!([]);
@@ -1085,17 +1087,9 @@ impl Catalog {
                 if !loaded.iter().any(|item| item.as_str() == Some(id)) {
                     loaded.push(json!(id));
                 }
-                let permitted_skills = entry
-                    .tool_skills
-                    .iter()
-                    .filter(|(tool, text)| Self::supported(tool) && Self::allowed(policy, tool) && Self::tool_mode(visibility, tool) == "visible"
-                        && Self::skill_live(entry, "tool", tool, text))
-                    .collect::<BTreeMap<_, _>>();
-                json!({"status":"ok","ability":ability,
-                    "skill":if Self::skill_mode(visibility, id) != "visible" {None} else {entry.skill.as_ref().filter(|text| Self::skill_live(entry, "ability", &entry.id, text))},
-                    "tool_skills":permitted_skills,
-                    "selectable_skills":entry.selectable_skills.iter().filter(|(name, text)| Self::skill_live(entry, "selectable", name, text) && Self::selectable_metadata(name,text).is_some() && Self::selectable_mode(visibility,id,name,text)!="off").map(|(name, _)| name).collect::<Vec<_>>(),
-                    "catalog_version":self.version})
+                json!({"status":"ok","ability_id":id,"availability":"activated",
+                    "scope":"session","catalog_version":self.version,"context_source":"live_ability_catalog",
+                    "message":"Ability activated. Its available tools and guidance are supplied in the next model context; individual visibility and permissions still apply."})
             }
             _ => json!({"status":"denied","output":"Unknown discovery operation"}),
         }
@@ -1449,10 +1443,12 @@ mod tests {
             &policy,
         );
         assert_eq!(result["status"], "ok");
-        assert_eq!(result["ability"]["group_name"], "Administrator");
-        assert_eq!(result["skill"], "Use scoped workspace tools.");
-        assert_eq!(result["tool_skills"]["file_edit"], "Match one exact span.");
-        assert!(result["tool_skills"]["python"].is_null());
+        assert_eq!(result["ability_id"], "codebase_admin");
+        assert!(result.get("ability").is_none());
+        assert!(result.get("skill").is_none());
+        assert!(result.get("tool_skills").is_none());
+        assert!(!result.to_string().contains("Use scoped workspace tools."));
+        assert!(!result.to_string().contains("Match one exact span."));
         assert!(catalog.tool_loaded("file_edit", &run["loaded_abilities"]));
         let names = catalog
             .schemas(&policy, &run["loaded_abilities"])
@@ -1910,7 +1906,9 @@ mod tests {
         assert!(!catalog.tool_available("maps_geocode",&v,&state,&json!([])));
         let result=catalog.discover_with("load_ability",&json!({"ability_id":"web_access"}),&mut run,&p,&v,&state);
         assert_eq!(result["status"],"ok");
-        assert!(result["tool_skills"]["maps_geocode"].as_str().unwrap().contains("great-circle"));
+        assert_eq!(result["ability_id"],"web_access");
+        assert!(result.get("tool_skills").is_none());
+        assert!(!result.to_string().contains("great-circle"));
         let active=json!({"active":["web_access"],"suppressed":[]});
         assert!(catalog.tool_available("maps_geocode",&v,&active,&run["loaded_abilities"]));
         assert_eq!(catalog.tool_abilities("maps_geocode",&v,&active,&run["loaded_abilities"]),vec!["web_access"]);

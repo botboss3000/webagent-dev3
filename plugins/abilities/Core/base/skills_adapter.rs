@@ -12,7 +12,7 @@ pub fn schemas()->Vec<Value> {
     vec![
         json!({"type":"function","name":"list_skills","description":"List inactive discoverable skills; include_available also shows visible and already loaded guidance",
             "parameters":{"type":"object","properties":{"ability_id":id,"query":{"type":"string","maxLength":200},"include_available":{"type":"boolean"}},"required":["ability_id"],"additionalProperties":false}}),
-        json!({"type":"function","name":"load_skill","description":"Load discoverable guidance for this run; already supplied guidance is acknowledged without repeating its body; does not activate abilities or tools",
+        json!({"type":"function","name":"load_skill","description":"Load discoverable guidance for this run. Returns only acknowledgment and metadata; full guidance is supplied in the next model context. Does not activate abilities or tools",
             "parameters":{"type":"object","properties":{"ability_id":id,"skill_id":id,
                 "kind":{"type":"string","enum":["ability","tool","selectable","own"]},
                 "expected_catalog_version":{"type":"string","minLength":64,"maxLength":64,"pattern":"^[a-f0-9]{64}$"}},
@@ -133,10 +133,15 @@ fn load_asset(current:&View,query:&LoadArgs)->Result<Value> {
     }
 }
 /// Persist selectors only after the caller fences the current native execution.
+pub(crate) fn apply_legacy_selection(run:&mut Value,result:&Value) {
+    // New acknowledgment selectors were committed with their native result.
+    // Import only old full-text evidence, never acknowledgments from another run.
+    if result["output"]["text"].is_string() {apply_selection(run,result);}
+}
 pub(crate) fn apply_selection(run:&mut Value,result:&Value) {
     if run["pending"]["name"]!="load_skill" || result["status"]!="success" {return;}
     let asset=&result["output"];
-    let Ok(evidence)=serde_json::from_value::<NativeEvidence>(asset.clone()) else {return;};
+    let Ok(evidence)=serde_json::from_value::<SelectionEvidence>(asset.clone()) else {return;};
     let args=run["pending"]["arguments"].clone();
     let selector=if let Some(raw)=args.as_str() {serde_json::from_str::<LoadArgs>(raw)}
         else {serde_json::from_value::<LoadArgs>(args)};
@@ -144,8 +149,16 @@ pub(crate) fn apply_selection(run:&mut Value,result:&Value) {
     use sha2::{Digest,Sha256};
     if validate_load(&selector).is_err() || evidence.activates
         || evidence.ability_id!=selector.ability_id || evidence.kind!=selector.kind
-        || evidence.skill_id!=selector.skill_id || evidence.bytes!=evidence.text.len()
-        || evidence.sha256!=hex::encode(Sha256::digest(evidence.text.as_bytes()))
+        || evidence.skill_id!=selector.skill_id || !valid_hash(&evidence.sha256)
+        || !match evidence.text.as_deref() {
+            // Compatibility for native results persisted before acknowledgment-only loads.
+            Some(text)=>evidence.bytes==text.len()
+                && evidence.sha256==hex::encode(Sha256::digest(text.as_bytes())),
+            // Only the fenced native loader produces this content-free result.
+            None=>evidence.status.as_deref()==Some("loaded") && evidence.bytes>0
+                && evidence.context_source.as_deref()==Some("live_skill_catalog")
+                && evidence.catalog_version.as_deref().is_some_and(valid_hash),
+        }
         || !(evidence.source_kind=="untrusted_bundled_guidance" && evidence.kind!="own" && evidence.revision.is_none()
             || evidence.source_kind=="untrusted_agent_skill" && evidence.kind=="own" && evidence.revision.is_some_and(|r|r>0)) {return;}
     let mut selections=run["loaded_skills"].as_array().cloned().unwrap_or_default();
@@ -157,6 +170,32 @@ pub(crate) fn apply_selection(run:&mut Value,result:&Value) {
     if let Some(revision)=evidence.revision {selected["revision"]=json!(revision);}
     selections.push(selected);
     run["loaded_skills"]=json!(selections);
+}
+fn valid_hash(hash:&str)->bool {
+    hash.len()==64 && hash.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))
+}
+#[derive(Deserialize)]
+struct SelectionEvidence {
+    ability_id:String, kind:String, skill_id:String, sha256:String,
+    bytes:usize, source_kind:String, activates:bool,
+    #[serde(default)] text:Option<String>,
+    #[serde(default)] revision:Option<i64>,
+    #[serde(default)] status:Option<String>,
+    #[serde(default)] catalog_version:Option<String>,
+    #[serde(default)] context_source:Option<String>,
+}
+fn skill_acknowledgment(asset:&Value,catalog_version:&str)->Value {
+    let available=asset["requires_activation"]==false;
+    let mut ack=json!({"status":if available {"already_available"} else {"loaded"},
+        "ability_id":asset["ability_id"],"kind":asset["kind"],"skill_id":asset["skill_id"],
+        "sha256":asset["sha256"],"bytes":asset["bytes"],"source_kind":asset["source_kind"],
+        "activates":false,"scope":"run","catalog_version":catalog_version,
+        "context_source":"live_skill_catalog","requires_activation":false,
+        "availability":if available {asset["availability"].as_str().unwrap_or("activated")} else {"activated"},
+        "message":if available {"This guidance is already supplied to the current model context."}
+            else {"Guidance loaded for this run and supplied in the next model context."}});
+    if let Some(revision)=asset.get("revision") {ack["revision"]=revision.clone();}
+    ack
 }
 /// Rehydrate guidance under current authority at every model boundary.
 pub(crate) async fn active_guidance(app:&App,sid:&str,run_id:&str)->Result<String> {
@@ -226,13 +265,7 @@ async fn work(app:&App,sid:&str,run_id:&str,name:&str,args:&Value)->Result<Value
             }
             let mut skill=load_asset(&current,&query)?;
             mark_availability(&mut skill,&current.loaded_skills,&current.loaded);
-            if skill["requires_activation"]==false {
-                skill.as_object_mut().context("Invalid skill metadata")?.remove("text");
-                skill["status"]=json!("already_available");
-                skill["message"]=json!("This guidance is already supplied to the current model context.");
-            } else {skill["status"]=json!("ok");}
-            skill["catalog_version"]=json!(current.version);
-            skill
+            skill_acknowledgment(&skill,&current.version)
         }
         _=>unreachable!(),
     };
@@ -402,6 +435,40 @@ mod tests {
         forged["output"]["text"]=json!("TAMPERED");
         apply_selection(&mut run,&forged);
         assert_eq!(run,before);
+    }
+    #[test]
+    fn acknowledgment_only_skill_load_selects_without_recording_the_body() {
+        let history=history_pair("load_skill","PRIVATE_SKILL_BODY");
+        let legacy:Value=serde_json::from_str(history[1]["output"].as_str().unwrap()).unwrap();
+        let mut asset=legacy["output"].clone();
+        asset["requires_activation"]=json!(true);
+        let ack=skill_acknowledgment(&asset,&"a".repeat(64));
+        assert_eq!(ack["status"],"loaded");
+        assert!(ack.get("text").is_none());
+        assert!(!ack.to_string().contains("PRIVATE_SKILL_BODY"));
+        let initial=json!({"pending":{"name":"load_skill","arguments":{
+            "ability_id":"base","kind":"ability","skill_id":"base"}}});
+        let mut run=initial.clone();
+        apply_selection(&mut run,&json!({"status":"success","output":ack}));
+        assert_eq!(run["loaded_skills"].as_array().unwrap().len(),1);
+        let mut migrated=initial.clone();
+        apply_legacy_selection(&mut migrated,&legacy);
+        assert_eq!(run,migrated);
+        let mut prior_run_ack=initial.clone();
+        apply_legacy_selection(&mut prior_run_ack,&json!({"status":"success","output":ack}));
+        assert_eq!(prior_run_ack,initial);
+        for field in ["status","catalog_version","context_source","sha256","skill_id"] {
+            let mut invalid=ack.clone();invalid[field]=json!("invalid");
+            let mut rejected=initial.clone();
+            apply_selection(&mut rejected,&json!({"status":"success","output":invalid}));
+            assert_eq!(rejected,initial,"invalid {field}");
+        }
+        asset["requires_activation"]=json!(false);asset["availability"]=json!("visible");
+        let visible=skill_acknowledgment(&asset,&"a".repeat(64));
+        assert_eq!(visible["status"],"already_available");
+        let mut unchanged=initial.clone();
+        apply_selection(&mut unchanged,&json!({"status":"success","output":visible}));
+        assert_eq!(unchanged,initial);
     }
     #[test]
     fn availability_distinguishes_pinned_loaded_and_changed_guidance() {
