@@ -25,6 +25,7 @@ import { mountSessionsPage } from './main-panel/agents/sessions/page.js';
 import { mountAvailableModels } from './main-panel/account/available-models.js';
 let availableModelsDispose;
 let selectionTable;
+let agentSelectionQueue=Promise.resolve();
 let sessionsPage=null,sessionsGeneration=0;
 // Accept the original bookmark scope, then normalize it to the Sessions route.
 let sessionsScope=['sessions','all'].includes(new URL(location.href).searchParams.get('agentScope'));
@@ -114,12 +115,11 @@ function renderAgentCards(){
     card.querySelector('.agent-card-name').textContent=agent.name||agent.id;
     card.querySelector('.agent-status-dot')?.remove();
     if(agent.description)card.title=agent.description;
-    const select=()=>{
-      if(!sessionsScope&&agent.id===agentId){$('agents-detail-region').scrollIntoView({block:'start',behavior:'smooth'});return;}
-      const route=new URL(location.href);route.searchParams.set('tab','agents');route.searchParams.set('agent',agent.id);route.searchParams.delete('agentScope');if(route.searchParams.get('agentView')==='sessions')route.searchParams.set('agentView','config');
-      // Remount all agent-scoped handlers while preserving the conversation route.
-      location.assign(route.href);
-    };
+    const select=guard(()=>{
+      // Serialize remounts so rapid card clicks cannot retain another agent's handlers.
+      agentSelectionQueue=agentSelectionQueue.catch(()=>{}).then(()=>selectAgent(agent.id));
+      return agentSelectionQueue;
+    });
     card.onclick=select;
     card.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();select();}};
     squares.append(row);
@@ -241,6 +241,27 @@ async function showAgentView(view,routeMode='push'){
   if(selected==='identity')await renderIdentity($('identity-page'),api,{agentId,onSaved:agent=>{const saved=agentRoster.find(item=>item.id===agentId);if(saved)saved.name=agent.name;renderAgentCards();}});
   if(selected==='abilities')await renderAbilities($('abilities-page'),api,{agentId});
 }
+async function selectAgent(id){
+  if(!sessionsScope&&id===agentId){$('agents-detail-region').scrollIntoView({block:'start',behavior:'smooth'});return;}
+  sessionsScope=false;
+  disposeSessionsPage();
+  $('sessions-region').hidden=true;
+  $('agents-detail-region').hidden=false;
+  agentId=id;
+  const route=new URL(location.href);
+  route.searchParams.set('tab','agents');
+  route.searchParams.set('agent',id);
+  route.searchParams.delete('agentScope');
+  if(route.searchParams.get('agentView')==='sessions')route.searchParams.set('agentView','config');
+  history.pushState({},'',route);
+  renderAgentCards();
+  for(const page of [{panelId:'config-page'},...agentPages])$(page.panelId).hidden=true;
+  // Rebind configuration handlers without remounting or reopening the conversation.
+  await Promise.all([
+    mountAgentModels(),
+    showAgentView(route.searchParams.get('agentView')||'config','replace')
+  ]);
+}
 for(const page of [{id:'config'},...agentPages]){
   $('agent-tab-'+page.id).onclick=guard(()=>showAgentView(page.id));
 }
@@ -315,7 +336,23 @@ async function boot(){
   if(!agentRoster.length){$('agents-detail-region').hidden=true;if(sessionsScope)await showSessions('replace');window.__boot?.appReady();return;}
   $('agents-detail-region').hidden=false;
   await refresh();
+  await mountAgentModels();
+  await showAgentView(new URL(location.href).searchParams.get('agentView')||(me.is_admin?'config':'model'),'replace');
+  const items=await chat.sessions();
+  const requested=new URL(location.href).searchParams.get('session_id');
+  const selected=items.find(item=>item.id===requested)||items[0];
+  if(selected)await chat.open(selected.id,'replace');
+  else if(requested){const route=new URL(location.href);route.searchParams.delete('session_id');history.replaceState({},'',route);}
+  if(requested&&requested!==selected?.id)note('Requested conversation is unavailable. Showing your latest conversation.');
+  if(initialTab==='account')showAccountPanel('replace');
+  window.__boot?.appReady();
+  clearInterval(poll);
+  poll=setInterval(()=>refresh().then(()=>clearNoticeFrom('status-poll')).catch(error=>note(error.message,'status-poll')),3000);
+}
+async function mountAgentModels(){
   selectionTable?.destroy();
+  selectionTable=null;
+  $('selection-model-table').replaceChildren();
   $('model-page').querySelector('.ac-model-table').hidden=true;
   $('settings').hidden=true;
   const mountModels=()=>mountSelectionTable($('selection-model-table'),{
@@ -356,17 +393,6 @@ async function boot(){
       $('selection-model-table').replaceChildren(warning);
     }
   }
-  await showAgentView(new URL(location.href).searchParams.get('agentView')||(me.is_admin?'config':'model'),'replace');
-  const items=await chat.sessions();
-  const requested=new URL(location.href).searchParams.get('session_id');
-  const selected=items.find(item=>item.id===requested)||items[0];
-  if(selected)await chat.open(selected.id,'replace');
-  else if(requested){const route=new URL(location.href);route.searchParams.delete('session_id');history.replaceState({},'',route);}
-  if(requested&&requested!==selected?.id)note('Requested conversation is unavailable. Showing your latest conversation.');
-  if(initialTab==='account')showAccountPanel('replace');
-  window.__boot?.appReady();
-  clearInterval(poll);
-  poll=setInterval(()=>refresh().then(()=>clearNoticeFrom('status-poll')).catch(error=>note(error.message,'status-poll')),3000);
 }
 // Registration mirrors V2's mode switch; V3 retains independent cookie authentication.
 let registerMode=false;
