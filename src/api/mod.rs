@@ -1,8 +1,9 @@
 //! HTTP admission, administration, and routing. Rust checks authority before a run is queued.
 use super::*;
 mod auth;
+pub(crate) mod embed;
 mod admin;
-mod sessions;
+pub(crate) mod sessions;
 mod promotions;
 mod chat;
 pub(crate) mod direct_messages;
@@ -120,6 +121,10 @@ pub(super) fn router(app: App) -> Router {
         .route("/agents/{id}/abilities/{ability}/tools/{tool}/skill-content",get(ability_admin::tool_skill_content))
         .route("/agents/{id}/abilities/{ability}/tools/{tool}/mode",put(ability_admin::tool_set))
         .route("/user/agent-page-favorites",get(agent_pages::read).put(agent_pages::save))
+        .route("/agents/{id}/embed",get(embed::config_get).put(embed::config_put))
+        .route("/embed/challenges/{id}",get(embed::challenge_info))
+        .route("/embed/authorize",post(embed::authorize))
+        .route("/embed/credentials/{id}",axum::routing::delete(embed::revoke))
         .route("/auth/me", get(me))
         .route("/auth/ui-config", get(chat_ui_config))
         .route("/auth/profile", put(update_profile))
@@ -134,6 +139,11 @@ pub(super) fn router(app: App) -> Router {
     let ui = std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into());
     let shared = std::env::var("V3_SHARED_UI_ROOT").unwrap_or_else(|_| "/opt/v3/shared-ui".into());
     Router::new().merge(event_aliases).route("/api/v3/pages/catalog",get(ui_pages::catalog))
+        .route("/embed/{id}",get(embed::page))
+        .route("/api/v3/embed/{id}/descriptor",get(embed::descriptor))
+        .route("/api/v3/embed/{id}/challenge",post(embed::challenge))
+        .route("/api/v3/embed/{id}/guest",post(embed::guest))
+        .route("/api/v3/embed/redeem",post(embed::redeem))
         .route("/api/v3/auth/login",post(login))
         .route("/api/v3/auth/register",post(registration::register))
         .route("/api/v3/auth/guest-login",post(registration::guest_login))
@@ -160,11 +170,13 @@ pub(super) fn router(app: App) -> Router {
         .layer(DefaultBodyLimit::max(2*1024*1024))
         .layer(middleware::from_fn(diagnostics::http_errors))
         .layer(middleware::from_fn(|request:Request,next:Next|async move{
+            let public_widget_module=request.uri().path()=="/v3-ui/chat/widget/window.js";
             let mut response=next.run(request).await;
+            if public_widget_module {response.headers_mut().insert("access-control-allow-origin",HeaderValue::from_static("*"));}
             response.headers_mut().insert("cache-control",HeaderValue::from_static("no-store"));
             response.headers_mut().insert("x-content-type-options",HeaderValue::from_static("nosniff"));
             response.headers_mut().insert("referrer-policy",HeaderValue::from_static("same-origin"));
-            response.headers_mut().insert("content-security-policy",HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"));
+            if !response.headers().contains_key("content-security-policy") {response.headers_mut().insert("content-security-policy",HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"));}
             response
         })).with_state(app)
 }

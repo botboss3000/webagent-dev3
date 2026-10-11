@@ -1,0 +1,10 @@
+import {widgetProfile,refreshChatSurface,setChatSurfaceActions} from '../controls/chat-config.js';
+export function mountNativeWidget({chat,createFloatingChat,createChatLauncher,onDock,onChange=()=>{},note}){
+ const panel=document.getElementById('chat-panel');let floating=false,launcher,shell,preferred=false;
+ try{preferred=localStorage.getItem('v3.chat.surface')==='floating'}catch{}
+ const remember=value=>{try{localStorage.setItem('v3.chat.surface',value?'floating':'docked')}catch{}};
+ function apply(){window.__CHAT_PORTAL__=floating;refreshChatSurface();document.dispatchEvent(new Event('v3:chat-visibility'));document.getElementById('chat-float-btn').textContent=floating?'Floating':'Float';}
+ shell=createFloatingChat({panel,profile:widgetProfile(),storageKey:'v3.chat.widget.geometry',onMinimize:()=>{launcher.show('minimized');apply();onChange()},onClose:()=>{launcher.show('closed');apply();onChange()},onDock:()=>{floating=false;remember(false);launcher.hide();setChatSurfaceActions({});apply();onDock();}});
+ launcher=createChatLauncher({profile:widgetProfile(),storageKey:'v3.chat.widget.launcher-draft',onOpen:()=>api.open(),onSend:async text=>{api.open();chat.setDraft(text);try{await chat.send(text)}catch(error){note(error.message);throw error}}});document.body.append(launcher.element);launcher.hide();
+ const api={get floating(){return floating},get isOpen(){return shell.isOpen()},float(){floating=true;remember(true);panel.hidden=false;setChatSurfaceActions({minimize:()=>shell.minimize(),close:()=>shell.close()});shell.open();launcher.hide();apply();onChange();},open(){if(!floating)return api.float();shell.open();launcher.hide();apply();onChange();},hide(){shell.close();launcher.hide();},configure(){const profile=widgetProfile();shell.setProfile(profile);launcher.setProfile(profile);if(preferred){preferred=false;api.float()}else if(!floating||shell.isOpen())launcher.hide();},destroy(){launcher.destroy();shell.destroy()}};return api;
+}

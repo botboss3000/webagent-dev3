@@ -64,11 +64,13 @@ macro_rules! path_json {
         }
     };
 }
-async fn sessions(Extension(app): Extension<App>, Query(args): Query<crate::SessionListArgs>) -> Response {
-    crate::sessions(State(app),Query(args)).await.into_response()
+async fn sessions(Extension(app): Extension<App>, identity:Option<Extension<Value>>, Query(args): Query<crate::SessionListArgs>) -> Response {
+    let result=crate::sessions(State(app),Query(args)).await;
+    match result {Ok(mut value)=>{if let Some(agent)=identity.as_ref().and_then(|v|v.0["_embed_agent"].as_str()) {if let Some(items)=value.0["sessions"].as_array_mut(){items.retain(|s|s["agent_id"].as_str().unwrap_or("shared_default")==agent);}}value.into_response()},Err(e)=>e.into_response()}
 }
-async fn session_search(Extension(app): Extension<App>, Query(args): Query<crate::SessionSearchArgs>) -> Response {
-    crate::session_search_api(State(app), Query(args)).await.into_response()
+async fn session_search(Extension(app): Extension<App>, identity:Option<Extension<Value>>, Query(args): Query<crate::SessionSearchArgs>) -> Response {
+    let result=crate::api::sessions::session_search_scoped(app,args,identity.as_ref().and_then(|v|v.0["_embed_agent"].as_str())).await;
+    match result {Ok(mut value)=>{if let Some(agent)=identity.as_ref().and_then(|v|v.0["_embed_agent"].as_str()) {if let Some(items)=value.0["results"].as_array_mut(){items.retain(|s|s["agent_id"].as_str().unwrap_or("shared_default")==agent);}}value.into_response()},Err(e)=>e.into_response()}
 }
 json_arg!(create_session => create_session);
 async fn direct_message(Extension(app):Extension<App>,Json(body):Json<Value>)->Response {
@@ -214,9 +216,10 @@ async fn approval(Extension(app): Extension<App>, Path(id): Path<String>,
 }
 
 // Only caller-owned run summaries; never provider credentials or admin policy.
-async fn user_status(Extension(app): Extension<App>) -> crate::Api {
+async fn user_status(Extension(app): Extension<App>,identity:Option<Extension<Value>>) -> crate::Api {
     let mut runs=app.store.active_runs().await?;
     runs.extend(app.store.recent_runs(None).await?);
+    if let Some(agent)=identity.as_ref().and_then(|v|v.0["_embed_agent"].as_str()) {runs.retain(|r|r["agent_id"].as_str().unwrap_or("shared_default")==agent);}
     Ok(Json(serde_json::json!({"shutoff":app.shutoff().await?,
         "runs":crate::public_runs(&app,runs).await?})))
 }
@@ -268,4 +271,25 @@ pub(crate) fn messaging_router() -> Router<App> {
         .route("/sessions", post(create_session))
         .route("/sessions/{id}", get(snapshot))
         .route("/sessions/{id}/messages", post(send).layer(axum::extract::DefaultBodyLimit::disable()))
+}
+
+#[cfg(test)]mod embed_identity_compatibility_tests {
+    use super::*;
+    use axum::{body::Body,extract::Request,http::StatusCode};
+    use tower::ServiceExt;
+    #[tokio::test]
+    async fn machine_chat_handlers_allow_absent_browser_identity() {
+        let (_root,mut app)=crate::runtime_tests::fixture().await;
+        let token="fixture-machine-messaging-token-0123456789";
+        app.message_api_token_hash=crate::api::message_api_token_hash(token).unwrap();
+        // Exercise the shared handlers beneath the machine middleware, which
+        // intentionally supplies caller App without a browser identity document.
+        let route=Router::new().route("/sessions",get(sessions))
+            .route("/sessions/search",get(session_search)).route("/user/status",get(user_status))
+            .route_layer(axum::middleware::from_fn_with_state(app.clone(),crate::api::message_api_auth)).with_state(app);
+        for uri in ["/sessions","/sessions/search?q=needle","/user/status"] {
+            let request=Request::builder().uri(uri).header("authorization",format!("Bearer {token}")).body(Body::empty()).unwrap();
+            assert_eq!(route.clone().oneshot(request).await.unwrap().status(),StatusCode::OK);
+        }
+    }
 }

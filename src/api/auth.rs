@@ -49,6 +49,11 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
         request.extensions_mut().insert(identity);
         return next.run(request).await;
     }
+    if request.headers().contains_key("authorization") {
+        return match super::embed::bearer(&app,&mut request).await {
+            Ok(())=>next.run(request).await,Err(error)=>error.into_response(),
+        };
+    }
     let cookie = request
         .headers()
         .get("cookie")

@@ -299,6 +299,7 @@ pub(crate) async fn events(
                     let access=app.store.live_access(&user_id,&agent_id).await.ok();
                     let valid=doc.as_ref().is_some_and(|doc|doc["generation"]==generation
                             && doc["expires"].as_u64().unwrap_or(0)>now())
+                        && (if let Some(doc)=doc.as_ref().filter(|d|d.get("agent_id").is_some()) {super::embed::credential_valid(&app,doc).await} else {true})
                         && account.as_ref().is_some_and(|account|
                             account["generation"]==generation
                             && account["is_approved"]==true

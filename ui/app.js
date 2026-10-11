@@ -10,6 +10,9 @@ import { initHeaderCarousel } from './shared/header-carousel.js';
 initHeaderCarousel();
 import { wirePageTabDrag } from './shared/page-tabs.js';
 import { purgeAllBrowserData } from './browser-data-reset.js';
+import { createFloatingChat,createChatLauncher } from './chat/widget/window.js';
+import { mountNativeWidget } from './chat/widget/native.js';
+import { authorizeEmbedPopup } from './embed/authorize.js';
 import { initChatConfig } from './chat/controls/chat-config.js';
 import { mountChatPanel } from './chat/core/panel.js';
 
@@ -266,13 +269,15 @@ syncAgentTabs();
 wirePageTabDrag(document.querySelector('#agents-grid .agent-card-tabs'), { getOrder: () => agentTabOrder, save: saveAgentTabs, prefix: 'agent-tab-' });
 async function loadGuestPolicy(){try{const policy=await api('/auth/access-mode');$('guest-login').hidden=!policy.guest_access;document.querySelector('.private-access-approval').hidden=!!policy.guest_access;}catch{$('guest-login').hidden=true;}}
 $('guest-login').onclick=async()=>{const btn=$('guest-login');btn.disabled=true;try{const result=await api('/auth/guest-login','POST',{});csrf=result.csrf_token;await boot();}catch(error){$('registration-status').textContent=error.message;}finally{btn.disabled=false;}};
-function out(){agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
+function out(){widget?.hide();agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
 async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;$('shutoff').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}if(!$('rules').children.length)for(const [tool,rule]of Object.entries(state.policy?.rules||{})){const label=document.createElement('label');label.textContent=tool;const select=document.createElement('select');select.name=tool;for(const value of ['allow','deny','require_approval']){const option=document.createElement('option');option.value=value;option.textContent=value.replaceAll('_',' ');select.append(option);}select.value=rule;label.append(select);$('rules').append(label);}chat.runs(state.runs||[]);}
 // Explicit role administration replaces the legacy default-model form for every agent.
 async function boot(){
   const me=await api('/auth/me');
   csrf=me.csrf_token;
   await initChatConfig().catch(() => {});
+  if(await authorizeEmbedPopup({request:api,me}))return;
+  widget?.configure();
   renderAccount(me);
   window.dispatchEvent(new Event('v3-identity-changed'));
   privateVisible(false);
@@ -480,6 +485,7 @@ $('account-password-form').onsubmit=async event=>{
 const mobileLayout=matchMedia('(max-width:800px)');
 let mobileView=initialTab==='account'?'main':new URL(location.href).searchParams.has('session_id')?'chat':'main';
 let desktopChatVisible=true;
+const widget=mountNativeWidget({chat,createFloatingChat,createChatLauncher,onChange:()=>syncLayout(),onDock:()=>{desktopChatVisible=true;syncLayout();},note});
 function updateChatControl(visible){$('chat-toggle-btn').classList.toggle('active',visible);$('chat-toggle-btn').setAttribute('aria-expanded',String(visible));}
 function showMobileView(view){mobileView=view;$('app').dataset.mobileView=view;updateChatControl(view==='chat');updateMainPageState();}
 function syncLayout(){
@@ -488,6 +494,7 @@ function syncLayout(){
   $('mobile-back-main-btn').hidden=!mobileLayout.matches;
   if(!mobileLayout.matches)closeMobileNav();
   updateMobileNavigation();
+  if(widget.floating){if(mobileLayout.matches)$('app').dataset.mobileView='main';else delete $('app').dataset.mobileView;updateMainPageState();$('chat-panel').hidden=false;$('chat-resize-handle').hidden=true;updateChatControl(widget.isOpen);return;}
   if(mobileLayout.matches){$('chat-panel').hidden=false;$('chat-resize-handle').hidden=false;showMobileView(mobileView);}
   else{delete $('app').dataset.mobileView;$('chat-panel').hidden=!desktopChatVisible;$('chat-resize-handle').hidden=!desktopChatVisible;updateChatControl(desktopChatVisible);updateMainPageState();}
 }
@@ -504,7 +511,8 @@ document.addEventListener('click',event=>{if(!mobileNav.hidden&&!event.target.cl
 document.addEventListener('keydown',event=>{if(event.key==='Escape')closeMobileNav();});
 mobileLayout.addEventListener('change',syncLayout);syncLayout();
 window.addEventListener('popstate',()=>location.reload());
-$('chat-toggle-btn').onclick=()=>{if(mobileLayout.matches){showMobileView('chat');}else{desktopChatVisible=!desktopChatVisible;syncLayout();}};
+$('chat-float-btn').onclick=()=>{widget.float();syncLayout();};
+$('chat-toggle-btn').onclick=()=>{if(widget.floating){widget.open();syncLayout();return;}if(mobileLayout.matches){showMobileView('chat');}else{desktopChatVisible=!desktopChatVisible;syncLayout();}};
 
 let browserResetInProgress=false;
 async function hardRefresh(signOut=false){

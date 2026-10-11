@@ -1,5 +1,6 @@
 
 'use strict';
+import { renderEmbedSettings } from './embed.js';
 import { renderVisibility } from './visibility.js';
 import { renderClosing } from './closing.js';
 import { renderManager } from './manager.js';
@@ -60,6 +61,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
     const task = queue.then(async()=>{ const saved=await request(path,'PUT',{revision:agent.revision,...patch}); agent=saved; onSaved(saved); return saved; });
     queue=task.catch(()=>{}); return task;
   };
+  if(agent.can_manage)await renderEmbedSettings(content,request,{agentId});
   renderCompaction(content, agent, persist);
   renderToolOutputPolicy(content, agent, persist);
   const title = document.createElement('h3'); title.textContent = 'Chat modes'; content.append(title);

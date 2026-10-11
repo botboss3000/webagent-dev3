@@ -3,7 +3,12 @@ import { applyChatPillLayout } from './chat-pill-config.js';
 import { initFooterHandle } from './footer-handle.js';
 // V3 reads the v3/data/config/chat.json schema. Unknown controls are
 // skipped until their v3 features exist; the controls below are live in v3.
-const byId = id => document.getElementById(id);
+let chatRoot = null;
+const byId = id => chatRoot?.querySelector('#'+id) || document.getElementById(id);
+let surfaceActions = {};
+export function setChatSurfaceActions(actions){surfaceActions=actions;}
+export function widgetProfile(){return mergeProfile(documentConfig?.chat_common,documentConfig?.chat_widget);}
+export function refreshChatSurface(){currentSurface='';applyChatConfig();}
 let documentConfig = null;
 let headerNodes = null;
 let currentSurface = '';
@@ -80,8 +85,13 @@ function headerControl(name) {
     minimize.setAttribute('aria-label', 'Minimize chat');
     minimize.title = 'Minimize chat';
     minimize.innerHTML = '<i data-lucide="minus"></i>';
-    minimize.onclick = () => byId('chat-toggle-btn').click();
+    minimize.onclick = () => surfaceActions.minimize ? surfaceActions.minimize() : byId('chat-toggle-btn')?.click();
     headerNodes.minimize = minimize;
+    const close=document.createElement('button');close.type='button';close.className='chat-header-minimize';close.title='Close chat';close.setAttribute('aria-label','Close chat');close.textContent='×';close.onclick=()=>surfaceActions.close?.();headerNodes.close=close;
+    const title=document.createElement('span');title.textContent=surfaceActions.title||'WebAgent';headerNodes.title=title;
+    const icon=document.createElement('span');icon.textContent='◉';icon.setAttribute('aria-hidden','true');headerNodes.icon=icon;
+    const status=document.createElement('span');status.textContent='';headerNodes.status=status;
+    const dot=document.createElement('span');dot.className='agent-status-dot';headerNodes.dot=dot;
   }
   return headerNodes[name];
 }
@@ -172,7 +182,7 @@ function applyFooter(profile, mode) {
     area.style.setProperty('--idle-pill-width',profile.idle_footer?.chat_pill?.pill_width || '500px');
     area.style.setProperty('--idle-margin-bottom',profile.idle_footer?.margin_bottom || '24px');
     area.style.setProperty('bottom',footer.margin_bottom || '0px','important');
-    const contentProfile = mergeProfile(documentConfig.chat_common, documentConfig[window.innerWidth <= 768 ? 'chat_mobile' : 'chat_desktop']);
+    const contentProfile = currentChatProfile();
     surface.style.setProperty('--chat-surface-max-width',contentProfile.content_max_width || '1000px');
     if(profile.messages?.pill_placeholder)footerNodes.input.placeholder=profile.messages.pill_placeholder;
     applyChatPillLayout(footerNodes,pill);
@@ -237,7 +247,7 @@ export function applyChatConfig() {
     }
   }
   const panel = byId('chat-panel');
-  const contentProfile = mergeProfile(documentConfig.chat_common, documentConfig[window.innerWidth <= 768 ? 'chat_mobile' : 'chat_desktop']);
+  const contentProfile = currentChatProfile();
   panel.style.setProperty('--v3-content-max-width', contentProfile.content_max_width || '100%');
   panel.style.setProperty('--v3-transcript-top',(profile.transcript_padding?.top_px ?? 25)+'px');
   panel.style.setProperty('--v3-transcript-bottom',(profile.transcript_padding?.bottom_px ?? 50)+'px');
@@ -256,10 +266,14 @@ export function applyChatConfig() {
   applyFooter(profile, mode);
 }
 
-export async function initChatConfig() {
+export async function initChatConfig({config:provided,root=null} = {}) {
+  chatRoot=root;
+  let data=provided;
+  if(!data){
   const response = await fetch('/api/v3/auth/ui-config', { credentials: 'same-origin', cache: 'no-store' });
   if (!response.ok) return;
-  const data = await response.json();
+  data = await response.json();
+  }
   const config = data.chat_ui || data;
   if (!config?.chat_common) return;
   // A remount replaces the partial; never reuse detached header/pill nodes.

@@ -16,8 +16,7 @@ import { mountSessionDropdown } from '../controls/session-dropdown/controller.js
 import { createSessionList } from '../controls/session-dropdown/list.js';
 import {createRecoveryDetails} from './recovery-details.js';
 const mountedPanels = new WeakMap();
-export async function mountChatPanel({request, guard, note, clearNoticeFrom, keyId, forgetKey, refresh, getState, getAgentId, getIdentity=()=>({})}) {
-  const root = document.getElementById('chat-panel');
+export async function mountChatPanel({root = document.getElementById('chat-panel'), createStream, resolveAsset, onEvent = () => {}, request, guard, note, clearNoticeFrom, keyId, forgetKey, refresh, getState, getAgentId, getIdentity=()=>({})}) {
   mountedPanels.get(root)?.destroy();
   const $ = id => root.querySelector('#' + id);
   let session = '';
@@ -29,7 +28,7 @@ export async function mountChatPanel({request, guard, note, clearNoticeFrom, key
   function rememberRuns(items){for(const run of items)gutterRuns.set(run.id,run);for(const [id] of [...gutterRuns.entries()].sort((a,b)=>(b[1].updated_at||0)-(a[1].updated_at||0)).slice(100))gutterRuns.delete(id);}
   async function refreshGutterRuns(id=session){const epoch=sessionGeneration;try{const data=await client.snapshot(id);if(id===session&&epoch===sessionGeneration)rememberRuns(data.runs||[]);}catch(error){if(id===session&&epoch===sessionGeneration)note('Message statistics unavailable: '+error.message);}}
   const paintActivity=()=>activity.render({sessionId:session,runs:activityRuns.map(r=>({...r,state:({completed:'completed',failed:'failed',stopped:'cancelled',waiting_approval:'running',waiting_gate:'finalizing'})[r.status]||r.status}))},$('chat-messages-inner'));
-  const client = createChatClient({request, note, clearNoticeFrom});
+  const client = createChatClient({request, note, clearNoticeFrom, createStream});
   function button(text,fn){const node=document.createElement('button');node.type='button';node.textContent=text;node.onclick=guard(fn);return node;}
 async function mountChat(){
   const response=await fetch('/v3-ui/chat/chat.html?v=chat-partial-20261007-notifications',{credentials:'same-origin'});
@@ -68,15 +67,16 @@ let readGeneration=0, readThrough=0, readPending=0, readTimer=0;
 const readAbort=new AbortController();
 const visibleRows=new Set();
 function queueRead(){
-  if(document.visibilityState!=='visible'||!session)return;
+  if(document.visibilityState!=='visible'||!session||!root.getClientRects().length||root.dataset.embedVisible==='false'){clearTimeout(readTimer);return;}
   for(const row of visibleRows){if(row.isConnected)readPending=Math.max(readPending,Number(row.dataset.seq)||0);}
   clearTimeout(readTimer);
   if(readPending<=readThrough)return;
   const id=session, generation=readGeneration, through=readPending;
-  readTimer=setTimeout(async()=>{try{const result=await client.read(id,through);if(generation!==readGeneration||id!==session)return;readThrough=Math.max(readThrough,result.session?.read_through_seq||through);await sessions();}catch(error){if(generation===readGeneration)note('Read acknowledgment failed: '+error.message);}},250);
+  readTimer=setTimeout(async()=>{try{if(!root.getClientRects().length||root.dataset.embedVisible==='false')return;const result=await client.read(id,through);if(generation!==readGeneration||id!==session)return;readThrough=Math.max(readThrough,result.session?.read_through_seq||through);await sessions();}catch(error){if(generation===readGeneration)note('Read acknowledgment failed: '+error.message);}},250);
 }
 const readObserver=new IntersectionObserver(entries=>{for(const entry of entries){if(entry.isIntersecting&&entry.intersectionRect.height>0)visibleRows.add(entry.target);else visibleRows.delete(entry.target);}queueRead();},{root:$('chat-messages'),threshold:0});
 document.addEventListener('visibilitychange',queueRead,{signal:readAbort.signal});
+document.addEventListener('v3:chat-visibility',queueRead,{signal:readAbort.signal});
 function resetReads(){++readGeneration;clearTimeout(readTimer);readThrough=0;readPending=0;visibleRows.clear();readObserver.disconnect();}
 let reviewRefreshBusy=false;
 const reviewTimer=setInterval(async()=>{
@@ -93,7 +93,7 @@ const reviewTimer=setInterval(async()=>{
   }catch(error){if(sid===session&&generation===sessionGeneration)note('Manager status unavailable: '+error.message);}
   finally{reviewRefreshBusy=false;}
 },1000);
-function message(item){const target=$('chat-messages-inner');const existing=[...target.children].find(row=>row.dataset.publicId===item.id);if(existing){updateAdmission(existing,item.admission);return;}const row=createMessage(item,{getRun:()=>gutterRuns.get(item.run_id),client,getSession:()=>session,note,showContext:run=>stats.show(run)});if(!row)return false;const before=[...target.children].find(node=>Number(node.dataset.seq)>item.seq);target.insertBefore(row,before||null);readObserver.observe(row);try{paintActivity();}catch(error){note('Activity display unavailable: '+error.message);}return true;}
+function message(item){const target=$('chat-messages-inner');const existing=[...target.children].find(row=>row.dataset.publicId===item.id);if(existing){updateAdmission(existing,item.admission);return;}const row=createMessage(item,{resolveAsset,getRun:()=>gutterRuns.get(item.run_id),client,getSession:()=>session,note,showContext:run=>stats.show(run)});if(!row)return false;const before=[...target.children].find(node=>Number(node.dataset.seq)>item.seq);target.insertBefore(row,before||null);readObserver.observe(row);try{paintActivity();}catch(error){note('Activity display unavailable: '+error.message);}return true;}
 // Base presentation is display-only. Never turn model-supplied choice or
 // approval descriptions into an action or an authorization control.
 function components(items){
@@ -126,7 +126,7 @@ function components(items){
 function watchFocus(){const source=document.activeElement;let moved=false;const onFocus=()=>{if(document.activeElement!==source)moved=true;};document.addEventListener('focusin',onFocus);return {unchanged:()=>!moved&&(document.activeElement===source||(!source.isConnected&&document.activeElement===document.body)),stop:()=>document.removeEventListener('focusin',onFocus)};}
 function shouldFocusComposer(kind){const value=currentChatProfile()?.composer?.keyboard_focus?.[kind];return kind==='new_session'?value!==false:value===true;}
 async function sessions(){const data=await client.sessions();$('sessions').replaceChildren();for(const item of data.sessions){const option=document.createElement('option');option.value=item.id;option.textContent=(item.title||'Conversation')+' — '+(item.agent_id||'shared_default');$('sessions').append(option);}$('sessions').value=session;sessionItems=data.sessions;sessionList.update(sessionItems,session);return data.sessions;}
-async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{anchor.reset();progress.open(id);notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);controls.open(id).catch(error=>{if(id===session)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);runs(data.runs||[]);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;try{media.published(item);}catch(error){note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);}catch(error){note('Transcript positioning unavailable: '+error.message);}return true;},()=>{void sessions().catch(error=>note(error.message));});if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
+async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{anchor.reset();progress.open(id);notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);controls.open(id).catch(error=>{if(id===session)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);onEvent('session',{session_id:id});document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);runs(data.runs||[]);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;try{media.published(item);}catch(error){note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);}catch(error){note('Transcript positioning unavailable: '+error.message);}return true;},()=>{void sessions().catch(error=>note(error.message));});if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
 async function cancel(id){progress.note('Stopping…');try{await client.cancel(id,{client_request_id:keyId('cancel:'+id)});}finally{await refresh();}}
 function failedRunMessages(items){
   const target=$('chat-messages-inner');
@@ -145,7 +145,7 @@ function failedRunMessages(items){
     row.firstChild.textContent='Run failed'+(run.error?' — '+run.error:'')+'. To continue, write a new message in the chat.';
   }
 }
-function runs(items){client.updateRuns(items);anchor.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));progress.update(items);void stats.refresh();controls.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));activityRuns=items.filter(run=>run.session_id===session||!run.session_id);rememberRuns(activityRuns);if(session)paintActivity();$('runs').replaceChildren();notifications.clearTools();const relevant=items.filter(run=>run.session_id===session||!run.session_id);const pendingReview=!!$('chat-messages-inner').querySelector('[data-admission-status="pending_review"],[data-admission-status="reviewing"]');const active=relevant.find(run=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(run.status));$('chat-input-row').dataset.runStatus=active?.status||relevant[0]?.status||'Ready';$('chat-stop-btn').hidden=!active||$('chat-stop-btn').dataset.configEnabled==='false';$('chat-stop-btn').dataset.run=active?.id||'';$('chat-stop-btn').style.display=$('chat-stop-btn').hidden?'none':'';$('chat-send').disabled=pendingReview||!!active||!!getState().shutoff||submitting||!!media?.uploading;
+function runs(items){onEvent('runs',{session_id:session,runs:items.filter(r=>r.session_id===session||!r.session_id).map(r=>({id:r.id,status:r.status,uncertain:!!r.uncertain,approval_id:r.pending?.id||null}))});client.updateRuns(items);anchor.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));progress.update(items);void stats.refresh();controls.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));activityRuns=items.filter(run=>run.session_id===session||!run.session_id);rememberRuns(activityRuns);if(session)paintActivity();$('runs').replaceChildren();notifications.clearTools();const relevant=items.filter(run=>run.session_id===session||!run.session_id);const pendingReview=!!$('chat-messages-inner').querySelector('[data-admission-status="pending_review"],[data-admission-status="reviewing"]');const active=relevant.find(run=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(run.status));$('chat-input-row').dataset.runStatus=active?.status||relevant[0]?.status||'Ready';$('chat-stop-btn').hidden=!active||$('chat-stop-btn').dataset.configEnabled==='false';$('chat-stop-btn').dataset.run=active?.id||'';$('chat-stop-btn').style.display=$('chat-stop-btn').hidden?'none':'';$('chat-send').disabled=pendingReview||!!active||!!getState().shutoff||submitting||!!media?.uploading;
 failedRunMessages(relevant);
 const continuing=!pendingReview&&!active&&!media?.count&&!$('chat-input').value.trim()&&$('chat-continue-btn').dataset.configEnabled!=='false';
 $('chat-continue-btn').hidden=!continuing;$('chat-continue-btn').style.display=continuing?'':'none';
@@ -194,7 +194,8 @@ $('new').onclick=guard(async()=>{
   }finally{focusWatch.stop();}
 });
 async function submit(text,clearInput=false){
-  if((!text&&!media.count)||submitting||getState().shutoff||$('chat-send').disabled)return;
+  if(!text&&!media.count)throw Error('Enter a message');
+  if(submitting||getState().shutoff||$('chat-send').disabled)throw Error('Chat is busy or execution is disabled');
   const origin=session,epoch=sessionGeneration,draft=$('chat-input').value;
   progress.note('Sending…');submitting=true;$('chat-send').disabled=true;$('chat-continue-btn').disabled=true;
   try{
@@ -211,6 +212,7 @@ async function submit(text,clearInput=false){
     forgetKey(requestKey);media.committed(sid,ids);
     if(clearInput&&sid===session&&$('chat-input').value===draft)$('chat-input').value='';
     applyChatConfig();await refresh();
+    onEvent('sent',{session_id:sid});return {session_id:sid};
   }finally{submitting=false;await refresh();}
 }
 $('composer').onsubmit=guard(()=>submit($('chat-input').value.trim(),true));
@@ -225,7 +227,21 @@ $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
     $('chat-input').onkeydown=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;
   }
-  const panel = {open, sessions, runs, disconnect, destroy};
+  async function newSession(){
+    if(submitting||media.uploading)throw Error('Wait for the pending message or upload');
+    const item=await client.create({agent_id:getAgentId(),client_request_id:crypto.randomUUID()});
+    await sessions();await open(item.id);return {session_id:item.id};
+  }
+  function selectedRun(id){const run=activityRuns.find(r=>r.id===id);if(!run)throw Error('Run is not in the selected conversation');return run;}
+  const panel = {open, sessions, runs, disconnect, destroy, newSession,
+    get sessionId(){return session;},
+    setDraft(text){if(typeof text!=='string')throw Error('Draft must be text');$('chat-input').value=text;applyChatConfig();},
+    async send(text){if(typeof text!=='string')throw Error('Message must be text');this.setDraft(text);return submit(text.trim(),true);},
+    continue:()=>submit('Continue'),
+    async stop(id){const run=id?selectedRun(id):activityRuns.find(r=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(r.status));if(!run)throw Error('No active run');await cancel(run.id);},
+    async approve(id,decision){const run=activityRuns.find(r=>r.pending?.id===id&&r.status==='waiting_approval');if(!run)throw Error('Approval is not pending in the selected conversation');await client.decide(id,{decision,client_request_id:keyId('approval:'+id+':'+decision)});await refresh();},
+    async recover(id,decision,output){const run=selectedRun(id);if(!run.uncertain&&run.status!=='recovery')throw Error('Run is not waiting for recovery');await client.recover(id,{decision,output,client_request_id:keyId('recovery:'+id+':'+decision+':'+output)});await refresh();}
+  };
   mountedPanels.set(root, panel);
   return panel;
 }

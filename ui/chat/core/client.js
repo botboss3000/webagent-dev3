@@ -1,7 +1,7 @@
 import { createAdministratorNotices } from './administrator-notices.js';
 
 // V3 transport only: cookie/CSRF request policy is supplied by the shell.
-export function createChatClient({request, note, clearNoticeFrom = () => {}, EventSourceClass = EventSource,
+export function createChatClient({request, note, clearNoticeFrom = () => {}, createStream, EventSourceClass = EventSource,
   setTimeoutFn = globalThis.setTimeout, clearTimeoutFn = globalThis.clearTimeout}) {
   const administratorNotices = createAdministratorNotices({ request });
   let source = null, epoch = 0, current = null;
@@ -73,7 +73,8 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, Eve
       seen:new Set(data.messages.map(item => item.id)), runs:new Map((data.runs || []).map(run => [run.id,run.status])),
       inFlight:null, again:false, retry:null, failures:0};
     administratorNotices.start(id);
-    source = new EventSourceClass('/api/v3/sessions/' + encodeURIComponent(id) + '/events?after=' + state.last);
+    const streamUrl='/api/v3/sessions/' + encodeURIComponent(id) + '/events?after=' + state.last;
+    source = createStream ? createStream(streamUrl) : new EventSourceClass(streamUrl);
     setConnecting(true);
     source.addEventListener('session_updated', () => { if (valid(state)) metadataChanged(); });
     source.onmessage = event => {

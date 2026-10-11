@@ -18,7 +18,7 @@ export function updateAdmission(bubble, admission) {
     acceptable:'Accepted by the manager',unacceptable:'Not sent to the agent: this message does not meet its acceptance criteria.',
     review_error:admission.error||'Review failed. This message was not sent to the agent.'})[admission.status]||'';
 }
-export function createMessage(item,{getRun=()=>null,client,getSession=()=>null,note=()=>{},showContext=()=>{}}={}){
+export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSession=()=>null,note=()=>{},showContext=()=>{}}={}){
   if(!['user','assistant'].includes(item.role)||!Number.isSafeInteger(item.seq)||item.seq<=0||typeof item.id!=='string')return null;
   const profile=currentChatProfile()||{},role=item.role==='user'?'user':'agent';
   let text=typeof item.content==='string'?item.content:JSON.stringify(item.content);
@@ -32,7 +32,10 @@ export function createMessage(item,{getRun=()=>null,client,getSession=()=>null,n
     for(const file of item.attachments){
       if(typeof file.id!=='string'||!/^[0-9a-f-]{36}$/i.test(file.id)||!sid)continue;
       const link=document.createElement('a');link.href='/api/v3/sessions/'+encodeURIComponent(sid)+'/attachments/'+encodeURIComponent(file.id)+'/content';link.textContent=file.name||'Attachment';link.download=file.name||'attachment';link.target='_blank';link.rel='noopener';
-      if(file.preview===true){const image=document.createElement('img');image.src=link.href;image.alt=file.name||'Image attachment';image.loading='lazy';link.prepend(image);}
+      let image;
+      if(file.preview===true){image=document.createElement('img');if(!resolveAsset)image.src=link.href;image.alt=file.name||'Image attachment';image.loading='lazy';link.prepend(image);}
+      if(resolveAsset){const url=link.href;let ready=false;link.onclick=event=>{if(!ready){event.preventDefault();note('Attachment is loading; try again shortly.');}};
+        resolveAsset(url).then(blobUrl=>{if(!link.isConnected)return;ready=true;link.href=blobUrl;if(image)image.src=blobUrl;}).catch(error=>{link.onclick=event=>{event.preventDefault();note('Attachment unavailable: '+error.message);};});}
       files.append(link);
     }
     bubble.append(files);

@@ -17,6 +17,7 @@ struct Cursor {
     version: u8, user: String, query: String, status: String, expires: u64,
     last_key: String, upper_key: String, titles_done: bool, seq: i64, upper_seq: i64,
     skipped: usize,
+    #[serde(default)] agent:Option<String>,
 }
 fn invalid() -> anyhow::Error { InvalidSearch.into() }
 // Offsets refer to original Unicode characters, not byte offsets in lowercase text.
@@ -34,6 +35,9 @@ fn snippet(text: &str, query: &str) -> Option<String> {
 }
 impl Store {
     pub async fn search_private_sessions(&self, query: &str, status: &str, limit: usize, continuation: Option<&str>) -> Result<Value> {
+        self.search_private_sessions_scoped(query,status,limit,continuation,None).await
+    }
+    pub(crate) async fn search_private_sessions_scoped(&self, query:&str,status:&str,limit:usize,continuation:Option<&str>,agent:Option<&str>)->Result<Value> {
         let query = query.trim().to_lowercase();
         if query.is_empty() || query.len() > 256 || query.chars().count() > 128 || query.chars().any(char::is_control)
             || !matches!(status, "active" | "recycled") || !(1..=50).contains(&limit) { return Err(invalid()); }
@@ -42,12 +46,12 @@ impl Store {
             if token.len() > 4096 || token.len() % 2 != 0 || !token.bytes().all(|b| b.is_ascii_hexdigit()) { return Err(invalid()); }
             let bytes: Vec<u8> = (0..token.len()).step_by(2).map(|i| u8::from_str_radix(&token[i..i+2],16).map_err(|_| invalid())).collect::<Result<_>>()?;
             let c: Cursor = serde_json::from_value(self.unseal(&bytes).map_err(|_| invalid())?).map_err(|_| invalid())?;
-            if c.version != 1 || c.user != self.current_user_id() || c.query != query || c.status != status || c.expires <= crate::now() || c.seq < 0 || c.seq > c.upper_seq { return Err(invalid()); }
+            if c.version != 1 || c.user != self.current_user_id() || c.query != query || c.status != status || c.agent.as_deref()!=agent || c.expires <= crate::now() || c.seq < 0 || c.seq > c.upper_seq { return Err(invalid()); }
             c
         } else {
             Cursor { version: 1, user: self.current_user_id().to_owned(), query: query.clone(), status: status.to_owned(), expires: crate::now()+900,
                 last_key: "session:".into(), upper_key: sqlx::query_scalar("SELECT COALESCE(MAX(key),'session:') FROM docs WHERE key GLOB 'session:*'").fetch_one(&mut *tx).await?,
-                titles_done: false, seq: 0, upper_seq: sqlx::query_scalar("SELECT COALESCE(MAX(seq),0) FROM chat").fetch_one(&mut *tx).await?, skipped: 0 }
+                titles_done: false, seq: 0, upper_seq: sqlx::query_scalar("SELECT COALESCE(MAX(seq),0) FROM chat").fetch_one(&mut *tx).await?, skipped: 0, agent:agent.map(str::to_owned) }
         };
         let mut results = Vec::new();
         let mut scanned = 0;
@@ -65,7 +69,7 @@ impl Store {
                 if size > RECORD_BYTES { cursor.skipped += 1; continue; }
                 bytes += size;
                 let doc = self.unseal(&row.get::<Vec<u8>,_>("value"))?;
-                if doc["status"] != status { continue; }
+                if doc["status"] != status || agent.is_some_and(|id|doc["agent_id"].as_str().unwrap_or("shared_default")!=id) { continue; }
                 if let Some(text) = snippet(doc["title"].as_str().unwrap_or(""), &query) {
                     results.push(json!({"kind":"title","session_id":cursor.last_key.trim_start_matches("session:"),"agent_id":doc["agent_id"].as_str().unwrap_or("shared_default"),"title":doc["title"],"snippet":text}));
                 }
@@ -80,7 +84,7 @@ impl Store {
                 if size > RECORD_BYTES || doc_size > RECORD_BYTES { cursor.skipped += 1; continue; }
                 bytes += size + doc_size;
                 let doc = self.unseal(&row.get::<Vec<u8>,_>("value"))?;
-                if doc["status"] != status { continue; }
+                if doc["status"] != status || agent.is_some_and(|id|doc["agent_id"].as_str().unwrap_or("shared_default")!=id) { continue; }
                 let content = self.unseal(&row.get::<Vec<u8>,_>("content"))?;
                 if let Some(text) = content.as_str().and_then(|s| snippet(s, &query)) {
                     results.push(json!({"kind":"message","session_id":row.get::<String,_>("session_id"),"agent_id":doc["agent_id"].as_str().unwrap_or("shared_default"),"title":doc["title"],"seq":cursor.seq,"role":row.get::<String,_>("role"),"snippet":text}));

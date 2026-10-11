@@ -6,7 +6,10 @@ pub(crate) struct SessionSearchArgs {
     q: String, status: Option<String>, limit: Option<usize>, continuation: Option<String>,
 }
 pub(crate) async fn session_search_api(State(app): State<App>, Query(args): Query<SessionSearchArgs>) -> Api {
-    let mut page = app.store.search_private_sessions(&args.q, args.status.as_deref().unwrap_or("active"), args.limit.unwrap_or(20), args.continuation.as_deref()).await
+    session_search_scoped(app,args,None).await
+}
+pub(crate) async fn session_search_scoped(app:App,args:SessionSearchArgs,agent:Option<&str>)->Api {
+    let mut page = app.store.search_private_sessions_scoped(&args.q, args.status.as_deref().unwrap_or("active"), args.limit.unwrap_or(20), args.continuation.as_deref(),agent).await
         .map_err(|error| if error.downcast_ref::<crate::store::search::InvalidSearch>().is_some() { bad("Invalid or expired search parameters/continuation") } else { ApiError::from(error) })?;
     let mut results = Vec::new();
     let mut admitted = std::collections::HashMap::new();
