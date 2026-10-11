@@ -109,6 +109,7 @@ pub fn public_session(value: &Value) -> Result<Value> {
     let metadata: SessionMetadata = serde_json::from_value(value.clone())?;
     let mut summary = serde_json::to_value(metadata)?;
     summary["id"] = value["id"].clone();
+    summary["history_revision"] = json!(value["history_revision"].as_u64().unwrap_or(0));
     summary["agent_id"] = json!(value["agent_id"].as_str().unwrap_or("shared_default"));
     Ok(summary)
 }
@@ -462,8 +463,17 @@ impl Store {
         }
         if session["status"]!="recycled" {return Ok(SessionPatchOutcome::Conflict("Recycle the session before permanently deleting it"));}
         self.cancel_session_work(&mut tx,sid).await?;
-        let ids:Vec<String>=sqlx::query_scalar("SELECT id FROM run_index WHERE session_id=?")
+        let mut ids:Vec<String>=sqlx::query_scalar("SELECT id FROM run_index WHERE session_id=?")
             .bind(sid).fetch_all(&mut *tx).await?;
+        // Undo retains audited runs outside the active index. Purge their recovery data too.
+        let archived_runs=sqlx::query("SELECT value FROM docs WHERE substr(key,1,4)=?")
+            .bind("run:").fetch_all(&mut *tx).await?;
+        for row in archived_runs {
+            let record=self.unseal(&row.get::<Vec<u8>,_>("value"))?;
+            if record["session_id"]==sid {
+                if let Some(id)=record["id"].as_str() { if !ids.iter().any(|known|known==id) {ids.push(id.into());} }
+            }
+        }
         for id in &ids {
             for table in ["recovery_input","loop_commands","loop_events","publication_outbox"] {
                 sqlx::query(&format!("DELETE FROM {table} WHERE run_id=?")).bind(id).execute(&mut *tx).await?;
@@ -484,7 +494,7 @@ impl Store {
                 || ["session_mode","session_ability_state","session_usage","manager_pending","session_naming",
                     "administrator_host","administrator_browser","administrator_notice"].iter()
                     .any(|prefix|candidate==format!("{prefix}:{sid}"))
-                || ["receipt:message","receipt:session:patch","receipt:session:lifecycle","receipt:base",
+                || ["receipt:message","receipt:session:patch","receipt:session:lifecycle","receipt:session:history","receipt:base",
                     "receipt:voice","receipt:chat_controls","receipt:session_mode","administrator_receipt"].iter()
                     .any(|prefix|candidate.starts_with(&format!("{prefix}:{sid}:")))
                 || ["run","run_view"].iter().any(|prefix|ids.iter().any(|id|candidate==format!("{prefix}:{id}")))
@@ -513,6 +523,7 @@ impl Store {
             sqlx::query("DELETE FROM background_task_delivery WHERE id IN (SELECT id FROM background_task_index WHERE session_id=?)").bind(sid).execute(&mut *tx).await?;
             sqlx::query("DELETE FROM background_task_index WHERE session_id=?").bind(sid).execute(&mut *tx).await?;
         }
+        sqlx::query("DELETE FROM chat_context_boundaries WHERE message_id IN (SELECT id FROM chat WHERE session_id=?)").bind(sid).execute(&mut *tx).await?;
         for table in ["chat","interactions","events","reasoning_cleanup","run_index"] {
             sqlx::query(&format!("DELETE FROM {table} WHERE session_id=?")).bind(sid).execute(&mut *tx).await?;
         }
@@ -542,6 +553,13 @@ impl Store {
         if let Some(raw) = previous {
             let previous = self.unseal(&raw)?;
             if previous["status"] == "deleted" { return Err(RecycledSession.into()); }
+            if previous["history_revision"].as_u64().unwrap_or(0)
+                > object.get("history_revision").and_then(Value::as_u64).unwrap_or(0) {
+                // A pre-Undo snapshot must not restore the discarded compaction context.
+                for field in ["history_revision", "checkpoint_input", "checkpoint_through", "tool_context_state"] {
+                    if let Some(value) = previous.get(field) { object.insert(field.into(), value.clone()); }
+                }
+            }
             // A runner may carry a full session snapshot from before a metadata
             // edit. Preserve the newer metadata while accepting its checkpoint.
             let stale = previous["metadata_revision"].as_u64().unwrap_or(0)
@@ -559,7 +577,8 @@ impl Store {
         if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(key).fetch_optional(&mut **tx).await? {
             let previous = self.unseal(&raw)?;
-            for field in ["last_active_at", "read_through_seq", "execution_epoch"] {
+            for field in ["last_active_at", "read_through_seq", "execution_epoch", "history_revision"] {
+                if field == "read_through_seq" && next["history_revision"].as_u64().unwrap_or(0) > previous["history_revision"].as_u64().unwrap_or(0) { continue; }
                 let maximum = previous[field].as_u64().unwrap_or(0).max(next[field].as_u64().unwrap_or(0));
                 next[field] = json!(maximum);
             }

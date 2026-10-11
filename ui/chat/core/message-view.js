@@ -24,7 +24,7 @@ export function updateAdmission(bubble, admission) {
     review_error:admission.error||'Review failed. This message was not sent to the agent.'})[admission.status]||'';
 }
 /** Builds one published transcript row; rejects malformed role/sequence/ID data and wires attachments, gutters, and user-text expansion. */
-export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSession=()=>null,note=()=>{},showContext=()=>{}}={}){
+export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSession=()=>null,note=()=>{},showContext=()=>{},historyAction=null}={}){
   if(!['user','assistant'].includes(item.role)||!Number.isSafeInteger(item.seq)||item.seq<=0||typeof item.id!=='string')return null;
   const profile=currentChatProfile()||{},role=item.role==='user'?'user':'agent';
   let text=typeof item.content==='string'?item.content:JSON.stringify(item.content);
@@ -48,7 +48,7 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
     bubble.append(files);
   }
   const cfg=profile.message_bubbles||{},lane=cfg[role]||{};bubble.style.fontSize=(cfg.font_size_px||17)+'px';bubble.style.padding=(cfg.padding_y_px??10)+'px '+(cfg.padding_x_px??14)+'px';if(role==='agent')bubble.style.paddingLeft=(cfg.agent_padding_left_px??4)+'px';applyBubblePaint(bubble,lane);bubble.style.borderRadius=(lane.radius_px??14)+'px';bubble.style.lineHeight=String(lane.line_height||1.5);
-  const gutter=createBubbleGutter({item,body,bubble,getText:()=>text,getRun,showContext,refreshMessage:async()=>{
+  const gutter=createBubbleGutter({item,body,bubble,getText:()=>text,getRun,showContext,historyAction,refreshMessage:async()=>{
     const sid=getSession();
     if(!sid||!client)throw Error('Conversation unavailable');
     const snapshot=await client.snapshot(sid);

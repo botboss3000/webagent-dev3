@@ -1,7 +1,7 @@
 use super::*;
 
 impl Store {
-    async fn background_index(&self) -> Result<()> {
+    pub(super) async fn background_index(&self) -> Result<()> {
         sqlx::query("CREATE TABLE IF NOT EXISTS background_task_index(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,revision INTEGER NOT NULL,status TEXT NOT NULL)").execute(&self.pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS background_task_delivery(id TEXT PRIMARY KEY,run_id TEXT NOT NULL)").execute(&self.pool).await?;
         Ok(())

@@ -78,6 +78,7 @@ pub struct ContextCache {
 
 struct ContextEntry {
     checkpoint_through: i64,
+    history_revision: u64,
     cursor: i64,
     input: Vec<Value>,
     weight: usize,
@@ -94,8 +95,15 @@ impl ContextCache {
         }
     }
 
-    pub fn get(&mut self, sid: &str, checkpoint_through: i64) -> Option<(Vec<Value>, i64)> {
-        if self.entries.get(sid)?.checkpoint_through != checkpoint_through {
+    pub fn get(
+        &mut self,
+        sid: &str,
+        checkpoint_through: i64,
+        history_revision: u64,
+    ) -> Option<(Vec<Value>, i64)> {
+        if self.entries.get(sid)?.checkpoint_through != checkpoint_through
+            || self.entries.get(sid)?.history_revision != history_revision
+        {
             self.invalidate(sid);
             return None;
         }
@@ -105,9 +113,19 @@ impl ContextCache {
         Some((entry.input.clone(), entry.cursor))
     }
 
-    pub fn insert(&mut self, sid: String, checkpoint_through: i64, cursor: i64, input: Vec<Value>) {
+    pub fn insert(
+        &mut self,
+        sid: String,
+        checkpoint_through: i64,
+        history_revision: u64,
+        cursor: i64,
+        input: Vec<Value>,
+    ) {
         if self.entries.get(&sid).is_some_and(|entry| {
-            entry.checkpoint_through == checkpoint_through && entry.cursor > cursor
+            entry.history_revision > history_revision
+                || (entry.history_revision == history_revision
+                    && entry.checkpoint_through == checkpoint_through
+                    && entry.cursor > cursor)
         }) {
             return;
         }
@@ -136,6 +154,7 @@ impl ContextCache {
             sid,
             ContextEntry {
                 checkpoint_through,
+                history_revision,
                 cursor,
                 input,
                 weight,
@@ -179,19 +198,19 @@ mod tests {
     #[test]
     fn context_cache_appends_without_regressing_cursor_and_evicts() {
         let mut cache = ContextCache::new(1200);
-        cache.insert("a".into(), 0, 1, vec![json!("a".repeat(20))]);
-        cache.insert("a".into(), 0, 2, vec![json!("a".repeat(20)), json!("b")]);
-        cache.insert("a".into(), 0, 1, vec![json!("stale")]);
-        assert_eq!(cache.get("a", 0).unwrap().1, 2);
-        cache.insert("b".into(), 0, 1, vec![json!("b".repeat(200))]);
+        cache.insert("a".into(), 0, 0, 1, vec![json!("a".repeat(20))]);
+        cache.insert("a".into(), 0, 0, 2, vec![json!("a".repeat(20)), json!("b")]);
+        cache.insert("a".into(), 0, 0, 1, vec![json!("stale")]);
+        assert_eq!(cache.get("a", 0, 0).unwrap().1, 2);
+        cache.insert("b".into(), 0, 0, 1, vec![json!("b".repeat(200))]);
         assert!(cache.weight <= cache.budget);
-        assert!(cache.get("a", 1).is_none());
+        assert!(cache.get("a", 1, 0).is_none());
     }
 
     #[test]
     fn oversized_context_is_not_cached() {
         let mut cache = ContextCache::new(128);
-        cache.insert("a".into(), 0, 1, vec![json!("x".repeat(100))]);
-        assert!(cache.get("a", 0).is_none());
+        cache.insert("a".into(), 0, 0, 1, vec![json!("x".repeat(100))]);
+        assert!(cache.get("a", 0, 0).is_none());
     }
 }

@@ -34,6 +34,9 @@ async fn run_app(app: App, run_id: &str) -> Result<App, crate::ApiError> {
     let run = app.run(run_id).await
         .map_err(|_| crate::ApiError(axum::http::StatusCode::NOT_FOUND,
             "Run not found".into()))?;
+    if run["history_removed"] == true {
+        return Err(crate::conflict("This run was removed by Undo and cannot be controlled"));
+    }
     let session_id = run["session_id"].as_str()
         .ok_or_else(|| crate::ApiError(axum::http::StatusCode::NOT_FOUND,
             "Run not found".into()))?;
@@ -111,6 +114,8 @@ async fn direct_message(Extension(app):Extension<App>,Json(body):Json<Value>)->R
 }
 path_arg!(snapshot => snapshot, String);
 path_json!(session_read => session_read_api, String, crate::SessionReadBody);
+path_json!(session_undo => undo_session_api, String, crate::store::conversation_history::HistoryRequest);
+path_json!(session_fork => fork_session_api, String, crate::store::conversation_history::HistoryRequest);
 async fn session_lifecycle(app:App,id:String,body:crate::store::session::SessionLifecycle,restore:bool)->Response {
     let app=match session_app_lifecycle(app,&id,true).await {Ok(app)=>app,Err(error)=>return error.into_response()};
     if restore {crate::restore_session_api(State(app),Path(id),Json(body)).await.into_response()}
@@ -283,6 +288,8 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{id}", get(snapshot).patch(session_patch).delete(session_recycle))
         .route("/sessions/{id}/purge", post(session_purge))
         .route("/sessions/{id}/restore", post(session_restore))
+        .route("/sessions/{id}/undo", post(session_undo))
+        .route("/sessions/{id}/fork", post(session_fork))
         .route("/sessions/{id}/read", axum::routing::put(session_read))
         .route("/sessions/{id}/controls", get(chat_controls))
         .route("/sessions/{id}/usage", get(chat_usage))

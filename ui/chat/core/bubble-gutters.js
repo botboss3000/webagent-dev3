@@ -85,7 +85,7 @@ export function bindGutterVisibility(bubble,gutter,config,role) {
 }
 // @code-index {"version":1,"feature":"chat-message-bubbles","aliases":["chat message bubbles","message gutter","bubble actions"],"purpose":"Builds the configured message action gutter and its More menu Config: data/config/chat.json -> chat_common.message_bubbles, chat_common.message_gutters, chat_common.user_message_truncation. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles","/chat_common/message_gutters","/chat_common/user_message_truncation"],"profile_overrides":true}],"opportunities":[]}}
 /** Builds one role-configured message gutter, including menu actions and explicit disabled placeholders for unported backend actions. */
-export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,showContext=()=>{},refreshMessage=async()=>{}}) {
+export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,showContext=()=>{},historyAction=null,refreshMessage=async()=>{}}) {
   const role=item.role==='user'?'user':'agent',profile=currentChatProfile()||{};
   const config=profile.message_gutters||{},spec=config[role]||{};
   const defaults=role==='user'?['time','full_view','copy','undo','delete','more']:['time','full_view','collapse','read_aloud','copy','fork','delete','more'];
@@ -135,7 +135,8 @@ export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,sho
     if(name==='copy')control=iconButton('Copy text','copy',node=>copy(node,getText()));
     if(name==='collapse')control=iconButton('Collapse message','chevron-down',node=>{body.hidden=!body.hidden;node.title=body.hidden?'Expand message':'Collapse message';node.setAttribute('aria-label',node.title);node.setAttribute('aria-expanded',String(!body.hidden));});
     if(name==='read_aloud'){control=iconButton('Read aloud','volume-2',node=>speak(body,node,gutter));if(!window.speechSynthesis)unavailable(control,'Read aloud');}
-    if(['undo','delete','fork','schema'].includes(name))control=unavailable(iconButton({undo:'Undo message',delete:'Delete message',fork:'Fork conversation',schema:'View schema sent to LLM'}[name],{undo:'undo-2',delete:'trash-2',fork:'git-fork',schema:'menu'}[name]),name);
+    if(['undo','fork'].includes(name)){control=iconButton(name==='undo'?'Undo from this message':'Fork conversation at this message',name==='undo'?'undo-2':'git-fork',async node=>{if(!historyAction)return;node.disabled=true;try{await historyAction(name,item);}finally{node.disabled=false;}});if(!historyAction||(name==='undo'&&role!=='user')||(name==='fork'&&role!=='agent'))unavailable(control,name);}
+    if(['delete','schema'].includes(name))control=unavailable(iconButton({undo:'Undo message',delete:'Delete message',fork:'Fork conversation',schema:'View schema sent to LLM'}[name],{undo:'undo-2',delete:'trash-2',fork:'git-fork',schema:'menu'}[name]),name);
     if(name==='more'){control=iconButton('More','ellipsis',more);control.setAttribute('aria-haspopup','menu');control.setAttribute('aria-expanded','false');}
     if(!control)continue;
     if(entry?.locked){control.disabled=true;control.title=entry.locked_message||'Unavailable';}

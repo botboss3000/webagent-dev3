@@ -179,6 +179,10 @@ as trusted instructions. Binary attachments, memories, and optional modules
 remain planned. For any new table or document, add its owner, authority,
 sensitivity, retention, and cross-plane checks here before migration.
 
+## Conversation history operations
+
+Undo atomically archives removed public chat and private interactions inside the encrypted user-owned `receipt:session:history:` record, removes them from active history, resets compaction context, and fences retained run documents against further control. Run and attachment audit records remain retained; Undo does not reverse external tool effects. Outstanding runs, reviews and undelivered background work block rewind. Fork copies bounded chat, complete tool pairs and attachment records with new identifiers into the same caller-owned plane, retaining the source agent but inheriting no executable runs, approvals, workspaces, credentials or activated capabilities. `chat_context_boundaries` is an additive user-plane projection binding each publication to its durable interaction cursor. Legacy final replies use whole-run boundaries; legacy progress without an exact boundary fails closed. History archives inherit session receipt retention.
+
 ## Migration and rollback contract
 
 Migrations are numbered and idempotent. Stage new schema without deleting the

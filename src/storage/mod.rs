@@ -2,6 +2,7 @@
 //! A run revision and a time-limited lease stop stale processes from replacing
 //! newer progress. See docs/code-tour.md before following the SQL below.
 pub(crate) mod session;
+pub(crate) mod conversation_history;
 mod agent_pages;
 pub(crate) mod search;
 pub(crate) mod own_skills;
@@ -255,6 +256,7 @@ pub(crate) async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<S
             CREATE TABLE IF NOT EXISTS interactions(seq INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,run_id TEXT NOT NULL,step TEXT NOT NULL,item BLOB NOT NULL,created_at INTEGER NOT NULL,UNIQUE(run_id,step));
             CREATE INDEX IF NOT EXISTS interactions_session ON interactions(session_id,seq);
             CREATE TABLE IF NOT EXISTS activity_boundaries(interaction_seq INTEGER PRIMARY KEY,boundary_item_id TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS chat_context_boundaries(message_id TEXT PRIMARY KEY,through_seq INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS activity_boundary_item ON activity_boundaries(boundary_item_id);
             CREATE TABLE IF NOT EXISTS chat(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL,run_id TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN (\'user\',\'assistant\')),content BLOB NOT NULL,created_at INTEGER NOT NULL,terminal_run_id TEXT UNIQUE);
             CREATE INDEX IF NOT EXISTS chat_session ON chat(session_id,seq);
@@ -1136,7 +1138,9 @@ impl Store {
             .await?
             .ok_or_else(|| anyhow!("Session not found"))?;
         let through = session["checkpoint_through"].as_i64().unwrap_or(0);
-        let cached = self.context_cache.lock().unwrap().get(&self.context_cache_key(sid), through);
+        // A rewind may retain the same compaction cursor. Each process must reject its previous history cache.
+        let history_revision = session["history_revision"].as_u64().unwrap_or(0);
+        let cached = self.context_cache.lock().unwrap().get(&self.context_cache_key(sid), through, history_revision);
         let (mut input, mut cursor) = cached.unwrap_or_else(|| {
             (
                 session["checkpoint_input"]
@@ -1160,7 +1164,7 @@ impl Store {
         self.context_cache
             .lock()
             .unwrap()
-            .insert(self.context_cache_key(sid), through, cursor, input.clone());
+            .insert(self.context_cache_key(sid), through, history_revision, cursor, input.clone());
         Ok(input)
     }
     pub async fn chat_snapshot(&self, sid: &str) -> Result<(Vec<Value>, i64)> {
@@ -1310,9 +1314,11 @@ impl Store {
             None
         };
         let inserted = sqlx::query("INSERT OR IGNORE INTO chat(id,session_id,run_id,role,content,created_at,terminal_run_id) VALUES(?,?,?,?,?,strftime('%s','now'),?)")
-            .bind(id).bind(sid).bind(run_id).bind(role)
+            .bind(&id).bind(sid).bind(run_id).bind(role)
             .bind(self.encode_user_record(content)?).bind(terminal).execute(&mut **tx).await?;
         if inserted.rows_affected() > 0 {
+            sqlx::query("INSERT INTO chat_context_boundaries(message_id,through_seq) SELECT ?,COALESCE(MAX(seq),0) FROM interactions WHERE session_id=?")
+                .bind(&id).bind(sid).execute(&mut **tx).await?;
             self.touch_session_activity(tx, sid).await?;
             if role == "user" {
                 self.stage_notification(tx,&format!("message:{run_id}"),"message.received",sid,Some(run_id),None).await?;
@@ -1341,6 +1347,8 @@ impl Store {
             sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at,terminal_run_id) VALUES(?,?,?,?,?,strftime('%s','now'),NULL)")
                 .bind(message_id).bind(sid).bind(rid).bind("assistant")
                 .bind(self.encode_user_record(&json!(text))?).execute(&mut **tx).await?;
+            sqlx::query("INSERT INTO chat_context_boundaries(message_id,through_seq) SELECT ?,COALESCE(MAX(seq),0) FROM interactions WHERE session_id=?")
+                .bind(message_id).bind(sid).execute(&mut **tx).await?;
             self.touch_session_activity(tx, sid).await?;
         }
         Ok(())
@@ -1647,6 +1655,7 @@ impl Store {
             // corruption-checking reconstruction on that path. write_document
             // still verifies retained items before committing any input delta.
             let metadata = self.unseal(&raw)?;
+            if metadata["history_removed"] == true { return Err(anyhow!("Run removed by Undo")); }
             let previous = if matches!(metadata["status"].as_str(),
                 Some("completed" | "cancelled" | "failed")) {
                 self.decode_document(&mut tx, &raw).await?
@@ -2050,6 +2059,7 @@ impl Store {
             if let Some(raw)=sqlx::query_scalar::<_,Vec<u8>>("SELECT value FROM docs WHERE key=?")
                 .bind(format!("run:{rid}")).fetch_optional(&mut *tx).await? {
                 let previous=self.decode_document(&mut tx,&raw).await?;
+                if previous["history_removed"] == true { return Err(anyhow!("Run removed by Undo")); }
                 if previous["generation"]!=run["generation"]
                     || previous["lease_epoch"]!=run["lease_epoch"]
                     || previous["run_revision"].as_u64().unwrap_or(0)!=expected
@@ -2460,7 +2470,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(store.context("s").await.unwrap()[0]["content"], "first");
-        let first_cursor = store.context_cache.lock().unwrap().get(&store.context_cache_key("s"), 0).unwrap().1;
+        let first_cursor = store.context_cache.lock().unwrap().get(&store.context_cache_key("s"), 0, 0).unwrap().1;
         store
             .atomic_docs_event(
                 vec![],
@@ -2474,7 +2484,7 @@ mod tests {
         assert_eq!(input.len(), 2);
         assert_eq!(input[0]["content"], "first");
         assert_eq!(input[1]["content"], "second");
-        let second_cursor = store.context_cache.lock().unwrap().get(&store.context_cache_key("s"), 0).unwrap().1;
+        let second_cursor = store.context_cache.lock().unwrap().get(&store.context_cache_key("s"), 0, 0).unwrap().1;
         assert!(second_cursor > first_cursor);
     }
 
@@ -3336,11 +3346,11 @@ mod tests {
         }
         assert_eq!(store.context("s").await.unwrap()[0]["content"],"admin text");
         other.put("session:s",&json!({"id":"s","checkpoint_input":[],"checkpoint_through":0})).await.unwrap();
-        assert!(store.context_cache.lock().unwrap().get(&store.context_cache_key("s"),0).is_some());
+        assert!(store.context_cache.lock().unwrap().get(&store.context_cache_key("s"), 0, 0).is_some());
         other.configure_cache(0,0);
-        assert!(store.context_cache.lock().unwrap().get(&store.context_cache_key("s"),0).is_none());
+        assert!(store.context_cache.lock().unwrap().get(&store.context_cache_key("s"), 0, 0).is_none());
         assert_eq!(store.context("s").await.unwrap()[0]["content"],"admin text");
-        assert!(store.context_cache.lock().unwrap().get(&store.context_cache_key("s"),0).is_none());
+        assert!(store.context_cache.lock().unwrap().get(&store.context_cache_key("s"), 0, 0).is_none());
     }
 
 }

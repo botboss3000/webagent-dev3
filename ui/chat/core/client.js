@@ -92,7 +92,7 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
     const streamUrl='/api/v3/sessions/' + encodeURIComponent(id) + '/events?after=' + state.last;
     source = createStream ? createStream(streamUrl) : new EventSourceClass(streamUrl);
     setConnecting(true);
-    source.addEventListener('session_updated', () => { if (valid(state)) metadataChanged(); });
+    source.addEventListener('session_updated', event => { if (valid(state)) {try {metadataChanged(JSON.parse(event.data).session);} catch {metadataChanged();}} });
     // Validates each SSE payload; rendering/parse failures trigger snapshot recovery.
     source.onmessage = event => {
       if (!valid(state)) return;
@@ -106,6 +106,8 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
   }
   return {
     open, disconnect, updateRuns,
+    undo:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/undo','POST',body),
+    fork:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/fork','POST',body),
     /** Reads recorded usage totals for one session. */
     usage:id=>request("/sessions/"+encodeURIComponent(id)+"/usage"),
     /** Reads administrator context-compaction settings. */

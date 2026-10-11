@@ -4,6 +4,8 @@ mod auth;
 pub(crate) mod embed;
 mod admin;
 pub(crate) mod sessions;
+pub(crate) mod conversation_history;
+pub(crate) use conversation_history::*;
 mod promotions;
 mod chat;
 pub(crate) mod direct_messages;
