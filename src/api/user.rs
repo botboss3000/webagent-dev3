@@ -245,6 +245,21 @@ async fn promote(Extension(app): Extension<App>, Extension(identity): Extension<
     };
     crate::promote(State(app), Path(id), Json(body)).await.into_response()
 }
+// Resolve caller-owned session and live agent access before queue mutation.
+async fn followup_delivery(Extension(app): Extension<App>, Path((sid, mid)): Path<(String, String)>,
+    Json(body): Json<Value>) -> Response {
+    let app = match session_app(app, &sid).await {
+        Ok(app) => app, Err(error) => return error.into_response(),
+    };
+    crate::api::followup_queue::delivery(State(app), Path((sid, mid)), Json(body)).await.into_response()
+}
+async fn followup_resume(Extension(app): Extension<App>, Path(sid): Path<String>,
+    Json(body): Json<Value>) -> Response {
+    let app = match session_app(app, &sid).await {
+        Ok(app) => app, Err(error) => return error.into_response(),
+    };
+    crate::api::followup_queue::resume(State(app), Path(sid), Json(body)).await.into_response()
+}
 async fn command(Extension(app): Extension<App>, Path((id, action)): Path<(String, String)>,
     Json(body): Json<Value>) -> Response {
     let app = match run_app(app, &id).await {
@@ -305,6 +320,8 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{id}/promotions/{request_id}/reject", post(promotion_reject))
         .route("/messages",post(direct_message).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/sessions/{id}/messages", post(send).layer(axum::extract::DefaultBodyLimit::disable()))
+        .route("/sessions/{id}/messages/{mid}/delivery", axum::routing::patch(followup_delivery))
+        .route("/sessions/{id}/queue/resume", post(followup_resume))
         .route("/sessions/{id}/voice/route",post(voice_route).layer(axum::middleware::from_fn(crate::api::media_lane::limit)))
         .route("/sessions/{id}/voice/capabilities",get(voice_capabilities))
         .route("/sessions/{id}/voice/speech",post(voice_speech).layer(axum::middleware::from_fn(crate::api::media_lane::limit)))
@@ -382,5 +399,62 @@ mod session_statistics_tests {
         assert_eq!(result["sessions"][0]["id"],"mine");
         assert_eq!(result["sessions"][0]["message_count"],0);
         assert!(result["sessions"][0]["usage"].is_null());
+    }
+}
+
+#[cfg(test)]
+mod followup_route_tests {
+    use super::*;
+    use axum::{body::Body, extract::Request, http::StatusCode};
+    use serde_json::json;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn active_followup_route_requires_auth_csrf_and_never_enters_context_before_delivery() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        crate::runtime_tests::queued(&app, &sid).await;
+        let token = crate::uuid();
+        app.store.put(&format!("auth:{}", crate::digest(&json!(token))),
+            &json!({"csrf":"fixture","expires":crate::now()+3600,"generation":"fixture-generation"})).await.unwrap();
+        let uri = format!("/api/v3/sessions/{sid}/messages");
+        let body = json!({"text":"pending followup must remain outside model history","client_message_id":crate::uuid()});
+        let req = |cookie: bool, csrf: bool| {
+            let mut request = Request::builder().method("POST").uri(&uri).header("content-type","application/json");
+            if cookie { request = request.header("cookie", format!("v3_session={token}")); }
+            if csrf { request = request.header("x-csrf-token","fixture"); }
+            request.body(Body::from(body.to_string())).unwrap()
+        };
+        assert_eq!(crate::router(app.clone()).oneshot(req(false,false)).await.unwrap().status(),StatusCode::UNAUTHORIZED);
+        assert_eq!(crate::router(app.clone()).oneshot(req(true,false)).await.unwrap().status(),StatusCode::FORBIDDEN);
+        assert_eq!(crate::router(app.clone()).oneshot(req(true,true)).await.unwrap().status(),StatusCode::ACCEPTED);
+        assert_eq!(crate::router(app.clone()).oneshot(req(true,true)).await.unwrap().status(),StatusCode::ACCEPTED);
+        let queue = app.store.followup_queue(&sid).await.unwrap();
+        assert_eq!(queue["entries"].as_array().unwrap().len(),1);
+        let (chat, _) = app.store.chat_snapshot(&sid).await.unwrap();
+        assert_eq!(chat.len(),2);
+        assert!(!app.store.context(&sid).await.unwrap().iter().any(|item|item["content"]==body["text"]));
+    }
+
+    #[tokio::test]
+    async fn delivery_control_cannot_cross_sessions_or_user_planes() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        crate::runtime_tests::queued(&app, &sid).await;
+        let (_, Json(sent)) = crate::send(State(app.clone()),Path(sid.clone()),
+            Json(json!({"text":"private queued message","client_message_id":crate::uuid()}))).await.unwrap();
+        let mid = sent["submission_id"].as_str().unwrap().to_owned();
+        let other = crate::runtime_tests::conversation(&app).await;
+        let body = json!({"expected_revision":0,"client_request_id":crate::uuid(),"choice":"cancel"});
+        assert_eq!(followup_delivery(Extension(app.clone()),Path((other,mid.clone())),Json(body.clone())).await.status(),StatusCode::NOT_FOUND);
+        let mut foreign = app.clone();
+        let mut account = app.store.account_by_id("admin").await.unwrap().unwrap();
+        account["user_id"] = json!("foreign_fixture");
+        account["username"] = json!("foreign_fixture");
+        sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES('foreign_fixture','foreign_fixture',?)")
+            .bind(app.store.seal(&account).unwrap()).execute(&app.store.app_pool).await.unwrap();
+        foreign.store = app.store.for_user("foreign_fixture").await.unwrap();
+        assert_eq!(followup_delivery(Extension(foreign),Path((sid.clone(),mid)),Json(body)).await.status(),StatusCode::NOT_FOUND);
+        assert_eq!(app.store.followup_queue(&sid).await.unwrap()["entries"][0]["status"],"pending");
     }
 }

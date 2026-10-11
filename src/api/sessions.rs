@@ -124,9 +124,10 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
     let usage=crate::usage::public(&app.store.get(&format!("session_usage:{id}")).await?.unwrap_or(Value::Null));
     let runs = public_runs(&app,app.store.recent_runs(Some(&id)).await?).await?;
     let components = app.store.base_chat_components(&id).await?;
+    let queue=crate::followup_queue::public(&app.store.followup_queue(&id).await?);
     Ok(Json(
         json!({"usage":usage,"session":app.store.session_read_summary(&id).await?,
-        "messages":messages,"runs":runs,"components":components,"last_seq":last_seq}),
+        "messages":messages,"runs":runs,"components":components,"last_seq":last_seq,"queue":queue["queue"],"queue_state":queue["queue_state"]}),
     ))
 }
 #[derive(Deserialize)]

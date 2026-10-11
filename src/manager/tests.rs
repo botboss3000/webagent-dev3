@@ -113,14 +113,15 @@ async fn unacceptable_keeps_chat_excludes_context_and_retry_does_not_rejudge() {
     );
     assert!(app.store.context(&sid).await.unwrap().is_empty());
     assert!(app.store.active_runs().await.unwrap().is_empty());
-    // A pending gate fences additional messages, even through the ordinary API.
-    assert!(crate::send(
+    // Followups remain visible and durable while the manager gate is pending.
+    let queued = crate::send(
         State(app.clone()),
         Path(sid.clone()),
         Json(json!({"client_message_id":"other","text":"Sizes?"}))
-    )
-    .await
-    .is_err());
+    ).await.unwrap().1.0;
+    assert_eq!(queued["delivery_state"], "queued");
+    assert_eq!(app.store.chat_snapshot(&sid).await.unwrap().0.len(), 2);
+    assert!(app.store.context(&sid).await.unwrap().is_empty());
     super::scheduler::process(app.clone(), id.to_owned())
         .await
         .unwrap();
@@ -147,6 +148,9 @@ async fn unacceptable_keeps_chat_excludes_context_and_retry_does_not_rejudge() {
         "unacceptable"
     );
     assert!(!snapshot.to_string().contains("Only accept questions"));
+    // Cancel the separately queued followup before testing fresh admission.
+    app.store.followup_choice(&sid, queued["submission_id"].as_str(), 0, "cancel-other",
+        &json!({"choice":"cancel","expected_revision":0,"client_request_id":"cancel-other"})).await.unwrap();
     // Turning the gate off never admits a previously rejected message.
     settings(&app, false).await;
     submit(&app, &sid, "later", "What sizes do you have?").await;

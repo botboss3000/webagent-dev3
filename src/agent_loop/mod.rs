@@ -1,7 +1,7 @@
 //! Run recovery and scheduling stay in Rust; the worker only executes authorized tools.
 use super::*;
 mod run;
-pub(crate) use run::execute_run;
+pub(crate) use run::{execute_run, settle_abandoned_interrupt, settle_followup_interrupt};
 pub(super) fn append_tool(run: &mut Value, result: &Value) -> Result<()> {
     workflow::record_tool_result(run, result)?;
     tools::core_tool_search::apply_selection(run,result);

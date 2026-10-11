@@ -52,9 +52,16 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
           state.again = false;
           const data = await request('/sessions/' + encodeURIComponent(state.id));
           if (!valid(state)) return;
+          const historyRevision=data.session?.history_revision||0;
+          if(historyRevision!==state.historyRevision){
+            if(historyRevision>state.historyRevision){state.historyChanged=true;state.metadataChanged(data.session);}
+            return;
+          }
+          if(state.historyChanged)return;
           // Include gaps below a newer live event; ID deduplication keeps rows.
           for (const item of [...data.messages].sort((a,b) => a.seq-b.seq)) deliver(state, item, true);
           state.last = Math.max(state.last, data.last_seq || 0);
+          state.snapshotChanged(data);
         } while (state.again && valid(state));
         state.failures = 0;
         clearNoticeFrom('chat-sync');
@@ -79,23 +86,24 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
     }
   }
   /** Loads a snapshot, invokes render, then opens the session SSE stream and its callbacks. */
-  async function open(id, render, publish, metadataChanged = () => {}) {
+  async function open(id, render, publish, metadataChanged = () => {}, snapshotChanged = () => {}) {
     disconnect();
     const turn = epoch;
     const data = await request('/sessions/' + encodeURIComponent(id));
     if (turn !== epoch) return;
     render(data);
-    const state = current = {id, epoch:turn, publish, last:data.last_seq || 0,
+    const state = current = {id, epoch:turn, publish, metadataChanged, snapshotChanged, historyRevision:data.session?.history_revision||0,historyChanged:false,last:data.last_seq || 0,
       seen:new Set(data.messages.map(item => item.id)), runs:new Map((data.runs || []).map(run => [run.id,run.status])),
       inFlight:null, again:false, retry:null, failures:0};
     administratorNotices.start(id);
     const streamUrl='/api/v3/sessions/' + encodeURIComponent(id) + '/events?after=' + state.last;
     source = createStream ? createStream(streamUrl) : new EventSourceClass(streamUrl);
     setConnecting(true);
-    source.addEventListener('session_updated', event => { if (valid(state)) {try {metadataChanged(JSON.parse(event.data).session);} catch {metadataChanged();}} });
+    source.addEventListener('queue_updated', () => { if (valid(state)) void recover(state); });
+    source.addEventListener('session_updated', event => { if (valid(state)) {try {const summary=JSON.parse(event.data).session;if((summary?.history_revision||0)>state.historyRevision)state.historyChanged=true;metadataChanged(summary);} catch {metadataChanged();}} });
     // Validates each SSE payload; rendering/parse failures trigger snapshot recovery.
     source.onmessage = event => {
-      if (!valid(state)) return;
+      if (!valid(state)||state.historyChanged) return;
       try { deliver(state, JSON.parse(event.data)); }
       catch { void recover(state); }
     };
@@ -106,6 +114,8 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
   }
   return {
     open, disconnect, updateRuns,
+    delivery:(id,mid,body)=>request('/sessions/'+encodeURIComponent(id)+'/messages/'+encodeURIComponent(mid)+'/delivery','PATCH',body),
+    resumeQueue:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/queue/resume','POST',body),
     undo:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/undo','POST',body),
     fork:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/fork','POST',body),
     /** Reads recorded usage totals for one session. */

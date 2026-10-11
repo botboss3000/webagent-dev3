@@ -1,6 +1,7 @@
 // @code-index {"version":1,"feature":"chat-panel","aliases":["chat panel","conversation panel","session transcript"],"purpose":"Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common/composer/keyboard_focus"],"profile_overrides":true}],"opportunities":[]}}
 // V2-style panel/client separation; markup and message protocol remain V3.
 import { createChatClient } from './client.js';
+import {mountFollowupQueue} from './followup-queue.js';
 import {mountTranscriptAnchor} from './transcript-anchor.js';
 import {mountComposerMedia} from '../controls/composer-media.js';
 import {mountSessionControls} from '../controls/session-controls.js';
@@ -67,6 +68,17 @@ const gutterClock=setInterval(()=>{if(document.visibilityState==='visible')updat
 const controls=mountSessionControls({root,client,guard,note,ensureSession,notifications,/* Forwards advertised attachment availability and limits to media controls. */onState:data=>{media?.setAvailable(data?.composer?.attachments===true,data?.composer?.attachment_limits);}});
 let submitting=false,sessionGeneration=0,creatingSession=null,media=null,historyBusy=false,historyLastSeq=0,historyRevision=0,historyDeferredRevision=0,closeUndoDialog=null;
 const historyRequests=new Map();
+const followups=mountFollowupQueue({root,host:$('chat-above-pill'),client,getSession:()=>session,guard,note,keyId,forgetKey,onSnapshot:syncSnapshot});
+/** Rewinds rebuild the transcript; queue and poll snapshots may only merge the same history revision. */
+function historyChanged(summary){
+  if((summary?.history_revision||0)>historyRevision){if(historyBusy)historyDeferredRevision=Math.max(historyDeferredRevision,summary.history_revision);else void open(session,'replace').catch(error=>note(error.message));}
+}
+function syncSnapshot(data){
+  if(data.session?.id&&data.session.id!==session)return false;
+  if((data.session?.history_revision||0)!==historyRevision){historyChanged(data.session);return false;}
+  historyLastSeq=Math.max(historyLastSeq,data.last_seq||0);
+  for(const item of data.messages||[])message(item);followups.update(data);runs(data.runs||[]);return true;
+}
 /** Confirms rewind and resolves existing composer text without silently discarding a draft. */
 function undoChoice(hasDraft){return new Promise(resolve=>{const dialog=document.createElement('dialog');dialog.className='wa-confirm-panel';const text=document.createElement('p');text.textContent='Undo this message and all later messages? This changes conversation history; external tool effects remain.';dialog.append(text);if(hasDraft){const hint=document.createElement('p');hint.textContent='The composer already has text. Choose how to return the undone message.';dialog.append(hint);}let settled=false;const finish=value=>{if(settled)return;settled=true;dialog.close();dialog.remove();closeUndoDialog=null;resolve(value);};for(const [label,value] of hasDraft?[['Clear & replace','replace'],['Keep current','keep'],['Append','append'],['Cancel',null]]:[['Undo','replace'],['Cancel',null]]){const node=document.createElement('button');node.type='button';node.className='ac-btn';node.textContent=label;node.onclick=()=>finish(value);dialog.append(node);}dialog.addEventListener('cancel',event=>{event.preventDefault();finish(null);});closeUndoDialog=()=>finish(null);document.body.append(dialog);dialog.showModal();dialog.querySelector('button:last-child').focus();});}
 /** Uses the displayed transcript cursor, durable retry identity and panel generation fence. */
@@ -101,7 +113,7 @@ let sessionItems=[];
 // Dropdown refresh reads sessions; its search reset delegates to the session-list controller.
 const dropdown=mountSessionDropdown($('session-dropdown'),{/* Reloads session options. */refresh:()=>sessions(),select:open,guard,/* Clears search through the list controller. */resetSearch:()=>sessionList.reset()});
 // Session-list refresh shares the session loader; recycle completion resets transcript and session-scoped state.
-const sessionList=createSessionList($('session-dropdown'),{guard,/* Shares the panel session loader. */refresh:()=>sessions(),select:open,client,/* Clears the selected transcript and its session-scoped controls after recycle. */recycled:()=>{anchor.reset();progress.reset();activity.disconnect();resetReads();session='';stats.disconnect();++sessionGeneration;controls.open('');media.open('');client.disconnect();$('chat-messages-inner').replaceChildren();notifications.clearTools();$('runs').replaceChildren();const url=new URL(location.href);url.searchParams.delete('session_id');history.replaceState({},'',url);}});
+const sessionList=createSessionList($('session-dropdown'),{guard,/* Shares the panel session loader. */refresh:()=>sessions(),select:open,client,/* Clears the selected transcript and its session-scoped controls after recycle. */recycled:()=>{followups.reset();anchor.reset();progress.reset();activity.disconnect();resetReads();session='';stats.disconnect();++sessionGeneration;controls.open('');media.open('');client.disconnect();$('chat-messages-inner').replaceChildren();notifications.clearTools();$('runs').replaceChildren();const url=new URL(location.href);url.searchParams.delete('session_id');history.replaceState({},'',url);}});
 // Exposes dropdown configuration through the session-list controller.
 $('session-dropdown').configure=cfg=>sessionList.configure(cfg);
 const chatPanel=root;
@@ -139,14 +151,13 @@ let reviewRefreshBusy=false;
 const reviewTimer=setInterval(async()=>{
   if(!session||reviewRefreshBusy||document.visibilityState==='hidden')return;
   const rows=[...$('chat-messages-inner').querySelectorAll('[data-admission-status]')];
-  if(!rows.some(row=>['pending_review','reviewing'].includes(row.dataset.admissionStatus)))return;
+  if(!followups.pending&&!rows.some(row=>['pending_review','reviewing'].includes(row.dataset.admissionStatus)))return;
   const sid=session,generation=sessionGeneration;reviewRefreshBusy=true;
   try{
     const data=await client.snapshot(sid);
     if(sid!==session||generation!==sessionGeneration)return;
-    for(const item of data.messages){const row=rows.find(row=>row.dataset.publicId===item.id);if(row)updateAdmission(row,item.admission);}
-    runs(data.runs||[]);
-    if(!data.messages.some(item=>['pending_review','reviewing'].includes(item.admission?.status)))await refresh();
+    if(!syncSnapshot(data))return;
+    if(rows.some(row=>['pending_review','reviewing'].includes(row.dataset.admissionStatus))&&!data.messages.some(item=>['pending_review','reviewing'].includes(item.admission?.status)))await refresh();
   }catch(error){if(sid===session&&generation===sessionGeneration)note('Manager status unavailable: '+error.message);}
   finally{reviewRefreshBusy=false;}
 },1000);
@@ -193,7 +204,7 @@ async function sessions(){const data=await client.sessions();$('sessions').repla
  * Route mode controls push/replace history; composer focus is restored only if the user did not move it.
  * Client snapshot failures propagate; control-load failures are reported through note.
  */
-async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{anchor.reset();progress.open(id);notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);controls.open(id).catch(error=>{if(id===session)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{historyLastSeq=data.last_seq||0;historyRevision=data.session.history_revision||0;readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);onEvent('session',{session_id:id});document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);runs(data.runs||[]);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;try{media.published(item);}catch(error){note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);}catch(error){note('Transcript positioning unavailable: '+error.message);}return true;},summary=>{if(summary&&(summary.history_revision||0)!==historyRevision){if(historyBusy)historyDeferredRevision=Math.max(historyDeferredRevision,summary.history_revision||0);else void open(id,'replace').catch(error=>note(error.message));}void sessions().catch(error=>note(error.message));});if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
+async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{followups.reset();anchor.reset();progress.open(id);notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);controls.open(id).catch(error=>{if(id===session)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{historyLastSeq=data.last_seq||0;historyRevision=data.session.history_revision||0;readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);onEvent('session',{session_id:id});document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);followups.update(data);runs(data.runs||[]);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;try{media.published(item);}catch(error){note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);}catch(error){note('Transcript positioning unavailable: '+error.message);}return true;},summary=>{historyChanged(summary);void sessions().catch(error=>note(error.message));},syncSnapshot);if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
 // Requests run cancellation and refreshes shell state even when the request fails.
 async function cancel(id){progress.note('Stopping…');try{await client.cancel(id,{client_request_id:keyId('cancel:'+id)});}finally{await refresh();}}
 // Adds/removes a transcript notice only for certain failed runs; uncertain outcomes remain in recovery UI.
@@ -215,7 +226,7 @@ function failedRunMessages(items){
   }
 }
 /** Fans run snapshots to transport, controls, progress and activity, then paints composer and run actions. Approval, recovery, resume, and cancel handlers call their matching client endpoints. */
-function runs(items){onEvent('runs',{session_id:session,runs:items.filter(r=>r.session_id===session||!r.session_id).map(r=>({id:r.id,status:r.status,uncertain:!!r.uncertain,approval_id:r.pending?.id||null}))});client.updateRuns(items);anchor.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));progress.update(items);void stats.refresh();controls.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));activityRuns=items.filter(run=>run.session_id===session||!run.session_id);rememberRuns(activityRuns);if(session)paintActivity();$('runs').replaceChildren();notifications.clearTools();const relevant=items.filter(run=>run.session_id===session||!run.session_id);const pendingReview=!!$('chat-messages-inner').querySelector('[data-admission-status="pending_review"],[data-admission-status="reviewing"]');const active=relevant.find(run=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(run.status));$('chat-input-row').dataset.runStatus=active?.status||relevant[0]?.status||'Ready';$('chat-stop-btn').hidden=!active||$('chat-stop-btn').dataset.configEnabled==='false';$('chat-stop-btn').dataset.run=active?.id||'';$('chat-stop-btn').style.display=$('chat-stop-btn').hidden?'none':'';$('chat-send').disabled=pendingReview||!!active||!!getState().shutoff||submitting||!!media?.uploading;
+function runs(items){onEvent('runs',{session_id:session,runs:items.filter(r=>r.session_id===session||!r.session_id).map(r=>({id:r.id,status:r.status,uncertain:!!r.uncertain,approval_id:r.pending?.id||null}))});client.updateRuns(items);anchor.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));progress.update(items);void stats.refresh();controls.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));activityRuns=items.filter(run=>run.session_id===session||!run.session_id);rememberRuns(activityRuns);if(session)paintActivity();$('runs').replaceChildren();notifications.clearTools();const relevant=items.filter(run=>run.session_id===session||!run.session_id);const pendingReview=!!$('chat-messages-inner').querySelector('[data-admission-status="pending_review"],[data-admission-status="reviewing"]');const active=relevant.find(run=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(run.status));$('chat-input-row').dataset.runStatus=active?.status||relevant[0]?.status||'Ready';$('chat-stop-btn').hidden=!active||$('chat-stop-btn').dataset.configEnabled==='false';$('chat-stop-btn').dataset.run=active?.id||'';$('chat-stop-btn').style.display=$('chat-stop-btn').hidden?'none':'';$('chat-send').disabled=historyBusy||!!getState().shutoff||submitting||!!media?.uploading;
 failedRunMessages(relevant);
 const continuing=!pendingReview&&!active&&!media?.count&&!$('chat-input').value.trim()&&$('chat-continue-btn').dataset.configEnabled!=='false';
 $('chat-continue-btn').hidden=!continuing;$('chat-continue-btn').style.display=continuing?'':'none';
@@ -278,10 +289,10 @@ async function submit(text,clearInput=false){
     const ids=media.snapshot(sid),content=text+(elementContext?'\n\n[Untrusted page context selected by user]\n'+elementContext:'');
     const requestKey='message:'+sid+':'+content+':'+ids.join(',');
     const sent=await client.send(sid,{text:content,attachment_ids:ids,client_message_id:keyId(requestKey)});
-    if(sent.review_id&&sid===session){
-      progress.note('Awaiting manager review…');
+    if(sid===session){
+      progress.note(sent.submission_id?'Message queued':sent.review_id?'Awaiting manager review…':'Message sent');
       const data=await client.snapshot(sid);
-      if(sid===session){for(const item of data.messages)message(item);runs(data.runs||[]);}
+      if(sid===session)syncSnapshot(data);
     }
     forgetKey(requestKey);media.committed(sid,ids);
     if(clearInput&&sid===session&&$('chat-input').value===draft)$('chat-input').value='';
@@ -299,11 +310,11 @@ $('chat-input').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey&&!even
 $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
 
   /** Clears session visuals and disconnects every session-scoped transport/control. */
-  function disconnect(){elementContext='';anchor.reset();progress.reset();notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
+  function disconnect(){followups.reset();elementContext='';anchor.reset();progress.reset();notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
   /** Disconnects and disposes panel-owned timers, observers, listeners, and mounted child controls. */
   function destroy(){
     ++sessionGeneration;closeUndoDialog?.();
-    disconnect();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
+    disconnect();followups.destroy();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
     $('chat-input').onkeydown=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;
   }

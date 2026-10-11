@@ -42,13 +42,28 @@ pub(crate) async fn send(
         }
         return Ok((StatusCode::ACCEPTED, Json(result)));
     }
-    let prepared=prepare_message(&app,&id,&body,None).await?;
+    if crate::followup_queue::should_queue(&app,&id).await? {
+        let result=crate::followup_queue::submit(&app,&id,&body).await?;
+        return Ok((StatusCode::ACCEPTED,Json(result)));
+    }
+    let prepared=match prepare_message(&app,&id,&body,None).await {
+        Ok(prepared)=>prepared,
+        Err(error) if matches!(error.1.as_str(),"Resolve the existing run first"|"Resolve the pending message review first")=>{
+            return Ok((StatusCode::ACCEPTED,Json(crate::followup_queue::submit(&app,&id,&body).await?)));
+        },
+        Err(error)=>return Err(error),
+    };
     let mut docs=prepared.docs;
     docs.push((receipt_key,json!({"digest":digest(&body),"result":prepared.result})));
-    app.store.atomic_docs_event(docs,&id,prepared.kind,&prepared.message).await.map_err(admission_error)?;
+    if let Err(error)=app.store.atomic_docs_event(docs,&id,prepared.kind,&prepared.message).await {
+        if matches!(error.to_string().as_str(),"Session already has an active run"|"Resolve the pending message review first") {
+            return Ok((StatusCode::ACCEPTED,Json(crate::followup_queue::submit(&app,&id,&body).await?)));
+        }
+        return Err(admission_error(error));
+    }
     Ok((StatusCode::ACCEPTED,Json(prepared.result)))
 }
-pub(super) struct PreparedMessage {
+pub(crate) struct PreparedMessage {
     pub docs:Vec<(String,Value)>,
     pub kind: &'static str,
     pub message:Value,
@@ -58,7 +73,14 @@ pub(super) fn admission_error(error:anyhow::Error)->ApiError {
     if error.to_string()=="Session already has an active run" {conflict("Resolve the existing run first")}
     else {ApiError::from(error)}
 }
-pub(super) async fn prepare_message(app:&App,id:&str,body:&Value,supplied_session:Option<&Value>)
+pub(crate) async fn prepare_message(app:&App,id:&str,body:&Value,supplied_session:Option<&Value>)
+    ->std::result::Result<PreparedMessage,ApiError> {
+    prepare_message_inner(app,id,body,supplied_session,false).await
+}
+pub(crate) async fn prepare_followup(app:&App,id:&str,body:&Value) ->std::result::Result<PreparedMessage,ApiError> {
+    prepare_message_inner(app,id,body,None,true).await
+}
+async fn prepare_message_inner(app:&App,id:&str,body:&Value,supplied_session:Option<&Value>,followup:bool)
     ->std::result::Result<PreparedMessage,ApiError> {
     let text=body["text"].as_str().ok_or_else(||bad("text is required"))?;
     if app.shutoff().await? {
@@ -74,20 +96,20 @@ pub(super) async fn prepare_message(app:&App,id:&str,body:&Value,supplied_sessio
     let access=app.store.live_access(app.store.current_user_id(),&agent_id).await
         .map_err(|_|ApiError(StatusCode::FORBIDDEN,"Agent unavailable".into()))?;
     if !access.admitted() { return Err(ApiError(StatusCode::FORBIDDEN,"Agent unavailable".into())); }
-    if app.store.get(&format!("manager_pending:{id}")).await?.is_some() {
+    if !followup && app.store.get(&format!("manager_pending:{id}")).await?.is_some() {
         return Err(conflict("Resolve the pending message review first"));
     }
     let manager=crate::manager::prepare(&app,&agent_id).await
         .map_err(|_|conflict("Incoming-message review requires valid criteria and an authorized System model"))?;
     let active = app.store.active_runs().await?;
     let review_count=app.store.list("manager_pending:").await?.len();
-    if active.len()+review_count >= app.runtime.read().await.scheduler.max_unresolved_runs {
+    if !followup && active.len()+review_count >= app.runtime.read().await.scheduler.max_unresolved_runs {
         return Err(conflict("Run queue is full"));
     }
-    if active.len()+review_count >= access.max_active_runs() as usize {
+    if !followup && active.len()+review_count >= access.max_active_runs() as usize {
         return Err(conflict("Account run limit reached"));
     }
-    if active
+    if !followup && active
         .iter()
         .any(|r| r["session_id"] == id && !terminal(status(r)))
     {
@@ -287,7 +309,7 @@ pub(crate) async fn events(
             auth_key,
             expires,
             0u64,
-            user_id, generation, agent_id, access_revision, None::<u64>, 0u64,
+            user_id, generation, agent_id, access_revision, None::<(u64,u64)>, 0u64,
         ),
         move |(app, id, mut cursor, mut queue, start, auth_key, expires, mut checked,
             user_id, generation, agent_id, access_revision, mut metadata_revision, mut metadata_checked)| async move {
@@ -335,13 +357,15 @@ pub(crate) async fn events(
                 if queue.is_empty() && now() > metadata_checked {
                     metadata_checked = now();
                     let summary = app.store.session_read_summary(&id).await.ok()?;
-                    let revision = summary["metadata_revision"].as_u64().unwrap_or(0);
+                    let queue_state=crate::followup_queue::public(&app.store.followup_queue(&id).await.ok()?);
+                    let revision = (summary["metadata_revision"].as_u64().unwrap_or(0),queue_state["queue_state"]["revision"].as_u64().unwrap_or(0));
                     if metadata_revision != Some(revision) {
+                        let queue_changed=metadata_revision.is_some_and(|previous|previous.1!=revision.1);
                         metadata_revision = Some(revision);
                         // Metadata events deliberately carry no SSE ID: event-log
                         // sequence numbers are not public chat sequence numbers.
-                        let event = Event::default().event("session_updated")
-                            .data(json!({"session":summary}).to_string());
+                        let event = Event::default().event(if queue_changed {"queue_updated"}else{"session_updated"})
+                            .data(json!({"session":summary,"queue":queue_state["queue"],"queue_state":queue_state["queue_state"]}).to_string());
                         return Some((Ok(event), (app, id, cursor, queue, start, auth_key,
                             expires, checked, user_id, generation, agent_id, access_revision,
                             metadata_revision, metadata_checked)));
@@ -519,6 +543,7 @@ pub(crate) async fn command(
                     Some("abandon")=>{
                         run["status"]=json!("cancelled");
                         run["uncertain"]=json!(false);
+                        run["recovery_abandoned"]=json!(true);
                     },
                     Some("retry")=>{
                         if app.shutoff().await? {return Err(conflict("Clear global shutoff first"));}
@@ -545,6 +570,7 @@ pub(crate) async fn command(
                 Some("abandon") => {
                     run["status"] = json!("cancelled");
                     run["uncertain"] = json!(false);
+                    run["recovery_abandoned"] = json!(true);
                 }
                 Some("retry") => {
                     if app.shutoff().await? {

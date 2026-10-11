@@ -341,3 +341,34 @@ provides the fallback for operator tasks without a chat session identity.
 Review acknowledges an exact revision and preserves source, receipts and
 uncertain effects. There is no model wake, automatic retry, chat-history
 publication or deletion.
+
+## Durable followup queue
+
+Encrypted user-owned followup_queue:<session> version-1 documents are the
+canonical bounded session ledger, including submissions, attachment references,
+review decisions, delivery choices, interruption target, batch membership and
+consumption receipts. receipt:queue: is user-owned idempotency state. The ledger
+and retry receipts share existing user retention; terminal entries remain for
+stable bubble association. Each pending session permits at most 256 submissions.
+No application-plane fallback or plaintext queue sidecar is used.
+
+SQLite writer reservation serializes submission, choice changes, review results,
+batch consumption and final publication across API and loop processes. Individual
+public user bubbles commit with submission; only approved consumed batches enter
+private interactions. A continuation inherits retained private execution context,
+while unknown effects remain behind existing recovery controls. Crash recovery
+uses the same ledger and committed run identity; explicit Stop/failure holds
+ordinary messages until Resume queue. New document families are additive, versioned
+and do not copy or rewrite historical messages.
+
+Session recycling cancels pending queue entries inside its lifecycle transaction,
+advancing revisions so restore and late review results cannot revive them.
+Permanent deletion also removes queue retry receipts and queued-message
+attachment metadata.
+
+History actions check the queue in the same writer transaction. Pending entries
+block Undo. An individual followup belongs to a combined input; Undo requires
+its original message rather than rewriting part of that input. Ordinary Undo
+archives and removes affected queue entries. Fork includes only batches admitted
+before the chosen context boundary, with remapped attachments and immutable
+delivered status; it inherits no executable queue or review authority.

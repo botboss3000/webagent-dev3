@@ -40,3 +40,5 @@ pub(crate) async fn decorate(app: &App, messages: &mut [Value]) -> Result<()> {
     }
     Ok(())
 }
+
+pub(crate) async fn judge_followup(app:&App,record:&mut Value)->Result<Verdict> {review::judge(app,record).await}

@@ -320,6 +320,7 @@ impl Store {
     /// Revoke all durable session work in the lifecycle writer transaction.
     /// Increment run/task fences so old executors cannot publish after restore.
     async fn cancel_session_work(&self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, sid: &str) -> Result<()> {
+        self.cancel_session_followups(tx,sid).await?;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')")
             .bind(sid).fetch_all(&mut **tx).await?;
         for id in ids {
@@ -479,6 +480,8 @@ impl Store {
                 sqlx::query(&format!("DELETE FROM {table} WHERE run_id=?")).bind(id).execute(&mut *tx).await?;
             }
         }
+        let message_ids:Vec<String>=sqlx::query_scalar("SELECT run_id FROM chat WHERE session_id=? AND role='user'")
+            .bind(sid).fetch_all(&mut *tx).await?;
         // Explicit key namespaces plus sealed ownership; never substring-match an ID.
         let rows=sqlx::query("SELECT key,value FROM docs").fetch_all(&mut *tx).await?;
         let mut uncertain_effects=Vec::new();
@@ -494,9 +497,10 @@ impl Store {
                 || ["session_mode","session_ability_state","session_usage","manager_pending","session_naming",
                     "administrator_host","administrator_browser","administrator_notice"].iter()
                     .any(|prefix|candidate==format!("{prefix}:{sid}"))
-                || ["receipt:message","receipt:session:patch","receipt:session:lifecycle","receipt:session:history","receipt:base",
+                || ["receipt:message","receipt:queue","receipt:session:patch","receipt:session:lifecycle","receipt:session:history","receipt:base",
                     "receipt:voice","receipt:chat_controls","receipt:session_mode","administrator_receipt"].iter()
                     .any(|prefix|candidate.starts_with(&format!("{prefix}:{sid}:")))
+                || message_ids.iter().any(|id|candidate==format!("message_attachments:{id}"))
                 || ["run","run_view"].iter().any(|prefix|ids.iter().any(|id|candidate==format!("{prefix}:{id}")))
                 || ids.iter().any(|id|candidate.starts_with(&format!("receipt:run:{id}:")))
                 || ids.iter().any(|id|record["result"]["run_id"]==*id

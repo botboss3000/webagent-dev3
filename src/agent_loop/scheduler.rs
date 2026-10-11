@@ -82,10 +82,21 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
                 tracing::error!("Loop command validation failed: {error}");
                 continue;
             }
+            if let Err(error)=crate::followup_queue::scheduler_tick(&user_app).await {
+                tracing::warn!("Followup queue reconciliation deferred: {error}");
+            }
             progress.at(Stage::RunScan);
             if let Ok(runs) = user_app.store.active_runs().await {
                 for view in runs {
                     let id = view["id"].as_str().unwrap().to_owned();
+                    if !app.active.lock().await.contains_key(&id)
+                        && crate::followup_queue::interrupt_requested(&user_app,&id).await.unwrap_or(false) {
+                        let Ok(mut interrupted)=user_app.run(&id).await else {continue;};
+                        if let Err(error)=super::run::settle_followup_interrupt(&user_app,&mut interrupted).await {
+                            tracing::warn!(run_id=%id,"Followup interruption deferred: {error}");
+                        }
+                        continue;
+                    }
                     if status(&view) == "waiting_approval" {
                         if let Err(error)=requeue_auto_approval(&user_app,&id).await {
                             tracing::warn!(run_id=%id,"Auto approval reconciliation deferred: {error}");
@@ -133,6 +144,22 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
                         let watcher_id=id.clone();
                         let watcher_generation=generation.clone();
                         let watcher_cancel=cancel.clone();
+                        let interrupt_app=cloned.clone();
+                        let interrupt_id=id.clone();
+                        let interrupt_cancel=cancel.clone();
+                        let interrupt_watcher=tokio::spawn(async move {
+                            loop {
+                                tokio::select! {
+                                    _=interrupt_cancel.cancelled()=>break,
+                                    _=tokio::time::sleep(Duration::from_millis(250))=>{},
+                                }
+                                match crate::followup_queue::interrupt_requested(&interrupt_app,&interrupt_id).await {
+                                    Ok(true)=>{interrupt_cancel.cancel();break;},
+                                    Ok(false)=>{},
+                                    Err(error)=>tracing::warn!(run_id=%interrupt_id,"Interrupt observation deferred: {error}"),
+                                }
+                            }
+                        });
                         let watcher=tokio::spawn(async move {
                             loop {
                                 tokio::time::sleep(Duration::from_secs(5)).await;
@@ -149,7 +176,18 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
                         {
                             tracing::warn!(run_id=%id,"Run interrupted: {}",error);
                         }
+                        // Join paths that return early (approval and parallel tools)
+                        // also settle durable interruption after their awaits finish.
+                        {
+                            let _settle_guard=cloned.gate.lock().await;
+                            if let Ok(mut final_run)=cloned.run(&id).await {
+                            if let Err(error)=super::run::settle_followup_interrupt(&cloned,&mut final_run).await {
+                                tracing::warn!(run_id=%id,"Followup handoff deferred: {error}");
+                            }
+                            }
+                        }
                         cancel.cancel();
+                        interrupt_watcher.abort();
                         watcher.abort();
                         cloned.active.lock().await.remove(&id);
                         drop(permit);

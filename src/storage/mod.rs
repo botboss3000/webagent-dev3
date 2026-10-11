@@ -11,6 +11,7 @@ mod activity;
 mod naming;
 mod background_tasks;
 mod background_followup;
+mod followup_queue;
 mod reasoning_cleanup;
 pub(crate) mod notifications;
 
@@ -587,6 +588,8 @@ impl Store {
         } else if key.starts_with("session:")
             || key.starts_with("manager_review:")
             || key.starts_with("manager_pending:")
+            || key.starts_with("followup_queue:")
+            || key.starts_with("receipt:queue:")
             || key.starts_with("user_agent_page_preferences:")
             || key.starts_with("session_mode:")
             || key.starts_with("session_chat_controls:")
@@ -1645,7 +1648,10 @@ impl Store {
             None
         };
         let mut tx = self.pool.begin().await?;
-        self.require_active_session(&mut tx, run["session_id"].as_str().ok_or_else(||anyhow!("Run has no session"))?).await?;
+        sqlx::query("UPDATE docs SET key=key WHERE key=?").bind(format!("run:{rid}")).execute(&mut *tx).await?;
+        if !matches!(run["status"].as_str(), Some("completed" | "cancelled" | "failed")) {
+            self.require_active_session(&mut tx, run["session_id"].as_str().ok_or_else(||anyhow!("Run has no session"))?).await?;
+        }
         let expected=run["run_revision"].as_u64().unwrap_or(0);
         if let Some(raw)=sqlx::query_scalar::<_,Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(format!("run:{rid}")).fetch_optional(&mut *tx).await? {
@@ -1688,6 +1694,9 @@ impl Store {
             }
         } else if expected!=0 {
             return Err(anyhow!("Run revision missing"));
+        }
+        if run["status"]=="completed" {
+            self.followup_publication_guard(&mut tx,run["session_id"].as_str().unwrap_or("")).await?;
         }
         let mut persisted=run.clone();
         persisted["run_revision"]=json!(expected+1);
@@ -1918,6 +1927,11 @@ impl Store {
     }
     pub async fn renew_run_lease(&self, rid:&str, generation:&str, owner:&str, epoch:i64) -> Result<bool> {
         let mut tx=self.pool.begin().await?;
+        // Reserve the SQLite writer before reading authority. Otherwise a queue
+        // commit can stale this WAL snapshot and its later UPDATE fails with
+        // BUSY_SNAPSHOT, which the lease watcher treats as lost ownership.
+        sqlx::query("UPDATE run_index SET lease_expires_at=lease_expires_at WHERE id=?")
+            .bind(rid).execute(&mut *tx).await?;
         let raw:Option<Vec<u8>>=sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
             .bind(format!("run:{rid}")).fetch_optional(&mut *tx).await?;
         let Some(raw)=raw else {return Ok(false)};
@@ -3159,6 +3173,87 @@ mod tests {
         let (unchanged,_)=store.chat_snapshot("auto-session").await.unwrap();
         assert_eq!(unchanged.len(),2);
     }
+    async fn renewal_fixture() -> (tempfile::TempDir, Store, Value) {
+        let root=tempfile::tempdir().unwrap();
+        let store=Store::open(root.path()).await.unwrap();
+        store.put("session:renew-session",&json!({"id":"renew-session","agent_id":"shared_default","status":"active"})).await.unwrap();
+        let mut run=json!({"id":"renew-run","session_id":"renew-session","status":"queued",
+            "generation":"","run_revision":0,"turns":1,"updated_at":1,
+            "input":(0..64).map(|i|json!({"role":"user","content":format!("{i}:{}","x".repeat(4096))})).collect::<Vec<_>>()});
+        store.put("run:renew-run",&run).await.unwrap();
+        assert!(store.claim_run(&mut run,"renew-owner","renew-generation").await.unwrap());
+        (root,store,run)
+    }
+
+    #[tokio::test]
+    async fn renewal_metadata_keeps_large_input_and_rejects_stale_ownership() {
+        let (_root,store,run)=renewal_fixture().await;
+        let raw:Vec<u8>=sqlx::query_scalar("SELECT value FROM docs WHERE key='run:renew-run'").fetch_one(&store.pool).await.unwrap();
+        let metadata=store.unseal(&raw).unwrap();
+        assert!(metadata["input"].is_null());assert_eq!(metadata["_recovery_input"]["count"],64);
+        assert_eq!(metadata["generation"],"renew-generation");assert_eq!(metadata["lease_epoch"],run["lease_epoch"]);
+        sqlx::query("UPDATE run_index SET lease_expires_at=0 WHERE id='renew-run'").execute(&store.pool).await.unwrap();
+        let epoch=run["lease_epoch"].as_i64().unwrap();
+        assert!(store.renew_run_lease("renew-run","renew-generation","renew-owner",epoch).await.unwrap());
+        let before:i64=sqlx::query_scalar("SELECT lease_expires_at FROM run_index WHERE id='renew-run'").fetch_one(&store.pool).await.unwrap();
+        assert!(before>crate::now() as i64);
+        for (generation,owner,attempt_epoch) in [("wrong-generation","renew-owner",epoch),
+            ("renew-generation","wrong-owner",epoch),("renew-generation","renew-owner",epoch+1)] {
+            assert!(!store.renew_run_lease("renew-run",generation,owner,attempt_epoch).await.unwrap());
+            let after:i64=sqlx::query_scalar("SELECT lease_expires_at FROM run_index WHERE id='renew-run'").fetch_one(&store.pool).await.unwrap();
+            assert_eq!(after,before);
+        }
+        assert!(!store.renew_run_lease("missing-run","renew-generation","renew-owner",epoch).await.unwrap());
+        let mut stopped=run.clone();stopped["status"]=json!("stopped");
+        store.save_run(&mut stopped,"run_status",&json!({})).await.unwrap();
+        assert!(!store.renew_run_lease("renew-run","renew-generation","renew-owner",epoch).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn renewal_deferred_snapshot_reproduces_concurrent_queue_write_conflict() {
+        let (_root,store,run)=renewal_fixture().await;
+        let mut old=store.pool.begin().await.unwrap();
+        let _:Vec<u8>=sqlx::query_scalar("SELECT value FROM docs WHERE key='run:renew-run'").fetch_one(&mut *old).await.unwrap();
+        let entry=json!({"id":"queued-followup","message_id":"user:queued-followup","session_id":"renew-session",
+            "agent_id":"shared_default","revision":0,"status":"pending","review_status":"acceptable","choice":"queue",
+            "content":"ordinary followup","context_content":"ordinary followup","attachments":[]});
+        // A real queue submission commits between the old renewal read/write.
+        store.followup_submit("renew-session",entry,vec![],"queued-followup","digest",&json!({})).await.unwrap();
+        let failure=sqlx::query("UPDATE run_index SET lease_expires_at=? WHERE id=? AND lease_owner=? AND lease_epoch=?")
+            .bind(crate::now() as i64+30).bind("renew-run").bind("renew-owner").bind(run["lease_epoch"].as_i64().unwrap())
+            .execute(&mut *old).await.unwrap_err();
+        assert_eq!(failure.as_database_error().and_then(|e|e.code()).as_deref(),Some("517"));
+        old.rollback().await.unwrap();
+        assert!(store.renew_run_lease("renew-run","renew-generation","renew-owner",run["lease_epoch"].as_i64().unwrap()).await.unwrap());
+        assert_eq!(store.followup_queue("renew-session").await.unwrap()["entries"][0]["status"],"pending");
+    }
+
+    #[tokio::test]
+    async fn renewal_waits_for_queue_writer_instead_of_cancelling_owned_run() {
+        let (_root,store,run)=renewal_fixture().await;
+        let epoch=run["lease_epoch"].as_i64().unwrap();
+        for revision in 1..=3 {
+            let mut queue_writer=store.pool.begin().await.unwrap();
+            let queue=json!({"schema_version":1,"session_id":"renew-session","revision":revision,
+                "held":false,"reason":null,"entries":[]});
+            sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+                .bind("followup_queue:renew-session").bind(store.seal(&queue).unwrap()).execute(&mut *queue_writer).await.unwrap();
+            let renewed_store=store.clone();
+            let (started,ready)=tokio::sync::oneshot::channel();
+            let renewal=tokio::spawn(async move {
+                started.send(()).unwrap();
+                renewed_store.renew_run_lease("renew-run","renew-generation","renew-owner",epoch).await
+            });
+            ready.await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            assert!(!renewal.is_finished(),"Renewal must wait behind an existing writer, not fail a read-to-write upgrade");
+            queue_writer.commit().await.unwrap();
+            assert!(tokio::time::timeout(std::time::Duration::from_secs(10),renewal).await.unwrap().unwrap().unwrap());
+            assert_eq!(store.followup_queue("renew-session").await.unwrap()["revision"],revision);
+            assert_eq!(store.get("run:renew-run").await.unwrap().unwrap()["generation"],"renew-generation");
+        }
+    }
+
     #[tokio::test]
     async fn command_ack_and_lease_takeover_fence_terminal_publication() {
         let root=tempfile::tempdir().unwrap();

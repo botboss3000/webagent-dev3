@@ -155,7 +155,137 @@ async fn preserve_restart_interruption(app: &App, run: &mut Value) -> Result<boo
     Ok(true)
 }
 
+// A selected interruption must settle the whole returned call list before the
+// parent becomes immutable terminal state. Ordinary read failures still fail.
+async fn commit_tool_transport_failure(app: &App, run: &mut Value, name: &str) -> Result<()> {
+    let id=run["id"].as_str().ok_or_else(||anyhow!("Missing run id"))?.to_owned();
+    if let Some(receipt)=record_interrupted_tool(run,name)? {
+        if crate::followup_queue::interrupt_requested(app,&id).await? {
+            run["status"]=json!("running");
+            run["error"]=json!("User interruption settling");
+        }
+        app.store.save_run_observed(run,"tool_result",
+            &json!({"run_id":id,"name":name,"result":receipt})).await?;
+    } else {
+        app.store.save_run_observed(run,"run_status",&json!({"run_id":id})).await?;
+    }
+    settle_followup_interrupt(app,run).await?;
+    Ok(())
+}
+
+fn followup_interruption_result(executing: bool, completed: Option<&Value>) -> Value {
+    completed.cloned().unwrap_or_else(|| json!({
+        "status":"interrupted", "interrupted_by":"user",
+        "execution_state":if executing {"read_interrupted"} else {"not_dispatched"},
+        "output":if executing {"Run interrupted by user before the read result arrived."}
+            else {"Run interrupted by user; this tool was not dispatched."}
+    }))
+}
+
+// Explicit recovery abandonment resolves replay authority, not the historical
+// effect. Keep the original call paired with an unknown-outcome/no-retry receipt.
+// The handoff transaction journals these pairs; terminal runs cannot be saved
+// incrementally through ordinary executor transitions.
+pub(crate) fn settle_abandoned_interrupt(run: &mut Value) -> Result<()> {
+    if run["recovery_abandoned"] != true || run["uncertain"] == true {
+        return Err(anyhow!("Explicit recovery abandonment required"));
+    }
+    let calls=run["calls"].as_array().cloned().unwrap_or_default();
+    for (idx,call) in calls.iter().enumerate() {
+        if run["input"].as_array().is_some_and(|items|items.iter().any(|item|
+            item["type"]=="function_call_output" && item["call_id"]==call["call_id"])) {continue;}
+        let batch=run["batch"].as_array().and_then(|items|items.get(idx)).cloned();
+        let pending=if run["pending"]["call_id"]==call["call_id"] {run["pending"].clone()}
+            else {batch.as_ref().map(|item|item["pending"].clone()).unwrap_or(Value::Null)};
+        let affected=pending["state"]=="executing" || batch.as_ref()
+            .is_some_and(|item|matches!(item["state"].as_str(),Some("executing"|"uncertain")));
+        let result=if let Some(done)=batch.as_ref().filter(|item|item["state"]=="done") {
+            done["result"].clone()
+        } else if affected && !tools::is_read(call["name"].as_str().unwrap_or("")) {
+            json!({"status":"interrupted","interrupted_by":"user","execution_state":"outcome_unknown",
+                "recovery_decision":"abandoned","no_retry":true,
+                "operation_refs":{"call_id":call["call_id"],"invocation_id":pending["id"],
+                    "external_job":pending["external_job"],"operation_id":pending["operation_id"]},
+                "output":"Run interrupted by user. This write's outcome remains unknown; recovery was explicitly abandoned. Do not replay it. Check existing effects before proposing further writes."})
+        } else {followup_interruption_result(affected,None)};
+        run["input"].as_array_mut().ok_or_else(||anyhow!("Missing interrupted context"))?
+            .push(json!({"type":"function_call_output","call_id":call["call_id"],"output":result.to_string()}));
+    }
+    run["pending"]=Value::Null; run["batch"]=Value::Null;
+    run["call_index"]=json!(calls.len());
+    run["user_interruption"]=json!({"recorded_at":now(),"reason":"user_followup","recovery_decision":"abandoned"});
+    Ok(())
+}
+
+// Called only after local tool futures have settled, or for an inactive run.
+// Unknown writes retain their original recovery checkpoint; interruption cannot
+// turn missing acknowledgement into proof that an effect did not happen.
+pub(crate) async fn settle_followup_interrupt(app: &App, run: &mut Value) -> Result<bool> {
+    let id = run["id"].as_str().unwrap_or("").to_owned();
+    if !crate::followup_queue::interrupt_requested(app, &id).await? {
+        return Ok(false);
+    }
+    if run["uncertain"] == true || matches!(status(run), "recovery" | "waiting_external") {
+        return Ok(false);
+    }
+    // A late choice can arrive after an ordinary read failure committed. Such
+    // parents are immutable; only the atomic handoff may journal missing pairs.
+    let terminal_parent = matches!(status(run), "failed" | "cancelled");
+    let calls = run["calls"].as_array().cloned().unwrap_or_default();
+    for (idx, call) in calls.iter().enumerate() {
+        if run["input"].as_array().is_some_and(|items| items.iter().any(|item|
+            item["type"] == "function_call_output" && item["call_id"] == call["call_id"])) {
+            continue;
+        }
+        let batch = run["batch"].as_array().and_then(|items| items.get(idx)).cloned();
+        let name = call["name"].as_str().unwrap_or("");
+        let executing = batch.as_ref().is_some_and(|item|
+            matches!(item["state"].as_str(), Some("executing" | "uncertain")))
+            || (run["pending"]["call_id"] == call["call_id"] && run["pending"]["state"] == "executing");
+        if executing && !tools::is_read(name) {
+            if terminal_parent {
+                let sid = run["session_id"].as_str().unwrap_or("");
+                app.store.followup_hold(sid,"Interrupted write outcome is unknown; explicit recovery is required").await?;
+                return Ok(false);
+            }
+            run["uncertain"] = json!(true);
+            run["status"] = json!("recovery");
+            run["error"] = json!("User interrupted; tool outcome unknown, review before continuing");
+            app.save(run).await?;
+            return Ok(false);
+        }
+        let completed = batch.as_ref().filter(|item| item["state"] == "done")
+            .map(|item| &item["result"]);
+        let result = followup_interruption_result(executing, completed);
+        // Preserve provider call/result pairing without fabricating tool effects.
+        // Each save journals just this result; a restart skips its existing pair.
+        run["pending"] = json!({"call_id":call["call_id"]});
+        run["call_index"] = json!(idx);
+        run["input"].as_array_mut().ok_or_else(||anyhow!("Missing run context"))?
+            .push(json!({"type":"function_call_output","call_id":call["call_id"],"output":result.to_string()}));
+        run["call_index"] = json!(idx + 1);
+        run["pending"] = Value::Null;
+        if !terminal_parent {
+            app.store.save_run_observed(run,"tool_result",&json!({"run_id":id,"name":name,"result":result})).await?;
+        }
+    }
+    run["batch"] = Value::Null;
+    run["pending"] = Value::Null;
+    run["user_interruption"] = json!({"recorded_at":now(),"reason":"user_followup"});
+    crate::followup_queue::finish_interrupt(app, run).await
+}
+
 pub(crate) async fn execute_run(
+    app: App,
+    id: String,
+    generation: String,
+    cancel: CancellationToken,
+) -> Result<()> {
+    // Keep the run state machine off callers' stacks. Followup handoff and
+    // session fencing add nested futures to this long-lived execution state.
+    Box::pin(execute_run_inner(app, id, generation, cancel)).await
+}
+async fn execute_run_inner(
     app: App,
     id: String,
     generation: String,
@@ -172,6 +302,7 @@ pub(crate) async fn execute_run(
         if run["generation"] != generation || status(&run) != "running" {
             return Ok(());
         }
+        if settle_followup_interrupt(&app, &mut run).await? { return Ok(()); }
         if cancel.is_cancelled() {
             preserve_restart_interruption(&app, &mut run).await?;
             return Ok(());
@@ -179,6 +310,10 @@ pub(crate) async fn execute_run(
         // Apply a composer choice before validating the next dispatch. This never
         // cancels/replays the model response or tool effects from the previous call.
         if run["phase"]=="model" {
+            if crate::followup_queue::apply_steering(&app, &mut run).await? {
+                context_accounting.reset();
+                context_assets = None;
+            }
             match apply_chat_model_preference(&app,&mut run).await {
                 Ok(true)=>{context_accounting.reset();app.save(&mut run).await?;}
                 Ok(false)=>{},
@@ -954,6 +1089,7 @@ pub(crate) async fn execute_run(
                 app.save(&mut run).await?;
                 return Ok(());
             }
+            if settle_followup_interrupt(&app, &mut run).await? { return Ok(()); }
             if cancel.is_cancelled() || app.shutoff().await? {
                 if preserve_restart_interruption(&app, &mut run).await? {return Ok(());}
                 run["status"] = json!("stopped");
@@ -1125,8 +1261,30 @@ pub(crate) async fn execute_run(
                                     json!({"module_id":module_id,"reason_code":reason_code});
                             },
                         }
-                        publication::terminal(&app.store, &mut run, output, &text, &publication_policy).await?;
-                        return Ok(());
+                        // Journal model output before any following user interaction.
+                        // Terminal insertion uses the same stable interaction keys, so
+                        // publication and restart cannot duplicate the private output.
+                        app.store.save_run_observed(&mut run,"model_output",&json!({"output":output})).await?;
+                        // A user choice can commit while the publication gate awaits.
+                        if crate::followup_queue::interrupt_requested(&app, &id).await? {
+                            settle_followup_interrupt(&app, &mut run).await?;
+                            return Ok(());
+                        }
+                        if crate::followup_queue::apply_steering(&app, &mut run).await? {
+                            run["phase"] = json!("model");
+                            app.save(&mut run).await?;
+                            context_accounting.reset(); context_assets = None;
+                            continue;
+                        }
+                        match publication::terminal(&app.store, &mut run, output, &text, &publication_policy).await {
+                            Ok(()) => return Ok(()),
+                            Err(error) if error.to_string().contains("Pending followup prevents terminal publication") => {
+                                run["phase"] = json!("model");
+                                app.save(&mut run).await?;
+                                continue;
+                            }
+                            Err(error) => return Err(error),
+                        }
                     }
                     let auto_promote=run["promotion_mode"]=="auto";
                     if auto_promote && output.iter().filter(|item|item["type"]=="message")
@@ -1524,12 +1682,7 @@ pub(crate) async fn execute_run(
                         app.save(&mut run).await?;
                         return Ok(());
                     }
-                    if let Some(receipt)=record_interrupted_tool(&mut run,&name)? {
-                        app.store.save_run_observed(&mut run,"tool_result",
-                            &json!({"run_id":id,"name":name,"result":receipt})).await?;
-                    } else {
-                        app.store.save_run_observed(&mut run, "run_status", &json!({"run_id":id})).await?;
-                    }
+                    commit_tool_transport_failure(&app, &mut run, &name).await?;
                     return Ok(());
                 }
             }
@@ -1549,6 +1702,174 @@ mod interrupted_tool_tests {
             "workflow":{"receipts":{"pre_tool":{"checkpoint":"pre_tool",
                 "generation":"generation-1","policy_revision":"policy-1","input_digest":"digest",
                 "turn":1,"call_index":0,"result":{"decision":"pass"}}}}})
+    }
+
+    #[test]
+    fn followup_interrupt_does_not_invent_cancellation_or_lose_completed_effects() {
+        let not_dispatched=followup_interruption_result(false,None);
+        assert_eq!(not_dispatched["execution_state"],"not_dispatched");
+        assert_eq!(not_dispatched["interrupted_by"],"user");
+        let interrupted_read=followup_interruption_result(true,None);
+        assert_eq!(interrupted_read["execution_state"],"read_interrupted");
+        assert!(interrupted_read.get("cancellation_confirmed").is_none());
+        let completed=json!({"status":"success","output":{"operation_id":"operation-1","written":true}});
+        assert_eq!(followup_interruption_result(true,Some(&completed)),completed);
+    }
+
+    #[tokio::test]
+    async fn abandoned_write_handoff_persists_unknown_pair_without_replay() {
+        let root=tempfile::tempdir().unwrap();
+        let store=Store::open(root.path()).await.unwrap();
+        store.put("session:session-1",&json!({"id":"session-1","status":"active","agent_id":"shared_default"})).await.unwrap();
+        let mut old=pending("file_write");
+        old["calls"]=json!([old["input"][0].clone()]);
+        old["run_revision"]=json!(0);old["updated_at"]=json!(now());
+        store.put("run:run-1",&old).await.unwrap();
+        let calls=old["calls"].clone();
+        store.save_run(&mut old,"model_output",&json!({"output":calls})).await.unwrap();
+        old["status"]=json!("cancelled");old["recovery_abandoned"]=json!(true);
+        old["pending"]["id"]=json!("write-invocation");
+        store.save_run(&mut old,"run_status",&json!({"run_id":"run-1"})).await.unwrap();
+        let entry=json!({"id":"followup-1","message_id":"user:followup-1","session_id":"session-1",
+            "agent_id":"shared_default","revision":0,"status":"pending","review_status":"acceptable",
+            "choice":"interrupt","target_run_id":"run-1","content":"check the result",
+            "context_content":"check the result","attachments":[]});
+        store.followup_submit("session-1",entry,vec![],"submission","digest",&json!({})).await.unwrap();
+        settle_abandoned_interrupt(&mut old).unwrap();
+        let once=old["input"].clone();settle_abandoned_interrupt(&mut old).unwrap();
+        assert_eq!(old["input"],once);
+        let mut next=json!({"id":"replacement","session_id":"session-1","status":"queued",
+            "generation":"","run_revision":0,"updated_at":now(),"input":old["input"].clone()});
+        assert!(store.followup_consume("session-1","interrupt",&mut next,Some(&mut old)).await.unwrap());
+        let reopened=Store::open(root.path()).await.unwrap();
+        let context=reopened.context("session-1").await.unwrap();
+        let i=context.iter().position(|item|item["type"]=="function_call"&&item["call_id"]=="call-1").unwrap();
+        assert_eq!(context[i+1]["type"],"function_call_output");
+        let result:Value=serde_json::from_str(context[i+1]["output"].as_str().unwrap()).unwrap();
+        assert_eq!(result["execution_state"],"outcome_unknown");assert_eq!(result["no_retry"],true);
+        assert_eq!(result["operation_refs"]["invocation_id"],"write-invocation");
+        assert_eq!(context[i+2]["content"],"check the result");
+        assert!(old["pending"].is_null());
+    }
+
+    #[tokio::test]
+    async fn selected_interrupt_settles_remaining_serial_calls_before_terminal_commit() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let sid=crate::runtime_tests::conversation(&app).await;
+        let rid=crate::runtime_tests::queued(&app,&sid).await;
+        let mut run=app.run(&rid).await.unwrap();
+        let template=run.clone();
+        assert!(app.store.claim_run(&mut run,"serial-interrupt-test",&uuid()).await.unwrap());
+        let calls=json!([
+            {"type":"function_call","call_id":"read-serial","name":"file_read","arguments":"{}"},
+            {"type":"function_call","call_id":"publish-undispatched","name":"publish_main_message","arguments":"{}"}
+        ]);
+        run["input"].as_array_mut().unwrap().extend(calls.as_array().unwrap().iter().cloned());
+        run["calls"]=calls.clone();run["turns"]=json!(1);run["call_index"]=json!(0);
+        run["phase"]=json!("tools");
+        run["pending"]=json!({"name":"file_read","call_id":"read-serial","state":"executing"});
+        let policy=workflow::Policy::resolve(None).unwrap();
+        workflow::record(&mut run,&policy,&workflow::Input::PreTool(workflow::PreToolInput {
+            name:"file_read".into(),arguments_digest:"fixture".into(),policy_version:1,
+            mode_revision:0,visibility_revision:0,ability_state_revision:0,
+        }),workflow::Decision::Pass).unwrap();
+        app.store.save_run_observed(&mut run,"model_output",&json!({"output":calls})).await.unwrap();
+        let e=json!({"id":"selected-interrupt","message_id":"user:selected-interrupt","session_id":sid,
+            "agent_id":"shared_default","revision":0,"choice":"interrupt","status":"pending",
+            "review_status":"acceptable","target_run_id":rid,"content":"change direction",
+            "context_content":"change direction","attachments":[],"template":template});
+        app.store.followup_submit(&sid,e,vec![],"selected-interrupt","fixture-digest",&json!({})).await.unwrap();
+        // Exercise the production transport-error commit/handoff, not a hand-built
+        // equivalent. Committing failed before the second result used to reject it.
+        commit_tool_transport_failure(&app,&mut run,"file_read").await.unwrap();
+        assert_eq!(run["status"],"cancelled");
+        let q=app.store.followup_queue(&sid).await.unwrap();
+        assert_eq!(q["entries"][0]["status"],"delivered");
+        let next=app.run(q["entries"][0]["consuming_run_id"].as_str().unwrap()).await.unwrap();
+        let input=next["input"].as_array().unwrap();
+        for call in ["read-serial","publish-undispatched"] {
+            assert_eq!(input.iter().filter(|item|item["type"]=="function_call_output"&&item["call_id"]==call).count(),1);
+        }
+        let result:Value=serde_json::from_str(input.iter().find(|item|item["type"]=="function_call_output"
+            &&item["call_id"]=="publish-undispatched").unwrap()["output"].as_str().unwrap()).unwrap();
+        assert_eq!(result["execution_state"],"not_dispatched");
+        assert_eq!(input.last().unwrap()["content"],"change direction");
+    }
+
+    #[tokio::test]
+    async fn late_interrupt_settles_failed_parent_atomically_and_once() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let sid=crate::runtime_tests::conversation(&app).await;
+        let rid=crate::runtime_tests::queued(&app,&sid).await;
+        let mut run=app.run(&rid).await.unwrap();let template=run.clone();
+        assert!(app.store.claim_run(&mut run,"late-interrupt-test",&uuid()).await.unwrap());
+        let calls=json!([
+            {"type":"function_call","call_id":"late-read","name":"file_read","arguments":"{}"},
+            {"type":"function_call","call_id":"late-publish","name":"publish_main_message","arguments":"{}"}
+        ]);
+        run["input"].as_array_mut().unwrap().extend(calls.as_array().unwrap().iter().cloned());
+        run["calls"]=calls.clone();run["turns"]=json!(1);run["call_index"]=json!(0);run["phase"]=json!("tools");
+        run["pending"]=json!({"name":"file_read","call_id":"late-read","state":"executing"});
+        let policy=workflow::Policy::resolve(None).unwrap();
+        workflow::record(&mut run,&policy,&workflow::Input::PreTool(workflow::PreToolInput {
+            name:"file_read".into(),arguments_digest:"fixture".into(),policy_version:1,
+            mode_revision:0,visibility_revision:0,ability_state_revision:0,
+        }),workflow::Decision::Pass).unwrap();
+        app.store.save_run_observed(&mut run,"model_output",&json!({"output":calls})).await.unwrap();
+        let receipt=record_interrupted_tool(&mut run,"file_read").unwrap().unwrap();
+        app.store.save_run_observed(&mut run,"tool_result",&json!({"run_id":rid,"name":"file_read","result":receipt})).await.unwrap();
+        assert_eq!(run["status"],"failed");
+        // Deterministically persist the choice after failure, with the target
+        // already bound while the run was running (the narrow commit race).
+        let e=json!({"id":"late-interrupt","message_id":"user:late-interrupt","session_id":sid,
+            "agent_id":"shared_default","revision":0,"choice":"interrupt","status":"pending",
+            "review_status":"acceptable","interrupt_committed":true,"target_run_id":rid,
+            "content":"new direction","context_content":"new direction","attachments":[],"template":template});
+        app.store.followup_submit(&sid,e,vec![],"late-interrupt","digest",&json!({})).await.unwrap();
+        crate::followup_queue::scheduler_tick(&app).await.unwrap();
+        crate::followup_queue::scheduler_tick(&app).await.unwrap();
+        let q=app.store.followup_queue(&sid).await.unwrap();assert_eq!(q["entries"][0]["status"],"delivered");
+        let active=app.store.active_runs().await.unwrap();
+        assert_eq!(active.iter().filter(|r|r["session_id"]==sid).count(),1);
+        let next=app.run(q["entries"][0]["consuming_run_id"].as_str().unwrap()).await.unwrap();
+        let input=next["input"].as_array().unwrap();
+        for id in ["late-read","late-publish"] {
+            assert_eq!(input.iter().filter(|i|i["type"]=="function_call_output"&&i["call_id"]==id).count(),1);
+        }
+        let result:Value=serde_json::from_str(input.iter().find(|i|i["type"]=="function_call_output"&&i["call_id"]=="late-publish").unwrap()["output"].as_str().unwrap()).unwrap();
+        assert_eq!(result["execution_state"],"not_dispatched");
+        assert_eq!(app.run(&rid).await.unwrap()["status"],"cancelled");
+        let context=app.store.context(&sid).await.unwrap();
+        assert_eq!(context.iter().filter(|i|i["type"]=="function_call_output"&&i["call_id"]=="late-publish").count(),1);
+    }
+
+    #[tokio::test]
+    async fn terminal_unknown_write_holds_interrupt_without_replacement_or_fake_result() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let sid=crate::runtime_tests::conversation(&app).await;
+        let rid=crate::runtime_tests::queued(&app,&sid).await;
+        let mut run=app.run(&rid).await.unwrap();let template=run.clone();
+        assert!(app.store.claim_run(&mut run,"terminal-write-test",&uuid()).await.unwrap());
+        let call=json!({"type":"function_call","call_id":"unknown-write","name":"file_write","arguments":"{}"});
+        run["input"].as_array_mut().unwrap().push(call.clone());run["calls"]=json!([call.clone()]);run["turns"]=json!(1);
+        run["pending"]=json!({"name":"file_write","call_id":"unknown-write","state":"executing"});
+        app.store.save_run_observed(&mut run,"model_output",&json!({"output":[call]})).await.unwrap();
+        // Simulate a terminal checkpoint lacking an acknowledged write result.
+        run["status"]=json!("cancelled");run["uncertain"]=json!(false);
+        app.store.save_run_observed(&mut run,"run_status",&json!({"run_id":rid})).await.unwrap();
+        let e=json!({"id":"write-interrupt","message_id":"user:write-interrupt","session_id":sid,
+            "agent_id":"shared_default","revision":0,"choice":"interrupt","status":"pending",
+            "review_status":"acceptable","interrupt_committed":true,"target_run_id":rid,
+            "content":"check write","context_content":"check write","attachments":[],"template":template});
+        app.store.followup_submit(&sid,e,vec![],"write-interrupt","digest",&json!({})).await.unwrap();
+        crate::followup_queue::scheduler_tick(&app).await.unwrap();
+        crate::followup_queue::scheduler_tick(&app).await.unwrap();
+        let q=app.store.followup_queue(&sid).await.unwrap();assert_eq!(q["held"],true);
+        assert_eq!(q["entries"][0]["status"],"pending");assert!(q["entries"][0]["consuming_run_id"].is_null());
+        assert!(!app.store.active_runs().await.unwrap().iter().any(|r|r["session_id"]==sid));
+        let parent=app.run(&rid).await.unwrap();assert_eq!(parent["pending"]["state"],"executing");
+        assert!(!parent["input"].as_array().unwrap().iter().any(|i|i["type"]=="function_call_output"&&i["call_id"]=="unknown-write"));
+        assert!(!app.store.context(&sid).await.unwrap().iter().any(|i|i["type"]=="function_call_output"&&i["call_id"]=="unknown-write"));
     }
 
     #[test]

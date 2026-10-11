@@ -18,6 +18,7 @@ mod execution_modes;
 mod tool_execution;
 mod background_tasks;
 mod background_followup;
+mod followup_queue;
 mod abilities;
 mod services;
 mod session_naming;

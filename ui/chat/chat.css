@@ -8,7 +8,7 @@
 /* Run controls stay above, and clickable beside either composer layout. */
 #chat-panel #chat-input-area #chat-above-pill{flex-shrink:0;max-height:35dvh;opacity:1;margin:0 auto 6px;overflow:auto;pointer-events:auto;z-index:8}
 /* Keep progress and repository notices visible even without run-control cards. */
-#chat-panel #chat-input-area #chat-above-pill:not(.visible):not(:has(#chat-notifications .chat-notification,#runs > :not([hidden]),.v3-repository-notice:not([hidden]))){display:none}
+#chat-panel #chat-input-area #chat-above-pill:not(.visible):not(:has(#chat-notifications .chat-notification,#runs > :not([hidden]),.v3-repository-notice:not([hidden]),.followup-queue-banner:not([hidden]))){display:none}
 #chat-notifications{padding:0 4px}
 #runs{max-height:none;overflow:visible;padding:0 4px}
 /* All composer notices share the approval pill surface and chip actions. */
@@ -100,3 +100,14 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .voice-conversation-control {border:1px solid var(--border);border-radius:10px;background:var(--surface);color:inherit;padding:4px 10px;}
 .v3-message.system{align-items:center}
 .v3-message.system .message-content{max-width:min(90%,680px);font-size:13px;color:var(--fg-2);background:var(--bg-elev);text-align:center}
+
+/* Theme tokens keep durable delivery choices legible in docked and embedded chat. */
+.followup-delivery{font-size:13px;margin-top:10px;border-top:1px solid var(--border);padding-top:8px;color:var(--fg-2)}
+.followup-delivery p,.followup-queue-banner p{margin:0 0 6px;overflow-wrap:anywhere}
+.followup-delivery-actions{display:flex;flex-wrap:wrap;gap:6px}
+.followup-delivery-actions button,.followup-queue-banner button{font:inherit;color:var(--fg-1);background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:6px 10px;min-height:34px;cursor:pointer}
+.followup-delivery-actions button[aria-pressed=true]{background:var(--bg-tint);border-color:var(--fg-2)}
+.followup-delivery-actions button:disabled{opacity:.55;cursor:wait}
+.followup-delivery-actions button:focus-visible,.followup-queue-banner button:focus-visible{outline:2px solid var(--fg-1);outline-offset:2px}
+.followup-queue-banner{margin:8px 12px;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elev);color:var(--fg-1);font-size:13px}
+.followup-queue-banner[hidden]{display:none}
