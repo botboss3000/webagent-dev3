@@ -7,6 +7,7 @@ let chatRoot = null;
 const byId = id => chatRoot?.querySelector('#'+id) || document.getElementById(id);
 let surfaceActions = {};
 export function setChatSurfaceActions(actions){surfaceActions=actions;}
+export function defaultChatDisplay(){const value=documentConfig?.chat_display?.default;return value==="panel"||value==="widget"?value:null;}
 export function widgetProfile(){return mergeProfile(documentConfig?.chat_common,documentConfig?.chat_widget);}
 export function refreshChatSurface(){currentSurface='';applyChatConfig();}
 let documentConfig = null;
