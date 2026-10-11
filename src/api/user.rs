@@ -68,6 +68,33 @@ async fn sessions(Extension(app): Extension<App>, identity:Option<Extension<Valu
     let result=crate::sessions(State(app),Query(args)).await;
     match result {Ok(mut value)=>{if let Some(agent)=identity.as_ref().and_then(|v|v.0["_embed_agent"].as_str()) {if let Some(items)=value.0["sessions"].as_array_mut(){items.retain(|s|s["agent_id"].as_str().unwrap_or("shared_default")==agent);}}value.into_response()},Err(e)=>e.into_response()}
 }
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionStatisticsArgs { status: Option<String>, offset: Option<usize>, limit: Option<usize> }
+async fn session_statistics(Extension(app): Extension<App>, Query(args): Query<SessionStatisticsArgs>) -> Response {
+    async fn read(app: App, args: SessionStatisticsArgs) -> crate::Api {
+        let recycled = match args.status.as_deref().unwrap_or("active") {
+            "active" => false, "recycled" => true, _ => return Err(crate::bad("Invalid session status")),
+        };
+        let limit = args.limit.unwrap_or(100);
+        if !(1..=100).contains(&limit) { return Err(crate::bad("Invalid statistics limit")); }
+        let (page, next) = app.store.session_statistics_page(recycled,args.offset.unwrap_or(0),limit).await?;
+        let mut admitted = HashMap::new();
+        let mut sessions = Vec::new();
+        for item in page {
+            let agent = item["agent_id"].as_str().unwrap_or("shared_default");
+            let allowed = if let Some(allowed) = admitted.get(agent) { *allowed } else {
+                let allowed = app.store.live_access(app.store.current_user_id(),agent).await
+                    .map(|access| access.admitted()).unwrap_or(false);
+                admitted.insert(agent.to_owned(),allowed); allowed
+            };
+            if allowed { sessions.push(item); }
+        }
+        Ok(Json(serde_json::json!({"sessions":sessions,"next_offset":next,"server_time":crate::now()})))
+    }
+    read(app,args).await.into_response()
+}
+
 async fn session_search(Extension(app): Extension<App>, identity:Option<Extension<Value>>, Query(args): Query<crate::SessionSearchArgs>) -> Response {
     let result=crate::api::sessions::session_search_scoped(app,args,identity.as_ref().and_then(|v|v.0["_embed_agent"].as_str())).await;
     match result {Ok(mut value)=>{if let Some(agent)=identity.as_ref().and_then(|v|v.0["_embed_agent"].as_str()) {if let Some(items)=value.0["results"].as_array_mut(){items.retain(|s|s["agent_id"].as_str().unwrap_or("shared_default")==agent);}}value.into_response()},Err(e)=>e.into_response()}
@@ -229,6 +256,7 @@ pub(crate) fn router() -> Router<App> {
         .route("/user/status", get(user_status))
         .route("/sessions", get(sessions).post(create_session))
         .route("/sessions/search", get(session_search))
+        .route("/sessions/stats", get(session_statistics))
         .route("/sessions/{sid}/runs/{rid}/diagnostics", get(diagnostics))
         .route("/sessions/{sid}/runs/{rid}/diagnostics/context/{attempt_id}", get(context_snapshot))
         .route("/sessions/{sid}/runs/{rid}/progress", get(progress))
@@ -291,5 +319,41 @@ pub(crate) fn messaging_router() -> Router<App> {
             let request=Request::builder().uri(uri).header("authorization",format!("Bearer {token}")).body(Body::empty()).unwrap();
             assert_eq!(route.clone().oneshot(request).await.unwrap().status(),StatusCode::OK);
         }
+    }
+}
+
+#[cfg(test)]
+mod session_statistics_tests {
+    use super::*;
+    use axum::{body::Body, extract::Request, http::StatusCode};
+    use tower::ServiceExt;
+    #[tokio::test]
+    async fn statistics_require_browser_auth_and_validate_bounds() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let router = crate::router(app.clone());
+        let request = |uri: &str, cookie: Option<&str>| {
+            let mut builder = Request::builder().uri(uri);
+            if let Some(cookie) = cookie { builder = builder.header("cookie",cookie); }
+            builder.body(Body::empty()).unwrap()
+        };
+        assert_eq!(router.clone().oneshot(request("/api/v3/sessions/stats",None)).await.unwrap().status(),StatusCode::UNAUTHORIZED);
+        let token = crate::uuid();
+        app.store.put(&format!("auth:{}",crate::digest(&serde_json::json!(token))),
+            &serde_json::json!({"csrf":"fixture","expires":crate::now()+3600,"generation":"fixture-generation"})).await.unwrap();
+        let cookie = format!("v3_session={token}");
+        for uri in ["/api/v3/sessions/stats?status=bad","/api/v3/sessions/stats?limit=101","/api/v3/sessions/stats?limit=0","/api/v3/sessions/stats?user_id=other"] {
+            assert_eq!(router.clone().oneshot(request(uri,Some(&cookie))).await.unwrap().status(),StatusCode::BAD_REQUEST,"{uri}");
+        }
+        let user = app.store.for_user("admin").await.unwrap();
+        user.put("session:mine",&serde_json::json!({"id":"mine","title":"Mine","agent_id":"shared_default"})).await.unwrap();
+        user.put("session:revoked",&serde_json::json!({"id":"revoked","title":"Hidden","agent_id":"unavailable-agent"})).await.unwrap();
+        let response = router.oneshot(request("/api/v3/sessions/stats?limit=100",Some(&cookie))).await.unwrap();
+        assert_eq!(response.status(),StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(),1024*1024).await.unwrap();
+        let result: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(result["sessions"].as_array().unwrap().len(),1);
+        assert_eq!(result["sessions"][0]["id"],"mine");
+        assert_eq!(result["sessions"][0]["message_count"],0);
+        assert!(result["sessions"][0]["usage"].is_null());
     }
 }

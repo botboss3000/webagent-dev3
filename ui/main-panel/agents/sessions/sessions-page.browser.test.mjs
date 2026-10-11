@@ -1,0 +1,58 @@
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
+import http from 'node:http';import fs from 'node:fs/promises';import path from 'node:path';import assert from 'node:assert/strict';
+const root=path.resolve(new URL('../../../..',import.meta.url).pathname);
+const server=http.createServer(async(req,res)=>{try{const file=path.resolve(root,'.'+new URL(req.url,'http://localhost').pathname);if(!file.startsWith(root+'/'))throw Error('bad');const data=await fs.readFile(file);res.setHeader('content-type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html');res.end(data);}catch{res.statusCode=404;res.end('Not found');}});
+await new Promise(r=>server.listen(0,'127.0.0.1',r));
+let browser;try{
+ browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/snap/bin/chromium',headless:true,args:['--no-sandbox']});
+ const page=await browser.newPage({viewport:{width:1200,height:850}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('http://127.0.0.1:'+server.address().port+'/ui/main-panel/agents/sessions/sessions.html');
+ const result=await page.evaluate(async()=>{
+  const html=await(await fetch('/ui/main-panel/agents/sessions/sessions.html')).text();document.body.innerHTML='<div id="tab-agents" class="active"><div id="all-agents-region"><section id="sessions-section"></section></div></div>';
+  const style=document.createElement('link');style.rel='stylesheet';style.href='/ui/main-panel/agents/sessions/sessions.css';document.head.append(style);
+  const host=document.getElementById('sessions-section');host.innerHTML=html;
+  const rows=[{id:'a',agent_id:'one',title:'Alpha',status:'active',metadata_revision:0,created_at:1,last_active_at:10,is_unread:true,unread_count:1,read_through_seq:0,last_public_seq:3,message_count:3,usage:{input_tokens:0,output_tokens:0,reported_calls:1,unreported_calls:0,known_cost_usd:0,unknown_cost_calls:0}},{id:'b',agent_id:'two',title:'Beta',status:'active',metadata_revision:0,created_at:1,last_active_at:9,is_unread:false,message_count:0},{id:'c',agent_id:'one',title:'Recycled',status:'recycled',metadata_revision:0,created_at:1,last_active_at:8,is_unread:false,message_count:0}];
+  const writes=[],opens=[],calls=[];let failB=true;
+  const request=async(url,method='GET',body)=>{
+   calls.push(url);const parsed=new URL(url,location.origin);
+   if(url.startsWith('/sessions/stats'))return {sessions:rows.filter(r=>r.status===parsed.searchParams.get('status')),next_offset:null};
+   if(url.startsWith('/sessions/search'))return {results:[{session_id:'b',kind:'message',snippet:'needle <script> bad'}],continuation:null};
+   const id=decodeURIComponent(parsed.pathname.split('/')[2]),row=rows.find(r=>r.id===id);if(method!=='GET'){writes.push({id,method,body:structuredClone(body)});if(id==='b'&&method==='DELETE'&&failB){const e=Error('fixture network failure');throw e;}if(method==='DELETE')row.status='recycled';if(parsed.pathname.endsWith('/restore'))row.status='active';if(method==='PATCH')Object.assign(row,body);if(method==='PUT')row.is_unread=false;row.metadata_revision++;return {session:structuredClone(row)};}
+   throw Error('Unexpected '+url);
+  };
+  const {mountSessions}=await import('/ui/main-panel/agents/sessions/js/sessions-page.js');
+  window.fixture={host,rows,writes,opens,calls,setFailB:v=>{failB=v;},controller:mountSessions(host,{request,userId:'fixture',roster:[{id:'one',name:'Agent One'},{id:'two',name:'Agent Two'}],getSessionId:()=>null,open:id=>opens.push(id),changed:()=>{}})};
+  await new Promise(r=>setTimeout(r,300));
+  return {titles:[...host.querySelectorAll('.session-row-title-label')].map(n=>n.textContent),display:getComputedStyle(host).display};
+ });
+ assert.deepEqual(result.titles,['Alpha','Beta']);assert.equal(result.display,'flex');
+ assert.equal(await page.locator('td.col-tokens_in').first().innerText(),'0');assert.equal(await page.locator('td.col-cost').first().innerText(),'$0.000000');
+ if(await page.locator('[data-sessions-footer-gutter]').getAttribute('aria-pressed')!=='true')await page.locator('[data-sessions-footer-gutter]').click();
+ // Keyboard select must not open a chat or write a read cursor.
+ await page.locator('.sessions-check-cell').first().focus();await page.keyboard.press('Space');
+ assert.equal(await page.evaluate(()=>fixture.opens.length),0);assert.equal(await page.evaluate(()=>fixture.writes.length),0);
+ await page.locator('[data-sessions-footer-checkall]').click();
+ await page.locator('#sessions-trash-btn').click();await page.waitForTimeout(500);
+ assert.equal(await page.evaluate(()=>fixture.writes.length),0);
+ await page.locator('#sessions-trash-btn').click();await page.waitForTimeout(300);
+ assert.equal(await page.locator('.sessions-check-cell.checked').count(),1);
+ const receipt=await page.evaluate(()=>fixture.writes.find(w=>w.id==='b').body.client_request_id);
+ await page.evaluate(()=>fixture.setFailB(false));await page.locator('#sessions-trash-btn').click();await page.waitForTimeout(500);await page.locator('#sessions-trash-btn').click();await page.waitForTimeout(300);
+ const retries=await page.evaluate(()=>fixture.writes.filter(w=>w.id==='b'&&w.method==='DELETE'));assert.equal(retries.length,2);assert.equal(retries[1].body.client_request_id,receipt);
+ // Restore the retained undo context and exercise recycled view.
+ await page.locator('#sessions-undo-btn').click();await page.waitForTimeout(500);await page.locator('#sessions-undo-btn').click();await page.waitForTimeout(300);
+ await page.locator('[data-sessions-footer-view="recycle-bin"]').click();await page.waitForTimeout(300);
+ await page.locator('[data-session-row-more]').first().click();assert.equal(await page.locator('[data-action="delete"]').isDisabled(),true);
+ await page.keyboard.press('Escape');
+ await page.locator('[data-sessions-footer-view="both"]').click();await page.waitForTimeout(300);
+ await page.locator('#sessions-search-input').fill('needle');await page.waitForTimeout(500);
+ assert.equal(await page.locator('.session-row-title-label').first().innerText(),'Beta');
+ assert.equal(await page.evaluate(()=>fixture.calls.some(p=>p.includes('/api/v1'))),false);
+ await page.setViewportSize({width:390,height:780});await page.waitForTimeout(100);
+ assert.equal(await page.locator('#sessions-table-wrap').evaluate(n=>n.scrollWidth<=n.clientWidth+2),true);
+ await page.evaluate(()=>document.body.classList.add('light-mode'));
+ await page.locator('#sessions-search-input').fill('');await page.waitForTimeout(250);
+ await page.evaluate(()=>fixture.controller.destroy());const before=await page.evaluate(()=>fixture.calls.length);await page.evaluate(()=>window.dispatchEvent(new Event('v3:sessions-changed')));await page.waitForTimeout(100);assert.equal(await page.evaluate(()=>fixture.calls.length),before);
+ assert.deepEqual(errors,[]);
+ console.log('PASS reference renderer: zero statistics, selection, confirmation, partial batch, stable retry receipt, restore, disabled permanent deletion, server search, narrow layout, teardown');
+}finally{await browser?.close();server.close();}

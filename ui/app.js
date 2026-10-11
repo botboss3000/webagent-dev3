@@ -21,9 +21,12 @@ import { renderIdentity } from './main-panel/agents/pages/identity/page.js';
 import { renderAbilities } from './main-panel/agents/pages/abilities/page.js';
 import { loadAgentPages, renderAgentDirectory } from './main-panel/agents/pages/catalog.js';
 import { mountSelectionTable } from './main-panel/agents/pages/model-table.js';
+import { mountCommonSessions } from './main-panel/agents/sessions/page.js';
 import { mountAvailableModels } from './main-panel/account/available-models.js';
 let availableModelsDispose;
 let selectionTable;
+let commonSessions=null,commonGeneration=0;
+let allAgentsScope=new URL(location.href).searchParams.get('agentScope')==='all';
 let agentPages=[];
 const $=id=>document.getElementById(id);
 let agentId=new URL(location.href).searchParams.get('agent')||'shared_default';
@@ -78,6 +81,10 @@ async function mountAgents(){
   detailRow.append(detail,panel);
   region.append(detailRow);
   grid.append(region);
+  const common=document.createElement('div');common.id='all-agents-region';common.className='open';common.hidden=true;
+  common.innerHTML='<div class="agent-row expanded agent-row-all-agents"><div class="agent-card active agent-card-tabs-only"><div class="agent-card-tabs-wrap"><div class="agent-card-tabs" role="tablist" aria-label="All Agents pages"><button id="all-agents-sessions-tab" type="button" role="tab" class="active" aria-selected="true" aria-controls="sessions-section">Sessions</button></div></div></div><div class="agent-detail-panel"><div class="agent-detail-content"><section id="sessions-section" role="tabpanel" aria-labelledby="all-agents-sessions-tab"></section></div></div></div>';
+  grid.append(common);
+  const css=document.createElement('link');css.rel='stylesheet';css.href='/v3-ui/main-panel/agents/sessions/sessions.css';document.head.append(css);
   $('agents-grid').replaceWith(grid);
   const route=new URL(location.href);
   if(activeMainPage==='agents'){
@@ -91,20 +98,24 @@ async function mountAgents(){
 function renderAgentCards(){
   const squares=document.querySelector('#agents-grid .agents-squares');
   squares.replaceChildren();
+  const common=document.createElement('div');common.className='agent-row';
+  common.innerHTML='<button type="button" class="agent-card agent-square" aria-label="All Agents"><div class="agent-card-top"><div class="agent-card-icon-wrap color-purple">'+ '<i data-lucide="layers"></i>'+'</div><div class="agent-card-meta"><div class="agent-card-name-row"><span class="agent-card-name">All Agents</span></div></div></div></button>';
+  common.firstElementChild.classList.toggle('activated',allAgentsScope);common.firstElementChild.setAttribute('aria-pressed',String(allAgentsScope));
+  common.firstElementChild.onclick=guard(()=>showAllAgents());squares.append(common);
   for(const agent of agentRoster){
     const row=document.createElement('div');row.className='agent-row';row.dataset.agentId=agent.id;
     row.innerHTML='<div class="agent-card agent-square activated"><div class="agent-card-top"><div class="agent-card-icon-wrap color-purple"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="12" cy="12" r="3"/></svg></div><div class="agent-card-meta"><div class="agent-card-name-row"><span class="agent-card-name">WebAgent</span><span class="agent-status-dot"></span></div></div></div></div>';
     const card=row.firstElementChild;
-    card.classList.toggle('activated',agent.id===agentId);
+    card.classList.toggle('activated',!allAgentsScope&&agent.id===agentId);
     card.setAttribute('role','button');card.tabIndex=0;
     card.setAttribute('aria-label','Configure '+(agent.name||agent.id));
-    card.setAttribute('aria-pressed',String(agent.id===agentId));
+    card.setAttribute('aria-pressed',String(!allAgentsScope&&agent.id===agentId));
     card.querySelector('.agent-card-name').textContent=agent.name||agent.id;
     card.querySelector('.agent-status-dot')?.remove();
     if(agent.description)card.title=agent.description;
     const select=()=>{
-      if(agent.id===agentId){$('agents-detail-region').scrollIntoView({block:'start',behavior:'smooth'});return;}
-      const route=new URL(location.href);route.searchParams.set('tab','agents');route.searchParams.set('agent',agent.id);
+      if(!allAgentsScope&&agent.id===agentId){$('agents-detail-region').scrollIntoView({block:'start',behavior:'smooth'});return;}
+      const route=new URL(location.href);route.searchParams.set('tab','agents');route.searchParams.set('agent',agent.id);route.searchParams.delete('agentScope');if(route.searchParams.get('agentView')==='sessions')route.searchParams.set('agentView','config');
       // Remount all agent-scoped handlers while preserving the conversation route.
       location.assign(route.href);
     };
@@ -195,8 +206,23 @@ const guard=fn=>async event=>{event?.preventDefault();try{await fn(event);note('
 const chat = await mountChatPanel({request:api, guard, note, clearNoticeFrom, keyId, forgetKey:key=>ids.delete(key), refresh, getState:()=>state, getAgentId:()=>agentId, getIdentity:()=>accountMe});
 await loadMainPages();
 
+function disposeCommonSessions(){++commonGeneration;commonSessions?.destroy();commonSessions=null;}
+async function showAllAgents(routeMode='push'){
+  if(activeMainPage!=='agents')return;
+  allAgentsScope=true;$('agents-detail-region').hidden=true;$('all-agents-region').hidden=false;renderAgentCards();
+  const route=new URL(location.href);route.searchParams.set('tab','agents');route.searchParams.set('agentScope','all');route.searchParams.set('agentView','sessions');
+  if(route.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',route);
+  if(commonSessions||activeMainPage!=='agents')return;
+  const generation=++commonGeneration;
+  const mounted=await mountCommonSessions($('sessions-section'),{request:api,userId:accountMe?.user_id||accountMe?.user,roster:agentRoster,getSessionId:()=>chat.sessionId,isCurrent:()=>generation===commonGeneration&&allAgentsScope&&activeMainPage==='agents',
+    open:async id=>{await chat.open(id);if(mobileLayout.matches)showMobileView('chat');},
+    changed:()=>{window.dispatchEvent(new Event('v3:sessions-changed'));void chat.sessions().catch(error=>note(error.message));}});
+  if(generation===commonGeneration)commonSessions=mounted;else mounted?.destroy();
+}
 // Agent pages resolve tenant authority independently; members see effective read-only abilities.
 async function showAgentView(view,routeMode='push'){
+  if(allAgentsScope){await showAllAgents(routeMode);return;}
+  disposeCommonSessions();$('all-agents-region').hidden=true;
   const pages=[{id:'config',panelId:'config-page'},...agentPages];
   const selected=accountMe&&!accountMe.is_admin&&!['model','abilities','identity'].includes(view)?'model':pages.some(page=>page.id===view)?view:'config';
   for(const page of pages){
@@ -238,7 +264,7 @@ async function loadAgentTabs(){
   agentTabsReady=true;
 }
 function syncAgentTabs(){
-  const strip=document.querySelector('#agents-grid .agent-card-tabs');
+  const strip=document.querySelector('#agents-detail-region .agent-card-tabs');
   for(const id of agentTabOrder)strip.append($('agent-tab-'+id));
   for(const page of [{id:'config'},...agentPages])$('agent-tab-'+page.id).hidden=!agentTabOrder.includes(page.id);
   renderAgentDirectory($('config-page'),agentPages,view=>guard(()=>showAgentView(view))(),agentTabOrder,id=>{
@@ -266,10 +292,10 @@ function saveAgentTabs(){
 }
 
 syncAgentTabs();
-wirePageTabDrag(document.querySelector('#agents-grid .agent-card-tabs'), { getOrder: () => agentTabOrder, save: saveAgentTabs, prefix: 'agent-tab-' });
+wirePageTabDrag(document.querySelector('#agents-detail-region .agent-card-tabs'), { getOrder: () => agentTabOrder, save: saveAgentTabs, prefix: 'agent-tab-' });
 async function loadGuestPolicy(){try{const policy=await api('/auth/access-mode');$('guest-login').hidden=!policy.guest_access;document.querySelector('.private-access-approval').hidden=!!policy.guest_access;}catch{$('guest-login').hidden=true;}}
 $('guest-login').onclick=async()=>{const btn=$('guest-login');btn.disabled=true;try{const result=await api('/auth/guest-login','POST',{});csrf=result.csrf_token;await boot();}catch(error){$('registration-status').textContent=error.message;}finally{btn.disabled=false;}};
-function out(){widget?.hide();agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
+function out(){disposeCommonSessions();widget?.hide();agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
 async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;$('shutoff').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}if(!$('rules').children.length)for(const [tool,rule]of Object.entries(state.policy?.rules||{})){const label=document.createElement('label');label.textContent=tool;const select=document.createElement('select');select.name=tool;for(const value of ['allow','deny','require_approval']){const option=document.createElement('option');option.value=value;option.textContent=value.replaceAll('_',' ');select.append(option);}select.value=rule;label.append(select);$('rules').append(label);}chat.runs(state.runs||[]);}
 // Explicit role administration replaces the legacy default-model form for every agent.
 async function boot(){
@@ -285,7 +311,7 @@ async function boot(){
   await agentTabsQueue;
   await loadAgentTabs();
   await loadAgentRoster();
-  if(!agentRoster.length){$('agents-detail-region').hidden=true;window.__boot?.appReady();return;}
+  if(!agentRoster.length){$('agents-detail-region').hidden=true;if(allAgentsScope)await showAllAgents('replace');window.__boot?.appReady();return;}
   $('agents-detail-region').hidden=false;
   await refresh();
   selectionTable?.destroy();
@@ -409,6 +435,7 @@ function showMainPage(id,routeMode='push'){
   closeMobileNav();
   activeMainPage=id;
   updateMainPageState();
+  if(id!=='agents')disposeCommonSessions();else if(allAgentsScope&&accountMe)void showAllAgents('replace').catch(error=>note(error.message));
   if(id==='account')loadAccountControls();
   const route=new URL(location.href);
   route.searchParams.set('tab',id);

@@ -200,6 +200,34 @@ impl Store {
         Ok(summaries)
     }
 
+    /// Table-only statistics from this user's public chat and recorded usage.
+    /// Pagination bounds payloads; authority is rechecked by the browser handler.
+    pub async fn session_statistics_page(&self, recycled: bool, offset: usize, limit: usize) -> Result<(Vec<Value>, Option<usize>)> {
+        let summaries = self.ordered_sessions_status(recycled).await?;
+        let end = offset.saturating_add(limit).min(summaries.len());
+        let next = (end < summaries.len()).then_some(end);
+        let mut tx = self.pool.begin().await?;
+        let mut page = Vec::new();
+        for mut summary in summaries.into_iter().skip(offset).take(limit) {
+            let sid = summary["id"].as_str().ok_or_else(|| anyhow!("Invalid session ID"))?;
+            let (count, last_seq): (i64, i64) = sqlx::query_as(
+                "SELECT COUNT(*),COALESCE(MAX(seq),0) FROM chat WHERE session_id=? AND role IN ('user','assistant')")
+                .bind(sid).fetch_one(&mut *tx).await?;
+            let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+                .bind(format!("session_usage:{sid}")).fetch_optional(&mut *tx).await?;
+            let usage = match raw { Some(raw) => crate::usage::public(&self.unseal(&raw)?), None => Value::Null };
+            let status: Option<String> = sqlx::query_scalar("SELECT status FROM run_index WHERE session_id=? ORDER BY updated_at DESC,id DESC LIMIT 1")
+                .bind(sid).fetch_optional(&mut *tx).await?;
+            summary["message_count"] = json!(count);
+            summary["last_public_seq"] = json!(last_seq);
+            summary["usage"] = usage;
+            summary["run_status"] = json!(status);
+            page.push(summary);
+        }
+        tx.commit().await?;
+        Ok((page, next))
+    }
+
     /// Reserve SQLite's writer before reading. Session, event and encrypted retry
     /// receipt commit together; the request key is scoped to this user and session.
     pub async fn patch_session(&self, sid: &str, patch: &SessionPatch) -> Result<SessionPatchOutcome> {
@@ -435,6 +463,30 @@ mod tests {
 
     fn lifecycle(request: &str, revision: u64) -> SessionLifecycle {
         SessionLifecycle { client_request_id: request.into(), expected_revision: revision }
+    }
+
+    #[tokio::test]
+    async fn session_statistics_are_bounded_private_and_preserve_unknown_usage() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store.put("session:a", &json!({"id":"a","title":"First","checkpoint_input":["private"]})).await.unwrap();
+        store.put("session:b", &json!({"id":"b","title":"Second"})).await.unwrap();
+        store.put("session_usage:a", &json!({"input_tokens":7,"output_tokens":3,"reported_calls":1,"unreported_calls":1,"known_cost_usd":0.0,"unknown_cost_calls":1,"private":"secret"})).await.unwrap();
+        let mut tx = store.pool.begin().await.unwrap();
+        store.insert_chat(&mut tx,"a","r","assistant", &json!("secret content")).await.unwrap();
+        tx.commit().await.unwrap();
+        let (first, next) = store.session_statistics_page(false,0,1).await.unwrap();
+        assert_eq!(first.len(),1); assert_eq!(next,Some(1));
+        assert_eq!(first[0]["id"],"a"); assert_eq!(first[0]["message_count"],1);
+        assert!(first[0]["last_public_seq"].as_u64().unwrap()>0);
+        assert_eq!(first[0]["usage"]["input_tokens"],7);
+        assert_eq!(first[0]["usage"]["unknown_cost_calls"],1);
+        assert!(!serde_json::to_string(&first).unwrap().contains("secret"));
+        assert!(first[0].get("checkpoint_input").is_none());
+        let (second, next) = store.session_statistics_page(false,1,1).await.unwrap();
+        assert_eq!(next,None); assert!(second[0]["usage"].is_null());
+        assert_eq!(second[0]["message_count"],0);
+        assert!(store.session_statistics_page(true,0,100).await.unwrap().0.is_empty());
     }
 
     #[tokio::test]
