@@ -42,6 +42,31 @@ class GitTests(unittest.IsolatedAsyncioTestCase):
   pushed=subprocess.run(["git","--git-dir",str(self.remote),"rev-parse","main"],capture_output=True,check=True).stdout.decode().strip()
   self.assertEqual(pushed,self.run_git("rev-parse","HEAD"))
 
+ async def test_file_manager_commit_more_than_64_paths(self):
+  fm_spec=importlib.util.spec_from_file_location("file_manager",FILE.with_name("file_manager.py"))
+  fm=importlib.util.module_from_spec(fm_spec);fm_spec.loader.exec_module(fm)
+  names=[f"change-{i:03}.txt" for i in range(100)]
+  for name in names:(self.repo/name).write_text("ordinary source change\n")
+  view=await fm._git_status(git,self.repo,"__root__")
+  with self.assertRaisesRegex(git.Rejected,"1 to 64"):
+   git.paths(self.repo,names)
+  original_head=self.run_git("rev-parse","HEAD")
+  result=await fm._git_commit(git,self.repo,{"repo":"__root__","paths":names,"message":"large regular file commit","expected_head":view["head"],"expected_review_sha256":view["review_sha256"]})
+  self.assertEqual(result["status"],"committed")
+  self.assertEqual(set(self.run_git("diff-tree","--no-commit-id","--name-only","-r","HEAD").splitlines()),set(names))
+  self.assertEqual(self.run_git("rev-parse","HEAD^"),original_head)
+  self.assertEqual(self.run_git("status","--porcelain"),"")
+
+ async def test_file_manager_commit_path_validation(self):
+  fm_spec=importlib.util.spec_from_file_location("file_manager",FILE.with_name("file_manager.py"))
+  fm=importlib.util.module_from_spec(fm_spec);fm_spec.loader.exec_module(fm)
+  for names in ([],["file.txt"]*2,[None],[f"file-{i}.txt" for i in range(fm.MAX_ENTRIES+1)],["../escape"]):
+   with self.subTest(paths=names[:3]):
+    with self.assertRaises((git.Rejected,fm.Rejected)):
+     await fm._git_commit(git,self.repo,{"paths":names})
+  with self.assertRaises(git.Rejected):
+   git.paths(self.repo,["file.txt"]*65,max_paths=fm.MAX_ENTRIES)
+
  async def test_large_outgoing_history_push_and_streamed_secret_guard(self):
   (self.repo/"large.txt").write_text("ordinary source line\n"*12000)
   self.run_git("add","large.txt");self.run_git("commit","-qm","large source")

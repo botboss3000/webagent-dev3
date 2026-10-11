@@ -711,7 +711,8 @@ async def _git_branches(adapter, repo):
 async def _git_commit(adapter, repo, args):
     expected_head = args.get("expected_head")
     expected_review = args.get("expected_review_sha256")
-    paths = adapter.paths(repo, args.get("paths"))
+    # The admin page commits a reviewed change set; model tools retain their 64-path bound.
+    paths = adapter.paths(repo, args.get("paths"), max_paths=MAX_ENTRIES)
     message = args.get("message")
     if not isinstance(message, str) or not message.strip() or len(message.encode()) > 2000:
         raise Rejected("Commit message required")

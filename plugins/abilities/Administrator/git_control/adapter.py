@@ -251,8 +251,8 @@ async def network(base,repo,remote,operation):
  if local and operation=="push":
   await command(repo,["update-ref","refs/remotes/"+ref(remote)+"/"+branch,await head(repo)],mutable=True)
  return output
-def paths(repo,values):
- if not isinstance(values,list) or not values or len(values)>64 or any(not isinstance(v,str) for v in values) or len(set(values))!=len(values):raise Rejected("Specify 1 to 64 unique exact paths")
+def paths(repo,values,max_paths=64):
+ if not isinstance(values,list) or not values or len(values)>max_paths or any(not isinstance(v,str) for v in values) or len(set(values))!=len(values):raise Rejected(f"Specify 1 to {max_paths} unique exact paths")
  for v in values:path(repo,v,True)
  return values
 async def fence(repo,expected):
