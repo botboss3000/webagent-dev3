@@ -8,3 +8,31 @@ body>.wa-chat-window,body>.wa-chat-launcher{z-index:10000}
 
 #chat-float-btn{font:inherit;font-size:14px;border:0;background:transparent;color:inherit;padding:0 8px;cursor:pointer}
 :host([data-theme=light]){--fg-1:#222;--bg-1:#fff;--bg-elev:#f5f5f5;--border:#ccc}
+
+/* Port of V2 CHAT-LAUNCHER-SYNC: theme contrast, nebula glow and corner geometry. */
+@keyframes wa-launcher-glow{0%,100%{filter:saturate(1)}50%{filter:saturate(1.22) brightness(1.05)}}
+@keyframes wa-bot-blink{0%,80%,100%{transform:scaleY(1)}50%{transform:scaleY(.08)}}
+.wa-chat-launcher{right:22px;bottom:22px;padding:0;border:0;background:transparent;box-shadow:none;border-radius:0;overflow:visible}
+.wa-chat-launcher>.wa-launcher-main{position:relative;width:58px;height:58px;min-width:58px;min-height:58px;padding:0;border-radius:50%;border:1px solid var(--border-strong,var(--border,#555));color:var(--bg-0,#101114);background:var(--fg-1,#e8e8ec);box-shadow:0 0 18px color-mix(in srgb,var(--launcher-accent) 72%,transparent),0 0 48px rgba(var(--purple-rgb,168,85,247),.36),0 8px 28px rgba(var(--shadow-rgb,0,0,0),.32);cursor:grab;touch-action:none;user-select:none;animation:wa-launcher-glow 4s ease-in-out infinite;transition:transform .15s ease,box-shadow .15s ease}
+.wa-chat-launcher>.wa-launcher-main:hover{background:var(--fg-1,#e8e8ec);transform:scale(1.06);box-shadow:0 0 24px color-mix(in srgb,var(--launcher-accent) 86%,transparent),0 0 62px rgba(var(--purple-rgb,168,85,247),.46),0 10px 32px rgba(var(--shadow-rgb,0,0,0),.36)}
+.wa-chat-launcher[data-shape=rounded-square]>.wa-launcher-main{border-radius:14px}
+.wa-chat-launcher[data-shape=pill]>.wa-launcher-main,.wa-chat-launcher[data-state=minimized]>.wa-launcher-main{width:auto;border-radius:999px;padding:0 14px}
+.wa-launcher-main>svg{pointer-events:none;transform:translate(var(--launcher-icon-x,0),var(--launcher-icon-y,0));transition:transform .12s ease-out}
+.wa-chat-launcher.dragging>.wa-launcher-main{cursor:grabbing;transform:scale(1.08);animation:none}
+.wla-antenna,.wla-eye-blink{transform-box:fill-box}
+.wla-eye-blink.blinking{animation:wa-bot-blink .2s ease}
+.wa-chat-launcher form{background:var(--bg-elev,#24262e);border:1px solid var(--border,#555);border-radius:999px;padding:4px;color:var(--fg-1,#e8e8ec)}
+.wa-launcher-corners{position:absolute;inset:0;pointer-events:none}
+.wa-launcher-corners[hidden]{display:none!important}
+.wa-chat-launcher .wa-launcher-corner{position:absolute;width:22px;height:22px;min-width:0;min-height:0;padding:0;border-radius:50%;border:1px solid var(--border-strong,var(--border,#555));background:var(--bg-elev,#24262e);color:var(--fg-2,var(--fg-1,#e8e8ec));display:inline-flex;align-items:center;justify-content:center;pointer-events:auto;box-shadow:0 2px 6px rgba(var(--shadow-rgb,0,0,0),.25);transition:transform .12s ease,color .12s ease,background .12s ease}
+.wa-launcher-corner.tl{top:-11px;left:-11px}.wa-launcher-corner.tr{top:-11px;right:-11px}.wa-launcher-corner.bl{bottom:-11px;left:-11px}.wa-launcher-corner.br{bottom:-11px;right:-11px}
+.wa-launcher-corner svg{width:12px;height:12px;pointer-events:none}
+.wa-chat-launcher .wa-launcher-corner:hover{transform:scale(1.15);background:var(--bg-tint,#8882)}
+.wa-chat-launcher .wa-launcher-corner.active{color:var(--launcher-accent);border-color:var(--launcher-accent);box-shadow:0 0 10px color-mix(in srgb,var(--launcher-accent) 50%,transparent)}
+.wa-pickup-dot{position:absolute;top:-4px;left:50%;transform:translateX(-50%);width:8px;height:8px;border-radius:50%;background:var(--launcher-accent);border:2px solid var(--bg-0,#101114);opacity:0;pointer-events:none}.wa-pickup-dot.active{opacity:1}
+body.light-mode .wa-launcher-main,:host([data-theme=light]) .wa-launcher-main{color:var(--bg-0,#fff)}
+.wa-chat-launcher-error{background:var(--bg-elev,#24262e);border-radius:8px;padding:4px}
+@media(pointer:coarse){.wa-chat-launcher .wa-launcher-corner{width:28px;height:28px}.wa-launcher-corner.tl{top:-14px;left:-14px}.wa-launcher-corner.tr{top:-14px;right:-14px}.wa-launcher-corner.bl{bottom:-14px;left:-14px}.wa-launcher-corner.br{bottom:-14px;right:-14px}}
+@media(prefers-reduced-motion:reduce){.wa-chat-launcher>.wa-launcher-main,.wla-eye-blink.blinking{animation:none}.wa-chat-launcher>.wa-launcher-main,.wa-launcher-main>svg,.wa-launcher-corner,.wla-antenna{transition:none!important}.wa-chat-launcher>.wa-launcher-main:hover,.wa-chat-launcher .wa-launcher-corner:hover{transform:none}}
+
+.wa-chat-launcher[data-shape=circle]>.wa-launcher-main{overflow:visible}

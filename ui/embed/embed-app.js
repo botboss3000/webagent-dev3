@@ -50,8 +50,10 @@ async function action(command,args){
  if(command==='visibility'){if(typeof args.visible!=='boolean')throw Error('Visibility must be boolean');root.dataset.embedVisible=String(args.visible);document.dispatchEvent(new Event('v3:chat-visibility'));return {visible:args.visible}}
  if(command==='setDraft'){chat.setDraft(args.text);return {updated:true}}
  if(command==='send'){chat.setDraft(args.text);try{await ensureAuthenticated();return await chat.send(args.text)}catch(error){note(error.message);throw error}}
+ if(command==='setElementContext'){chat.setElementContext(args.text);return {updated:true};}
  await ensureAuthenticated();
  if(command==='selectSession'){if(typeof args.sessionId!=='string')throw Error('Session ID required');await request('/sessions/'+encodeURIComponent(args.sessionId));await chat.open(args.sessionId);return {session_id:chat.sessionId}}
+ if(command==='showSessions'){await chat.showSessions();return {shown:true};}
  if(command==='newSession')return chat.newSession();
  if(command==='stop'){await chat.stop(args.runId);return {stopped:true}}
  if(command==='continue')return chat.continue();

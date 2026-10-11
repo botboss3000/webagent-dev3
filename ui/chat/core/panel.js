@@ -193,6 +193,7 @@ $('new').onclick=guard(async()=>{
     await open(item.id,'push','new_session',focusWatch);
   }finally{focusWatch.stop();}
 });
+let elementContext='';
 async function submit(text,clearInput=false){
   if(!text&&!media.count)throw Error('Enter a message');
   if(submitting||getState().shutoff||$('chat-send').disabled)throw Error('Chat is busy or execution is disabled');
@@ -201,7 +202,7 @@ async function submit(text,clearInput=false){
   try{
     const sid=await ensureSession();
     if((origin&&origin!==session)||(epoch!==sessionGeneration&&session!==sid))throw Error('Conversation changed; message was not sent.');
-    const ids=media.snapshot(sid),content=text;
+    const ids=media.snapshot(sid),content=text+(elementContext?'\n\n[Untrusted page context selected by user]\n'+elementContext:'');
     const requestKey='message:'+sid+':'+content+':'+ids.join(',');
     const sent=await client.send(sid,{text:content,attachment_ids:ids,client_message_id:keyId(requestKey)});
     if(sent.review_id&&sid===session){
@@ -221,7 +222,7 @@ $('chat-continue-btn').onclick=guard(()=>submit('Continue'));
 $('chat-input').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!$('chat-send').disabled)$('composer').requestSubmit();}};
 $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
 
-  function disconnect(){anchor.reset();progress.reset();notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
+  function disconnect(){elementContext='';anchor.reset();progress.reset();notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
   function destroy(){
     disconnect();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
@@ -235,6 +236,8 @@ $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
   function selectedRun(id){const run=activityRuns.find(r=>r.id===id);if(!run)throw Error('Run is not in the selected conversation');return run;}
   const panel = {open, sessions, runs, disconnect, destroy, newSession,
     get sessionId(){return session;},
+    showSessions(){$('session-dropdown-trigger').focus({preventScroll:true});return dropdown.open();},
+    setElementContext(text){if(typeof text!=='string'||text.length>2000)throw Error('Invalid page context');elementContext=text;},
     setDraft(text){if(typeof text!=='string')throw Error('Draft must be text');$('chat-input').value=text;applyChatConfig();},
     async send(text){if(typeof text!=='string')throw Error('Message must be text');this.setDraft(text);return submit(text.trim(),true);},
     continue:()=>submit('Continue'),

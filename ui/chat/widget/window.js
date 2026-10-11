@@ -47,9 +47,9 @@ export function createFloatingChat({panel,profile={},storageKey='webagent.widget
  if(e.shiftKey?profile.window?.resizable===false:profile.window?.movable===false)return;e.preventDefault();const [x,y]=keys[e.key];if(e.shiftKey){geometry.width+=x;geometry.height+=y}else{geometry.x+=x;geometry.y+=y}layout()});
  window.addEventListener('resize',layout);api.setProfile(profile);return api;
 }
-export function createChatLauncher({profile={},onOpen=()=>{},onSend=async()=>{},storageKey='webagent.widget.draft'}){
+export function createChatLauncher({profile={},onOpen=()=>{},onSend=async()=>{},onAction=async()=>{throw Error('Unknown launcher action')},onPickup=()=>{},storageKey='webagent.widget.draft'}){
  const element=document.createElement('div');element.className='wa-chat-launcher';
- const button=document.createElement('button');button.type='button';
+ const button=document.createElement('button');button.type='button';button.className='wa-launcher-main';
  const form=document.createElement('form');form.hidden=true;
  const input=document.createElement('input');input.type='text';input.setAttribute('aria-label','Chat message');
  const send=document.createElement('button');send.type='submit';send.textContent='Send';
@@ -57,16 +57,68 @@ export function createChatLauncher({profile={},onOpen=()=>{},onSend=async()=>{},
  form.append(input,send);element.append(button,form,error);let state='closed',busy=false;
  try{input.value=localStorage.getItem(storageKey)||''}catch{}
  input.addEventListener('input',()=>{try{localStorage.setItem(storageKey,input.value)}catch{}});
- button.addEventListener('click',()=>{if(state!=='minimized'&&profile.launcher?.mode==='pill'){form.hidden=!form.hidden;if(!form.hidden)input.focus()}else onOpen()});
+ let features;
+ button.addEventListener('click',e=>{if(!features.beforeOpen(e))return;if(state!=='minimized'&&profile.launcher?.mode==='pill'){form.hidden=!form.hidden;if(!form.hidden)input.focus()}else onOpen()});
  form.addEventListener('submit',async e=>{e.preventDefault();if(busy||!input.value.trim())return;busy=true;send.disabled=true;error.textContent='';
  try{await onSend(input.value);input.value='';try{localStorage.removeItem(storageKey)}catch{};onOpen()}catch(e){error.textContent=e.message||'Unable to send. Please try again.'}finally{busy=false;send.disabled=false}});
  const api={element,show(next='closed'){state=next;element.dataset.state=state;element.hidden=false;button.replaceChildren();
  if(state==='minimized')button.textContent='Restore chat';else{
-  const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');icon.setAttribute('viewBox','0 0 24 24');icon.setAttribute('width','24');icon.setAttribute('height','24');icon.setAttribute('fill','none');icon.setAttribute('stroke','currentColor');icon.setAttribute('stroke-width','2');icon.setAttribute('aria-hidden','true');
-  icon.innerHTML=profile.launcher?.icon==='message-circle'?'<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7A8.5 8.5 0 1 1 21 11.5Z"/>':'<rect x="3" y="7" width="18" height="14" rx="3"/><path d="M12 7V3M8 12h.01M16 12h.01M8 17h8"/>';button.append(icon);
+  const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');icon.setAttribute('viewBox','0 0 24 24');icon.setAttribute('width','27');icon.setAttribute('height','27');icon.setAttribute('fill','none');icon.setAttribute('stroke','currentColor');icon.setAttribute('stroke-width','2');icon.setAttribute('aria-hidden','true');
+  icon.innerHTML=profile.launcher?.icon==='message-circle'?'<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7A8.5 8.5 0 1 1 21 11.5Z"/>':'<g class="wla-antenna" style="transform-origin:12px 8px"><path d="M12 8V4H8"/></g><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2"/><g class="wla-eye-blink" style="transform-origin:9px 14px"><path d="M9 13v2"/></g><g class="wla-eye-blink" style="transform-origin:15px 14px"><path d="M15 13v2"/></g>';icon.classList.add('wla-bot-svg');button.append(icon);
   if(profile.launcher?.mode==='pill'||profile.launcher?.shape==='pill'){const label=document.createElement('span');label.textContent=profile.launcher?.label||'Chat';button.append(label);}
- }button.setAttribute('aria-label',state==='minimized'?'Restore chat':profile.launcher?.aria_label||'Open chat');button.title=profile.launcher?.label||'Chat';},hide(){element.hidden=true},setProfile(next){profile=next||{};element.dataset.shape=profile.launcher?.shape||'circle';element.dataset.position=({left:'bottom-left',right:'bottom-right'})[profile.launcher?.position]||profile.launcher?.position||'bottom-right';element.style.background=profile.launcher?.accent||'';input.placeholder=profile.launcher?.placeholder||'Type a message';api.show(state)},destroy(){element.remove()}};
- api.setProfile(profile);return api;
+ }button.setAttribute('aria-label',state==='minimized'?'Restore chat':profile.launcher?.aria_label||'Open chat');button.title=profile.launcher?.label||'Chat';features?.decorate();},hide(){element.hidden=true;features.dismiss()},setProfile(next){profile=next||{};element.dataset.shape=profile.launcher?.shape||'circle';element.dataset.position=({left:'bottom-left',right:'bottom-right'})[profile.launcher?.position]||profile.launcher?.position||'bottom-right';element.style.setProperty('--launcher-accent',profile.launcher?.accent||'var(--brand,#a78bfa)');features?.rebuild(profile);input.placeholder=profile.launcher?.placeholder||'Type a message';api.show(state)},destroy(){features.destroy();element.remove()}};
+ features=wireLauncherFeatures({element,button,profile,onAction,onPickup,error,storageKey});api.setProfile(profile);return api;
+}
+
+// V2 launcher interaction port. Page samples remain ordinary untrusted message context.
+function wireLauncherFeatures({element,button,profile,onAction,onPickup,error,storageKey}){
+ const menu=document.createElement('div');menu.className='wa-launcher-corners';menu.hidden=true;element.append(menu);
+ const dot=document.createElement('span');dot.className='wa-pickup-dot';button.append(dot);
+ let config=profile,showTimer,hideTimer,drag=null,dragged=false,lastPointerTouch=false,touchFocus=false,pickup=false,lastSample=0,disposed=false,animation,position;
+ const motion=matchMedia('(prefers-reduced-motion: reduce)');
+ const icons={list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',plus:'<path d="M12 5v14M5 12h14"/>',crosshair:'<circle cx="12" cy="12" r="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>','maximize-2':'<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',x:'<path d="m6 6 12 12M18 6 6 18"/>'};
+ const clear=()=>{clearTimeout(showTimer);clearTimeout(hideTimer);showTimer=hideTimer=null};
+ function reveal(){clear();if(menu.children.length&&!element.hidden)menu.hidden=false}
+ function dismiss(){clear();menu.hidden=true}
+ const show=()=>{clearTimeout(hideTimer);if(!showTimer)showTimer=setTimeout(()=>{showTimer=null;reveal()},Math.max(0,Number(config.launcher?.corner_buttons?.hover_delay_ms)||200))};
+ function place(x,y){const r=element.getBoundingClientRect(),edge=18;position={x:Math.max(edge,Math.min(innerWidth-r.width-edge,x)),y:Math.max(edge,Math.min(innerHeight-r.height-edge,y))};Object.assign(element.style,{left:position.x+'px',top:position.y+'px',right:'auto',bottom:'auto'})}
+ function sample(){
+  if(!pickup)return;
+  if(Date.now()-lastSample<150)return;lastSample=Date.now();
+  const r=button.getBoundingClientRect(),target=document.elementFromPoint(r.left+r.width/2,r.top-6);
+  if(!target||element.contains(target)||target.closest('input,textarea,select,[contenteditable],[data-private],[data-sensitive]'))return;
+  const text=(target.innerText||target.textContent||'').trim().slice(0,1500);
+  const value=JSON.stringify({source:'Untrusted page element selected by user',tag:target.tagName.toLowerCase(),id:target.id||'',text});
+  Promise.resolve(onPickup(value)).catch(e=>{error.textContent=e.message});
+ }
+ function toggle(btn){pickup=!pickup;btn.classList.toggle('active',pickup);btn.setAttribute('aria-pressed',String(pickup));dot.classList.toggle('active',pickup);if(pickup)sample();else Promise.resolve(onPickup('')).catch(e=>{error.textContent=e.message})}
+ function rebuild(next){
+  config=next;menu.replaceChildren();dismiss();
+  const cfg=config.launcher?.corner_buttons;if(pickup&&(!cfg||cfg.enabled===false||!Object.values(cfg).some(c=>c?.type==='element_pickup'&&c.enabled!==false))){pickup=false;dot.classList.remove('active');Promise.resolve(onPickup('')).catch(e=>{error.textContent=e.message})}if(!cfg||cfg.enabled===false)return;
+  for(const [key,cls] of Object.entries({top_left:'tl',top_right:'tr',bottom_left:'bl',bottom_right:'br'})){
+   const c=cfg[key];if(!c||c.enabled===false)continue;
+   const b=document.createElement('button');b.type='button';b.className='wa-launcher-corner '+cls;b.title=c.tooltip||c.type;b.setAttribute('aria-label',b.title);b.dataset.cornerType=c.type;
+   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','2');svg.setAttribute('aria-hidden','true');svg.innerHTML=icons[c.icon]||icons[c.type==='new_session'?'plus':'list'];b.append(svg);
+   if(c.type==='element_pickup'){b.setAttribute('aria-pressed',String(pickup));b.classList.toggle('active',pickup)}
+   b.onclick=async e=>{e.stopPropagation();error.textContent='';if(c.type==='element_pickup'){toggle(b);return}b.disabled=true;try{await onAction(c.type);dismiss()}catch(e){error.textContent=e.message}finally{b.disabled=false}};menu.append(b);
+  }
+ }
+ element.addEventListener('pointerenter',show);element.addEventListener('pointerleave',()=>{clearTimeout(showTimer);showTimer=null;hideTimer=setTimeout(dismiss,300)});
+ element.addEventListener('focusin',()=>{if(!touchFocus)reveal()});element.addEventListener('focusout',e=>{if(!element.contains(e.relatedTarget))dismiss()});
+ const outside=e=>{if(!e.composedPath().includes(element))dismiss()};document.addEventListener('pointerdown',outside);
+ element.addEventListener('keydown',e=>{if(e.key==='Escape')dismiss()});
+ button.addEventListener('pointerdown',e=>{touchFocus=lastPointerTouch=e.pointerType==='touch';if(e.button!==0||config.launcher?.draggable===false)return;const r=element.getBoundingClientRect();lastPointerTouch=e.pointerType==='touch';drag={x:e.clientX,y:e.clientY,left:r.left,top:r.top,moved:false,touch:lastPointerTouch};button.setPointerCapture(e.pointerId)});
+ button.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(!drag.moved&&Math.hypot(dx,dy)<5)return;drag.moved=true;dismiss();element.classList.add('dragging');place(drag.left+dx,drag.top+dy);sample()});
+ const finish=e=>{touchFocus=false;if(!drag)return;dragged=drag.moved;drag=null;element.classList.remove('dragging');try{button.releasePointerCapture(e.pointerId)}catch{};if(dragged){try{localStorage.setItem(storageKey+'.position',JSON.stringify(position))}catch{}}};
+ button.addEventListener('pointerup',finish);button.addEventListener('pointercancel',finish);
+ const resize=()=>{if(position)place(position.x,position.y)};window.addEventListener('resize',resize);
+ try{const saved=JSON.parse(localStorage.getItem(storageKey+'.position')||'null');if(Number.isFinite(saved?.x)&&Number.isFinite(saved?.y))requestAnimationFrame(()=>{if(!disposed)place(saved.x,saved.y)})}catch{}
+ // Keep the exact Lucide bot geometry and V2 animation wrappers.
+ function animate(){if(disposed)return;const svg=button.querySelector('.wla-bot-svg');if(svg&&!motion.matches&&!element.hidden&&!drag){const eyes=svg.querySelectorAll('.wla-eye-blink');for(const e of eyes)e.classList.add('blinking');setTimeout(()=>{for(const e of eyes)e.classList.remove('blinking')},220);const antenna=svg.querySelector('.wla-antenna');if(antenna){antenna.style.transition='transform 650ms ease';antenna.style.transform='rotate(-14deg)';setTimeout(()=>{antenna.style.transform='rotate(0deg)'},650)}}animation=setTimeout(animate,3200)}
+ animation=setTimeout(animate,1500);
+ const magnet=e=>{if(motion.matches||drag)return;const r=button.getBoundingClientRect(),dx=e.clientX-r.left-r.width/2,dy=e.clientY-r.top-r.height/2,d=Math.hypot(dx,dy),s=d?3.5*Math.max(0,1-d/150)/d:0;button.style.setProperty('--launcher-icon-x',dx*s+'px');button.style.setProperty('--launcher-icon-y',dy*s+'px')};document.addEventListener('pointermove',magnet,{passive:true});
+ rebuild(profile);
+ return {rebuild,dismiss,beforeOpen(e){if(dragged){dragged=false;return false}if(e.detail!==0&&(e.pointerType==='touch'||lastPointerTouch)&&menu.hidden&&menu.children.length){reveal();return false}sample();return true},decorate(){button.append(dot)},destroy(){disposed=true;clear();clearTimeout(animation);document.removeEventListener('pointerdown',outside);document.removeEventListener('pointermove',magnet);window.removeEventListener('resize',resize)}};
 }
 
 export function mergeProfile(base,override){const result={...base};for(const [key,value] of Object.entries(override||{}))result[key]=value&&typeof value==='object'&&!Array.isArray(value)?mergeProfile(base?.[key]||{},value):value;return result;}

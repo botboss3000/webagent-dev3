@@ -38,3 +38,30 @@ test('lost popup notification recovers with one in-flight redemption',async()=>{
 test('cancelled popup stops polling after final failed redemption',async()=>{
  let tick,ended=0,count=0;const {watchAuthorization}=await moduleAt('../../embed/auth-handoff.js');watchAuthorization({redeem:async()=>{count++;throw Error('Not authorized')},connected:()=>assert.fail('Unexpected connection'),ended:()=>ended++,isClosed:()=>true,isExpired:()=>false,setIntervalFn:fn=>{tick=fn;return 1},clearIntervalFn(){}});tick();await new Promise(setImmediate);tick();assert.equal(count,1);assert.equal(ended,1);
 });
+
+test('launcher corner configuration dispatches scoped actions and pickup without opening chat',async()=>{
+ class Node{
+  constructor(tag){this.tagName=tag;this.children=[];this.dataset={};this.style={setProperty(){}};this.events={};this.attributes={};this.hidden=false;this.parentNode=null;this.classList={add(){},toggle(){},remove(){}};}
+  append(...nodes){for(const n of nodes){this.children.push(n);n.parentNode=this;}}
+  replaceChildren(...nodes){this.children=[];this.append(...nodes)}
+  setAttribute(k,v){this.attributes[k]=v}addEventListener(k,fn){this.events[k]=fn}removeEventListener(){}
+  getBoundingClientRect(){return {left:900,top:700,width:58,height:58}}
+  querySelector(){return null}contains(n){return this===n||this.children.some(c=>c.contains(n))}
+  focus(){}remove(){}setPointerCapture(){}releasePointerCapture(){}
+ }
+ const document={createElement:tag=>new Node(tag),createElementNS:(_,tag)=>new Node(tag),addEventListener(){},removeEventListener(){},elementFromPoint:()=>({tagName:'H2',id:'example',innerText:'Selected page heading',closest:()=>null})};
+ const window={addEventListener(){},removeEventListener(){}};
+ const calls=[],samples=[];let opened=0;
+ const {createChatLauncher}=await moduleAt('window.js',{document,window,innerWidth:1200,innerHeight:900,matchMedia:()=>({matches:true}),localStorage:{getItem:()=>null},setTimeout:()=>1,clearTimeout(){},requestAnimationFrame:()=>1});
+ const profile={launcher:{corner_buttons:{enabled:true,top_left:{type:'sessions',icon:'list',tooltip:'Show sessions'},top_right:{type:'new_session',icon:'plus'},bottom_left:{type:'element_pickup',icon:'crosshair'},bottom_right:{enabled:false,type:'open_all'}}}};
+ const launcher=createChatLauncher({profile,onAction:type=>calls.push(type),onPickup:value=>samples.push(value),onOpen:()=>opened++});
+ const main=launcher.element.children[0],menu=launcher.element.children.find(n=>n.className==='wa-launcher-corners');
+ assert.equal(menu.children.length,3);
+ await menu.children[0].onclick({stopPropagation(){}});await menu.children[1].onclick({stopPropagation(){}});
+ assert.deepEqual(calls,['sessions','new_session']);assert.equal(opened,0);
+ await menu.children[2].onclick({stopPropagation(){}});assert.equal(JSON.parse(samples[0]).text,'Selected page heading');
+ main.events.pointerdown({button:0,clientX:900,clientY:700,pointerId:1,pointerType:'touch'});launcher.element.events.focusin();assert.equal(menu.hidden,true);main.events.pointerup({pointerId:1});main.events.click({detail:1});assert.equal(opened,0);assert.equal(menu.hidden,false);
+ main.events.click({detail:1,pointerType:'touch'});assert.equal(opened,1);
+ launcher.setProfile({launcher:{corner_buttons:{enabled:false}}});assert.equal(menu.children.length,0);
+ launcher.destroy();
+});

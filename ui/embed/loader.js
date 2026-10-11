@@ -77,7 +77,7 @@
    onClose(){launcher.show('closed');command('visibility',{visible:false}).catch(()=>{});notify('close',{})}
   });
   iframe.hidden=false;
-  launcher=createChatLauncher({profile,storageKey:'webagent.widget.'+origin+'.'+agent+'.draft',onOpen:()=>api.open(),onSend:async text=>{await api.open();return command('send',{text})}});
+  launcher=createChatLauncher({profile,storageKey:'webagent.widget.'+origin+'.'+agent+'.draft',onOpen:()=>api.open(),onPickup:text=>command('setElementContext',{text}),onAction:async type=>{if(type==='close_all'){await api.close();return}await api.open();if(type==='sessions')await command('showSessions');else if(type==='new_session')await api.newSession();else if(type!=='open_all')throw new Error('Unknown launcher action');},onSend:async text=>{await api.open();return command('send',{text})}});
   shadow.append(launcher.element);
   return descriptor;
  })();
