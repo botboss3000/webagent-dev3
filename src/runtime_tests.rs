@@ -1870,6 +1870,149 @@ async fn shutoff_cancels_midstream_model_without_waiting_for_eof() {
     server.abort();
 }
 
+
+// Exercise shutdown during a real streaming dispatch, then reopen durable state.
+#[tokio::test]
+async fn runtime_restart_resumes_model_once_but_preserves_intentional_stops() {
+    use axum::response::{sse::Event, Sse};
+    for action in ["restart", "disabled", "pause", "cancel", "shutoff", "lease_cancel"] {
+        let (root, mut app) = fixture().await;
+        let started = Arc::new(tokio::sync::Notify::new());
+        let signal = started.clone();
+        let mock = Router::new().route("/responses", post(move || {
+            let signal = signal.clone();
+            async move {
+                signal.notify_one();
+                Sse::new(futures_util::stream::once(async {
+                    Ok::<Event, Infallible>(Event::default().data(
+                        r#"{"type":"response.output_text.delta","delta":"partial"}"#))
+                }).chain(futures_util::stream::pending()))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap(); });
+        app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+        let sid = conversation(&app).await;
+        let id = queued(&app, &sid).await;
+        running(&app, &id, "before-restart").await;
+        let original = app.run(&id).await.unwrap()["input"].clone();
+        let cancel = app.stop.child_token();
+        app.active.lock().await.insert(id.clone(), cancel.clone());
+        let executing = tokio::spawn(execute_run(app.clone(), id.clone(), "before-restart".into(), cancel.clone()));
+        tokio::time::timeout(Duration::from_secs(5), started.notified()).await.unwrap();
+        match action {
+            "restart" | "disabled" => { app.stop.cancel(); },
+            "pause" | "cancel" => {
+                command(State(app.clone()), Path((id.clone(), action.into())),
+                    Json(json!({"client_request_id":uuid()}))).await.unwrap();
+                app.stop.cancel(); // A concurrent deployment must not undo the user's choice.
+            },
+            "shutoff" => {
+                control(State(app.clone()), Json(json!({"client_request_id":uuid(),"shutoff":true}))).await.unwrap();
+                app.stop.cancel();
+            },
+            _ => cancel.cancel(),
+        }
+        tokio::time::timeout(Duration::from_secs(5), executing).await.unwrap().unwrap().unwrap();
+        app.active.lock().await.remove(&id);
+        let interrupted = app.run(&id).await.unwrap();
+        assert_eq!(interrupted["input"], original, "{action}");
+        assert_eq!(app.store.chat_snapshot(&sid).await.unwrap().0.len(), 1);
+        if matches!(action, "restart" | "disabled") {
+            assert_eq!(interrupted["status"], "running");
+            assert_eq!(interrupted["restart_interruption"]["kind"], "runtime_restart");
+        } else {
+            assert!(interrupted["restart_interruption"].is_null(), "{action}");
+        }
+        server.abort();
+        let mut restarted = app.clone();
+        restarted.stop = CancellationToken::new();
+        restarted.store = Store::open(root.path()).await.unwrap();
+        if action == "disabled" {
+            services::save_boot_orphan_resume(&restarted.store, "admin", false, 0).await.unwrap();
+        }
+        recover(&restarted, true).await.unwrap();
+        let expected = match action {
+            "restart" => "queued", "pause" => "paused", "cancel" => "cancelled", _ => "stopped",
+        };
+        assert_eq!(restarted.run(&id).await.unwrap()["status"], expected, "{action}");
+        if action == "restart" {
+            let mock = Router::new().route("/responses", post(|| async {
+                let event = json!({"type":"response.completed","response":{"status":"completed",
+                    "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Recovered reply"}]}]}});
+                ([("content-type", "text/event-stream")], format!("data: {event}\n\n"))
+            }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap(); });
+            restarted.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+            running(&restarted, &id, "after-restart").await;
+            execute_run(restarted.clone(), id.clone(), "after-restart".into(), restarted.stop.child_token()).await.unwrap();
+            assert_eq!(restarted.run(&id).await.unwrap()["status"], "completed");
+            recover(&restarted, true).await.unwrap();
+            execute_run(restarted.clone(), id.clone(), "after-restart".into(), CancellationToken::new()).await.unwrap();
+            let messages = restarted.store.chat_snapshot(&sid).await.unwrap().0;
+            assert_eq!(messages.iter().filter(|m|m["role"]=="assistant").count(), 1);
+            assert_eq!(messages.last().unwrap()["content"], "Recovered reply");
+            server.abort();
+        }
+    }
+}
+
+
+#[tokio::test]
+async fn runtime_restart_retains_pending_read_for_startup_retry() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let (root, mut app) = fixture().await;
+    let mock = Router::new().route("/responses", post(|| async {
+        let event = json!({"type":"response.completed","response":{"status":"completed",
+            "output":[{"type":"function_call","call_id":"restart-read","name":"file_read",
+                "arguments":json!({"path":"ui/app.js","offset":1,"limit":5,"task_id":null}).to_string()}]}});
+        ([("content-type", "text/event-stream")], format!("data: {event}\n\n"))
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap(); });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    let sid = conversation(&app).await;
+    activate_codebase(&app, &sid).await;
+    let started = Arc::new(tokio::sync::Notify::new());
+    let signal = started.clone();
+    let listener = tokio::net::UnixListener::bind(&app.tool_socket).unwrap();
+    let worker = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        signal.notify_one();
+        std::future::pending::<()>().await;
+    });
+    let id = queued(&app, &sid).await;
+    running(&app, &id, "before-read-restart").await;
+    let executing = tokio::spawn(execute_run(app.clone(), id.clone(), "before-read-restart".into(), app.stop.child_token()));
+    tokio::time::timeout(Duration::from_secs(5), started.notified()).await.unwrap();
+    app.stop.cancel();
+    tokio::time::timeout(Duration::from_secs(5), executing).await.unwrap().unwrap().unwrap();
+    let interrupted = app.run(&id).await.unwrap();
+    assert_eq!(interrupted["status"], "running");
+    assert_eq!(interrupted["pending"]["call_id"], "restart-read");
+    assert_eq!(interrupted["pending"]["state"], "executing");
+    assert_eq!(interrupted["uncertain"], false);
+    assert!(!interrupted["input"].as_array().unwrap().iter().any(|item|item["type"]=="function_call_output"));
+    let mut restarted = app.clone();
+    restarted.stop = CancellationToken::new();
+    restarted.store = Store::open(root.path()).await.unwrap();
+    recover(&restarted, true).await.unwrap();
+    let recovered = restarted.run(&id).await.unwrap();
+    assert_eq!(recovered["status"], "queued");
+    assert_eq!(recovered["pending"]["state"], "requested");
+    assert_eq!(recovered["pending"]["call_id"], "restart-read");
+    assert_eq!(restarted.store.chat_snapshot(&sid).await.unwrap().0.len(), 1);
+    server.abort();
+    worker.abort();
+}
+
 // Run only through tests/run_real_worker_integration.py in a disposable container.
 // The live worker rejects clients that are not the application UID.
 #[tokio::test]

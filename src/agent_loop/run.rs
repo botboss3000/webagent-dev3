@@ -129,6 +129,18 @@ async fn dispatch_asset_key(app:&App,sid:&str,agent_id:&str,loaded:&Value,select
     Ok(digest(&json!([app.abilities.live_version(),own["revision"],policy,visibility,state,loaded,selected,skills,
         mode,access.context_fingerprint()])))
 }
+// Process shutdown is not an intentional run stop. Keep the claimed checkpoint
+// recoverable; startup owns access checks, safe-read retry and uncertain writes.
+async fn preserve_restart_interruption(app: &App, run: &mut Value) -> Result<bool> {
+    if !app.stop.is_cancelled() || status(run) != "running" || app.shutoff().await? {
+        return Ok(false);
+    }
+    run["restart_interruption"] = json!({"kind":"runtime_restart","recorded_at":now()});
+    run["error"] = json!("Interrupted by runtime restart; awaiting startup recovery");
+    app.save(run).await?;
+    Ok(true)
+}
+
 pub(crate) async fn execute_run(
     app: App,
     id: String,
@@ -143,7 +155,11 @@ pub(crate) async fn execute_run(
     loop {
         let _guard = app.gate.lock().await;
         let mut run = app.run(&id).await?;
-        if run["generation"] != generation || status(&run) != "running" || cancel.is_cancelled() {
+        if run["generation"] != generation || status(&run) != "running" {
+            return Ok(());
+        }
+        if cancel.is_cancelled() {
+            preserve_restart_interruption(&app, &mut run).await?;
             return Ok(());
         }
         // Apply a composer choice before validating the next dispatch. This never
@@ -715,6 +731,7 @@ pub(crate) async fn execute_run(
                     return Ok(());
                 }
                 if app.shutoff().await? || cancel.is_cancelled() {
+                    if preserve_restart_interruption(&app, &mut run).await? {return Ok(());}
                     run["status"] = json!("stopped");
                     run["error"] = json!("Context summary interrupted");
                     app.save(&mut run).await?;
@@ -924,6 +941,7 @@ pub(crate) async fn execute_run(
                 return Ok(());
             }
             if cancel.is_cancelled() || app.shutoff().await? {
+                if preserve_restart_interruption(&app, &mut run).await? {return Ok(());}
                 run["status"] = json!("stopped");
                 run["error"] = json!("Provider response discarded after cancellation or shutoff");
                 app.save(&mut run).await?;
@@ -1477,6 +1495,10 @@ pub(crate) async fn execute_run(
                         .await?;
                 }
                 Err(_) => {
+                    if tools::is_read(&name) && preserve_restart_interruption(&app, &mut run).await? {
+                        // Retain the pending read and its original call ID for startup retry.
+                        return Ok(());
+                    }
                     if matches!(name.as_str(),"v3_build_work"|"build_work") && args["action"]=="finish" {
                         // The request may have reached the broker before the socket
                         // closed. Reconcile by task ID; never submit finish again.
