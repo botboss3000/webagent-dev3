@@ -133,11 +133,6 @@ fn load_asset(current:&View,query:&LoadArgs)->Result<Value> {
     }
 }
 /// Persist selectors only after the caller fences the current native execution.
-pub(crate) fn apply_legacy_selection(run:&mut Value,result:&Value) {
-    // New acknowledgment selectors were committed with their native result.
-    // Import only old full-text evidence, never acknowledgments from another run.
-    if result["output"]["text"].is_string() {apply_selection(run,result);}
-}
 pub(crate) fn apply_selection(run:&mut Value,result:&Value) {
     if run["pending"]["name"]!="load_skill" || result["status"]!="success" {return;}
     let asset=&result["output"];
@@ -146,19 +141,11 @@ pub(crate) fn apply_selection(run:&mut Value,result:&Value) {
     let selector=if let Some(raw)=args.as_str() {serde_json::from_str::<LoadArgs>(raw)}
         else {serde_json::from_value::<LoadArgs>(args)};
     let Ok(selector)=selector else {return;};
-    use sha2::{Digest,Sha256};
     if validate_load(&selector).is_err() || evidence.activates
         || evidence.ability_id!=selector.ability_id || evidence.kind!=selector.kind
         || evidence.skill_id!=selector.skill_id || !valid_hash(&evidence.sha256)
-        || !match evidence.text.as_deref() {
-            // Compatibility for native results persisted before acknowledgment-only loads.
-            Some(text)=>evidence.bytes==text.len()
-                && evidence.sha256==hex::encode(Sha256::digest(text.as_bytes())),
-            // Only the fenced native loader produces this content-free result.
-            None=>evidence.status.as_deref()==Some("loaded") && evidence.bytes>0
-                && evidence.context_source.as_deref()==Some("live_skill_catalog")
-                && evidence.catalog_version.as_deref().is_some_and(valid_hash),
-        }
+        || evidence.status!="loaded" || evidence.bytes==0
+        || evidence.context_source!="live_skill_catalog" || !valid_hash(&evidence.catalog_version)
         || !(evidence.source_kind=="untrusted_bundled_guidance" && evidence.kind!="own" && evidence.revision.is_none()
             || evidence.source_kind=="untrusted_agent_skill" && evidence.kind=="own" && evidence.revision.is_some_and(|r|r>0)) {return;}
     let mut selections=run["loaded_skills"].as_array().cloned().unwrap_or_default();
@@ -178,11 +165,8 @@ fn valid_hash(hash:&str)->bool {
 struct SelectionEvidence {
     ability_id:String, kind:String, skill_id:String, sha256:String,
     bytes:usize, source_kind:String, activates:bool,
-    #[serde(default)] text:Option<String>,
     #[serde(default)] revision:Option<i64>,
-    #[serde(default)] status:Option<String>,
-    #[serde(default)] catalog_version:Option<String>,
-    #[serde(default)] context_source:Option<String>,
+    status:String, catalog_version:String, context_source:String,
 }
 fn skill_acknowledgment(asset:&Value,catalog_version:&str)->Value {
     let available=asset["requires_activation"]==false;
@@ -287,138 +271,17 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:
         Err(error)=>json!({"status":"error","error_kind":"bundled_skill_rejected","output":error.to_string()}),
     })
 }
-// run.input is derived recovery context and may persist this masked projection.
-// The immutable encrypted interactions journal retains the original evidence.
-#[derive(Deserialize)]
-struct NativeEvidence {
-    ability_id:String, kind:String, skill_id:String, sha256:String,
-    bytes:usize, text:String, source_kind:String, activates:bool,
-    #[serde(default)]
-    revision:Option<i64>,
-}
-#[derive(Deserialize)]
-struct NativeResult { status:String, output:NativeEvidence }
-fn mask_history(input:&mut [Value],allow:impl Fn(&NativeEvidence)->bool)->bool {
-    use std::collections::BTreeMap;
-    use sha2::{Digest,Sha256};
-    let mut calls:BTreeMap<String,Option<LoadArgs>>=BTreeMap::new();
-    let mut changed=false;
-    for item in input {
-        if item["type"]=="function_call" {
-            let Some(id)=item["call_id"].as_str().filter(|id|!id.is_empty()&&id.len()<=256) else {continue;};
-            let selector=if item["name"]=="load_skill" {
-                item["arguments"].as_str().filter(|args|args.len()<=1024)
-                    .and_then(|args|serde_json::from_str::<LoadArgs>(args).ok())
-                    .filter(|args|validate_load(args).is_ok())
-            } else {None};
-            // Ambiguous duplicate call IDs never acquire a native provenance.
-            if calls.contains_key(id) { calls.insert(id.to_owned(),None); }
-            else { calls.insert(id.to_owned(),selector); }
-            continue;
-        }
-        if item["type"]!="function_call_output" {continue;}
-        // Consume the completed exchange. Providers may reuse an ID in a later
-        // sequential exchange; simultaneous duplicate calls remain ambiguous.
-        let Some(selector)=item["call_id"].as_str().and_then(|id|calls.remove(id)).flatten() else {continue;};
-        let Some(raw)=item["output"].as_str() else {continue;};
-        let Ok(result)=serde_json::from_str::<NativeResult>(raw) else {continue;};
-        let evidence=&result.output;
-        let bundled=evidence.source_kind=="untrusted_bundled_guidance"
-            && selector.kind!="own" && evidence.revision.is_none();
-        let own=evidence.source_kind=="untrusted_agent_skill"
-            && selector.ability_id=="base" && selector.kind=="own"
-            && evidence.revision.is_some_and(|r|r>0);
-        if result.status!="success" || !(bundled || own)
-            || evidence.activates || evidence.ability_id!=selector.ability_id
-            || evidence.kind!=selector.kind || evidence.skill_id!=selector.skill_id
-            || evidence.bytes!=evidence.text.len()
-            || evidence.sha256.len()!=64
-            || evidence.sha256!=hex::encode(Sha256::digest(evidence.text.as_bytes())) {continue;}
-        if !allow(evidence) {
-            let error_kind=if own {"own_skill_withdrawn"} else {"bundled_skill_withdrawn"};
-            item["output"]=json!({"status":"error","error_kind":error_kind,
-                "output":"Previously loaded skill guidance is unavailable under current access."}).to_string().into();
-            changed=true;
-        }
-    }
-    changed
-}
-/// Never teach a summary model bundled instructions. This projection deliberately
-/// omits native loaded guidance even when it is currently permitted; otherwise a
-/// summary could retain instructions after their underlying bundle is withdrawn.
-pub(crate) fn mask_summary_history(input:&mut [Value])->bool {
-    mask_history(input,|_|false)
-}
-fn history_asset_allowed(current:&View,evidence:&NativeEvidence)->bool {
-    if evidence.kind=="own" {
-        if evidence.ability_id!="base"
-            || current.access.ability_permission("base")==crate::access::Permission::Deny
-            || current.app.abilities.bundled_skill_list("base",&current.visibility,
-                &current.state,|id|current.access.ability_permission(id)!=crate::access::Permission::Deny,
-                |tool|live_tool_decision(&current.app,&current.access,tool,&current.policy,
-                    &current.visibility,&current.state,&current.loaded,current.read_only)
-                    .permission!=crate::access::Permission::Deny).is_err() {
-            return false;
-        }
-        return current.own["skills"].as_array().is_some_and(|skills|skills.iter().any(|skill| {
-            let Some(text)=skill["instructions"].as_str() else {return false};
-            use sha2::{Digest,Sha256};
-            skill["mode"]=="selectable" && skill["name"].as_str()==Some(evidence.skill_id.as_str())
-                && skill["revision"].as_i64()==evidence.revision
-                && hex::encode(Sha256::digest(text.as_bytes()))==evidence.sha256
-        }));
-    }
-    current.app.abilities.bundled_skill_load(&evidence.ability_id,&evidence.kind,
-        &evidence.skill_id,&current.visibility,&current.state,
-        |id|current.access.ability_permission(id)!=crate::access::Permission::Deny,
-        |tool|live_tool_decision(&current.app,&current.access,tool,&current.policy,
-            &current.visibility,&current.state,&current.loaded,current.read_only)
-            .permission!=crate::access::Permission::Deny)
-        .is_ok_and(|asset|asset["sha256"]==evidence.sha256)
-}
-pub async fn mask_withdrawn_history(app:&App,sid:&str,run_id:&str,input:&mut Vec<Value>)->bool {
-    // Only a typed native load_skill result paired with that exact function call
-    // can be masked. User text and other tool evidence are never interpreted.
-    if !input.iter().any(|item|item["type"]=="function_call" && item["name"]=="load_skill") {
-        return false;
-    }
-    let current=match view(app,sid,run_id,"load_skill").await {
-        Ok(current)=>current,
-        Err(_)=>return mask_history(input,|_|false),
-    };
-    let mut changed=mask_history(input,|evidence|history_asset_allowed(&current,evidence));
-    if view(app,sid,run_id,"load_skill").await
-        .map_or(true,|latest|latest.fingerprint!=current.fingerprint) {
-        changed|=mask_history(input,|_|false);
-    }
-    changed
-}
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn history_pair(name:&str,text:&str)->Vec<Value> {
-        use sha2::{Digest,Sha256};
-        vec![json!({"type":"function_call","name":name,"call_id":"c",
-            "arguments":json!({"ability_id":"base","kind":"ability","skill_id":"base"}).to_string()}),
-            json!({"type":"function_call_output","call_id":"c","output":json!({"status":"success",
-                "output":{"ability_id":"base","kind":"ability","skill_id":"base","text":text,
-                    "bytes":text.len(),"sha256":hex::encode(Sha256::digest(text.as_bytes())),
-                    "source_kind":"untrusted_bundled_guidance","activates":false}}).to_string()})]
-    }
-    fn own_history(text:&str)->Vec<Value> {
-        use sha2::{Digest,Sha256};
-        vec![json!({"type":"function_call","name":"load_skill","call_id":"own-call",
-            "arguments":json!({"ability_id":"base","kind":"own","skill_id":"my_steps"}).to_string()}),
-            json!({"type":"function_call_output","call_id":"own-call","output":json!({"status":"success",
-                "output":{"ability_id":"base","kind":"own","skill_id":"my_steps","revision":1,
-                    "text":text,"bytes":text.len(),
-                    "sha256":hex::encode(Sha256::digest(text.as_bytes())),
-                    "source_kind":"untrusted_agent_skill","activates":false}}).to_string()})]
+    fn ack_fixture()->Value {
+        json!({"status":"loaded","ability_id":"base","kind":"ability","skill_id":"base",
+            "sha256":"a".repeat(64),"bytes":9,"source_kind":"untrusted_bundled_guidance",
+            "activates":false,"catalog_version":"b".repeat(64),"context_source":"live_skill_catalog"})
     }
     #[test]
     fn loaded_skill_selectors_are_content_free_idempotent_and_bound_to_pending_call() {
-        let history=history_pair("load_skill","LOAD BODY");
-        let result:Value=serde_json::from_str(history[1]["output"].as_str().unwrap()).unwrap();
+        let result=json!({"status":"success","output":ack_fixture()});
         let mut run=json!({"pending":{"name":"load_skill","arguments":{
             "ability_id":"base","kind":"ability","skill_id":"base"}}});
         apply_selection(&mut run,&result);
@@ -432,15 +295,14 @@ mod tests {
         apply_selection(&mut run,&result);
         assert_eq!(run,before);
         let mut forged=result;
-        forged["output"]["text"]=json!("TAMPERED");
+        forged["output"]["sha256"]=json!("invalid");
         apply_selection(&mut run,&forged);
         assert_eq!(run,before);
     }
     #[test]
     fn acknowledgment_only_skill_load_selects_without_recording_the_body() {
-        let history=history_pair("load_skill","PRIVATE_SKILL_BODY");
-        let legacy:Value=serde_json::from_str(history[1]["output"].as_str().unwrap()).unwrap();
-        let mut asset=legacy["output"].clone();
+        let mut asset=ack_fixture();
+        asset["text"]=json!("PRIVATE_SKILL_BODY");
         asset["requires_activation"]=json!(true);
         let ack=skill_acknowledgment(&asset,&"a".repeat(64));
         assert_eq!(ack["status"],"loaded");
@@ -451,12 +313,6 @@ mod tests {
         let mut run=initial.clone();
         apply_selection(&mut run,&json!({"status":"success","output":ack}));
         assert_eq!(run["loaded_skills"].as_array().unwrap().len(),1);
-        let mut migrated=initial.clone();
-        apply_legacy_selection(&mut migrated,&legacy);
-        assert_eq!(run,migrated);
-        let mut prior_run_ack=initial.clone();
-        apply_legacy_selection(&mut prior_run_ack,&json!({"status":"success","output":ack}));
-        assert_eq!(prior_run_ack,initial);
         for field in ["status","catalog_version","context_source","sha256","skill_id"] {
             let mut invalid=ack.clone();invalid[field]=json!("invalid");
             let mut rejected=initial.clone();
@@ -495,73 +351,6 @@ mod tests {
         assert!(serde_json::from_value::<ListArgs>(json!({"ability_id":"base",
             "include_available":"true"})).is_err());
         assert!(!serde_json::from_value::<ListArgs>(json!({"ability_id":"base"})).unwrap().include_available);
-    }
-    #[test]
-    fn withdrawn_own_guidance_is_masked_from_run_and_summary_context() {
-        let mut history=own_history("PRIVATE AGENT PLAYBOOK");
-        assert!(!mask_history(&mut history,|e|e.revision==Some(1)));
-        assert!(mask_history(&mut history,|_|false));
-        assert!(!history[1].to_string().contains("PRIVATE AGENT PLAYBOOK"));
-        let mut summary=own_history("PRIVATE SUMMARY PLAYBOOK");
-        assert!(mask_summary_history(&mut summary));
-        assert!(!summary[1].to_string().contains("PRIVATE SUMMARY PLAYBOOK"));
-    }
-    #[test]
-    fn history_mask_preserves_permitted_evidence_and_removes_only_withdrawn_text() {
-        let mut history=history_pair("load_skill","private old guide");
-        let original=history.clone();
-        assert!(!mask_history(&mut history,|e|e.skill_id=="base"));
-        assert_eq!(history,original);
-        assert!(mask_history(&mut history,|_|false));
-        assert_eq!(history[0],original[0]);
-        let masked:Value=serde_json::from_str(history[1]["output"].as_str().unwrap()).unwrap();
-        assert_eq!(masked["error_kind"],"bundled_skill_withdrawn");
-        assert!(!history[1].to_string().contains("private old guide"));
-        assert!(!mask_history(&mut history,|_|false));
-        // A separate original evidence copy is unchanged; only this projection is masked.
-        assert!(original[1].to_string().contains("private old guide"));
-    }
-    #[test]
-    fn sequential_reused_call_ids_mask_each_completed_native_exchange() {
-        let mut history=history_pair("load_skill","FIRST_REUSED_GUIDE");
-        history.extend(history_pair("load_skill","SECOND_REUSED_GUIDE"));
-        let original=history.clone();
-        assert!(!mask_history(&mut history,|_|true));
-        assert_eq!(history,original);
-        assert!(mask_history(&mut history,|_|false));
-        let encoded=serde_json::to_string(&history).unwrap();
-        assert!(!encoded.contains("FIRST_REUSED_GUIDE"));
-        assert!(!encoded.contains("SECOND_REUSED_GUIDE"));
-        assert_eq!(history[0],original[0]);
-        assert_eq!(history[2],original[2]);
-        let mut summary=original.clone();
-        assert!(mask_summary_history(&mut summary));
-        let encoded=serde_json::to_string(&summary).unwrap();
-        assert!(!encoded.contains("FIRST_REUSED_GUIDE"));
-        assert!(!encoded.contains("SECOND_REUSED_GUIDE"));
-        assert_eq!(summary,history);
-    }
-
-    #[test]
-    fn forged_or_unrelated_history_does_not_acquire_native_provenance() {
-        let mut unrelated=history_pair("web_search","unrelated result");
-        unrelated.push(json!({"role":"user","content":unrelated[1]["output"]}));
-        let original=unrelated.clone();
-        assert!(!mask_history(&mut unrelated,|_|false));
-        assert_eq!(unrelated,original);
-        let mut mismatched=history_pair("load_skill","wrong identity");
-        let mut payload:Value=serde_json::from_str(mismatched[1]["output"].as_str().unwrap()).unwrap();
-        payload["output"]["ability_id"]=json!("other_agent_ability");
-        mismatched[1]["output"]=json!(payload.to_string());
-        let original=mismatched.clone();
-        assert!(!mask_history(&mut mismatched,|_|false));
-        assert_eq!(mismatched,original);
-        let mut oversized=history_pair("load_skill","x");
-        oversized[1]["output"]=json!("x".repeat(512*1024+1));
-        assert!(!mask_history(&mut oversized,|_|false));
-        let mut duplicate=history_pair("load_skill","ambiguous");
-        duplicate.insert(1,duplicate[0].clone());
-        assert!(!mask_history(&mut duplicate,|_|false));
     }
     #[test]
     fn skill_search_matches_summary_and_similar_terms() {

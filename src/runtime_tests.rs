@@ -5549,60 +5549,6 @@ async fn removed_manifest_withdraws_cached_schemas_and_guidance_within_run() {
 }
 
 #[tokio::test]
-async fn revoked_native_skill_is_masked_before_provider_while_journal_is_retained() {
-    use axum::routing::post;
-    use sha2::{Digest,Sha256};
-    let (_root,mut app)=fixture().await;
-    let requests=Arc::new(Mutex::new(Vec::<Value>::new()));
-    let captured=requests.clone();
-    let mock=Router::new().route("/responses",post(move |Json(body):Json<Value>| {
-        let captured=captured.clone();
-        async move {
-            captured.lock().await.push(body);
-            let event=json!({"type":"response.completed","response":{"status":"completed",
-                "output":[{"type":"message","role":"assistant",
-                    "content":[{"type":"output_text","text":"Done."}]}]}});
-            ([("content-type","text/event-stream")],format!("data: {event}\n\n"))
-        }
-    }));
-    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address=listener.local_addr().unwrap();
-    let server=tokio::spawn(async move {axum::serve(listener,mock).await.unwrap()});
-    app.provider=provider::Provider::for_test(format!("http://{address}/responses"));
-    let sid=conversation(&app).await;
-    let id=queued(&app,&sid).await;
-    let sentinel="PRIVATE_REVOKED_SKILL_SENTINEL";
-    let result=json!({"status":"success","output":{"ability_id":"base","kind":"tool",
-        "skill_id":"get_time","text":sentinel,"bytes":sentinel.len(),
-        "sha256":hex::encode(Sha256::digest(sentinel.as_bytes())),
-        "source_kind":"untrusted_bundled_guidance","activates":false}});
-    let mut run=app.run(&id).await.unwrap();
-    run["input"]=json!([
-        {"type":"function_call","name":"load_skill","call_id":"old-skill",
-            "arguments":json!({"ability_id":"base","kind":"tool","skill_id":"get_time"}).to_string()},
-        {"type":"function_call_output","call_id":"old-skill","output":result.to_string()}]);
-    run["context_hydration_pending"]=json!(false);
-    let call=run["input"][0].clone();
-    app.store.save_run(&mut run,"model_output",&json!({"output":[call]})).await.unwrap();
-    app.store.save_run(&mut run,"tool_result",&json!({"run_id":id,"name":"load_skill",
-        "result":result})).await.unwrap();
-    assert_eq!(app.store.live_access("admin","shared_default").await.unwrap()
-        .ability_permission("base"),access::Permission::Deny);
-    running(&app,&id,"skill-withdrawal").await;
-    execute_run(app.clone(),id.clone(),"skill-withdrawal".into(),
-        CancellationToken::new()).await.unwrap();
-    assert_eq!(app.run(&id).await.unwrap()["status"],"completed");
-    let requests=requests.lock().await;
-    assert_eq!(requests.len(),1);
-    assert!(!requests[0].to_string().contains(sentinel));
-    assert!(requests[0]["input"].to_string().contains("bundled_skill_withdrawn"));
-    assert!(app.store.context(&sid).await.unwrap().iter().any(|item|
-        item["type"]=="function_call_output" && item["output"].as_str()
-            .is_some_and(|output|output.contains(sentinel))));
-    server.abort();
-}
-
-#[tokio::test]
 async fn bundle_withdrawal_during_credentials_blocks_provider_dispatch() {
     use axum::routing::post;
     for cancelled in [false,true] {

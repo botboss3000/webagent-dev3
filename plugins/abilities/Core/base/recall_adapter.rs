@@ -94,9 +94,6 @@ fn metadata(session: &Value) -> Result<Vec<Value>> {
     Ok(output)
 }
 fn mask_guidance(source: &mut [Value]) {
-    // Mask on the full source before paging: splitting a call from its result
-    // would defeat the provenance-aware bundled guidance masker.
-    crate::tools::core_skills::mask_summary_history(source);
     let mut sensitive_calls = HashSet::new();
     for item in source {
         if item["type"] == "function_call" {

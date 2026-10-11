@@ -328,32 +328,6 @@ pub(crate) async fn execute_run(
                 json!({"mode":"read_only","execution_mode":"ask","revision":mode["revision"]})
             } else {mode.clone()};
             let read_only=authorization_mode["mode"]=="read_only";
-            // Rehydrate legacy native load results before removing their replay text.
-            // New results already have content-free selectors saved by append_tool.
-            let prior_skills=run["loaded_skills"].clone();
-            let history=run["input"].as_array().cloned().unwrap_or_default();
-            let mut calls=std::collections::BTreeMap::new();
-            for item in history {
-                if item["type"]=="function_call" && item["name"]=="load_skill" {
-                    if let Some(id)=item["call_id"].as_str() {calls.insert(id.to_owned(),item.clone());}
-                } else if item["type"]=="function_call_output" {
-                    if let Some(call)=item["call_id"].as_str().and_then(|id|calls.remove(id)) {
-                        if let Some(result)=item["output"].as_str().and_then(|raw|serde_json::from_str::<Value>(raw).ok()) {
-                            let mut projection=json!({"pending":{"name":"load_skill","arguments":call["arguments"]},
-                                "loaded_skills":run["loaded_skills"]});
-                            tools::core_skills::apply_legacy_selection(&mut projection,&result);
-                            run["loaded_skills"]=projection["loaded_skills"].clone();
-                        }
-                    }
-                }
-            }
-            if run["loaded_skills"]!=prior_skills {app.save(&mut run).await?;}
-            // Old skill results are historical evidence, never continuing authority.
-            // Mask derived recovery context; original interaction journal stays intact.
-            if tools::core_skills::mask_withdrawn_history(&app,&sid,&id,
-                run["input"].as_array_mut().unwrap()).await {
-                context_accounting.reset();
-            }
             // CONTEXT-ASSET-KEY: include full freshly resolved access (including
             // grants), live bundle validity, policy, visibility, loaded state and session mode.
             // Hash only in memory; never publish private grant data in reports.

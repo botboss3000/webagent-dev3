@@ -146,16 +146,10 @@ impl Config {
         result
     }
     pub fn prompt(&self, plan: &Plan) -> Result<String> {
-        // A summary must not turn revocable bundled skill instructions into
-        // durable background guidance. Preserve the original plan identity and
-        // project only the provider source; ordinary history remains unchanged.
         self.prompt_source(&plan.source, true)
     }
     fn prompt_source(&self, input: &[Value], enforce_source_limit: bool) -> Result<String> {
-        let mut projected = input.to_vec();
-        project_loaded_guidance(&mut projected);
-        crate::tools::core_skills::mask_summary_history(&mut projected);
-        let source = serde_json::to_string(&projected.iter()
+        let source = serde_json::to_string(&input.iter()
             .filter(|item| item["type"] != "reasoning").collect::<Vec<_>>())?;
         if enforce_source_limit && source.len() > self.max_source_bytes { bail!("Context summary source is too large"); }
         // Substitute source last so transcript text cannot expand template placeholders.
@@ -173,53 +167,15 @@ impl Config {
 }
 
 
-/// Native guidance lives outside compactable conversation history. Preserve the
-/// immutable journal, but replay only its acknowledgment to avoid stale copies.
-pub(crate) fn project_loaded_guidance(input: &mut [Value]) -> bool {
-    let mut calls = std::collections::BTreeMap::<String,(String,Value)>::new();
-    let mut changed=false;
-    for item in input {
-        if item["type"]=="function_call" {
-            if let (Some(id),Some(name),Some(raw))=(item["call_id"].as_str(),item["name"].as_str(),item["arguments"].as_str()) {
-                if matches!(name,"load_ability"|"load_skill") {
-                    if let Ok(args)=serde_json::from_str(raw) {calls.insert(id.into(),(name.into(),args));}
-                }
-            }
-            continue;
-        }
-        if item["type"]!="function_call_output" {continue;}
-        let Some((name,args))=item["call_id"].as_str().and_then(|id|calls.remove(id)) else {continue;};
-        let Some(raw)=item["output"].as_str() else {continue;};
-        let Ok(mut result)=serde_json::from_str::<Value>(raw) else {continue;};
-        let projected = if name=="load_ability" && result["status"]=="ok"
-            && args["ability_id"].is_string() && result["ability"]["id"]==args["ability_id"] {
-            // The next model boundary rebuilds authorized guidance and schemas.
-            result=json!({"status":"ok","ability_id":args["ability_id"],"context_source":"live_ability_catalog"});true
-        } else if name=="load_skill" && result["status"]=="success"
-            && result["output"]["ability_id"]==args["ability_id"]
-            && result["output"]["kind"]==args["kind"] && result["output"]["skill_id"]==args["skill_id"]
-            && result["output"]["text"].as_str().is_some_and(|text|
-                result["output"]["bytes"].as_u64()==Some(text.len() as u64)
-                && result["output"]["sha256"]==hex::encode(Sha256::digest(text.as_bytes()))) {
-            result["output"].as_object_mut().unwrap().remove("text");
-            result["output"]["context_source"]=json!("live_skill_catalog");true
-        } else {false};
-        if projected {item["output"]=json!(result.to_string());changed=true;}
-    }
-    changed
-}
-
 /// Keep the encrypted interaction as the full record. Only provider replay is
 /// reduced, including on resume of a run saved before this limit was installed.
 pub fn project_tool_results(input: &mut [Value], preview_bytes: usize) -> Result<bool> {
-    // Native instructions are rebuilt separately and never enter summaries.
-    let projected = project_loaded_guidance(input);
     // Keep catalog metadata intact while bounding ordinary results.
     let instruction_calls = input.iter()
         .filter(|item| item["type"] == "function_call"
             && matches!(item["name"].as_str(), Some("list_abilities" | "load_ability" | "load_skill")))
         .filter_map(call_id).map(str::to_owned).collect::<HashSet<_>>();
-    let mut changed = projected;
+    let mut changed = false;
     for item in input {
         if item["type"] != "function_call_output" { continue; }
         if item["call_id"].as_str().is_some_and(|id| instruction_calls.contains(id)) { continue; }
@@ -536,30 +492,19 @@ mod tests {
     }
 
     #[test]
-    fn native_guidance_is_rebuilt_outside_compaction_history() {
-        let body="full skill guidance ".repeat(10000);
-        let output=json!({"status":"ok","ability":{"id":"codebase_admin"},"skill":body}).to_string();
-        let mut history=vec![json!({"type":"function_call","name":"load_ability","call_id":"load",
-            "arguments":"{\"ability_id\":\"codebase_admin\"}"}),
-            json!({"type":"function_call_output","call_id":"load","output":output})];
-        let journal=history.clone();
-        assert!(project_loaded_guidance(&mut history));
-        assert!(!history[1]["output"].as_str().unwrap().contains("full skill guidance"));
-        assert!(journal[1]["output"].as_str().unwrap().contains("full skill guidance"));
-        assert!(!project_loaded_guidance(&mut history));
-    }
-
-    #[test]
-    fn loaded_ability_guidance_stays_complete() {
-        let content = "tool schema ".repeat(2000);
-        let output = json!({"status":"ok","ability":{"tools":[{"name":"state_inspect",
-            "description":content}]}}).to_string();
-        let mut input = vec![
-            json!({"type":"function_call","call_id":"load","name":"load_ability","arguments":"{}"}),
-            json!({"type":"function_call_output","call_id":"load","output":output})];
-        let original = input.clone();
-        assert!(!project_tool_results(&mut input, 8192).unwrap());
-        assert_eq!(input, original);
+    fn loader_acknowledgments_pass_unchanged_to_replay_and_summary() {
+        let config=Config::configured().unwrap();
+        for name in ["load_ability","load_tool","load_skill"] {
+            let output=json!({"status":"success","output":{"status":"loaded",
+                "scope":"run","context_source":"live_skill_catalog"}}).to_string();
+            let mut input=vec![
+                json!({"type":"function_call","call_id":"load","name":name,"arguments":"{}"}),
+                json!({"type":"function_call_output","call_id":"load","output":output})];
+            let original=input.clone();
+            assert!(!project_tool_results(&mut input,8192).unwrap());
+            assert_eq!(input,original);
+            assert!(config.prompt_source(&input,true).unwrap().contains("live_skill_catalog"));
+        }
     }
 
     #[test]
@@ -604,43 +549,6 @@ mod tests {
     }
     fn output(id: &str) -> Value {
         json!({"type":"function_call_output","call_id":id,"output":"{}"})
-    }
-
-    #[test]
-    fn summary_projection_masks_native_skill_evidence_without_changing_plan_identity() {
-        let config=rolling_config();
-        let guide="REVOCABLE_BUNDLED_INSTRUCTIONS";
-        let native=json!({"status":"success","output":{"ability_id":"base","kind":"ability",
-            "skill_id":"base","bytes":guide.len(),"text":guide,
-            "sha256":hex::encode(Sha256::digest(guide.as_bytes())),
-            "source_kind":"untrusted_bundled_guidance","activates":false}});
-        let input=vec![user(&"old conversation ".repeat(100)),
-            json!({"type":"function_call","call_id":"skill","name":"load_skill",
-                "arguments":json!({"ability_id":"base","kind":"ability","skill_id":"base"}).to_string()}),
-            json!({"type":"function_call_output","call_id":"skill","output":native.to_string()}),
-            json!({"type":"function_call","call_id":"ordinary","name":"web_search","arguments":"{}"}),
-            json!({"type":"function_call_output","call_id":"ordinary",
-                "output":json!({"status":"success","output":{"text":"ORDINARY_RESULT_MUST_REMAIN",
-                    "source_kind":"untrusted_bundled_guidance"}}).to_string()}),
-            user("latest")];
-        let original=input.clone();
-        let planned=plan_rolling(&input,8192,&config).unwrap().unwrap();
-        let source=planned.source.clone();
-        let identity=planned.source_digest.clone();
-        assert!(serde_json::to_string(&source).unwrap().contains(guide));
-        let prompt=config.prompt(&planned).unwrap();
-        assert!(!prompt.contains(guide));
-        assert!(prompt.contains("live_skill_catalog"));
-        assert!(prompt.contains("ORDINARY_RESULT_MUST_REMAIN"));
-        assert!(prompt.contains("old conversation"));
-        assert_eq!(planned.source,source);
-        assert_eq!(planned.source_digest,identity);
-        assert_eq!(digest(&planned.source).unwrap(),identity);
-        assert_eq!(input,original);
-        // apply_summary still validates the original history/digest and leaves
-        // the ordinary tail untouched. No source is rewritten by prompt projection.
-        let compacted=apply_summary(&input,&planned,"Earlier work completed.").unwrap();
-        assert_eq!(&compacted[1..],&input[planned.drop_until..]);
     }
 
     #[test]
