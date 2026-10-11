@@ -27,6 +27,7 @@ pub(crate) async fn send(
     if text.len() > 65536 { return Err(bad("text has invalid length")); }
     let request_id = required(&body, "client_message_id", 128)?;
     let _guard = app.gate.lock().await;
+    session_agent_id(&app,&id).await?;
     let receipt_key = format!("receipt:message:{id}:{request_id}");
     if let Some(receipt) = app.store.get(&receipt_key).await? {
         if receipt["digest"] != digest(&body) {
@@ -68,7 +69,7 @@ pub(super) async fn prepare_message(app:&App,id:&str,body:&Value,supplied_sessio
         None=>app.store.get(&key("session",id)).await?
             .ok_or_else(||ApiError(StatusCode::NOT_FOUND,"Session not found".into()))?,
     };
-    if session["status"] == "recycled" { return Err(conflict("Session is recycled; restore it first")); }
+    if supplied_session.is_none() && session["status"] != "active" { return Err(ApiError(StatusCode::NOT_FOUND,"Session not found".into())); }
     let agent_id=session["agent_id"].as_str().unwrap_or("shared_default").to_owned();
     let access=app.store.live_access(app.store.current_user_id(),&agent_id).await
         .map_err(|_|ApiError(StatusCode::FORBIDDEN,"Agent unavailable".into()))?;
@@ -253,9 +254,10 @@ pub(crate) async fn events(
     Sse<impl futures_util::Stream<Item = std::result::Result<Event, Infallible>>>,
     ApiError,
 > {
-    if app.store.get(&key("session", &id)).await?.is_none() {
-        return Err(ApiError(StatusCode::NOT_FOUND, "Session not found".into()));
-    }
+    let opening=app.store.get(&key("session", &id)).await?
+        .filter(|s|s["status"]=="active")
+        .ok_or_else(||ApiError(StatusCode::NOT_FOUND,"Session not found".into()))?;
+    let execution_epoch=opening["execution_epoch"].as_u64().unwrap_or(0);
     let after = params
         .get("after")
         .and_then(|v| v.parse::<i64>().ok())
@@ -287,9 +289,11 @@ pub(crate) async fn events(
             0u64,
             user_id, generation, agent_id, access_revision, None::<u64>, 0u64,
         ),
-        |(app, id, mut cursor, mut queue, start, auth_key, expires, mut checked,
+        move |(app, id, mut cursor, mut queue, start, auth_key, expires, mut checked,
             user_id, generation, agent_id, access_revision, mut metadata_revision, mut metadata_checked)| async move {
             loop {
+                if !app.store.get(&key("session",&id)).await.is_ok_and(|session|session.is_some_and(|s|
+                    s["status"]=="active" && s["execution_epoch"].as_u64().unwrap_or(0)==execution_epoch)) { return None; }
                 if now() - start > 3600 || app.stop.is_cancelled() || now() >= expires {
                     return None;
                 }

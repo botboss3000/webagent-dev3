@@ -129,8 +129,8 @@ pub(crate) async fn upload(
         .get(&key("session", &sid))
         .await?
         .ok_or_else(|| bad("Session not found"))?;
-    if session["status"] == "recycled" {
-        return Err(conflict("Restore this conversation before uploading"));
+    if session["status"] != "active" {
+        return Err(ApiError(StatusCode::NOT_FOUND,"Session not found".into()));
     }
     if let Some(saved) = app.store.get(&key("attachment", aid)).await? {
         if saved["session_id"] != sid || saved["upload_digest"] != fingerprint {

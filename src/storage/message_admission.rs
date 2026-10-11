@@ -19,6 +19,7 @@ impl Store {
         if record["status"] != "pending_review" {
             return Ok(None);
         }
+        self.require_active_session(&mut tx,record["session_id"].as_str().ok_or_else(||anyhow!("Missing review session"))?).await?;
         record["status"] = json!("reviewing");
         record["generation"] = json!(uuid::Uuid::new_v4().to_string());
         record["deadline"] = json!(crate::now() + 50);

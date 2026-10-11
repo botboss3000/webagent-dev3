@@ -198,7 +198,7 @@ async fn work(app: App, sid: String, recovery: bool) -> Result<()> {
         .as_str()
         .ok_or_else(|| anyhow!("Missing naming claim"))?
         .to_owned();
-    let operation = generate(&app, &session);
+    let operation = app.session_operation(&sid,app.stop.child_token(),generate(&app, &session));
     tokio::pin!(operation);
     let mut renew = tokio::time::interval(Duration::from_secs(10));
     let result = loop {

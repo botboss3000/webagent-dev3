@@ -150,6 +150,8 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
     recycle: (id, body) => request('/sessions/' + encodeURIComponent(id), 'DELETE', body),
     /** Restores a recycled session using its current revision. */
     restore: (id, body) => request('/sessions/' + encodeURIComponent(id) + '/restore', 'POST', body),
+    /** Permanently removes a recycled session through the same revision fence. */
+    purge: (id, body) => request('/sessions/' + encodeURIComponent(id) + '/purge', 'POST', body),
     /** Acknowledges messages through a durable sequence cursor. */
     read: (id, through_seq) => request('/sessions/' + encodeURIComponent(id) + '/read', 'PUT', {through_seq}),
     /** Creates a session from the supplied agent and request identity. */

@@ -35,7 +35,7 @@ impl IntoResponse for ApiError {
 impl From<anyhow::Error> for ApiError {
     fn from(error: anyhow::Error) -> Self {
         if error.downcast_ref::<crate::store::session::RecycledSession>().is_some() {
-            return conflict("Session is recycled; restore it first");
+            return ApiError(StatusCode::NOT_FOUND,"Session not found".into());
         }
         tracing::error!("Request storage or execution operation failed");
         diagnostics::backend_error();
@@ -564,6 +564,7 @@ async fn agent_abilities(app: &App) -> Result<Value> {
 async fn session_agent_id(app: &App, sid: &str) -> Result<String> {
     let session = app.store.get(&key("session", sid)).await?
         .ok_or_else(|| anyhow!("Session not found"))?;
+    if session["status"] != "active" { return Err(crate::store::session::RecycledSession.into()); }
     Ok(session["agent_id"].as_str().unwrap_or("shared_default").to_owned())
 }
 async fn session_agent_abilities(app: &App, sid: &str) -> Result<Value> {
@@ -678,6 +679,39 @@ impl App {
             .unwrap_or(json!({"shutoff":true}))["shutoff"]
             .as_bool()
             .unwrap_or(true))
+    }
+    /// Deletion is durable across API/loop processes. The epoch also catches a
+    /// recycle/restore occurring between polls; old work can never resume.
+    async fn session_operation<T>(&self, sid: &str, cancel: CancellationToken,
+        operation: impl std::future::Future<Output=Result<T>>) -> Result<T> {
+        let initial=self.store.get(&key("session",sid)).await?
+            .filter(|session|session["status"]=="active")
+            .ok_or_else(||anyhow::Error::from(crate::store::session::RecycledSession))?;
+        let epoch=initial["execution_epoch"].as_u64().unwrap_or(0);
+        tokio::pin!(operation);
+        let mut poll=tokio::time::interval(Duration::from_millis(100));
+        loop {
+            tokio::select! {
+                result=&mut operation=>{
+                    let available=self.store.get(&key("session",sid)).await
+                        .is_ok_and(|session|session.is_some_and(|s|s["status"]=="active"
+                            && s["execution_epoch"].as_u64().unwrap_or(0)==epoch));
+                    if !available {cancel.cancel();return Err(crate::store::session::RecycledSession.into());}
+                    return result;
+                },
+                _=poll.tick()=>{
+                    let available=self.store.get(&key("session",sid)).await
+                        .is_ok_and(|session|session.is_some_and(|s|s["status"]=="active"
+                            && s["execution_epoch"].as_u64().unwrap_or(0)==epoch));
+                    if !available {
+                        cancel.cancel();
+                        // Poll cancellation cleanup before dropping a worker socket.
+                        let _=tokio::time::timeout(Duration::from_secs(5),&mut operation).await;
+                        return Err(crate::store::session::RecycledSession.into());
+                    }
+                }
+            }
+        }
     }
     async fn save(&self, run: &mut Value) -> Result<()> {
         // Terminal documents are immutable in storage. Preserve their last

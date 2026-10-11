@@ -86,7 +86,8 @@ pub(crate) async fn call_foreground(
     }
     let mut scoped=app;
     scoped.store=scoped.store.for_agent(&agent_id).await?;
-    call_raw(scoped,sid,run_id,generation,name,args,pending_id,policy_version,cancel).await
+    scoped.session_operation(&sid,cancel.clone(),
+        call_raw(scoped.clone(),sid.clone(),run_id,generation,name,args,pending_id,policy_version,cancel)).await
 }
 
 pub(crate) async fn call_raw(

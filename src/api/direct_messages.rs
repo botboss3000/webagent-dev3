@@ -32,6 +32,8 @@ pub(crate) async fn send(
         if receipt["digest"] != digest(&body) {
             return Err(conflict("Request identifier reused with different input"));
         }
+        let sid=receipt["result"]["session"]["id"].as_str().ok_or_else(||bad("Invalid message receipt"))?;
+        session_agent_id(&app,sid).await?;
         return Ok((StatusCode::ACCEPTED, Json(receipt["result"].clone())));
     }
     let mut message_body = body.clone();

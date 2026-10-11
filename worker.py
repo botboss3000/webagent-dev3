@@ -45,6 +45,33 @@ def search_limits():
 
 
 PLUGINS = {}
+ACTIVE_OPERATIONS = {}
+
+async def synchronous(function, *args):
+    # Cancellation must wait for bounded synchronous writes to settle before
+    # acknowledging quiescence; cancelling to_thread alone leaves work running.
+    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        raise
+
+async def stop_workspace_operations(workspace):
+    current = asyncio.current_task()
+    tasks = [task for task, owner in list(ACTIVE_OPERATIONS.items())
+             if owner == workspace and task is not current]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
 
 def administrator_plugin(name):
     # Static ownership, not manifest-driven imports or a model supplied path.
@@ -233,8 +260,15 @@ async def execute_locked(request, lock):
             if selected.parent != Path("/opt/v3/assets/releases") or not selected.is_dir():
                 raise ValueError("Published release unavailable")
             uuid.UUID(selected.name)
-            return await asyncio.to_thread(module.execute_published, name, args, selected)
-        return await asyncio.to_thread(module.execute, name, args, base)
+            return await synchronous(module.execute_published, name, args, selected)
+        # A scan can run for tens of seconds and publish an index. Execute it
+        # under the existing subprocess supervisor so cancellation reaps it.
+        spec = json.dumps({"base":str(base),"name":name,"arguments":args})
+        result = await command([sys.executable, "-I", str(Path(__file__).resolve()),
+                                "--index-inner", spec], base, 60, lock)
+        if result["status"] != "success":
+            return result
+        return json.loads(result["output"])
     if name == "administrator_git_watch":
         module=administrator_plugin("git_control").adapter
         value=await module.snapshot(base)
@@ -249,7 +283,7 @@ async def execute_locked(request, lock):
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             PLUGINS["file_manager"] = module
-        return await asyncio.to_thread(module.execute, args)
+        return await synchronous(module.execute, args)
     if name == "administrator_file_git":
         module = PLUGINS.get("file_manager")
         if module is None:
@@ -272,6 +306,7 @@ async def execute_locked(request, lock):
         content = administrator_plugin("diagnostics").read_artifact(base, request.get("trusted"), args["artifact_id"])
         return {"status": "success", "png_base64": base64.b64encode(content).decode()}
     if name == "administrator_quiesce":
+        await stop_workspace_operations(request["workspace"])
         if "terminal_control" in PLUGINS:
             await PLUGINS["terminal_control"].close_all(base)
         if "diagnostics" in PLUGINS:
@@ -284,10 +319,10 @@ async def execute_locked(request, lock):
     if name == "workspace_seed":
         return await seed_workspace_async(base)
     if name == "source_review":
-        return await asyncio.to_thread(source_review, base)
+        return await synchronous(source_review, base)
     if name == "source_patch":
-        return await asyncio.to_thread(source_patch, base, args)
-    return await asyncio.to_thread(file_operation, request, base, args, name)
+        return await synchronous(source_patch, base, args)
+    return await synchronous(file_operation, request, base, args, name)
 
 
 def git_capture(source, arguments, limit=LIMIT, acceptable=(0,)):
@@ -1162,11 +1197,16 @@ def file_operation(request, base, args, name):
 
 
 async def execute(request):
-    with (CONTROL / "dispatch.lock").open("rb") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        if (CONTROL / "shutoff").read_text().strip() != "0":
-            raise ValueError("execution disabled")
-        return await execute_locked(request, lock)
+    task = asyncio.current_task()
+    ACTIVE_OPERATIONS[task] = request["workspace"]
+    try:
+        with (CONTROL / "dispatch.lock").open("rb") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if (CONTROL / "shutoff").read_text().strip() != "0":
+                raise ValueError("execution disabled")
+            return await execute_locked(request, lock)
+    finally:
+        ACTIVE_OPERATIONS.pop(task, None)
 
 
 async def client(reader, writer):
@@ -1192,6 +1232,8 @@ async def client(reader, writer):
             await writer.wait_closed()
             return
         response = task.result()
+    except asyncio.CancelledError:
+        response = {"status": "failed", "output": "Session not found"}
     except Exception as error:
         response = {"status": "failed", "output": str(error)[:4096]}
     finally:
@@ -1305,6 +1347,14 @@ def runner(argv):
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--runner":
         runner(json.loads(sys.argv[2]))
+    elif len(sys.argv) == 3 and sys.argv[1] == "--index-inner":
+        spec = json.loads(sys.argv[2])
+        try:
+            result = administrator_plugin("code_index").execute(
+                spec["name"], spec["arguments"], Path(spec["base"]))
+        except Exception as error:
+            result = {"status":"failed", "output":str(error)[:4096]}
+        print(json.dumps(result))
     elif len(sys.argv) == 3 and sys.argv[1] == "--seed-inner":
         try:
             print(json.dumps(_seed_inner(json.loads(sys.argv[2]))))

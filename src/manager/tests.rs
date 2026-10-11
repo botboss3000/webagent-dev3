@@ -74,6 +74,26 @@ async fn provider(
     (server, calls)
 }
 #[tokio::test]
+async fn recycling_cancels_pending_review_without_provider_dispatch() {
+    let (_root,mut app)=crate::runtime_tests::fixture().await;
+    settings(&app,true).await;
+    let (server,calls)=provider(&mut app,r#"{"verdict":"acceptable"}"#,false).await;
+    let sid=session(&app).await;
+    let result=submit(&app,&sid,"request","Write a Python program").await;
+    let id=result["review_id"].as_str().unwrap();
+    let metadata=app.store.session_read_summary(&sid).await.unwrap();
+    app.store.lifecycle_session(&sid,&crate::store::session::SessionLifecycle {
+        client_request_id:"recycle".into(),expected_revision:metadata["metadata_revision"].as_u64().unwrap()
+    },false).await.unwrap();
+    super::scheduler::process(app.clone(),id.to_owned()).await.unwrap();
+    assert!(calls.lock().await.is_empty());
+    assert!(app.store.get(&format!("run:{id}")).await.unwrap().is_none());
+    assert_eq!(app.store.get(&format!("manager_review:{id}")).await.unwrap().unwrap()["status"],"cancelled");
+    assert_eq!(crate::send(State(app),Path(sid),Json(json!({"text":"late","client_message_id":"request"}))).await.unwrap_err().0,StatusCode::NOT_FOUND);
+    server.abort();
+}
+
+#[tokio::test]
 async fn unacceptable_keeps_chat_excludes_context_and_retry_does_not_rejudge() {
     let (_root, mut app) = crate::runtime_tests::fixture().await;
     settings(&app, true).await;
@@ -101,21 +121,6 @@ async fn unacceptable_keeps_chat_excludes_context_and_retry_does_not_rejudge() {
     )
     .await
     .is_err());
-    let metadata = app.store.session_read_summary(&sid).await.unwrap();
-    assert!(matches!(
-        app.store
-            .lifecycle_session(
-                &sid,
-                &crate::store::session::SessionLifecycle {
-                    client_request_id: "recycle".into(),
-                    expected_revision: metadata["metadata_revision"].as_u64().unwrap()
-                },
-                false
-            )
-            .await
-            .unwrap(),
-        crate::store::session::SessionPatchOutcome::Conflict(_)
-    ));
     super::scheduler::process(app.clone(), id.to_owned())
         .await
         .unwrap();

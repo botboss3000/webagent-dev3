@@ -220,6 +220,8 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
       if (status === 'recycled') {
         const b = button('Restore session','archive-restore',null,'session-row-bin'); b.textContent = 'bin';
         confirmButton(b,'Restore?',() => mutate(item,'restore')); row.append(b);
+        const remove = button('Permanently delete session','trash-2',null,'session-row-action danger');
+        confirmButton(remove,'Delete permanently?',() => mutate(item,'purge')); row.append(remove);
       } else if (!checkboxMode && config.menu?.row_actions !== false) row.append(button('More…','more-vertical',() => actions(item,row.querySelector('.session-row-kebab')),'session-row-kebab'));
       menu.append(row);
     }

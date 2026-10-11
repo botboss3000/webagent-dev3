@@ -1492,6 +1492,9 @@ impl Store {
             None
         };
         let mut tx = self.pool_for(key).begin().await?;
+        if key.starts_with("run:") {
+            self.require_active_session(&mut tx,value["session_id"].as_str().ok_or_else(||anyhow!("Run has no session"))?).await?;
+        }
         self.write_document(&mut tx,key,value).await?;
         if key.starts_with("run:") {
             self.index_run(&mut tx, value).await?;
@@ -1634,9 +1637,7 @@ impl Store {
             None
         };
         let mut tx = self.pool.begin().await?;
-        if !matches!(run["status"].as_str(), Some("completed" | "cancelled" | "failed")) {
-            self.require_active_session(&mut tx, run["session_id"].as_str().ok_or_else(||anyhow!("Run has no session"))?).await?;
-        }
+        self.require_active_session(&mut tx, run["session_id"].as_str().ok_or_else(||anyhow!("Run has no session"))?).await?;
         let expected=run["run_revision"].as_u64().unwrap_or(0);
         if let Some(raw)=sqlx::query_scalar::<_,Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(format!("run:{rid}")).fetch_optional(&mut *tx).await? {

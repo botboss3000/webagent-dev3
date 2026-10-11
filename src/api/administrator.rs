@@ -28,6 +28,7 @@ fn artifact_denied()->ApiError {
 async fn artifact_authority(app:&App,sid:&str)->std::result::Result<(String,Value),ApiError> {
     let session=app.store.get(&key("session",sid)).await?
         .ok_or_else(||ApiError(StatusCode::NOT_FOUND,"Session not found".into()))?;
+    if session["status"] != "active" { return Err(ApiError(StatusCode::NOT_FOUND,"Session not found".into())); }
     let agent=session["agent_id"].as_str().unwrap_or("shared_default");
     let mut scoped=app.clone();scoped.store=app.store.for_agent(agent).await?;
     let (policy,revision,visibility,state)=ability_controls(&scoped,sid).await?;

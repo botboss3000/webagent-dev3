@@ -14,8 +14,8 @@ pub(crate) async fn lane_run(
         .get(&key("session", sid))
         .await?
         .ok_or_else(|| bad("Session not found"))?;
-    if session["status"] == "recycled" {
-        return Err(conflict("Restore this conversation first"));
+    if session["status"] != "active" {
+        return Err(ApiError(StatusCode::NOT_FOUND,"Session not found".into()));
     }
     let agent = session_agent_id(app, sid).await?;
     let mut plan = app
@@ -28,13 +28,21 @@ pub(crate) async fn lane_run(
         .await
         .map_err(|_| conflict("Required model is unavailable"))?;
     Ok(
-        json!({"agent_id":agent,"session_id":sid,"selection_plan":plan,"failover_state":model_selection::FailoverState::default()}),
+        json!({"agent_id":agent,"session_id":sid,"session_execution_epoch":session["execution_epoch"].as_u64().unwrap_or(0),
+        "selection_plan":plan,"failover_state":model_selection::FailoverState::default()}),
     )
 }
 pub(crate) async fn lane_selection(
     app: &App,
     run: &Value,
 ) -> Result<(provider::ProviderSelection, Value), ApiError> {
+    let sid=run["session_id"].as_str().unwrap_or("");
+    session_agent_id(app,sid).await?;
+    if let Some(epoch)=run["session_execution_epoch"].as_u64() {
+        if !app.store.get(&key("session",sid)).await?.is_some_and(|s|s["execution_epoch"].as_u64().unwrap_or(0)==epoch) {
+            return Err(ApiError(StatusCode::NOT_FOUND,"Session not found".into()));
+        }
+    }
     let candidate = app
         .run_candidate(run)
         .await
@@ -59,12 +67,13 @@ pub(crate) async fn lane_answer(
     let (selection, tokens) = lane_selection(app, run).await?;
     let (tx, mut rx) = mpsc::channel(16);
     let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let cancel=app.stop.child_token();
     let result = tokio::time::timeout(
         Duration::from_secs(90),
-        async {
+        app.session_operation(run["session_id"].as_str().unwrap_or(""),cancel.clone(),async {
             let selection = &selection;
             let tokens = &tokens;
-            let cancel = app.stop.child_token();
+            let cancel = cancel.clone();
             let ready = crate::provider::CallDraft::new(
                 selection,
                 input,
@@ -75,7 +84,7 @@ pub(crate) async fn lane_answer(
             .validate()?
             .bind_credentials(tokens, &cancel)?;
             app.provider.dispatch(ready, tx, cancel).await
-        },
+        }),
     )
     .await;
     drain.abort();
@@ -86,7 +95,8 @@ pub(crate) async fn lane_answer(
                 "Voice or image model timed out".into(),
             )
         })?
-        .map_err(|_| {
+        .map_err(|error| {
+            if error.downcast_ref::<crate::store::session::RecycledSession>().is_some() {return ApiError::from(error);}
             ApiError(
                 StatusCode::BAD_GATEWAY,
                 "Voice or image model did not complete; check its assignment and connection".into(),

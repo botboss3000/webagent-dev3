@@ -20,7 +20,7 @@ async fn host_jobs(app:&App)->Result<()> {
 async fn repository_notices(app:&App)->Result<()> {
     let mut sessions=app.store.list("session:").await?;
     sessions.sort_by_key(|s|std::cmp::Reverse(s["created_at"].as_u64().unwrap_or(0)));
-    for session in sessions.into_iter().take(32) {
+    for session in sessions.into_iter().filter(|s|s["status"]=="active").take(32) {
         let Some(sid)=session["id"].as_str().filter(|s|uuid::Uuid::parse_str(s).is_ok()) else {continue;};
         let agent=session["agent_id"].as_str().unwrap_or("shared_default");
         let mut scoped=app.clone();scoped.store=app.store.for_agent(agent).await?;

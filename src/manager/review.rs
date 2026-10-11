@@ -56,7 +56,8 @@ pub(super) async fn judge(app: &App, record: &mut Value) -> Result<Verdict> {
         .bind_credentials(tokens, &cancel)?;
         app.provider.dispatch(ready, tx, cancel).await
     };
-    let result = tokio::time::timeout(Duration::from_secs(40), call).await;
+    let result = tokio::time::timeout(Duration::from_secs(40),
+        app.session_operation(record["session_id"].as_str().unwrap_or(""),cancel.clone(),call)).await;
     cancel.cancel();
     drain.abort();
     let response = result.map_err(|_| anyhow!("Manager review timed out"))??;

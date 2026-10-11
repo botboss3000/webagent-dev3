@@ -90,7 +90,7 @@ pub(super) async fn prepare_session(app:&App,body:&Value) -> std::result::Result
     let access=app.store.live_access(app.store.current_user_id(),agent_id).await
         .map_err(|_|ApiError(StatusCode::FORBIDDEN,"Agent unavailable".into()))?;
     if !access.admitted() { return Err(ApiError(StatusCode::FORBIDDEN,"Agent unavailable".into())); }
-    if app.store.list("session:").await?.len() >= access.max_sessions() as usize {
+    if app.store.list("session:").await?.iter().filter(|s|s["status"]!="deleted").count() >= access.max_sessions() as usize {
         return Err(conflict("Session limit reached"));
     }
     let agent_store=app.store.for_agent(agent_id).await
@@ -716,13 +716,40 @@ pub(crate) async fn session_read_api(State(app): State<App>, Path(id): Path<Stri
 pub(crate) async fn recycle_session_api(State(app): State<App>, Path(id): Path<String>, Json(body): Json<crate::store::session::SessionLifecycle>) -> Api {
     lifecycle_session_api(app,id,body,false).await
 }
+pub(crate) async fn purge_session_api(State(app):State<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Api {
+    use crate::store::session::SessionPatchOutcome;
+    let _guard=app.gate.lock().await;
+    let validation=crate::store::session::SessionPatch {client_request_id:body.client_request_id.clone(),
+        expected_revision:body.expected_revision,title:None,pinned:Some(false)};
+    validation.validate().map_err(bad)?;
+    if let Some(session)=app.store.get(&key("session",&id)).await?.filter(|s|s["status"]=="recycled") {
+        if session["metadata_revision"].as_u64()!=Some(body.expected_revision) {
+            return Err(conflict("Session metadata revision changed"));
+        }
+        crate::api::voice::quiesce(&app,&id).await;
+        crate::phase3_api::quiesce_session_resources(&app,&id).await?;
+    }
+    match app.store.purge_session(&id,&body).await? {
+        SessionPatchOutcome::Saved(value)=>Ok(Json(value)),
+        SessionPatchOutcome::NotFound=>Err(ApiError(StatusCode::NOT_FOUND,"Session not found".into())),
+        SessionPatchOutcome::Conflict(message)=>Err(conflict(message)),
+        SessionPatchOutcome::Invalid(message)=>Err(bad(message)),
+    }
+}
 pub(crate) async fn restore_session_api(State(app): State<App>, Path(id): Path<String>, Json(body): Json<crate::store::session::SessionLifecycle>) -> Api {
     lifecycle_session_api(app,id,body,true).await
 }
 async fn lifecycle_session_api(app: App, id: String, body: crate::store::session::SessionLifecycle, restore: bool) -> Api {
     use crate::store::session::SessionPatchOutcome;
+    let _guard=app.gate.lock().await;
     match app.store.lifecycle_session(&id,&body,restore).await? {
-        SessionPatchOutcome::Saved(value) => Ok(Json(value)),
+        SessionPatchOutcome::Saved(value) => {
+            if !restore && app.store.get(&key("session",&id)).await?.is_some_and(|s|s["status"]=="recycled") {
+                crate::api::voice::quiesce(&app,&id).await;
+                crate::phase3_api::quiesce_session_resources(&app,&id).await?;
+            }
+            Ok(Json(value))
+        },
         SessionPatchOutcome::NotFound => Err(ApiError(StatusCode::NOT_FOUND,"Session not found".into())),
         SessionPatchOutcome::Conflict(message) => Err(conflict(message)),
         SessionPatchOutcome::Invalid(message) => Err(bad(message)),

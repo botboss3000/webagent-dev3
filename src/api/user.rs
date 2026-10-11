@@ -6,10 +6,16 @@ use axum::{extract::{Path, Query, State}, http::HeaderMap, response::{IntoRespon
 use serde_json::Value;
 use std::collections::HashMap;
 
-async fn session_app(mut app: App, session_id: &str) -> Result<App, crate::ApiError> {
+async fn session_app(app: App, session_id: &str) -> Result<App, crate::ApiError> {
+    session_app_lifecycle(app,session_id,false).await
+}
+async fn session_app_lifecycle(mut app: App, session_id: &str, lifecycle: bool) -> Result<App, crate::ApiError> {
     let session = app.store.get(&crate::key("session", session_id)).await?
         .ok_or_else(|| crate::ApiError(axum::http::StatusCode::NOT_FOUND,
             "Session not found".into()))?;
+    if !lifecycle && session["status"] != "active" {
+        return Err(crate::ApiError(axum::http::StatusCode::NOT_FOUND,"Session not found".into()));
+    }
     let agent_id = session["agent_id"].as_str().unwrap_or("shared_default");
     app.store = app.store.for_agent(agent_id).await
         .map_err(|_| crate::ApiError(axum::http::StatusCode::NOT_FOUND,
@@ -105,8 +111,21 @@ async fn direct_message(Extension(app):Extension<App>,Json(body):Json<Value>)->R
 }
 path_arg!(snapshot => snapshot, String);
 path_json!(session_read => session_read_api, String, crate::SessionReadBody);
-path_json!(session_recycle => recycle_session_api, String, crate::store::session::SessionLifecycle);
-path_json!(session_restore => restore_session_api, String, crate::store::session::SessionLifecycle);
+async fn session_lifecycle(app:App,id:String,body:crate::store::session::SessionLifecycle,restore:bool)->Response {
+    let app=match session_app_lifecycle(app,&id,true).await {Ok(app)=>app,Err(error)=>return error.into_response()};
+    if restore {crate::restore_session_api(State(app),Path(id),Json(body)).await.into_response()}
+    else {crate::recycle_session_api(State(app),Path(id),Json(body)).await.into_response()}
+}
+async fn session_recycle(Extension(app):Extension<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Response {
+    session_lifecycle(app,id,body,false).await
+}
+async fn session_restore(Extension(app):Extension<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Response {
+    session_lifecycle(app,id,body,true).await
+}
+async fn session_purge(Extension(app):Extension<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Response {
+    let app=match session_app_lifecycle(app,&id,true).await {Ok(app)=>app,Err(error)=>return error.into_response()};
+    crate::purge_session_api(State(app),Path(id),Json(body)).await.into_response()
+}
 path_json!(session_patch => patch_session_api, String, crate::store::session::SessionPatch);
 path_arg!(diagnostics => run_diagnostics_api, (String, String));
 path_arg!(progress => run_progress_api, (String, String));
@@ -262,6 +281,7 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{sid}/runs/{rid}/progress", get(progress))
         .route("/sessions/{sid}/runs/{rid}/logs", get(run_logs))
         .route("/sessions/{id}", get(snapshot).patch(session_patch).delete(session_recycle))
+        .route("/sessions/{id}/purge", post(session_purge))
         .route("/sessions/{id}/restore", post(session_restore))
         .route("/sessions/{id}/read", axum::routing::put(session_read))
         .route("/sessions/{id}/controls", get(chat_controls))

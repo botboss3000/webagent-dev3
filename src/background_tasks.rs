@@ -197,8 +197,9 @@ async fn run_task(app:&App,mut task:Value)->Result<()> {
         tokio::select! {
             result=&mut operation=>break result,
             _=tokio::time::sleep(Duration::from_millis(100))=>{
-                let current=app.store.background_get(&id).await?.ok_or_else(||anyhow!("Task disappeared"))?;
-                if dispatch_authorized(app,&sid,&rid,&claim_id,&id,task["name"].as_str().unwrap(),&task["arguments"]).await?!=Some(true)
+                let current=app.store.background_get(&id).await.ok().flatten();
+                let Some(current)=current else {cancel.cancel();break Err(anyhow!("Task disappeared"));};
+                if dispatch_authorized(app,&sid,&rid,&claim_id,&id,task["name"].as_str().unwrap(),&task["arguments"]).await.ok()!=Some(Some(true))
                     || current["revision"].as_u64()!=Some(current_revision) {
                     cancel.cancel();break Err(anyhow!("Background authority expired"));
                 }

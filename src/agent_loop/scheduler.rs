@@ -144,7 +144,8 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
                             }
                         });
                         if let Err(error) =
-                            execute_run(cloned.clone(), id.clone(), generation, cancel.clone()).await
+                            cloned.session_operation(run["session_id"].as_str().unwrap_or(""),cancel.clone(),
+                                execute_run(cloned.clone(), id.clone(), generation, cancel.clone())).await
                         {
                             tracing::warn!(run_id=%id,"Run interrupted: {}",error);
                         }

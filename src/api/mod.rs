@@ -12,6 +12,7 @@ pub(crate) mod media_lane;
 pub(crate) mod uploads;
 mod voice;
 #[cfg(test)]mod composer_tests;
+#[cfg(test)]mod session_deletion_tests;
 mod ability_admin;
 mod service_admin;
 mod administrator;

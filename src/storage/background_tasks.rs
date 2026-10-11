@@ -58,6 +58,9 @@ impl Store {
         let id=task["id"].as_str().ok_or_else(||anyhow!("Missing task ID"))?;
         if task["user_id"] != self.user_id { return Err(anyhow!("Task owner mismatch")); }
         let mut tx=self.pool.begin().await?;
+        if !matches!(task["status"].as_str(),Some("cancelled"|"failed")) {
+            self.require_active_session(&mut tx,task["session_id"].as_str().ok_or_else(||anyhow!("Missing task session"))?).await?;
+        }
         let changed=if let Some(revision)=expected {
             sqlx::query("UPDATE background_task_index SET revision=revision+1,status=? WHERE id=? AND revision=?")
                 .bind(task["status"].as_str().unwrap_or("cancelled")).bind(id).bind(revision as i64)

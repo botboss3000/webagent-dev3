@@ -40,6 +40,52 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         return await worker.execute({"workspace": self.session, "name": name,
                                      "arguments": args, "timeout_seconds": timeout})
 
+    async def test_code_index_private_dispatch_runs_under_supervisor(self):
+        base=worker.workspace_path(self.session)
+        (base/"main.rs").write_text("fn main() {}\n")
+        result=await self.run_tool("code_index_scan",{"root":".","action":"discover"})
+        self.assertEqual(result["status"],"success",result)
+        self.assertTrue((base/".code-index").is_dir())
+
+    async def test_quiesce_cancels_owned_work_and_waits_for_cleanup(self):
+        started, cleaned = asyncio.Event(), asyncio.Event()
+        async def operation(request, lock):
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            if request["name"] == "slow":
+                started.set()
+                try:
+                    await asyncio.sleep(30)
+                finally:
+                    await asyncio.sleep(0.01)
+                    cleaned.set()
+                return {"status":"success"}
+            await worker.stop_workspace_operations(request["workspace"])
+            return {"status":"success"}
+        with mock.patch.object(worker, "execute_locked", side_effect=operation):
+            task=asyncio.create_task(self.run_tool("slow",{}))
+            await started.wait()
+            result=await self.run_tool("administrator_quiesce",{})
+            self.assertEqual(result["status"],"success")
+            self.assertTrue(cleaned.is_set())
+            self.assertTrue(task.cancelled())
+            self.assertFalse(worker.ACTIVE_OPERATIONS)
+
+    async def test_cancelled_synchronous_call_waits_for_thread_settlement(self):
+        started, release, settled = threading.Event(), threading.Event(), threading.Event()
+        def write():
+            started.set()
+            release.wait(2)
+            settled.set()
+        task=asyncio.create_task(worker.synchronous(write))
+        await asyncio.to_thread(started.wait)
+        task.cancel()
+        await asyncio.sleep(0.01)
+        self.assertFalse(task.done())
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(settled.is_set())
+
     async def test_file_write_prepublication_failures_preserve_original(self):
         base = worker.workspace_path(self.session)
         target = base / "source.py"

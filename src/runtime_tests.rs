@@ -5828,9 +5828,9 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
     let (_,list) = ability_request(&app,Method::GET,"/api/v3/sessions",None,Some(&cookie),None).await; assert_eq!(list["sessions"].as_array().unwrap().len(),0);
     let (_,list) = ability_request(&app,Method::GET,"/api/v3/sessions?status=recycled",None,Some(&cookie),None).await; assert_eq!(list["sessions"][0]["id"],sid);
     assert_eq!(ability_request(&app,Method::GET,"/api/v3/sessions?status=invalid",None,Some(&cookie),None).await.0,StatusCode::BAD_REQUEST);
-    assert_eq!(ability_request(&app,Method::GET,&uri,None,Some(&cookie),None).await.0,StatusCode::OK);
+    assert_eq!(ability_request(&app,Method::GET,&uri,None,Some(&cookie),None).await.0,StatusCode::NOT_FOUND);
     let message = json!({"text":"blocked","client_message_id":"blocked"});
-    assert_eq!(ability_request(&app,Method::POST,&format!("{uri}/messages"),Some(message),Some(&cookie),Some("ability-fixture")).await.0,StatusCode::CONFLICT);
+    assert_eq!(ability_request(&app,Method::POST,&format!("{uri}/messages"),Some(message),Some(&cookie),Some("ability-fixture")).await.0,StatusCode::NOT_FOUND);
     let restore = json!({"client_request_id":"restore","expected_revision":1});
     assert_eq!(ability_request(&app,Method::POST,&format!("{uri}/restore"),Some(restore.clone()),Some(&cookie),None).await.0,StatusCode::FORBIDDEN);
     let (status,result) = ability_request(&app,Method::POST,&format!("{uri}/restore"),Some(restore.clone()),Some(&cookie),Some("ability-fixture")).await;
@@ -5849,9 +5849,16 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
     }
     app.store.put("session:inaccessible-lifecycle",&json!({"id":"inaccessible-lifecycle","agent_id":"missing-agent"})).await.unwrap();
     assert_eq!(ability_request(&app,Method::DELETE,"/api/v3/sessions/inaccessible-lifecycle",Some(json!({"client_request_id":"inaccessible","expected_revision":0})),Some(&cookie),Some("ability-fixture")).await.0,StatusCode::NOT_FOUND);
-    // A nonterminal run is a conflict; there is no implicit cancellation.
+    // Recycling cancels pending approval; permanent removal keeps the session unavailable.
     app.store.put("run:lifecycle-blocker",&json!({"id":"lifecycle-blocker","session_id":sid,"status":"waiting_approval"})).await.unwrap();
-    assert_eq!(ability_request(&app,Method::DELETE,&uri,Some(json!({"client_request_id":"blocked-by-run","expected_revision":2})),Some(&cookie),Some("ability-fixture")).await.0,StatusCode::CONFLICT);
+    assert_eq!(ability_request(&app,Method::DELETE,&uri,Some(json!({"client_request_id":"with-run","expected_revision":2})),Some(&cookie),Some("ability-fixture")).await.0,StatusCode::OK);
+    assert_eq!(app.store.get("run:lifecycle-blocker").await.unwrap().unwrap()["status"],"cancelled");
+    let purge=json!({"client_request_id":"purge","expected_revision":3});
+    assert_eq!(ability_request(&app,Method::POST,&format!("{uri}/purge"),Some(purge.clone()),Some(&cookie),None).await.0,StatusCode::FORBIDDEN);
+    assert_eq!(ability_request(&app,Method::POST,&format!("{uri}/purge"),Some(purge.clone()),Some(&cookie),Some("ability-fixture")).await.0,StatusCode::OK);
+    assert_eq!(ability_request(&app,Method::POST,&format!("{uri}/purge"),Some(purge),Some(&cookie),Some("ability-fixture")).await.0,StatusCode::OK);
+    assert_eq!(ability_request(&app,Method::GET,&uri,None,Some(&cookie),None).await.0,StatusCode::NOT_FOUND);
+    assert_eq!(ability_request(&app,Method::POST,&format!("{uri}/restore"),Some(json!({"client_request_id":"after-purge","expected_revision":0})),Some(&cookie),Some("ability-fixture")).await.0,StatusCode::NOT_FOUND);
 
 }
 
