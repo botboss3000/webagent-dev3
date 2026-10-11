@@ -271,14 +271,14 @@ function _deviceBadge(s) {
 let _initialized = false;
 let _sessionsData = [];
 let _sessionsDataViewId = '';
-let _sessionsDataAgentId = null; // which agent the _sessionsData buffer belongs to (null = account-wide / All Agents)
-let _agentFilterId = null; // null = the All Agents catalog
+let _sessionsDataAgentId = null; // which agent the _sessionsData buffer belongs to (null = account-wide / Sessions)
+let _agentFilterId = null; // null = the Sessions catalog
 let _nativeCodexContext = null; // agent metadata when its card owns the native Codex catalog
 let _refreshTimer = null;
 let _sourceAccessDenied = false;
 let _tickTimer = null;   // 1s interval that re-renders the live time-ago labels
 let _onKsChanged = null; // kill-switch-changed listener while the tab is active
-let _agentContextName = 'All Agents';
+let _agentContextName = 'Sessions';
 let _viewId = 'sessions';  // 'sessions' | 'recycle-bin' | 'both' (chip switcher)
 let _selectionPanelMode = 'selected';
 // Successful recycling removes active rows from the current projection. Keep this
@@ -334,12 +334,9 @@ function _markSessionsPaint(source) {
 }
 
 // ── Canonical account-wide session snapshot ─────────────────────────
-// SESSIONS-SHARED-SNAPSHOT (breadcrumb): All Agents and every agent card read
-// the SAME account-wide session list. A selected-agent view is derived from it
-// by a local agent_id filter in _renderTable — never by a separate server-scoped
-// request — which is what makes an agent click instant. The snapshot is
-// refreshed by the 30s background pass and by explicit session mutations; it is
-// NEVER narrowed to a single agent's rows.
+// SESSIONS-SHARED-SNAPSHOT: the common Sessions page keeps one account-wide
+// snapshot, refreshed by the background pass and explicit session mutations.
+// Individual agent configuration pages do not mount this renderer.
 let _sharedSnapshotViewId = '';
 let _sharedSnapshotRows = null;
 let _sharedSnapshotAt = 0;
@@ -379,10 +376,10 @@ function _sharedSnapshotIsStale(viewId) {
   return (Date.now() - _sharedSnapshotAt) > _SHARED_SNAPSHOT_TTL_MS;
 }
 
-// The account-wide All Agents catalog. The shared _sessionsData buffer can be
+// The account-wide Sessions catalog. The shared _sessionsData buffer can be
 // narrowed to the last-loaded context, so the authoritative account-wide set
 // lives in (in order) the in-memory snapshot, the buffer when it already holds
-// All Agents rows, or the sessions:{view} IDB cache. Read-only — never narrows.
+// Sessions rows, or the sessions:{view} IDB cache. Read-only — never narrows.
 function _accountWideRows() {
   const snapshot = _readSharedSnapshot(_viewId);
   if (snapshot && snapshot.length) return snapshot;
@@ -438,10 +435,8 @@ function _paintAgentFromSharedSnapshot(agentId) {
   setTimeout(paint, 60);
 }
 
-// The Agents page owns one sessions table. The All Agents Sessions tab and an
-// opened agent's Sessions tab move that same DOM node into their card so search,
-// sorting, selection, and refresh state are preserved.
-function setSessionsAgentContext() { _agentFilterId=null;_nativeCodexContext=null;_agentContextName='All Agents'; }
+// Sessions stays account-wide; configuration selection never filters its catalog.
+function setSessionsAgentContext() { _agentFilterId=null;_nativeCodexContext=null;_agentContextName='Sessions'; }
 
 // Cross-catalog search cache: while a query is active we lazily fetch the OTHER
 // catalog (sessions ↔ recycle bin) so results surface from both views at once.
@@ -825,8 +820,7 @@ function _buildThead(thead, cfg) {
   const hidden = getHiddenColumns(cfg, _sessionsViewWidth());
   const viewKey = _viewId + '|' + cfg.id;
   if (_lastTheadConfigId === viewKey) {
-    // Same config — preserve the stateful header DOM, but update its context
-    // label so a selected agent never retains the All Agents heading.
+    // Same config — preserve the stateful header DOM and refresh its heading.
     _updateSessionsHeading();
     _updateResponsiveColumns();
     return;
@@ -1495,10 +1489,8 @@ async function _loadAndRender(reason = 'foreground') {
   const cachedRows = cacheKey ? readAgentCache(cacheKey) : null;
   const bufferMismatch = _sessionsDataViewId !== loadViewId
     || _sessionsDataAgentId !== bufferStamp;
-  // The account-wide cache is first paint for EVERY normal context — All Agents
-  // and each agent card alike — so a selected agent renders its filtered subset
-  // immediately instead of showing a scoped-request skeleton. Native Codex
-  // catalogs keep their own scoped flow.
+  // The account-wide Sessions cache supplies first paint while fresh statistics
+  // load. Native catalogs remain unavailable until their V3 contracts exist.
   if (!isNativeCtx && bufferMismatch && Array.isArray(cachedRows)) {
     _sessionsData = cachedRows;
     _sessionsDataViewId = loadViewId;
@@ -2822,7 +2814,7 @@ function startSessions() {
   // Paint the footer storage meter immediately — it must not wait for the
   // (possibly slow) session catalog request.
   _refreshStorageUsage();
-  // On a cold boot the All Agents cache may still be hydrating. Never let an
+  // On a cold boot the Sessions cache may still be hydrating. Never let an
   // asynchronous cache completion replace a selected-agent skeleton or a newer
   // context with account-wide rows.
   const cacheViewId = _viewId;

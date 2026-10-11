@@ -1736,14 +1736,14 @@ body.light-mode .sess-agent-badge {
 .sessions-activity-tip .sessions-activity-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* V3 common-page shell; reference table styling above is retained. */
-#all-agents-region { min-width:0; }
-#all-agents-region[hidden] { display:none; }
+#sessions-region { min-width:0; }
+#sessions-region[hidden] { display:none; }
 #sessions-section { min-width:0; position:relative; }
 #sessions-toolbar { display:flex; padding:8px 12px; }
 #sessions-header-actions { display:flex; gap:8px; align-items:center; }
 #sessions-search-panel { position:static; box-shadow:none; }
-#sessions-table-wrap { max-height:calc(100dvh - 280px); min-height:160px; overflow:auto; }
-#sessions-footer { position:sticky; bottom:0; background:var(--bg-1); }
+#sessions-table-wrap { min-height:0; overflow:auto; touch-action:auto; }
+#sessions-footer, #sessions-footer-dock { background:var(--bg-1); }
 #sessions-section .v3-pending { color:var(--fg-3); font-size:11px; }
 #sessions-section button:disabled, .session-row-actions button:disabled { opacity:.5; cursor:not-allowed; }
 #sessions-section tr.is-unread .session-row-title-label { font-weight:700; }
@@ -1751,9 +1751,25 @@ body.light-mode .sess-agent-badge {
 #sessions-section .sessions-check-cell:focus-visible { outline:2px solid var(--accent); }
 #sessions-section .sessions-search-wrap { min-width:100px; }
 #sessions-section #sessions-search-input { width:100%; }
-@media (max-width:600px) { #sessions-toolbar { flex-wrap:wrap; } #sessions-header-actions { flex-wrap:wrap; width:100%; } #sessions-search-panel { flex:1; min-width:120px; } #sessions-table-wrap { max-height:calc(100dvh - 220px); } }
+@media (max-width:600px) { #sessions-toolbar { flex-wrap:wrap; } #sessions-header-actions { flex-wrap:wrap; width:100%; } #sessions-search-panel { flex:1; min-width:120px; } }
 
-#all-agents-region #sessions-section { display:flex; }
+#sessions-region #sessions-section { display:flex; }
 
 #sessions-section #sessions-search-panel[hidden] { display:flex!important; }
-#sessions-section [data-sessions-footer-storage]::after { content:"Storage · Pending"; font-size:10px; color:var(--fg-3); }
+#sessions-footer-dock [data-sessions-footer-storage]::after, #sessions-section [data-sessions-footer-storage]::after { content:"Storage · Pending"; font-size:10px; color:var(--fg-3); }
+
+/* Sessions has one bounded table scrollport. The V2 footer remains a sibling
+   of the grid, so neither long catalogs nor touch scrolling can hide it. */
+#main-panel:has(#tab-agents.sessions-view:not([hidden])) { overflow:hidden; }
+#tab-agents.sessions-view { display:flex!important; flex-direction:column; height:100%!important; min-height:0; box-sizing:border-box; overflow:hidden!important; padding:12px 12px 0; }
+#tab-agents.sessions-view #agents-grid { flex:1; min-height:0; overflow:hidden; }
+#tab-agents.sessions-view .agents-top-row { flex:0 0 auto; }
+#sessions-region { display:flex; flex:1; min-height:0; }
+#sessions-region[hidden] { display:none; }
+#sessions-region > .agent-row { display:flex; flex-direction:column; flex:1; min-height:0; width:100%; }
+#sessions-region .agent-card-tabs-only { flex:0 0 auto; }
+#tab-agents.sessions-view #sessions-region .agent-detail-panel, #tab-agents.sessions-view #sessions-region .agent-detail-content { display:flex; flex:1; height:auto; min-height:0; overflow:hidden; }
+#sessions-region #sessions-section { flex:1; min-height:0; }
+#sessions-region #sessions-table-wrap { flex:1; min-height:0; max-height:none; touch-action:auto; overscroll-behavior:contain; }
+#sessions-footer-dock { flex:0 0 auto; margin-inline:-12px; width:auto; box-shadow:0 -1px 0 var(--border); }
+#sessions-footer-dock button:disabled { opacity:.5; cursor:not-allowed; }

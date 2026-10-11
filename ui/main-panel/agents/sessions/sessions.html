@@ -70,16 +70,10 @@
   <!-- SESSION-GUTTER-CHECK-ALL — select-all/clear-all twin of the gutter toggle.
        Only visible while the selection column is open; painted by
        _syncToggleButtons()/_syncFooterCheckAll() in sessions-page.js. Keep in
-       sync with ui/main-panel/agents/agents.html (#sessions-footer and
-       #agents-sessions-footer-dock). -->
+       sync with the page-shell #sessions-footer-dock created by page.js. -->
   <button type="button" class="session-manage-checkbox-toggle sessions-footer-check-all" data-sessions-footer-checkall title="Select all sessions" aria-label="Select all sessions" aria-pressed="false" hidden><i data-lucide="check-square" style="width:15px;height:15px;"></i></button>
-  <!-- SESSION-FOOTER-FILTERS — the footer carries no search FIELD of its own:
-       the shared page-chat launcher drives the table's engine input directly
-       (hiddenSearchSelector in ui/shared/js/agents-page-chat-widget.js). Only
-       the controls the launcher does not own stay here — the Title/T+C mode
-       chip and the FLAG filter. Keep in sync with the two copies in
-       ui/main-panel/agents/agents.html (#sessions-footer and
-       #agents-sessions-footer-dock). -->
+  <!-- SESSION-FOOTER-FILTERS — the Sessions toolbar owns the search field.
+       The docked reference footer retains search mode and the pending FLAG filter. -->
   <span class="session-manage-search">
     <button type="button" class="session-manage-search-mode" data-sessions-footer-mode title="Search mode: Title">Title</button>
     <button type="button" class="session-manage-flag-filter" data-sessions-footer-flag data-state="off" title="Show only sessions with a flag" aria-pressed="false">FLAG</button>
@@ -90,8 +84,7 @@
   </span>
   <!-- SESSION-STORAGE-METER — trailing element of the left-aligned control
        strip; keep it last. Keep in sync with
-       ui/main-panel/agents/agents.html (#sessions-footer and
-       #agents-sessions-footer-dock). -->
+       the page-shell #sessions-footer-dock created by page.js. -->
   <span class="session-manage-storage" data-sessions-footer-storage role="group" aria-label="Session storage usage">
     <span class="session-storage-track" aria-hidden="true"><span class="session-storage-fill" data-storage-fill></span></span>
   </span>

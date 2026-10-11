@@ -1,14 +1,14 @@
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 import http from 'node:http';import fs from 'node:fs/promises';import path from 'node:path';import assert from 'node:assert/strict';
 const root=path.resolve(new URL('../../../..',import.meta.url).pathname);
-const server=http.createServer(async(req,res)=>{try{const file=path.resolve(root,'.'+new URL(req.url,'http://localhost').pathname);if(!file.startsWith(root+'/'))throw Error('bad');const data=await fs.readFile(file);res.setHeader('content-type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html');res.end(data);}catch{res.statusCode=404;res.end('Not found');}});
+const server=http.createServer(async(req,res)=>{try{const file=path.resolve(root,'.'+new URL(req.url,'http://localhost').pathname.replace(/^\/v3-ui\//,'/ui/'));if(!file.startsWith(root+'/'))throw Error('bad');const data=await fs.readFile(file);res.setHeader('content-type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html');res.end(data);}catch{res.statusCode=404;res.end('Not found');}});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 let browser;try{
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/snap/bin/chromium',headless:true,args:['--no-sandbox']});
  const page=await browser.newPage({viewport:{width:1200,height:850}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto('http://127.0.0.1:'+server.address().port+'/ui/main-panel/agents/sessions/sessions.html');
  const result=await page.evaluate(async()=>{
-  const html=await(await fetch('/ui/main-panel/agents/sessions/sessions.html')).text();document.body.innerHTML='<div id="tab-agents" class="active"><div id="all-agents-region"><section id="sessions-section"></section></div></div>';
+  const html=await(await fetch('/ui/main-panel/agents/sessions/sessions.html')).text();document.body.innerHTML='<div id="tab-agents" class="active"><div id="sessions-region"><section id="sessions-section"></section></div></div>';
   const style=document.createElement('link');style.rel='stylesheet';style.href='/ui/main-panel/agents/sessions/sessions.css';document.head.append(style);
   const host=document.getElementById('sessions-section');host.innerHTML=html;
   const rows=[{id:'a',agent_id:'one',title:'Alpha',status:'active',metadata_revision:0,created_at:1,last_active_at:10,is_unread:true,unread_count:1,read_through_seq:0,last_public_seq:3,message_count:3,usage:{input_tokens:0,output_tokens:0,reported_calls:1,unreported_calls:0,known_cost_usd:0,unknown_cost_calls:0}},{id:'b',agent_id:'two',title:'Beta',status:'active',metadata_revision:0,created_at:1,last_active_at:9,is_unread:false,message_count:0},{id:'c',agent_id:'one',title:'Recycled',status:'recycled',metadata_revision:0,created_at:1,last_active_at:8,is_unread:false,message_count:0}];
@@ -43,7 +43,8 @@ let browser;try{
  await page.locator('#sessions-undo-btn').click();await page.waitForTimeout(500);await page.locator('#sessions-undo-btn').click();await page.waitForTimeout(300);
  await page.locator('[data-sessions-footer-view="recycle-bin"]').click();await page.waitForTimeout(300);
  await page.locator('[data-session-row-more]').first().click();assert.equal(await page.locator('[data-action="delete"]').isDisabled(),true);
- await page.keyboard.press('Escape');
+ await page.locator('#sessions-heading').click();
+ assert.equal(await page.locator('.session-row-actions').count(),0);
  await page.locator('[data-sessions-footer-view="both"]').click();await page.waitForTimeout(300);
  await page.locator('#sessions-search-input').fill('needle');await page.waitForTimeout(500);
  assert.equal(await page.locator('.session-row-title-label').first().innerText(),'Beta');
@@ -54,5 +55,28 @@ let browser;try{
  await page.locator('#sessions-search-input').fill('');await page.waitForTimeout(250);
  await page.evaluate(()=>fixture.controller.destroy());const before=await page.evaluate(()=>fixture.calls.length);await page.evaluate(()=>window.dispatchEvent(new Event('v3:sessions-changed')));await page.waitForTimeout(100);assert.equal(await page.evaluate(()=>fixture.calls.length),before);
  assert.deepEqual(errors,[]);
- console.log('PASS reference renderer: zero statistics, selection, confirmation, partial batch, stable retry receipt, restore, disabled permanent deletion, server search, narrow layout, teardown');
+ // Exercise the public page mount with a long catalog and its docked footer.
+ await page.evaluate(async()=>{
+  document.body.innerHTML='<main id="main-panel"><section id="tab-agents" class="active sessions-view"><div id="agents-grid"><div class="agents-top-row">Sessions</div><div id="sessions-region"><div class="agent-row"><div class="agent-card-tabs-only">Sessions</div><div class="agent-detail-panel"><div class="agent-detail-content"><section id="sessions-section"></section></div></div></div></div></div></section></main>';
+  const style=document.createElement('style');style.textContent='html,body{height:100%;margin:0}#main-panel{height:100%;overflow:auto}#agents-grid{display:flex;flex-direction:column} .agents-top-row{height:148px} .agent-card-tabs-only{min-height:39px} .sessions-footer{display:flex;min-height:32px} .agent-detail-content{height:520px;flex-direction:column}';
+  document.head.append(style);
+  const appStyle=document.createElement('link');appStyle.rel='stylesheet';appStyle.href='/ui/app.css';document.head.append(appStyle);
+  const {mountSessionsPage}=await import('/ui/main-panel/agents/sessions/page.js');
+  const rows=Array.from({length:200},(_,i)=>({id:'long-'+i,title:'Long catalog '+i,agent_id:'one',status:'active',metadata_revision:0,created_at:1,last_active_at:200-i,message_count:0}));
+  window.longPage=await mountSessionsPage(document.getElementById('sessions-section'),{isCurrent:()=>true,request:async()=>({sessions:rows,next_offset:null}),userId:'long-fixture',roster:[{id:'one',name:'One'}],getSessionId:()=>null,open:()=>{},changed:()=>{}});
+ });
+ await page.locator('#sessions-table-body tr').nth(199).waitFor({state:'attached'});
+ for(const viewport of [{width:1200,height:720},{width:390,height:780}]){
+  await page.setViewportSize(viewport);
+  const layout=await page.evaluate(()=>{const table=document.getElementById('sessions-table-wrap'),footer=document.getElementById('sessions-footer-dock'),panel=document.getElementById('main-panel');return {client:table.clientHeight,scroll:table.scrollHeight,tableBottom:table.getBoundingClientRect().bottom,footerTop:footer.getBoundingClientRect().top,footerBottom:footer.getBoundingClientRect().bottom,panelBottom:panel.getBoundingClientRect().bottom,touch:getComputedStyle(table).touchAction,footerParent:footer.parentElement.id};});
+  assert.ok(layout.scroll>layout.client);assert.ok(layout.client>100);assert.equal(layout.footerParent,'tab-agents');assert.ok(layout.tableBottom<=layout.footerTop+1);assert.ok(Math.abs(layout.footerBottom-layout.panelBottom)<=2);assert.equal(layout.touch,'auto');
+  await page.locator('#sessions-table-wrap').hover();await page.mouse.wheel(0,10000);await page.waitForTimeout(150);
+  assert.ok(await page.locator('#sessions-table-wrap').evaluate(e=>e.scrollTop>0));
+  assert.ok(await page.locator('#sessions-footer-dock').isVisible());
+  // Footer controls still operate from outside the renderer's host.
+  await page.locator('#sessions-footer-dock [data-sessions-footer-gutter]').click();
+ }
+ await page.evaluate(()=>longPage.destroy());assert.equal(await page.locator('#sessions-footer-dock').count(),0);
+ assert.deepEqual(errors,[]);
+ console.log('PASS reference renderer: zero statistics, selection, confirmation, partial batch, stable retry receipt, restore, disabled permanent deletion, server search, narrow layout, teardown, long catalog scrolling and docked footer');
 }finally{await browser?.close();server.close();}
