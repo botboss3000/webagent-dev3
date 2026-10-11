@@ -82,7 +82,14 @@ export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
     snapFallback=setTimeout(finishSnap,directionSetting(nearest.direction,'snap_complete_fallback_ms',1000));
   }
   for(const type of ['wheel','touchstart','pointerdown'])scroller.addEventListener(type,release,{passive:true,signal:abort.signal});
-  scroller.addEventListener('keydown',event=>{if(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)&&!event.target.closest('input,textarea,[contenteditable=true]'))release();},{signal:abort.signal});
+  scroller.addEventListener('keydown',event=>{
+    if(event.defaultPrevented||event.isComposing||event.target.closest('input,textarea,select,[contenteditable]:not([contenteditable=false])'))return;
+    if(event.key==='End'&&!event.shiftKey&&!event.altKey&&!event.metaKey){
+      event.preventDefault();
+      release();neighborhoodLanding=null;following=true;intentUntil=0;
+      scroller.scrollTo({top:scroller.scrollHeight,behavior:'instant'});
+    }else if(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key))release();
+  },{signal:abort.signal});
   scroller.addEventListener('scroll',()=>{if(snapping||performance.now()>intentUntil)return;rearm();following=scroller.scrollHeight-scroller.clientHeight-scroller.scrollTop<=setting('tail_follow_distance_px',12);clearTimeout(snapTimer);snapTimer=setTimeout(settle,px(config().snap_settle_ms,120));},{passive:true,signal:abort.signal});
   scroller.addEventListener('scrollend',finishSnap,{signal:abort.signal});
   const observer=new ResizeObserver(changed);observer.observe(inner);observer.observe(header);observer.observe(scroller);
