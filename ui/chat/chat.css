@@ -54,6 +54,8 @@ body.light-mode #chat-notifications .chat-notification{background:var(--chat-pil
 body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:var(--message-bg-light)}
 #chat-messages-inner .bubble-body{white-space:pre-wrap;overflow-wrap:anywhere}
 #chat-messages-inner .turn-gutter{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+#chat-messages-inner .turn-gutter[hidden]{display:none!important}
+#chat-messages-inner .chat-bubble[aria-controls]:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
 #chat-messages-inner .turn-gutter-btn:disabled{opacity:.4;cursor:not-allowed}
 /* Red marks a visible reference control awaiting a v3 backend contract. */
 #chat-panel .v3-backend-pending,.bubble-more-menu .v3-backend-pending,.v3-context-panel .v3-backend-pending{color:var(--danger,#e5484d)!important;opacity:1!important}

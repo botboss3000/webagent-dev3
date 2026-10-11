@@ -48,6 +48,32 @@ function speak(body,trigger,gutter) {
   trigger.title='Stop reading';trigger.setAttribute('aria-label','Stop reading');trigger.after(pause);
   playback={trigger,stop};window.speechSynthesis.speak(utterance);
 }
+// Keep message actions and text selection independent of the bubble toggle.
+export function bindGutterVisibility(bubble,gutter,config,role) {
+  const enabled=config.enabled!==false&&config[role]?.enabled!==false;
+  const hideable=enabled&&config.hideable===true;
+  gutter.hidden=!enabled||hideable;
+  if(!hideable)return;
+  gutter.id='message-gutter-'+bubble.dataset.publicId;
+  bubble.tabIndex=0;
+  bubble.setAttribute('aria-controls',gutter.id);
+  bubble.setAttribute('aria-expanded','false');
+  const interactive='a,button,input,textarea,select,summary,[role="button"],[contenteditable]:not([contenteditable="false"])';
+  function toggle(){
+    gutter.hidden=!gutter.hidden;
+    bubble.setAttribute('aria-expanded',String(!gutter.hidden));
+  }
+  bubble.addEventListener('click',event=>{
+    if(event.defaultPrevented||event.target.closest(interactive)||gutter.contains(event.target))return;
+    const selection=window.getSelection();
+    if(selection&&!selection.isCollapsed&&(bubble.contains(selection.anchorNode)||bubble.contains(selection.focusNode)))return;
+    toggle();
+  });
+  bubble.addEventListener('keydown',event=>{
+    if(event.target!==bubble||event.repeat||!['Enter',' '].includes(event.key))return;
+    event.preventDefault();toggle();
+  });
+}
 export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,showContext=()=>{},refreshMessage=async()=>{}}) {
   const role=item.role==='user'?'user':'agent',profile=currentChatProfile()||{};
   const config=profile.message_gutters||{},spec=config[role]||{};
@@ -86,7 +112,7 @@ export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,sho
     window.addEventListener('resize',position,{signal:abort.signal});document.addEventListener('scroll',position,{capture:true,signal:abort.signal});
     overlay={trigger,close};menu.querySelector('button:not(:disabled)')?.focus();
   }
-  for(const name of spec.enabled===false?[]:spec.order||defaults) {
+  for(const name of config.enabled===false||spec.enabled===false?[]:spec.order||defaults) {
     const entry=spec.controls?.[name];if(entry===false||entry?.enabled===false)continue;
     let control;
     if(name==='time'){control=document.createElement('time');control.className='turn-gutter-time bubble-time';const date=new Date(item.created_at*1000);if(Number.isFinite(date.getTime())){control.dateTime=date.toISOString();control.dataset.gutterCreatedAt=String(date.getTime());control.textContent=formatRelativeTime(date.getTime());control.title=date.toLocaleString();}}
@@ -100,5 +126,6 @@ export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,sho
     if(entry?.locked){control.disabled=true;control.title=entry.locked_message||'Unavailable';}
     control.dataset.gutterControl=name;gutter.append(control);
   }
+  bindGutterVisibility(bubble,gutter,config,role);
   return gutter;
 }
