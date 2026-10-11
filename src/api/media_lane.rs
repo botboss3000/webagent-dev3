@@ -40,7 +40,7 @@ pub(crate) async fn lane_selection(
         .await
         .map_err(|_| conflict("Model access changed"))?
         .ok_or_else(|| conflict("Model unavailable"))?;
-    let selection = provider::ProviderSelection {
+    let selection = provider::ProviderSelection { limits:candidate.limits.clone(),
         provider: candidate.transport.provider_id(),
         model: candidate.upstream_model,
     };
@@ -61,16 +61,21 @@ pub(crate) async fn lane_answer(
     let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
     let result = tokio::time::timeout(
         Duration::from_secs(90),
-        app.provider.complete_selected_with_instructions(
-            &selection,
-            &tokens,
-            input,
-            vec![],
-            run["session_id"].as_str().unwrap(),
-            instructions,
-            tx,
-            app.stop.child_token(),
-        ),
+        async {
+            let selection = &selection;
+            let tokens = &tokens;
+            let cancel = app.stop.child_token();
+            let ready = crate::provider::CallDraft::new(
+                selection,
+                input,
+                vec![],
+                run["session_id"].as_str().unwrap(),
+                instructions,
+            )
+            .validate()?
+            .bind_credentials(tokens, &cancel)?;
+            app.provider.dispatch(ready, tx, cancel).await
+        },
     )
     .await;
     drain.abort();
@@ -116,4 +121,82 @@ pub(crate) async fn limit(request: Request, next: Next) -> Response {
         .into_response();
     };
     next.run(request).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{routing::post, Router};
+
+    #[tokio::test]
+    async fn typed_media_call_preserves_request_and_does_not_publish_chat() {
+        let (_root, mut app) = crate::runtime_tests::fixture().await;
+        let mut catalog = app.store.model_catalog().await.unwrap();
+        let roster = catalog.agent_models.get_mut("shared_default").unwrap();
+        let assignment = roster.roles[&model_selection::ModelRole::Standard].clone();
+        roster
+            .roles
+            .insert(model_selection::ModelRole::Voice, assignment.clone());
+        catalog
+            .entries
+            .get_mut(&assignment.entry_id)
+            .unwrap()
+            .capabilities
+            .insert("voice".into());
+        app.store
+            .save_model_catalog(&catalog, catalog.revision)
+            .await
+            .unwrap();
+        let sid = crate::create_session(
+            State(app.clone()),
+            Json(json!({"client_request_id":uuid(),"agent_id":"shared_default"})),
+        )
+        .await
+        .unwrap()
+        .0["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let captured = calls.clone();
+        let mock = Router::new().route(
+            "/responses",
+            post(move |Json(body): Json<Value>| {
+                let captured = captured.clone();
+                async move {
+                    captured.lock().await.push(body);
+                    let event = json!({"type":"response.completed","response":{
+                    "status":"completed","output":[{"type":"message","role":"assistant",
+                    "content":[{"type":"output_text","text":"A bounded voice answer."}]}]}});
+                    (
+                        [("content-type", "text/event-stream")],
+                        format!("data: {event}\n\n"),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, mock).await.unwrap();
+        });
+        app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+        let run = lane_run(&app, &sid, model_selection::ModelRole::Voice)
+            .await
+            .unwrap();
+        let input = vec![json!({"role":"user","content":"What size is available?"})];
+        let answer = lane_answer(&app, &run, input.clone(), "Answer briefly.")
+            .await
+            .unwrap();
+        assert_eq!(answer, "A bounded voice answer.");
+        let calls = calls.lock().await;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["input"], json!(input));
+        assert_eq!(calls[0]["instructions"], "Answer briefly.");
+        assert!(calls[0].get("tools").is_none());
+        assert!(app.store.chat_snapshot(&sid).await.unwrap().0.is_empty());
+        assert!(app.store.context(&sid).await.unwrap().is_empty());
+        assert!(app.store.active_runs().await.unwrap().is_empty());
+        server.abort();
+    }
 }

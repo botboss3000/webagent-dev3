@@ -1,5 +1,6 @@
 'use strict';
 // Reference chat-bubble DOM and configured gutters, with V3 committed-row transport.
+import {applyBubblePaint} from './bubble-paint.js';
 import {currentChatProfile} from '../controls/chat-config.js';
 import {_refreshLucideIcons} from './presentation.js';
 import {copyText} from '../../shared/models/clipboard.js';
@@ -36,7 +37,7 @@ export function createMessage(item,{getRun=()=>null,client,getSession=()=>null,n
     }
     bubble.append(files);
   }
-  const cfg=profile.message_bubbles||{},lane=cfg[role]||{};bubble.style.fontSize=(cfg.font_size_px||17)+'px';bubble.style.padding=(cfg.padding_y_px??10)+'px '+(cfg.padding_x_px??14)+'px';if(role==='agent')bubble.style.paddingLeft=(cfg.agent_padding_left_px??4)+'px';bubble.style.border=lane.border||'none';bubble.style.borderRadius=(lane.radius_px??14)+'px';bubble.style.lineHeight=String(lane.line_height||1.5);bubble.style.setProperty('--message-bg-dark',lane.bg_dark||'transparent');bubble.style.setProperty('--message-bg-light',lane.bg_light||'transparent');bubble.classList.add('v3-config-bubble');
+  const cfg=profile.message_bubbles||{},lane=cfg[role]||{};bubble.style.fontSize=(cfg.font_size_px||17)+'px';bubble.style.padding=(cfg.padding_y_px??10)+'px '+(cfg.padding_x_px??14)+'px';if(role==='agent')bubble.style.paddingLeft=(cfg.agent_padding_left_px??4)+'px';applyBubblePaint(bubble,lane);bubble.style.borderRadius=(lane.radius_px??14)+'px';bubble.style.lineHeight=String(lane.line_height||1.5);
   const gutter=createBubbleGutter({item,body,bubble,getText:()=>text,getRun,showContext,refreshMessage:async()=>{
     const sid=getSession();
     if(!sid||!client)throw Error('Conversation unavailable');

@@ -94,7 +94,7 @@ impl Policy {
         let policy: Self = serde_json::from_value(value)?;
         if policy.schema_version != 1 || !(1..=50).contains(&policy.max_turns)
             || !(1..=3).contains(&policy.max_attempts)
-            || !(1024..=262144).contains(&policy.max_context_bytes)
+            || !(1024..=4_194_304).contains(&policy.max_context_bytes)
             || !(1..=262144).contains(&policy.max_publication_bytes) {
             bail!("Invalid workflow policy or operator ceiling exceeded");
         }

@@ -152,7 +152,7 @@ pub(crate) async fn apply_chat_model_preference(app:&App,run:&mut Value)->Result
         return Err(anyhow!("Selected model connection is unavailable"));
     }
     run["provider_selection"]=provider::ProviderSelection{
-        provider:candidate.transport.provider_id(),model:candidate.upstream_model.clone()
+        provider:candidate.transport.provider_id(),model:candidate.upstream_model.clone(),limits:candidate.limits.clone()
     }.value();
     run["selection_plan"]=json!(plan);
     run["failover_state"]=json!(model_selection::FailoverState::default());

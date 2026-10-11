@@ -30,7 +30,7 @@ pub(super) async fn judge(app: &App, record: &mut Value) -> Result<Verdict> {
     {
         return Err(anyhow!("Manager model assignment changed"));
     }
-    let selection = provider::ProviderSelection {
+    let selection = provider::ProviderSelection { limits:candidate.limits.clone(),
         provider: candidate.transport.provider_id(),
         model: candidate.upstream_model.clone(),
     };
@@ -41,16 +41,21 @@ pub(super) async fn judge(app: &App, record: &mut Value) -> Result<Verdict> {
     let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
     let call_id = format!("manager:{}", record["id"].as_str().unwrap_or(""));
     let instructions = gates::incoming_message::instructions(&pinned.criteria);
-    let call = app.provider.complete_selected_with_instructions(
-        &selection,
-        &tokens,
-        gates::incoming_message::input(&record["message"]),
-        Vec::new(),
-        &call_id,
-        &instructions,
-        tx,
-        cancel.clone(),
-    );
+    let call = async {
+        let selection = &selection;
+        let tokens = &tokens;
+        let cancel = cancel.clone();
+        let ready = crate::provider::CallDraft::new(
+            selection,
+            gates::incoming_message::input(&record["message"]),
+            Vec::new(),
+            &call_id,
+            &instructions,
+        )
+        .validate()?
+        .bind_credentials(tokens, &cancel)?;
+        app.provider.dispatch(ready, tx, cancel).await
+    };
     let result = tokio::time::timeout(Duration::from_secs(40), call).await;
     cancel.cancel();
     drain.abort();

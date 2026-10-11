@@ -462,6 +462,9 @@ pub(crate) async fn execute_run(
             if let Ok(system_run) = system_dispatch_run(&run) {
                 let system_selection = provider::ProviderSelection::parse(
                     &system_run["provider_selection"], DEFAULT_AGENT_MODEL)?;
+                if let Some(limits) = &system_selection.limits {
+                    compaction_config.summary_tokens = compaction_config.summary_tokens.min(limits.output_tokens);
+                }
                 compaction_config.system_input_budget = Some(
                     loop_runtime::Config::read(&app.runtime_path)?.context
                         .ceiling(&system_selection)?.min(workflow_policy.max_context_bytes));
@@ -636,15 +639,22 @@ pub(crate) async fn execute_run(
                     return Ok(());
                 }
                 app.run_candidate(&system_dispatch_run(&current)?).await?;
-                let mut completion = Box::pin(app.provider.complete_selected(
-                    &selection,
-                    &tokens,
-                    summary_input,
-                    Vec::new(),
-                    &sid,
-                    sender,
-                    cancel.clone(),
-                ));
+                let mut completion = Box::pin(async {
+                    let default_instructions = crate::provider::Provider::configured_base_instructions();
+                    let selection = &selection;
+                    let tokens = &tokens;
+                    let cancel = cancel.clone();
+                    let ready = crate::provider::CallDraft::new(
+                        selection,
+                        summary_input,
+                        Vec::new(),
+                        &sid,
+                        &default_instructions,
+                    )
+                    .validate()?
+                    .bind_credentials(tokens, &cancel)?;
+                    app.provider.dispatch(ready, sender, cancel).await
+                });
                 let mut immediate = None;
                 futures_util::future::poll_fn(|cx| {
                     use std::future::Future;
@@ -845,16 +855,15 @@ pub(crate) async fn execute_run(
             // Response handling below reloads authoritative state under the gate.
             drop(current);
             drop(run);
-            let mut completion = Box::pin(app.provider.complete_selected_with_instructions(
-                &selection,
-                &tokens,
-                input,
-                schemas,
-                &sid,
-                &instructions,
-                sender,
-                cancel.clone(),
-            ));
+            let mut completion = Box::pin(async {
+                let selection = &selection;
+                let tokens = &tokens;
+                let cancel = cancel.clone();
+                let ready = crate::provider::CallDraft::new(selection, input, schemas, &sid, &instructions)
+                    .validate()?
+                    .bind_credentials(tokens, &cancel)?;
+                app.provider.dispatch(ready, sender, cancel).await
+            });
             let mut immediate = None;
             futures_util::future::poll_fn(|cx| {
                 use std::future::Future;

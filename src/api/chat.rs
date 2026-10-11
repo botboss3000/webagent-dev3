@@ -137,7 +137,7 @@ pub(super) async fn prepare_message(app:&App,id:&str,body:&Value,supplied_sessio
         app.pin_model_plan(plan).await.map_err(|_|conflict("Assigned model is no longer entitled or configured"))?;
     }
     let selection = match &plan {
-        Some(plan) => provider::ProviderSelection { provider: plan.candidates[0].transport.provider_id(),
+        Some(plan) => provider::ProviderSelection { limits:plan.candidates[0].limits.clone(), provider: plan.candidates[0].transport.provider_id(),
             model: plan.candidates[0].upstream_model.clone() },
         None => {
             let mut agent_app=app.clone();

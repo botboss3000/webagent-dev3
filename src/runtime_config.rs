@@ -22,13 +22,7 @@ impl Context {
  /// Output reserve is budgeting only, not a claim about upstream output controls.
  pub fn ceiling(&self,selection:&crate::provider::ProviderSelection)->Result<usize> {
   let provider=serde_json::to_value(selection.provider)?.as_str().unwrap_or("").to_owned();
-  // Luna's requested 128,000 context ceiling is a hard upper bound. Without a
-  // provider tokenizer, use one token per logical JSON byte and reserve 8,192
-  // for output/protocol overhead. Operator profiles may tighten this ceiling.
-  let ceiling=if matches!(selection.provider,crate::provider::ProviderId::OpenaiSubscription)
-      && selection.model=="gpt-6-luna" {
-      self.max_context_bytes.min(128_000-8_192)
-  } else {self.max_context_bytes};
+  let ceiling=self.max_context_bytes.min(selection.input_budget_bytes()?.unwrap_or(self.max_context_bytes));
   match self.model_profiles.get(&format!("{provider}/{}",selection.model)) {
    None=>Ok(ceiling), Some(p)=> {
     if p.context_tokens==0 || p.output_reserve_tokens>=p.context_tokens || !(1..=8).contains(&p.bytes_per_token) {bail!("Invalid model budget profile");}
@@ -145,15 +139,15 @@ impl Config {
 #[cfg(test)] mod luna_budget_tests {
  use super::*;
  #[test]
- fn luna_ceiling_reserves_headroom_and_cannot_be_expanded_by_a_profile() {
-  let luna=crate::provider::ProviderSelection {provider:crate::provider::ProviderId::OpenaiSubscription,model:"gpt-6-luna".into()};
-  let other=crate::provider::ProviderSelection {provider:crate::provider::ProviderId::OpenaiSubscription,model:"fixture".into()};
+ fn published_luna_context_and_operator_ceiling_are_independent() {
+  let luna=crate::provider::ProviderSelection { limits:None,provider:crate::provider::ProviderId::OpenaiSubscription,model:"gpt-6-luna".into()};
+  let other=crate::provider::ProviderSelection { limits:None,provider:crate::provider::ProviderId::OpenaiSubscription,model:"fixture".into()};
   let mut context=Config::default().context;
-  assert_eq!(context.ceiling(&luna).unwrap(),119_808);
+  assert_eq!(context.ceiling(&luna).unwrap(),262_144);
   assert_eq!(context.ceiling(&other).unwrap(),262_144);
   context.model_profiles.insert("openai_subscription/gpt-6-luna".into(),
       ModelBudget {context_tokens:1_000_000,output_reserve_tokens:8192,bytes_per_token:8});
-  assert_eq!(context.ceiling(&luna).unwrap(),119_808);
+  assert_eq!(context.ceiling(&luna).unwrap(),262_144);
   context.model_profiles.insert("openai_subscription/gpt-6-luna".into(),
       ModelBudget {context_tokens:10_000,output_reserve_tokens:1000,bytes_per_token:2});
   assert_eq!(context.ceiling(&luna).unwrap(),18_000);

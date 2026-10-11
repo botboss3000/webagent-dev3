@@ -56,7 +56,7 @@ fn dispatch(session: &Value, state: &model_selection::FailoverState) -> Result<V
         .ok_or_else(|| anyhow!("Naming candidates exhausted"))?;
     Ok(
         json!({"id":session["auto_naming"]["run_id"],"session_id":session["id"],"agent_id":session["agent_id"],
-        "selection_plan":plan,"failover_state":state,"provider_selection":provider::ProviderSelection {
+        "selection_plan":plan,"failover_state":state,"provider_selection":provider::ProviderSelection { limits:candidate.limits.clone(),
             provider:candidate.transport.provider_id(),model:candidate.upstream_model.clone()}.value()}),
     )
 }
@@ -118,16 +118,21 @@ async fn generate(app: &App, original: &Value) -> Result<String> {
                 let drain = tokio::spawn(async move { while receiver.recv().await.is_some() {} });
                 let cancel = app.stop.child_token();
                 let request_session = format!("{sid}:title");
-                let operation = app.provider.complete_selected_with_instructions(
-                    &selection,
-                    &tokens,
-                    input.clone(),
-                    Vec::new(),
-                    &request_session,
-                    &settings.prompt,
-                    sender,
-                    cancel.clone(),
-                );
+                let operation = async {
+                    let selection = &selection;
+                    let tokens = &tokens;
+                    let cancel = cancel.clone();
+                    let ready = crate::provider::CallDraft::new(
+                        selection,
+                        input.clone(),
+                        Vec::new(),
+                        &request_session,
+                        &settings.prompt,
+                    )
+                    .validate()?
+                    .bind_credentials(tokens, &cancel)?;
+                    app.provider.dispatch(ready, sender, cancel).await
+                };
                 tokio::pin!(operation);
                 let deadline = tokio::time::sleep(Duration::from_secs(settings.request_timeout_seconds));
                 tokio::pin!(deadline);

@@ -72,6 +72,7 @@ async fn response(app: &App, identity: &Value, agent: &str, catalog: &Catalog) -
         for c in view.connections.values_mut() { c.credential_ref.clear(); }
         for a in view.agent_models.values_mut() {
             a.entry_ids.retain(|id|available.contains(id));
+            a.limits.retain(|id,_|available.contains(id));
             a.roles.retain(|_,r|available.contains(&r.entry_id));
             for r in a.roles.values_mut() {r.backup_entry_ids.retain(|id|available.contains(id));}
         }
@@ -575,7 +576,7 @@ pub(crate) async fn migrate_legacy_default(store: &crate::store::Store) -> anyho
         catalog.entries.insert(id.clone(),ModelEntry {id:id.clone(),owner_id:"admin".into(),
             connection_id:id.clone(),upstream_model:selection.model,display_name:"Existing default subscription".into(),
             capabilities:std::collections::BTreeSet::from(["text".into()]),allowed_agents:grants,revision:1});
-        catalog.agent_models.insert("shared_default".into(),AgentModels {agent_id:"shared_default".into(),owner_id:"admin".into(),
+        catalog.agent_models.insert("shared_default".into(),AgentModels { limits: std::collections::BTreeMap::new(),agent_id:"shared_default".into(),owner_id:"admin".into(),
             entry_ids:vec![id.clone()],roles:std::collections::BTreeMap::from([(ModelRole::Standard,
                 RoleAssignment {entry_id:id,backup_entry_ids:vec![]})]),revision:1});
         store.save_model_catalog(&catalog,catalog.revision).await?;

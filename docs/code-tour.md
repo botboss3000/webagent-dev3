@@ -540,3 +540,24 @@ share admission checks with the existing two-step handlers. One user transaction
 commits the new session, first message, run or manager review, immutable retry
 receipt and both lifecycle notification stages. Inline attachments keep existing
 validation; uploaded IDs remain session-bound. See [the API contract](direct-messages.md).
+
+
+### Provider call typestate
+
+All production completion calls use `provider::CallDraft` -> `ValidatedCall`
+-> `ReadyCall` -> consuming `Provider::dispatch`. The private state fields prevent
+direct ready construction, and calls are neither cloneable nor persisted.
+The provider-internal `src/models/provider/call.rs` validates the existing
+transport payload and binds only that transport's required credentials.
+Subscription history vectors move through preparation without another copy;
+compatible bodies are translated once. Stream parsing and wire contracts stay
+in the private transport adapters.
+
+Chat, compaction, manager review, naming and media-lane callers use this boundary.
+Preparation stays within the completion future's first poll; the agent loop
+still first-polls under its dispatch gate after live checks and checkpoint saves.
+Ready means locally prepared, not currently authorized: live policy, revocation,
+cancellation, durable recovery and publication checks remain authoritative.
+Recovery reconstructs ephemeral calls and does not persist credential-bearing
+typestate values. Typestate does not prevent concurrent database writes or
+guarantee exactly-once remote effects.

@@ -16,7 +16,7 @@ fn message_content(value:&Value)->Result<Value>{
         _=>bail!("Unsupported media part")
     }).collect::<Result<Vec<_>>>().map(|parts|json!(parts))
 }
-fn request_body(model: &str, input: Vec<Value>, tools: Vec<Value>, instructions: &str) -> Result<Value> {
+pub(super) fn request_body(model: &str, input: Vec<Value>, tools: Vec<Value>, instructions: &str) -> Result<Value> {
     let mut messages = vec![json!({"role":"system","content":instructions})];
     for item in input {
         match item["type"].as_str().unwrap_or("message") {
@@ -145,20 +145,19 @@ impl Provider {
             result=tokio::time::timeout(Duration::from_secs(60),read)=>result.map_err(|_|typed_failure(FailureKind::Transient,false,"Provider discovery timed out"))?
         }
     }
-    pub(super) async fn complete_compatible(&self, provider: ProviderId, tokens: &Value, model: &str, input: Vec<Value>, tools: Vec<Value>, instructions: &str, delta: mpsc::Sender<String>, cancel: CancellationToken) -> Result<Value> {
-        if instructions.is_empty() || instructions.len()>MAX_INSTRUCTIONS { return Err(typed_failure(FailureKind::MalformedRequest,false,"Invalid provider instructions")); }
-        let mut body = request_body(model,input,tools,instructions).map_err(|_|typed_failure(FailureKind::MalformedRequest,false,"Invalid Provider request"))?;
-        if provider != ProviderId::Deepseek {
-            for message in body["messages"].as_array_mut().unwrap() {
-                message.as_object_mut().unwrap().remove("reasoning_content");
-            }
-        }
-        let fixed_endpoint = provider.chat_endpoint().ok_or_else(||anyhow!("Provider does not use API keys"))?;
+    pub(super) async fn send_compatible(
+        &self,
+        body: Value,
+        fixed_endpoint: &str,
+        api_key: &str,
+        delta: mpsc::Sender<String>,
+        cancel: CancellationToken,
+    ) -> Result<Value> {
         #[cfg(not(test))]
         let endpoint = fixed_endpoint;
         #[cfg(test)]
         let endpoint = self.responses_endpoint.as_deref().unwrap_or(fixed_endpoint);
-        let request = self.client.post(endpoint).bearer_auth(required(tokens,"api_key")?).header("Accept","text/event-stream").json(&body);
+        let request = self.client.post(endpoint).bearer_auth(api_key).header("Accept","text/event-stream").json(&body);
         let response = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(typed_failure(FailureKind::Cancelled,false,"Provider request cancelled")),
@@ -220,7 +219,22 @@ mod tests {
         let provider=Provider::for_test(format!("http://{addr}/chat"));
         let (sender,mut receiver)=mpsc::channel(8);
         let selection=ProviderSelection::parse(&json!({"provider":"deepseek","model":"deepseek-chat"}),"unused").unwrap();
-        let result=provider.complete_selected_with_instructions(&selection,&json!({"api_key":"test-key","access_token":"do-not-use","account_id":"do-not-send"}),vec![json!({"role":"user","content":"hi"})],vec![],"session","help",sender,CancellationToken::new()).await.unwrap();
+        let result=async {
+            let selection = &selection;
+            let tokens =
+                &json!({"api_key":"test-key","access_token":"do-not-use","account_id":"do-not-send"});
+            let cancel = CancellationToken::new();
+            let ready = crate::provider::CallDraft::new(
+                selection,
+                vec![json!({"role":"user","content":"hi"})],
+                vec![],
+                "session",
+                "help",
+            )
+            .validate()?
+            .bind_credentials(tokens, &cancel)?;
+            provider.dispatch(ready, sender, cancel).await
+        }.await.unwrap();
         assert_eq!(result["output"][0]["content"][0]["text"],"Hello world");
         assert_eq!(receiver.recv().await.unwrap(),"Hello");assert_eq!(receiver.recv().await.unwrap()," world");
         let captured=captured.lock().await;let (headers,body)=captured.as_ref().unwrap();
@@ -243,8 +257,16 @@ data: [DONE]
         let server=tokio::spawn(async move{axum::serve(listener,app).await.unwrap();});
         let provider=Provider::for_test(format!("http://{addr}/chat"));
         let (tx,_rx)=mpsc::channel(8);
-        let selection=ProviderSelection{provider:ProviderId::Deepseek,model:"fixture".into()};
-        let result=provider.complete_selected_with_instructions(&selection,&json!({"api_key":"fixture"}),vec![],vec![],"s","help",tx,CancellationToken::new()).await.unwrap();
+        let selection=ProviderSelection{limits:None,provider:ProviderId::Deepseek,model:"fixture".into()};
+        let result=async {
+            let selection = &selection;
+            let tokens = &json!({"api_key":"fixture"});
+            let cancel = CancellationToken::new();
+            let ready = crate::provider::CallDraft::new(selection, vec![], vec![], "s", "help")
+                .validate()?
+                .bind_credentials(tokens, &cancel)?;
+            provider.dispatch(ready, tx, cancel).await
+        }.await.unwrap();
         assert_eq!(result["usage"]["prompt_tokens"],42);assert_eq!(result["usage"]["completion_tokens"],3);
         server.abort();
     }
@@ -294,12 +316,17 @@ data: [DONE]
             ProviderId::Xai,ProviderId::Perplexity,ProviderId::Deepinfra] {
             let endpoint=reqwest::Url::parse(id.chat_endpoint().unwrap()).unwrap();
             assert_eq!(endpoint.scheme(),"https");assert!(endpoint.username().is_empty());
-            let selection=ProviderSelection{provider:id,model:"vendor/model".into()};
+            let selection=ProviderSelection{limits:None,provider:id,model:"vendor/model".into()};
             let (sender,_receiver)=mpsc::channel(8);
-            let result=provider.complete_selected_with_instructions(&selection,
-                &json!({"api_key":"isolated-key","access_token":"never-forward","account_id":"never-forward"}),
-                vec![json!({"role":"assistant","content":"prior","deepseek_reasoning":"private reasoning"})],
-                vec![],"session","help",sender,CancellationToken::new()).await.unwrap();
+            let result=async {
+                let selection = &selection;
+                let tokens = &json!({"api_key":"isolated-key","access_token":"never-forward","account_id":"never-forward"});
+                let cancel = CancellationToken::new();
+                let ready = crate::provider::CallDraft::new(
+                        selection, vec![json!({"role":"assistant","content":"prior","deepseek_reasoning":"private reasoning"})], vec![], "session", "help",
+                    ).validate()?.bind_credentials(tokens, &cancel)?;
+                provider.dispatch(ready, sender, cancel).await
+            }.await.unwrap();
             assert_eq!(result["output"][0]["content"][0]["text"],"ok");
             let capture=captured.lock().await;let (headers,body)=capture.as_ref().unwrap();
             assert_eq!(headers["authorization"],"Bearer isolated-key");
@@ -320,8 +347,18 @@ data: [DONE]
         let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap();});
         let provider=Provider::for_test(format!("http://{addr}/chat"));
         let (sender,_receiver)=mpsc::channel(8);
-        let error=provider.complete_selected_with_instructions(&ProviderSelection{provider:ProviderId::Openrouter,model:"vendor/model".into()},
-            &json!({"api_key":"never-leak-key"}),vec![],vec![],"session","help",sender,CancellationToken::new()).await.unwrap_err();
+        let error=async {
+            let selection = &ProviderSelection { limits:None,
+                provider: ProviderId::Openrouter,
+                model: "vendor/model".into(),
+            };
+            let tokens = &json!({"api_key":"never-leak-key"});
+            let cancel = CancellationToken::new();
+            let ready = crate::provider::CallDraft::new(selection, vec![], vec![], "session", "help")
+                .validate()?
+                .bind_credentials(tokens, &cancel)?;
+            provider.dispatch(ready, sender, cancel).await
+        }.await.unwrap_err();
         assert!(!error.to_string().contains("never-leak-key"));
         assert!(!error.to_string().contains("private"));
         server.abort();

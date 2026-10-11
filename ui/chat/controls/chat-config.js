@@ -1,3 +1,4 @@
+import { applyBubblePaint } from '../core/bubble-paint.js';
 import { applyChatPillLayout } from './chat-pill-config.js';
 import { initFooterHandle } from './footer-handle.js';
 // V3 reads the v3/data/config/chat.json schema. Unknown controls are
@@ -226,8 +227,15 @@ export function applyChatConfig() {
       footerNodes.continue.hidden=!continuing;footerNodes.continue.style.display=continuing?'':'none';}
     return;
   }
+  const surfaceChanged = surface !== currentSurface;
   currentSurface = surface;
   currentFooterMode = mode;
+  if (surfaceChanged) {
+    for (const bubble of document.querySelectorAll('#chat-messages-inner .chat-bubble.v3-config-bubble')) {
+      const role = bubble.classList.contains('user') ? 'user' : 'agent';
+      applyBubblePaint(bubble, profile.message_bubbles?.[role] || {});
+    }
+  }
   const panel = byId('chat-panel');
   const contentProfile = mergeProfile(documentConfig.chat_common, documentConfig[window.innerWidth <= 768 ? 'chat_mobile' : 'chat_desktop']);
   panel.style.setProperty('--v3-content-max-width', contentProfile.content_max_width || '100%');

@@ -350,7 +350,7 @@ fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
         let plan: SelectionPlan = serde_json::from_value(value.clone())?;
         let action = state.failed(&plan, kind);
         if action == NextAction::Backup {
-            run["provider_selection"] = provider::ProviderSelection {
+            run["provider_selection"] = provider::ProviderSelection { limits:plan.candidates[state.candidate_index].limits.clone(),
                 provider: plan.candidates[state.candidate_index].transport.provider_id(),
                 model: plan.candidates[state.candidate_index].upstream_model.clone(),
             }.value();
@@ -402,7 +402,7 @@ fn system_dispatch_run(run: &Value) -> Result<Value> {
     let state:model_selection::FailoverState=serde_json::from_value(run["system_failover_state"].clone())?;
     let candidate=plan.candidates.get(state.candidate_index).ok_or_else(||anyhow!("System candidates exhausted"))?;
     Ok(json!({"id":run["id"],"session_id":run["session_id"],"agent_id":run["agent_id"],"selection_plan":plan,"failover_state":state,
-        "uncertain":run["uncertain"],"provider_selection":provider::ProviderSelection {
+        "uncertain":run["uncertain"],"provider_selection":provider::ProviderSelection { limits:candidate.limits.clone(),
             provider:candidate.transport.provider_id(),model:candidate.upstream_model.clone()}.value()}))
 }
 fn system_model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
@@ -493,8 +493,8 @@ mod system_budget_tests {
     #[test]
     fn compaction_uses_system_profile_and_counts_escaped_envelope() {
         let mut context=loop_runtime::Config::default().context;
-        let standard=provider::ProviderSelection {provider:provider::ProviderId::OpenaiSubscription,model:"standard".into()};
-        let system=provider::ProviderSelection {provider:provider::ProviderId::OpenaiSubscription,model:"system".into()};
+        let standard=provider::ProviderSelection { limits:None,provider:provider::ProviderId::OpenaiSubscription,model:"standard".into()};
+        let system=provider::ProviderSelection { limits:None,provider:provider::ProviderId::OpenaiSubscription,model:"system".into()};
         context.model_profiles.insert("openai_subscription/system".into(),
             loop_runtime::ModelBudget {context_tokens:512,output_reserve_tokens:64,bytes_per_token:1});
         let prompt="\"\\\n".repeat(200);

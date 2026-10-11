@@ -179,7 +179,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
         let provider = Provider::for_test(format!("http://{address}/audio"));
-        let selection = ProviderSelection {
+        let selection = ProviderSelection { limits:None,
             provider: ProviderId::OpenaiApi,
             model: "whisper-1".into(),
         };

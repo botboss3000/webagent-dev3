@@ -8,6 +8,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 mod deepseek;
+mod call;
+pub(crate) use call::CallDraft;
 mod capabilities;
 mod media;
 
@@ -64,6 +66,8 @@ impl ProviderId {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProviderSelection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<crate::model_selection::ModelLimits>,
     pub provider: ProviderId,
     pub model: String,
 }
@@ -87,10 +91,25 @@ impl ProviderSelection {
         if !crate::platform_catalog::valid_model(model) {
             bail!("Invalid model");
         }
+        let limits: Option<crate::model_selection::ModelLimits> = value.get("limits")
+            .filter(|v| !v.is_null()).map(|v| serde_json::from_value(v.clone())).transpose()?;
+        if let Some(limits) = &limits { limits.validate_for(provider, model)?; }
         Ok(Self {
+            limits,
             provider,
             model: model.to_owned(),
         })
+    }
+
+    pub fn input_budget_bytes(&self) -> Result<Option<usize>> {
+        let input = if let Some(limits) = &self.limits {
+            limits.validate_for(self.provider, &self.model)?;
+            Some(limits.input_tokens)
+        } else if matches!(self.provider, ProviderId::OpenaiSubscription | ProviderId::OpenaiApi) {
+            crate::model_selection::effective_limits(self.provider, &self.model).map(|(context, _)| context-8_192)
+        } else { None };
+        // Match the existing compaction estimate. This is not a provider tokenizer.
+        input.map(|n| n.checked_mul(4).ok_or_else(|| anyhow!("Model input budget overflow"))).transpose()
     }
 
     pub fn value(&self) -> Value {
@@ -384,6 +403,8 @@ fn decorate(mut tokens: Value) -> Result<Value> {
 // Wire fields remain identical to the stateless Responses contract.
 #[derive(serde::Serialize)]
 struct RequestBody<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<usize>,
     model: &'a str,
     input: &'a [Value],
     instructions: &'a str,
@@ -398,7 +419,7 @@ struct RequestBody<'a> {
     tool_choice: Option<&'static str>,
 }
 fn request_body<'a>(model: &'a str, input: &'a [Value], tools: &'a [Value], session: &'a str, instructions: &'a str) -> RequestBody<'a> {
-    RequestBody { model, input, instructions, stream: true, store: false,
+    RequestBody { max_output_tokens: None, model, input, instructions, stream: true, store: false,
         include: ["reasoning.encrypted_content"], prompt_cache_key: session,
         parallel_tool_calls: true, tools: (!tools.is_empty()).then_some(tools),
         tool_choice: (!tools.is_empty()).then_some("auto") }
@@ -464,7 +485,7 @@ impl Provider {
         let slots = pinned.strip_prefix(DEFAULT_INSTRUCTIONS).unwrap_or(pinned);
         format!("{}{}", Self::configured_base_instructions(), slots)
     }
-    fn configured_base_instructions() -> String {
+    pub(crate) fn configured_base_instructions() -> String {
         static CACHE: OnceLock<Mutex<(Option<(u128, u128)>, String)>> = OnceLock::new();
         let cache = CACHE.get_or_init(|| Mutex::new((None, DEFAULT_INSTRUCTIONS.to_string())));
         let mut cache = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -635,113 +656,33 @@ impl Provider {
         subscription_model_list(&value)
     }
 
-    /// Typed dispatch boundary; every supported transport must be explicit here.
-    pub async fn complete_selected(
+    async fn send_subscription(
         &self,
-        selection: &ProviderSelection,
-        tokens: &Value,
-        input: Vec<Value>,
-        tools: Vec<Value>,
-        session: &str,
+        request: call::SubscriptionRequest<'_>,
+        credentials: call::SubscriptionCredentials<'_>,
         delta: mpsc::Sender<String>,
         cancel: CancellationToken,
     ) -> Result<Value> {
-        self.complete_selected_with_instructions(
-            selection,
-            tokens,
-            input,
-            tools,
-            session,
-            &Self::configured_base_instructions(),
-            delta,
-            cancel,
-        )
-        .await
-    }
-
-    pub async fn complete_selected_with_instructions(
-        &self,
-        selection: &ProviderSelection,
-        tokens: &Value,
-        input: Vec<Value>,
-        tools: Vec<Value>,
-        session: &str,
-        instructions: &str,
-        delta: mpsc::Sender<String>,
-        cancel: CancellationToken,
-    ) -> Result<Value> {
-        match selection.provider {
-            ProviderId::OpenaiSubscription => {
-                self.complete_with_instructions(
-                    tokens,
-                    &selection.model,
-                    input,
-                    tools,
-                    session,
-                    instructions,
-                    delta,
-                    cancel,
-                )
-                .await
-            },
-            provider => self.complete_compatible(provider, tokens, &selection.model, input, tools, instructions, delta, cancel).await,
-        }
-    }
-
-    pub async fn complete(
-        &self,
-        tokens: &Value,
-        model: &str,
-        input: Vec<Value>,
-        tools: Vec<Value>,
-        session: &str,
-        delta: mpsc::Sender<String>,
-        cancel: CancellationToken,
-    ) -> Result<Value> {
-        self.complete_with_instructions(
-            tokens,
-            model,
-            input,
-            tools,
-            session,
-            &Self::configured_base_instructions(),
-            delta,
-            cancel,
-        )
-        .await
-    }
-
-    async fn complete_with_instructions(
-        &self,
-        tokens: &Value,
-        model: &str,
-        input: Vec<Value>,
-        tools: Vec<Value>,
-        session: &str,
-        instructions: &str,
-        delta: mpsc::Sender<String>,
-        cancel: CancellationToken,
-    ) -> Result<Value> {
+        let call::SubscriptionRequest { max_output_tokens, model, input, tools, session, instructions } = request;
         let mut response_started = false;
-        if instructions.is_empty() || instructions.len() > MAX_INSTRUCTIONS {
-            return Err(typed_failure(crate::model_selection::FailureKind::MalformedRequest, false, "Invalid provider instructions"));
-        }
         if cancel.is_cancelled() {
             return Err(typed_failure(crate::model_selection::FailureKind::Cancelled, response_started, "Provider request cancelled"));
         }
+        let mut body = request_body(model, &input, &tools, session, instructions);
+        body.max_output_tokens = max_output_tokens;
         let mut request = self
             .client
             .post(self.responses_endpoint())
-            .bearer_auth(required(tokens, "access_token")?)
+            .bearer_auth(credentials.access_token)
             .header("originator", "webagent")
             .header("session-id", session)
             .header("Accept", "text/event-stream")
-            .json(&request_body(model, &input, &tools, session, instructions));
-        for (key, header) in [
-            ("account_id", "ChatGPT-Account-Id"),
-            ("residency", "x-openai-internal-codex-residency"),
+            .json(&body);
+        for (value, header) in [
+            (credentials.account_id, "ChatGPT-Account-Id"),
+            (credentials.residency, "x-openai-internal-codex-residency"),
         ] {
-            if let Some(value) = tokens[key].as_str().filter(|v| !v.is_empty()) {
+            if let Some(value) = value {
                 request = request.header(header, value);
             }
         }
@@ -914,8 +855,26 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
         let provider = Provider::for_test(format!("http://{address}/responses"));
         let (sender, _receiver) = mpsc::channel(1);
-        let error = provider.complete(&json!({"access_token":"test-only"}), "fixture", vec![], vec![],
-            "session", sender, CancellationToken::new()).await.unwrap_err().to_string();
+        let error = async {
+            let legacy_selection = crate::provider::ProviderSelection { limits:None,
+                provider: crate::provider::ProviderId::OpenaiSubscription,
+                model: ("fixture").to_owned(),
+            };
+            let default_instructions = crate::provider::Provider::configured_base_instructions();
+            let selection = &legacy_selection;
+            let tokens = &json!({"access_token":"test-only"});
+            let cancel = CancellationToken::new();
+            let ready = crate::provider::CallDraft::new(
+                selection,
+                vec![],
+                vec![],
+                "session",
+                &default_instructions,
+            )
+            .validate()?
+            .bind_credentials(tokens, &cancel)?;
+            provider.dispatch(ready, sender, cancel).await
+        }.await.unwrap_err().to_string();
         assert!(error.contains("HTTP 400"));
         assert!(error.contains("model is unavailable"));
         assert!(!error.contains("private-token"));
@@ -1002,17 +961,21 @@ mod tests {
         let provider = Provider::for_test(format!("http://{address}/responses"));
         let (sender, _receiver) = mpsc::channel(1);
         let selection = ProviderSelection::parse(&json!({"model":"fixture"}), "unused").unwrap();
-        let output = provider
-            .complete_selected_with_instructions(
-                &selection,
-                &json!({"access_token":"test-only","account_id":"account","residency":"eu"}),
+        let output = async {
+            let selection = &selection;
+            let tokens = &json!({"access_token":"test-only","account_id":"account","residency":"eu"});
+            let cancel = CancellationToken::new();
+            let ready = crate::provider::CallDraft::new(
+                selection,
                 vec![json!({"role":"user","content":"hello"})],
                 vec![],
                 "session",
                 "Pinned instructions for this run.",
-                sender,
-                CancellationToken::new(),
             )
+            .validate()?
+            .bind_credentials(tokens, &cancel)?;
+            provider.dispatch(ready, sender, cancel).await
+        }
             .await
             .unwrap();
         assert_eq!(output["output"][0]["encrypted_content"], "opaque");
@@ -1024,6 +987,12 @@ mod tests {
         assert_eq!(headers["session-id"], "session");
         assert_eq!(headers["chatgpt-account-id"], "account");
         assert_eq!(headers["x-openai-internal-codex-residency"], "eu");
+        assert_eq!(*body, json!({
+            "model":"fixture", "input":[{"role":"user","content":"hello"}],
+            "instructions":"Pinned instructions for this run.",
+            "stream":true, "store":false, "include":["reasoning.encrypted_content"],
+            "prompt_cache_key":"session", "parallel_tool_calls":true
+        }));
         assert_eq!(body["store"], false);
         assert_eq!(body["instructions"], "Pinned instructions for this run.");
         assert_eq!(body["prompt_cache_key"], "session");
@@ -1044,8 +1013,26 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
         let provider = Provider::for_test(format!("http://{address}/responses"));
         let (sender, _receiver) = mpsc::channel(1);
-        let output = provider.complete(&json!({"access_token":"test-only"}), "fixture",
-            vec![], vec![], "session", sender, CancellationToken::new()).await.unwrap();
+        let output = async {
+            let legacy_selection = crate::provider::ProviderSelection { limits:None,
+                provider: crate::provider::ProviderId::OpenaiSubscription,
+                model: ("fixture").to_owned(),
+            };
+            let default_instructions = crate::provider::Provider::configured_base_instructions();
+            let selection = &legacy_selection;
+            let tokens = &json!({"access_token":"test-only"});
+            let cancel = CancellationToken::new();
+            let ready = crate::provider::CallDraft::new(
+                selection,
+                vec![],
+                vec![],
+                "session",
+                &default_instructions,
+            )
+            .validate()?
+            .bind_credentials(tokens, &cancel)?;
+            provider.dispatch(ready, sender, cancel).await
+        }.await.unwrap();
         assert_eq!(output["output"][0]["content"][0]["text"], "hello");
         server.abort();
     }
@@ -1060,16 +1047,26 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
         let (sender, _receiver) = mpsc::channel(1);
-        let result = provider
-            .complete(
-                &json!({"access_token":"test-only"}),
-                "fixture",
+        let result = async {
+            let legacy_selection = crate::provider::ProviderSelection { limits:None,
+                provider: crate::provider::ProviderId::OpenaiSubscription,
+                model: ("fixture").to_owned(),
+            };
+            let default_instructions = crate::provider::Provider::configured_base_instructions();
+            let selection = &legacy_selection;
+            let tokens = &json!({"access_token":"test-only"});
+            let cancel = cancel;
+            let ready = crate::provider::CallDraft::new(
+                selection,
                 vec![],
                 vec![],
                 "session",
-                sender,
-                cancel,
+                &default_instructions,
             )
+            .validate()?
+            .bind_credentials(tokens, &cancel)?;
+            provider.dispatch(ready, sender, cancel).await
+        }
             .await;
         assert!(result.is_err());
         assert!(
