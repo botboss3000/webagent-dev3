@@ -1,4 +1,5 @@
 'use strict';
+// @code-index {"version":1,"feature":"chat-message-bubbles","aliases":["chat message bubbles","message renderer","message bubble"],"purpose":"Renders persisted V3 user and assistant messages into transcript bubbles","span_lines":80}
 // Reference chat-bubble DOM and configured gutters, with V3 committed-row transport.
 import {applyBubblePaint} from './bubble-paint.js';
 import {currentChatProfile} from '../controls/chat-config.js';
@@ -6,9 +7,13 @@ import {_refreshLucideIcons} from './presentation.js';
 import {copyText} from '../../shared/models/clipboard.js';
 import {openChatElementFullView} from './full-view.js';
 import {createBubbleGutter} from './bubble-gutters.js';
+/** Creates an accessible gutter button and forwards its click to the supplied action. */
 function button(title,icon,action){const node=document.createElement('button');node.type='button';node.className='turn-gutter-btn';node.title=title;node.setAttribute('aria-label',title);node.innerHTML='<i data-lucide="'+icon+'" style="width:14px;height:14px"></i>';node.addEventListener('click',action);return node;}
+/** Writes plain text as text nodes and recognized HTTP(S) URLs as safe new-tab links. */
 function linkify(body,text){let last=0;for(const match of text.matchAll(/https?:\/\/[^\s<>"]+/g)){body.append(document.createTextNode(text.slice(last,match.index)));const a=document.createElement('a');a.textContent=match[0];a.href=match[0];a.target='_blank';a.rel='noopener noreferrer';body.append(a);last=match.index+match[0].length;}body.append(document.createTextNode(text.slice(last)));}
+/** Renders sanitized Markdown when the bundled parsers exist, otherwise falls back to linkified text. */
 function markdown(body,text){if(window.marked?.parse&&window.DOMPurify?.sanitize){body.className='md-body';body.innerHTML=window.DOMPurify.sanitize(window.marked.parse(text,{gfm:true,breaks:true}),{FORBID_ATTR:['style']});body.querySelectorAll('a[href]').forEach(a=>{a.target='_blank';a.rel='noopener noreferrer';});body.querySelectorAll('pre').forEach(pre=>{const wrap=document.createElement('div');wrap.className='md-code-block';pre.replaceWith(wrap);wrap.append(pre);const copy=button('Copy code','copy',async()=>{try{await copyText(pre.textContent);copy.title='Copied';}catch{copy.title='Copy failed';}});copy.classList.add('md-code-copy');wrap.append(copy);});}else{body.className='bubble-body';linkify(body,text);}}
+/** Adds, updates, or removes the live status note that records whether admission review sent a message. */
 export function updateAdmission(bubble, admission) {
   let status=bubble.querySelector('.message-admission-status');
   if(!admission){status?.remove();delete bubble.dataset.admissionStatus;return;}
@@ -18,6 +23,7 @@ export function updateAdmission(bubble, admission) {
     acceptable:'Accepted by the manager',unacceptable:'Not sent to the agent: this message does not meet its acceptance criteria.',
     review_error:admission.error||'Review failed. This message was not sent to the agent.'})[admission.status]||'';
 }
+/** Builds one published transcript row; rejects malformed role/sequence/ID data and wires attachments, gutters, and user-text expansion. */
 export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSession=()=>null,note=()=>{},showContext=()=>{}}={}){
   if(!['user','assistant'].includes(item.role)||!Number.isSafeInteger(item.seq)||item.seq<=0||typeof item.id!=='string')return null;
   const profile=currentChatProfile()||{},role=item.role==='user'?'user':'agent';
@@ -34,6 +40,7 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
       const link=document.createElement('a');link.href='/api/v3/sessions/'+encodeURIComponent(sid)+'/attachments/'+encodeURIComponent(file.id)+'/content';link.textContent=file.name||'Attachment';link.download=file.name||'attachment';link.target='_blank';link.rel='noopener';
       let image;
       if(file.preview===true){image=document.createElement('img');if(!resolveAsset)image.src=link.href;image.alt=file.name||'Image attachment';image.loading='lazy';link.prepend(image);}
+      // Resolve attachment content lazily; detached rows are ignored and failed links stay non-navigable.
       if(resolveAsset){const url=link.href;let ready=false;link.onclick=event=>{if(!ready){event.preventDefault();note('Attachment is loading; try again shortly.');}};
         resolveAsset(url).then(blobUrl=>{if(!link.isConnected)return;ready=true;link.href=blobUrl;if(image)image.src=blobUrl;}).catch(error=>{link.onclick=event=>{event.preventDefault();note('Attachment unavailable: '+error.message);};});}
       files.append(link);
@@ -53,6 +60,7 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
     note('Message refreshed');
   }});
   bubble.append(gutter);updateAdmission(bubble,item.admission);_refreshLucideIcons(bubble);
+  // Measure after layout, then expose expansion only when the configured line clamp hides content.
   if(role==='user')requestAnimationFrame(()=>{
     const cfg=profile.user_message_truncation||{},maxLines=Math.max(1,Math.min(100,Number(cfg.max_lines)||3));if(cfg.enabled===false||!bubble.isConnected)return;const lineHeight=parseFloat(getComputedStyle(body).lineHeight)||20;if(body.scrollHeight<=lineHeight*maxLines+1)return;bubble.style.setProperty('--user-message-max-lines',String(maxLines));bubble.classList.add('user-message-clamped');const toggle=document.createElement('button');toggle.type='button';toggle.className='user-message-expand';toggle.textContent=cfg.expand_label||'See more';toggle.setAttribute('aria-expanded','false');toggle.onclick=()=>{const expanded=bubble.classList.toggle('user-message-expanded');toggle.textContent=expanded?(cfg.collapse_label||'Show less'):(cfg.expand_label||'See more');toggle.setAttribute('aria-expanded',String(expanded));};body.after(toggle);
   });

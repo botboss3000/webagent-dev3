@@ -1,5 +1,6 @@
 <link rel="stylesheet" href="/v3-ui/chat/core/recovery-details.css">
 <!-- V3 baseline chat shell adapted from v2 ui/chat/chat-side-panel.html. -->
+<!-- core/panel.js mounts this partial, wires transcript and message submission, and tears down its controls. -->
 <div id="chat-header">
   <div class="chat-header-row v3-chat-agent-row">
     <span class="chat-header-zone chat-header-zone-left"></span>
@@ -24,6 +25,7 @@
 </div>
 <select id="sessions" hidden aria-hidden="true" tabindex="-1"></select>
 <div id="chat-messages"><div id="chat-messages-inner"></div></div>
+<!-- controls/chat-config.js applies composer/footer layout; controls/footer-handle.js owns footer expansion. -->
 <form id="composer"><div id="chat-input-area">
 <div id="chat-above-pill" class="chat-above-pill"><div id="chat-notifications" aria-live="polite"></div><div id="runs" aria-live="polite"></div></div>
   <div id="chat-composer-react-island"></div>

@@ -1,7 +1,17 @@
+// @code-index {"version":1,"feature":"chat-footer","aliases":["chat footer","composer footer","footer handle"],"purpose":"Locates the session-scoped expandable chat footer interaction","span_lines":80}
 // SISTER-PANEL: V2-FOOTER-HANDLE — v2 chat-ui.js interaction, v3-only storage scope.
+/**
+ * Mounts the footer handle's visibility, pointer-drag, click, and session restore behavior.
+ * Reads the active session from the URL and persists expansion under a v3-prefixed localStorage key; storage errors propagate.
+ * Binds a document-lifetime v3:session-open listener and returns its reload callback, not a teardown.
+ * chat-config.applyFooter calls this after populating controls and ignores the returned callback.
+ */
 export function initFooterHandle() {
+// Reads the current session from the address bar when footer state is saved or restored.
 const app = { get currentSessionId() { return new URL(location.href).searchParams.get('session_id') || ''; } };
+// Reads v3-prefixed browser storage; localStorage access errors propagate.
 const kvRead = (_, key) => localStorage.getItem('v3:' + key);
+// Writes footer preferences only in the v3 localStorage namespace; storage errors propagate.
 const kvWrite = (_, key, value) => localStorage.setItem('v3:' + key, value);
   // ── Footer drag handle (abilities / device / mode chips) ──
   const _footerHandle = document.getElementById('chat-footer-handle');
@@ -18,9 +28,10 @@ const kvWrite = (_, key, value) => localStorage.setItem('v3:' + key, value);
     _footerHandle.style.display = hasContent ? '' : 'none';
   }
   _updateFooterHandleVisibility();
-  // Re-check when chat controls are re-applied (agent switch, theme change)
+  // The local adapter defines only currentSessionId, so this legacy refresh-hook branch is dormant here.
   if (app._reapplyChatControls) {
     const _origReapply = app._reapplyChatControls;
+    // Rechecks visibility after the existing control refresh completes.
     const _patchedReapply = function() {
       const result = _origReapply.apply(this, arguments);
       setTimeout(_updateFooterHandleVisibility, 50);
@@ -29,6 +40,7 @@ const kvWrite = (_, key, value) => localStorage.setItem('v3:' + key, value);
     app._reapplyChatControls = _patchedReapply;
   }
 
+  // Persists the expanded state under the current session's legacy key shape.
   function _saveFooterExpanded(expanded) {
     const sid = app.currentSessionId;
     if (sid) {
@@ -36,6 +48,7 @@ const kvWrite = (_, key, value) => localStorage.setItem('v3:' + key, value);
     }
   }
 
+  // Restores this session's preference, defaulting to an expanded footer.
   function _loadFooterExpanded() {
     const sid = app.currentSessionId;
     if (sid) {
@@ -45,6 +58,7 @@ const kvWrite = (_, key, value) => localStorage.setItem('v3:' + key, value);
     return true; // default to expanded
   }
 
+  // Synchronizes handle and row classes/ARIA state, then saves the preference.
   function _applyFooterExpanded(expanded) {
     if (_footerHandle) {
       _footerHandle.classList.toggle('expanded', expanded);
@@ -54,6 +68,7 @@ const kvWrite = (_, key, value) => localStorage.setItem('v3:' + key, value);
     _saveFooterExpanded(expanded);
   }
 
+  // Toggles from the row's current class and delegates state updates.
   function _toggleFooter() {
     const current = _footerRow ? _footerRow.classList.contains('expanded') : false;
     _applyFooterExpanded(!current);
@@ -160,7 +175,7 @@ const kvWrite = (_, key, value) => localStorage.setItem('v3:' + key, value);
     });
   }
 
-  // Export for session switch reload
+  // Assigns the callback invoked by the persistent v3:session-open document listener.
   app.reloadFooterExpanded = () => _applyFooterExpanded(_loadFooterExpanded());
 
 document.addEventListener('v3:session-open', app.reloadFooterExpanded);

@@ -1,19 +1,24 @@
+// @code-index {"version":1,"feature":"chat-tool-activity","aliases":["session activity groups","activity journal view"],"purpose":"Locates the administrator-gated session activity projection in chat","span_lines":80}
 import {activityGroups, watchActivity} from './activity.js';
 import {createTranscriptRow, patchTranscriptRow, mountTranscript} from './activity-transcript.js';
 
+// Own one session-scoped private journal watch and project groups beside public transcript anchors.
 export function createActivityView({app,isAdmin,chatUiFlag}) {
 let session=null, stop=null, journal=null, publicState=null, container=null, error='';
 const nodes=new Map();
+// Install the activity stylesheet once for this document.
 function styles() {
   if(document.getElementById('v2-activity-styles')) return;
   const link=document.createElement('link');link.id='v2-activity-styles';
   link.rel='stylesheet';link.href=new URL('./activity.css',import.meta.url).href;
   document.head.appendChild(link);
 }
+// Create inert text nodes for group labels and diagnostic headings.
 function textNode(tag, text, className='') {
   const node=document.createElement(tag);node.className=className;node.textContent=text;
   return node;
 }
+// Reconcile an expanded group's keyed rows and raw-event disclosure without replacing stable rows.
 function updateRows(node,group) {
   const viewport=node.querySelector('.v2-activity-body');
   if(!node._transcript) node._transcript=mountTranscript(viewport);
@@ -34,6 +39,7 @@ function updateRows(node,group) {
     raw=document.createElement('details');raw.dataset.rowId='raw';
     raw.appendChild(textNode('summary',''));
     raw.appendChild(textNode('pre',''));
+    // Populate raw JSON only while the disclosure is open.
     raw.addEventListener('toggle',()=>{
       raw.lastElementChild.textContent=raw.open?JSON.stringify(raw._events,null,2):'';
     });
@@ -50,6 +56,7 @@ function updateRows(node,group) {
   }
   node._transcript.update();
 }
+// Place groups after matching public-message anchors and refresh labels from private journal state.
 function paint() {
   if(!journal || !publicState || !container || session!==app.currentSessionId) return;
   const groups=activityGroups(journal,publicState.runs), keep=new Set(), tails=new Map();
@@ -66,10 +73,12 @@ function paint() {
       node.dataset.activityGroupId=group.id;
       node.appendChild(textNode('summary','Activity'));
       node.appendChild(textNode('div','','v2-activity-body'));
+      // Lazily build row DOM only when the activity group is expanded.
       node.addEventListener('toggle',()=>{if(node.open && node._group) updateRows(node,node._group);});
       nodes.set(group.id,node);
     }
     node._group=group;
+    // Summarize nonzero category counts without changing the underlying journal rows.
     const parts=Object.entries(group.counts).filter(([,count])=>count)
       .map(([kind,count])=>count+' '+(count===1?kind.replace(/s$/,''):kind));
     const phase={running:'Working…',queued:'Queued…',waiting_external:'Waiting for build…',finalizing:'Checking response…',
@@ -89,12 +98,14 @@ function paint() {
   for(const [id,node] of nodes) if(!keep.has(id)) {node._transcript?.dispose();node.remove();nodes.delete(id);}
   app._reLandAnchor?.();
 }
+// Stop the current watch and dispose rendered groups before changing session or policy.
 function disconnectActivity() {
   stop?.();stop=null;
   document.querySelector('#session-dropdown-icon')?.classList.remove('activity-running');
   for(const node of nodes.values()) {node._transcript?.dispose();node.remove();}
   nodes.clear();session=null;journal=null;publicState=null;container=null;error='';
 }
+// Enforce revocation, feature-flag, and administrator gates before watching this session.
 function renderActivity(state,target) {
   if(state.revoked || !chatUiFlag('show_activity_groups',false) || !isAdmin()) {
     disconnectActivity();return;
@@ -105,13 +116,17 @@ function renderActivity(state,target) {
   container=target;publicState=state;
   if(!stop) {
     const id=session;
+    // Fence callbacks to this session; transient watch failures remain visible while polling retries.
     stop=watchActivity({sessionId:id,
+      // Request private pages with same-origin credentials and abort support.
       request:(cursor,signal)=>fetch(('/api/v3/sessions/'+encodeURIComponent(id)+'/activity?after='+cursor),
         {credentials: "same-origin",signal,cache:'no-store'}),
+      // Publish only while this view still owns the session and reflect remaining pagination.
       onChange:(value,more)=>{
         if(session!==id) return;
         journal=value;error=more?'Loading activity…':'';paint();
       },
+      // Authorization or missing-session failures disconnect; other errors leave a retry status.
       onError:failure=>{
         if(session!==id) return;
         if([401,403,404].includes(failure.status)) {disconnectActivity();return;}
@@ -120,5 +135,6 @@ function renderActivity(state,target) {
   }
   paint();
 }
+// The panel owns render/disconnect and calls disconnect on session change or teardown.
 return {render:renderActivity,disconnect:disconnectActivity};
 }

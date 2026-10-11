@@ -1,4 +1,10 @@
+// @code-index {"version":1,"feature":"chat-tool-activity","aliases":["tool activity","activity journal","run activity"],"purpose":"Locates private tool and run activity projection and polling","span_lines":80}
 // Private journal projection: no public reducer or persistent browser cache.
+/**
+ * Merges one session's activity page by sequence while rejecting identity, cursor, and revision conflicts.
+ * Keeps records ordered by sequence and carries the server's segment snapshot forward.
+ * Called by watchActivity.poll for each fetched continuation page.
+ */
 export function mergeActivity(previous, page, sessionId) {
   if (!Array.isArray(page.events) || !Array.isArray(page.segments)
       || !Number.isSafeInteger(page.cursor) || page.cursor < previous.cursor)
@@ -18,6 +24,7 @@ export function mergeActivity(previous, page, sessionId) {
     segments: page.segments, cursor: page.cursor};
 }
 
+/** Projects journal events into grouped tool, message, mode, and compaction rows for activityGroups. */
 export function activityRows(events) {
   const rows=[], tools=new Map(), messages=new Map();
   for (const event of events) {
@@ -52,15 +59,20 @@ export function activityRows(events) {
   return rows;
 }
 
+/**
+ * Assigns events to execution segments, retaining uncovered late events on the latest segment.
+ * Counts projected rows and derives display state from the matching run snapshot.
+ * Called by activity-view.paint to prepare transcript groups.
+ */
 export function activityGroups(activity, runs) {
+  // Tests whether a sequence falls inside a segment's explicit run interval.
   const owns=(segment,event)=>event.run_id===segment.run_id && segment.first_seq != null
     && event.seq>=segment.first_seq && event.seq<=segment.last_seq;
   const covered=new Set(activity.events.filter(e=>activity.segments.some(s=>owns(s,e))).map(e=>e.seq));
   const lastByRun=new Map(activity.segments.map(s=>[s.run_id,s.id]));
   const terminal=new Set(['completed','failed','cancelled']);
   return activity.segments.map(segment => {
-    // Late/stale events remain available in raw diagnostics, without extending
-    // the semantic counters of an already closed execution segment.
+    // In-range events attach to their segment; uncovered same-run events fall back to the latest segment, even if it is closed.
     const events=activity.events.filter(e=>owns(segment,e) ||
       (!covered.has(e.seq) && e.run_id===segment.run_id && lastByRun.get(e.run_id)===segment.id));
     const rows=activityRows(events);
@@ -68,6 +80,7 @@ export function activityGroups(activity, runs) {
     for (const row of rows) counts[row.category]++;
     const run=runs.find(r=>r.id===segment.run_id);
     const finalOutcome=lastByRun.get(segment.run_id)===segment.id && terminal.has(run?.state);
+    // Closed segments display as finished except for a latest segment with a terminal run outcome.
     return {...segment,events,rows,counts,kind:run?.kind,
       state:segment.closed && !finalOutcome?'finished':run?.state || 'queued'};
   });
@@ -75,9 +88,16 @@ export function activityGroups(activity, runs) {
 
 // Serial pagination, identity fencing, and polling are independent of the public
 // chat transport. Private records live only until this session is disconnected.
+/**
+ * Polls private activity pages serially, following cursors until caught up and retrying after failures every two seconds.
+ * Stops on 401, 403, or 404; returns a stop function that aborts the request and clears private in-memory records.
+ * Called by activity-view.renderActivity with a same-origin GET request to the session activity endpoint.
+ * Calls mergeActivity and reports pages through onChange; onError must not throw or retry scheduling is skipped.
+ */
 export function watchActivity({sessionId, request, onChange, onError, schedule=setTimeout, cancel=clearTimeout}) {
   let state={events:[],segments:[],cursor:0}, timer=null, stopped=false;
   const controller=new AbortController();
+  // Fetches every continuation page before scheduling the next poll.
   async function poll() {
     try {
       let more=true;
@@ -103,6 +123,7 @@ export function watchActivity({sessionId, request, onChange, onError, schedule=s
     }
     if(!stopped) timer=schedule(poll,2000);
   }
+  // Fences future callbacks, aborts fetch, cancels polling, and drops session data.
   function stop() {
     stopped=true;controller.abort();if(timer!==null) cancel(timer);
     state={events:[],segments:[],cursor:0};

@@ -1,1 +1,327 @@
-{"version":1,"features":[]}
+{
+  "version": 1,
+  "features": [
+    {
+      "id": "chat-panel",
+      "aliases": [
+        "chat panel",
+        "conversation panel",
+        "session transcript"
+      ],
+      "purpose": "Locates the v3 chat panel lifecycle and its mounted transcript surface.",
+      "locations": [
+        {
+          "path": "ui/chat/core/panel.js",
+          "start_line": 1,
+          "end_line": 80
+        },
+        {
+          "path": "ui/index.html",
+          "start_line": 80,
+          "end_line": 88
+        }
+      ]
+    },
+    {
+      "id": "chat-transport-recovery",
+      "aliases": [
+        "chat client",
+        "chat event stream",
+        "session transport recovery"
+      ],
+      "purpose": "Locates the v3 chat transport and sequence-based stream recovery.",
+      "locations": [
+        {
+          "path": "ui/chat/core/client.js",
+          "start_line": 11,
+          "end_line": 80
+        }
+      ]
+    },
+    {
+      "id": "chat-message-bubbles",
+      "aliases": [
+        "chat message bubbles",
+        "message renderer",
+        "bubble actions",
+        "message bubble icons"
+      ],
+      "purpose": "Locates persisted message rendering, bubble actions, and refreshed presentation icons.",
+      "locations": [
+        {
+          "path": "ui/chat/core/message-view.js",
+          "start_line": 2,
+          "end_line": 68
+        },
+        {
+          "path": "ui/chat/core/bubble-gutters.js",
+          "start_line": 86,
+          "end_line": 146
+        },
+        {
+          "path": "ui/chat/core/presentation.js",
+          "start_line": 3,
+          "end_line": 21
+        }
+      ]
+    },
+    {
+      "id": "chat-full-view",
+      "aliases": [
+        "chat full view",
+        "full message view",
+        "message zoom"
+      ],
+      "purpose": "Shows a cloned chat element in an accessible modal dialog.",
+      "locations": [
+        {
+          "path": "ui/chat/core/full-view.js",
+          "start_line": 6,
+          "end_line": 69
+        }
+      ]
+    },
+    {
+      "id": "chat-transcript-anchor",
+      "aliases": [
+        "chat transcript anchor",
+        "scroll anchoring",
+        "user turn positioning"
+      ],
+      "purpose": "Keeps new user turns visible while respecting reader scroll intent.",
+      "locations": [
+        {
+          "path": "ui/chat/core/transcript-anchor.js",
+          "start_line": 3,
+          "end_line": 82
+        }
+      ]
+    },
+    {
+      "id": "chat-tool-activity",
+      "aliases": [
+        "tool activity",
+        "activity journal",
+        "run activity",
+        "activity transcript"
+      ],
+      "purpose": "Locates the private activity journal, its transcript rows, and session activity projection.",
+      "locations": [
+        {
+          "path": "ui/chat/core/activity.js",
+          "start_line": 1,
+          "end_line": 80
+        },
+        {
+          "path": "ui/chat/core/activity-transcript.js",
+          "start_line": 1,
+          "end_line": 80
+        },
+        {
+          "path": "ui/chat/core/activity-view.js",
+          "start_line": 1,
+          "end_line": 80
+        }
+      ]
+    },
+    {
+      "id": "chat-composer-progress",
+      "aliases": [
+        "composer activity progress",
+        "tool progress panel",
+        "current run progress"
+      ],
+      "purpose": "Locates the composer activity summary and current-run tool details.",
+      "locations": [
+        {
+          "path": "ui/chat/core/composer-progress.js",
+          "start_line": 1,
+          "end_line": 76
+        }
+      ]
+    },
+    {
+      "id": "chat-administrator-notices",
+      "aliases": [
+        "repository status reminder",
+        "retained build notice",
+        "administrator notices"
+      ],
+      "purpose": "Locates administrator repository and retained-build notices in the chat composer.",
+      "locations": [
+        {
+          "path": "ui/chat/core/administrator-notices.js",
+          "start_line": 1,
+          "end_line": 80
+        }
+      ]
+    },
+    {
+      "id": "chat-run-notifications",
+      "aliases": [
+        "run approval",
+        "mode confirmation",
+        "pending run notices"
+      ],
+      "purpose": "Locates guarded mode confirmations and pending run-approval cards in the composer.",
+      "locations": [
+        {
+          "path": "ui/chat/core/chat-notifications.js",
+          "start_line": 1,
+          "end_line": 80
+        }
+      ]
+    },
+    {
+      "id": "chat-footer",
+      "aliases": [
+        "chat footer",
+        "composer footer",
+        "message composer",
+        "footer handle"
+      ],
+      "purpose": "Locates the responsive footer mode, footer expansion, and composer/footer structure.",
+      "locations": [
+        {
+          "path": "ui/chat/controls/footer-handle.js",
+          "start_line": 1,
+          "end_line": 80
+        },
+        {
+          "path": "ui/chat/controls/chat-config.js",
+          "start_line": 149,
+          "end_line": 188,
+          "purpose": "Applies footer mode, binds shell controls, and initializes the footer handle."
+        },
+        {
+          "path": "ui/chat/controls/chat-config.js",
+          "start_line": 238,
+          "end_line": 277,
+          "purpose": "Selects the active chat profile and updates footer presentation."
+        },
+        {
+          "path": "ui/chat/chat.html",
+          "start_line": 75,
+          "end_line": 96,
+          "purpose": "Defines the footer handle, expandable footer row, and footer controls."
+        }
+      ]
+    },
+    {
+      "id": "chat-composer-media",
+      "aliases": [
+        "composer media",
+        "voice capture",
+        "chat attachments"
+      ],
+      "purpose": "Locates composer attachment staging and voice capture/conversation behavior.",
+      "locations": [
+        {
+          "path": "ui/chat/controls/audio-capture.js",
+          "start_line": 1,
+          "end_line": 60
+        },
+        {
+          "path": "ui/chat/controls/composer-media.js",
+          "start_line": 17,
+          "end_line": 80
+        }
+      ]
+    },
+    {
+      "id": "chat-run-controls",
+      "aliases": [
+        "run controls",
+        "execution mode",
+        "model selection"
+      ],
+      "purpose": "Locates session-scoped execution-mode and next-turn model controls.",
+      "locations": [
+        {
+          "path": "ui/chat/controls/session-controls.js",
+          "start_line": 1,
+          "end_line": 80
+        }
+      ]
+    },
+    {
+      "id": "chat-usage-context",
+      "aliases": [
+        "usage context",
+        "context statistics",
+        "provider usage"
+      ],
+      "purpose": "Locates provider-reported usage and measured context presentation.",
+      "locations": [
+        {
+          "path": "ui/chat/controls/usage-stats.js",
+          "start_line": 1,
+          "end_line": 80
+        }
+      ]
+    },
+    {
+      "id": "chat-session-selector",
+      "aliases": [
+        "session dropdown",
+        "conversation selector",
+        "session list"
+      ],
+      "purpose": "Mounts and manages the v3 session selector menu, rows, search, and session actions.",
+      "locations": [
+        {
+          "path": "ui/chat/controls/session-dropdown/controller.js",
+          "start_line": 4,
+          "end_line": 80
+        },
+        {
+          "path": "ui/chat/controls/session-dropdown/list.js",
+          "start_line": 4,
+          "end_line": 81
+        }
+      ]
+    },
+    {
+      "id": "chat-ui-config",
+      "aliases": [
+        "chat configuration",
+        "chat surface settings",
+        "chat pill layout"
+      ],
+      "purpose": "Normalizes chat surface settings and renders configured composer controls.",
+      "locations": [
+        {
+          "path": "ui/chat/controls/chat-config.js",
+          "start_line": 1,
+          "end_line": 80
+        },
+        {
+          "path": "ui/chat/controls/chat-pill-config.js",
+          "start_line": 2,
+          "end_line": 81
+        },
+        {
+          "path": "ui/chat/controls/chat-pill-config.js",
+          "start_line": 407,
+          "end_line": 486
+        }
+      ]
+    },
+    {
+      "id": "chat-login-hook",
+      "aliases": [
+        "login overlay",
+        "left login form",
+        "username focus"
+      ],
+      "purpose": "Focuses the username field after scrolling the left login panel into view.",
+      "locations": [
+        {
+          "path": "ui/chat/controls/login-hook.js",
+          "start_line": 1,
+          "end_line": 3
+        }
+      ]
+    }
+  ]
+}

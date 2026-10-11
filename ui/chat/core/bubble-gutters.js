@@ -3,6 +3,7 @@ import {currentChatProfile} from '../controls/chat-config.js';
 import {copyText} from '../../shared/models/clipboard.js';
 import {openChatElementFullView} from './full-view.js';
 let overlay=null, playback=null;
+/** Formats a creation timestamp as a nonnegative short age, or reports unavailable for invalid input. */
 export function formatRelativeTime(createdAtMs,now=Date.now()) {
   if(!Number.isFinite(createdAtMs))return 'time unavailable';
   const seconds=Math.floor(Math.max(0,now-createdAtMs)/1000);
@@ -10,26 +11,31 @@ export function formatRelativeTime(createdAtMs,now=Date.now()) {
   const minutes=Math.floor(seconds/60);
   return minutes<60?minutes+'m':Math.floor(minutes/60)+'h '+minutes%60+'m';
 }
+/** Refreshes visible relative-time labels beneath the supplied chat root. */
 export function updateGutterTimes(root) {
   for(const node of root.querySelectorAll('[data-gutter-created-at]')) {
     const value=formatRelativeTime(Number(node.dataset.gutterCreatedAt));
     if(node.textContent!==value)node.textContent=value;
   }
 }
+/** Creates an icon action button that stops bubble propagation before invoking its callback. */
 function iconButton(label,icon,action) {
   const node=document.createElement('button');node.type='button';node.className='turn-gutter-btn';
   node.title=label;node.setAttribute('aria-label',label);
   node.innerHTML='<i data-lucide="'+icon+'" style="width:14px;height:14px"></i>';
   node.addEventListener('click',event=>{event.stopPropagation();action?.(node);});return node;
 }
+/** Disables an unported action and marks its pending backend status for the UI. */
 function unavailable(node,label) {
   node.disabled=true;node.classList.add('v3-backend-pending');node.title=label+' — backend port pending';
   node.setAttribute('aria-label',node.title);return node;
 }
+/** Closes the active More menu and stops the active speech playback, if present. */
 export function closeGutterOverlays() {
   overlay?.close();overlay=null;
   playback?.stop();playback=null;
 }
+/** Reads bubble text aloud, highlights matching blocks, and owns the single active playback control. */
 function speak(body,trigger,gutter) {
   if(!window.speechSynthesis||!window.SpeechSynthesisUtterance)return;
   if(playback?.trigger===trigger){playback.stop();return;}
@@ -41,6 +47,7 @@ function speak(body,trigger,gutter) {
   const blocks=[...body.querySelectorAll('p,li,h1,h2,h3,h4,blockquote')];
   const positions=[];let cursor=0;
   for(const block of blocks){const part=block.textContent;const offset=text.indexOf(part,cursor);if(offset>=0){positions.push({block,start:offset,end:offset+part.length});cursor=offset+part.length;}}
+  /** Cancels speech and restores highlights, pause UI, and the trigger label. */
   const stop=()=>{if(finished)return;finished=true;window.speechSynthesis.cancel();highlighted?.classList.remove('tts-speaking');pause.remove();trigger.title='Read aloud';trigger.setAttribute('aria-label','Read aloud');if(playback?.trigger===trigger)playback=null;};
   utterance.onboundary=event=>{const found=positions.find(p=>event.charIndex>=p.start&&event.charIndex<p.end);if(found?.block!==highlighted){highlighted?.classList.remove('tts-speaking');highlighted=found?.block;highlighted?.classList.add('tts-speaking');}};
   utterance.onend=stop;utterance.onerror=stop;
@@ -49,6 +56,7 @@ function speak(body,trigger,gutter) {
   playback={trigger,stop};window.speechSynthesis.speak(utterance);
 }
 // Keep message actions and text selection independent of the bubble toggle.
+/** Makes configured gutters keyboard/click revealable while ignoring nested controls and text selection. */
 export function bindGutterVisibility(bubble,gutter,config,role) {
   const enabled=config.enabled!==false&&config[role]?.enabled!==false;
   const hideable=enabled&&config.hideable===true;
@@ -59,6 +67,7 @@ export function bindGutterVisibility(bubble,gutter,config,role) {
   bubble.setAttribute('aria-controls',gutter.id);
   bubble.setAttribute('aria-expanded','false');
   const interactive='a,button,input,textarea,select,summary,[role="button"],[contenteditable]:not([contenteditable="false"])';
+  /** Updates gutter visibility and the bubble's expanded accessibility state. */
   function toggle(){
     gutter.hidden=!gutter.hidden;
     bubble.setAttribute('aria-expanded',String(!gutter.hidden));
@@ -74,12 +83,16 @@ export function bindGutterVisibility(bubble,gutter,config,role) {
     event.preventDefault();toggle();
   });
 }
+// @code-index {"version":1,"feature":"chat-message-bubbles","aliases":["chat message bubbles","message gutter","bubble actions"],"purpose":"Builds the configured message action gutter and its More menu","span_lines":80}
+/** Builds one role-configured message gutter, including menu actions and explicit disabled placeholders for unported backend actions. */
 export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,showContext=()=>{},refreshMessage=async()=>{}}) {
   const role=item.role==='user'?'user':'agent',profile=currentChatProfile()||{};
   const config=profile.message_gutters||{},spec=config[role]||{};
   const defaults=role==='user'?['time','full_view','copy','undo','delete','more']:['time','full_view','collapse','read_aloud','copy','fork','delete','more'];
   const gutter=document.createElement('div');gutter.className='turn-gutter';gutter.dataset.sectionIdx='0';
+  /** Copies action text and updates the clicked control with a success or failure label. */
   function copy(node,text) {void copyText(text).then(()=>{node.title='Copied';}).catch(()=>{node.title='Copy failed';});}
+  /** Opens the single body-level More menu, replacing any prior menu and binding abortable dismissal/reposition handlers. */
   function more(trigger) {
     if(overlay?.trigger===trigger){overlay.close();return;}
     overlay?.close();
@@ -104,7 +117,9 @@ export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,sho
       if(name==='refresh'){row.onclick=async()=>{row.disabled=true;text.textContent='Refreshing…';try{await refreshMessage();close();}catch(error){if(menu.isConnected){text.textContent='Refresh failed — retry';row.title=error.message;}}finally{row.disabled=false;}};}
       if(entry?.locked){row.disabled=true;row.title=entry.locked_message||'Unavailable';}
     }
+    /** Aborts menu listeners, removes its DOM, and clears trigger/overlay state. */
     function close(){abort.abort();menu.remove();trigger.classList.remove('open');trigger.setAttribute('aria-expanded','false');if(overlay?.trigger===trigger)overlay=null;}
+    /** Keeps an open menu inside the viewport, switching above the trigger when needed. */
     function position(){if(!trigger.isConnected){close();return;}const rect=trigger.getBoundingClientRect();menu.style.left=Math.max(6,Math.min(rect.right-menu.offsetWidth,innerWidth-menu.offsetWidth-6))+'px';menu.style.top=(rect.bottom+menu.offsetHeight+6>innerHeight?Math.max(6,rect.top-menu.offsetHeight-6):rect.bottom+6)+'px';}
     document.body.append(menu);trigger.classList.add('open');trigger.setAttribute('aria-expanded','true');window.lucide?.createIcons();position();
     document.addEventListener('click',event=>{if(!menu.contains(event.target)&&!trigger.contains(event.target))close();},{signal:abort.signal});

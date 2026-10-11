@@ -1,3 +1,4 @@
+// @code-index {"version":1,"feature":"chat-panel","aliases":["chat panel","conversation panel","session transcript"],"purpose":"Locates the v3 chat panel lifecycle, transcript, and run controls","span_lines":80}
 // V2-style panel/client separation; markup and message protocol remain V3.
 import { createChatClient } from './client.js';
 import {mountTranscriptAnchor} from './transcript-anchor.js';
@@ -16,20 +17,34 @@ import { mountSessionDropdown } from '../controls/session-dropdown/controller.js
 import { createSessionList } from '../controls/session-dropdown/list.js';
 import {createRecoveryDetails} from './recovery-details.js';
 const mountedPanels = new WeakMap();
+/**
+ * Mounts the V3 chat partial, transport, transcript and controls under the supplied shell root.
+ * Replaces an earlier panel for that root through its destroy lifecycle and returns the panel API.
+ * Called by ui/app.js with the authenticated request, action guard, identity and selected-agent adapters.
+ * Reports session/run/sent changes through onEvent and returns the mounted panel API.
+ * Missing or incomplete partial markup and synchronous setup failures propagate to the shell.
+ */
 export async function mountChatPanel({root = document.getElementById('chat-panel'), createStream, resolveAsset, onEvent = () => {}, request, guard, note, clearNoticeFrom, keyId, forgetKey, refresh, getState, getAgentId, getIdentity=()=>({})}) {
   mountedPanels.get(root)?.destroy();
+  // Resolves partial element IDs only within this panel root.
   const $ = id => root.querySelector('#' + id);
   let session = '';
-  const activity=createActivityView({app:{get currentSessionId(){return session;}},isAdmin:()=>!!getIdentity().is_admin,chatUiFlag:(key,fallback)=>currentChatProfile()?.[key]??fallback});
+  // Activity receives the panel's live session getter, account admin flag, and configured UI flags.
+  const activity=createActivityView({app:{/* Reads the current selected session. */get currentSessionId(){return session;}},/* Returns the current account's admin flag. */isAdmin:()=>!!getIdentity().is_admin,/* Uses profile configuration when set, otherwise the default. */chatUiFlag:(key,fallback)=>currentChatProfile()?.[key]??fallback});
   let activityRuns=[];
   const expandedApprovals=new Set();
   const expandedRecovery=new Set();
   const gutterRuns=new Map();
+  /** Keeps recent run snapshots available to message gutters, trimming older entries to 100. */
   function rememberRuns(items){for(const run of items)gutterRuns.set(run.id,run);for(const [id] of [...gutterRuns.entries()].sort((a,b)=>(b[1].updated_at||0)-(a[1].updated_at||0)).slice(100))gutterRuns.delete(id);}
+  /** Refreshes gutter run details from the session snapshot, ignoring stale-session replies. */
   async function refreshGutterRuns(id=session){const epoch=sessionGeneration;try{const data=await client.snapshot(id);if(id===session&&epoch===sessionGeneration)rememberRuns(data.runs||[]);}catch(error){if(id===session&&epoch===sessionGeneration)note('Message statistics unavailable: '+error.message);}}
+  // Projects panel run states into the activity view's display-state vocabulary.
   const paintActivity=()=>activity.render({sessionId:session,runs:activityRuns.map(r=>({...r,state:({completed:'completed',failed:'failed',stopped:'cancelled',waiting_approval:'running',waiting_gate:'finalizing'})[r.status]||r.status}))},$('chat-messages-inner'));
   const client = createChatClient({request, note, clearNoticeFrom, createStream});
+  /** Creates a panel button whose action passes through the shell's guard. */
   function button(text,fn){const node=document.createElement('button');node.type='button';node.textContent=text;node.onclick=guard(fn);return node;}
+/** Fetches, validates, and mounts the required V3 chat partial into the supplied root. */
 async function mountChat(){
   const response=await fetch('/v3-ui/chat/chat.html?v=chat-partial-20261007-notifications',{credentials:'same-origin'});
   if(!response.ok)throw Error('Chat shell unavailable');
@@ -43,29 +58,39 @@ async function mountChat(){
 await mountChat();
 const notifications=mountChatNotifications({root,guard});
 const anchor=mountTranscriptAnchor({scroller:$('chat-messages'),inner:$('chat-messages-inner'),header:$('chat-header'),getProfile:currentChatProfile});
+// Progress visibility is filtered using the current account's administrator identity.
 const progress=mountComposerProgress({root,getProfile:currentChatProfile,isAdmin:()=>!!getIdentity().is_admin});
 const stats=mountUsageStats({root,client,note});
+// Refreshes relative gutter times once per second while visible; destroy clears this timer.
 const gutterClock=setInterval(()=>{if(document.visibilityState==='visible')updateGutterTimes(root);},1000);
-const controls=mountSessionControls({root,client,guard,note,ensureSession,notifications,onState:data=>{media?.setAvailable(data?.composer?.attachments===true,data?.composer?.attachment_limits);}});
+// Session-control capability updates enable or disable the media adapter.
+const controls=mountSessionControls({root,client,guard,note,ensureSession,notifications,/* Forwards advertised attachment availability and limits to media controls. */onState:data=>{media?.setAvailable(data?.composer?.attachments===true,data?.composer?.attachment_limits);}});
 let submitting=false,sessionGeneration=0,creatingSession=null,media=null;
-media=mountComposerMedia({root,client,ensureSession,note,guard,getState,refresh,changed:()=>{applyChatConfig();runs(activityRuns);}});
+// Media changes reapply composer layout and refresh run-dependent button states.
+media=mountComposerMedia({root,client,ensureSession,note,guard,getState,refresh,/* Reapplies composer geometry and run-dependent actions after media changes. */changed:()=>{applyChatConfig();runs(activityRuns);}});
 let sessionItems=[];
-const dropdown=mountSessionDropdown($('session-dropdown'),{refresh:()=>sessions(),select:open,guard,resetSearch:()=>sessionList.reset()});
-const sessionList=createSessionList($('session-dropdown'),{guard,refresh:()=>sessions(),select:open,client,recycled:()=>{anchor.reset();progress.reset();activity.disconnect();resetReads();session='';stats.disconnect();++sessionGeneration;controls.open('');media.open('');client.disconnect();$('chat-messages-inner').replaceChildren();notifications.clearTools();$('runs').replaceChildren();const url=new URL(location.href);url.searchParams.delete('session_id');history.replaceState({},'',url);}});
+// Dropdown refresh reads sessions; its search reset delegates to the session-list controller.
+const dropdown=mountSessionDropdown($('session-dropdown'),{/* Reloads session options. */refresh:()=>sessions(),select:open,guard,/* Clears search through the list controller. */resetSearch:()=>sessionList.reset()});
+// Session-list refresh shares the session loader; recycle completion resets transcript and session-scoped state.
+const sessionList=createSessionList($('session-dropdown'),{guard,/* Shares the panel session loader. */refresh:()=>sessions(),select:open,client,/* Clears the selected transcript and its session-scoped controls after recycle. */recycled:()=>{anchor.reset();progress.reset();activity.disconnect();resetReads();session='';stats.disconnect();++sessionGeneration;controls.open('');media.open('');client.disconnect();$('chat-messages-inner').replaceChildren();notifications.clearTools();$('runs').replaceChildren();const url=new URL(location.href);url.searchParams.delete('session_id');history.replaceState({},'',url);}});
+// Exposes dropdown configuration through the session-list controller.
 $('session-dropdown').configure=cfg=>sessionList.configure(cfg);
 const chatPanel=root;
+// Keeps transcript tail clearance aligned with measured header and composer heights.
 const updateChatClearance=()=>{
   const header=$('chat-header').getBoundingClientRect().height;
   const footer=$('chat-input-area').getBoundingClientRect().height + (parseFloat(getComputedStyle($('chat-input-area')).bottom)||0);
   if(header)chatPanel.style.setProperty('--v3-chat-header-clearance',`${Math.ceil(header)+12}px`);
   if(footer)chatPanel.style.setProperty('--v3-chat-footer-clearance',`${Math.ceil(footer)+16}px`);
 };
+// Recomputes clearance when either bounding region changes size.
 const chatClearanceObserver=new ResizeObserver(updateChatClearance);
 chatClearanceObserver.observe($('chat-header'));
 chatClearanceObserver.observe($('chat-input-area'));
 let readGeneration=0, readThrough=0, readPending=0, readTimer=0;
 const readAbort=new AbortController();
 const visibleRows=new Set();
+/** Debounces read acknowledgments to the highest visible sequence and fences stale session writes. */
 function queueRead(){
   if(document.visibilityState!=='visible'||!session||!root.getClientRects().length||root.dataset.embedVisible==='false'){clearTimeout(readTimer);return;}
   for(const row of visibleRows){if(row.isConnected)readPending=Math.max(readPending,Number(row.dataset.seq)||0);}
@@ -74,11 +99,14 @@ function queueRead(){
   const id=session, generation=readGeneration, through=readPending;
   readTimer=setTimeout(async()=>{try{if(!root.getClientRects().length||root.dataset.embedVisible==='false')return;const result=await client.read(id,through);if(generation!==readGeneration||id!==session)return;readThrough=Math.max(readThrough,result.session?.read_through_seq||through);await sessions();}catch(error){if(generation===readGeneration)note('Read acknowledgment failed: '+error.message);}},250);
 }
+// Tracks visible transcript rows and queues read-marker advancement as visibility changes.
 const readObserver=new IntersectionObserver(entries=>{for(const entry of entries){if(entry.isIntersecting&&entry.intersectionRect.height>0)visibleRows.add(entry.target);else visibleRows.delete(entry.target);}queueRead();},{root:$('chat-messages'),threshold:0});
 document.addEventListener('visibilitychange',queueRead,{signal:readAbort.signal});
 document.addEventListener('v3:chat-visibility',queueRead,{signal:readAbort.signal});
+// Invalidates pending acknowledgments and clears visibility/read cursors on session changes.
 function resetReads(){++readGeneration;clearTimeout(readTimer);readThrough=0;readPending=0;visibleRows.clear();readObserver.disconnect();}
 let reviewRefreshBusy=false;
+// Rechecks admission rows once per second while a session is open; serializes snapshots and stops in destroy.
 const reviewTimer=setInterval(async()=>{
   if(!session||reviewRefreshBusy||document.visibilityState==='hidden')return;
   const rows=[...$('chat-messages-inner').querySelectorAll('[data-admission-status]')];
@@ -93,9 +121,11 @@ const reviewTimer=setInterval(async()=>{
   }catch(error){if(sid===session&&generation===sessionGeneration)note('Manager status unavailable: '+error.message);}
   finally{reviewRefreshBusy=false;}
 },1000);
-function message(item){const target=$('chat-messages-inner');const existing=[...target.children].find(row=>row.dataset.publicId===item.id);if(existing){updateAdmission(existing,item.admission);return;}const row=createMessage(item,{resolveAsset,getRun:()=>gutterRuns.get(item.run_id),client,getSession:()=>session,note,showContext:run=>stats.show(run)});if(!row)return false;const before=[...target.children].find(node=>Number(node.dataset.seq)>item.seq);target.insertBefore(row,before||null);readObserver.observe(row);try{paintActivity();}catch(error){note('Activity display unavailable: '+error.message);}return true;}
+/** Inserts or updates a public message row, observes it for read tracking, and repaints activity. */
+function message(item){const target=$('chat-messages-inner');const existing=[...target.children].find(row=>row.dataset.publicId===item.id);if(existing){updateAdmission(existing,item.admission);return;}const row=createMessage(item,{resolveAsset,/* Supplies the latest cached run for gutter actions. */getRun:()=>gutterRuns.get(item.run_id),client,/* Resolves the currently selected session for message actions. */getSession:()=>session,note,/* Opens usage/context details for the selected run. */showContext:run=>stats.show(run)});if(!row)return false;const before=[...target.children].find(node=>Number(node.dataset.seq)>item.seq);target.insertBefore(row,before||null);readObserver.observe(row);try{paintActivity();}catch(error){note('Activity display unavailable: '+error.message);}return true;}
 // Base presentation is display-only. Never turn model-supplied choice or
 // approval descriptions into an action or an authorization control.
+/** Renders bounded display-only components; these cards never submit model-described actions. */
 function components(items){
   if(!Array.isArray(items))return;
   for(const row of items.slice(0,64)){
@@ -123,11 +153,21 @@ function components(items){
 }
 
 // Focus follows a session load only while the initiating focus choice is unchanged.
-function watchFocus(){const source=document.activeElement;let moved=false;const onFocus=()=>{if(document.activeElement!==source)moved=true;};document.addEventListener('focusin',onFocus);return {unchanged:()=>!moved&&(document.activeElement===source||(!source.isConnected&&document.activeElement===document.body)),stop:()=>document.removeEventListener('focusin',onFocus)};}
+/** Watches focus during an async load; returns a predicate and listener remover for the caller's finally block. */
+function watchFocus(){const source=document.activeElement;let moved=false;/* Records focus leaving the initiating control during the load. */const onFocus=()=>{if(document.activeElement!==source)moved=true;};document.addEventListener('focusin',onFocus);return {/* Allows focus restore only while the user has not moved focus. */unchanged:()=>!moved&&(document.activeElement===source||(!source.isConnected&&document.activeElement===document.body)),/* Removes the temporary focus listener after the operation. */stop:()=>document.removeEventListener('focusin',onFocus)};}
+// Applies per-profile keyboard-focus policy for new versus existing sessions.
 function shouldFocusComposer(kind){const value=currentChatProfile()?.composer?.keyboard_focus?.[kind];return kind==='new_session'?value!==false:value===true;}
+/** Loads session options and synchronizes both the native select and dropdown list. */
 async function sessions(){const data=await client.sessions();$('sessions').replaceChildren();for(const item of data.sessions){const option=document.createElement('option');option.value=item.id;option.textContent=(item.title||'Conversation')+' — '+(item.agent_id||'shared_default');$('sessions').append(option);}$('sessions').value=session;sessionItems=data.sessions;sessionList.update(sessionItems,session);return data.sessions;}
+/**
+ * Switches the selected session, resets session-scoped views, then renders its snapshot and live events.
+ * Route mode controls push/replace history; composer focus is restored only if the user did not move it.
+ * Client snapshot failures propagate; control-load failures are reported through note.
+ */
 async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{anchor.reset();progress.open(id);notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);controls.open(id).catch(error=>{if(id===session)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);onEvent('session',{session_id:id});document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);runs(data.runs||[]);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;try{media.published(item);}catch(error){note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);}catch(error){note('Transcript positioning unavailable: '+error.message);}return true;},()=>{void sessions().catch(error=>note(error.message));});if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
+// Requests run cancellation and refreshes shell state even when the request fails.
 async function cancel(id){progress.note('Stopping…');try{await client.cancel(id,{client_request_id:keyId('cancel:'+id)});}finally{await refresh();}}
+// Adds/removes a transcript notice only for certain failed runs; uncertain outcomes remain in recovery UI.
 function failedRunMessages(items){
   const target=$('chat-messages-inner');
   const failed=items.filter(run=>run.status==='failed'&&!run.uncertain);
@@ -145,6 +185,7 @@ function failedRunMessages(items){
     row.firstChild.textContent='Run failed'+(run.error?' — '+run.error:'')+'. To continue, write a new message in the chat.';
   }
 }
+/** Fans run snapshots to transport, controls, progress and activity, then paints composer and run actions. Approval, recovery, resume, and cancel handlers call their matching client endpoints. */
 function runs(items){onEvent('runs',{session_id:session,runs:items.filter(r=>r.session_id===session||!r.session_id).map(r=>({id:r.id,status:r.status,uncertain:!!r.uncertain,approval_id:r.pending?.id||null}))});client.updateRuns(items);anchor.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));progress.update(items);void stats.refresh();controls.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));activityRuns=items.filter(run=>run.session_id===session||!run.session_id);rememberRuns(activityRuns);if(session)paintActivity();$('runs').replaceChildren();notifications.clearTools();const relevant=items.filter(run=>run.session_id===session||!run.session_id);const pendingReview=!!$('chat-messages-inner').querySelector('[data-admission-status="pending_review"],[data-admission-status="reviewing"]');const active=relevant.find(run=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(run.status));$('chat-input-row').dataset.runStatus=active?.status||relevant[0]?.status||'Ready';$('chat-stop-btn').hidden=!active||$('chat-stop-btn').dataset.configEnabled==='false';$('chat-stop-btn').dataset.run=active?.id||'';$('chat-stop-btn').style.display=$('chat-stop-btn').hidden?'none':'';$('chat-send').disabled=pendingReview||!!active||!!getState().shutoff||submitting||!!media?.uploading;
 failedRunMessages(relevant);
 const continuing=!pendingReview&&!active&&!media?.count&&!$('chat-input').value.trim()&&$('chat-continue-btn').dataset.configEnabled!=='false';
@@ -167,6 +208,7 @@ if(run.uncertain || run.status==='recovery'){
 }
 if(!run.uncertain && ['paused','stopped'].includes(run.status))card.append(button('Resume run',async()=>{await client.resume(run.id,{client_request_id:crypto.randomUUID()});await refresh();}));if(active?.id===run.id)card.append(button('Cancel run',()=>cancel(run.id)));$('runs').append(card);}}
 $('sessions').onchange=guard(()=>open($('sessions').value));
+/** Deduplicates session creation and rejects completion if the user changed sessions mid-request. */
 async function ensureSession(){
   if(session)return session;
   if(creatingSession)return creatingSession;
@@ -185,6 +227,7 @@ async function ensureSession(){
   })().finally(()=>{creatingSession=null;});
   return creatingSession;
 }
+// Creates a fresh session from the New control and restores the initiating focus choice.
 $('new').onclick=guard(async()=>{
   const focusWatch=watchFocus();
   try{
@@ -194,6 +237,7 @@ $('new').onclick=guard(async()=>{
   }finally{focusWatch.stop();}
 });
 let elementContext='';
+/** Submits text plus staged attachments/page context, preserving draft and session identity across awaits. */
 async function submit(text,clearInput=false){
   if(!text&&!media.count)throw Error('Enter a message');
   if(submitting||getState().shutoff||$('chat-send').disabled)throw Error('Chat is busy or execution is disabled');
@@ -216,33 +260,49 @@ async function submit(text,clearInput=false){
     onEvent('sent',{session_id:sid});return {session_id:sid};
   }finally{submitting=false;await refresh();}
 }
+// Sends the current composer draft on form submission.
 $('composer').onsubmit=guard(()=>submit($('chat-input').value.trim(),true));
 // Continue is a new user turn, not an automatic retry of an exhausted run.
 $('chat-continue-btn').onclick=guard(()=>submit('Continue'));
+// Enter submits unless Shift is held or IME composition is active.
 $('chat-input').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!$('chat-send').disabled)$('composer').requestSubmit();}};
+// Stops the run currently identified on the stop control.
 $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
 
+  /** Clears session visuals and disconnects every session-scoped transport/control. */
   function disconnect(){elementContext='';anchor.reset();progress.reset();notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
+  /** Disconnects and disposes panel-owned timers, observers, listeners, and mounted child controls. */
   function destroy(){
     disconnect();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
     $('chat-input').onkeydown=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;
   }
+  /** Creates and opens a new conversation, rejecting while a message or upload is pending. */
   async function newSession(){
     if(submitting||media.uploading)throw Error('Wait for the pending message or upload');
     const item=await client.create({agent_id:getAgentId(),client_request_id:crypto.randomUUID()});
     await sessions();await open(item.id);return {session_id:item.id};
   }
+  /** Returns a run from the selected conversation or throws when it is absent. */
   function selectedRun(id){const run=activityRuns.find(r=>r.id===id);if(!run)throw Error('Run is not in the selected conversation');return run;}
   const panel = {open, sessions, runs, disconnect, destroy, newSession,
+    /** Reads the panel's current session ID. */
     get sessionId(){return session;},
+    /** Focuses and opens the conversation selector. */
     showSessions(){$('session-dropdown-trigger').focus({preventScroll:true});return dropdown.open();},
+    /** Stores user-selected page context up to 2,000 characters; rejects larger or non-string values. */
     setElementContext(text){if(typeof text!=='string'||text.length>2000)throw Error('Invalid page context');elementContext=text;},
+    /** Sets the composer draft and reapplies the configured layout; rejects non-text input. */
     setDraft(text){if(typeof text!=='string')throw Error('Draft must be text');$('chat-input').value=text;applyChatConfig();},
+    /** Sets and submits a programmatic text draft; call with this bound to the returned panel. */
     async send(text){if(typeof text!=='string')throw Error('Message must be text');this.setDraft(text);return submit(text.trim(),true);},
+    /** Starts a new Continue user turn. */
     continue:()=>submit('Continue'),
+    /** Cancels the selected run by ID or the first active run; throws if none is active. */
     async stop(id){const run=id?selectedRun(id):activityRuns.find(r=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(r.status));if(!run)throw Error('No active run');await cancel(run.id);},
+    /** Decides an approval only when it is pending in this conversation, then refreshes shell state. */
     async approve(id,decision){const run=activityRuns.find(r=>r.pending?.id===id&&r.status==='waiting_approval');if(!run)throw Error('Approval is not pending in the selected conversation');await client.decide(id,{decision,client_request_id:keyId('approval:'+id+':'+decision)});await refresh();},
+    /** Resolves a selected uncertain/recovery run and refreshes shell state. */
     async recover(id,decision,output){const run=selectedRun(id);if(!run.uncertain&&run.status!=='recovery')throw Error('Run is not waiting for recovery');await client.recover(id,{decision,output,client_request_id:keyId('recovery:'+id+':'+decision+':'+output)});await refresh();}
   };
   mountedPanels.set(root, panel);

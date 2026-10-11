@@ -1,23 +1,36 @@
 import { createAdministratorNotices } from './administrator-notices.js';
 
 // V3 transport only: cookie/CSRF request policy is supplied by the shell.
+/**
+ * Builds the v3 chat transport around the shell-authenticated request helper and an SSE stream.
+ * Stream epochs fence stale sessions; snapshot recovery fills gaps after delivery or connection failures.
+ * @param {object} options Supplies request, notices, stream creation, and timer adapters.
+ * @returns {object} Session, run, attachment, voice, approval, and recovery request methods.
+ * Errors from the initial session request propagate; stream recovery retries are bounded.
+ */
+// @code-index {"version":1,"feature":"chat-transport-recovery","aliases":["chat client","chat event stream","session transport recovery"],"purpose":"Locates the v3 chat transport and sequence-based stream recovery","span_lines":80}
 export function createChatClient({request, note, clearNoticeFrom = () => {}, createStream, EventSourceClass = EventSource,
   setTimeoutFn = globalThis.setTimeout, clearTimeoutFn = globalThis.clearTimeout}) {
   const administratorNotices = createAdministratorNotices({ request });
   let source = null, epoch = 0, current = null;
+  // Reflects connection state in the chat toggle when the shell control exists.
   function setConnecting(connecting) {
     const button = document.getElementById('chat-toggle-btn');
     if (!button) return;
     button.classList.toggle('connection-connecting', connecting);
     button.title = connecting ? 'Chat connecting…' : 'Toggle chat panel';
   }
+  // Invalidates the active epoch, cancels its retry, and closes notices and stream state.
   function disconnect() {
     ++epoch;
     if (current && current.retry !== null) clearTimeoutFn(current.retry);
     current = null;
     administratorNotices.stop(); source?.close(); source = null; setConnecting(false);
   }
+  // Rejects callbacks from any connection or session superseded by disconnect/open.
   function valid(state) { return current === state && state.epoch === epoch; }
+  // Validates and deduplicates one sequenced event before publishing it to the panel.
+  // Invalid events or a rejected render throw so the caller can request snapshot recovery.
   function deliver(state, item, recovered = false) {
     if (!Number.isSafeInteger(item.seq) || item.seq <= 0 || typeof item.id !== 'string')
       throw Error('Invalid chat event');
@@ -28,6 +41,7 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
     state.seen.add(item.id);
     state.last = Math.max(state.last, item.seq);
   }
+  /** Fills message gaps from a session snapshot, coalescing concurrent recovery requests. */
   async function recover(state) {
     if (!valid(state)) return;
     if (state.inFlight) { state.again = true; return state.inFlight; }
@@ -53,6 +67,7 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
     })();
     return state.inFlight;
   }
+  // Tracks this session's run statuses and recovers the transcript after terminal changes.
   function updateRuns(items) {
     const state = current;
     if (!state) return;
@@ -63,6 +78,7 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
       if (previous !== run.status && ['completed','failed','stopped'].includes(run.status)) void recover(state);
     }
   }
+  /** Loads a snapshot, invokes render, then opens the session SSE stream and its callbacks. */
   async function open(id, render, publish, metadataChanged = () => {}) {
     disconnect();
     const turn = epoch;
@@ -77,46 +93,76 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
     source = createStream ? createStream(streamUrl) : new EventSourceClass(streamUrl);
     setConnecting(true);
     source.addEventListener('session_updated', () => { if (valid(state)) metadataChanged(); });
+    // Validates each SSE payload; rendering/parse failures trigger snapshot recovery.
     source.onmessage = event => {
       if (!valid(state)) return;
       try { deliver(state, JSON.parse(event.data)); }
       catch { void recover(state); }
     };
+    // Marks transport loss and starts bounded snapshot recovery for the current epoch.
     source.onerror = () => { if (valid(state)) {setConnecting(true); void recover(state);} };
+    // Clears the connection indicator and checks for messages missed before reconnect.
     source.onopen = () => { if (valid(state)) {setConnecting(false); void recover(state);} };
   }
   return {
     open, disconnect, updateRuns,
+    /** Reads recorded usage totals for one session. */
     usage:id=>request("/sessions/"+encodeURIComponent(id)+"/usage"),
+    /** Reads administrator context-compaction settings. */
     contextConfig:()=>request("/admin/context-compaction"),
+    /** Saves administrator context-compaction settings with PUT. */
     saveContextConfig:body=>request("/admin/context-compaction","PUT",body),
+    /** Reads one session snapshot containing public messages and run state. */
     snapshot:id=>request('/sessions/'+encodeURIComponent(id)),
+    /** Uploads a staged attachment to the selected session. */
     upload:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/attachments','POST',body),
+    /** Requests a server-generated description for an uploaded attachment. */
     describeUpload:(id,aid)=>request('/sessions/'+encodeURIComponent(id)+'/attachments/'+encodeURIComponent(aid)+'/describe','POST',{}),
+    /** Removes a staged attachment from a session. */
     removeUpload:(id,aid)=>request('/sessions/'+encodeURIComponent(id)+'/attachments/'+encodeURIComponent(aid),'DELETE'),
+    /** Sends a voice audio frame for the selected session. */
     voiceAudio:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/voice/audio','POST',body),
+    /** Routes a voice utterance to the supported session action. */
     voiceRoute:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/voice/route','POST',body),
+    /** Updates voice conversation controls for a session. */
     voiceControl:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/voice/control','POST',body),
+    /** Reads the runtime's voice capabilities for one session. */
     voiceCapabilities:id=>request('/sessions/'+encodeURIComponent(id)+'/voice/capabilities'),
+    /** Requests speech audio for text in the selected session. */
     voiceSpeech:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/voice/speech','POST',body),
+    /** Reads session-specific mode/model and composer capability state. */
     controls: id => request('/sessions/' + encodeURIComponent(id) + '/controls'),
+    /** Saves a session's execution-mode selection with PUT. */
     mode: (id, body) => request('/sessions/' + encodeURIComponent(id) + '/mode', 'PUT', body),
+    /** Saves a session's model selection with PUT. */
     model: (id, body) => request('/sessions/' + encodeURIComponent(id) + '/model', 'PUT', body),
+    /** Lists sessions for the requested lifecycle status. */
     sessions: (status = 'active') => request('/sessions?status=' + encodeURIComponent(status)),
+    /** Searches sessions in pages of 20, optionally continuing a prior cursor. */
     search: ({q, status = 'active', continuation}) => {
       const params = new URLSearchParams({q, status, limit: '20'});
       if (continuation) params.set('continuation', continuation);
       return request('/sessions/search?' + params);
     },
+    /** Applies revision-fenced title or pin metadata changes. */
     patch: (id, body) => request('/sessions/' + encodeURIComponent(id), 'PATCH', body),
+    /** Recycles a session with the caller's metadata revision. */
     recycle: (id, body) => request('/sessions/' + encodeURIComponent(id), 'DELETE', body),
+    /** Restores a recycled session using its current revision. */
     restore: (id, body) => request('/sessions/' + encodeURIComponent(id) + '/restore', 'POST', body),
+    /** Acknowledges messages through a durable sequence cursor. */
     read: (id, through_seq) => request('/sessions/' + encodeURIComponent(id) + '/read', 'PUT', {through_seq}),
+    /** Creates a session from the supplied agent and request identity. */
     create: body => request('/sessions', 'POST', body),
+    /** Submits one user message and its attachment IDs to a session. */
     send: (id, body) => request('/sessions/' + id + '/messages', 'POST', body),
+    /** Requests cancellation of a run. */
     cancel: (id, body) => request('/runs/' + id + '/cancel', 'POST', body),
+    /** Submits a decision for a pending approval. */
     decide: (id, body) => request('/approvals/' + id + '/decision', 'POST', body),
+    /** Resolves an uncertain run through its recovery endpoint. */
     recover: (id, body) => request('/runs/' + id + '/recovery', 'POST', body),
+    /** Resumes a paused or stopped run. */
     resume: (id, body) => request('/runs/' + id + '/resume', 'POST', body)
   };
 }

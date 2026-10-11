@@ -1,10 +1,14 @@
+// @code-index {"version":1,"feature":"chat-usage-context","aliases":["chat footer","usage context","context statistics"],"purpose":"Locates provider-reported usage and measured context presentation","span_lines":80}
 // V2 stats-strip and context-panel presentation; Rust supplies every measured value.
+/** Purpose: Format finite counts compactly for the stats strip; unknown values remain an em dash. */
 export function formatCount(value) {
   if (!Number.isFinite(value)) return '—';
   return value >= 1000000 ? (value / 1000000).toFixed(2) + 'M'
     : value >= 1000 ? (value / 1000).toFixed(1) + 'k' : String(value);
 }
+/** Purpose: Mount the stats strip and context panel from server-reported usage and measured dispatch data. Generation checks prevent stale session responses from replacing current values. panel.js drives open/refresh/show/disconnect/destroy; this module reads client.usage/contextConfig and writes saveContextConfig. */
 export function mountUsageStats({root,client,note}) {
+    // Resolve statistics controls inside the supplied chat root.
   const $ = id => root.querySelector('#' + id);
   const anchor = $('chat-pill-stats'), abort = new AbortController();
   let session = '', generation = 0, data = null, pending = null, lastLoad = 0, selectedRun = null, configData = null;
@@ -14,13 +18,17 @@ export function mountUsageStats({root,client,note}) {
   document.body.append(panel);
   anchor.tabIndex = 0; anchor.setAttribute('role','button');
   anchor.setAttribute('aria-label','Context statistics'); anchor.setAttribute('aria-expanded','false');
+    // Hide the context panel, clear its run-specific selection, and reset the expanded state.
   function close() { panel.hidden = true; selectedRun = null; anchor.setAttribute('aria-expanded','false'); }
+    // Format finite panel values with locale separators and label missing measurements explicitly.
   const num = value => Number.isFinite(value) ? value.toLocaleString() : 'Not reported';
+    // Append a text-only label/value row to the context panel.
   function row(parent,label,value) {
     const node=document.createElement('div'); node.className='cmp-cc-top';
     const name=document.createElement('span'), val=document.createElement('span');
     name.textContent=label; val.textContent=value; node.append(name,val); parent.append(node);
   }
+    // Render measured context composition, provider-reported usage, and any available app-wide limits as display data.
   function paintPanel() {
     panel.replaceChildren();
     const content=document.createElement('div'); content.className='cmp-compact';
@@ -80,6 +88,7 @@ export function mountUsageStats({root,client,note}) {
       const status=document.createElement('p');status.setAttribute('role','status');content.append(status);
       const save=document.createElement('button');save.type='button';save.className='cmp-cc-btn';
       save.textContent='Save context settings';content.append(save);
+            // Save only positive safe-integer limits against the digest that was read; show validation and write outcomes in the status region.
       save.addEventListener('click',async()=>{
         const next={...configData.config};
         for(const [key,input] of inputs) {
@@ -97,6 +106,7 @@ export function mountUsageStats({root,client,note}) {
     }
     panel.append(content);window.lucide?.createIcons();
   }
+    // Update strip token/context/cost labels and configured visibility, then refresh an open panel.
   function paint() {
     const totals=data?.usage, ctx=data?.latest?.context_summary;
     $('chat-tokens-in').textContent=totals?.reported_calls ? formatCount(totals.input_tokens) : '—';
@@ -114,6 +124,7 @@ export function mountUsageStats({root,client,note}) {
     }
     if(!panel.hidden && !panel.contains(document.activeElement))paintPanel();
   }
+    // Coalesce usage requests and throttle ordinary refreshes to 1.5 seconds; generation checks discard stale results and failures leave prior data visible.
   async function refresh(force=false) {
     if(!session || pending || (!force && Date.now()-lastLoad<1500))return pending;
     const sid=session,epoch=generation;
@@ -124,10 +135,12 @@ export function mountUsageStats({root,client,note}) {
       .finally(()=>{if(pending===request)pending=null;});
     pending=request;return request;
   }
+    // Load app-wide context limits for the panel; unavailable configuration is omitted without failing usage display.
   async function refreshConfig() {
     try {configData=await client.contextConfig();if(!panel.hidden)paintPanel();}
     catch {configData=null;}
   }
+    // Toggle and position the context panel, optionally pinning one run, then refresh usage and configuration.
   function toggle(run=null) {
     if(!panel.hidden){close();return;}
     selectedRun=run;
@@ -139,6 +152,7 @@ export function mountUsageStats({root,client,note}) {
     void refresh(true);
     void refreshConfig();
   }
+    // Accessible click/keyboard controls open the panel; chevrons scroll the strip, and abort-scoped document/window listeners close it on outside click, Escape, or resize.
   anchor.addEventListener('click',event=>{if(!event.target.closest('.chat-stats-chev'))toggle();},{signal:abort.signal});
   anchor.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle();}},{signal:abort.signal});
   for(const direction of ['left','right']) {
@@ -151,10 +165,15 @@ export function mountUsageStats({root,client,note}) {
   window.addEventListener('resize',close,{signal:abort.signal});
   paint();
   return {
+        // Start a new session generation, clear cached usage, and force an initial read.
     open(id){generation++;session=id;data=null;pending=null;lastLoad=0;close();paint();void refresh(true);},
+        // Expose the same coalesced refresh used by the panel to chat publication/run updates.
     refresh,
+        // Open the panel for a specific run after clearing any earlier selection.
     show(run=null){close();toggle(run);},
+        // Clear session state through the same generation-reset path as open.
     disconnect(){this.open('');},
+        // Disconnect pending session work, remove owned event listeners, and remove the panel.
     destroy(){this.disconnect();abort.abort();panel.remove();}
   };
 }

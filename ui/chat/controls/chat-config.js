@@ -1,14 +1,20 @@
+// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"V3 chat surface profile application and responsive footer wiring","span_lines":40}
 import { applyBubblePaint } from '../core/bubble-paint.js';
 import { applyChatPillLayout } from './chat-pill-config.js';
 import { initFooterHandle } from './footer-handle.js';
 // V3 reads the v3/data/config/chat.json schema. Unknown controls are
 // skipped until their v3 features exist; the controls below are live in v3.
 let chatRoot = null;
+// The optional chatRoot keeps widget queries scoped; document lookup supports the panel.
 const byId = id => chatRoot?.querySelector('#'+id) || document.getElementById(id);
 let surfaceActions = {};
+/** Supplies widget actions consumed by the generated chat header controls. */
 export function setChatSurfaceActions(actions){surfaceActions=actions;}
+/** Returns only supported panel/widget defaults from the loaded profile. */
 export function defaultChatDisplay(){const value=documentConfig?.chat_display?.default;return value==="panel"||value==="widget"?value:null;}
+/** Merges common and widget-specific profile values for the native widget. */
 export function widgetProfile(){return mergeProfile(documentConfig?.chat_common,documentConfig?.chat_widget);}
+/** Invalidates the cached surface choice and reapplies the active profile. */
 export function refreshChatSurface(){currentSurface='';applyChatConfig();}
 let documentConfig = null;
 let headerNodes = null;
@@ -16,6 +22,7 @@ let currentSurface = '';
 let currentFooterMode = '';
 let listenersBound = false;
 
+/** Recursively overlays object values while replacing arrays and scalar values. */
 export function mergeProfile(base, override) {
   const merged = { ...(base || {}) };
   for (const [key, value] of Object.entries(override || {})) {
@@ -25,17 +32,20 @@ export function mergeProfile(base, override) {
   return merged;
 }
 
+/** Resolves portal or panel-width context to the configured profile key. */
 function surfaceName() {
   if (window.__CHAT_PORTAL__) return 'chat_widget';
   return (byId('chat-panel')?.clientWidth || window.innerWidth) <= 768 ? 'chat_mobile' : 'chat_desktop';
 }
 
+/** Returns the common profile merged with the current panel/mobile surface profile. */
 export function currentChatProfile() {
   if (!documentConfig?.chat_common) return null;
   return mergeProfile(documentConfig.chat_common, documentConfig[surfaceName()]);
 }
 
 // SISTER-PANEL: v2 chat-controls-config sizing; row defaults precede overrides.
+/** Applies configured dimensions to a header/footer control and its icon. */
 function sizeControl(node, config) {
   if (!node || !config) return;
   const size = config.container_size || config.box_size;
@@ -54,6 +64,7 @@ function sizeControl(node, config) {
   if (config.max_width) node.style.maxWidth=config.max_width;
 }
 
+/** Resolves cached shell controls or creates the supported navigation/action nodes. */
 function headerControl(name) {
   if (!headerNodes) {
     const select = byId('sessions');
@@ -97,6 +108,7 @@ function headerControl(name) {
   return headerNodes[name];
 }
 
+/** Rebuilds configured header rows from known controls; disabled/missing controls are skipped. */
 function applyHeader(profile) {
   const header = byId('chat-header');
   const config = profile.chat_header || {};
@@ -133,6 +145,7 @@ function applyHeader(profile) {
 let footerNodes = null;
 let applyingFooter = false;
 let footerControls = null;
+/** Applies footer mode/layout and binds its one-time shell controls; guard prevents recursive refresh. */
 function applyFooter(profile, mode) {
   if (applyingFooter) return;
   applyingFooter = true;
@@ -222,6 +235,7 @@ function applyFooter(profile, mode) {
   } finally { applyingFooter=false; }
 }
 
+/** Selects the current profile and updates bubble, transcript, header, and footer presentation. */
 export function applyChatConfig() {
   const profile = currentChatProfile();
   if (!profile) return;
@@ -253,6 +267,7 @@ export function applyChatConfig() {
   panel.style.setProperty('--v3-transcript-top',(profile.transcript_padding?.top_px ?? 25)+'px');
   panel.style.setProperty('--v3-transcript-bottom',(profile.transcript_padding?.bottom_px ?? 50)+'px');
   const tailClearance = profile.transcript_tail_clearance || {};
+  // Rejects negative/non-numeric spacing before writing the transcript CSS tokens.
   const tailPixels = (value, fallback) => Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : fallback;
   panel.style.setProperty('--v3-tail-gap', tailPixels(tailClearance.gap_px, 24) + 'px');
   panel.style.setProperty('--v3-tail-min', tailPixels(tailClearance.min_px, 100) + 'px');
@@ -267,6 +282,7 @@ export function applyChatConfig() {
   applyFooter(profile, mode);
 }
 
+/** Loads or accepts UI config, binds delegated listeners once, and reapplies on remount. */
 export async function initChatConfig({config:provided,root=null} = {}) {
   chatRoot=root;
   let data=provided;

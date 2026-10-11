@@ -1,4 +1,6 @@
 // V2 dropdown presentation/lifecycle, with independent Rust data authority.
+// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector","session list"],"purpose":"Renders and manages V3 session rows, private search, and session actions","span_lines":40}
+/** Creates the list renderer; controller callbacks own navigation and guarded mutations. */
 export function createSessionList(root, {guard, refresh, select, client, recycled = () => {}}) {
   let items = [], selected = '', config = {}, query = '', status = 'active';
   let hits = [], continuation = null, searchInfo = '', searching = false, epoch = 0, timer = 0, destroyed = false;
@@ -6,14 +8,18 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
   const checked = new Set();
   const menu = root.querySelector('.session-dropdown-menu');
   const abort = new AbortController(), timers = new Set(), receipts = new Map();
+  // Lucide markup shared by the trigger-compatible row controls.
   const icon = name => `<i data-lucide="${name}" style="width:14px;height:14px"></i>`;
+  // Builds an accessible icon button; optional actions stop row bubbling and use the caller guard.
   const button = (title, glyph, fn, cls = '') => {
     const b = document.createElement('button'); b.type = 'button'; b.className = cls;
     b.title = title; b.setAttribute('aria-label', title); b.innerHTML = icon(glyph);
     if (fn) b.onclick = e => { e.stopPropagation(); guard(fn)(e); };
     return b;
   };
+  /** Tracks delayed UI work so teardown can cancel every pending callback. */
   function delay(fn, ms) { const t = setTimeout(() => { timers.delete(t); if (!destroyed) fn(); }, ms); timers.add(t); return t; }
+  /** Formats activity timestamps for row labels without changing stored values. */
   function elapsed(ts) {
     if (!ts) return '';
     const seconds = Math.max(0, Math.floor(Date.now() / 1000 - ts));
@@ -22,6 +28,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     }
     return new Date(ts * 1000).toLocaleDateString(undefined, {month:'short', day:'numeric'});
   }
+  /** Builds the unread/activity status chip used by the trigger and list rows. */
   function statusNode(item) {
     const node = document.createElement('span');
     node.className = 'session-row-status ' + (item.is_unread ? 'session-status-unread' : 'session-status-idle');
@@ -31,6 +38,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
       (item.last_active_at ? 'Last active ' + new Date(item.last_active_at * 1000).toLocaleString() : 'Activity unknown');
     return node;
   }
+  /** Refreshes trigger label/status from the currently selected session. */
   function label() {
     const item = items.find(s => s.id === selected);
     const label = root.querySelector('#session-dropdown-label');
@@ -46,6 +54,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     statusEl.replaceChildren(); if (item) statusEl.append(statusNode(item));
     root.querySelector('#session-dropdown-delete').disabled = !item || item.status === 'recycled';
   }
+  /** Sends revision-fenced client actions with stable retry IDs for uncertain responses. */
   async function mutate(item, action, changes = {}, deferred = false) {
     const body = {expected_revision:item.metadata_revision, ...changes};
     const receiptKey = JSON.stringify([item.id, action, body]);
@@ -69,6 +78,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
   }
   // V2 checkbox management, backed by individually revision-fenced Rust writes.
   // A batch is not atomic: keep failed selections and their retry receipts.
+  /** Recycles selected sessions sequentially; failed rows stay selected for retry. */
   async function recycleChecked() {
     if (batchBusy || destroyed) return;
     const targets = items.filter(item => checked.has(item.id));
@@ -89,6 +99,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
       }
     } finally { batchBusy = false; if (!destroyed) render(); }
   }
+  /** Updates one checkbox selection unless a batch operation is active. */
   function toggleChecked(id) {
     if (batchBusy) return;
     if (checked.has(id)) checked.delete(id); else checked.add(id);
@@ -102,6 +113,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     e.preventDefault(); e.stopImmediatePropagation(); toggleChecked(row.dataset.id);
     menu.querySelector(`[data-id="${CSS.escape(row.dataset.id)}"]`)?.focus();
   }, {capture:true,signal:abort.signal});
+  /** Adds a timed two-step confirmation and guards asynchronous actions. */
   function confirmButton(b, text, fn) {
     let armed = false, busy = false, timeout = 0;
     const old = b.innerHTML, label = b.getAttribute('aria-label');
@@ -120,6 +132,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
       guard(async () => { try { await fn(); } finally { busy = false; b.disabled = false; reset(); } })(e);
     };
   }
+  /** Replaces a row title with an editor; Enter/blur commit and Escape cancels. */
   function rename(item, element) {
     if (!element || editing) return;
     const input = document.createElement('input'); input.className = 'session-row-title-input'; input.value = item.title;
@@ -132,6 +145,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     input.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); finish(true); } if (e.key === 'Escape') { e.preventDefault(); finish(false); } });
     input.addEventListener('blur', () => finish(true));
   }
+  /** Builds the row action popup, leaving unsupported V3 actions visibly disabled. */
   function actions(item, anchor) {
     const popup = document.createElement('div'); popup.className = 'session-row-actions'; popup.dataset.source = 'session-list'; popup.dataset.id = item.id;
     for (const [key, title, glyph, fn] of [
@@ -160,6 +174,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     popup.style.left = Math.max(4,Math.min(r.right-popup.offsetWidth,innerWidth-popup.offsetWidth-4)) + 'px';
     popup.style.top = Math.max(4,Math.min(r.bottom+4,innerHeight-popup.offsetHeight-4)) + 'px'; window.lucide?.createIcons();
   }
+  /** Runs scoped paginated private search and discards stale/destroyed responses. */
   async function search(more = false) {
     const turn = ++epoch, q = query, scope = status, token = more ? continuation : null;
     searching = true; if (!more) { hits = []; continuation = null; } searchInfo = ''; render();
@@ -171,6 +186,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     } catch (error) { if (turn === epoch && !destroyed) searchInfo = 'Search failed: ' + (error.message || 'Unable to search private sessions'); }
     finally { if (turn === epoch && !destroyed) { searching = false; render(); } }
   }
+  /** Loads active or recycled rows, then applies the current private-search query. */
   async function loadScope() {
     const turn = ++epoch, scope = status;
     const data = await client.sessions(scope);
@@ -180,6 +196,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     if (query.trim()) await search(); else render();
   }
   let binItems = [];
+  /** Rebuilds visible rows and controls while preserving search focus/selection. */
   function render() {
     if (menu.hidden || editing || destroyed) return;
     const focused = menu.querySelector('.session-manage-search-input');
@@ -235,10 +252,15 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
   root.querySelector('#session-dropdown-kebab').onclick = e => { e.stopPropagation(); const item = items.find(s => s.id === selected); if (item) actions(item,e.currentTarget); };
   confirmButton(root.querySelector('#session-dropdown-delete'),'Recycle?',() => { const item = items.find(s => s.id === selected); return item ? mutate(item,'recycle') : undefined; });
   const tick = setInterval(() => { for (const node of [...menu.querySelectorAll('[data-ts]'),...root.querySelectorAll('[data-ts]')]) node.textContent = elapsed(Number(node.dataset.ts)); },1000);
+  // Public lifecycle API keeps selected rows, configuration, search state and timers in sync.
   return {
+    // Replace authoritative rows/selection and drop checkbox IDs no longer present.
     update(rows,id) { items = rows; selected = id; for (const id of checked) if (!items.some(item => item.id === id)) checked.delete(id); label(); render(); },
+    // Reapply menu options; disabling batch delete also clears its transient selection.
     configure(cfg) { config = cfg || {}; if (config.menu?.batch_delete === false) { checkboxMode = false; checked.clear(); } menu.style.maxHeight = config.menu?.max_height || ''; label(); render(); },
+    // Invalidate in-flight search and restore the default active, unfiltered list.
     reset() { if (!batchBusy) { checkboxMode = false; checked.clear(); } ++epoch; clearTimeout(timer); query = ''; hits = []; continuation = null; searching = false; searchInfo = ''; status = 'active'; },
+    // Cancel timers/listeners and detach editors before the dropdown root is removed.
     destroy() { destroyed = true; ++epoch; clearTimeout(timer); clearInterval(tick); for (const t of timers) clearTimeout(t); abort.abort(); editing?.remove(); root.querySelector('#session-dropdown-kebab').onclick = null; root.querySelector('#session-dropdown-delete').onclick = null; }
   };
 }

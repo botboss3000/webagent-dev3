@@ -1,16 +1,24 @@
+// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector"],"purpose":"Mounts the V3 session selector menu lifecycle and interaction wiring","span_lines":40}
 // Adapted from running v2 session-dropdown/controller.js. V3 owns data/actions.
+/** Mounts menu positioning, keyboard/focus behavior, animation, and teardown around V3-owned data callbacks. */
 export function mountSessionDropdown(root, {refresh, select, guard, resetSearch = () => {}}) {
  const dropdown=root, menu=root.querySelector('.session-dropdown-menu');
  const app={currentUserId:true};
  let _openRequestId=0,_keyboardDismissRequested=false,_closeAnimationTimer=0,_openAnimationTimer=0;
  const abort=new AbortController();
+ // V2-only reset hooks are inert because V3 list.js owns these controls/states.
  const _resetAllDeleteButtons=()=>{}, _cancelPendingSearchCommit=()=>{}, _clearMsgSearch=()=>{};
  const _setShowHidden=()=>{}, _setSearchQuery=()=>{resetSearch();const search=menu.querySelector('input');if(search)search.value='';};
+ // Keep the legacy load-state interface callable; this V3 controller has no shared store.
  const sessionDropdownStore={setLoadState:()=>{}};
+ // V3 is browser-backed here; the legacy non-browser cache branch stays disabled.
  const storageAdapter={isBrowser:true};
+ // Data refresh is supplied by panel.js; the sentinel is false on success and failure.
  const populateSessionSelect=async()=>{try{await refresh();return false;}catch(error){menu.textContent=error.message;return false;}};
  let popup=null;
+ // Replacing/closing a row popup always removes its current DOM node.
  const _closeRowActions=()=>{popup?.remove();popup=null;};
+  /** Mirrors the menu syncing flag into a row above list.js managed content. */
   function _syncStatusRow() {
     if (!menu) return;
     const syncing = menu.dataset.syncing === 'true';
@@ -40,11 +48,13 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
   // Ensure it is correct if the menu already carries data-syncing at mount time.
   _syncStatusRow();
 
+  /** Identifies editable focus that may have opened the mobile keyboard. */
   function _isEditableElement(el) {
     if (!el || el === document.body) return false;
     return el.matches?.('input, textarea, select, [contenteditable="true"]') || false;
   }
 
+  /** Uses the visual viewport when available for keyboard-settle measurements. */
   function _viewportHeight() {
     return window.visualViewport?.height || window.innerHeight;
   }
@@ -52,6 +62,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
   // Focus is the reliable keyboard signal. Some Android WebViews shrink both
   // visualViewport and innerHeight, so comparing those two values can falsely
   // report that the keyboard is already closed.
+  /** Blurs editable focus before opening, preserving the composer draft caret. */
   function _dismissKeyboardBeforeOpen() {
     const active = document.activeElement;
     // The conversation trigger is part of the composer controls. Opening its
@@ -67,6 +78,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
     return true;
   }
 
+  /** Waits for viewport growth/settling with a bounded timeout before menu reveal. */
   function _waitForKeyboardDismiss() {
     const vv = window.visualViewport;
     const startHeight = _viewportHeight();
@@ -136,6 +148,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
   // mirrors it in ui/main-panel/agents/sessions/js/sessions-page.js
   // (_renderSkeletonRows — first content column fixed 500px) and the static
   // phantom rows in ui/main-panel/agents/agents.html (same classes + ranges).
+  /** Paints stable phantom rows so opening geometry is ready before list loading. */
   function _renderSessionMenuSkeleton() {
     if (!menu) return;
     menu.replaceChildren();
@@ -158,6 +171,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
     }
   }
 
+  /** Chooses the loading skeleton or anonymous empty state before revealing the menu. */
   function _prepareSessionMenuContent() {
     if (app.currentUserId) {
       _renderSessionMenuSkeleton();
@@ -176,6 +190,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
   // ancestors, so it no longer follows its trigger automatically. Keep this
   // geometry update separate from the open animation so a window or chat-panel
   // resize can re-anchor the already-open menu without restarting that animation.
+  /** Reanchors the detached menu to its trigger and computes available viewport height. */
   function _positionOpenMenu() {
     if (!menu) return;
 
@@ -206,7 +221,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
     dropdown.classList.toggle('flip-up', flipUp);
   }
 
-  /** Position and show the menu (called after the keyboard is gone). */
+  /** Resets stale animation state, detaches the menu, positions it, and begins opening. */
   function _positionAndShowMenu() {
     if (!menu) return;
     clearTimeout(_closeAnimationTimer);
@@ -241,6 +256,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
     _resetAllDeleteButtons();
   }
 
+  /** Opens after any keyboard settle, then loads sessions only after animation completes. */
   async function openMenu() {
     if (!menu) return;
     const requestId = ++_openRequestId;
@@ -280,15 +296,14 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
           menu.classList.remove('opening');
           rows.forEach(row => { row.style.animationDelay = ''; });
           _openAnimationTimer = 0;
-          // The shell is now fully open. Only at this point may cache reads,
-          // DOM row construction, or network revalidation compete for the
-          // main thread, avoiding a visibly interrupted open animation.
+          // Defer the V3 refresh callback until the opening animation has settled.
           if (requestId === _openRequestId && menu.dataset.state === 'open') _loadSessionList();
         }, totalMs);
       });
     });
   }
 
+  /** Brackets the supplied V3 refresh callback with sync indicators; the legacy cache result is dormant. */
   async function _loadSessionList() {
     if (!app.currentUserId) return;
     const userId = app.currentUserId;
@@ -296,17 +311,9 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
     menu.setAttribute('aria-busy', 'true');
     sessionDropdownStore.setLoadState('syncing');
     try {
-      // First resolve the shared memory snapshot or IndexedDB mirror. In
-      // normal mode with no local snapshot this falls through to the server,
-      // leaving the honest skeleton in place. In every warm path the rows are
-      // usable immediately and this awaited work is only local storage.
+      // V3's helper ignores the inherited cache arguments and delegates to panel.js refresh.
+      // It returns false on success, so the preserved non-browser follow-up is unreachable here.
       const paintedFromCache = await populateSessionSelect(userId, { preferCache: true });
-
-      // A cached snapshot is deliberately stale-while-revalidate. Normal mode
-      // verifies it with one authoritative list read after it is visible.
-      // Hybrid listSessions already owns one background refresh and dispatches
-      // sessions-delta; browser-authority mode has no server handshake. Starting
-      // another handshake here would multiply one open into equivalent work.
       if (paintedFromCache && !storageAdapter.isBrowser) {
         await populateSessionSelect(userId);
       }
@@ -317,6 +324,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
     }
   }
 
+  /** Finalizes closing state, reparents the menu, and clears temporary geometry. */
   function _finishMenuClose() {
     clearTimeout(_closeAnimationTimer);
     _closeAnimationTimer = 0;
@@ -347,6 +355,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
     menu._closeAnimation = null;
   }
 
+  /** Cancels deferred opening/search work, animates shut, and resets transient controls. */
   function closeMenu({ immediate = false } = {}) {
     if (!menu) return;
     // A pending search-input debounce must not fire after the menu closes —
@@ -426,17 +435,22 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
   }
 
 
+ /** Toggles open/closed unless a closing animation is still in progress. */
  function toggle(){if(!menu.hidden && menu.dataset.state!=='closing')closeMenu();else if(menu.dataset.state!=='closing')openMenu();}
  root.addEventListener('click',e=>{if(e.target.closest('button,input'))return;e.stopPropagation();toggle();},{signal:abort.signal});
  root.addEventListener('keydown',e=>{if(e.target.closest('button,input'))return;if(['Enter',' '].includes(e.key)){e.preventDefault();toggle();}},{signal:abort.signal});
  menu.addEventListener('click',e=>{e.stopPropagation();if(e.target.closest('button,input'))return;const row=e.target.closest('.session-row');if(row&&!row.classList.contains('recycled')){closeMenu();guard(()=>select(row.dataset.id))();}},{signal:abort.signal});
  menu.addEventListener('keydown',e=>{const row=e.target.closest('.session-row');if(row&&!row.classList.contains('recycled')&&!e.target.closest('button,input')&&['Enter',' '].includes(e.key)){e.preventDefault();closeMenu();guard(()=>select(row.dataset.id))();}},{signal:abort.signal});
+ // Shared outside click/focus callback accounts for the menu being detached to body.
  const outside=e=>{if(!root.contains(e.target)&&!menu.contains(e.target)&&!popup?.contains(e.target))closeMenu();};
  document.addEventListener('click',outside,{signal:abort.signal});document.addEventListener('focusin',outside,{signal:abort.signal});
  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!menu.hidden){closeMenu();root.querySelector('.session-dropdown-trigger').focus();}},{signal:abort.signal});
+ // Resize callback reanchors an open detached menu without restarting its animation.
  const reposition=()=>{if(!menu.hidden)_positionOpenMenu();};
  window.addEventListener('resize',reposition,{signal:abort.signal});window.visualViewport?.addEventListener('resize',reposition,{signal:abort.signal});
  const observer=new ResizeObserver(reposition);observer.observe(root);
+ // Returned controller is the list renderer’s lifecycle/configuration bridge.
+ // Expose menu lifecycle plus popup ownership to the sibling list renderer.
  const handle={open:openMenu,close:closeMenu,isOpen:()=>!menu.hidden,destroy(){_openRequestId++;menu._deferredOpenCleanup?.();closeMenu({immediate:true});abort.abort();_syncRowObserver.disconnect();observer.disconnect();clearTimeout(_openAnimationTimer);clearTimeout(_closeAnimationTimer);menu.remove();_closeRowActions();},setPopup(node){_closeRowActions();popup=node;}};
  root._sessionDropdownController=handle;return handle;
 }

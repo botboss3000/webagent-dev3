@@ -3,12 +3,14 @@
 // Shared full-view dialog for rendered chat elements. Callers pass the element
 // that holds the readable content; its DOM is cloned so the dialog is a stable
 // snapshot even while the live transcript changes underneath it.
+// @code-index {"version":1,"feature":"chat-full-view","aliases":["chat full view","full message view","message zoom"],"purpose":"Shows a cloned chat element in an accessible modal dialog","span_lines":80}
 
 import { _refreshLucideIcons } from './presentation.js';
 
 let _activeFullView = null;
 let _viewerId = 0;
 
+/** Closes the singleton viewer, removes its Escape listener/backdrop, and restores focus when possible. */
 export function closeChatElementFullView() {
   const state = _activeFullView;
   if (!state) return;
@@ -18,6 +20,7 @@ export function closeChatElementFullView() {
   if (state.returnFocus?.isConnected) state.returnFocus.focus();
 }
 
+/** Replaces the current viewer with a labelled modal clone; missing content is ignored and close paths return focus to the connected trigger. */
 export function openChatElementFullView(source, returnFocus, title = 'Full view') {
   closeChatElementFullView();
   if (!source) return;
@@ -51,6 +54,7 @@ export function openChatElementFullView(source, returnFocus, title = 'Full view'
   backdrop.appendChild(viewer);
   document.body.appendChild(backdrop);
 
+  // The named handler is removed by closeChatElementFullView with the same function identity.
   const onKeyDown = (event) => {
     if (event.key === 'Escape') closeChatElementFullView();
   };

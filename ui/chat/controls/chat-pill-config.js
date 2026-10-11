@@ -1,4 +1,5 @@
 // SISTER-PANEL: V2-PILL-RENDERER — exact ui/shared/js/chat-pill-config.js snapshot; only login import differs.
+// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat pill layout"],"purpose":"Normalizes chat pill settings and renders configured composer controls","span_lines":40}
 'use strict';
 
 // Canonical chat-pill schema and renderer.
@@ -25,18 +26,22 @@ const MODE_CLASSES = [
   'chat-pill-no-action',
 ];
 
+/** Shallowly combines schema layers before legacy/canonical normalization. */
 function mergeObjects(base, overrides) {
   return { ...(base || {}), ...(overrides || {}) };
 }
 
+/** Maps the legacy voice name to the canonical mic control key. */
 function canonicalName(name) {
   return CONTROL_ALIASES[name] || name;
 }
 
+/** Creates the normalized metadata shape expected for each layout zone. */
 function emptyZoneMeta() {
   return { controls: [], carousel: null, align: null, padding: null };
 }
 
+/** Creates the fixed two-row, three-zone normalized layout. */
 function emptyRows() {
   return [
     { left: emptyZoneMeta(), center: emptyZoneMeta(), right: emptyZoneMeta() },
@@ -44,6 +49,7 @@ function emptyRows() {
   ];
 }
 
+/** Converts legacy arrays or current zone objects into canonical controls and styles. */
 function normalizeZone(value) {
   // Legacy: bare array of control names → default align/padding
   if (Array.isArray(value)) return { controls: value.map(canonicalName), carousel: null, align: null, padding: null };
@@ -59,6 +65,7 @@ function normalizeZone(value) {
   return emptyZoneMeta();
 }
 
+/** Normalizes at most two configured rows and fills all absent zones. */
 function normalizeRows(rows) {
   const out = emptyRows();
   for (let index = 0; index < Math.min(2, rows?.length || 0); index += 1) {
@@ -69,6 +76,7 @@ function normalizeRows(rows) {
   return out;
 }
 
+/** Resolves enabled legacy mic/send settings to their combined or individual control. */
 function legacyButtonName(buttons) {
   const micEnabled = buttons?.voice?.enabled !== false;
   const sendEnabled = buttons?.send?.enabled !== false;
@@ -78,6 +86,7 @@ function legacyButtonName(buttons) {
   return null;
 }
 
+/** Translates a legacy row,column coordinate into the matching named zone. */
 function placeLegacyControl(rows, cell, name) {
   if (!cell || !name) return;
   const [rowRaw, colRaw] = String(cell).split(',');
@@ -88,6 +97,7 @@ function placeLegacyControl(rows, cell, name) {
   rows[row][zone].controls.push(name);
 }
 
+/** Removes duplicate controls and individual mic/send entries shadowed by mic_send. */
 function finalizeRows(rows) {
   const hasCombined = rows.some(row => ZONES.some(
     zone => row[zone].controls.includes('mic_send') || (row[zone].carousel || []).includes('mic_send'),
@@ -114,6 +124,7 @@ function finalizeRows(rows) {
   return rows;
 }
 
+/** Converts old and current pill schemas into canonical rows and control settings. */
 export function normalizeChatPill(pill = {}) {
   const legacyButtons = pill.buttons || {};
   const canonicalControls = pill.controls || {};
@@ -160,6 +171,7 @@ export function normalizeChatPill(pill = {}) {
   return { ...pill, rows: finalizeRows(rows), controls };
 }
 
+/** Lists enabled controls in row order for renderer visibility decisions. */
 export function configuredRowControls(config) {
   const names = [];
   for (const row of config?.rows || []) {
@@ -175,18 +187,21 @@ export function configuredRowControls(config) {
   return names;
 }
 
+/** Clears hidden/display state when a configured control becomes visible. */
 function showElement(el) {
   if (!el) return;
   el.hidden = false;
   el.style.removeProperty('display');
 }
 
+/** Forces a control hidden even when author CSS overrides the hidden attribute. */
 function hideElement(el) {
   if (!el) return;
   el.hidden = true;
   el.style.setProperty('display', 'none', 'important');
 }
 
+/** Applies configured box and icon dimensions without inventing defaults. */
 function sizeControl(el, cfg = {}) {
   if (!el) return;
   const containerSize = cfg.container_size || cfg.box_size;
@@ -207,6 +222,7 @@ function sizeControl(el, cfg = {}) {
 let _lockedControlPopover = null;
 let _lockedControlPopoverCleanup = null;
 
+/** Removes the active lock popover and its resize/scroll listeners. */
 function _closeLockedControlPopover() {
   _lockedControlPopoverCleanup?.();
   _lockedControlPopoverCleanup = null;
@@ -214,6 +230,7 @@ function _closeLockedControlPopover() {
   _lockedControlPopover = null;
 }
 
+/** Keeps the registration prompt within the viewport near its triggering control. */
 function _positionLockedControlPopover(popover, anchor) {
   const rect = anchor.getBoundingClientRect();
   const padding = 8;
@@ -234,6 +251,7 @@ function _positionLockedControlPopover(popover, anchor) {
   popover.style.top = `${y}px`;
 }
 
+/** Replaces the prior lock prompt and routes its CTA to the login overlay. */
 export function showLockedControlPopover(anchor, cfg = {}) {
   _closeLockedControlPopover();
   const popover = document.createElement('div');
@@ -265,10 +283,12 @@ export function showLockedControlPopover(anchor, cfg = {}) {
   });
   popover.appendChild(cta);
   document.body.appendChild(popover);
+  // Shared resize/scroll callback repositions this singleton prompt.
   const reposition = () => _positionLockedControlPopover(popover, anchor);
   reposition();
   window.addEventListener('resize', reposition);
   document.addEventListener('scroll', reposition, true);
+  // Keep listener removal paired with the active popup's lifetime.
   _lockedControlPopoverCleanup = () => {
     window.removeEventListener('resize', reposition);
     document.removeEventListener('scroll', reposition, true);
@@ -277,6 +297,7 @@ export function showLockedControlPopover(anchor, cfg = {}) {
   setTimeout(() => document.addEventListener('click', _closeLockedControlPopover, { once: true }), 0);
 }
 
+/** Keeps a capture-phase lock guard bound once while reading the latest lock config. */
 function applyControlLock(el, cfg = {}) {
   if (!el) return;
   el._chatControlLockConfig = cfg;
@@ -301,6 +322,7 @@ function applyControlLock(el, cfg = {}) {
   }, true);
 }
 
+/** Sets the pill class matching the configured combined/individual action controls. */
 function setButtonMode(pillEl, names) {
   pillEl.classList.remove(...MODE_CLASSES);
   const hasCombined = names.includes('mic_send');
@@ -335,6 +357,7 @@ const STATS_TYPE_EL = {
  * what decimals to use. Elements for disabled types are hidden; enabled ones
  * are value-gated by their renderers (hidden while their value is zero).
  */
+/** Resolves configured stat types to unique DOM nodes and stores renderer metadata. */
 function applyStatsConfig(statsEl, cfg = {}) {
   if (!statsEl || !Array.isArray(cfg.visible)) return;
   const resolved = [];
@@ -380,6 +403,7 @@ function applyStatsConfig(statsEl, cfg = {}) {
   }
 }
 
+/** Renders normalized composer rows and applies control state; returns normalized settings. */
 export function applyChatPillLayout(els, rawPill = {}) {
   const pill = normalizeChatPill(rawPill);
   const pillEl = els?.pill;
@@ -500,12 +524,14 @@ export function applyChatPillLayout(els, rawPill = {}) {
         }
 
         // Wire chevrons
+        // Recompute carousel controls after strip/content geometry changes.
         const update = () => {
           const overflow = strip.scrollWidth - strip.clientWidth > 1;
           zoneEl.classList.toggle('has-overflow', overflow);
           chevLeft.classList.toggle('visible', overflow && strip.scrollLeft > 1);
           chevRight.classList.toggle('visible', overflow && strip.scrollLeft < strip.scrollWidth - strip.clientWidth - 1);
         };
+        // Scroll by a fraction of the visible strip, with a minimum usable increment.
         const scrollStep = () => Math.max(60, Math.floor(strip.clientWidth * 0.6));
         chevLeft.addEventListener('click', () => { strip.scrollBy({ left: -scrollStep(), behavior: 'smooth' }); });
         chevRight.addEventListener('click', () => { strip.scrollBy({ left: scrollStep(), behavior: 'smooth' }); });
@@ -575,6 +601,7 @@ export function applyChatPillLayout(els, rawPill = {}) {
       }
     } catch (_) { /* Focus restoration is best-effort during teardown. */ }
 
+    // Restore the textarea caret only after its temporary DOM move is complete.
     const revealCaret = () => {
       pillEl.classList.remove('chat-pill-caret-suppressed');
       els.input.removeEventListener('pointerdown', revealCaret, true);

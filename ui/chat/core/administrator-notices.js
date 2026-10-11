@@ -1,6 +1,9 @@
+// @code-index {"version":1,"feature":"chat-administrator-notices","aliases":["repository status reminder","retained build notice"],"purpose":"Locates administrator repository and retained-build notices in the chat composer","span_lines":80}
 // Repository notices are server-authored FYI, separate from chat connection errors.
+// Adapt repository notice text into a polite status region; caller owns polling and lifecycle.
 export function repositoryNoticeRenderer(documentObject = globalThis.document) {
   let region = null;
+  // Return the renderer callback used by the repository notice poller.
   return text => {
     const parent = documentObject?.getElementById('chat-above-pill');
     if (!parent) return;
@@ -17,8 +20,10 @@ export function repositoryNoticeRenderer(documentObject = globalThis.document) {
 }
 
 
+// Render retained-build reminders as inert text and delegate reviewed-state changes to the supplied callback.
 export function buildNoticeRenderer(documentObject = globalThis.document) {
   let region = null;
+  // Return the renderer callback; review is invoked only by the explicit button action.
   return (items, review) => {
     const parent = documentObject?.getElementById('chat-above-pill');
     if (!parent) return;
@@ -32,6 +37,7 @@ export function buildNoticeRenderer(documentObject = globalThis.document) {
     }
     region.replaceChildren();
     region.hidden = !items.length;
+    // The input was validated by the poller before this renderer receives it.
     for (const item of items) {
       const row = documentObject.createElement('p');
       const text = documentObject.createElement('span');
@@ -41,6 +47,7 @@ export function buildNoticeRenderer(documentObject = globalThis.document) {
       button.type = 'button';
       button.textContent = 'Mark reviewed';
       button.title = 'Clear this reminder after investigation. Retained work remains intact.';
+      // Prevent duplicate review requests while pending and retain a visible failure message.
       button.addEventListener('click', async () => {
         button.disabled = true;
         try { await review(item.id); }
@@ -53,8 +60,10 @@ export function buildNoticeRenderer(documentObject = globalThis.document) {
   };
 }
 
+// Bound and validate response entries before they reach the notice renderer.
 function validBuildNotices(value) {
   if (!Array.isArray(value) || value.length > 20) return [];
+  // Retain only bounded, well-shaped notice rows with supported status values.
   return value.filter(item => item && /^[a-f0-9]{64}$/.test(item.id || '')
     && /^[A-Za-z0-9_-]{8,80}$/.test(item.task_id || '')
     && ['stale_open', 'failed', 'interrupted', 'uncertain', 'stale'].includes(item.status)
@@ -62,14 +71,17 @@ function validBuildNotices(value) {
     && (item.retained_bytes == null || (Number.isSafeInteger(item.retained_bytes) && item.retained_bytes >= 0)));
 }
 
+// Poll notices for one selected session, fencing async results across stop/start transitions.
 export function createAdministratorNotices({ request, render = repositoryNoticeRenderer(), renderBuilds = buildNoticeRenderer(),
   setIntervalFn = globalThis.setInterval, clearIntervalFn = globalThis.clearInterval }) {
   let session = null, generation = 0, interval = null, inFlight = false, seen = '', seenBuilds = '';
+  // Invalidate pending results, clear the interval, and withdraw both notice surfaces.
   function stop() {
     ++generation; session = null; seen = ''; seenBuilds = '';
     if (interval !== null) clearIntervalFn(interval);
     interval = null; render(''); renderBuilds([], null);
   }
+  // Serialize reads, validate response fields, and render only for the still-current session.
   async function poll() {
     if (!session || inFlight) return;
     const id = session, turn = generation;
@@ -81,6 +93,7 @@ export function createAdministratorNotices({ request, render = repositoryNoticeR
       const revision = JSON.stringify(items);
       if (revision !== seenBuilds) {
         seenBuilds = revision;
+        // Review is an explicit POST; refresh only while the same notice session remains active.
         renderBuilds(items, async noticeId => {
           if (turn !== generation || id !== session) return;
           await request('/sessions/' + encodeURIComponent(id) + '/administrator/notices/' + encodeURIComponent(noticeId) + '/review', 'POST', {});
@@ -107,10 +120,12 @@ export function createAdministratorNotices({ request, render = repositoryNoticeR
       if (turn !== generation && session) void poll();
     }
   }
+  // Replace prior polling, ignore non-string, empty, or oversized session IDs, then poll immediately and every ten seconds.
   function start(id) {
     stop();
     if (typeof id !== 'string' || !id || id.length > 128) return;
     session = id;
+    // The timer is session-scoped and cleared by stop before a replacement starts.
     interval = setIntervalFn(() => { void poll(); }, 10000);
     void poll();
   }
