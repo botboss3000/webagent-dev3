@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"V3 chat surface profile application and responsive footer wiring","span_lines":40}
+// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"V3 chat surface profile application and responsive footer wiring Config: data/config/chat.json -> chat_common, chat_desktop, chat_mobile, chat_widget, chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
 import { applyBubblePaint } from '../core/bubble-paint.js';
 import { applyChatPillLayout } from './chat-pill-config.js';
 import { initFooterHandle } from './footer-handle.js';

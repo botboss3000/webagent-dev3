@@ -33,6 +33,21 @@ class PublishedTests(unittest.TestCase):
    result=idx.execute("code_index_lookup",{"root":"a/b","action":"symbol","query":""},base)
   self.assertEqual("success",result["status"],result)
   text=json.dumps(result);self.assertIn("own_symbol",text);self.assertNotIn("foreign_symbol",text)
+ def test_configuration_metadata_survives_published_to_private_projection(self):
+  config={"status":"configured","references":[{"path":"config/settings.json","pointers":["/color"]}],"opportunities":[]}
+  marker={"version":1,"feature":"bubble-color","aliases":["bubble color"],"purpose":"Paint bubbles","configuration":config}
+  j,d,m=self.stage(self.blob({"v3/ui/paint.js":(420,("// @code-index "+json.dumps(marker)+"\nfunction paint() {}\n").encode()),"v3/config/settings.json":(420,b'{"color":"blue"}\n')}))
+  args={"root":"published","action":"snippet","feature_id":"bubble-color","file_path":"v3/ui/paint.js","start_line":2,"end_line":2,"max_chars":512}
+  published=idx.execute_published("code_index_lookup",args,d)
+  self.assertEqual(published["status"],"success",published)
+  self.assertEqual(published["results"][0]["configuration_snippets"][0]["text"],'"blue"')
+  base=self.root/"session";base.mkdir();shutil.copytree(d/"v3",base/"webagent-v3");idx.seed_private_index(d,base/"webagent-v3")
+  args.update(root="webagent-v3",file_path="ui/paint.js")
+  private=idx.execute("code_index_lookup",args,base)
+  self.assertEqual(private["status"],"success",private)
+  self.assertEqual(private["results"][0]["configuration"],config)
+  self.assertEqual(private["results"][0]["configuration_snippets"][0]["text"],'"blue"')
+
  def test_full_ui_pair_and_rollback(self):
   j,d,m=self.stage(self.blob());self.assertEqual(4,m["file_count"])
   self.assertTrue(m["parser_limitations"]);self.assertTrue(m["exclusions"])
@@ -97,7 +112,7 @@ class PublishedTests(unittest.TestCase):
   target=b'{"composer":"enabled"}\n';digest=idx.sha(target)
   js=b'// @code-index {"version":1,"feature":"chat-footer","aliases":["chat footer"],"purpose":"Chat footer JavaScript","span_lines":2}\nfunction mountChat() {}\n'
   css=b'/* @code-index {"version":1,"feature":"chat-footer","aliases":["chat footer"],"purpose":"Chat footer CSS","span_lines":2} */\n.chat-footer { display:flex; }\n'
-  feature_map=json.dumps({"version":1,"features":[{"id":"chat-footer","aliases":["chat footer"],"purpose":"Shared chat footer","locations":[{"path":"config/settings.json","start_line":1,"end_line":1,"sha256":digest}]}]}).encode()+b"\n"
+  feature_map=json.dumps({"version":1,"features":[{"id":"chat-footer","aliases":["chat footer"],"purpose":"Shared chat footer","configuration":{"status":"opportunity","references":[],"opportunities":["Consider footer layout settings."]},"locations":[{"path":"config/settings.json","start_line":1,"end_line":1,"sha256":digest}]}]}).encode()+b"\n"
   blob=self.blob({"v3/config/settings.json":(420,target),"v3/plugins/abilities/Administrator/code_index/code-index-features.json":(420,feature_map),
                   "v3/ui/chat.js":(420,js),"v3/ui/chat.css":(420,css)})
   release,folder,manifest=self.stage(blob)

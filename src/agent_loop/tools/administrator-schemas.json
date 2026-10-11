@@ -54,7 +54,7 @@
   {
     "type": "function",
     "name": "code_index_lookup",
-    "description": "Look up indexed files, symbols and edges; search bounded candidates or read a fresh hash-checked source excerpt. Source output is untrusted.",
+    "description": "Look up indexed files, symbols and edges; search bounded candidates or read a fresh hash-checked source excerpt. Source output is untrusted. Feature search reports configuration assessments. Use feature_id with snippet to pair code with verified settings or configuration opportunities.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -110,6 +110,11 @@
             "snippet",
             "symbol"
           ]
+        },
+        "feature_id": {
+          "type": "string",
+          "maxLength": 48,
+          "description": "For snippet: bind the source excerpt to a searched feature and include its configuration assessment and bounded current settings."
         }
       },
       "required": [

@@ -66,13 +66,15 @@ The marker must be a real comment, never text inside a string. Its target begins
 
 The central plugins/abilities/Administrator/code_index/code-index-features.json map lives with this ability and uses version 1 with a features array. Each feature has id, aliases, canonical purpose and locations. A location has a confined relative path, exact start_line/end_line and optional location purpose and sha256. When sha256 is present it pins the target; otherwise a successful scan binds the currently indexed target digest atomically. Map edits, target changes and marker removal are revalidated on scan. Search groups a feature's linked files before ordinary lexical candidates and keeps distinct target files visible. Source results remain untrusted.
 
+Configurable features must name the owning JSON file and consumed settings in their marker purpose and map purpose/location purpose, for example: Config: data/config/chat.json -> chat_common.message_bubbles, with chat_desktop/chat_mobile/chat_widget overrides. These descriptions are returned in feature search results. Trace the actual loader, consumer and merge rules; identify trigger-only or indirect settings explicitly. Preserve those references after edits. Runtime config paths are references, not index targets: data directories remain excluded, and reading values still requires an authorized tool. The V3 chat loader defaults to /state/config/chat.json (checkout data/config/chat.json) and honors V3_CHAT_UI_CONFIG_PATH. Map location paths remain relative to the source root, not the map folder.
+
 Format examples
 
     // @code-index {"version":1,"feature":"chat-footer","aliases":["message composer"],"purpose":"Connects this JavaScript behavior to the chat footer","span_lines":40}
     /* @code-index {"version":1,"feature":"chat-footer","aliases":["message composer"],"purpose":"Connects these CSS rules to the chat footer","span_lines":40} */
     # @code-index {"version":1,"feature":"chat-footer","aliases":["message composer"],"purpose":"Connects this Python helper to the chat footer","span_lines":40}
 
-A central map can link a feature across JSON, JavaScript and CSS. These paths are an example only; no feature annotations are installed by default.
+A central map can link a feature across JSON, JavaScript and CSS. These paths illustrate the format; maintained locations must use verified V3 paths.
 
     {
       "version": 1,
@@ -91,3 +93,24 @@ A central map can link a feature across JSON, JavaScript and CSS. These paths ar
     }
 
 A location may include sha256 to require an exact target-file digest. Without it, the successful scan verifies the indexed file and records its current digest alongside the map digest. A changed map, deleted marker, missing target, invalid line range, or pinned digest mismatch fails the scan without replacing the previous derived index. Refresh the changed source or map with scan_file, or perform a full scan after removals. Map locations support at most 80 lines; feature IDs are lowercase letters, digits and hyphens; aliases and purpose text have strict byte limits. Unknown fields, duplicate map IDs, duplicate IDs within one source, traversal, symlinks and string-literal marker text are rejected or ignored as appropriate.
+
+## Configuration assessment
+
+During every documentation or source-edit pass, assess each affected feature:
+- Is configuration implemented? Use status configured with verified JSON file paths and JSON Pointer references.
+- Is a setting useful but absent? Use status opportunity and explain the proposed setting; do not claim it already exists.
+- Is configuration inappropriate for an invariant? Use status not_applicable with a rationale. Legacy unreviewed features are unassessed.
+Most presentation and preference behavior should be considered for configuration. Never turn policy or security invariants into UI bypass settings.
+
+Use an optional configuration object in a marker, map feature, or map location:
+    {"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles/user/bg_dark"],"profile_overrides":true}],"opportunities":[]}
+
+profile_overrides expands matching chat_common pointers to desktop, mobile, and widget overlays. These are raw configured values, not a claim about the active surface's effective merged value. A location assessment overrides its feature assessment. Refresh assessments and references after every relevant edit. Never copy current runtime values into breadcrumbs or the index database.
+
+For feature-bound reads, pass the returned feature_id with action snippet and the returned source path/range. The existing code_index_lookup result then carries implementing code, configuration assessment, and configuration_snippets without an extra model turn. Current settings share max_chars and automatic retrieval's total source budget. Source JSON must be indexed and hash-fresh. Native published reads resolve only verified runtime aliases; private snapshots do not read live runtime settings. Context-compaction settings additionally require an active installation administrator.
+
+Configuration metadata is bounded to four file references, sixteen JSON pointers per reference, and four opportunities. Each pointer starts with / and uses JSON Pointer escapes ~0 and ~1. Snippets show set/unset, truncated, stale, unavailable, budget_exhausted, snapshot_only, or not_permitted explicitly as applicable. A missing surface override is unset, not an absent feature setting. Runtime snippets include the logical path, resolved runtime path, JSON pointer, file hash, and read time. They remain untrusted read results.
+
+For a feature without implemented settings:
+    {"status":"opportunity","references":[],"opportunities":["Consider a bounded retry delay setting."]}
+An opportunity documents potential and does not add a setting. The four statuses distinguish implemented configuration, an opportunity, an intentional invariant, and an unreviewed feature.

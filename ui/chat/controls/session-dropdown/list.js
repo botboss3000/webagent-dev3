@@ -1,5 +1,5 @@
 // V2 dropdown presentation/lifecycle, with independent Rust data authority.
-// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector","session list"],"purpose":"Renders and manages V3 session rows, private search, and session actions","span_lines":40}
+// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector","session list"],"purpose":"Renders and manages V3 session rows, private search, and session actions Config: data/config/chat.json -> chat_common.chat_header.controls.session_dropdown (trigger and menu). Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/chat_header/controls/session_dropdown"],"profile_overrides":true}],"opportunities":[]}}
 /** Creates the list renderer; controller callbacks own navigation and guarded mutations. */
 export function createSessionList(root, {guard, refresh, select, client, recycled = () => {}}) {
   let items = [], selected = '', config = {}, query = '', status = 'active';

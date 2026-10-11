@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS edges(file_path TEXT NOT NULL REFERENCES files(path) 
 CREATE INDEX IF NOT EXISTS edges_value ON edges(value);
 CREATE TABLE IF NOT EXISTS feature_locations(feature_id TEXT,source_path TEXT,source_line INTEGER,file_path TEXT,start_line INTEGER,end_line INTEGER,aliases TEXT,purpose TEXT,location_purpose TEXT,origin TEXT,target_sha256 TEXT,source_sha256 TEXT,PRIMARY KEY(feature_id,source_path,source_line,file_path,start_line,end_line));
 CREATE INDEX IF NOT EXISTS feature_locations_id ON feature_locations(feature_id);
+CREATE TABLE IF NOT EXISTS feature_configurations(feature_id TEXT,file_path TEXT,start_line INTEGER,end_line INTEGER,configuration TEXT NOT NULL,PRIMARY KEY(feature_id,file_path,start_line,end_line));
 CREATE TABLE IF NOT EXISTS batches(batch_id TEXT PRIMARY KEY,scope TEXT NOT NULL,status TEXT NOT NULL,requested_files INTEGER NOT NULL,indexed_files INTEGER NOT NULL,started_at TEXT NOT NULL,completed_at TEXT,error TEXT NOT NULL,revision INTEGER);
 """
 
@@ -121,6 +122,80 @@ def _pathnorm(path):
     if parts[0] in {"v3","webagent-v3"}:parts=parts[1:]
     if not parts:raise ValueError("invalid feature path")
     return "/".join(parts)
+
+def _configuration(value=None):
+    """Validate navigation metadata; it never authorizes reading a runtime file."""
+    if value is None:return {"status":"unassessed","references":[],"opportunities":[]}
+    if not isinstance(value,dict) or set(value)-{"status","references","opportunities","rationale"}:raise ValueError("invalid feature configuration fields")
+    status=value.get("status")
+    if not isinstance(status,str) or status not in {"configured","opportunity","not_applicable","unassessed"}:raise ValueError("invalid feature configuration status")
+    refs=value.get("references",[]);opps=value.get("opportunities",[]);reason=value.get("rationale","")
+    if not isinstance(refs,list) or len(refs)>4 or not isinstance(opps,list) or len(opps)>4:raise ValueError("invalid feature configuration bounds")
+    for ref in refs:
+        if not isinstance(ref,dict) or not {"path","pointers"}<=set(ref) or set(ref)-{"path","pointers","profile_overrides"}:raise ValueError("invalid configuration reference")
+        if not isinstance(ref["path"],str) or _pathnorm(ref["path"])!=ref["path"] or not ref["path"].endswith(".json"):raise ValueError("invalid configuration path")
+        pointers=ref["pointers"]
+        if not isinstance(pointers,list) or not 1<=len(pointers)<=16 or any(not isinstance(x,str) for x in pointers) or len(set(pointers))!=len(pointers):raise ValueError("invalid configuration pointers")
+        for pointer in pointers:
+            if not pointer.startswith("/") or len(pointer.encode())>192 or any(ord(c)<32 for c in pointer) or re.search(r"~(?![01])",pointer):raise ValueError("invalid configuration pointer")
+        if "profile_overrides" in ref and type(ref["profile_overrides"]) is not bool:raise ValueError("invalid configuration profiles")
+    if any(not isinstance(x,str) or not x.strip() or len(x.encode())>256 for x in opps) or not isinstance(reason,str) or len(reason.encode())>256:raise ValueError("invalid configuration assessment")
+    if status=="configured" and not refs or status=="opportunity" and (refs or not opps) or status=="not_applicable" and (refs or not reason):raise ValueError("inconsistent configuration assessment")
+    result={"status":status,"references":refs,"opportunities":opps}
+    if reason:result["rationale"]=reason
+    if len(json.dumps(result).encode())>4096:raise ValueError("configuration assessment exceeds bound")
+    return result
+
+
+def _configuration_snippets(conn,rootfd,configuration,budget):
+    """Read only indexed JSON under the same confined source root, never state."""
+    result=[]
+    for ref in configuration["references"]:
+        logical=ref["path"]
+        if logical.startswith("data/"):continue
+        path=("v3/" if conn.execute("SELECT 1 FROM files WHERE path LIKE 'v3/%' LIMIT 1").fetchone() else "")+logical
+        metadata=conn.execute("SELECT sha256 FROM files WHERE path=?",(path,)).fetchone()
+        if metadata is None:
+            result.append({"path":logical,"status":"unavailable","reason":"not_indexed"});continue
+        try:
+            raw=read_source(rootfd,path)
+            if sha(raw)!=metadata[0]:
+                result.append({"path":logical,"status":"stale"});continue
+            value=_unique_json(raw.decode("utf-8"))
+        except (OSError,ValueError):
+            result.append({"path":logical,"status":"unavailable"});continue
+        pointers=list(ref["pointers"])
+        if ref.get("profile_overrides"):
+            for pointer in ref["pointers"]:
+                if pointer.startswith("/chat_common/"):
+                    pointers.extend("/"+profile+pointer[len("/chat_common"):] for profile in ("chat_desktop","chat_mobile","chat_widget"))
+        share=budget//max(1,len(pointers))
+        for pointer in pointers[:64]:
+            item={"path":logical,"pointer":pointer,"sha256":metadata[0],"read_at":datetime.now(timezone.utc).isoformat(),"source_kind":"untrusted_configuration"}
+            selected=value;exists=True
+            for token in pointer[1:].split("/"):
+                token=token.replace("~1","/").replace("~0","~")
+                if isinstance(selected,dict) and token in selected:selected=selected[token]
+                elif isinstance(selected,list) and re.fullmatch(r"0|[1-9][0-9]*",token) and int(token)<len(selected):selected=selected[int(token)]
+                else:exists=False;break
+            if exists:
+                rendered=json.dumps(selected,ensure_ascii=False,indent=2).encode()
+                text=rendered[:min(share,budget)].decode("utf-8",errors="ignore")
+                item.update(status="set" if text else "budget_exhausted",text=text,truncated=len(text.encode())<len(rendered))
+                budget-=len(text.encode())
+            else:item["status"]="unset"
+            result.append(item)
+    return result
+
+def _feature_config_select(conn):
+    exists=conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='feature_configurations'").fetchone()
+    if not exists:return "SELECT f.*,NULL AS configuration FROM feature_locations f"
+    return """SELECT f.*,c.configuration FROM feature_locations f LEFT JOIN feature_configurations c
+    ON c.feature_id=f.feature_id AND c.file_path=f.file_path AND c.start_line=f.start_line AND c.end_line=f.end_line"""
+
+def _row_configuration(row):
+    return _configuration(json.loads(row["configuration"]) if row["configuration"] else None)
+
 def _has_code_line(line,suffix):
     text=line.strip()
     if not text:return False
@@ -140,7 +215,7 @@ def _marker_rows(path,source,digest):
         m=re.fullmatch(r"\s*@code-index\s+(\{.*\})\s*",body,re.S)
         if not m or len(m.group(1).encode())>2048:raise ValueError("malformed Code Index feature marker")
         obj=_unique_json(m.group(1))
-        if not isinstance(obj,dict) or not {"version","feature","aliases","purpose"}<=set(obj) or set(obj)-{"version","feature","aliases","purpose","span_lines"}:raise ValueError("invalid Code Index feature marker fields")
+        if not isinstance(obj,dict) or not {"version","feature","aliases","purpose"}<=set(obj) or set(obj)-{"version","feature","aliases","purpose","span_lines","configuration"}:raise ValueError("invalid Code Index feature marker fields")
         fid,aliases,purpose,span=obj["feature"],obj["aliases"],obj["purpose"],obj.get("span_lines",40)
         if type(obj["version"]) is not int or obj["version"]!=1 or not isinstance(fid,str) or not FEATURE_ID_RE.fullmatch(fid):raise ValueError("invalid Code Index feature marker identity")
         if fid in seen:raise ValueError("duplicate Code Index feature in file")
@@ -150,7 +225,7 @@ def _marker_rows(path,source,digest):
         seen.add(fid);start=line+1;end=min(len(lines),start+(span or 40)-1)
         code=[x for x in lines[start-1:end] if _has_code_line(x,suffix)]
         if not code:raise ValueError("Code Index marker span has no code")
-        rows.append((fid,path,line,path,start,end,json.dumps(aliases,ensure_ascii=False),purpose.strip(),purpose.strip(),"comment",digest,digest))
+        rows.append((fid,path,line,path,start,end,json.dumps(aliases,ensure_ascii=False),purpose.strip(),purpose.strip(),"comment",digest,digest,json.dumps(_configuration(obj.get("configuration")))))
     return rows
 def _map_rows(raw):
     if len(raw)>128*1024:raise ValueError("Code Index feature map exceeds limit")
@@ -159,7 +234,7 @@ def _map_rows(raw):
     if not isinstance(doc["features"],list) or len(doc["features"])>128:raise ValueError("invalid Code Index feature list")
     seen=set();out=[]
     for f in doc["features"]:
-        if not isinstance(f,dict) or set(f)!={"id","aliases","purpose","locations"}:raise ValueError("invalid Code Index feature entry")
+        if not isinstance(f,dict) or not {"id","aliases","purpose","locations"}<=set(f) or set(f)-{"id","aliases","purpose","locations","configuration"}:raise ValueError("invalid Code Index feature entry")
         fid=f["id"]
         if not isinstance(fid,str) or not FEATURE_ID_RE.fullmatch(fid) or fid in seen:raise ValueError("invalid or duplicate feature map ID")
         seen.add(fid);aliases=f["aliases"];purpose=f["purpose"];locs=f["locations"]
@@ -167,11 +242,11 @@ def _map_rows(raw):
         if not isinstance(purpose,str) or not purpose.strip() or len(purpose.encode())>512:raise ValueError("invalid feature map purpose")
         if not isinstance(locs,list) or not 1<=len(locs)<=16:raise ValueError("invalid feature map locations")
         for loc in locs:
-            if not isinstance(loc,dict) or not {"path","start_line","end_line"}<=set(loc) or set(loc)-{"path","start_line","end_line","purpose","sha256"}:raise ValueError("invalid feature map location")
+            if not isinstance(loc,dict) or not {"path","start_line","end_line"}<=set(loc) or set(loc)-{"path","start_line","end_line","purpose","sha256","configuration"}:raise ValueError("invalid feature map location")
             target=_pathnorm(loc["path"]);start,end=loc["start_line"],loc["end_line"];desc=loc.get("purpose",purpose);digest=loc.get("sha256")
             if any(not isinstance(x,int) or isinstance(x,bool) for x in (start,end)) or start<1 or end<start or end-start>=80:raise ValueError("invalid feature map line range")
             if not isinstance(desc,str) or not desc.strip() or len(desc.encode())>512 or (digest is not None and (not isinstance(digest,str) or not re.fullmatch(r"[0-9a-f]{64}",digest))):raise ValueError("invalid feature map target binding")
-            out.append((fid,FEATURE_MAP_PATH,1,target,start,end,json.dumps(aliases,ensure_ascii=False),purpose.strip(),desc.strip(),"map",digest,""))
+            out.append((fid,FEATURE_MAP_PATH,1,target,start,end,json.dumps(aliases,ensure_ascii=False),purpose.strip(),desc.strip(),"map",digest,"",json.dumps(_configuration(loc.get("configuration",f.get("configuration"))))))
     return out
 def refresh_features(conn,rootfd):
     indexed={r["path"]:r for r in conn.execute("SELECT path,sha256 FROM files")}
@@ -203,10 +278,13 @@ def refresh_features(conn,rootfd):
             actual,meta=target;data=read_source(rootfd,actual);lines=data.decode("utf-8").splitlines()
             suffix=Path(actual).suffix.lower()
             if (row[10] and meta["sha256"]!=row[10]) or sha(data)!=meta["sha256"] or row[5]>len(lines) or not any(_has_code_line(x,suffix) for x in lines[row[4]-1:row[5]]):raise ValueError("feature map target is stale")
-            rows.append(row[:1]+(map_path,)+row[2:3]+(actual,)+row[4:10]+(meta["sha256"],feature_sources[map_path]["sha256"]))
+            rows.append(row[:1]+(map_path,)+row[2:3]+(actual,)+row[4:10]+(meta["sha256"],feature_sources[map_path]["sha256"],row[12]))
     if len(rows)>MAX_FILES+MAX_FEATURES*MAX_FEATURE_LOCATIONS:raise ValueError("Code Index feature row limit exceeded")
     conn.execute("DELETE FROM feature_locations")
-    conn.executemany("INSERT INTO feature_locations VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",rows)
+    conn.executemany("INSERT INTO feature_locations VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",[row[:12] for row in rows])
+    conn.execute("DELETE FROM feature_configurations")
+    for row in sorted(rows,key=lambda row:row[9]=="map"):
+        conn.execute("INSERT OR REPLACE INTO feature_configurations VALUES(?,?,?,?,?)",(row[0],row[3],row[4],row[5],row[12]))
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
@@ -685,7 +763,7 @@ ACTIONS={"code_index_scan":{"discover","scan","scan_file"},
     "code_index_trace":{"symbol","selector","event","endpoint","data_attribute","import","asset"},
     "code_index_progress":{"list","get"}}
 FIELDS={"code_index_scan":{"scope","file_path","batch_id","expected_revision"},
-    "code_index_lookup":{"query","file_path","line_no","start_line","end_line","max_chars"},
+    "code_index_lookup":{"query","file_path","line_no","start_line","end_line","max_chars","feature_id"},
     "code_index_coverage":set(),"code_index_trace":{"kind","value"},
     "code_index_progress":{"batch_id"}}
 def validated(name,args):
@@ -701,7 +779,7 @@ def validated(name,args):
             "scan_file":{"file_path","batch_id","expected_revision"}},
         "code_index_lookup":{"file":{"file_path"},"line":{"file_path","line_no"},
             "symbol":{"query","file_path"},"edge":{"query","file_path"},
-            "search":{"query"},"snippet":{"file_path","start_line","end_line","max_chars"}},
+            "search":{"query"},"snippet":{"file_path","start_line","end_line","max_chars","feature_id"}},
         "code_index_coverage":{"report":set(),"gaps":set(),"stale":set()},
         "code_index_trace":{kind:{"value"} for kind in ACTIONS["code_index_trace"]},
         "code_index_progress":{"list":set(),"get":{"batch_id"}},
@@ -743,6 +821,8 @@ def validated(name,args):
         raise ValueError("Invalid index revision")
     if "batch_id" in result and (not isinstance(result["batch_id"],str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}",result["batch_id"])):
         raise ValueError("Invalid batch_id")
+    if result.get("feature_id")=="" or result.get("feature_id") is None:result.pop("feature_id",None)
+    if "feature_id" in result and (not isinstance(result["feature_id"],str) or not FEATURE_ID_RE.fullmatch(result["feature_id"])):raise ValueError("Invalid feature_id")
     return result
 SEARCH_PATH_RE = re.compile(r"(?<![\w./-])(?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]{1,12}(?![\w./-])")
 SEARCH_STOP_WORDS = {"a", "an", "and", "are", "as", "at", "be", "call", "codebase", "do", "explain", "for", "from", "grounded", "how", "if", "in", "is", "it", "no", "of", "only", "or", "please", "retrieved", "short", "snippets", "source", "supplied", "the", "this", "to", "tools", "use", "using", "with"}
@@ -819,7 +899,7 @@ def lookup(conn,rootfd,args):
             item={"file_path":path,"start_line":1,"end_line":1,"label":path,"kind":"file"}
             add_candidate((path,1,1),item,path)
         feature_groups={}
-        for row in conn.execute("SELECT * FROM feature_locations ORDER BY feature_id,file_path,start_line LIMIT ?",(MAX_FILES+MAX_FEATURES*MAX_FEATURE_LOCATIONS,)):
+        for row in conn.execute(_feature_config_select(conn)+" ORDER BY f.feature_id,f.file_path,f.start_line LIMIT ?",(MAX_FILES+MAX_FEATURES*MAX_FEATURE_LOCATIONS,)):
             group=feature_groups.setdefault(row["feature_id"],{"aliases":[],"purpose":row["purpose"],"map_purpose":None,"rows":[]})
             if row["origin"]=="map":group["map_purpose"]=row["purpose"]
             group["rows"].append(row)
@@ -835,7 +915,7 @@ def lookup(conn,rootfd,args):
             exact_len=max((len(label) for label in normalized if label and (" "+label+" ") in padded),default=0)
             purpose=group["map_purpose"] or group["purpose"]
             purposes=" ".join(dict.fromkeys(row["location_purpose"] for row in group["rows"][:16]))
-            hay=" ".join([fid,*group["aliases"],purpose,purposes]).lower()
+            hay=" ".join([fid,*group["aliases"],purpose,purposes,*[json.dumps(_row_configuration(row)) for row in group["rows"][:16]]]).lower()
             hits=sum(1 for term in terms if term in hay)
             if not exact_len and not hits:continue
             per_file={}
@@ -846,6 +926,7 @@ def lookup(conn,rootfd,args):
                 item={"file_path":row["file_path"],"start_line":row["start_line"],"end_line":row["end_line"],
                     "label":fid,"kind":"code_index_feature","feature_id":fid,"aliases":group["aliases"],
                     "purpose":purpose,"location_purpose":row["location_purpose"],"feature_origin":row["origin"],
+                    "configuration":_row_configuration(row),
                     "source_path":row["source_path"],"source_sha256":row["source_sha256"],"target_sha256":row["target_sha256"],
                     "score":round(max(hits,local_hits)/len(terms),4),
                     "ranking_score":round(1000+exact_len*10+path_rank*10+max(hits,local_hits)/len(terms),4),
@@ -878,11 +959,19 @@ def lookup(conn,rootfd,args):
         if sha(data)!=metadata["sha256"]:raise ValueError("Indexed source is stale; rescan before reading")
         lines=data.decode("utf-8").splitlines();start=args["start_line"];end=args["end_line"]
         if end>len(lines):raise ValueError("Snippet line range exceeds source")
+        configuration=None
+        if args.get("feature_id"):
+            bindings=conn.execute(_feature_config_select(conn)+" WHERE f.feature_id=? AND f.file_path=? AND f.start_line<=? AND f.end_line>=? ORDER BY f.origin DESC",(args["feature_id"],path,start,start)).fetchall()
+            if not bindings:raise ValueError("Feature is not bound to this source range")
+            binding=bindings[0]
+            if sha(read_source(rootfd,binding["source_path"]))!=binding["source_sha256"]:raise ValueError("Feature metadata is stale; rescan before reading")
+            configuration=_row_configuration(binding)
+        code_budget=args["max_chars"] if not configuration or not configuration["references"] else max(256,args["max_chars"]//2)
         text="\n".join(lines[start-1:end])
-        while len(text.encode("utf-8"))>args["max_chars"] and end>start:
+        while len(text.encode("utf-8"))>code_budget and end>start:
             end-=1;text="\n".join(lines[start-1:end])
-        if len(text.encode("utf-8"))>args["max_chars"]:raise ValueError("Single source line exceeds snippet character bound")
-        return {"results":[{"file_path":path,"start_line":start,"end_line":end,"sha256":metadata["sha256"],"text":text,"stale":False}],"offset":0,"limit":1,"total":1,"result_cap_reached":False}
+        if len(text.encode("utf-8"))>code_budget:raise ValueError("Single source line exceeds snippet character bound")
+        return {"results":[{"file_path":path,"start_line":start,"end_line":end,"sha256":metadata["sha256"],"text":text,"stale":False,**({"feature_id":args["feature_id"],"configuration":configuration,"configuration_snippets":_configuration_snippets(conn,rootfd,configuration,args["max_chars"]-len(text.encode()))} if configuration else {})}],"offset":0,"limit":1,"total":1,"result_cap_reached":False}
     else:
         raise ValueError("Unsupported lookup action")
     result=page([dict(row) for row in rows[:MAX_FILES]],args["offset"],args["limit"])
@@ -1072,6 +1161,9 @@ def seed_private_index(release, stage):
         conn.execute("DELETE FROM feature_locations WHERE file_path NOT LIKE 'v3/%'")
         conn.execute("UPDATE feature_locations SET file_path=substr(file_path,4) WHERE file_path LIKE 'v3/%'")
         conn.execute("UPDATE feature_locations SET source_path=substr(source_path,4) WHERE source_path LIKE 'v3/%'")
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='feature_configurations'").fetchone():
+            conn.execute("DELETE FROM feature_configurations WHERE file_path NOT LIKE 'v3/%'")
+            conn.execute("UPDATE feature_configurations SET file_path=substr(file_path,4)")
         conn.execute("DELETE FROM batches")
         conn.commit()
         if conn.execute("PRAGMA foreign_key_check").fetchone():
@@ -1217,7 +1309,7 @@ def schemas():
     extra={
         "code_index_scan":{"scope":path,"file_path":path,"batch_id":{"type":"string","maxLength":80},
             "expected_revision":{"type":"integer","minimum":0}},
-        "code_index_lookup":{"query":text,"file_path":path,"line_no":{"type":"integer","minimum":1,"maximum":MAX_LINES},"start_line":{"type":"integer","minimum":1,"maximum":MAX_LINES},"end_line":{"type":"integer","minimum":1,"maximum":MAX_LINES},"max_chars":{"type":"integer","minimum":256,"maximum":12000}},
+        "code_index_lookup":{"feature_id":{"type":"string","maxLength":48},"query":text,"file_path":path,"line_no":{"type":"integer","minimum":1,"maximum":MAX_LINES},"start_line":{"type":"integer","minimum":1,"maximum":MAX_LINES},"end_line":{"type":"integer","minimum":1,"maximum":MAX_LINES},"max_chars":{"type":"integer","minimum":256,"maximum":12000}},
         "code_index_coverage":{},
         "code_index_trace":{"kind":{"type":"string","enum":sorted(ACTIONS["code_index_trace"])},"value":text},
         "code_index_progress":{"batch_id":{"type":"string","maxLength":80}}}

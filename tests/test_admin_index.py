@@ -37,6 +37,45 @@ class AdminIndexTests(unittest.TestCase):
         return path
     def scan(self,**args):
         return self.call("scan",action="scan",**args)
+
+    def test_configuration_assessment_and_current_source_json(self):
+        config={"status":"configured","references":[{"path":"config/presentation.json","pointers":["/color","/missing"]}],"opportunities":[]}
+        marker={"version":1,"feature":"bubble-color","aliases":["bubble color"],"purpose":"Paint chat bubbles","configuration":config}
+        (self.repo/"ui/app.js").write_text("// @code-index "+json.dumps(marker)+"\nfunction paint() { return true; }\n")
+        folder=self.repo/"config";folder.mkdir()
+        (folder/"presentation.json").write_text('{"color":"blue"}')
+        self.scan()
+        found=self.call("lookup",action="search",query="bubble color")["results"][0]
+        self.assertEqual(found["configuration"]["status"],"configured")
+        snippet=self.call("lookup",action="snippet",file_path="ui/app.js",feature_id="bubble-color",start_line=2,end_line=2,max_chars=512)["results"][0]
+        settings=snippet["configuration_snippets"]
+        self.assertEqual(settings[0]["text"],'"blue"')
+        self.assertEqual(settings[1]["status"],"unset")
+        self.assertEqual(settings[0]["sha256"],index.sha(b'{"color":"blue"}'))
+        self.assertLessEqual(len(snippet["text"].encode())+sum(len(row.get("text","").encode()) for row in settings),512)
+        bad=index.execute("code_index_lookup",{"action":"snippet","file_path":"worker.py","feature_id":"bubble-color","start_line":1,"end_line":1},self.base)
+        self.assertEqual(bad["status"],"error")
+        (folder/"presentation.json").write_text('{"color":"red"}')
+        stale=self.call("lookup",action="snippet",file_path="ui/app.js",feature_id="bubble-color",start_line=2,end_line=2)["results"][0]
+        self.assertEqual(stale["configuration_snippets"][0]["status"],"stale")
+        self.scan()
+        fresh=self.call("lookup",action="snippet",file_path="ui/app.js",feature_id="bubble-color",start_line=2,end_line=2)["results"][0]
+        self.assertEqual(fresh["configuration_snippets"][0]["text"],'"red"')
+
+    def test_configuration_opportunities_validation_and_legacy_database(self):
+        opportunity={"status":"opportunity","references":[],"opportunities":["Make retry delay configurable."]}
+        self.assertEqual(index._configuration(opportunity),opportunity)
+        for bad in [{"status":"configured"},{"status":"opportunity","references":[]},
+                    {"status":"not_applicable"},{"status":"configured","references":[{"path":"../secret.json","pointers":["/x"]}]},
+                    {"status":"configured","references":[{"path":"config/x.json","pointers":["/bad~2"]}]}]:
+            with self.assertRaises(ValueError):index._configuration(bad)
+        self.scan()
+        key=index.sha(b"webagent-v3")
+        path=self.base/".code-index"/(key+".sqlite")
+        conn=sqlite3.connect(path);conn.execute("DROP TABLE feature_configurations");conn.commit();conn.close()
+        self.call("lookup",action="search",query="worker")
+        self.scan()
+
     def test_complete_surface_physical_lines_symbols_edges_and_progress(self):
         discovered=self.call("scan",action="discover")
         self.assertEqual(discovered["total"],5)

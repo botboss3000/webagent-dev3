@@ -350,6 +350,7 @@ fn decision_request(
                 for field in ["purpose","location_purpose"] {
                     if let Some(value)=candidate[field].as_str().filter(|value|!value.trim().is_empty() && value.len()<=512) {entry[field]=json!(value);}
                 }
+                if let Some(configuration)=candidate.get("configuration").filter(|value|value.is_object() && value.to_string().len()<=4096) {entry["configuration"]=configuration.clone();}
                 if let Some(origin)=candidate["feature_origin"].as_str().filter(|value|*value=="comment" || *value=="map") {entry["feature_origin"]=json!(origin);}
                 if let Some(source_path)=candidate["source_path"].as_str().filter(|value|value.len()<=512 && !value.starts_with('/') && !value.contains("..")) {entry["source_path"]=json!(source_path);}
                 for field in ["source_sha256","target_sha256"] {
@@ -529,7 +530,12 @@ pub(crate) async fn retrieve(
             if agent != initial_agent || user != initial_user {
                 bail!("Session authority changed before source read");
             }
-            let excerpt=super::execute_trusted("code_index_lookup",&json!({"action":"snippet","root":config.root,"file_path":candidate["file_path"],"start_line":start,"end_line":end,"max_chars":budget}),sid,&app.tool_socket,None,cancel.clone()).await?;
+            let mut snippet_args=json!({"action":"snippet","root":config.root,"file_path":candidate["file_path"],"start_line":start,"end_line":end,"max_chars":budget});
+            if candidate["feature_id"].is_string(){snippet_args["feature_id"]=candidate["feature_id"].clone();}
+            let mut excerpt=super::execute_trusted("code_index_lookup",&snippet_args,sid,&app.tool_socket,None,cancel.clone()).await?;
+            require_lookup(app,sid,run_id,&settings_sha256).await?;
+            super::code_index_configuration::attach(app,&snippet_args,&mut excerpt,&cancel).await?;
+            require_lookup(app,sid,run_id,&settings_sha256).await?;
             let same_index = if config.root == "published" {
                 ["release_id", "source_sha256", "index_sha256"]
                     .iter()
@@ -545,7 +551,8 @@ pub(crate) async fn retrieve(
                 .and_then(|rows| rows.first())
                 .context("Snippet result malformed")?;
             let text = source["text"].as_str().context("Snippet text missing")?;
-            if source["stale"] == true || text.len() > budget {
+            let configuration_bytes=super::code_index_configuration::snippet_bytes(source);
+            if source["stale"] == true || text.len()+configuration_bytes > budget {
                 continue;
             }
             let path = candidate["file_path"]
@@ -564,7 +571,14 @@ pub(crate) async fn retrieve(
                 .as_u64()
                 .context("Snippet end line missing")?;
             let candidate_id = format!("candidate_{index}");
-            let id = format!("code-index:{index_revision}:{hash}:{source_start}:{source_end}");
+            // Read timestamps describe freshness but do not invalidate retained
+            // context when the selected values and their file hashes are unchanged.
+            let mut configuration_identity=source["configuration_snippets"].clone();
+            if let Some(rows)=configuration_identity.as_array_mut(){
+                for row in rows{if let Some(object)=row.as_object_mut(){object.remove("read_at");}}
+            }
+            let configuration_hash=crate::digest(&json!([source["configuration"],configuration_identity]));
+            let id = format!("code-index:{index_revision}:{hash}:{source_start}:{source_end}:{configuration_hash}");
             let call_id = format!("code_index_auto_{run_id}_{}", items.len());
             let item_revision = if config.root == "published" {
                 lexical["publication"].clone()
@@ -574,9 +588,9 @@ pub(crate) async fn retrieve(
             items.push(json!({"id":id,"candidate_id":candidate_id,"call_id":call_id,"origin_tool":"code_index_lookup","root":config.root,"path":path,
                 "start_line":source["start_line"],"end_line":source["end_line"],"sha256":hash,"index_revision":item_revision,
                 "score":score,"confidence":confidence,"max_chars":budget,"retention_eligible":true,
-                "recall_reference":call_id,"text":text,
+                "recall_reference":call_id,"text":text,"feature_id":source["feature_id"],"configuration":source["configuration"],"configuration_snippets":source["configuration_snippets"],
                 "source_kind":"untrusted_source_index"}));
-            used+=text.len();
+            used+=text.len()+configuration_bytes;
         }
         Ok::<_, anyhow::Error>((items, used))
     }
@@ -596,6 +610,8 @@ pub(crate) async fn retrieve(
             json!({
                 "candidate_id":candidate_id,
                 "path":candidates[*index]["file_path"],
+                "feature_id":candidates[*index]["feature_id"],
+                "configuration":candidates[*index]["configuration"],
                 "start_line":candidates[*index]["start_line"],
                 "end_line":candidates[*index]["end_line"],
                 "score":score,

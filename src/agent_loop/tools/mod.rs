@@ -7,6 +7,8 @@ pub(crate) mod core_decision;
 #[path = "../../../plugins/abilities/Core/decision/directory_adapter.rs"]
 pub(crate) mod core_directory_decision;
 pub(crate) mod code_index_retrieval;
+#[path = "../../../plugins/abilities/Administrator/code_index/configuration_adapter.rs"]
+pub(crate) mod code_index_configuration;
 #[path = "../../../plugins/abilities/Core/base/adapter.rs"]
 pub(crate) mod core_utilities;
 #[path = "../../../plugins/abilities/Core/base/session_adapter.rs"]

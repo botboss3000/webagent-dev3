@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-footer","aliases":["chat footer","composer footer","footer handle"],"purpose":"Locates the session-scoped expandable chat footer interaction","span_lines":80}
+// @code-index {"version":1,"feature":"chat-footer","aliases":["chat footer","composer footer","footer handle"],"purpose":"Locates the session-scoped expandable chat footer interaction Config: data/config/chat.json -> chat_common.active_footer, chat_common.idle_footer, chat_common.messages.pill_placeholder, chat_common.content_max_width. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/active_footer","/chat_common/idle_footer","/chat_common/messages/pill_placeholder","/chat_common/content_max_width"],"profile_overrides":true}],"opportunities":[]}}
 // SISTER-PANEL: V2-FOOTER-HANDLE — v2 chat-ui.js interaction, v3-only storage scope.
 /**
  * Mounts the footer handle's visibility, pointer-drag, click, and session restore behavior.

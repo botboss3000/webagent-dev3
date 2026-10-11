@@ -205,6 +205,11 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
     let run=app.run(run_id).await?;
     if run["session_id"]!=sid || run["agent_id"].as_str().unwrap_or("shared_default")!=agent {bail!("Current run/session mismatch");}
     match name {
+        "code_index_lookup"=>{
+            let mut result=worker(app,sid,name,args,None,cancel.clone()).await?;
+            super::code_index_configuration::attach(app,args,&mut result,&cancel).await?;
+            Ok(result)
+        },
         "file_list"|"file_read"|"file_search"|"file_edit"|"file_write"=>{
             if args.get("task_id").is_some_and(|value|!value.is_null()) {
                 host(app,sid,run_id,name,args,cancel).await

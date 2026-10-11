@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-tool-activity","aliases":["tool activity","activity journal","run activity"],"purpose":"Locates private tool and run activity projection and polling","span_lines":80}
+// @code-index {"version":1,"feature":"chat-tool-activity","aliases":["tool activity","activity journal","run activity"],"purpose":"Locates private tool and run activity projection and polling Config: data/config/chat.json -> chat_common.show_activity_groups. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/show_activity_groups"],"profile_overrides":true}],"opportunities":[]}}
 // Private journal projection: no public reducer or persistent browser cache.
 /**
  * Merges one session's activity page by sequence while rejecting identity, cursor, and revision conflicts.

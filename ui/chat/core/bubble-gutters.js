@@ -83,7 +83,7 @@ export function bindGutterVisibility(bubble,gutter,config,role) {
     event.preventDefault();toggle();
   });
 }
-// @code-index {"version":1,"feature":"chat-message-bubbles","aliases":["chat message bubbles","message gutter","bubble actions"],"purpose":"Builds the configured message action gutter and its More menu","span_lines":80}
+// @code-index {"version":1,"feature":"chat-message-bubbles","aliases":["chat message bubbles","message gutter","bubble actions"],"purpose":"Builds the configured message action gutter and its More menu Config: data/config/chat.json -> chat_common.message_bubbles, chat_common.message_gutters, chat_common.user_message_truncation. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles","/chat_common/message_gutters","/chat_common/user_message_truncation"],"profile_overrides":true}],"opportunities":[]}}
 /** Builds one role-configured message gutter, including menu actions and explicit disabled placeholders for unported backend actions. */
 export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,showContext=()=>{},refreshMessage=async()=>{}}) {
   const role=item.role==='user'?'user':'agent',profile=currentChatProfile()||{};

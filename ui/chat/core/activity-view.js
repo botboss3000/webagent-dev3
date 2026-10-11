@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-tool-activity","aliases":["session activity groups","activity journal view"],"purpose":"Locates the administrator-gated session activity projection in chat","span_lines":80}
+// @code-index {"version":1,"feature":"chat-tool-activity","aliases":["session activity groups","activity journal view"],"purpose":"Locates the administrator-gated session activity projection in chat Config: data/config/chat.json -> chat_common.show_activity_groups. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/show_activity_groups"],"profile_overrides":true}],"opportunities":[]}}
 import {activityGroups, watchActivity} from './activity.js';
 import {createTranscriptRow, patchTranscriptRow, mountTranscript} from './activity-transcript.js';
 

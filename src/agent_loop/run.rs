@@ -11,7 +11,7 @@ fn automatic_code_index_journal(
             let Some(call_id) = item["call_id"].as_str() else {
                 continue;
             };
-            let arguments = json!({
+            let mut arguments = json!({
                 "action":"snippet",
                 "root":item["root"],
                 "file_path":item["path"],
@@ -19,6 +19,7 @@ fn automatic_code_index_journal(
                 "end_line":item["end_line"],
                 "max_chars":item["max_chars"]
             });
+            if item["feature_id"].is_string(){arguments["feature_id"]=item["feature_id"].clone();}
             calls.push(json!({
                 "type":"function_call",
                 "call_id":call_id,
@@ -76,6 +77,19 @@ fn automatic_code_index_journal(
 #[cfg(test)]
 mod automatic_code_index_journal_tests {
     use super::*;
+    #[test]
+    fn code_and_current_settings_share_one_feature_bound_tool_result() {
+        let evidence=json!({"items":[{"call_id":"read-1","feature_id":"bubble-color","root":"published","path":"v3/ui/paint.js","start_line":2,"end_line":4,"max_chars":512,"text":"paint()","configuration":{"status":"configured"},"configuration_snippets":[{"path":"data/config/chat.json","pointer":"/chat_common/message_bubbles/user/bg_dark","text":"blue","source_kind":"untrusted_configuration"}]}]});
+        let (calls,results,_)=automatic_code_index_journal(&evidence,"run-1");
+        assert_eq!((calls.len(),results.len()),(1,1));
+        let args:Value=serde_json::from_str(calls[0]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(args["feature_id"],"bubble-color");
+        let output:Value=serde_json::from_str(results[0]["output"].as_str().unwrap()).unwrap();
+        assert_eq!(output["output"]["text"],"paint()");
+        assert_eq!(output["output"]["configuration_snippets"],evidence["items"][0]["configuration_snippets"]);
+        assert_eq!(output["source_kind"],"untrusted_source_index");
+    }
+
     #[test]
     fn ranked_candidates_are_journaled_without_snippets_as_untrusted_pairs() {
         let evidence=json!({"root":"published","query":"private query","candidate_limit":16,

@@ -8,7 +8,7 @@
         "conversation panel",
         "session transcript"
       ],
-      "purpose": "Locates the v3 chat panel lifecycle and its mounted transcript surface.",
+      "purpose": "Locates the v3 chat panel lifecycle and its mounted transcript surface. Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
       "locations": [
         {
           "path": "ui/chat/core/panel.js",
@@ -20,7 +20,21 @@
           "start_line": 80,
           "end_line": 88
         }
-      ]
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_display/default",
+              "/chat_common/composer/keyboard_focus"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
     },
     {
       "id": "chat-transport-recovery",
@@ -36,7 +50,14 @@
           "start_line": 11,
           "end_line": 80
         }
-      ]
+      ],
+      "configuration": {
+        "status": "opportunity",
+        "references": [],
+        "opportunities": [
+          "Consider bounded retry timing and backoff configuration; preserve recovery and publication invariants."
+        ]
+      }
     },
     {
       "id": "chat-message-bubbles",
@@ -44,26 +65,68 @@
         "chat message bubbles",
         "message renderer",
         "bubble actions",
-        "message bubble icons"
+        "message bubble icons",
+        "chat bubbles"
       ],
-      "purpose": "Locates persisted message rendering, bubble actions, and refreshed presentation icons.",
+      "purpose": "Locates persisted message rendering, bubble actions, and refreshed presentation icons. Config: data/config/chat.json -> chat_common.message_bubbles, chat_common.message_gutters, chat_common.user_message_truncation. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
       "locations": [
         {
           "path": "ui/chat/core/message-view.js",
           "start_line": 2,
-          "end_line": 68
+          "end_line": 68,
+          "purpose": "Renders bubbles using message_bubbles font_size_px/padding_x_px/padding_y_px/agent_padding_left_px and user/agent radius_px/line_height; user_message_truncation.enabled/max_lines/expand_label/collapse_label. Config: data/config/chat.json, merged profile."
         },
         {
           "path": "ui/chat/core/bubble-gutters.js",
           "start_line": 86,
-          "end_line": 146
+          "end_line": 146,
+          "purpose": "Builds role actions and More menu using message_gutters.enabled/hideable/more_menu and message_gutters.user/agent.order/controls. Config: data/config/chat.json, merged profile."
         },
         {
           "path": "ui/chat/core/presentation.js",
           "start_line": 3,
           "end_line": 21
+        },
+        {
+          "path": "ui/chat/core/bubble-paint.js",
+          "start_line": 2,
+          "end_line": 15,
+          "purpose": "Applies message_bubbles.user/agent.bg_dark, bg_light and border from data/config/chat.json through the merged current profile.",
+          "configuration": {
+            "status": "configured",
+            "references": [
+              {
+                "path": "data/config/chat.json",
+                "pointers": [
+                  "/chat_common/message_bubbles/user/bg_dark",
+                  "/chat_common/message_bubbles/user/bg_light",
+                  "/chat_common/message_bubbles/user/border",
+                  "/chat_common/message_bubbles/agent/bg_dark",
+                  "/chat_common/message_bubbles/agent/bg_light",
+                  "/chat_common/message_bubbles/agent/border"
+                ],
+                "profile_overrides": true
+              }
+            ],
+            "opportunities": []
+          }
         }
-      ]
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common/message_bubbles",
+              "/chat_common/message_gutters",
+              "/chat_common/user_message_truncation"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
     },
     {
       "id": "chat-full-view",
@@ -72,14 +135,28 @@
         "full message view",
         "message zoom"
       ],
-      "purpose": "Shows a cloned chat element in an accessible modal dialog.",
+      "purpose": "Shows a cloned chat element in an accessible modal dialog. Trigger config: data/config/chat.json -> chat_common.message_gutters.user.controls.full_view and chat_common.message_gutters.agent.controls.full_view. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
       "locations": [
         {
           "path": "ui/chat/core/full-view.js",
           "start_line": 6,
           "end_line": 69
         }
-      ]
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common/message_gutters/user/controls/full_view",
+              "/chat_common/message_gutters/agent/controls/full_view"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
     },
     {
       "id": "chat-transcript-anchor",
@@ -88,14 +165,27 @@
         "scroll anchoring",
         "user turn positioning"
       ],
-      "purpose": "Keeps new user turns visible while respecting reader scroll intent.",
+      "purpose": "Keeps new user turns visible while respecting reader scroll intent. Config: data/config/chat.json -> chat_common.user_turn_anchor. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
       "locations": [
         {
           "path": "ui/chat/core/transcript-anchor.js",
           "start_line": 3,
           "end_line": 82
         }
-      ]
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common/user_turn_anchor"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
     },
     {
       "id": "chat-tool-activity",
@@ -105,7 +195,7 @@
         "run activity",
         "activity transcript"
       ],
-      "purpose": "Locates the private activity journal, its transcript rows, and session activity projection.",
+      "purpose": "Locates the private activity journal, its transcript rows, and session activity projection. Config: data/config/chat.json -> chat_common.show_activity_groups. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
       "locations": [
         {
           "path": "ui/chat/core/activity.js",
@@ -122,7 +212,20 @@
           "start_line": 1,
           "end_line": 80
         }
-      ]
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common/show_activity_groups"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
     },
     {
       "id": "chat-composer-progress",
@@ -131,14 +234,28 @@
         "tool progress panel",
         "current run progress"
       ],
-      "purpose": "Locates the composer activity summary and current-run tool details.",
+      "purpose": "Locates the composer activity summary and current-run tool details. Config: data/config/chat.json -> chat_common.active_footer.above_pill and chat_common.idle_footer.above_pill (rows and controls.activity). Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
       "locations": [
         {
           "path": "ui/chat/core/composer-progress.js",
           "start_line": 1,
           "end_line": 76
         }
-      ]
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common/active_footer/above_pill",
+              "/chat_common/idle_footer/above_pill"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
     },
     {
       "id": "chat-administrator-notices",
@@ -154,7 +271,14 @@
           "start_line": 1,
           "end_line": 80
         }
-      ]
+      ],
+      "configuration": {
+        "status": "opportunity",
+        "references": [],
+        "opportunities": [
+          "Consider notice presentation preferences; access authority remains enforced by policy."
+        ]
+      }
     },
     {
       "id": "chat-run-notifications",
@@ -170,7 +294,14 @@
           "start_line": 1,
           "end_line": 80
         }
-      ]
+      ],
+      "configuration": {
+        "status": "opportunity",
+        "references": [],
+        "opportunities": [
+          "Consider notice labels and presentation settings; approval and cancellation authority remain enforced."
+        ]
+      }
     },
     {
       "id": "chat-footer",
@@ -180,7 +311,7 @@
         "message composer",
         "footer handle"
       ],
-      "purpose": "Locates the responsive footer mode, footer expansion, and composer/footer structure.",
+      "purpose": "Locates the responsive footer mode, footer expansion, and composer/footer structure. Config: data/config/chat.json -> chat_common.active_footer, chat_common.idle_footer, chat_common.messages.pill_placeholder, chat_common.content_max_width. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
       "locations": [
         {
           "path": "ui/chat/controls/footer-handle.js",
@@ -205,7 +336,23 @@
           "end_line": 96,
           "purpose": "Defines the footer handle, expandable footer row, and footer controls."
         }
-      ]
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common/active_footer",
+              "/chat_common/idle_footer",
+              "/chat_common/messages/pill_placeholder",
+              "/chat_common/content_max_width"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
     },
     {
       "id": "chat-composer-media",
@@ -214,7 +361,7 @@
         "voice capture",
         "chat attachments"
       ],
-      "purpose": "Locates composer attachment staging and voice capture/conversation behavior.",
+      "purpose": "Locates composer attachment staging and voice capture/conversation behavior. Config: data/config/chat.json -> chat_limits.attachments.{max_file_size_mb,max_per_message}; chat_common.{active_footer,idle_footer}.chat_pill.controls.{attach,mic,mic_send}. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
       "locations": [
         {
           "path": "ui/chat/controls/audio-capture.js",
@@ -226,7 +373,22 @@
           "start_line": 17,
           "end_line": 80
         }
-      ]
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_limits/attachments",
+              "/chat_common/active_footer/chat_pill/controls",
+              "/chat_common/idle_footer/chat_pill/controls"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
     },
     {
       "id": "chat-run-controls",
@@ -235,14 +397,28 @@
         "execution mode",
         "model selection"
       ],
-      "purpose": "Locates session-scoped execution-mode and next-turn model controls.",
+      "purpose": "Locates session-scoped execution-mode and next-turn model controls. Control visibility/layout: data/config/chat.json -> chat_common.{active_footer,idle_footer}.chat_pill.controls.{mode,model_changer,stop,continue}; run state is session-owned. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
       "locations": [
         {
           "path": "ui/chat/controls/session-controls.js",
           "start_line": 1,
           "end_line": 80
         }
-      ]
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common/active_footer/chat_pill/controls",
+              "/chat_common/idle_footer/chat_pill/controls"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
     },
     {
       "id": "chat-usage-context",
@@ -251,14 +427,36 @@
         "context statistics",
         "provider usage"
       ],
-      "purpose": "Locates provider-reported usage and measured context presentation.",
+      "purpose": "Locates provider-reported usage and measured context presentation. UI config: data/config/chat.json -> chat_common.{active_footer,idle_footer}.chat_pill.controls.stats.visible. Context defaults/limits: data/config/context-compaction.json; agent trigger/tail overrides live on Identity. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
       "locations": [
         {
           "path": "ui/chat/controls/usage-stats.js",
           "start_line": 1,
           "end_line": 80
         }
-      ]
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common/active_footer/chat_pill/controls/stats",
+              "/chat_common/idle_footer/chat_pill/controls/stats"
+            ],
+            "profile_overrides": true
+          },
+          {
+            "path": "data/config/context-compaction.json",
+            "pointers": [
+              "/trigger_tokens",
+              "/tail_tokens",
+              "/summary_tokens"
+            ]
+          }
+        ],
+        "opportunities": []
+      }
     },
     {
       "id": "chat-session-selector",
@@ -267,7 +465,7 @@
         "conversation selector",
         "session list"
       ],
-      "purpose": "Mounts and manages the v3 session selector menu, rows, search, and session actions.",
+      "purpose": "Mounts and manages the v3 session selector menu, rows, search, and session actions. Config: data/config/chat.json -> chat_common.chat_header.controls.session_dropdown (trigger and menu). Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
       "locations": [
         {
           "path": "ui/chat/controls/session-dropdown/controller.js",
@@ -279,7 +477,20 @@
           "start_line": 4,
           "end_line": 81
         }
-      ]
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common/chat_header/controls/session_dropdown"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
     },
     {
       "id": "chat-ui-config",
@@ -288,7 +499,7 @@
         "chat surface settings",
         "chat pill layout"
       ],
-      "purpose": "Normalizes chat surface settings and renders configured composer controls.",
+      "purpose": "Normalizes chat surface settings and renders configured composer controls. Config: data/config/chat.json -> chat_common, chat_desktop, chat_mobile, chat_widget, chat_display.default.",
       "locations": [
         {
           "path": "ui/chat/controls/chat-config.js",
@@ -305,7 +516,24 @@
           "start_line": 407,
           "end_line": 486
         }
-      ]
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_display/default",
+              "/chat_common",
+              "/chat_desktop",
+              "/chat_mobile",
+              "/chat_widget"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
     },
     {
       "id": "chat-login-hook",
@@ -321,7 +549,14 @@
           "start_line": 1,
           "end_line": 3
         }
-      ]
+      ],
+      "configuration": {
+        "status": "opportunity",
+        "references": [],
+        "opportunities": [
+          "Consider focus timing and restoration preferences; authentication requirements remain enforced."
+        ]
+      }
     }
   ]
 }

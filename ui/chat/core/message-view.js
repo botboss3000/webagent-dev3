@@ -1,5 +1,5 @@
 'use strict';
-// @code-index {"version":1,"feature":"chat-message-bubbles","aliases":["chat message bubbles","message renderer","message bubble"],"purpose":"Renders persisted V3 user and assistant messages into transcript bubbles","span_lines":80}
+// @code-index {"version":1,"feature":"chat-message-bubbles","aliases":["chat message bubbles","message renderer","message bubble"],"purpose":"Renders persisted V3 user and assistant messages into transcript bubbles Config: data/config/chat.json -> chat_common.message_bubbles, chat_common.message_gutters, chat_common.user_message_truncation. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles","/chat_common/message_gutters","/chat_common/user_message_truncation"],"profile_overrides":true}],"opportunities":[]}}
 // Reference chat-bubble DOM and configured gutters, with V3 committed-row transport.
 import {applyBubblePaint} from './bubble-paint.js';
 import {currentChatProfile} from '../controls/chat-config.js';

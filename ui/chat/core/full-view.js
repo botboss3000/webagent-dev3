@@ -3,7 +3,7 @@
 // Shared full-view dialog for rendered chat elements. Callers pass the element
 // that holds the readable content; its DOM is cloned so the dialog is a stable
 // snapshot even while the live transcript changes underneath it.
-// @code-index {"version":1,"feature":"chat-full-view","aliases":["chat full view","full message view","message zoom"],"purpose":"Shows a cloned chat element in an accessible modal dialog","span_lines":80}
+// @code-index {"version":1,"feature":"chat-full-view","aliases":["chat full view","full message view","message zoom"],"purpose":"Shows a cloned chat element in an accessible modal dialog Trigger config: data/config/chat.json -> chat_common.message_gutters.user.controls.full_view and chat_common.message_gutters.agent.controls.full_view. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_gutters/user/controls/full_view","/chat_common/message_gutters/agent/controls/full_view"],"profile_overrides":true}],"opportunities":[]}}
 
 import { _refreshLucideIcons } from './presentation.js';
 

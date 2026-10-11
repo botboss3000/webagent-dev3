@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector"],"purpose":"Mounts the V3 session selector menu lifecycle and interaction wiring","span_lines":40}
+// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector"],"purpose":"Mounts the V3 session selector menu lifecycle and interaction wiring Config: data/config/chat.json -> chat_common.chat_header.controls.session_dropdown (trigger and menu). Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/chat_header/controls/session_dropdown"],"profile_overrides":true}],"opportunities":[]}}
 // Adapted from running v2 session-dropdown/controller.js. V3 owns data/actions.
 /** Mounts menu positioning, keyboard/focus behavior, animation, and teardown around V3-owned data callbacks. */
 export function mountSessionDropdown(root, {refresh, select, guard, resetSearch = () => {}}) {

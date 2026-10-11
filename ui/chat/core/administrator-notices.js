@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-administrator-notices","aliases":["repository status reminder","retained build notice"],"purpose":"Locates administrator repository and retained-build notices in the chat composer","span_lines":80}
+// @code-index {"version":1,"feature":"chat-administrator-notices","aliases":["repository status reminder","retained build notice"],"purpose":"Locates administrator repository and retained-build notices in the chat composer","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider notice presentation preferences; access authority remains enforced by policy."]}}
 // Repository notices are server-authored FYI, separate from chat connection errors.
 // Adapt repository notice text into a polite status region; caller owns polling and lifecycle.
 export function repositoryNoticeRenderer(documentObject = globalThis.document) {

@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-tool-activity","aliases":["chat activity transcript","tool activity rows"],"purpose":"Locates private activity journal rows rendered inside chat","span_lines":80}
+// @code-index {"version":1,"feature":"chat-tool-activity","aliases":["chat activity transcript","tool activity rows"],"purpose":"Locates private activity journal rows rendered inside chat Config: data/config/chat.json -> chat_common.show_activity_groups. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/show_activity_groups"],"profile_overrides":true}],"opportunities":[]}}
 'use strict';
 
 // Presentation only: journal IDs are never treated as legacy interaction IDs.
