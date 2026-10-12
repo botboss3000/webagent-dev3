@@ -81,6 +81,28 @@ function buildOptimizationControls({ ability, data, request, scope, levelId, pre
   panel.append(node('p', 'ac-hint', enabled
     ? 'Defaults for explicit /optimize requests. Command overrides apply to that request only. Experiments produce a candidate for review.'
     : 'Optimization settings are read-only while previewing a user or capability level.'));
+  const help = node('details', 'v3-optimization-help');
+  help.open = true;
+  help.append(node('summary', '', 'How to use Optimization'));
+  const instructions = node('div', 'ac-list');
+  instructions.append(node('p', 'ac-hint',
+    'Start a chat with this agent and send /optimize followed by a code optimization goal. The account and agent need permission for Optimization and Codebase Admin; permitted Discoverable abilities activate automatically.'));
+  const example = node('pre', 'ac-hint', '/optimize Optimize for reduced RAM usage.');
+  example.style.whiteSpace = 'pre-wrap'; example.style.overflowWrap = 'anywhere';
+  instructions.append(example);
+  instructions.append(node('p', 'ac-hint',
+    'You can use the command without flags: it uses the saved settings on this page. Select Memory priority to favor lower peak RAM. Resource limits are the benchmark environment’s budget, not the desired resource use of the optimized code.'));
+  instructions.append(node('p', 'ac-hint',
+    'Cold builds may exceed the default 1024 MiB RAM budget. Use 4096 MiB for a cold build and increase Total runtime if needed. Optional flags override only one request and do not change saved settings:'));
+  const override = node('pre', 'ac-hint',
+    '/optimize --priority=memory --ram_mb=4096 --cpu_cores=2 --total_seconds=1800 Reduce RAM usage in the agent loop.');
+  override.style.whiteSpace = 'pre-wrap'; override.style.overflowWrap = 'anywhere';
+  instructions.append(override);
+  instructions.append(node('p', 'ac-hint',
+    'Each experiment runs the full correctness suite, then predefined v3 workloads: Quick measures 3 tests, Standard 6, and Extended 10. Your text describes the optimization goal; sample tasks such as “update this page” are not replayed as benchmark workloads.'));
+  instructions.append(node('p', 'ac-hint',
+    'Review the measured results and candidate changes before requesting a separate release. Prompt and skill optimization, and automatic candidate deployment, are excluded.'));
+  help.append(instructions); panel.append(help);
   const current = { priority: 'balanced', attempts: 3, total_seconds: 900, profiling: 'both',
     cpu_cores: 1, ram_mb: 1024, coverage: 'standard', max_slowdown_percent: 0,
     max_memory_regression_percent: 0, allow_dependencies: false, ...(data.settings?.[ability.id] || {}) };
