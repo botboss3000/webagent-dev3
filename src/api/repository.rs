@@ -181,6 +181,23 @@ mod tests {
         assert_eq!(transport(&app,&sid).await.unwrap()["connections"],json!([]));
     }
     #[tokio::test]
+    async fn default_agent_tools_and_file_manager_share_repository_transport() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let body=Body {expected_revision:0,url:"https://example.test/team/repo".into(),
+            username:Some("git".into()),token:Some("fixture-token-only".into()),revoked:false};
+        let saved=put(State(app.clone()),Extension(json!({"_user_id":"admin"})),
+            Path(("shared_default".into(),"origin".into())),Json(body)).await.unwrap();
+        assert!(!saved.0.to_string().contains("fixture-token-only"));
+        let sid=crate::uuid();
+        app.store.put(&format!("session:{sid}"),&json!({"id":sid,"agent_id":"shared_default"})).await.unwrap();
+        let agent=transport(&app,&sid).await.unwrap();
+        let manager=transport_for_agent(&app,"shared_default").await.unwrap();
+        assert_eq!(agent,manager);
+        assert_eq!(agent["connections"][0]["id"],"origin");
+        assert_eq!(agent["connections"][0]["token"],"fixture-token-only");
+    }
+
+    #[tokio::test]
     async fn delegated_manager_owns_only_created_connection_members_cannot_write() {
         let (_root,app)=crate::runtime_tests::fixture().await;
         let user=app.store.create_user_account("repository_delegate","fixture-password-hash").await.unwrap();

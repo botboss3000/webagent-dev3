@@ -82,6 +82,48 @@ class GitTests(unittest.IsolatedAsyncioTestCase):
   unchanged=subprocess.run(["git","--git-dir",str(self.remote),"rev-parse","main"],capture_output=True,check=True).stdout.decode().strip()
   self.assertEqual(unchanged,pushed)
 
+ async def test_minified_outgoing_line_pushes_and_long_literal_is_guarded(self):
+  (self.repo/"bundle.min.js").write_text("const vector='"+"z"*330000+"';\n")
+  self.run_git("add","bundle.min.js");self.run_git("commit","-qm","minified source")
+  await git.network(self.base,self.repo,"origin","push")
+  pushed=subprocess.run(["git","--git-dir",str(self.remote),"rev-parse","main"],capture_output=True,check=True).stdout.decode().strip()
+  self.assertEqual(pushed,self.run_git("rev-parse","HEAD"))
+  # Retain the keyword before 64 KiB until the closing quote arrives.
+  (self.repo/"bundle.min.js").write_text('access_token="'+"q"*330000+'"\n')
+  self.run_git("add","bundle.min.js");self.run_git("commit","-qm","long literal guard fixture")
+  with self.assertRaisesRegex(git.Rejected,"credential guard"):
+   await git.network(self.base,self.repo,"origin","push")
+  unchanged=subprocess.run(["git","--git-dir",str(self.remote),"rev-parse","main"],capture_output=True,check=True).stdout.decode().strip()
+  self.assertEqual(unchanged,pushed)
+
+ async def test_agent_and_file_manager_transport_use_same_saved_connection(self):
+  from unittest.mock import AsyncMock,patch
+  spec=importlib.util.spec_from_file_location("shared_git_transport",FILE.with_name("transport.py"))
+  transport=importlib.util.module_from_spec(spec);spec.loader.exec_module(transport)
+  payload={"agent_id":"shared_default","connections":[{"url":"https://example.test/team/repo","username":"git","token":"fixture-token"}]}
+  agent=transport.connections(payload)
+  manager=transport.connections({"repository":payload})
+  self.assertEqual(agent,manager)
+  environments=[]
+  with patch.object(transport.adapter,"command",new=AsyncMock(return_value=b"https://example.test/team/repo")),patch.object(transport.os,"access",return_value=True):
+   for rows in (agent,manager):
+    lease=transport._CONNECTIONS.set(rows)
+    try:environments.append(await transport.authorize(self.repo,"origin","push"))
+    finally:transport._CONNECTIONS.reset(lease)
+  self.assertEqual(environments[0],environments[1])
+  self.assertEqual(environments[0]["V3_GIT_TOKEN"],"fixture-token")
+
+ async def test_portability_fixture_uses_recognized_reserved_credentials(self):
+  source=FILE.parents[4]/"tests/test_build_service.py"
+  self.assertFalse(git.secret(source.read_bytes()))
+
+ async def test_outgoing_line_scan_remains_bounded(self):
+  (self.repo/"oversized.min.js").write_text("z"*(1024*1024+1)+"\n")
+  self.run_git("add","oversized.min.js");self.run_git("commit","-qm","oversized scan fixture")
+  with self.assertRaisesRegex(git.Rejected,"line exceeds scan bound"):
+   await git.network(self.base,self.repo,"origin","push")
+  self.assertEqual(subprocess.run(["git","--git-dir",str(self.remote),"rev-parse","--verify","main"],capture_output=True).returncode,128)
+
  async def test_credential_literals_and_source_expressions(self):
   for source in (
    b"api_key: platformCatalog ? '' : apiKey",

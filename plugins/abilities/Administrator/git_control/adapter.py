@@ -3,6 +3,7 @@ import asyncio,contextvars,hashlib,json,os,re,runpy,signal,stat,uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 LIMIT=65536
+SCAN_LINE_LIMIT=1024*1024
 NETWORK_TRANSPORT=None
 _SANDBOX_ROOT=contextvars.ContextVar("git_workspace_root",default=None)
 _RESTRICT=runpy.run_path(str(Path(__file__).resolve().parents[4]/"sandbox.py"))["restrict"]
@@ -147,16 +148,18 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,
    output.extend(chunk)
    if scan_only:
     # Scan the entire stream, retaining overlap instead of returning a patch.
-    # Reject oversized lines/whitespace so a credential cannot bridge beyond
-    # the retained window; ordinary tool responses keep their original cap.
+    # Minified assets can exceed the response cap. Retain the complete unfinished
+    # line plus bounded completed overlap so long literals cannot hide a prefix.
+    # Line and whitespace bounds still cap memory and credential lookbehind.
     if secret(bytes(output[:output.rfind(b"\n")+1])):raise Rejected("Outgoing history withheld by credential guard")
     if re.search(rb"\s{4096}",output):raise Rejected("Outgoing history whitespace exceeds scan bound")
     segments=chunk.split(b"\n")
     for index,segment in enumerate(segments):
      line_bytes+=len(segment)
-     if line_bytes>LIMIT:raise Rejected("Outgoing history line exceeds scan bound")
+     if line_bytes>SCAN_LINE_LIMIT:raise Rejected("Outgoing history line exceeds scan bound")
      if index<len(segments)-1:line_bytes=0
-    if len(output)>LIMIT:del output[:-LIMIT]
+    completed=output.rfind(b"\n")+1
+    if completed>LIMIT:del output[:completed-LIMIT]
    elif len(output)>LIMIT:raise Rejected("Git output exceeds limit")
   if scan_only and secret(bytes(output)):raise Rejected("Outgoing history withheld by credential guard")
   await proc.wait()
