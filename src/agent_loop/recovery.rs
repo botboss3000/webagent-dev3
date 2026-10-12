@@ -53,7 +53,7 @@ async fn build_result(app:&App,run:&Value)->Result<Option<Value>> {
     let fingerprint=tools::administrator::host_fingerprint(app,sid,rid,authority).await?;
     let trusted=json!({"user_id":app.store.current_user_id(),"session_id":sid,
         "lease_until":now()+30,"access_fingerprint":fingerprint});
-    let socket=std::path::Path::new("/run/v3/build/build.sock");
+    let socket_path=crate::tools::administrator::build_socket(&app);let socket=&socket_path;
     let mut job_id=run["pending"]["external_job"]["job_id"].as_str().map(str::to_owned);
     if job_id.is_none() {
         // The broker may have admitted finish just before the loop stopped.

@@ -83,7 +83,7 @@ pub(crate) async fn quiesce_session_resources(app:&App,sid:&str)->Result<(),ApiE
             "lease_until":crate::now()+30,"access_fingerprint":job["access_fingerprint"]});
         let result=tokio::time::timeout(std::time::Duration::from_secs(2),
             crate::tools::execute_trusted("administrator_host_revoke",&json!({}),sid,
-                std::path::Path::new("/run/v3/build/build.sock"),Some(trusted),
+                &crate::tools::administrator::build_socket(&app),Some(trusted),
                 crate::CancellationToken::new())).await;
         failed |= !matches!(result,Ok(Ok(ref value)) if value["status"]=="success");
         if matches!(result,Ok(Ok(ref value)) if value["status"]=="success") {

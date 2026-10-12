@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "id": "message_visibility_v1",
+  "checkpoint": "model_dispatch",
+  "runtime": "rust",
+  "config": {
+    "tool_name": "publish_main_message",
+    "guidance": "Ordinary substantive non-final assistant text stays inside the current activity group automatically. Only when you intentionally need a user-visible working update, call `publish_main_message` with the complete clean text to show as a normal standalone assistant bubble while the run continues. Do not use that call for the final response. The call never asks for approval or pauses the run; continue work normally after it. Do not emit visibility markers or other control text in assistant prose."
+  }
+}

@@ -84,11 +84,12 @@ pub(crate) async fn propose_promotion(
             );
         }
     }
-    let review = tools::execute(
+    let review = tools::administrator::workspace_host(
+        app,
+        sid,
         "source_review",
         &json!({}),
-        sid,
-        &app.tool_socket,
+        None,
         cancel.clone(),
     )
     .await?;
@@ -260,11 +261,12 @@ pub(crate) async fn promote(State(app): State<App>, Path(id): Path<String>, Json
             return Err(conflict("Global shutoff is active"));
         }
     }
-    let review = tools::execute(
+    let review = tools::administrator::workspace_host(
+        &app,
+        &id,
         "source_review",
         &json!({}),
-        &id,
-        &app.tool_socket,
+        None,
         CancellationToken::new(),
     )
     .await?;

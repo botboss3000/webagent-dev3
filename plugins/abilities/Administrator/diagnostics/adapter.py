@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-ORIGIN="https://dev.webagent.live"
+ORIGIN=os.environ.get("V3_PUBLIC_ORIGIN","https://dev.webagent.live")
 PRIVATE_ROOT=Path("/run/v3/worker/browser")
 MAX_TEXT=16384
 MAX_PNG=1024*1024

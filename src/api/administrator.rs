@@ -172,7 +172,7 @@ async fn build_notice_broker(
             name,
             &arguments,
             sid,
-            std::path::Path::new("/run/v3/build/build.sock"),
+            &crate::tools::administrator::build_socket(&app),
             Some(trusted),
             CancellationToken::new(),
         ),

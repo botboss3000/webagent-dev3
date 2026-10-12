@@ -22,6 +22,7 @@ struct App {
     login_attempts: Arc<Mutex<Vec<u64>>>,
     control_dir: PathBuf,
     tool_socket: PathBuf,
+    build_socket: PathBuf,
     promotion_socket: PathBuf,
     secure: bool,
     chat_ui_config_path: PathBuf,
@@ -949,6 +950,7 @@ async fn run_process() -> Result<()> {
         tool_socket: PathBuf::from(
             std::env::var("V3_TOOL_SOCKET").unwrap_or_else(|_| "/run/v3/worker/tools.sock".into()),
         ),
+        build_socket: PathBuf::from(std::env::var("V3_BUILD_SOCKET").unwrap_or_else(|_|"/run/v3/build/build.sock".into())),
         promotion_socket: PathBuf::from(
             std::env::var("V3_PROMOTE_SOCKET")
                 .unwrap_or_else(|_| "/run/v3/promote/promote.sock".into()),

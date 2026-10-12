@@ -307,7 +307,7 @@ class Performance:
         remaining = config["total_seconds"] - spent
         if remaining <= 0:
             raise ValueError("optimization cumulative runtime budget exhausted")
-        image = self.broker.runner.command(["docker", "inspect", "--format", "{{.Image}}", "webagent-dev-v3"], timeout=15).strip()
+        image = self.broker.runner.command(["docker", "inspect", "--format", "{{.Image}}", self.broker.runner.source_config["api_container"]], timeout=15).strip()
         if not re.fullmatch(r"sha256:[a-f0-9]{64}", image):
             raise ValueError("pinned performance image unavailable")
         directory = self.root / identity
@@ -465,7 +465,7 @@ class Performance:
                 "--network", "none", "--read-only", "--cap-drop", "ALL",
                 "--security-opt", "no-new-privileges", "--pids-limit", "256",
                 "--cpus", str(c["cpu_cores"]), "--memory", str(c["ram_mb"]) + "m",
-                "--memory-swap", str(c["ram_mb"]) + "m", "--user", "1000:1000",
+                "--memory-swap", str(c["ram_mb"]) + "m", "--user", str(self.broker.runner.source_config["service_uid"])+":"+str(self.broker.runner.source_config["service_gid"]),
                 "--tmpfs", "/tmp:rw,nosuid,nodev,size=" + str(c["ram_mb"]) + "m",
                 "--mount", "type=bind,src=" + str(directory / "source/v3") + ",dst=/source,readonly",
                 "--mount", "type=bind,src=" + str(directory / "source/ui") + ",dst=/ui,readonly",

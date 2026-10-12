@@ -1,0 +1,150 @@
+"""Portable configuration and persistent build admission contract."""
+import importlib.util,tempfile,time,types,unittest,uuid
+from pathlib import Path
+from unittest.mock import patch
+import test_admin_build as fixtures
+def module(name,path):
+ spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
+config=module("portable_config",Path(__file__).resolve().parents[1]/"build-service/config.py")
+class ConfigurationTests(unittest.TestCase):
+ def account(self,name):return types.SimpleNamespace(pw_name=name,pw_uid=2301 if name=="builder" else 2402,pw_gid=2301,pw_dir="/srv/build-home")
+ def test_arbitrary_account_paths_and_two_instances(self):
+  for ident,root in (("one","/srv/one"),("two","/srv/two")):
+   value=config.defaults(root);value.update(instance=ident,service_account="builder",source_owner="owner",api_container=ident+"-api",loop_container=ident+"-loop",runtime_root=root+"/sockets",service_dir="/var/lib/webagent/"+ident+"/build-service/releases/test")
+   with patch.object(config.pwd,"getpwnam",side_effect=self.account):result=config.validate(value)
+   self.assertEqual(result["service_uid"],2301);self.assertEqual(result["source_uid"],2402)
+   self.assertEqual(result["checkout_root"],root);self.assertEqual(result["api_container"],ident+"-api")
+ def test_rejects_paths_targets_and_colliding_identities(self):
+  value=config.defaults("/srv/one");value.update(service_account="builder",source_owner="owner")
+  for overrides in ({"checkout_root":"/srv/../private"},{"checkout_root":"/srv/x,secret"},{"api_container":"webagent"},{"loop_container":value["api_container"]},{"port":True},{"app_uid":2301},{"public_origin":"https://user:password@example.invalid"}):
+   with patch.object(config.pwd,"getpwnam",side_effect=self.account),self.assertRaises(ValueError):config.validate({**value,**overrides})
+ def test_unprotected_config_rejected(self):
+  with tempfile.TemporaryDirectory() as base:
+   path=Path(base)/"config";path.write_text("{}");path.chmod(0o666)
+   with self.assertRaises(PermissionError):config.load(path)
+   link=Path(base)/"link";link.symlink_to(path)
+   with self.assertRaises(PermissionError):config.load(link)
+class MaintenanceTests(unittest.TestCase):
+ def setUp(self):
+  self.temp=tempfile.TemporaryDirectory();self.state=Path(self.temp.name)/"jobs";self.runner=fixtures.FakeRunner()
+  self.broker=fixtures.host.Broker(self.state,self.runner);self.sid=str(uuid.uuid4())
+  self.trusted={"user_id":"codex-local","session_id":self.sid,"lease_until":time.time()+30,"access_fingerprint":"f"*64,"local_caller":True}
+ def tearDown(self):self.broker.shutdown();self.temp.cleanup()
+ def call(self,name,args,trusted=None):return self.broker.handle({"id":"fixture","name":name,"arguments":args,"workspace":self.sid,"trusted":trusted or self.trusted})
+ def test_drain_persists_and_blocks_new_work_but_allows_owner(self):
+  self.call("build_service_maintenance",{"action":"drain","task_id":"migration-task"})
+  with self.assertRaisesRegex(PermissionError,"drained"):self.call("v3_build_work",{"action":"begin","task_id":"another-task","summary":"Blocked","mode":"isolated"})
+  result=self.call("v3_build_work",{"action":"begin","task_id":"migration-task","summary":"Allowed","mode":"isolated"});self.assertEqual(result["status"],"open")
+  self.broker.shutdown();self.broker=fixtures.host.Broker(self.state,self.runner)
+  self.assertTrue(self.call("build_service_maintenance",{"action":"status"})["drained"])
+  self.call("build_service_maintenance",{"action":"resume"})
+  result=self.call("v3_build_work",{"action":"begin","task_id":"another-task","summary":"Allowed","mode":"isolated"});self.assertEqual(result["status"],"open")
+ def test_app_cannot_open_maintenance_or_override_with_task_id(self):
+  app={k:v for k,v in self.trusted.items() if k!="local_caller"}
+  with self.assertRaises(PermissionError):self.call("build_service_maintenance",{"action":"drain"},app)
+  self.call("build_service_maintenance",{"action":"drain","task_id":"migration-task"})
+  with self.assertRaises(PermissionError):self.call("v3_build_work",{"action":"begin","task_id":"migration-task","summary":"Blocked","mode":"isolated"},app)
+
+class MountBoundaryTests(unittest.TestCase):
+ def test_pinned_inode_survives_path_replacement_and_rejects_symlink(self):
+  import os
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary);source=root/"session";source.mkdir();identity=source.stat().st_ino
+   with fixtures.host.pinned_directory(root,"session",os.getuid()) as mount:
+    source.rename(root/"original");source.symlink_to("/etc",target_is_directory=True)
+    self.assertEqual(Path(mount).stat().st_ino,identity)
+   with self.assertRaises(OSError):
+    with fixtures.host.pinned_directory(root,"session"):pass
+
+class InitialPublicationTests(unittest.TestCase):
+ def test_first_workspace_request_stages_snapshot_before_release_id(self):
+  from unittest.mock import Mock
+  import os
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary);workspace=str(uuid.uuid4());(root/workspace).mkdir()
+   runner=Mock();runner.snapshot.return_value=b"immutable-source"
+   runner.stage_assets.side_effect=RuntimeError("publication checkpoint")
+   broker=fixtures.host.Broker(root/"jobs",runner)
+   trusted={"user_id":"operator","session_id":workspace,"lease_until":time.time()+30,"access_fingerprint":"f"*64,"local_caller":True}
+   try:
+    with patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"workspace_root":str(root),"worker_uid":os.getuid(),"instance":"fresh"}),patch.object(fixtures.host,"ASSET_ROOT",root/"assets"),patch.object(fixtures.host,"context_digest",return_value=("f"*64,{})):
+     with self.assertRaisesRegex(RuntimeError,"publication checkpoint"):broker.workspace_request("source_review",{},trusted,workspace)
+    args=runner.stage_assets.call_args.args
+    self.assertEqual(args[0],b"immutable-source")
+    self.assertEqual(str(uuid.UUID(args[1])),args[1])
+   finally:broker.shutdown()
+
+class WorkspaceVolumeTests(unittest.TestCase):
+ def test_pinned_volumes_are_removed_after_executor_failure(self):
+  from unittest.mock import Mock
+  import os
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary);base=root/"workspace";selected=root/"release"
+   base.mkdir();selected.mkdir();runner=fixtures.host.Runner();runner.command=Mock(return_value="created")
+   with patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"worker_uid":os.getuid(),"service_uid":os.getuid()}),patch.object(fixtures.host.subprocess,"run") as cleanup:
+    with self.assertRaisesRegex(RuntimeError,"executor"):
+     with runner.workspace_volumes(base,selected) as volumes:
+      self.assertEqual(len(volumes),2)
+      for command in runner.command.call_args_list:
+       self.assertTrue(any(arg.startswith("device=/proc/") for arg in command.args[0]))
+      raise RuntimeError("executor")
+    self.assertEqual(cleanup.call_count,2)
+    self.assertEqual({call.args[0][-1] for call in cleanup.call_args_list},set(volumes))
+
+class PublishedPermissionsTests(unittest.TestCase):
+ def test_source_and_index_are_traversable_for_distinct_container_uid(self):
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary);source=root/"v3";index=root/".code-index"
+   source.mkdir(mode=0o700);index.mkdir(mode=0o700)
+   (source/"Cargo.toml").write_text("source");(index/"manifest.json").write_text("index")
+   fixtures.host.Runner().readable_assets(root)
+   for path in (root,source,index):self.assertEqual(path.stat().st_mode&0o777,0o755)
+   (root/"escape").symlink_to("/etc")
+   with self.assertRaises(PermissionError):fixtures.host.Runner().readable_assets(root)
+
+class ExecutorResponseTests(unittest.TestCase):
+ def test_json_booleans_are_parsed_before_log_redaction(self):
+  from unittest.mock import Mock
+  import contextlib
+  runner=fixtures.host.Runner();runner.command=Mock(return_value='{"status":"success","truncated":false}')
+  @contextlib.contextmanager
+  def volumes(*args):yield ("workspace-volume","source-volume")
+  runner.workspace_volumes=volumes
+  with patch.object(fixtures.host.subprocess,"run"):
+   result=runner.workspace_task(Path("/workspace/session"),Path("/source/release"),"image","source_review",{}, {"lease_until":time.time()+30})
+  self.assertFalse(result["truncated"])
+  self.assertTrue(runner.command.call_args.kwargs["private_raw"])
+
+class OriginConfigurationTests(unittest.TestCase):
+ def test_ui_verification_uses_configured_instance_origin(self):
+  from unittest.mock import Mock
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary);entry=root/"current/v3/ui/index.html";entry.parent.mkdir(parents=True);entry.write_bytes(b"app")
+   connection=Mock();response=connection.getresponse.return_value;response.status=200;response.read.return_value=b"app"
+   with patch.object(fixtures.host,"ASSET_ROOT",root),patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"bind_address":"127.0.0.1","port":18081}),patch.object(fixtures.host.http.client,"HTTPConnection",return_value=connection) as factory:
+    fixtures.host.Runner().verify_ui()
+   factory.assert_called_once_with("127.0.0.1",18081,timeout=10)
+
+class HostSourceReleaseTests(unittest.TestCase):
+ def test_application_changes_and_app_callers_cannot_skip_image_build(self):
+  with tempfile.TemporaryDirectory() as temporary:
+   broker=fixtures.host.Broker(Path(temporary)/"jobs",fixtures.FakeRunner())
+   try:
+    for path in ("v3/src/app.rs","v3/worker.py","v3/build-service/workspace_executor.py","v3/build-service/config.py","v3/plugins/abilities/catalog.json"):
+     self.assertFalse(broker.host_source_only([path],b"unused",{"local_caller":True}))
+    self.assertFalse(broker.host_source_only(["v3/build-service/host.py"],b"unused",{}))
+   finally:broker.shutdown()
+ def test_installed_host_must_match_candidate(self):
+  import os,tarfile,io
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary);host=root/"host.py";host.write_bytes(b"installed host");host.chmod(0o644)
+   blob=io.BytesIO()
+   with tarfile.open(fileobj=blob,mode="w") as archive:
+    item=tarfile.TarInfo("v3/build-service/host.py");item.size=len(b"candidate host");item.mode=0o644;archive.addfile(item,io.BytesIO(b"candidate host"))
+   broker=fixtures.host.Broker(root/"jobs",fixtures.FakeRunner())
+   try:
+    with patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"service_dir":str(root)}),patch.object(fixtures.host,"context_digest",return_value=("f"*64,{})):
+     if os.getuid()==0:self.assertFalse(broker.host_source_only(["v3/build-service/host.py"],blob.getvalue(),{"local_caller":True}))
+     else:
+      with self.assertRaises(PermissionError):broker.host_source_only(["v3/build-service/host.py"],blob.getvalue(),{"local_caller":True})
+   finally:broker.shutdown()

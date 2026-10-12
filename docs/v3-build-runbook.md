@@ -1,6 +1,6 @@
 # V3 Build runbook (operator material)
 
-Host- and broker-side material moved out of the V3 Build skill (`plugins/abilities/Administrator/v3_build/v3_build.skill.md`) on 2026-10-08 (guidance survey F5/F8). The skill keeps the agent workflow; this file is for operators and for tasks that explicitly call for host or broker work.
+Host- and broker-side material moved out of the V3 Build skill (`build-service/docs/legacy/v3_build/v3_build.skill.md`) on 2026-10-08 (guidance survey F5/F8). The skill keeps the agent workflow; this file is for operators and for tasks that explicitly call for host or broker work.
 
 ## Storage checks and artifact prune
 

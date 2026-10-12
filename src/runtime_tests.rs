@@ -64,6 +64,7 @@ pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
         login_attempts: Arc::new(Mutex::new(Vec::new())),
         control_dir,
         tool_socket: root.path().join("worker.sock"),
+        build_socket: root.path().join("host-build.sock"),
         promotion_socket: root.path().join("promote.sock"),
         chat_ui_config_path: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ui/chat/chat_ui.json"),
         secure: false,
@@ -369,7 +370,7 @@ async fn agent_proposal_is_visible_and_admin_can_promote_the_same_review() {
     let rid = uuid();
     let baseline = "b".repeat(40);
     let expected = hex::encode(Sha256::digest(format!("{baseline}\0patch").as_bytes()));
-    let worker_listener = UnixListener::bind(&app.tool_socket).unwrap();
+    let worker_listener = UnixListener::bind(&app.build_socket).unwrap();
     let review_digest = expected.clone();
     let worker = tokio::spawn(async move {
         for _ in 0..2 {
@@ -382,6 +383,7 @@ async fn agent_proposal_is_visible_and_admin_can_promote_the_same_review() {
             let reply = json!({"id":call["id"],"status":"success","truncated":false,
                 "review_sha256":review_digest,"baseline_commit":baseline,
                 "status_output":" M src/main.rs","diff":"patch"});
+            let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
             reader
                 .get_mut()
                 .write_all(format!("{reply}\n").as_bytes())
@@ -471,6 +473,7 @@ async fn agent_proposal_is_visible_and_admin_can_promote_the_same_review() {
         let call: Value = serde_json::from_str(&line).unwrap();
         let reply = json!({"id":call["id"],"status":"success",
             "patch_sha256":call["patch_sha256"],"paths":["src/main.rs"]});
+            let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
         reader
             .get_mut()
             .write_all(format!("{reply}\n").as_bytes())
@@ -541,7 +544,7 @@ async fn proposal_respects_policy_and_rejects_stale_review() {
     assert!(app.store.list("promotion:").await.unwrap().is_empty());
 
     app.store.put("policy", &policy_default()).await.unwrap();
-    let listener = UnixListener::bind(&app.tool_socket).unwrap();
+    let listener = UnixListener::bind(&app.build_socket).unwrap();
     let worker = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut reader = BufReader::new(stream);
@@ -551,6 +554,7 @@ async fn proposal_respects_policy_and_rejects_stale_review() {
         let reply = json!({"id":call["id"],"status":"success","truncated":false,
             "review_sha256":"b".repeat(64),"baseline_commit":"c".repeat(40),
             "diff":"patch"});
+        let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
         reader
             .get_mut()
             .write_all(format!("{reply}\n").as_bytes())
@@ -624,7 +628,7 @@ async fn promotion_requires_auth_and_csrf_and_reuses_durable_receipt() {
         StatusCode::FORBIDDEN
     );
 
-    let worker_listener = UnixListener::bind(&app.tool_socket).unwrap();
+    let worker_listener = UnixListener::bind(&app.build_socket).unwrap();
     let broker_listener = UnixListener::bind(&app.promotion_socket).unwrap();
     let review_digest = expected.clone();
     let worker = tokio::spawn(async move {
@@ -637,6 +641,7 @@ async fn promotion_requires_auth_and_csrf_and_reuses_durable_receipt() {
         let reply = json!({"id":call["id"],"status":"success","truncated":false,
             "review_sha256":review_digest,"baseline_commit":baseline,
             "diff":"patch"});
+            let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
         reader
             .get_mut()
             .write_all(format!("{reply}\n").as_bytes())
@@ -652,6 +657,7 @@ async fn promotion_requires_auth_and_csrf_and_reuses_durable_receipt() {
         assert_eq!(call["patch"], "patch");
         let reply = json!({"id":call["id"],"status":"success",
             "patch_sha256":call["patch_sha256"],"paths":["src/main.rs"]});
+            let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
         reader
             .get_mut()
             .write_all(format!("{reply}\n").as_bytes())
@@ -717,7 +723,7 @@ async fn admin_cannot_promote_a_stale_agent_proposal() {
         )
         .await
         .unwrap();
-    let listener = UnixListener::bind(&app.tool_socket).unwrap();
+    let listener = UnixListener::bind(&app.build_socket).unwrap();
     let worker = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut reader = BufReader::new(stream);
@@ -727,6 +733,7 @@ async fn admin_cannot_promote_a_stale_agent_proposal() {
         let changed = hex::encode(Sha256::digest(format!("{baseline}\0new").as_bytes()));
         let reply = json!({"id":call["id"],"status":"success","truncated":false,
             "review_sha256":changed,"baseline_commit":baseline,"diff":"new"});
+        let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
         reader
             .get_mut()
             .write_all(format!("{reply}\n").as_bytes())
@@ -913,7 +920,7 @@ async fn source_review_route_requires_auth_policy_and_existing_session() {
         .put("control", &json!({"shutoff":false}))
         .await
         .unwrap();
-    let listener = UnixListener::bind(&app.tool_socket).unwrap();
+    let listener = UnixListener::bind(&app.build_socket).unwrap();
     let expected_sid = sid.clone();
     let worker = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
@@ -925,6 +932,7 @@ async fn source_review_route_requires_auth_policy_and_existing_session() {
         assert_eq!(call["workspace"], expected_sid);
         let reply = json!({"id":call["id"],"status":"success",
             "status_output":" M src/main.rs","diff":"patch","truncated":false});
+            let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
         reader
             .get_mut()
             .write_all(format!("{reply}\n").as_bytes())
@@ -950,7 +958,7 @@ async fn tool_reply_must_match_the_dispatched_request() {
     use tokio::net::UnixListener;
 
     let (_root, app) = fixture().await;
-    let listener = UnixListener::bind(&app.tool_socket).unwrap();
+    let listener = UnixListener::bind(&app.build_socket).unwrap();
     let worker = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut reader = BufReader::new(stream);
@@ -962,13 +970,7 @@ async fn tool_reply_must_match_the_dispatched_request() {
             .await
             .unwrap();
     });
-    let result = tools::execute(
-        "source_review",
-        &json!({}),
-        &uuid(),
-        &app.tool_socket,
-        CancellationToken::new(),
-    )
+    let result = tools::administrator::workspace_host(&app,&uuid(),"source_review",&json!({}),None,CancellationToken::new())
     .await;
     assert!(result.is_err());
     worker.await.unwrap();
@@ -1308,7 +1310,7 @@ async fn agent_loop_creates_reviewable_proposal_without_dispatching_broker() {
     });
     app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
 
-    let worker_listener = UnixListener::bind(&app.tool_socket).unwrap();
+    let worker_listener = UnixListener::bind(&app.build_socket).unwrap();
     let worker_digest = expected.clone();
     let worker = tokio::spawn(async move {
         for _ in 0..4 {
@@ -1320,6 +1322,7 @@ async fn agent_loop_creates_reviewable_proposal_without_dispatching_broker() {
             if call["name"] == "administrator_quiesce" {
                 assert_eq!(call["arguments"], json!({}));
                 let reply = json!({"id":call["id"],"status":"success"});
+            let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
                 reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
                 continue;
             }
@@ -1329,6 +1332,7 @@ async fn agent_loop_creates_reviewable_proposal_without_dispatching_broker() {
             let reply = json!({"id":call["id"],"status":"success","truncated":false,
                 "baseline_commit":baseline,"review_sha256":worker_digest,
                 "status_output":" M src/main.rs","diff":"patch"});
+            let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
             reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
             return;
         }
@@ -7199,4 +7203,30 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
         "revision":1,"active":[],"suppressed":["codebase_admin"]})).await.unwrap();
     let suppressed=visibility_native_call(&app,&sid,&id,"load_tool",json!({"tool_name":"state_inspect"})).await;
     assert_eq!(suppressed["status"],"denied","{suppressed}");
+}
+
+#[tokio::test]
+async fn workspace_host_uses_scoped_host_socket_and_rejects_missing_envelope() {
+    use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};
+    use tokio::net::UnixListener;
+    let (_root,app)=fixture().await;
+    let listener=UnixListener::bind(&app.build_socket).unwrap();
+    let sid=conversation(&app).await;
+    let expected=sid.clone();
+    let server=tokio::spawn(async move {
+        let (stream,_)=listener.accept().await.unwrap();
+        let mut reader=BufReader::new(stream);let mut line=String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let call:Value=serde_json::from_str(&line).unwrap();
+        assert_eq!(call["workspace"],expected);
+        assert_eq!(call["trusted"]["session_id"],expected);
+        assert!(call["trusted"]["lease_until"].as_u64().unwrap()>now());
+        assert_eq!(call["name"],"source_review");
+        let reply=json!({"id":call["id"],"status":"success","diff":"unwrapped"});
+        reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+    });
+    let result=tools::administrator::workspace_host(&app,&sid,"source_review",&json!({}),None,CancellationToken::new()).await;
+    assert!(result.is_err());
+    assert!(!app.tool_socket.exists());
+    server.await.unwrap();
 }

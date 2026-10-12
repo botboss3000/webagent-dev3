@@ -8,6 +8,7 @@ snapshot helper supplies only the allowlisted context and two gate JSON files.
 import argparse
 import asyncio
 import concurrent.futures
+import contextlib
 import hashlib
 import fcntl
 import http.client
@@ -32,16 +33,24 @@ import sqlite3
 import base64
 from urllib.parse import quote
 
-SOURCE = Path("/home/ar/webagent-dev3")
-STATE = SOURCE / "build-jobs"
-SOCKET = SOURCE / "runtime/build/build.sock"
-BRIDGE_SOCKET = SOURCE / "runtime/build/python.sock"
+
+import sys
+_module_root = Path(os.environ.get("WEBAGENT_BUILD_MODULE_ROOT", str(Path(__file__).resolve().parent)))
+_config_spec = importlib.util.spec_from_file_location("webagent_build_config", _module_root / "config.py")
+_config_module = importlib.util.module_from_spec(_config_spec)
+_config_spec.loader.exec_module(_config_module)
+CONFIG = _config_module.load()
+
+SOURCE = Path(CONFIG["checkout_root"])
+STATE = Path(CONFIG["state_root"])
+SOCKET = Path(CONFIG["runtime_root"])/"build.sock"
+BRIDGE_SOCKET = Path(CONFIG["runtime_root"])/"python.sock"
 BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
 CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
     "v3/src", "v3/ui", "v3/plugins/abilities", "v3/plugins/gates", "v3/worker.py",
     "v3/sandbox.py", "v3/launch.py", "v3/promote.py", "v3/ui-baseline.json", "v3/tests",
-    "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config",
+    "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service",
     "v3/data/config/gates/message_visibility_v1.json",
     "v3/data/config/gates/closing_status_v1.json",
     "ui/shared/css/app1.css", "ui/shared/css/app2.css", "ui/shared/css/app3.css",
@@ -51,16 +60,16 @@ CONTEXT = (
 UI_SOURCE_PREFIX = "v3/ui/"
 RUST_UI_FIXTURES = {"v3/ui/chat/chat_ui.json"}
 ASSET_ROOT = STATE / "ui-assets"
-TARGETS = ("webagent-dev-v3", "webagent-dev-v3-loop")
+TARGETS = (CONFIG["api_container"], CONFIG["loop_container"])
 LOCAL_WORKSPACE = "71440aad-a6ba-4ba8-adc8-1fcf66250be6"
-WORKER_CONTROL = Path("/var/lib/webagent-v3-build-worker/control.sock")
+WORKER_CONTROL = Path(CONFIG["worker_control"])
 MAX_LOG = 1024 * 1024
 PUBLIC_LOG = 16 * 1024
 MAX_CONTEXT = 128 * 1024 * 1024
 MIN_DEPLOY_FREE = 8 * 1024 * 1024 * 1024
 MIN_SEQUENCE_FREE = 16 * 1024 * 1024 * 1024
 
-_release_file = (SOURCE / "host-build-service/release.py"
+_release_file = (_module_root / "release.py"
                  if str(__file__).startswith("/proc/self/fd/") else Path(__file__).with_name("release.py"))
 _release_spec = importlib.util.spec_from_file_location(
     "v3_build_release", _release_file)
@@ -68,7 +77,7 @@ release = importlib.util.module_from_spec(_release_spec)
 _release_spec.loader.exec_module(release)
 TASK_CONTEXT = CONTEXT + release.INSPECTION_CONTEXT
 
-_performance_file = (SOURCE / "host-build-service/performance.py"
+_performance_file = (_module_root / "performance.py"
                      if str(__file__).startswith("/proc/self/fd/") else Path(__file__).with_name("performance.py"))
 _performance_spec = importlib.util.spec_from_file_location("v3_build_performance", _performance_file)
 performance = importlib.util.module_from_spec(_performance_spec)
@@ -392,7 +401,7 @@ def inspect_source_patch_corrected(root, patch):
     whose hunk counts validate_source_hunks recomputed and whose context
     the checked git apply in this function verified.
     """
-    if not root.is_dir() or root.is_symlink() or root.stat().st_uid != 1000:
+    if not root.is_dir() or root.is_symlink() or root.stat().st_uid != CONFIG["service_uid"]:
         raise ValueError("live V3 checkout unavailable")
     if patch.startswith("*** Begin Patch"):
         raise ValueError("source patch must be a Git unified diff starting with diff --git; apply_patch markers are unsupported")
@@ -417,7 +426,7 @@ def inspect_source_patch_corrected(root, patch):
     allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                      ".gitignore", "README.md", "deploy.sh", "launch.py",
                      "worker.py", "sandbox.py", "promote.py", "ui-baseline.json"}
-    allowed_dirs = {"src", "plugins", "tests", "ui", "docs", "config"}
+    allowed_dirs = {"src", "plugins", "tests", "ui", "docs", "config", "build-service"}
     for record in records:
         fields = record.split(b"\t", 2)
         if len(fields) != 3 or not fields[0].isdigit() or not fields[1].isdigit():
@@ -522,18 +531,32 @@ def loop_plugin_mounts(previous):
     return host
 
 
+@contextlib.contextmanager
+def pinned_directory(parent,name,owner=None):
+    """Hold a directory inode until Docker has mounted it; never follow a symlink."""
+    parent_fd=os.open(parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    fd=None
+    try:
+        fd=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=parent_fd)
+        if owner is not None and os.fstat(fd).st_uid!=owner:raise PermissionError("Workspace identity changed")
+        yield "/proc/"+str(os.getpid())+"/fd/"+str(fd)
+    finally:
+        if fd is not None:os.close(fd)
+        os.close(parent_fd)
+
 class Runner:
     def __init__(self, source=SOURCE, snapshot_helper=None, snapshot_socket=None):
         self.source, self.snapshot_helper = Path(source), snapshot_helper
+        self.source_config=CONFIG
         self.secrets = []
-        self.snapshot_socket = snapshot_socket or str(SOURCE / "host-build-service/snapshot.sock")
+        self.snapshot_socket = snapshot_socket or str(Path(CONFIG["runtime_root"])/"snapshot.sock")
         self.cancel = threading.Event()
         self.job_context = threading.local()
 
     def command(self, argv, stdin=None, timeout=3600, output_file=None, private_raw=False):
         # Explicit arguments only; the model never supplies argv. Environment
         # has no application tokens, cookies or provider credentials.
-        env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/home/ar", "LANG": "C.UTF-8"}
+        env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": CONFIG["service_home"], "LANG": "C.UTF-8"}
         with subprocess.Popen(argv, cwd=self.source, env=env, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True) as proc:
             output = bytearray()
@@ -604,6 +627,24 @@ class Runner:
                         pass
                     proc.wait()
 
+    def ensure_workspace(self,workspace):
+        # Caller identity and SID are already validated; paths/UIDs never come from arguments.
+        with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
+            connection.settimeout(10);connection.connect(self.snapshot_socket)
+            connection.sendall(canonical({"workspace":workspace})+b"\n")
+            def receive(count):
+                data=bytearray()
+                while len(data)<count:
+                    part=connection.recv(count-len(data))
+                    if not part:raise ValueError("Workspace helper disconnected")
+                    data.extend(part)
+                return bytes(data)
+            size=struct.unpack("!Q",receive(8))[0]
+            if not 0<size<=256:raise PermissionError("Workspace initialization rejected")
+            result=json.loads(receive(size))
+            if result.get("workspace")!=workspace:raise PermissionError("Workspace helper scope changed")
+            return result
+
     def snapshot(self, inspection=False):
         # Helper path is service configuration, never a tool argument. It must
         # be root-owned and immutable to the development source identity.
@@ -669,10 +710,19 @@ class Runner:
     def checkout_matches(self, blob, changed):
         return release.checkout_matches(self.source, blob, changed, context_digest, standalone=True)
 
+    def readable_assets(self,destination):
+        # Only allowlisted, frozen source/index artifacts cross into application
+        # containers. Private task inspection snapshots are never published here.
+        for path in [destination,*destination.rglob("*")]:
+            if path.is_symlink():raise PermissionError("Published asset symlink forbidden")
+            if path.is_dir():path.chmod(0o755)
+            elif not path.is_file() or path.stat().st_mode&0o444!=0o444:raise PermissionError("Published asset is not readable source")
+
     def stage_assets(self, blob, job_id):
-        scanner = self.source / "host-build-service/index-scanner.py"
+        scanner = Path(CONFIG["service_dir"])/"index-scanner.py"
         require_paired_index_parser(blob, scanner)
         destination = release.stage_assets(ASSET_ROOT, job_id, blob, context_digest)
+        self.readable_assets(destination)
         index = destination / ".code-index"
         for orphan in destination.glob(".index-stage-*"):
             uuid.UUID(orphan.name.removeprefix(".index-stage-"))
@@ -692,7 +742,7 @@ class Runner:
                        "," + repr(context_digest(blob)[0]) + ")")
             self.command(["docker", "run", "--rm", "--network", "none",
                 "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-                "--user", "1000:1000", "--memory", "1g", "--pids-limit", "64",
+                "--user", str(CONFIG["service_uid"])+":"+str(CONFIG["service_gid"]), "--memory", "1g", "--pids-limit", "64",
                 "--tmpfs", "/tmp:rw,size=64m,mode=1777",
                 "-v", str(scanner)+":/scanner.py:ro",
                 "-v", str(destination)+":/source:ro",
@@ -706,6 +756,7 @@ class Runner:
             try:os.fsync(fd)
             finally:os.close(fd)
             release.verify_index(destination, job_id, context_digest(blob)[0])
+            self.readable_assets(destination)
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary)
@@ -748,7 +799,7 @@ class Runner:
         for name, route in paths[:17]:
             expected_path = ASSET_ROOT / "current" / name
             expected = expected_path.read_bytes() if expected_path.is_file() else None
-            connection = http.client.HTTPConnection("100.112.23.15", 8081, timeout=10)
+            connection = http.client.HTTPConnection({"0.0.0.0":"127.0.0.1","::":"::1"}.get(CONFIG["bind_address"],CONFIG["bind_address"]), CONFIG["port"], timeout=10)
             try:
                 connection.request("GET", quote(route, safe="/"))
                 response = connection.getresponse()
@@ -761,7 +812,7 @@ class Runner:
                 connection.close()
 
     def inspect(self, name):
-        if name not in TARGETS and not re.fullmatch(r"webagent-dev-v3(?:-loop)?-pre-build-[0-9a-f-]{36}", name):
+        if name not in TARGETS and not any(re.fullmatch(re.escape(target)+r"-pre-build-[0-9a-f-]{36}",name) for target in TARGETS):
             raise ValueError("container outside development target")
         value = json.loads(self.command(["docker", "inspect", name], timeout=30, private_raw=True))[0]
         self.secrets.extend(item.partition("=")[2] for item in value.get("Config", {}).get("Env", []) if "=" in item)
@@ -794,7 +845,7 @@ class Runner:
         source_mount = [] if task == "test" else [
             "--mount", "type=bind,src=" + str(source) + ",dst=/build,readonly"]
         try:
-            return self.command(["docker", "run", "--rm", "--user", "1000:1000",
+            return self.command(["docker", "run", "--rm", "--user", str(CONFIG["service_uid"])+":"+str(CONFIG["service_gid"]),
                                  *source_mount,
                                  "--mount", "type=bind,src=" + str(check_dir) + ",dst=/check",
                                  "-e", "CARGO_HOME=/check/cargo", "-e", "CARGO_TARGET_DIR=/check/target",
@@ -804,8 +855,40 @@ class Runner:
             if scratch is not None:
                 shutil.rmtree(scratch)
 
+    @contextlib.contextmanager
+    def workspace_volumes(self,base,selected):
+        # Docker's local volume driver accepts pinned FD devices. Runc rejects
+        # direct /proc FD bind sources; daemon-owned mountpoints retain the inode.
+        created=[]
+        with pinned_directory(base.parent,base.name,CONFIG["worker_uid"]) as writable, pinned_directory(selected.parent,selected.name,CONFIG["service_uid"]) as readonly:
+            try:
+                for device in (writable,readonly):
+                    volume="webagent-workspace-pin-"+uuid.uuid4().hex
+                    self.command(["docker","volume","create","--driver","local","--opt","type=none","--opt","device="+device,"--opt","o=bind",volume],timeout=30)
+                    created.append(volume)
+                yield tuple(created)
+            finally:
+                for volume in reversed(created):
+                    subprocess.run(["docker","volume","rm",volume],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
+
+    def workspace_task(self,base,selected,image,name,args,job):
+        with self.workspace_volumes(base,selected) as (base_mount,selected_mount):
+            container="webagent-workspace-"+uuid.uuid4().hex
+            spec=json.dumps({"name":name,"arguments":args,"workspace":base.name})
+            argv=["docker","run","--rm","--name",container,"--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges","--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["app_gid"]),"--pids-limit","128","--memory","1g","--cpus","1","--tmpfs","/tmp:rw,size=64m,mode=1777","--tmpfs","/run:rw,size=16m,mode=1777","--mount","type=volume,src="+base_mount+",dst=/workspaces/"+base.name+",volume-nocopy","--mount","type=volume,src="+selected_mount+",dst=/opt/v3/assets/releases/"+selected.name+",readonly,volume-nocopy","--env","V3_CODE_TEMPLATE=/opt/v3/assets/releases/"+selected.name+"/v3","--env","V3_BUILD_EXECUTOR=1","--entrypoint","python3",image,"-I","/opt/v3/build-service/workspace_executor.py",spec]
+            finished=threading.Event()
+            def guard():
+                while not finished.wait(.5):
+                    if job.get("revoked") or job["lease_until"]<=time.time() or self.cancel.is_set():
+                        subprocess.run(["docker","stop","--time","2",container],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+                        return
+            watcher=threading.Thread(target=guard,daemon=True);watcher.start()
+            try:return json.loads(self.command(argv,timeout=650,private_raw=True))
+            finally:
+                finished.set();watcher.join(timeout=12)
+                subprocess.run(["docker","rm","-f",container],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
     def build(self, blob, job_id, role):
-        tag = "webagent-dev-v3" + ("-loop" if role == "loop" else "") + ":job-" + job_id
+        tag = TARGETS[1 if role=="loop" else 0]+":job-"+job_id
         log = self.command(["docker", "buildx", "build", "--builder", "default", "--load",
                             "--progress=plain", "--target", role, "-f", "v3/Dockerfile",
                             "-t", tag, "-"], stdin=blob)
@@ -925,6 +1008,8 @@ class Broker:
         self.requests = {}
         self.active = None
         self.stopping = False
+        self.maintenance_file=self.state/"coordination/maintenance.json"
+        self.workspace_leases={}
         self.work_dir = self.state / "coordination"
         if self.work_dir.is_symlink():
             raise ValueError("symlink coordination state forbidden")
@@ -938,6 +1023,7 @@ class Broker:
         self.performance = performance.Performance(self)
         self.work_activity = {key: self._work_content(item) for key, item in self.work.items()}
         for path in sorted(self.state.glob("*.json")):
+            if path==self.maintenance_file:continue
             if path.is_symlink():
                 raise ValueError("symlink receipt forbidden")
             job = json.loads(path.read_text())
@@ -1139,7 +1225,7 @@ class Broker:
             if any(p.strip() in {"cargo", "rustc", "rustdoc", "buildx"}
                    for p in processes.splitlines()):
                 return {"status": "deferred", "reason": "compiler active"}
-            ids = self.runner.command(["docker", "ps", "-aq", "--filter", "name=webagent-dev.*3"], timeout=5).split()
+            ids = self.runner.command(["docker", "ps", "-aq", "--filter", "name="+TARGETS[0]], timeout=5).split()
             containers = json.loads(self.runner.command(["docker", "inspect", *ids], timeout=10, private_raw=True)) if ids else []
             mounts = [Path(m["Source"]).resolve() for c in containers
                       for m in c.get("Mounts", []) if m.get("Source") and Path(m["Source"]).resolve() != self.state.parent.resolve()]
@@ -1208,7 +1294,7 @@ class Broker:
                     processes = self.runner.command(["ps", "-eo", "comm="], timeout=5)
                     if any(p.strip() in {"cargo", "rustc", "rustdoc", "buildx"} for p in processes.splitlines()):
                         return {"status": "deferred", "reason": "compiler started", "removed": removed}
-                    current_ids = self.runner.command(["docker", "ps", "-aq", "--filter", "name=webagent-dev.*3"], timeout=5).split()
+                    current_ids = self.runner.command(["docker", "ps", "-aq", "--filter", "name="+TARGETS[0]], timeout=5).split()
                     current_containers = json.loads(self.runner.command(["docker", "inspect", *current_ids], timeout=10, private_raw=True)) if current_ids else []
                     current_mounts = [Path(m["Source"]).resolve() for c in current_containers
                         for m in c.get("Mounts", []) if m.get("Source") and Path(m["Source"]).resolve() != self.state.parent.resolve()]
@@ -1319,6 +1405,7 @@ class Broker:
                 self.runner.ui_hot_swappable())
 
     def _start_parallel_ui(self, job):
+        if not self._maintenance_allowed({"local_caller":job.get("user_id")=="codex-local"},job):return
         try:
             self._lease(job)
             folder = self.state / job["job_id"]
@@ -1358,7 +1445,7 @@ class Broker:
         completed = [job.get("finished_at", 0) for job in self.jobs.values()
                      if job.get("isolated") and (job["status"] == "completed"
                      or job.get("operator_adopted_at"))
-                     and job["operation"] in ("deploy", "build_deploy", "ui_deploy")
+                     and job["operation"] in ("deploy", "build_deploy", "ui_deploy", "host_service_deploy")
                      and job.get("effects_started")]
         latest = max(completed, default=0)
         return any(job["status"] == "uncertain"
@@ -1368,6 +1455,13 @@ class Broker:
                    and job["job_id"] != current
                    for job in self.jobs.values())
 
+    def _maintenance(self):
+        if self.maintenance_file.is_symlink():raise PermissionError("Maintenance state replaced")
+        try:return json.loads(self.maintenance_file.read_text())
+        except FileNotFoundError:return {"drained":False,"task_id":None}
+    def _maintenance_allowed(self,trusted,args):
+        state=self._maintenance()
+        return not state["drained"] or (trusted.get("local_caller") is True and args.get("task_id")==state.get("task_id") and state.get("task_id") is not None)
     def _start_next(self):
         if (self.active is not None or self.active_ui is not None or self.stopping or
                 self._has_unresolved_release()):
@@ -1379,6 +1473,8 @@ class Broker:
             if not job.get("isolated") or job["status"] != "queued":
                 continue
             try:
+                task_id=job.get("task_id") or next((v["task_id"] for v in self.work.values() if v.get("job_id")==job["job_id"]),None)
+                if not self._maintenance_allowed({"local_caller":job.get("user_id")=="codex-local"},{"task_id":task_id}):continue
                 self._lease(job)
                 folder = self.state / job["job_id"]
                 base = (folder / "base.tar").read_bytes()
@@ -1657,7 +1753,7 @@ class Broker:
             for role, name in zip(("api", "loop"), TARGETS):
                 if not self.runner.healthy(name, images[role]):
                     return False
-            if job["operation"] == "ui_deploy" and job.get("hot_assets"):
+            if job["operation"] in ("ui_deploy","host_service_deploy") and job.get("hot_assets"):
                 return True
             rollback = job.get("rollback", {})
             if set(rollback) != {"api", "loop"}:
@@ -1685,7 +1781,7 @@ class Broker:
             # Hot UI switches keep the containers; accept only the exact active
             # asset snapshot with both original images healthy and bytes served.
             if job.get("hot_assets"):
-                if job["operation"] != "ui_deploy" or self.runner.current_asset_id() != job["job_id"]:
+                if job["operation"] not in ("ui_deploy","host_service_deploy") or self.runner.current_asset_id() != job["job_id"]:
                     return False
                 for role, name in zip(("api", "loop"), TARGETS):
                     if not self.runner.healthy(name, job["images"][role]):
@@ -1895,6 +1991,48 @@ class Broker:
                 else:
                     raise ValueError("performance snapshot special file forbidden")
 
+    def host_source_only(self,changed,blob,trusted):
+        # This operator path can publish only already-installed host code and its
+        # own docs/tests. Worker modules, policies and application code always build.
+        allowed={"v3/build-service/host.py","v3/build-service/README.md","v3/tests/test_build_service.py"}
+        if not trusted.get("local_caller") or not changed or not set(changed)<=allowed:return False
+        path=Path(CONFIG["service_dir"])/"host.py"
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+        try:
+            meta=os.fstat(fd)
+            if not stat.S_ISREG(meta.st_mode) or meta.st_uid!=0 or meta.st_mode&0o022 or meta.st_nlink!=1:raise PermissionError("Protected installed host code required")
+            with os.fdopen(fd,"rb",closefd=False) as stream:installed=stream.read(2*1024*1024+1)
+            candidate=release.entries(blob,context_digest).get("v3/build-service/host.py")
+            return candidate is not None and candidate[1]==installed
+        finally:os.close(fd)
+
+    def workspace_request(self,name,args,trusted,workspace):
+        deadline,fingerprint=self._incoming_lease(trusted)
+        if not isinstance(args,dict) or args.get("path","").startswith("/"):raise ValueError("Workspace-relative arguments required")
+        if name not in {"v3_workspace_status","source_review"} and args.get("action") not in {"review","read"} and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained")
+        self.runner.ensure_workspace(workspace)
+        base=Path(CONFIG["workspace_root"])/workspace
+        if base.is_symlink() or not base.is_dir() or base.resolve().parent!=Path(CONFIG["workspace_root"]).resolve():raise ValueError("Owned session workspace unavailable")
+        if base.stat().st_uid!=CONFIG["worker_uid"]:raise PermissionError("Workspace identity changed")
+        with self.lock:
+            if not (ASSET_ROOT/"current").exists():
+                if self.active or self.active_ui:raise ValueError("Initial source publication waits for idle builds")
+                blob=self.runner.snapshot()
+                initial=str(uuid.uuid5(uuid.NAMESPACE_URL,CONFIG["instance"]+":"+context_digest(blob)[0]))
+                self.runner.stage_assets(blob,initial);self.runner.activate_assets(initial)
+            selected=(ASSET_ROOT/"current").resolve(strict=True)
+        if selected.parent!=ASSET_ROOT/"releases":raise ValueError("Published source outside release namespace")
+        job={"user_id":trusted["user_id"],"workspace":workspace,"lease_until":deadline,"access_fingerprint":fingerprint}
+        key=uuid.uuid4().hex
+        with self.lock:self.workspace_leases[key]=job
+        try:
+            image=self.runner.inspect(TARGETS[0])["Image"]
+            result=self.runner.workspace_task(base,selected,image,name,args,job)
+            self._lease(job)
+            return result
+        finally:
+            with self.lock:self.workspace_leases.pop(key,None)
+
     def handle(self, request):
         if not isinstance(request, dict) or set(request) - {"id", "name", "arguments", "workspace", "timeout_seconds", "trusted"}:
             raise ValueError("invalid broker request")
@@ -1911,7 +2049,22 @@ class Broker:
         if not isinstance(args, dict):
             raise ValueError("arguments must be an object")
         name = request.get("name")
+        if name in ("workspace_seed","source_review","source_patch","v3_workspace_status","v3_workspace_action") or (name=="v3_cargo_task" and "task_id" not in args):
+            return self.workspace_request(name,args,trusted,workspace)
         with self.lock:
+            if name == "build_service_maintenance":
+                if not trusted.get("local_caller") or set(args)-{"action","task_id"} or args.get("action") not in {"status","drain","resume"}:raise PermissionError("Operator maintenance required")
+                if args["action"]!="status":
+                    state={"drained":args["action"]=="drain","task_id":args.get("task_id") if args["action"]=="drain" else None}
+                    temporary=self.maintenance_file.with_suffix(".tmp")
+                    fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
+                    with os.fdopen(fd,"w") as stream:json.dump(state,stream);stream.flush();os.fsync(stream.fileno())
+                    os.replace(temporary,self.maintenance_file)
+                    if not state["drained"]:self._start_next()
+                return {**self._maintenance(),"busy":bool(self.active or self.active_ui),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
+            read_actions={"status","review","preflight","receipt","list","read","search","job","artifact"}
+            read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
+            if name not in read_names and args.get("action") not in read_actions and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; new work disabled")
             if name == "performance_work":
                 return self.performance.handle(trusted, workspace, args)
             if name == "build_work":
@@ -2049,6 +2202,11 @@ class Broker:
                     raise ValueError("internal lease control takes no arguments")
                 incoming = self._incoming_lease(trusted) if name == "administrator_host_lease" else None
                 updated = self.performance.leases(trusted, workspace, incoming)
+                for job in list(self.workspace_leases.values()):
+                    if self._owned(job,trusted,workspace):
+                        if incoming and job["lease_until"]>time.time() and job["access_fingerprint"]==incoming[1] and not job.get("revoked"):job["lease_until"]=incoming[0]
+                        else:job["revoked"]=True
+                        updated+=1
                 for job in self.jobs.values():
                     if not self._owned(job, trusted, workspace) or job["status"] not in ("queued", "running"):
                         continue
@@ -2159,7 +2317,7 @@ class Broker:
                 source = root / "v3"
                 matches = []
                 scanned = 0
-                for folder in ("src", "plugins", "tests", "ui", "docs", "config"):
+                for folder in ("src", "plugins", "tests", "ui", "docs", "config", "build-service"):
                     for path in sorted((source / folder).rglob("*")):
                         if path.is_symlink() or not path.is_file() or path.suffix not in {
                                 ".rs", ".py", ".json", ".md", ".html", ".js", ".css", ".toml", ".sh"}:
@@ -2187,7 +2345,7 @@ class Broker:
                 if not isinstance(name_path, str) or len(name_path) > 240:
                     raise ValueError("bounded source directory path required")
                 parts = name_path.split("/") if name_path else []
-                allowed_dirs = {"src", "plugins", "tests", "ui", "docs", "config"}
+                allowed_dirs = {"src", "plugins", "tests", "ui", "docs", "config", "build-service"}
                 allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                                  ".gitignore", "README.md", "deploy.sh", "launch.py",
                                  "worker.py", "sandbox.py", "promote.py", "ui-baseline.json"}
@@ -2560,6 +2718,7 @@ class Broker:
                         if decision != "proceed":
                             return {"task_id": task_id, "status": "needs_synchronization" if decision == "synchronize" else "needs_decision", "synchronization": report}
                     ui_only = all(path.startswith(UI_SOURCE_PREFIX) for path in changed)
+                    host_only = self.host_source_only(current_changed,candidate,trusted)
                     lease_until, fingerprint = self._incoming_lease(trusted)
                     job_id = str(uuid.uuid4())
                     private = self.state / job_id
@@ -2569,7 +2728,7 @@ class Broker:
                     job = {"job_id": job_id, "request_key": "task-" + key,
                            "body_digest": hashlib.sha256(canonical([task_id, current])).hexdigest(),
                            "user_id": trusted["user_id"], "workspace": workspace,
-                           "operation": "ui_deploy" if ui_only else "build_deploy", "isolated": True, "inputs_sha256": current,
+                           "operation": "host_service_deploy" if host_only else "ui_deploy" if ui_only else "build_deploy", "task_id":task_id, "isolated": True, "inputs_sha256": current,
                            "created_at": time.time(), "status": "queued", "phase": "waiting",
                            "images": {}, "log": "", "tool_name": "v3_build_work",
                            "lease_until": max(lease_until, time.time() + 4 * 3600),
@@ -2577,6 +2736,8 @@ class Broker:
                     if decision == "proceed":
                         job["sync_ack_digest"] = report["digest"]
                     job["synchronization"] = report
+                    if host_only:
+                        job["rust_tests"]={"status":"not_required","summary":"Exact installed host broker and its docs/tests only; application runtime unchanged"}
                     if ui_only:
                         job["rust_tests"] = {"status": "not_required",
                             "summary": "UI assets only; no Rust build or tests required"}
@@ -2788,7 +2949,7 @@ class Broker:
         job["synchronization"] = self._sync_report(blob, blob, ())
         with self.lock:
             self._batch_lease(job)
-            job.update(status="completed", phase="finished", reason="UI assets served from frozen release",
+            job.update(status="completed", phase="finished", reason="Installed host service source published; application images unchanged" if job["operation"]=="host_service_deploy" else "UI assets served from frozen release",
                        finished_at=time.time())
             job.setdefault("phase_history", []).append(
                 {"phase": "finished", "at": job["finished_at"]})
@@ -2810,6 +2971,11 @@ class Broker:
                 job["status"] = "running"
                 job["started_at"] = time.time()
                 self._save(job)
+            if job["operation"]=="host_service_deploy":
+                if not self.host_source_only(job["changed_paths"],blob,{"local_caller":job["user_id"]=="codex-local"}):raise PermissionError("Installed host source changed after admission")
+                if not self.runner.ui_hot_swappable():raise ValueError("Host source publication requires frozen asset mounts")
+                self._run_ui_hot(job,blob)
+                return
             if job["operation"] == "ui_deploy" and self.runner.ui_hot_swappable():
                 self._run_ui_hot(job, blob)
                 return
@@ -2996,7 +3162,7 @@ async def serve(broker, listener, bridge_listener=None):
         try:
             sock = writer.get_extra_info("socket")
             _, uid, _ = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-            if uid not in (1000, 1100) or (bridge and uid != 1000):
+            if uid not in (CONFIG["service_uid"],CONFIG["app_uid"]) or (bridge and uid!=CONFIG["service_uid"]):
                 raise ValueError("broker caller identity denied")
             raw = await asyncio.wait_for(reader.readline(), 5)
             if len(raw) > 2 * 1024 * 1024 or not raw.endswith(b"\n"):
@@ -3010,8 +3176,8 @@ async def serve(broker, listener, bridge_listener=None):
                     "lease_until": time.time() + 4 * 3600,
                     "access_fingerprint": hashlib.sha256(b"python-v2-build-bridge").hexdigest(),
                     "bridge_caller": True}
-            elif uid == 1000:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work"):
+            elif uid == CONFIG["service_uid"]:
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": "codex-local", "session_id": LOCAL_WORKSPACE,
@@ -3053,8 +3219,8 @@ def main():
     parser.add_argument("--snapshot-helper")
     parser.add_argument("--snapshot-socket")
     arguments = parser.parse_args()
-    if os.geteuid() != 1000:
-        raise SystemExit("broker must run as ar UID 1000 with a protected inherited listener")
+    if os.geteuid() != CONFIG["service_uid"]:
+        raise SystemExit("broker must run as its configured service identity with a protected inherited listener")
     listener = socket.socket(fileno=arguments.listener_fd)
     if listener.family != socket.AF_UNIX:
         raise SystemExit("Unix listener required")

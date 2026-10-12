@@ -5,6 +5,32 @@ use anyhow::{bail,Result};
 use serde_json::{json,Value};
 use tokio_util::sync::CancellationToken;
 
+pub async fn workspace_host(app:&App,sid:&str,name:&str,args:&Value,_trusted:Option<Value>,cancel:CancellationToken)->Result<Value>{
+    let socket=build_socket(app);
+    let fingerprint=digest(&json!([app.store.current_user_id(),sid,name,args]));
+    let authority=||json!({"user_id":app.store.current_user_id(),"session_id":sid,"lease_until":now()+30,"access_fingerprint":fingerprint});
+    let future=tools::execute_trusted(name,args,sid,&socket,Some(authority()),cancel.clone());
+    tokio::pin!(future);
+    loop {tokio::select!{
+        result=&mut future=>{
+            let reply=result?;
+            if reply["status"]=="success" {
+                if !reply["output"].is_object(){bail!("Malformed workspace service response");}
+                return Ok(reply["output"].clone());
+            }
+            return Ok(reply);
+        },
+        _=cancel.cancelled()=>{
+            let _=tools::execute_trusted("administrator_host_revoke",&json!({}),sid,&socket,Some(authority()),CancellationToken::new()).await;
+            bail!("Workspace operation interrupted; inspect its receipt");
+        },
+        _=tokio::time::sleep(Duration::from_secs(10))=>{
+            tools::execute_trusted("administrator_host_lease",&json!({}),sid,&socket,Some(authority()),cancel.clone()).await?;
+        }
+    }}
+}
+pub fn build_socket(app:&App)->std::path::PathBuf {app.build_socket.clone()}
+
 pub fn schemas()->Vec<Value> {
     serde_json::from_str(include_str!("administrator-schemas.json"))
         .expect("compiled Administrator schemas")
@@ -132,7 +158,7 @@ async fn performance_cancel_existing(
     let trusted=json!({"user_id":crate::shared_chat::actor(app),"session_id":sid,
         "lease_until":now()+30,"access_fingerprint":fingerprint});
     let mut args=forwarded.clone();args["action"]=json!("cancel");
-    let socket=std::path::Path::new("/run/v3/build/build.sock");
+    let socket_path=build_socket(app);let socket=&socket_path;
     let _=tokio::time::timeout(Duration::from_secs(3),
         tools::execute_trusted("performance_work",&args,sid,socket,Some(trusted.clone()),
             CancellationToken::new())).await;
@@ -222,7 +248,7 @@ async fn host(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:Cancell
     }
     let mut forwarded=if name=="v3_build_work" {build_work_arguments(args)?} else {args.clone()};
     if let Some(object)=forwarded.as_object_mut(){object.retain(|_,value|!value.is_null());}
-    tools::execute_trusted(name,&forwarded,sid,std::path::Path::new("/run/v3/build/build.sock"),Some(trusted),cancel).await
+    tools::execute_trusted(name,&forwarded,sid,&build_socket(app),Some(trusted),cancel).await
 }
 
 fn workspace_worker_arguments(args:&Value)->Result<Value> {
@@ -269,11 +295,11 @@ async fn receipt_action(app:&App,sid:&str,run_id:&str,args:&Value,pending_id:&st
         propose_promotion(app,sid,pending_id,run_id,&json!({
             "expected_review_sha256":args["expected_review_sha256"],"summary":args["summary"]}),policy_version,cancel).await
     } else if matches!(action,"check"|"test") {
-        worker(app,sid,"v3_cargo_task",&json!({"task":action,
+        workspace_host(app,sid,"v3_cargo_task",&json!({"task":action,
             "expected_review_sha256":args["expected_review_sha256"],
             "timeout_seconds":args.get("timeout_seconds").filter(|value|!value.is_null()).cloned().unwrap_or(json!(600))}),None,cancel).await
     } else {
-        worker(app,sid,"v3_workspace_action",&forwarded,None,cancel).await
+        workspace_host(app,sid,"v3_workspace_action",&forwarded,None,cancel).await
     };
     let value=match result {
         Ok(value)=>value,
@@ -341,7 +367,7 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
         "dev_browser_url"=>{
             let path=args["path"].as_str().filter(|value|!value.is_empty()).map(str::to_owned).unwrap_or(format!("/app?session_id={sid}"));
             if !valid_development_path(&path,sid,&agent){bail!("Development path unavailable");}
-            Ok(json!({"status":"success","output":{"url":format!("https://dev.webagent.live{path}"),"authentication_required":true}}))
+            Ok(json!({"status":"success","output":{"url":format!("{}{path}",std::env::var("V3_PUBLIC_ORIGIN").unwrap_or_else(|_|"https://dev.webagent.live".into())),"authentication_required":true}}))
         },
         "login_as_current_user"|"login_as_current_user_v3"|"dev_browser_action"|"dev_browser_record"=>{
             worker(app,sid,name,args,Some(browser_authority(app,sid).await?),cancel).await
@@ -364,7 +390,7 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
 pub fn valid_development_path(path:&str,sid:&str,agent:&str)->bool {
     if path.len()>1024 || !path.starts_with('/') || path.starts_with("//") || path.contains('\\') || path.chars().any(char::is_control) {return false;}
     if path=="/app" || path.starts_with("/app?") {
-        return reqwest::Url::parse(&format!("https://dev.webagent.live{path}")).is_ok_and(|url|
+        return reqwest::Url::parse(&format!("{}{path}",std::env::var("V3_PUBLIC_ORIGIN").unwrap_or_else(|_|"https://dev.webagent.live".into()))).is_ok_and(|url|
             url.query_pairs().all(|(key,value)|(key!="session_id"||value==sid)&&(key!="agent"||value==agent)));
     }
     path=="/api/v3/auth/me" || path.starts_with(&format!("/api/v3/sessions/{sid}/"))

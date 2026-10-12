@@ -5,7 +5,7 @@ import io
 from unittest.mock import patch
 from pathlib import Path
 
-PATH = Path(__file__).resolve().parents[1] / "plugins/abilities/Administrator/v3_build/buildctl.py"
+PATH = Path(__file__).resolve().parents[1] / "build-service/buildctl.py"
 spec = importlib.util.spec_from_file_location("buildctl", PATH)
 client = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(client)

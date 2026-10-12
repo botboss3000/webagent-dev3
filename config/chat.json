@@ -1,0 +1,10 @@
+{
+  "chat_common": {
+    "execution_mode": {
+      "default_mode": "auto",
+      "confirm_auto_mode": false
+    }
+  },
+  "chat_desktop": {},
+  "chat_mobile": {}
+}

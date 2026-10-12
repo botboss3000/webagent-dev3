@@ -43,7 +43,7 @@ for name, content in [("dispatch.lock", ""), ("shutoff", "1")]:
     Path(path).write_text(content)
     os.chmod(path, 0o640)
 source = Path("/live-v3")
-if source.is_symlink() or not source.is_dir() or source.stat().st_uid != 1000:
+if source.is_symlink() or not source.is_dir() or source.stat().st_uid != int(os.environ.get("V3_SOURCE_OWNER_UID","1000")):
     raise RuntimeError("live v3 source mount unavailable")
 promote_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 Path("/run/v3/promote/promote.sock").unlink(missing_ok=True)

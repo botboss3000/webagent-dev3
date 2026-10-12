@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import Mock, patch
 import uuid
 
-PATH = Path(__file__).resolve().parents[1] / "plugins/abilities/Administrator/v3_build/install.py"
+PATH = Path(__file__).resolve().parents[1] / "build-service/install.py"
 spec = importlib.util.spec_from_file_location("admin_build_install", PATH)
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
@@ -33,15 +33,17 @@ class InstallTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.v3 = self.root / "v3"
-        self.source = self.v3 / "plugins/abilities/Administrator/v3_build"
+        self.source = self.v3 / "build-service"
         self.source.mkdir(parents=True)
         self.host = b"CONTEXT = ('v3/src',)\n"
         (self.source / "host.py").write_bytes(self.host)
         (self.source / "install.py").write_bytes(b"# fixture bootstrap\n")
         (self.source / "release.py").write_bytes(b"# fixture release\n")
         (self.source / "performance.py").write_bytes(b"# fixture protected performance\n")
-        index_source=self.source.parent/"code_index"
-        index_source.mkdir()
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","deploy.py","buildctl.py"):
+            (self.source/name).write_bytes(b"# fixture module\n")
+        index_source=self.v3/"plugins/abilities/Administrator/code_index"
+        index_source.mkdir(parents=True)
         (index_source/"adapter.py").write_bytes(b"# fixture protected parser\n")
         self.fake = FakePrivileges()
         self.patches = [patch.object(installer.shutil, "disk_usage", return_value=types.SimpleNamespace(free=5*1024*1024*1024)),
@@ -74,11 +76,11 @@ class InstallTests(unittest.TestCase):
 
     def test_reviewed_tree_install_is_confined_and_protects_parser(self):
         key="a"*64
-        task=self.v3/"build-jobs/coordination/trees"/key/"v3/plugins/abilities/Administrator"
+        task=self.v3/"build-jobs/coordination/trees"/key/"v3"
         task.mkdir(parents=True)
         import shutil
-        shutil.copytree(self.source,task/"v3_build")
-        shutil.copytree(self.source.parent/"code_index",task/"code_index")
+        shutil.copytree(self.source,task/"build-service")
+        shutil.copytree(self.v3/"plugins/abilities/Administrator/code_index",task/"plugins/abilities/Administrator/code_index")
         result=installer.install(key)
         self.assertIn("scanner_sha256",result)
         for invalid in ("../escape","a"*63,"z"*64):
@@ -275,16 +277,48 @@ class InstallTests(unittest.TestCase):
         libc = Mock()
         libc.prctl.side_effect = lambda *args: calls.append(("no_new_privs", args)) or 0
         def record(name): return lambda *args: calls.append((name, args))
-        with patch.object(installer.pwd, "getpwnam", return_value=types.SimpleNamespace(pw_uid=1000, pw_gid=1000)), \
-             patch.object(installer.os, "initgroups", record("groups")), patch.object(installer.os, "setgid", record("gid")), \
+        with patch.object(installer.pwd, "getpwnam", return_value=types.SimpleNamespace(pw_name="ar",pw_uid=1000, pw_gid=1000)), \
+             patch.dict(installer.os.environ,{"WEBAGENT_BUILD_CONFIG":"/etc/fixture.json"}), patch.object(installer.os,"getgroups",return_value=[1000]), patch.object(installer.os,"setgroups",record("supplementary")), patch.object(installer.os, "initgroups", record("groups")), patch.object(installer.os, "setgid", record("gid")), \
              patch.object(installer.os, "setuid", record("uid")), patch.object(installer.os, "set_inheritable", record("inheritable")), \
              patch.object(installer.os, "execve", record("exec")), patch.object(installer.ctypes, "CDLL", return_value=libc):
             installer._drop_and_exec(42, 43, 44)
-        self.assertEqual(["groups", "gid", "uid", "no_new_privs"], [name for name, _ in calls[:4]])
+        self.assertEqual(["groups","supplementary","gid","uid","no_new_privs"], [name for name,_ in calls[:5]])
         command = calls[-1][1]
         self.assertEqual("/usr/bin/python3", command[0])
         self.assertIn("/proc/self/fd/42", command[1])
-        self.assertEqual({"PATH", "HOME", "LANG"}, set(command[2]))
+        self.assertEqual({"PATH","HOME","LANG","WEBAGENT_BUILD_CONFIG","WEBAGENT_BUILD_MODULE_ROOT"},set(command[2]))
 
 
 if __name__ == "__main__": unittest.main()
+
+class RuntimeSocketTests(unittest.TestCase):
+    def test_restart_removes_only_runtime_socket_and_rejects_replaced_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);runtime=root/"runtime";runtime.mkdir()
+            protected=root/"protected";protected.mkdir()
+            (protected/"snapshot.sock").write_text("untouched protected file")
+            listener=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+            listener.bind(str(runtime/"snapshot.sock"))
+            fd=os.open(runtime,os.O_RDONLY|os.O_DIRECTORY)
+            try:
+                installer.remove_stale_socket(fd,"snapshot.sock",os.getuid())
+                self.assertFalse((runtime/"snapshot.sock").exists())
+                self.assertEqual((protected/"snapshot.sock").read_text(),"untouched protected file")
+                (runtime/"snapshot.sock").write_text("replaced")
+                with self.assertRaises(PermissionError):installer.remove_stale_socket(fd,"snapshot.sock",os.getuid())
+            finally:os.close(fd);listener.close()
+
+class WorkspaceInitializationTests(unittest.TestCase):
+    def test_canonical_private_workspace_is_created_once_and_scope_escapes_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);privileges=FakePrivileges()
+            with patch.object(installer,"PRIVILEGES",privileges),patch.dict(installer.CONFIG,{"workspace_root":str(root),"worker_uid":os.getuid(),"app_gid":os.getgid()}):
+                sid=str(uuid.uuid4())
+                result=installer.workspace_directory(sid);self.assertTrue(result["created"])
+                self.assertEqual((root/sid).stat().st_mode&0o777,0o770)
+                self.assertFalse(installer.workspace_directory(sid)["created"])
+                with self.assertRaises(ValueError):installer.workspace_directory("../outside")
+                other=str(uuid.uuid4());(root/other).symlink_to("/etc",target_is_directory=True)
+                with self.assertRaises(OSError):installer.workspace_directory(other)
+                with patch.dict(installer.CONFIG,{"worker_uid":os.getuid()+1}):
+                    with self.assertRaises(PermissionError):installer.workspace_directory(sid)

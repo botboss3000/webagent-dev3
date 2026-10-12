@@ -15,7 +15,7 @@ import types
 import unittest
 from unittest import mock
 
-MODULE = Path(__file__).resolve().parents[1] / "plugins/abilities/Administrator/v3_build/performance.py"
+MODULE = Path(__file__).resolve().parents[1] / "build-service/performance.py"
 SPEC = importlib.util.spec_from_file_location("performance_test_subject", MODULE)
 performance = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(performance)

@@ -9,6 +9,7 @@ COPY v3/src ./src
 COPY v3/config ./config
 # GATE-CONFIG: only the two selected non-secret live JSON files enter the image.
 COPY v3/data/config/gates ./data/config/gates
+COPY v3/build-service ./build-service
 COPY v3/plugins ./plugins
 # Runtime tests load the installed ability catalog and chat configuration.
 COPY v3/plugins/abilities ./plugins/abilities
@@ -48,6 +49,7 @@ COPY --from=tested_builder /out/webagent-optimization /usr/local/bin/webagent-op
 COPY --from=tested_builder /out/optimization-cargo /opt/optimization-cargo
 COPY --from=tested_builder /usr/local/rustup/toolchains/1.90.0-x86_64-unknown-linux-gnu /opt/rust
 COPY v3/worker.py v3/sandbox.py v3/launch.py v3/promote.py /opt/v3/
+COPY v3/build-service /opt/v3/build-service
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/gates /opt/v3/plugins/gates
 # Git invokes this fixed helper directly as the unprivileged tool worker.

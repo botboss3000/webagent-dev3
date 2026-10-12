@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,file):
  spec=importlib.util.spec_from_file_location(name,file);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
-workspace=module("workspace_adapter",ROOT/"plugins/abilities/Administrator/v3_workspace/adapter.py")
+workspace=module("workspace_adapter",ROOT/"build-service/workspace.py")
 worker=module("fixture_worker",ROOT/"worker.py")
 class Tests(unittest.IsolatedAsyncioTestCase):
  def setUp(self):

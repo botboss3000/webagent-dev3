@@ -192,6 +192,8 @@ async fn call_raw_inner(
         tools::core_mode::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
     } else if crate::modules::owns_tool(&name) {
         crate::modules::tool_call(&app,&sid,&run_id,&name,&args,&pending_id,cancel).await
+    } else if matches!(name.as_str(),"workspace_seed"|"source_review"|"source_patch"|"v3_workspace_status"|"v3_cargo_task") {
+        tools::administrator::workspace_host(&app,&sid,&name,&args,None,cancel).await
     } else if tools::administrator::owns(&name) {
         tools::administrator::execute(&app,&sid,&run_id,&name,&args,&pending_id,policy_version,cancel).await
     } else if tools::core_task::owns(&name) {

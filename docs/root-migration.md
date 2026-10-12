@@ -15,7 +15,7 @@ hashes and receipts remain valid. The protected snapshot helper maps `v3/` to
 the independent root and `ui/` to the selected V2 assets. Checkout promotion
 removes the virtual `v3/` prefix only at the filesystem boundary.
 
-Use `python3 -B /home/ar/webagent-dev3/plugins/abilities/Administrator/v3_build/buildctl.py`
+Use `python3 -B /home/ar/webagent-dev3/build-service/buildctl.py`
 for tasks. Edit isolated snapshots with checked unified diffs; finish queues
 one tested development release. Run the installed protected bootstrap for
 fixed-allowlist manual build snapshots. Keep runtime and workspace paths out

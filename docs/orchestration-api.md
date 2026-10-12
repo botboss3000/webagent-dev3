@@ -80,7 +80,7 @@ to its most recent 20 jobs; the single-job route can retrieve an older known ID.
 2. Build and release the v3 API and loop images with the project's
    `v3_build` workflow. Replacing the v3 containers interrupts the public app.
 3. Install the reviewed build broker code with
-   `sudo -n python3 -B /home/ar/webagent-dev3/plugins/abilities/Administrator/v3_build/install.py --install`.
+   `sudo -n python3 -B /home/ar/webagent-dev3/build-service/install.py --install`.
    Stop its existing supervisor cleanly, then run
    `sudo -n python3 -B /home/ar/webagent-dev3/host-build-service/bootstrap.py --start`.
 4. Verify both v3 containers are healthy, `/health/ready` responds, and an

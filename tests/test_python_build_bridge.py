@@ -8,7 +8,7 @@ import unittest
 
 from v3.tests.test_admin_build import FakeRunner
 
-PATH = Path(__file__).resolve().parents[1] / "plugins/abilities/Administrator/v3_build/host.py"
+PATH = Path(__file__).resolve().parents[1] / "build-service/host.py"
 spec = importlib.util.spec_from_file_location("bridge_host", PATH)
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)

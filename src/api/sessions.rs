@@ -723,11 +723,12 @@ pub(crate) async fn source_review(State(app): State<App>, Path(id): Path<String>
         return Err(conflict("Global shutoff is active"));
     }
     drop(_guard);
-    let result = tools::execute(
+    let result = tools::administrator::workspace_host(
+        &app,
+        &id,
         "source_review",
         &json!({}),
-        &id,
-        &app.tool_socket,
+        None,
         CancellationToken::new(),
     )
     .await?;

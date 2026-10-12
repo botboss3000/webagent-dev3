@@ -4,6 +4,7 @@ No /etc, sudoers, arbitrary paths, commands, source databases or workspace data.
 Review source, run --install as root, then --start the protected bootstrap copy.
 """
 import argparse
+import importlib.util
 import ast
 import io
 import ctypes
@@ -30,13 +31,22 @@ import tempfile
 INSPECTION_CONTEXT = ("v3/data/user_data/admin", "v3/data/agent_data/shared_default")
 MAX_INSPECTION_FILE = 256 * 1024 * 1024
 
-V3 = Path("/home/ar/webagent-dev3")
-SHARED_SOURCE = Path("/home/ar/webagent-dev2")
-SOURCE = V3 / "plugins/abilities/Administrator/v3_build"
-SERVICE = V3 / "host-build-service"
-RUNTIME = V3 / "runtime/build"
-JOBS = V3 / "build-jobs"
-ARCHIVES = V3 / "rollback/administrator"
+
+import sys
+_module_root = Path(os.environ.get("WEBAGENT_BUILD_MODULE_ROOT", str(Path(__file__).resolve().parent)))
+_config_spec = importlib.util.spec_from_file_location("webagent_build_config", _module_root / "config.py")
+_config_module = importlib.util.module_from_spec(_config_spec)
+_config_spec.loader.exec_module(_config_module)
+CONFIG = _config_module.load()
+
+V3=Path(CONFIG["checkout_root"])
+SHARED_SOURCE=V3/"build-service/shared-ui"
+if not SHARED_SOURCE.exists():SHARED_SOURCE=Path(CONFIG["service_dir"])/"shared-ui"
+SOURCE=V3/"build-service"
+SERVICE=Path(CONFIG["service_dir"])
+RUNTIME=Path(CONFIG["runtime_root"])
+JOBS=Path(CONFIG["state_root"])
+ARCHIVES=V3/"rollback/administrator"
 MAX_IMAGES = 16 * 1024 * 1024 * 1024
 RESERVE = 512 * 1024 * 1024
 
@@ -150,22 +160,22 @@ def install(tree=None):
     root_only()
     if tree is not None and not re.fullmatch(r"[a-f0-9]{64}",tree):
         raise ValueError("Exact isolated task tree hash required")
-    source_path = (V3/"build-jobs/coordination/trees"/tree/"v3/plugins/abilities/Administrator/v3_build"
+    source_path = (JOBS/"coordination/trees"/tree/"v3/build-service"
                    if tree is not None else SOURCE)
     source = directory(source_path)
-    parent = directory(V3)
+    parent = directory(SERVICE.parent)
     service = None
     try:
-        host = read_regular(source, "host.py", 2 * 1024 * 1024, owner=1000)
-        bootstrap = read_regular(source, "install.py", 2 * 1024 * 1024, owner=1000)
-        release = read_regular(source, "release.py", 2 * 1024 * 1024, owner=1000)
-        performance = read_regular(source, "performance.py", 2 * 1024 * 1024, owner=1000)
-        index_source = directory(source_path.parent / "code_index")
+        host = read_regular(source, "host.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
+        bootstrap = read_regular(source, "install.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
+        release = read_regular(source, "release.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
+        performance = read_regular(source, "performance.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
+        index_source = directory(source_path.parent / "plugins/abilities/Administrator/code_index")
         try:
-            scanner = read_regular(index_source, "adapter.py", 2*1024*1024, owner=1000)
+            scanner = read_regular(index_source, "adapter.py", 2*1024*1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
         finally:
             os.close(index_source)
-        service = protected_directory(parent, "host-build-service")
+        service = protected_directory(parent,SERVICE.name)
         # Compile without importing or executing source. The installed service
         # subsequently runs its protected copy, never this writable checkout.
         compile(host, "host.py", "exec")
@@ -178,16 +188,35 @@ def install(tree=None):
         publish(service, "release.py", release, 0o644)
         publish(service, "performance.py", performance, 0o644)
         publish(service, "index-scanner.py", scanner, 0o644)
-        manifest = {"performance_sha256": hashlib.sha256(performance).hexdigest(), "host_sha256": hashlib.sha256(host).hexdigest(), "bootstrap_sha256": hashlib.sha256(bootstrap).hexdigest(), "release_sha256": hashlib.sha256(release).hexdigest(), "scanner_sha256":hashlib.sha256(scanner).hexdigest()}
+        extra={}
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","deploy.py","buildctl.py"):
+            body=read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
+            compile(body,name,"exec");publish(service,name,body,0o644)
+            extra[name]=hashlib.sha256(body).hexdigest()
+            if read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))!=body:raise ValueError("Installation raced source edit")
+        assets=source_path/"shared-ui"
+        if assets.is_dir():
+            asset_dir=protected_directory(service,"shared-ui");os.close(asset_dir)
+            for file in sorted(assets.rglob("*")):
+                if file.is_symlink():raise PermissionError("Shared asset symlink rejected")
+                if not file.is_file():continue
+                rel=file.relative_to(assets);cursor=SERVICE/"shared-ui"
+                for part in rel.parts[:-1]:
+                    parentfd=directory(cursor);childfd=protected_directory(parentfd,part);os.close(childfd);os.close(parentfd);cursor=cursor/part
+                inputfd=directory(file.parent);body=read_regular(inputfd,file.name,4*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]));os.close(inputfd)
+                outputfd=directory(cursor);publish(outputfd,file.name,body,0o644);os.close(outputfd)
+        manifest = {"modules":extra,"performance_sha256": hashlib.sha256(performance).hexdigest(), "host_sha256": hashlib.sha256(host).hexdigest(), "bootstrap_sha256": hashlib.sha256(bootstrap).hexdigest(), "release_sha256": hashlib.sha256(release).hexdigest(), "scanner_sha256":hashlib.sha256(scanner).hexdigest()}
         publish(service, "installed.json", json.dumps(manifest, sort_keys=True).encode())
-        if read_regular(source, "performance.py", 2 * 1024 * 1024, owner=1000) != performance or read_regular(source, "host.py", 2 * 1024 * 1024, owner=1000) != host or read_regular(source, "install.py", 2 * 1024 * 1024, owner=1000) != bootstrap or read_regular(source, "release.py", 2 * 1024 * 1024, owner=1000) != release:
+        if read_regular(source, "performance.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != performance or read_regular(source, "host.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != host or read_regular(source, "install.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != bootstrap or read_regular(source, "release.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != release:
             raise ValueError("installation raced a source edit; repeat after writers pause")
-        index_source = directory(source_path.parent / "code_index")
+        index_source = directory(source_path.parent / "plugins/abilities/Administrator/code_index")
         try:
-            if read_regular(index_source, "adapter.py", 2*1024*1024, owner=1000) != scanner:
+            if read_regular(index_source, "adapter.py", 2*1024*1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != scanner:
                 raise ValueError("installation raced an index parser edit")
         finally:
             os.close(index_source)
+        for name,expected in extra.items():
+            if hashlib.sha256(read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))).hexdigest()!=expected:raise ValueError("Installation raced a module edit")
         return manifest
     finally:
         os.close(source)
@@ -202,7 +231,7 @@ def copy_artifact(source, destination, name, limit):
     output = None
     try:
         before = os.fstat(before_fd)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or PRIVILEGES.owner(before) != 1000 or before.st_mode & 0o077:
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or PRIVILEGES.owner(before) != CONFIG["service_uid"] or before.st_mode & 0o077:
             raise PermissionError("rollback artifact must be private and owned by ar")
         if not 0 < before.st_size <= limit:
             raise ValueError("rollback artifact exceeds bound")
@@ -266,7 +295,7 @@ def archive_rollbacks():
     except FileNotFoundError:
         return {"copied": 0, "failed": 0}
     jobs_info = os.fstat(jobs)
-    if PRIVILEGES.owner(jobs_info) != 1000 or jobs_info.st_mode & 0o077:
+    if PRIVILEGES.owner(jobs_info) != CONFIG["service_uid"] or jobs_info.st_mode & 0o077:
         os.close(jobs)
         raise PermissionError("private ar job state required")
     base = directory(V3)
@@ -285,7 +314,7 @@ def archive_rollbacks():
             try:
                 source = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=jobs)
                 info = os.fstat(source)
-                if PRIVILEGES.owner(info) != 1000 or info.st_mode & 0o077:
+                if PRIVILEGES.owner(info) != CONFIG["service_uid"] or info.st_mode & 0o077:
                     raise PermissionError("private ar rollback directory required")
                 # Skip before deployment has completed its export pair.
                 for artifact in ("rollback-images.tar", "container-config.json"):
@@ -386,6 +415,8 @@ def snapshot_context(context):
                 # Preserve archive names while reading V3 from its independent root.
                 inspection = name in INSPECTION_CONTEXT
                 source = V3 / name.removeprefix("v3/") if name.startswith("v3/") else SHARED_SOURCE / name
+                if name.startswith("v3/data/config/gates/") and not source.exists():source=V3/"config/gates"/source.name
+                if name=="v3/build-service" and not source.exists():continue
                 parent_path, leaf = source.parent, source.name
                 try:
                     parent = directory(parent_path)
@@ -448,6 +479,26 @@ def snapshot_context(context):
         os.close(origin)
 
 
+def workspace_directory(workspace):
+    root_only()
+    if not isinstance(workspace,str) or str(uuid.UUID(workspace))!=workspace:raise ValueError("Canonical workspace ID required")
+    parent=directory(Path(CONFIG["workspace_root"]))
+    child=None;created=False
+    try:
+        try:os.mkdir(workspace,0o700,dir_fd=parent);created=True
+        except FileExistsError:pass
+        child=os.open(workspace,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=parent)
+        meta=os.fstat(child)
+        if created:
+            os.fchown(child,CONFIG["worker_uid"],CONFIG["app_gid"])
+            os.fchmod(child,0o770);os.fsync(child);os.fsync(parent)
+        elif meta.st_uid!=CONFIG["worker_uid"] or meta.st_gid!=CONFIG["app_gid"]:
+            raise PermissionError("Workspace identity changed")
+        return {"workspace":workspace,"created":created}
+    finally:
+        if child is not None:os.close(child)
+        os.close(parent)
+
 def snapshot_server(listener, context, stopping):
     listener.settimeout(.5)
     while not stopping.is_set():
@@ -461,12 +512,20 @@ def snapshot_server(listener, context, stopping):
             conn.settimeout(60)
             try:
                 _, uid, _ = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-                if uid != 1000:
+                if uid != CONFIG["service_uid"]:
                     raise PermissionError("snapshot caller denied")
-                request = conn.recv(64)
-                if request not in (b"{}\n", b'{"inspection":true}\n'):
-                    raise PermissionError("snapshot request denied")
-                blob = snapshot_context(context + INSPECTION_CONTEXT if request != b"{}\n" else context)
+                request=bytearray()
+                while not request.endswith(b"\n") and len(request)<=64:
+                    part=conn.recv(65-len(request))
+                    if not part:raise PermissionError("Incomplete helper request")
+                    request.extend(part)
+                request=bytes(request)
+                if request in (b"{}\n",b'{"inspection":true}\n'):
+                    blob=snapshot_context(context+INSPECTION_CONTEXT if request!=b"{}\n" else context)
+                else:
+                    value=json.loads(request)
+                    if not isinstance(value,dict) or set(value)!={"workspace"}:raise PermissionError("Helper operation denied")
+                    blob=json.dumps(workspace_directory(value["workspace"]),separators=(",",":")).encode()
                 conn.sendall(struct.pack("!Q", len(blob)))
                 conn.sendall(blob)
             except (OSError, ValueError, PermissionError):
@@ -477,12 +536,12 @@ def snapshot_server(listener, context, stopping):
 
 
 def _drop_and_exec(host_fd, listener_fd, bridge_fd):
-    account = pwd.getpwnam("ar")
-    if account.pw_uid != 1000 or account.pw_gid != 1000:
-        raise PermissionError("fixed broker identity changed")
-    os.initgroups("ar", 1000)  # Includes the existing Docker supplementary group.
-    os.setgid(1000)
-    os.setuid(1000)
+    account=pwd.getpwnam(CONFIG["service_account"])
+    if account.pw_uid!=CONFIG["service_uid"] or account.pw_gid!=CONFIG["service_gid"]:raise PermissionError("Service identity changed")
+    os.initgroups(account.pw_name,account.pw_gid)
+    os.setgroups(sorted(set(os.getgroups())|{CONFIG["app_gid"],CONFIG["worker_gid"]}))
+    os.setgid(account.pw_gid)
+    os.setuid(account.pw_uid)
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(38, 1, 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "broker no_new_privs failed")
@@ -491,9 +550,16 @@ def _drop_and_exec(host_fd, listener_fd, bridge_fd):
     os.set_inheritable(bridge_fd, True)
     # fd pins the protected code inode even if a source author renames its
     # enclosing checkout directory. No root code is loaded after privilege drop.
-    os.execve("/usr/bin/python3", ["python3", "-I", "/proc/self/fd/" + str(host_fd), "--listener-fd", str(listener_fd), "--bridge-listener-fd", str(bridge_fd), "--snapshot-socket", str(SERVICE / "snapshot.sock")],
-              {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/home/ar", "LANG": "C.UTF-8"})
+    os.execve("/usr/bin/python3", ["python3", "-I", "/proc/self/fd/" + str(host_fd), "--listener-fd", str(listener_fd), "--bridge-listener-fd", str(bridge_fd), "--snapshot-socket", str(RUNTIME/"snapshot.sock")],
+              {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": CONFIG["service_home"], "LANG": "C.UTF-8", "WEBAGENT_BUILD_CONFIG":os.environ["WEBAGENT_BUILD_CONFIG"], "WEBAGENT_BUILD_MODULE_ROOT":str(SERVICE)})
 
+
+def remove_stale_socket(directory_fd,name,owner):
+    """Remove only the expected socket through the retained runtime directory FD."""
+    try:existing=os.stat(name,dir_fd=directory_fd,follow_symlinks=False)
+    except FileNotFoundError:return
+    if not stat.S_ISSOCK(existing.st_mode) or existing.st_uid!=owner:raise PermissionError("Snapshot socket replaced")
+    os.unlink(name,dir_fd=directory_fd)
 
 def _supervisor(service, ready):
     _COPY_STOP.clear()
@@ -510,11 +576,11 @@ def _supervisor(service, ready):
                 pass
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    runtime_parent = directory(V3 / "runtime")
+    runtime_parent=directory(RUNTIME.parent)
     # The app owns the socket; Codex needs directory traversal to reach it.
     # Neither account can replace entries in this protected directory.
-    runtime = protected_directory(runtime_parent, "build", 0o751, gid=1000)
-    os.fchown(runtime, 0, 1000)  # Also repair an existing protected directory.
+    runtime = protected_directory(runtime_parent,RUNTIME.name,0o751,gid=CONFIG["service_gid"])
+    os.fchown(runtime,0,CONFIG["service_gid"])  # Also repair an existing protected directory.
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     bridge_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     host_fd = None
@@ -526,13 +592,13 @@ def _supervisor(service, ready):
         sockname = "/proc/self/fd/" + str(runtime) + "/build.sock"
         try:
             old = os.stat("build.sock", dir_fd=runtime, follow_symlinks=False)
-            if not stat.S_ISSOCK(old.st_mode) or old.st_uid != 1100:
+            if not stat.S_ISSOCK(old.st_mode) or old.st_uid != CONFIG["app_uid"]:
                 raise PermissionError("unexpected broker socket")
             os.unlink("build.sock", dir_fd=runtime)
         except FileNotFoundError:
             pass
         listener.bind(sockname)
-        os.chown(sockname, 1100, 1000)
+        os.chown(sockname,CONFIG["app_uid"],CONFIG["service_gid"])
         os.chmod(sockname, 0o660)
         listener.listen(16)
         # Dedicated V2 Python bridge: host worker authenticates HTTP callers,
@@ -540,13 +606,13 @@ def _supervisor(service, ready):
         bridge_name = "/proc/self/fd/" + str(runtime) + "/python.sock"
         try:
             old_bridge = os.stat("python.sock", dir_fd=runtime, follow_symlinks=False)
-            if not stat.S_ISSOCK(old_bridge.st_mode) or old_bridge.st_uid != 1000:
+            if not stat.S_ISSOCK(old_bridge.st_mode) or old_bridge.st_uid != CONFIG["service_uid"]:
                 raise PermissionError("unexpected Python bridge socket")
             os.unlink("python.sock", dir_fd=runtime)
         except FileNotFoundError:
             pass
         bridge_listener.bind(bridge_name)
-        os.chown(bridge_name, 1000, 1000)
+        os.chown(bridge_name,CONFIG["service_uid"],CONFIG["service_gid"])
         os.chmod(bridge_name, 0o600)
         bridge_listener.listen(16)
         host_fd = os.open("host.py", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=service)
@@ -556,19 +622,13 @@ def _supervisor(service, ready):
         host_body = read_regular(service, "host.py", 2*1024*1024, owner=0)
         tree = ast.parse(host_body)
         context = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "CONTEXT" for target in node.targets))
-        snapshot_path = "/proc/self/fd/" + str(service) + "/snapshot.sock"
-        try:
-            existing = os.stat("snapshot.sock", dir_fd=service, follow_symlinks=False)
-            if not stat.S_ISSOCK(existing.st_mode) or existing.st_uid != 1000:
-                raise PermissionError("snapshot socket replaced")
-            os.unlink("snapshot.sock", dir_fd=service)
-        except FileNotFoundError:
-            pass
+        snapshot_path = "/proc/self/fd/" + str(runtime) + "/snapshot.sock"
+        remove_stale_socket(runtime,"snapshot.sock",CONFIG["service_uid"])
         snapshot_listener.bind(snapshot_path)
-        os.chown(snapshot_path, 1000, 1000)
+        os.chown(snapshot_path,CONFIG["service_uid"],CONFIG["service_gid"])
         os.chmod(snapshot_path, 0o600)
         snapshot_listener.listen(4)
-        error_fd = os.open("broker-error.log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=service)
+        error_fd = os.open("broker-error.log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=runtime)
         error_info = os.fstat(error_fd)
         if not stat.S_ISREG(error_info.st_mode) or error_info.st_nlink != 1 or PRIVILEGES.owner(error_info) != 0:
             os.close(error_fd)
@@ -582,8 +642,8 @@ def _supervisor(service, ready):
             _drop_and_exec(host_fd, listener.fileno(), bridge_listener.fileno())
         os.close(error_fd)
         threading.Thread(target=snapshot_server, args=(snapshot_listener, context, snapshot_stopping), daemon=True).start()
-        publish(service, "supervisor.pid", str(os.getpid()).encode())
-        publish(service, "broker.pid", str(child).encode())
+        publish(runtime, "supervisor.pid", str(os.getpid()).encode())
+        publish(runtime, "broker.pid", str(child).encode())
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             pid, _ = os.waitpid(child, os.WNOHANG)
@@ -604,7 +664,7 @@ def _supervisor(service, ready):
                 time.sleep(.1)
         else:
             raise RuntimeError("broker did not become ready")
-        publish(service, "ready.json", json.dumps({"ready": True, "supervisor_pid": os.getpid(), "broker_pid": child}).encode())
+        publish(runtime, "ready.json", json.dumps({"ready": True, "supervisor_pid": os.getpid(), "broker_pid": child}).encode())
         os.write(ready, b"ready\n")
         os.close(ready)
         ready = None
@@ -614,7 +674,7 @@ def _supervisor(service, ready):
                 child = None
                 break
             report = archive_rollbacks()
-            publish(service, "archive-status.json", json.dumps(report).encode())
+            publish(runtime, "archive-status.json", json.dumps(report).encode())
             for _ in range(50):
                 if stopping:
                     break
@@ -636,7 +696,7 @@ def _supervisor(service, ready):
                 pass
         snapshot_stopping.set()
         snapshot_listener.close()
-        publish(service, "ready.json", b'{"ready":false}')
+        publish(runtime, "ready.json", b'{"ready":false}')
         if ready is not None:
             os.close(ready)
         listener.close()
@@ -652,14 +712,17 @@ def start():
     if Path(__file__).resolve() != SERVICE / "bootstrap.py":
         raise PermissionError("start only the installed protected bootstrap copy")
     service = directory(SERVICE)
+    runtime = directory(RUNTIME)
     try:
         manifest = json.loads(read_regular(service, "installed.json", 4096, owner=0))
         for name, key in (("host.py", "host_sha256"), ("bootstrap.py", "bootstrap_sha256"), ("release.py", "release_sha256"), ("index-scanner.py", "scanner_sha256"), ("performance.py", "performance_sha256")):
             body = read_regular(service, name, 2 * 1024 * 1024, owner=0)
             if hashlib.sha256(body).hexdigest() != manifest[key]:
                 raise ValueError("installed broker code digest changed")
+        for name,expected in manifest.get("modules",{}).items():
+            if hashlib.sha256(read_regular(service,name,2*1024*1024,owner=0)).hexdigest()!=expected:raise ValueError("Installed module changed")
         try:
-            pid = int(read_regular(service, "supervisor.pid", 64, owner=0))
+            pid = int(read_regular(runtime,"supervisor.pid",64,owner=0))
             os.kill(pid, 0)
             raise ValueError("broker supervisor already running")
         except (FileNotFoundError, ProcessLookupError):
@@ -678,7 +741,7 @@ def start():
                 _supervisor(service, write_fd)
             except BaseException as error:
                 try:
-                    publish(service, "startup-error.json", json.dumps({"error": type(error).__name__, "reason": str(error)[:512]}).encode())
+                    publish(runtime,"startup-error.json", json.dumps({"error": type(error).__name__, "reason": str(error)[:512]}).encode())
                 except BaseException:
                     pass
                 os._exit(1)
@@ -718,10 +781,21 @@ def main():
     actions.add_argument("--install", action="store_true")
     actions.add_argument("--start", action="store_true")
     actions.add_argument("--snapshot", action="store_true")
+    actions.add_argument("--foreground",action="store_true")
     parser.add_argument("--install-tree",help="Reviewed isolated task tree hash; operator install only")
     args = parser.parse_args()
     if args.install_tree and not args.install:
         parser.error("--install-tree requires --install")
+    if args.foreground:
+        root_only()
+        if Path(__file__).resolve()!=SERVICE/"bootstrap.py":raise PermissionError("Installed bootstrap required")
+        service=directory(SERVICE)
+        manifest=json.loads(read_regular(service,"installed.json",8192,owner=0))
+        for name,key in (("host.py","host_sha256"),("bootstrap.py","bootstrap_sha256"),("release.py","release_sha256"),("performance.py","performance_sha256"),("index-scanner.py","scanner_sha256")):
+            if hashlib.sha256(read_regular(service,name,2*1024*1024,owner=0)).hexdigest()!=manifest[key]:raise ValueError("Installed code changed")
+        for name,expected in manifest.get("modules",{}).items():
+            if hashlib.sha256(read_regular(service,name,2*1024*1024,owner=0)).hexdigest()!=expected:raise ValueError("Installed module changed")
+        ready=os.open("/dev/null",os.O_WRONLY);_supervisor(service,ready);return
     if args.snapshot:
         sys.stdout.buffer.write(snapshot())
         return

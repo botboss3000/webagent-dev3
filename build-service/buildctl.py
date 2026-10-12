@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Codex-side client for the protected V3 development build coordinator."""
 import argparse
+from pathlib import Path
+import os,importlib.util
 import json
 import socket
 import sys
 import time
 import uuid
 
-SOCKET = "/home/ar/webagent-dev3/runtime/build/build.sock"
+spec=importlib.util.spec_from_file_location("build_client_config",Path(__file__).with_name("config.py"))
+configuration=importlib.util.module_from_spec(spec);spec.loader.exec_module(configuration)
+SOCKET=str(Path(configuration.load()["runtime_root"])/"build.sock")
 POLL_SECONDS = 15
 MAX_WAIT_SECONDS = 30 * 60
 TERMINAL = {"completed", "failed", "stale", "cancelled", "uncertain", "interrupted", "needs_decision"}
@@ -146,7 +150,12 @@ def main():
     wait.add_argument("task_id")
     wait.add_argument("--timeout", type=int, default=MAX_WAIT_SECONDS,
                       help="seconds to poll an assigned job, 0-1800 (default: 1800)")
+    maintenance=commands.add_parser("maintenance")
+    maintenance.add_argument("action",choices=("status","drain","resume"))
+    maintenance.add_argument("--task-id")
     args = parser.parse_args()
+    if args.command=="maintenance":
+        print(json.dumps(call("build_service_maintenance",{"action":args.action,**({"task_id":args.task_id} if args.task_id else {})}),sort_keys=True));return 0
     if args.command == "wait":
         if not 0 <= args.timeout <= MAX_WAIT_SECONDS:
             parser.error("--timeout must be between 0 and 1800 seconds")

@@ -95,7 +95,7 @@ async fn broker(app: &App, name: &str, arguments: Value) -> Api {
         name,
         &arguments,
         DASHBOARD_SESSION,
-        std::path::Path::new("/run/v3/build/build.sock"),
+        &crate::tools::administrator::build_socket(&app),
         Some(trusted),
         CancellationToken::new(),
     )

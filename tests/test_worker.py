@@ -1,3 +1,5 @@
+import os
+os.environ["V3_BUILD_EXECUTOR"]="1"
 import asyncio
 import importlib.util
 import fcntl
@@ -360,11 +362,11 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("edited", (path / "src/main.rs").read_text())
 
     async def test_workspace_seed_obeys_shutoff_before_publish(self):
-        original = worker._seed_finish
+        original = worker.workspace_support()._seed_finish
         def stop_before_publish(spec, raw):
             (worker.CONTROL / "shutoff").write_text("1")
             return original(spec, raw)
-        with mock.patch.object(worker, "_seed_finish", side_effect=stop_before_publish):
+        with mock.patch.object(worker.workspace_support(), "_seed_finish", side_effect=stop_before_publish):
             with self.assertRaisesRegex(ValueError, "execution disabled"):
                 await self.run_tool("workspace_seed", {})
         self.assertFalse((worker.ROOT / self.session / "webagent-v3").exists())

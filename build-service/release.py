@@ -292,7 +292,7 @@ def verify_index(destination, job_id, candidate_digest=None):
     # reviewed checkout adapter; no module inside a candidate is executed.
     scanner = Path(__file__).with_name("index-scanner.py")
     if not scanner.exists():
-        scanner = Path(__file__).parent.parent / "code_index/adapter.py"
+        scanner = Path(__file__).resolve().parent.parent / "plugins/abilities/Administrator/code_index/adapter.py"
     spec = importlib.util.spec_from_file_location("published_index", scanner)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

@@ -8,7 +8,7 @@ import importlib.util
 import unittest
 from pathlib import Path
 
-PATH = Path(__file__).resolve().parents[1] / "plugins/abilities/Administrator/v3_build/host.py"
+PATH = Path(__file__).resolve().parents[1] / "build-service/host.py"
 spec = importlib.util.spec_from_file_location("admin_build_hunks", PATH)
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)

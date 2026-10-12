@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "closing_status_v1",
+  "checkpoint": "publication",
+  "runtime": "rust",
+  "config": {
+    "tool_name": "set_closer_status",
+    "flags": [
+      "needs_input",
+      "complete",
+      "error",
+      "partial",
+      "unverified"
+    ],
+    "notification_max_chars": 80,
+    "notification_max_words": 5,
+    "fallback_status": "unverified",
+    "fallback_notification": "Reply status remains unverified.",
+    "guidance": "Before a final reply, call set_closer_status with one status flag and a short notification of at most five words. The status records whether the response is complete, partial, needs input, has an error, or remains unverified. You may include your final reply in the same response as this call. Do not mention this control tool in the reply."
+  }
+}

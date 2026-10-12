@@ -16,7 +16,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 
-PATH = Path(__file__).resolve().parents[1] / "plugins/abilities/Administrator/v3_build/host.py"
+PATH = Path(__file__).resolve().parents[1] / "build-service/host.py"
 spec = importlib.util.spec_from_file_location("admin_build", PATH)
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
@@ -41,6 +41,7 @@ def context(version="one", extra=None):
 class FakeRunner:
     def __init__(self):
         self.blob = context()
+        self.source_config=host.CONFIG
         self.secrets = ["NEVER-EXPOSE-THIS"]
         self.calls = []
         self.containers = {name: {"Image": "sha256:" + "1" * 64,
@@ -622,7 +623,7 @@ class BuildTests(unittest.TestCase):
         second = str(uuid.uuid4())
         release = host.release
         release.stage_assets(root, first, blob, host.context_digest)
-        scanner_path=PATH.parent.parent/"code_index/adapter.py"
+        scanner_path=PATH.parent.parent/"plugins/abilities/Administrator/code_index/adapter.py"
         scanner_spec=importlib.util.spec_from_file_location("fixture_scanner",scanner_path)
         scanner=importlib.util.module_from_spec(scanner_spec);scanner_spec.loader.exec_module(scanner)
         scanner.build_published(root/"releases"/first,root/"releases"/first/".code-index",
@@ -1548,10 +1549,12 @@ class IndexParserPairingTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.source = self.root / "source"
         (self.source / "host-build-service").mkdir(parents=True)
+        self.config_patch=patch.dict(host.CONFIG,{"service_dir":str(self.source/"host-build-service")});self.config_patch.start()
         self.assets = self.root / "assets"
         (self.assets / "releases").mkdir(parents=True)
 
     def tearDown(self):
+        self.config_patch.stop()
         self.temp.cleanup()
 
     def blob(self, adapter):
@@ -1685,7 +1688,8 @@ class RunnerSpaceTests(unittest.TestCase):
     def test_task_cargo_test_uses_binary_test_target(self):
         runner = host.Runner()
         with tempfile.TemporaryDirectory() as root, patch.object(runner, "command", return_value="ok") as command:
-            self.assertEqual("ok", runner.cargo_task(Path(root), Path(root) / "checks", "test", 60))
+            host.release.extract(Path(root)/"source",context(),host.context_digest)
+            self.assertEqual("ok", runner.cargo_task(Path(root)/"source", Path(root) / "checks", "test", 60))
         argv = command.call_args.args[0]
         self.assertEqual(["cargo", "test", "--locked", "--", "--test-threads=1"], argv[-5:])
 

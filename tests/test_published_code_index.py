@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[1]
 def load(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 idx=load("test_idx",ROOT/"plugins/abilities/Administrator/code_index/adapter.py")
-rel=load("test_rel",ROOT/"plugins/abilities/Administrator/v3_build/release.py")
+rel=load("test_rel",ROOT/"build-service/release.py")
 class PublishedTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name);self.assets=self.root/"assets"
@@ -101,7 +101,7 @@ class PublishedTests(unittest.TestCase):
   self.assertEqual("success",idx.execute("code_index_scan",{"action":"scan"},a)["status"])
   self.assertEqual(0,idx.execute("code_index_coverage",{},a)["stale_count"])
   self.assertEqual(0,idx.execute("code_index_coverage",{},b)["stale_count"])
-  workspace=load("published_test_workspace",ROOT/"plugins/abilities/Administrator/v3_workspace/adapter.py")
+  workspace=load("published_test_workspace",ROOT/"build-service/workspace.py")
   before=workspace.capture(a/"webagent-v3")
   (a/"webagent-v3/.code-index/derived-only").write_bytes(b"x"* (5*1024*1024))
   self.assertEqual(before,workspace.capture(a/"webagent-v3"))
@@ -206,7 +206,7 @@ class PublishedTests(unittest.TestCase):
   j,d,m=self.stage(self.blob());rel.activate_assets(self.assets,j)
   base=self.root/"workspace";base.mkdir()
   with patch.object(worker,"TEMPLATE",self.assets/"current/v3"):
-   spec=worker._seed_spec(base)
+   spec=worker.workspace_support()._seed_spec(base)
   k,e,n=self.stage(self.blob({"v3/ui/index.html":(420,b"<div>later</div>\n")}))
   rel.activate_assets(self.assets,k)
   self.assertEqual(str(d/"v3"),spec["template"])
@@ -215,4 +215,4 @@ class PublishedTests(unittest.TestCase):
   self.assertEqual(j,idx.read_published(stage)[1]["release_id"])
   self.assertEqual(b"<div>app</div>\n",(stage/"ui/index.html").read_bytes())
   stage.rename(base/"webagent-v3")
-  with self.assertRaises(ValueError):worker._seed_spec(base)
+  with self.assertRaises(ValueError):worker.workspace_support()._seed_spec(base)
