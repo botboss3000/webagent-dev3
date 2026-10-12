@@ -1,3 +1,4 @@
+/** Loads and saves per-agent embed enablement, guest access, and exact allowed origins; appearance stays in the chat UI profile. */
 export async function renderEmbedSettings(host,request,{agentId}){
  const section=document.createElement('details'),title=document.createElement('summary');title.textContent='Website chat widget';section.append(title);host.append(section);
  const status=document.createElement('p');status.className='ac-hint';status.setAttribute('role','status');section.append(status);

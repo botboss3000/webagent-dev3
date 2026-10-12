@@ -1,3 +1,5 @@
+// @code-index {"version":1,"feature":"chat-embed-auth","aliases":["embedded chat authorization","PKCE popup consent","embed sign in"],"purpose":"Renders the account-side consent page for a one-use embed challenge and reports authorization to the opener only after server acceptance.","span_lines":40,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Challenge consent and opener-origin checks are authorization boundaries, not user-configurable UI settings."}}
+/** Resolves the requested embed challenge, explains the agent and delegated chat actions, and posts a one-use authorization result to the same-origin opener after explicit consent. Returns false when no embed_auth challenge is present and true when the popup route is handled. */
 export async function authorizeEmbedPopup({request,me}){
  const challenge=new URL(location.href).searchParams.get('embed_auth');if(!challenge)return false;
  const style=document.createElement('link');style.rel='stylesheet';style.href='/v3-ui/embed/embed.css';document.head.append(style);

@@ -49,9 +49,9 @@ function speak(body,trigger,gutter) {
   for(const block of blocks){const part=block.textContent;const offset=text.indexOf(part,cursor);if(offset>=0){positions.push({block,start:offset,end:offset+part.length});cursor=offset+part.length;}}
   /** Cancels speech and restores highlights, pause UI, and the trigger label. */
   const stop=()=>{if(finished)return;finished=true;window.speechSynthesis.cancel();highlighted?.classList.remove('tts-speaking');pause.remove();trigger.title='Read aloud';trigger.setAttribute('aria-label','Read aloud');if(playback?.trigger===trigger)playback=null;};
-  utterance.onboundary=event=>{const found=positions.find(p=>event.charIndex>=p.start&&event.charIndex<p.end);if(found?.block!==highlighted){highlighted?.classList.remove('tts-speaking');highlighted=found?.block;highlighted?.classList.add('tts-speaking');}};
+  utterance.onboundary=/* Highlight the text block matching the active speech position. */event=>{const found=positions.find(p=>event.charIndex>=p.start&&event.charIndex<p.end);if(found?.block!==highlighted){highlighted?.classList.remove('tts-speaking');highlighted=found?.block;highlighted?.classList.add('tts-speaking');}};
   utterance.onend=stop;utterance.onerror=stop;
-  pause.onclick=event=>{event.stopPropagation();if(window.speechSynthesis.paused){window.speechSynthesis.resume();pause.textContent='Pause';}else{window.speechSynthesis.pause();pause.textContent='Resume';}};
+  pause.onclick=/* Toggle the utterance between paused and resumed. */event=>{event.stopPropagation();if(window.speechSynthesis.paused){window.speechSynthesis.resume();pause.textContent='Pause';}else{window.speechSynthesis.pause();pause.textContent='Resume';}};
   trigger.title='Stop reading';trigger.setAttribute('aria-label','Stop reading');trigger.after(pause);
   playback={trigger,stop};window.speechSynthesis.speak(utterance);
 }
@@ -83,8 +83,14 @@ export function bindGutterVisibility(bubble,gutter,config,role) {
     event.preventDefault();toggle();
   });
 }
+/**
+ * Build the configured action gutter for one persisted transcript message.
+ * Reads the current profile for role-specific order and availability; delegates text,
+ * run context, history actions, and refresh to panel callbacks supplied by the renderer.
+ * Disabled V3-unported actions stay inert. At most one More menu is open and
+ * at most one speech playback runs; these states are independent.
+ */
 // @code-index {"version":1,"feature":"chat-message-bubbles","aliases":["chat message bubbles","message gutter","bubble actions"],"purpose":"Builds the configured message action gutter and its More menu Config: data/config/chat.json -> chat_common.message_bubbles, chat_common.message_gutters, chat_common.user_message_truncation. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles","/chat_common/message_gutters","/chat_common/user_message_truncation"],"profile_overrides":true}],"opportunities":[]}}
-/** Builds one role-configured message gutter, including menu actions and explicit disabled placeholders for unported backend actions. */
 export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,showContext=()=>{},historyAction=null,refreshMessage=async()=>{}}) {
   const role=item.role==='user'?'user':'agent',profile=currentChatProfile()||{};
   const config=profile.message_gutters||{},spec=config[role]||{};
@@ -109,12 +115,12 @@ export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,sho
       const text=document.createElement('span');text.textContent=label;left.append(text);
       const value=document.createElement('span');value.className='bubble-more-value';
       row.append(left,value);menu.append(row);
-      if(name==='context'){value.textContent=ctx?ctx.envelope_bytes.toLocaleString()+' / '+ctx.max_bytes.toLocaleString()+' bytes':'Not measured';row.onclick=event=>{event.stopPropagation();close();showContext(run);};}
+      if(name==='context'){value.textContent=ctx?ctx.envelope_bytes.toLocaleString()+' / '+ctx.max_bytes.toLocaleString()+' bytes':'Not measured';row.onclick=/* Open this run measured context details from the More menu. */event=>{event.stopPropagation();close();showContext(run);};}
       if(name==='cost'){value.textContent=usage&&!usage.unknown_cost_calls?'$'+Number(usage.known_cost_usd||0).toFixed(4):'Not reported';row.disabled=true;if(!usage||usage.unknown_cost_calls)row.classList.add('v3-backend-pending');}
       if(name==='model'){value.textContent=run?.model?.model||'Not recorded';row.disabled=true;}
-      if(name==='message_id'){value.textContent=item.id.slice(0,12)+'…';row.title='Copy message ID';row.onclick=()=>copy(row,item.id);}
+      if(name==='message_id'){value.textContent=item.id.slice(0,12)+'…';row.title='Copy message ID';row.onclick=/* Copy the visible message identifier to the clipboard. */()=>copy(row,item.id);}
       if(name==='row_details'||name==='schema')unavailable(row,label);
-      if(name==='refresh'){row.onclick=async()=>{row.disabled=true;text.textContent='Refreshing…';try{await refreshMessage();close();}catch(error){if(menu.isConnected){text.textContent='Refresh failed — retry';row.title=error.message;}}finally{row.disabled=false;}};}
+      if(name==='refresh'){row.onclick=/* Refresh this message from its session snapshot and report retryable failure. */async()=>{row.disabled=true;text.textContent='Refreshing…';try{await refreshMessage();close();}catch(error){if(menu.isConnected){text.textContent='Refresh failed — retry';row.title=error.message;}}finally{row.disabled=false;}};}
       if(entry?.locked){row.disabled=true;row.title=entry.locked_message||'Unavailable';}
     }
     /** Aborts menu listeners, removes its DOM, and clears trigger/overlay state. */

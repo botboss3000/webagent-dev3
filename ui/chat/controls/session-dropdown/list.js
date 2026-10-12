@@ -1,6 +1,6 @@
 // V2 dropdown presentation/lifecycle, with independent Rust data authority.
 // @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector","session list"],"purpose":"Renders and manages V3 session rows, private search, and session actions Config: data/config/chat.json -> chat_common.chat_header.controls.session_dropdown (trigger and menu). Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/chat_header/controls/session_dropdown"],"profile_overrides":true}],"opportunities":[]}}
-/** Creates the list renderer; controller callbacks own navigation and guarded mutations. */
+/** Renders active/recycled sessions, private search results, and revision-fenced management actions. Controller callbacks own navigation; client writes retain retry receipts, and teardown fences pending work. */
 export function createSessionList(root, {guard, refresh, select, client, recycled = () => {}}) {
   let items = [], selected = '', config = {}, query = '', status = 'active';
   let hits = [], continuation = null, searchInfo = '', searching = false, epoch = 0, timer = 0, destroyed = false;
@@ -117,6 +117,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
   function confirmButton(b, text, fn) {
     let armed = false, busy = false, timeout = 0;
     const old = b.innerHTML, label = b.getAttribute('aria-label');
+    // Purpose: Restore the confirmation button label and accessible name after timeout or completion.
     const reset = () => {
       armed = false; b.innerHTML = old;
       if (label == null) b.removeAttribute('aria-label'); else b.setAttribute('aria-label', label);
@@ -137,6 +138,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     if (!element || editing) return;
     const input = document.createElement('input'); input.className = 'session-row-title-input'; input.value = item.title;
     editing = input; element.replaceWith(input); input.focus(); input.select(); let done = false;
+    // Purpose: Restore the row title editor and persist a changed non-empty title only when commit is true.
     const finish = commit => {
       if (done) return; done = true; editing = null; input.replaceWith(element);
       const title = input.value.trim(); label(); render();

@@ -74,6 +74,7 @@ const followups=mountFollowupQueue({root,host:$('chat-above-pill'),client,getSes
 function historyChanged(summary){
   if((summary?.history_revision||0)>historyRevision){if(historyBusy)historyDeferredRevision=Math.max(historyDeferredRevision,summary.history_revision);else void open(session,'replace').catch(error=>note(error.message));}
 }
+/** Merge a matching-session poll snapshot only when it shares the displayed history revision. */
 function syncSnapshot(data){
   if(data.session?.id&&data.session.id!==session)return false;
   if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}
@@ -94,6 +95,7 @@ async function historyAction(kind,item){
     if(sid!==session||generation!==sessionGeneration)return;
     let pending=historyRequests.get(actionKey);
     if(!pending){const receipt='history:'+sid+':'+kind+':'+item.id+':'+last;pending={receipt,body:{message_id:item.id,expected_last_seq:last,client_request_id:keyId(receipt)},result:null,composerApplied:false};historyRequests.set(actionKey,pending);}
+    // Keep the retry on the same client operation and durable request body.
     const execute=()=>client[kind](sid,pending.body);
     if(!pending.result){try{pending.result=await execute();}catch(error){if(error.status)throw error;pending.result=await execute();}}
     const data=pending.result;
@@ -110,7 +112,7 @@ async function historyAction(kind,item){
   finally{historyBusy=false;const pending=historyDeferredRevision;historyDeferredRevision=0;if(sid===session&&pending>historyRevision)void open(sid,'replace').catch(error=>note(error.message));}
 }
 let sharedAccess=null;
-const sharing=mountSharedChat({root,client,guard,note,ensureSession,onState:data=>{sharedAccess=data?.access||null;if(sharedAccess?.can_send===false)media?.setAvailable(false);runs(activityRuns);if(data&&session){const sid=session,epoch=sessionGeneration;client.snapshot(sid).then(snapshot=>{if(session!==sid||sessionGeneration!==epoch||!historyReady)return;if((snapshot.session.history_revision||0)!==historyRevision){if(historyBusy)historyDeferredRevision=Math.max(historyDeferredRevision,snapshot.session.history_revision||0);else void open(sid,'replace').catch(error=>note(error.message));return;}if(snapshot.access){sharedAccess=snapshot.access;canManageQueue=snapshot.access.can_manage_queue!==false;}for(const item of snapshot.messages||[])message(item);followups.update(snapshot);runs(snapshot.runs||[],true);}).catch(error=>note(error.message));}}});
+const sharing=mountSharedChat({root,client,guard,note,ensureSession,/* Refresh panel access and session projections after sharing changes. */onState:data=>{sharedAccess=data?.access||null;if(sharedAccess?.can_send===false)media?.setAvailable(false);runs(activityRuns);if(data&&session){const sid=session,epoch=sessionGeneration;client.snapshot(sid).then(snapshot=>{if(session!==sid||sessionGeneration!==epoch||!historyReady)return;if((snapshot.session.history_revision||0)!==historyRevision){if(historyBusy)historyDeferredRevision=Math.max(historyDeferredRevision,snapshot.session.history_revision||0);else void open(sid,'replace').catch(error=>note(error.message));return;}if(snapshot.access){sharedAccess=snapshot.access;canManageQueue=snapshot.access.can_manage_queue!==false;}for(const item of snapshot.messages||[])message(item);followups.update(snapshot);runs(snapshot.runs||[],true);}).catch(error=>note(error.message));}}});
 // Media changes reapply composer layout and refresh run-dependent button states.
 media=mountComposerMedia({root,client,ensureSession,note,guard,getState,refresh,/* Reapplies composer geometry and run-dependent actions after media changes. */changed:()=>{applyChatConfig();runs(activityRuns);}});
 let sessionItems=[];
@@ -249,7 +251,7 @@ if(run.pending && run.status==='waiting_approval'){
 }
 if((run.uncertain || run.status==='recovery')&&sharedAccess?.can_control!==false){
   title.remove();
-  card.append(createRecoveryDetails(run,{expanded:expandedRecovery,button,decide:async(decision,output)=>{
+  card.append(createRecoveryDetails(run,{expanded:expandedRecovery,button,/* Submit the authorized recovery choice, then reload run state. */decide:async(decision,output)=>{
     await client.recover(run.id,{decision,output,client_request_id:keyId('recovery:'+run.id+':'+decision+':'+output)});await refresh();
   }}));
 }

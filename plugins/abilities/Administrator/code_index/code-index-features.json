@@ -49,6 +49,12 @@
           "path": "ui/chat/core/client.js",
           "start_line": 11,
           "end_line": 80
+        },
+        {
+          "path": "ui/chat/core/fetch-stream.js",
+          "start_line": 2,
+          "end_line": 27,
+          "purpose": "Header-authenticated SSE parser and fixed reconnect delay; client.js owns snapshot and sequence-gap recovery."
         }
       ],
       "configuration": {
@@ -78,8 +84,8 @@
         },
         {
           "path": "ui/chat/core/bubble-gutters.js",
-          "start_line": 86,
-          "end_line": 146,
+          "start_line": 93,
+          "end_line": 152,
           "purpose": "Builds role actions and More menu using message_gutters.enabled/hideable/more_menu and message_gutters.user/agent.order/controls. Config: data/config/chat.json, merged profile."
         },
         {
@@ -499,7 +505,7 @@
         "chat surface settings",
         "chat pill layout"
       ],
-      "purpose": "Normalizes chat surface settings and renders configured composer controls. Config: data/config/chat.json -> chat_common, chat_desktop, chat_mobile, chat_widget, chat_display.default.",
+      "purpose": "Loads and applies chat presentation profiles. Config: data/config/chat.json (runtime /state/config/chat.json or V3_CHAT_UI_CONFIG_PATH) -> chat_display.default and chat_common, with chat_desktop/chat_mobile/chat_widget overlays; arrays and scalars replace inherited values.",
       "locations": [
         {
           "path": "ui/chat/controls/chat-config.js",
@@ -557,6 +563,270 @@
           "Consider focus timing and restoration preferences; authentication requirements remain enforced."
         ]
       }
+    },
+    {
+      "id": "chat-widget",
+      "aliases": [
+        "floating chat",
+        "chat launcher",
+        "native chat widget"
+      ],
+      "purpose": "Implements the native chat surface, floating window, and launcher. Config: data/config/chat.json (runtime /state/config/chat.json, or V3_CHAT_UI_CONFIG_PATH) -> chat_display.default, chat_common.window, and chat_common.launcher; chat_widget overlays common profile values. Geometry/draft/position persistence uses browser-local storage.",
+      "locations": [
+        {
+          "path": "ui/chat/widget/native.js",
+          "start_line": 1,
+          "end_line": 16,
+          "purpose": "Selects native panel/widget surface and synchronizes window, launcher, and chat visibility."
+        },
+        {
+          "path": "ui/chat/widget/window.js",
+          "start_line": 1,
+          "end_line": 12,
+          "purpose": "Clamps requested geometry to viewport and configured bounds."
+        },
+        {
+          "path": "ui/chat/widget/window.js",
+          "start_line": 13,
+          "end_line": 62,
+          "purpose": "Creates the floating panel, restores/persists geometry and exposes open/minimize/close/destroy lifecycle."
+        },
+        {
+          "path": "ui/chat/widget/window.js",
+          "start_line": 63,
+          "end_line": 142,
+          "purpose": "Builds launcher actions, browser-local draft/position behavior, and bounded pickup with config-aware clearing."
+        },
+        {
+          "path": "ui/chat/widget/window.js",
+          "start_line": 143,
+          "end_line": 153,
+          "purpose": "Builds launcher actions, browser-local draft/position behavior, and bounded pickup with config-aware clearing."
+        },
+        {
+          "path": "ui/chat/widget/window.js",
+          "start_line": 154,
+          "end_line": 154,
+          "purpose": "Merges nested presentation profile values recursively."
+        }
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_display/default",
+              "/chat_common/window",
+              "/chat_common/launcher"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
+    },
+    {
+      "id": "chat-shared-controls",
+      "aliases": [
+        "conversation sharing",
+        "shared chat",
+        "request help"
+      ],
+      "purpose": "Locates per-session invitations, participation, and help controls. Config: data/config/chat.json (runtime /state/config/chat.json, or V3_CHAT_UI_CONFIG_PATH) -> chat_common.chat_header.rows places controls and chat_common.chat_header.controls.{share,request_help,agent_active} controls presentation; desktop/mobile/widget profiles can overlay those settings. Server access and policy determine whether actions are allowed.",
+      "locations": [
+        {
+          "path": "ui/chat/controls/shared-chat.js",
+          "start_line": 1,
+          "end_line": 49,
+          "purpose": "Renders invitation, participation and help controls from server state; guarded mutations carry request IDs and stale responses are fenced."
+        }
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common/chat_header/controls/share",
+              "/chat_common/chat_header/controls/request_help",
+              "/chat_common/chat_header/controls/agent_active",
+              "/chat_common/chat_header/rows"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
+    },
+    {
+      "id": "chat-embed-host",
+      "aliases": [
+        "embedded chat host",
+        "iframe chat widget",
+        "embed bridge"
+      ],
+      "purpose": "Locates the embed host, its presentation descriptor, and Identity controls for per-agent enablement, guest access, and allowed origins. Origin binding, channel and authorization checks remain fixed.",
+      "locations": [
+        {
+          "path": "ui/embed/loader.js",
+          "start_line": 1,
+          "end_line": 80,
+          "purpose": "Creates descriptor-profiled shadow host, validates iframe source/origin/channel, correlates parent commands and destroys owned state."
+        },
+        {
+          "path": "ui/embed/loader.js",
+          "start_line": 81,
+          "end_line": 96,
+          "purpose": "Creates descriptor-profiled shadow host, validates iframe source/origin/channel, correlates parent commands and destroys owned state."
+        },
+        {
+          "path": "ui/main-panel/agents/pages/identity/embed.js",
+          "start_line": 1,
+          "end_line": 15,
+          "purpose": "Manages per-agent enablement, guest access, and allowed origins through the agent embed API; chat.json separately controls appearance."
+        }
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common",
+              "/chat_widget"
+            ],
+            "profile_overrides": false
+          }
+        ],
+        "opportunities": [],
+        "rationale": "chat_common/chat_widget references control appearance only. Origin binding, channel validation, authorization and command checks remain fixed security invariants."
+      }
+    },
+    {
+      "id": "chat-embed-runtime",
+      "aliases": [
+        "embedded chat runtime",
+        "iframe chat session",
+        "embedded chat commands"
+      ],
+      "purpose": "Locates the embedded chat runtime, credential lifecycle, session wiring, and serialized parent command bridge. Descriptor presentation comes from chat JSON; per-agent authorization policy is managed in Identity and stored in encrypted agent:<id>:embed.",
+      "locations": [
+        {
+          "path": "ui/embed/embed-app.js",
+          "start_line": 1,
+          "end_line": 58,
+          "purpose": "Initializes embedded panel with descriptor presentation, obtains guest or bearer access, wires sessions and refresh state. Identity config governs embed authorization separately."
+        },
+        {
+          "path": "ui/embed/embed-app.js",
+          "start_line": 78,
+          "end_line": 110,
+          "purpose": "Validates parent commands, serializes actions, bounds receipt history, replays identical IDs and fences changed input."
+        }
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common",
+              "/chat_widget"
+            ],
+            "profile_overrides": false
+          }
+        ],
+        "opportunities": [],
+        "rationale": "Presentation pointers carry descriptor UI settings only; authorization policy remains server-authoritative in the encrypted agent embed record."
+      }
+    },
+    {
+      "id": "chat-embed-auth",
+      "aliases": [
+        "embedded chat authorization",
+        "PKCE popup handoff",
+        "embed sign in"
+      ],
+      "purpose": "Locates one-use PKCE challenge consent, same-origin popup signaling, credential redemption, bounded polling, and terminal popup/expiry handling.",
+      "locations": [
+        {
+          "path": "ui/embed/embed-app.js",
+          "start_line": 59,
+          "end_line": 77,
+          "purpose": "Creates PKCE verifier/challenge, validates same-origin opener signals and redeems through the public endpoint."
+        },
+        {
+          "path": "ui/embed/auth-handoff.js",
+          "start_line": 1,
+          "end_line": 17,
+          "purpose": "Coordinates single-flight redemption, popup completion, bounded polling and terminal popup/expiry states."
+        },
+        {
+          "path": "ui/embed/authorize.js",
+          "start_line": 1,
+          "end_line": 13,
+          "purpose": "Shows explicit account-side consent and reports accepted one-use authorization to same-origin opener."
+        },
+        {
+          "path": "ui/embed/embed.html",
+          "start_line": 1,
+          "end_line": 24,
+          "purpose": "Provides the semantic shell slots owned by embed-app.js and the shared chat panel."
+        }
+      ],
+      "configuration": {
+        "status": "not_applicable",
+        "references": [],
+        "opportunities": [],
+        "rationale": "Challenge consent, origin/source checks, one-use redemption and popup expiry are authorization boundaries, not presentation settings."
+      }
+    },
+    {
+      "id": "chat-followup-queue",
+      "aliases": [
+        "queued message delivery",
+        "message followup queue",
+        "delivery queue controls"
+      ],
+      "purpose": "Projects durable queued-message state beside transcript rows and commits revision-fenced user choices. No chat JSON key is consumed; consider queue status presentation or placement preferences while keeping access and revision checks fixed.",
+      "configuration": {
+        "status": "opportunity",
+        "references": [],
+        "opportunities": [
+          "Consider configurable queue status labels or placement preferences; access and revision checks remain enforced."
+        ]
+      },
+      "locations": [
+        {
+          "path": "ui/chat/core/followup-queue.js",
+          "start_line": 2,
+          "end_line": 74
+        }
+      ]
+    },
+    {
+      "id": "chat-recovery-details",
+      "aliases": [
+        "run recovery details",
+        "uncertain tool outcome",
+        "interrupted run details"
+      ],
+      "purpose": "Renders inert detail text and explicit user choices for interrupted tool runs; the supplied callback and runtime retain recovery authority. No chat JSON key is consumed; only presentation preferences are candidates for configuration.",
+      "configuration": {
+        "status": "opportunity",
+        "references": [],
+        "opportunities": [
+          "Consider recovery detail labels or disclosure preferences; recovery authorization and retry consent remain enforced."
+        ]
+      },
+      "locations": [
+        {
+          "path": "ui/chat/core/recovery-details.js",
+          "start_line": 2,
+          "end_line": 24
+        }
+      ]
     }
   ]
 }

@@ -114,16 +114,27 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
   }
   return {
     open, disconnect, updateRuns,
+    /** Applies one revision-fenced queued-message delivery choice. */
     delivery:(id,mid,body)=>request('/sessions/'+encodeURIComponent(id)+'/messages/'+encodeURIComponent(mid)+'/delivery','PATCH',body),
+    /** Resumes a held delivery queue with its expected revision and request ID. */
     resumeQueue:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/queue/resume','POST',body),
+    /** Rewinds a session transcript to the requested public message boundary. */
     undo:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/undo','POST',body),
+    /** Forks a session from the supplied message boundary. */
     fork:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/fork','POST',body),
+    /** Reads the caller sharing state for a session. */
     sharing:id=>request('/sessions/'+encodeURIComponent(id)+'/sharing'),
+    /** Creates a session invitation from the supplied request and expiry. */
     invite:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/invitations','POST',body),
+    /** Revokes one invitation belonging to the session. */
     revokeInvite:(id,invite,body)=>request('/sessions/'+encodeURIComponent(id)+'/invitations/'+encodeURIComponent(invite),'DELETE',body),
+    /** Redeems an invitation using the supplied token. */
     redeemInvite:body=>request('/chat-invitations/redeem','POST',body),
+    /** Updates the caller participation state for a session. */
     participation:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/participation','PUT',body),
+    /** Requests assistance for the selected session. */
     help:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/help','POST',body),
+    /** Cancels the caller outstanding assistance request. */
     cancelHelp:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/help','DELETE',body),
     /** Reads recorded usage totals for one session. */
     usage:id=>request("/sessions/"+encodeURIComponent(id)+"/usage"),

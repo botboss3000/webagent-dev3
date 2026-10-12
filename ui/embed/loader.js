@@ -1,7 +1,9 @@
+// @code-index {"version":1,"feature":"chat-embed-host","aliases":["embedded chat host","iframe chat widget","embed bridge"],"purpose":"Creates the floating embed host and launcher from the descriptor profile, then exposes the authenticated iframe bridge and bounded parent command API. Origin/channel validation, authorization and command checks remain fixed security invariants.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common","/chat_widget"],"profile_overrides":false}],"opportunities":[],"rationale":"These pointers control presentation only; origin binding, channel validation and authorization checks are fixed security invariants."}}
 (() => {
  'use strict';
  const script=document.currentScript;
  if(!script)return;
+ // Purpose: Create one shadow-root host, iframe, floating shell, launcher, and public API after the document body exists.
  function mount(){
  if(window.WebAgentWidget)return;
  const agent=script.dataset.agent;
@@ -20,7 +22,9 @@
  const ready=new Promise((resolve,reject)=>{resolveReady=resolve;rejectReady=reject});
  ready.catch(()=>{});
  const timer=setTimeout(()=>{failed=new Error('Chat did not become ready. Reload to try again.');rejectReady(failed)},30000);
+ // Purpose: Deliver listener notifications without letting one listener exception interrupt the others.
  function notify(event,data){for(const listener of listeners.get(event)||[]){try{listener(data)}catch(error){console.error(error)}}}
+ // Purpose: Accept only messages from this iframe/origin/namespace/version/channel and settle matching commands or trusted UI events.
  function onMessage(event){
   if(destroyed||event.source!==iframe.contentWindow||event.origin!==origin)return;
   const message=event.data;
@@ -37,6 +41,7 @@
   }else if(message.type==='event'&&typeof message.event==='string'){if(message.event==='theme'&&['light','dark'].includes(message.data?.theme))host.dataset.theme=message.data.theme;else if(message.event==='minimize')shell?.minimize();else if(message.event==='close')shell?.close();notify(message.event,message.data);}
  }
  window.addEventListener('message',onMessage);
+ // Purpose: Send a correlated command after readiness; requests time out after 30 seconds and advise reconciling uncertain effects before retry.
  async function command(name,args={}){
   if(destroyed)throw new Error('Widget has been destroyed.');
   if(failed)throw failed;
@@ -49,6 +54,7 @@
    iframe.contentWindow.postMessage({namespace,version,type:'command',channel,id,command:name,args},origin);
   });
  }
+ // API methods expose the supported chat commands and UI events; destroy rejects pending work and removes host-owned UI/listeners.
  const api={
   async open(){await initialized;shell.open();launcher.hide();await command('visibility',{visible:true});notify('open',{})},
   async minimize(){await initialized;shell.minimize()},
@@ -64,6 +70,7 @@
   on(event,listener){if(typeof listener!=='function')throw new TypeError('Listener must be a function.');if(!listeners.has(event))listeners.set(event,new Set());listeners.get(event).add(listener);return ()=>listeners.get(event)?.delete(listener)},
   destroy(){destroyed=true;rejectReady(new Error('Widget destroyed.'));clearTimeout(timer);window.removeEventListener('message',onMessage);for(const request of requests.values()){clearTimeout(request.timer);request.reject(new Error('Widget destroyed.'))}requests.clear();shell?.destroy();launcher?.destroy();host.remove()}
  };
+ // Purpose: Load the public embed descriptor, derive the widget profile, and create the iframe shell and launcher.
  const initialized=(async()=>{
   const response=await fetch(origin+'/api/v3/embed/'+encodeURIComponent(agent)+'/descriptor?origin='+encodeURIComponent(location.origin),{credentials:'omit'});
   if(!response.ok)throw new Error('Chat embedding is unavailable for this website.');

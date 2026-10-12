@@ -1,5 +1,6 @@
+// @code-index {"version":1,"feature":"chat-shared-controls","aliases":["conversation sharing","shared chat","request help"],"purpose":"Locates per-session invitations, participation, and help controls. Config: data/config/chat.json (runtime /state/config/chat.json, or V3_CHAT_UI_CONFIG_PATH) -> chat_common.chat_header.rows places controls and chat_common.chat_header.controls.{share,request_help,agent_active} controls presentation; desktop/mobile/widget profiles can overlay those settings. Server access and policy determine whether actions are allowed.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/chat_header/controls/share","/chat_common/chat_header/controls/request_help","/chat_common/chat_header/controls/agent_active","/chat_common/chat_header/rows"],"profile_overrides":true}],"opportunities":[]}}
 import {setSharedChatControls} from './chat-config.js';
-/** Session controls share one state and never infer permission from button placement. */
+/** Mounts invitation, participation, and help controls from server state; button placement never grants permission. Mutations are guarded and use client request IDs, generation checks discard stale refreshes, and a visible-session timer refreshes every three seconds. panel.js drives open/refresh/disconnect/destroy. */
 export function mountSharedChat({root,client,guard,note,ensureSession,onState=()=>{}}){
   let session='',generation=0,state=null,busy=false,loading=null,destroyed=false;
   const nodes={};
@@ -18,6 +19,7 @@ export function mountSharedChat({root,client,guard,note,ensureSession,onState=()
   panel.append(title,expiry,issue,result,copy,list,close);
   const status=document.createElement('p');status.className='ac-hint v3-shared-chat-status';status.setAttribute('role','status');root.querySelector('#chat-input-area').prepend(status);
   nodes.share.setAttribute('aria-haspopup','dialog');nodes.share.setAttribute('aria-expanded','false');
+  // Purpose: Render availability only from server access/policy and current invitation/help state.
   function paint(){
     const access=state?.access||{},policy=state?.policy||{};
     nodes.share.disabled=busy||!state||!access.can_invite||!policy.shareable;
@@ -28,8 +30,11 @@ export function mountSharedChat({root,client,guard,note,ensureSession,onState=()
     issue.disabled=nodes.share.disabled;
     list.replaceChildren();for(const invite of state?.invitations||[]){const row=document.createElement('p');const expired=invite.expires_at*1000<=Date.now();row.textContent=(invite.revoked?'Revoked':invite.redeemed?'Redeemed':expired?'Expired':'Available')+' invitation · expires '+new Date(invite.expires_at*1000).toLocaleString();const revoke=document.createElement('button');revoke.type='button';revoke.className='ac-btn';revoke.textContent='Revoke';revoke.disabled=nodes.share.disabled||invite.revoked||invite.redeemed||expired;revoke.onclick=guard(()=>mutate(()=>client.revokeInvite(session,invite.id,{client_request_id:crypto.randomUUID()})));row.append(revoke);list.append(row);}
   }
+  // Purpose: Refresh server-owned state and discard responses from prior session generations.
   async function load(){if(!session||loading?.generation===generation||destroyed)return;const id=session,epoch=generation,request={generation};loading=request;try{const data=await client.sharing(id);if(session!==id||generation!==epoch||destroyed)return;state=data;onState(data);paint();}finally{if(loading===request)loading=null;}}
+  // Purpose: Ensure a session and fresh state before an action; fail closed when sharing state is unavailable.
   async function ready(){if(!session)await ensureSession();await load();if(!state)throw Error('Shared conversation controls are unavailable');}
+  // Purpose: Serialize one action and refresh state only while this session generation still owns the result.
   async function mutate(action){if(busy)return;const id=session,epoch=generation;busy=true;paint();try{await action();if(session===id&&generation===epoch)await load();}finally{busy=false;paint();}}
   nodes.share.onclick=guard(async()=>{await ready();if(nodes.share.disabled)return;panel.hidden=!panel.hidden;nodes.share.setAttribute('aria-expanded',String(!panel.hidden));});
   issue.onclick=guard(async()=>{await ready();const id=session,epoch=generation;await mutate(async()=>{const data=await client.invite(id,{client_request_id:crypto.randomUUID(),expires_in:Number(expiry.value)});if(id!==session||epoch!==generation)return;const url=new URL('/app',location.origin);url.searchParams.set('chat_invite',data.token);result.value=url.href;result.hidden=false;copy.hidden=false;});});
@@ -37,6 +42,8 @@ export function mountSharedChat({root,client,guard,note,ensureSession,onState=()
   nodes.request_help.onclick=guard(async()=>{await ready();if(nodes.request_help.disabled)return;await mutate(()=>state.help?.status==='pending'?client.cancelHelp(session,{client_request_id:crypto.randomUUID()}):client.help(session,{client_request_id:crypto.randomUUID()}));});
   setSharedChatControls(nodes);paint();
   const timer=setInterval(()=>{if(session&&document.visibilityState!=='hidden')load().catch(()=>{});},3000);
+  // Purpose: Invalidate in-flight state and clear session-specific invitation UI.
   function disconnect(){++generation;session='';state=null;panel.hidden=true;result.value='';result.hidden=true;copy.hidden=true;onState(null);paint();}
+  // Methods: open selects a session, refresh reloads its server state, disconnect clears session UI, and destroy also stops polling and removes owned nodes.
   return {async open(id){disconnect();session=id;if(id)await load();},refresh:load,disconnect,destroy(){destroyed=true;clearInterval(timer);disconnect();setSharedChatControls({});panel.remove();status.remove();},get state(){return state;}};
 }

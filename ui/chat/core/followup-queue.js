@@ -1,11 +1,22 @@
+// @code-index {"version":1,"feature":"chat-followup-queue","aliases":["queued message delivery","message followup queue","delivery queue controls"],"purpose":"Projects durable queued-message state beside transcript rows and commits revision-fenced user choices. No chat JSON key is consumed; consider queue status presentation or placement preferences while keeping access and revision checks fixed.","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider configurable queue status labels or placement preferences; access and revision checks remain enforced."]}}
 // Durable delivery state is display-only until a revision-checked user action commits.
+/**
+ * Mount the session queued-message delivery controls beside its transcript.
+ * Inputs are panel-owned DOM, transport, session and access adapters; writes use the
+ * displayed queue revision plus a durable request key, then refresh from a snapshot.
+ * The generation fence prevents late reads/writes from repainting a newly selected session.
+ * Returns update/reset/paint, pending state, and destroy for the owning panel lifecycle.
+ */
 export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId,forgetKey,onSnapshot,canWrite=()=>true}) {
   let generation=0,revision=-1,entries=[],held=false,bannerKey='';
   const busy=new Set();
   const banner=document.createElement('section');banner.className='followup-queue-banner';banner.hidden=true;host.append(banner);
   const terminal=new Set(['delivered','cancelled','rejected']);
+  // Translate durable queue states into short status text for transcript controls.
   const label=entry=>({pending:entry.choice==='interrupt'?'Interrupting…':entry.choice==='steer'?'Steering — applies next turn':'Queued — sends after this run',reviewing:'Reviewing…',held:'Held — waiting to resume',interrupting:'Interrupting…',delivered:'Delivered',cancelled:'Cancelled',rejected:'Not sent — rejected'})[entry.status]||entry.status;
+  // Create a text-only action button and pass its callback through the panel guard.
   function makeButton(text,action){const b=document.createElement('button');b.type='button';b.textContent=text;b.onclick=guard(action);return b;}
+  // Reconcile visible delivery rows from the current queue while retaining focused controls.
   function paint(){
     for(const row of root.querySelectorAll('[data-public-id]')) {
       const entry=entries.find(item=>item.message_id===row.dataset.publicId);
@@ -27,7 +38,9 @@ export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId
       if(focused){const replacement=[...actions.children].find(button=>button.dataset.deliveryChoice===focused.dataset.deliveryChoice&&!button.disabled);if(replacement)replacement.focus({preventScroll:true});else{status.tabIndex=-1;status.focus({preventScroll:true});}}
     }
   }
+  // Refresh the authoritative snapshot only if this session still owns the request.
   async function refresh(sid,epoch){const data=await client.snapshot(sid);if(epoch!==generation||sid!==getSession())return;onSnapshot(data);}
+  // Commit one revision-checked delivery choice and reconcile errors from a fresh snapshot.
   async function change(entry,choice){
     if(!canWrite())throw Error("Message delivery controls are not available to this user");
     if(busy.has(entry.id))return;
@@ -37,6 +50,7 @@ export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId
     catch(error){if(epoch===generation&&sid===getSession()){note('Message delivery update failed: '+error.message);await refresh(sid,epoch);}throw error;}
     finally{if(epoch===generation){busy.delete(entry.id);paint();}}
   }
+  // Accept monotonic snapshots and repaint queue state plus the held-queue banner.
   function update(data){
     const state=data.queue_state||{},next=Number(state.revision)||0;
     if(next<revision)return;revision=next;entries=Array.isArray(data.queue)?data.queue:[];held=!!state.held;
@@ -53,6 +67,8 @@ export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId
     });b.disabled=!canWrite();banner.append(b);if(bannerFocused)b.focus({preventScroll:true});}
     paint();
   }
+  // Invalidate outstanding work and clear this session queue presentation.
   function reset(){++generation;revision=-1;entries=[];held=false;busy.clear();bannerKey='';banner.replaceChildren();banner.hidden=true;paint();}
-  return {update,reset,paint,get pending(){return entries.some(e=>!terminal.has(e.status));},destroy(){reset();banner.remove();}};
+  // Dispose the mount after clearing state so no old queue UI remains in the panel.
+  return {update,reset,paint,/* True while any queued entry is not in a terminal state. */get pending(){return entries.some(e=>!terminal.has(e.status));},/* Reset state and remove this mount from the panel host. */destroy(){reset();banner.remove();}};
 }

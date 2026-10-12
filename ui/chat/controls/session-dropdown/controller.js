@@ -93,6 +93,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
     let timeout = 0;
 
     return new Promise(resolve => {
+      // Purpose: Stop polling and remove temporary listeners after keyboard dismissal or timeout.
       const finish = () => {
         if (finished) return;
         finished = true;
@@ -103,11 +104,13 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
         if (menu._deferredOpenCleanup === finish) menu._deferredOpenCleanup = null;
         requestAnimationFrame(() => requestAnimationFrame(resolve));
       };
+      // Purpose: Record keyboard-induced viewport motion and its latest settling timestamp.
       const noteResize = () => {
         sawResize = true;
         lastHeight = _viewportHeight();
         lastChangeAt = performance.now();
       };
+      // Purpose: Recheck viewport settling until keyboard dismissal is confirmed or the bounded wait expires.
       const check = now => {
         const height = _viewportHeight();
         if (Math.abs(height - lastHeight) > 1) {
@@ -451,6 +454,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
  const observer=new ResizeObserver(reposition);observer.observe(root);
  // Returned controller is the list renderer’s lifecycle/configuration bridge.
  // Expose menu lifecycle plus popup ownership to the sibling list renderer.
+ /** Methods: open/close control the animated menu, isOpen reports visibility, setPopup transfers popup ownership to the list, and destroy invalidates pending opens and removes listeners. */
  const handle={open:openMenu,close:closeMenu,isOpen:()=>!menu.hidden,destroy(){_openRequestId++;menu._deferredOpenCleanup?.();closeMenu({immediate:true});abort.abort();_syncRowObserver.disconnect();observer.disconnect();clearTimeout(_openAnimationTimer);clearTimeout(_closeAnimationTimer);menu.remove();_closeRowActions();},setPopup(node){_closeRowActions();popup=node;}};
  root._sessionDropdownController=handle;return handle;
 }

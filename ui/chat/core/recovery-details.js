@@ -1,4 +1,12 @@
-// Presentation only; authenticated recovery remains the decision authority.
+// @code-index {"version":1,"feature":"chat-recovery-details","aliases":["run recovery details","uncertain tool outcome","interrupted run details"],"purpose":"Renders inert detail text and explicit user choices for interrupted tool runs; the supplied callback and runtime retain recovery authority. No chat JSON key is consumed; only presentation preferences are candidates for configuration.","span_lines":40,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider recovery detail labels or disclosure preferences; recovery authorization and retry consent remain enforced."]}}
+/**
+ * Render the details and user decision controls for one interrupted tool run.
+ * The expanded Set retains disclosure state by run ID; button and decide are
+ * panel adapters; the decision callback submits choices to authenticated runtime recovery.
+ * Arguments and interruption metadata are rendered as inert text; the warning keeps
+ * uncertain effects visible so a retry is never implied by this presentation.
+ * Returns a detached details element for the caller to attach to its run card.
+ */
 export function createRecoveryDetails(run,{expanded,button,decide}) {
   const details=document.createElement('details');details.className='recovery-details';details.open=expanded.has(run.id);
   details.addEventListener('toggle',()=>{if(details.open)expanded.add(run.id);else expanded.delete(run.id);});
