@@ -11,7 +11,7 @@ class Element {
   get firstChild(){return this.children[0];}
   setAttribute(key,value){this.attributes[key]=value;}
   addEventListener(type,fn){(this.listeners[type]??=[]).push(fn);}
-  querySelector(selector){if(selector==='.cmc-name')return this.name;if(selector==='button:not(:disabled)')return this.children.find(c=>c.tag==='button'&&!c.disabled);}
+  querySelector(selector){if(selector==='.cmc-name')return this.name;if(selector==='button:not(:disabled)')return this.children.find(c=>c.tag==='button'&&!c.disabled);if(selector.startsWith('.')){for(const child of this.children){if((child.className||'').split(' ').includes(selector.slice(1)))return child;const match=child.querySelector(selector);if(match)return match;}}return null;}
   contains(node){return node===this||this.children.some(c=>c.contains(node));}
   closest(selector){return this.selector===selector?this:null;}
   focus(){this.focused=true;}
@@ -22,7 +22,7 @@ class Element {
   emit(type,details={}){return Promise.all((this.listeners[type]||[]).map(fn=>fn({target:this,preventDefault(){},...details})));}
 }
 async function fixture(){
-  const nodes=new Map(['chat-mode-btn','chat-model-changer'].map(id=>[id,new Element('button')]));
+  const nodes=new Map(['chat-mode-btn','chat-model-changer','chat-notifications'].map(id=>[id,new Element('button')]));
   nodes.get('chat-model-changer').name=new Element('span');
   const body=new Element(),document=new Element(),window=new Element();
   document.body=body;document.createElement=tag=>new Element(tag);
@@ -38,9 +38,11 @@ async function fixture(){
   const context=vm.createContext({document,window,AbortController,innerHeight:800,innerWidth:1000,crypto:require('node:crypto').webcrypto});
   const module=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../ui/chat/controls/session-controls.js'),'utf8'),{context});
   await module.link(()=>{});await module.evaluate();
+  const notificationModule=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../ui/chat/core/chat-notifications.js'),'utf8'),{context});await notificationModule.link(()=>{});await notificationModule.evaluate();
+  const notifications=notificationModule.namespace.mountChatNotifications({root:{querySelector:s=>nodes.get(s.slice(1))},guard:fn=>fn});
   const controls=module.namespace.mountSessionControls({root:{querySelector:s=>nodes.get(s.slice(1))},client,
     guard:fn=>async(...args)=>{try{return await fn(...args);}catch(e){errors.push(e.message);}},
-    note:()=>{},ensureSession:async()=>controls.open('created')});
+    notifications,note:()=>{},ensureSession:async()=>controls.open('created')});
   return {controls,nodes,body,state,calls,errors,client};
 }
 const tick=()=>new Promise(setImmediate);
@@ -49,12 +51,12 @@ test('mode cycle uses the loaded session revision; write elevation requires conf
   await f.nodes.get('chat-mode-btn').emit('click');
   assert.deepEqual(JSON.parse(JSON.stringify(f.calls.find(c=>c[0]==='mode').slice(1))),['session-a',{mode:'plan',expected_revision:0,confirm_write:false}]);
   const pending=f.nodes.get('chat-mode-btn').emit('click');await tick();
-  const dialog=f.body.children.find(n=>n.tag==='dialog');assert(dialog.open);
+  const host=f.nodes.get('chat-notifications');assert(host.querySelector('.chat-notification-deny'));
   assert.equal(f.calls.filter(c=>c[0]==='mode').length,1);
-  dialog.close('cancel');await pending;
+  await host.querySelector('.chat-notification-deny').onclick();await pending;
   assert.equal(f.calls.filter(c=>c[0]==='mode').length,1);
   const confirm=f.nodes.get('chat-mode-btn').emit('click');await tick();
-  f.body.children.find(n=>n.tag==='dialog').close('confirm');await confirm;
+  await host.querySelector('.chat-notification-approve').onclick();await confirm;
   const write=f.calls.filter(c=>c[0]==='mode').at(-1);
   assert.equal(write[2].expected_revision,1);assert.equal(write[2].confirm_write,true);
   f.controls.destroy();

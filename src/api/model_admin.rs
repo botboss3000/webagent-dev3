@@ -232,7 +232,7 @@ async fn identity_get(State(app): State<App>, Extension(identity): Extension<Val
     let manager=crate::manager::config::incoming(&store,&id).await?;
     let closing_protocol=crate::gate_registry::closing_config()?;
     let fixed=crate::gate_registry::visibility_config()?.guidance;
-    Ok(Json(json!({"manager_incoming_message":manager,"closing_message":closing,"closing_protocol":{"flags":closing_protocol.flags,"notification_max_words":closing_protocol.notification_max_words},"message_visibility":{"mode":settings.mode,"guidance":settings.guidance,"fixed_protocol":fixed},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":row.get::<String,_>("name"),
+    Ok(Json(json!({"shared_chat":crate::shared_chat::policy(&store,&id).await?,"manager_incoming_message":manager,"closing_message":closing,"closing_protocol":{"flags":closing_protocol.flags,"notification_max_words":closing_protocol.notification_max_words},"message_visibility":{"mode":settings.mode,"guidance":settings.guidance,"fixed_protocol":fixed},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":row.get::<String,_>("name"),
         "compaction_thresholds":{"trigger_tokens":effective.trigger_tokens,"tail_tokens":effective.tail_tokens},
         "compaction_defaults":{"trigger_tokens":defaults.trigger_tokens,"tail_tokens":defaults.tail_tokens,"summary_tokens":defaults.summary_tokens},
         "tool_output_policy":tool_output_policy,"tool_output_defaults":tool_output_defaults,
@@ -243,7 +243,7 @@ async fn identity_get(State(app): State<App>, Extension(identity): Extension<Val
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct IdentityUpdate { revision: i64, name: Option<String>, description: Option<String>, execution_modes: Option<Value>, default_execution_mode: Option<String>, message_visibility: Option<crate::gate_controls::AgentVisibility>, closing_message: Option<crate::gate_controls::AgentClosing>, compaction_thresholds: Option<crate::context_compaction::AgentThresholds>, manager_incoming_message: Option<crate::manager::config::IncomingMessage>, tool_output_policy: Option<crate::tool_output::Policy>, reset_tool_output_policy: Option<bool> }
+struct IdentityUpdate { revision: i64, shared_chat: Option<crate::shared_chat::SharedChatPolicy>, name: Option<String>, description: Option<String>, execution_modes: Option<Value>, default_execution_mode: Option<String>, message_visibility: Option<crate::gate_controls::AgentVisibility>, closing_message: Option<crate::gate_controls::AgentClosing>, compaction_thresholds: Option<crate::context_compaction::AgentThresholds>, manager_incoming_message: Option<crate::manager::config::IncomingMessage>, tool_output_policy: Option<crate::tool_output::Policy>, reset_tool_output_policy: Option<bool> }
 async fn identity_put(State(app): State<App>, Extension(identity): Extension<Value>, Path(id): Path<String>, Json(body): Json<IdentityUpdate>) -> Api {
     if body.tool_output_policy.is_some() && body.reset_tool_output_policy.is_some() {
         return Err(crate::bad("Set a tool output policy or reset it, not both"));
@@ -251,7 +251,7 @@ async fn identity_put(State(app): State<App>, Extension(identity): Extension<Val
     if let Some(policy)=body.tool_output_policy.as_ref() {
         policy.validate().map_err(|_|crate::bad("Invalid tool output retention policy"))?;
     }
-    if body.revision < 0 || (body.name.is_none() && body.description.is_none() && body.execution_modes.is_none() && body.default_execution_mode.is_none() && body.message_visibility.is_none() && body.closing_message.is_none() && body.compaction_thresholds.is_none() && body.manager_incoming_message.is_none() && body.tool_output_policy.is_none() && body.reset_tool_output_policy.is_none())
+    if body.revision < 0 || (body.name.is_none() && body.description.is_none() && body.execution_modes.is_none() && body.default_execution_mode.is_none() && body.message_visibility.is_none() && body.closing_message.is_none() && body.compaction_thresholds.is_none() && body.manager_incoming_message.is_none() && body.tool_output_policy.is_none() && body.reset_tool_output_policy.is_none() && body.shared_chat.is_none())
         || body.name.as_ref().is_some_and(|s| s.trim().is_empty() || s.len()>200)
         || body.description.as_ref().is_some_and(|s| s.len()>2000) {
         return Err(ApiError(StatusCode::BAD_REQUEST,"Name must contain 1–200 bytes; description at most 2000 bytes".into()));
@@ -261,6 +261,7 @@ async fn identity_put(State(app): State<App>, Extension(identity): Extension<Val
     let store = app.store.for_agent(&id).await?;
     let blob:Vec<u8>=sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?").bind(&id).fetch_one(&store.agent_pool).await.map_err(anyhow::Error::from)?;
     let mut metadata=store.unseal(&blob)?;
+    if let Some(settings)=body.shared_chat {metadata["shared_chat"]=serde_json::to_value(settings).map_err(anyhow::Error::from)?;}
     let modes=crate::execution_modes::normalize(body.execution_modes.as_ref().unwrap_or(&metadata["execution_modes"]))
         .map_err(|e|crate::bad(&e.to_string()))?;
     let requested=body.default_execution_mode.as_deref().unwrap_or(metadata["default_execution_mode"].as_str().unwrap_or("ask"));
@@ -743,7 +744,7 @@ mod tests {
         let (_root,app)=fixture().await;let identity=json!({"_user_id":"admin"});
         let Json(before)=identity_get(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap();
         assert_eq!(before["message_visibility"]["mode"],"manual");
-        let patch=|revision,guidance:&str|IdentityUpdate{revision,name:None,description:None,execution_modes:None,default_execution_mode:None,message_visibility:Some(crate::gate_controls::AgentVisibility{mode:crate::gate_controls::PromotionMode::None,guidance:guidance.into()}),closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None};
+        let patch=|revision,guidance:&str|IdentityUpdate{ shared_chat:None,revision,name:None,description:None,execution_modes:None,default_execution_mode:None,message_visibility:Some(crate::gate_controls::AgentVisibility{mode:crate::gate_controls::PromotionMode::None,guidance:guidance.into()}),closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None};
         let revision=before["revision"].as_i64().unwrap();
         let Json(saved)=identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(patch(revision,"Keep progress concise"))).await.unwrap();
         assert_eq!(saved["message_visibility"]["fixed_protocol"],before["message_visibility"]["fixed_protocol"]);
@@ -765,7 +766,7 @@ mod tests {
         let defaults=&before["compaction_defaults"];
         let trigger=defaults["trigger_tokens"].as_u64().unwrap() as usize + 1000;
         let tail=defaults["tail_tokens"].as_u64().unwrap() as usize;
-        let update=|revision,trigger,tail|IdentityUpdate{
+        let update=|revision,trigger,tail|IdentityUpdate{ shared_chat:None,
             revision,name:None,description:None,execution_modes:None,default_execution_mode:None,
             message_visibility:None,closing_message:None,manager_incoming_message:None,
             compaction_thresholds:Some(crate::context_compaction::AgentThresholds{trigger_tokens:trigger,tail_tokens:tail}), tool_output_policy:None,reset_tool_output_policy:None};
@@ -804,7 +805,7 @@ mod tests {
             refresh_on_recall:false,
             promote_on_edit:false,
         };
-        let update=|revision,tool_output_policy,reset_tool_output_policy|IdentityUpdate {
+        let update=|revision,tool_output_policy,reset_tool_output_policy|IdentityUpdate { shared_chat:None,
             revision,name:None,description:None,execution_modes:None,default_execution_mode:None,
             message_visibility:None,closing_message:None,compaction_thresholds:None,
             manager_incoming_message:None,tool_output_policy,reset_tool_output_policy,
@@ -851,7 +852,7 @@ mod tests {
         let Json(before)=identity_get(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap();
         assert_eq!(before["closing_message"]["notification_guidance"],"");
         let revision=before["revision"].as_i64().unwrap();
-        let update=|revision,guidance:&str|IdentityUpdate{revision,name:None,description:None,
+        let update=|revision,guidance:&str|IdentityUpdate{ shared_chat:None,revision,name:None,description:None,
             execution_modes:None,default_execution_mode:None,message_visibility:None,
             closing_message:Some(crate::gate_controls::AgentClosing{
                 notification_guidance:guidance.into()}),manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None};
@@ -871,7 +872,7 @@ mod tests {
         let (_root,app)=fixture().await;
         let identity=json!({"_user_id":"admin"});
         let Json(before)=identity_get(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap();
-        let Json(saved)=identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{
+        let Json(saved)=identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{ shared_chat:None,
             revision:before["revision"].as_i64().unwrap(),name:None,description:None,
             execution_modes:Some(json!([{"id":"review","label":"Review","permission_policy":"read_only","prompt":"Inspect only"}])),
             default_execution_mode:Some("review".into()),message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.unwrap();
@@ -884,7 +885,7 @@ mod tests {
         assert_eq!(mode["definition"]["prompt"],"Inspect only");
         let mut modes=saved["execution_modes"].clone();
         modes.as_array_mut().unwrap().last_mut().unwrap()["permission_policy"]=json!("write");
-        identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{
+        identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{ shared_chat:None,
             revision:saved["revision"].as_i64().unwrap(),name:None,description:None,execution_modes:Some(modes),default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.unwrap();
         assert_eq!(crate::session_mode(&app,sid).await.unwrap()["mode"],"read_only");
         let Json(next)=crate::api::change_session_mode(&app,sid,"review",Some(0),None).await.unwrap();
@@ -924,12 +925,12 @@ mod tests {
         let identity = json!({"_user_id":"admin"});
         let Json(before) = identity_get(State(app.clone()),Extension(identity.clone()),Path("shared_default".into())).await.unwrap();
         let revision = before["revision"].as_i64().unwrap();
-        let Json(saved) = identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{revision,name:Some("  Renamed  ".into()),description:Some("Description".into()),execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.unwrap();
+        let Json(saved) = identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{ shared_chat:None,revision,name:Some("  Renamed  ".into()),description:Some("Description".into()),execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.unwrap();
         assert_eq!(saved["name"],"Renamed"); assert_eq!(saved["description"],"Description");
-        assert!(identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{revision,name:Some("Stale".into()),description:None,execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.is_err());
-        assert!(identity_put(State(app.clone()),Extension(identity),Path("shared_default".into()),Json(IdentityUpdate{revision:revision+1,name:Some(" ".into()),description:None,execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.is_err());
+        assert!(identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate{ shared_chat:None,revision,name:Some("Stale".into()),description:None,execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.is_err());
+        assert!(identity_put(State(app.clone()),Extension(identity),Path("shared_default".into()),Json(IdentityUpdate{ shared_chat:None,revision:revision+1,name:Some(" ".into()),description:None,execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.is_err());
         let outsider = tenant_user(&app,"identity-outsider").await;
-        assert!(identity_put(State(app.clone()),Extension(json!({"_user_id":outsider})),Path("shared_default".into()),Json(IdentityUpdate{revision:revision+1,name:Some("Forbidden".into()),description:None,execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.is_err());
+        assert!(identity_put(State(app.clone()),Extension(json!({"_user_id":outsider})),Path("shared_default".into()),Json(IdentityUpdate{ shared_chat:None,revision:revision+1,name:Some("Forbidden".into()),description:None,execution_modes:None,default_execution_mode:None,message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.is_err());
     }
     #[tokio::test]
     async fn deepseek_keys_are_validated_encrypted_scoped_and_not_returned() {

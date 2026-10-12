@@ -57,6 +57,8 @@ struct View {
     own:Value, loaded_skills:Value, version:String, fingerprint:String,
 }
 async fn view(app:&App,sid:&str,run_id:&str,name:&str)->Result<View> {
+    if crate::shared_chat::actor(app)!=app.store.current_user_id() {bail!("Shared chat membership does not authorize caller-owned private records");}
+
     // Resolve the session in the authenticated user's plane before its agent.
     let agent=session_agent_id(app,sid).await?;
     let mut scoped=app.clone();
@@ -70,7 +72,7 @@ async fn view(app:&App,sid:&str,run_id:&str,name:&str)->Result<View> {
     let (policy,mode_revision,visibility,state)=ability_controls(&scoped,sid).await?;
     let mode=session_mode(&scoped,sid).await?;
     let read_only=mode["mode"]=="read_only";
-    let access=scoped.store.live_access(scoped.store.current_user_id(),&agent).await?;
+    let access=crate::shared_chat::live_access(&scoped.store,crate::shared_chat::actor(&scoped),sid,&agent).await?;
     if !access.admitted() || live_tool_decision(&scoped,&access,name,&policy,
         &visibility,&state,&loaded,read_only).permission==crate::access::Permission::Deny {
         bail!("Bundled skill tool unavailable under current access");

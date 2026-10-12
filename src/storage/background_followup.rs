@@ -13,6 +13,13 @@ impl Store {
         let sid=task["session_id"].as_str().ok_or_else(||anyhow!("Missing task session"))?.to_owned();
         let origin_raw:Vec<u8>=sqlx::query_scalar("SELECT value FROM docs WHERE key=?").bind(format!("run:{rid}")).fetch_one(&mut *tx).await?;
         let origin=self.unseal(&origin_raw)?;
+        if self.require_participation(&mut tx,&origin).await.is_err() {
+            task["notified"]=json!(true);task["on_run_end"]=json!("stop");
+            let revision=task["revision"].as_u64().unwrap_or(0)+1;task["revision"]=json!(revision);
+            sqlx::query("UPDATE background_task_index SET revision=? WHERE id=?").bind(revision as i64).bind(id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE docs SET value=? WHERE key=?").bind(self.seal(&task)?).bind(format!("background_task:{id}")).execute(&mut *tx).await?;
+            tx.commit().await?;return Ok(());
+        }
         if origin["status"]!="completed" {return Ok(());}
         if origin["background_delivered"].as_array().is_some_and(|items|items.contains(&task["id"])) {
             task["delivery_run_id"]=json!(rid);
@@ -29,11 +36,19 @@ impl Store {
                 let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE status NOT IN ('completed','cancelled','failed')").fetch_one(&mut *tx).await?;
                 let session_count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')").bind(&sid).fetch_one(&mut *tx).await?;
                 if count<(max_runs as i64) && session_count==0 {
+                    let capacity=match self.reserve_requester_run(wake).await {
+                        Ok(())=>true,
+                        Err(error) if error.to_string()=="Account run limit reached"=>false,
+                        Err(error)=>return Err(error),
+                    };
+                    if capacity {
+
                     let wake_id=wake["id"].as_str().ok_or_else(||anyhow!("Missing wake identity"))?;
                     self.write_document(&mut tx,&format!("run:{wake_id}"),wake).await?;
                     self.index_run(&mut tx,wake).await?;
                     task["wake_run_id"]=json!(wake_id);
                     task["delivery_run_id"]=json!(wake_id);
+                    }
                 }
             }
         }
@@ -65,6 +80,7 @@ mod followup_tests {
     async fn fixture() -> (tempfile::TempDir, Store, Value, Value) {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
+        if store.account_by_id("admin").await.unwrap().is_none(){store.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();}
         store.put("session:followup-session", &json!({
             "id":"followup-session","title":"Followup","status":"active",
             "agent_id":"shared_default","created_at":1
@@ -176,6 +192,7 @@ mod followup_tests {
     async fn account_and_runtime_effective_budgets_block_and_retry_wake() {
         for (account_limit, runtime_limit) in [(1usize, 4usize), (4, 1), (0, 4), (4, 0)] {
             let (_root, store, task, wake) = fixture().await;
+            store.put("session:other-session",&json!({"id":"other-session","agent_id":"shared_default","status":"active"})).await.unwrap();
             let busy = json!({"id":"other-session-run","session_id":"other-session",
                 "status":"queued","updated_at":1});
             save_run(&store, &busy).await;

@@ -45,7 +45,7 @@ pub fn apply_selection(run:&mut Value,result:&Value) {
     run["loaded_abilities"]=json!(loaded);run["selected_tools"]=json!(selected);
 }
 async fn eligible(app:&App,sid:&str,agent:&str,loaded:&Value)->Result<Vec<Value>> {
-    let access=app.store.live_access(app.store.current_user_id(),agent).await?;
+    let access=crate::shared_chat::live_access(&app.store,crate::shared_chat::actor(app),sid,agent).await?;
     if !access.admitted() {bail!("Agent access unavailable");}
     let (policy,_,visibility,state)=ability_controls(app,sid).await?;
     let read_only=session_mode(app,sid).await?["mode"]=="read_only";
@@ -107,7 +107,7 @@ async fn exact(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:&Cance
     let agent=session_agent_id(app,sid).await?;
     let run=app.run(run_id).await?;
     if cancel.is_cancelled()||run["session_id"]!=sid||run["agent_id"]!=agent||run["status"]!="running"||run["pending"]["name"]!=name||app.shutoff().await? {bail!("Run unavailable");}
-    let access=app.store.live_access(app.store.current_user_id(),&agent).await?;
+    let access=crate::shared_chat::live_access(&app.store,crate::shared_chat::actor(app),sid,&agent).await?;
     let (policy,_,visibility,state)=ability_controls(app,sid).await?;
     let read_only=session_mode(app,sid).await?["mode"]=="read_only";
     if live_tool_decision(app,&access,name,&policy,&visibility,&state,&run["loaded_abilities"],read_only).permission==crate::access::Permission::Deny {bail!("Catalog operation denied");}
@@ -129,7 +129,7 @@ async fn inner(app:&App,sid:&str,run_id:&str,args:&Args,cancel:CancellationToken
     let agent=session_agent_id(app,sid).await?;let run=app.run(run_id).await?;
     if run["session_id"]!=sid||run["agent_id"]!=agent||run["status"]!="running" {bail!("Run unavailable");}
     let candidate=resolve_model(&app.store.model_catalog().await?,&agent,args.model_entry_id.as_deref())?;
-    let tokens=if let Some(pin)=&candidate.platform {app.store.platform_dispatch_tokens(app.store.current_user_id(),&agent,pin).await?} else {app.store.get(&candidate.credential_ref).await?.context("Credential unavailable")?};
+    let tokens=if let Some(pin)=&candidate.platform {app.store.platform_dispatch_tokens(crate::shared_chat::actor(app),&agent,pin).await?} else {app.store.get(&candidate.credential_ref).await?.context("Credential unavailable")?};
     let key=tokens["api_key"].as_str().context("API key unavailable")?;let tools=eligible(app,sid,&agent,&run["loaded_abilities"]).await?;
     if tools.is_empty() {bail!("No eligible tools");}let body=request(&candidate.upstream_model,&args.query,&tools);
     if serde_json::to_vec(&body)?.len()>512*1024 {bail!("Request exceeds bound");}
@@ -156,9 +156,9 @@ pub fn additional_guidance(app:&App,schemas:&[Value],visibility:&Value,loaded:&V
         if !loaded.as_array().is_some_and(|items|items.contains(&json!(marker(name)))) {continue;}
         for owner in app.abilities.tool_abilities(name,visibility,&Value::Null,&Value::Null) {
         if owners.insert(owner.clone())&&visibility["skill_visibility"][&owner].as_str().unwrap_or("visible")=="visible" {
-            if let Some(s)=app.abilities.configuration_skill(&owner) {append_guidance(&mut out,existing,s);}
+            if let Some(s)=app.abilities.configuration_skill(&owner) {append_guidance(&mut out,existing,&s);}
         }
-        if visibility["tool_modes"][name]!="off" {if let Some(s)=app.abilities.configuration_skill_asset(&owner,"tool",name) {append_guidance(&mut out,existing,s);}}
+        if visibility["tool_modes"][name]!="off" {if let Some(s)=app.abilities.configuration_skill_asset(&owner,"tool",name) {append_guidance(&mut out,existing,&s);}}
     }}out
 }
 fn append_guidance(out:&mut String,existing:&str,text:&str) {

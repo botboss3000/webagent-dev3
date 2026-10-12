@@ -16,6 +16,7 @@ test('reload restores the partial reply, replay is deduplicated, and final text 
     replaceChildren(...nodes) { this.children = nodes; }
     setAttribute() {}
     querySelectorAll() { return []; }
+    querySelector() { return null; }
   }
   const elements = new Map();
   const get = id => {
@@ -26,6 +27,7 @@ test('reload restores the partial reply, replay is deduplicated, and final text 
   class EventSource {
     constructor() { stream = this; }
     close() {}
+    addEventListener(name, listener) { (this.listeners ??= {})[name] = listener; }
   }
   const responses = {
     '/auth/setup-status': { initialized: true },
@@ -34,7 +36,7 @@ test('reload restores the partial reply, replay is deduplicated, and final text 
     '/sessions': { sessions: [{ id: 's', title: 'test' }] },
     '/sessions/s': {
       session: { id: 's', title: 'test' },
-      messages: [{ role: 'user', content: 'Question' }],
+      messages: [{ id:'question',seq:9,role: 'user', content: 'Question' },{id:'working',seq:10,role:'assistant',content:'Saved prefix'}],
       runs: [], last_seq: 10, partial: { run_id: 'r', text: 'Saved prefix' },
     },
   };
@@ -49,32 +51,32 @@ test('reload restores the partial reply, replay is deduplicated, and final text 
     createAdministratorNotices: () => ({ start() {}, stop() {} }),
   };
   const clientSource = fs.readFileSync(path.join(__dirname, '../ui/chat/core/client.js'), 'utf8')
-    .replace(/^import .*;\n/gm, '').replace('export function', 'function');
+    .replace(/^import .*;\n/gm, '').replace(/^export function /gm, 'function ');
   vm.runInNewContext(clientSource + '\nglobalThis.createChatClient = createChatClient;', context);
   const published = [];
   const client = context.createChatClient({
     request: async url => responses[url], note: () => {}, EventSourceClass: EventSource,
   });
   await client.open('s', data => {
-    assert.equal(data.partial.text, 'Saved prefix');
+    assert.equal(data.messages.find(row=>row.id==='working').content, 'Saved prefix');
   }, item => published.push(item));
   const emit = item => stream.onmessage({ data: JSON.stringify(item) });
-  emit({ seq: 11, kind: 'delta', payload: { run_id: 'r', text: ' plus new' } });
-  emit({ seq: 11, kind: 'delta', payload: { run_id: 'r', text: ' duplicate' } });
-  emit({ seq: 12, kind: 'message', payload: { run_id: 'r', role: 'assistant', content: '<script>unsafe()</script>' } });
+  emit({ id:'next',seq:11,run_id:'r',role:'assistant',content:' plus new' });
+  emit({ id:'next',seq:11,run_id:'r',role:'assistant',content:' duplicate' });
+  emit({ id:'final',seq:12,run_id:'r',role:'assistant',content:'<script>unsafe()</script>' });
   assert.deepEqual(published.map(item => item.seq), [11, 12]);
-  assert.equal(published[1].payload.content, '<script>unsafe()</script>');
+  assert.equal(published[1].content, '<script>unsafe()</script>');
   client.disconnect();
   const viewSource = fs.readFileSync(path.join(__dirname, '../ui/chat/core/message-view.js'), 'utf8')
-    .replace(/^import .*;\n/gm, '').replace('export function', 'function');
+    .replace(/^import .*;\n/gm, '').replace(/^export function /gm, 'function ');
   const viewContext = {
     document: { createElement: () => new Element(), createTextNode: text => ({ textContent: text }) },
-    window: {}, currentChatProfile: () => ({}), _refreshLucideIcons() {},
+    window: {}, applyBubblePaint(){}, currentChatProfile: () => ({}), _refreshLucideIcons() {},
     createBubbleGutter: () => new Element(), URL, location: context.location,
   };
   vm.runInNewContext(viewSource + '\nglobalThis.createMessage = createMessage;', viewContext);
   const bubble = viewContext.createMessage({
-    id: 'final', seq: 12, run_id: 'r', role: 'assistant', content: published[1].payload.content,
+    id: 'final', seq: 12, run_id: 'r', role: 'assistant', content: published[1].content,
   });
   const body = bubble.children[1].children[0];
   assert.equal(body.children[0].textContent, '<script>unsafe()</script>');

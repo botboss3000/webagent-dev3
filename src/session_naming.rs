@@ -56,6 +56,8 @@ fn dispatch(session: &Value, state: &model_selection::FailoverState) -> Result<V
         .ok_or_else(|| anyhow!("Naming candidates exhausted"))?;
     Ok(
         json!({"id":session["auto_naming"]["run_id"],"session_id":session["id"],"agent_id":session["agent_id"],
+        "requester_user_id":session["auto_naming"]["requester_user_id"],
+        "participation_generation":session["auto_naming"]["participation_generation"].as_u64().unwrap_or(0),
         "selection_plan":plan,"failover_state":state,"provider_selection":provider::ProviderSelection { limits:candidate.limits.clone(),
             provider:candidate.transport.provider_id(),model:candidate.upstream_model.clone()}.value()}),
     )
@@ -71,6 +73,9 @@ async fn permitted(app: &App, session: &Value, run: &Value) -> bool {
             )
             .await
             .unwrap_or(false)
+        && app.store.participation_allows_run(run).await.unwrap_or(false)
+        && crate::shared_chat::live_access(&app.store,run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id()),
+            run["session_id"].as_str().unwrap_or(""),run["agent_id"].as_str().unwrap_or("shared_default")).await.is_ok_and(|access|access.admitted())
         && app.run_model_authorized(run).await
 }
 async fn prepare_plan(app: &App, session: &Value) -> Result<Value> {
@@ -194,6 +199,12 @@ async fn work(app: App, sid: String, recovery: bool) -> Result<()> {
     let Some(session) = app.store.naming_claim(&sid, recovery).await? else {
         return Ok(());
     };
+    let mut app=app;
+    let requester=session["auto_naming"]["requester_user_id"].as_str().unwrap_or(app.store.current_user_id()).to_owned();
+    app.chat_actor=Some(requester.clone());
+    let access=crate::shared_chat::resolve(&app,&sid,&requester).await?;
+    if !access.can_write() {return Err(anyhow!("Naming requester unavailable"));}
+    app.chat_access=Some(access);
     let claim = session["auto_naming"]["claim"]
         .as_str()
         .ok_or_else(|| anyhow!("Missing naming claim"))?
@@ -403,6 +414,29 @@ mod acceptance_tests {
         assert_eq!(saved(&app, &sid).await["auto_naming"]["stage"], "exhausted");
         assert!(app.store.naming_candidates(true).await.unwrap().is_empty());
         assert!(!app.store.naming_finish(&sid, claimed["auto_naming"]["claim"].as_str().unwrap(), Some("Late title")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn deactivation_cancels_naming_claim_and_reactivation_cannot_publish_late_title() {
+        let (_root,app)=fixture().await;
+        let sid=create(&app,None).await;
+        let mut run=accept(&app,&sid,"NAMING-SENTINEL").await;
+        finish(&app,&mut run).await;
+        let claimed=app.store.naming_claim(&sid,false).await.unwrap().unwrap();
+        let naming_run=dispatch(&claimed,&model_selection::FailoverState::default()).unwrap();
+        assert_eq!(naming_run["requester_user_id"],run["requester_user_id"]);
+        assert_eq!(naming_run["participation_generation"],run["participation_generation"]);
+        let claim=claimed["auto_naming"]["claim"].as_str().unwrap();
+        app.store.set_participation(&sid,app.store.current_user_id(),false,0,"off").await.unwrap();
+        app.store.set_participation(&sid,app.store.current_user_id(),true,1,"on").await.unwrap();
+        assert!(!permitted(&app,&claimed,&naming_run).await);
+        assert!(!app.store.naming_finish(&sid,claim,Some("Late private title")).await.unwrap());
+        assert!(app.store.naming_claim(&sid,true).await.unwrap().is_none());
+        work(app.clone(),sid.clone(),true).await.unwrap();
+        let saved=saved(&app,&sid).await;
+        assert_eq!(saved["auto_naming"]["stage"],"cancelled");
+        assert!(saved["auto_naming"]["source"].is_null());
+        assert_ne!(saved["title"],"Late private title");
     }
 
     use crate::runtime_tests::fixture;

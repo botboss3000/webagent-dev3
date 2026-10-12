@@ -34,3 +34,7 @@ http-body-util = "0.1"
 [[bin]]
 name = "webagent-diagnostics"
 path = "src/plugin_packages/diagnostics/main.rs"
+
+[[bin]]
+name = "webagent-optimization"
+path = "src/plugin_packages/optimization/main.rs"

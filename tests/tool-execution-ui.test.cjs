@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '../ui/shared/ability-row-controls.js'), 'utf8');
-function control({ capable = true, maxConcurrency = capable ? 4 : 1, canEdit = true, save = async () => {}, execution, policies } = {}) {
+function control({ capable = true, maxConcurrency = capable ? 4 : 1, canEdit = true, save = async () => {}, execution, policies, duplicateCapable = false } = {}) {
   const handlers = {};
   const tri = {
     classList: { add() {} }, dataset: {}, _paint() {}, setAttribute() {},
@@ -26,7 +26,7 @@ function control({ capable = true, maxConcurrency = capable ? 4 : 1, canEdit = t
   const end = source.indexOf('const _EYE_ON_SVG', start);
   vm.runInNewContext(source.slice(start, end) + '\nglobalThis.build = _buildToolStateControl;', context);
   context.build({
-    advanced_policies: policies,
+    advanced_policies: policies, duplicate_protection_capable: duplicateCapable,
     name: 'file_read', permMode: 'auto', mode: 'visible', background_capable: capable,
     max_supported_concurrency: maxConcurrency,
     execution: execution || { mode: 'foreground', max_concurrency: capable ? 4 : 1, on_run_end: 'stop' },
@@ -196,4 +196,21 @@ test('policy disclosure renders native collapsed details and clamps to measured 
   menu.height = 500;
   details.handlers.toggle();
   assert.equal(menu.style.top, '132px');
+});
+
+test('duplicate protection is independently configurable and retains the complete execution settings', async () => {
+  const saves = [];
+  const ui = control({ capable: false, duplicateCapable: true,
+    execution: { mode: 'foreground', max_concurrency: 1, on_run_end: 'stop', duplicate_protection: 'on' },
+    save: async (_, settings) => saves.push(settings) });
+  assert(ui.items().some(item => item.info && item.label === 'Duplicate-action protection'));
+  await ui.items().find(item => item.label === 'Off for new actions').action();
+  assert.deepEqual({ ...saves[0] }, { mode: 'foreground', max_concurrency: 1, on_run_end: 'stop', duplicate_protection: 'off' });
+  assert(ui.items().find(item => item.label === 'Off for new actions').checked);
+  assert(ui.items().some(item => /Saved and uncertain actions remain protected/.test(item.label)));
+  const failed = control({ capable: false, duplicateCapable: true,
+    execution: { mode: 'foreground', max_concurrency: 1, on_run_end: 'stop', duplicate_protection: 'on' },
+    save: async () => { throw Error('stale revision'); } });
+  await failed.items().find(item => item.label === 'Off for new actions').action();
+  assert(failed.items().find(item => item.label === 'On').checked);
 });

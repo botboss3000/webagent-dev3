@@ -13,7 +13,7 @@ class E {
 }
 const flatten=n=>[n.textContent,...n.children.map(flatten)].join(' ');
 const tick=()=>new Promise(setImmediate);
-async function fixture(){
+async function fixture(canWrite=()=>true){
  const root=new E(),row=new E(),host=new E();row.dataset.publicId='user:a';row.dataset.seq='7';root.append(row,host);
  const document={activeElement:null,createElement:tag=>{const node=new E(tag);node.document=document;return node;}};
  const context=vm.createContext({document,Set,Number});
@@ -21,7 +21,7 @@ async function fixture(){
  let session='one',data={queue:[{id:'a',message_id:'user:a',revision:2,choice:'queue',status:'pending'}],queue_state:{revision:3,held:false}};
  const calls=[],errors=[],keys=new Map();let write=null;
  const client={snapshot:async()=>data,delivery:async(...args)=>{calls.push(args);if(write)return write();data={queue:[{...data.queue[0],choice:args[2].choice,revision:3}],queue_state:{revision:4}};},resumeQueue:async(...args)=>calls.push(args)};
- const queue=mod.namespace.mountFollowupQueue({root,host,client,getSession:()=>session,guard:fn=>async()=>{try{await fn();}catch(e){errors.push(e.message);}},note:()=>{},keyId:k=>{if(!keys.has(k))keys.set(k,'request-'+keys.size);return keys.get(k);},forgetKey:k=>keys.delete(k),onSnapshot:d=>queue.update(d)});
+ const queue=mod.namespace.mountFollowupQueue({root,host,client,getSession:()=>session,canWrite,guard:fn=>async()=>{try{await fn();}catch(e){errors.push(e.message);}},note:()=>{},keyId:k=>{if(!keys.has(k))keys.set(k,'request-'+keys.size);return keys.get(k);},forgetKey:k=>keys.delete(k),onSnapshot:d=>queue.update(d)});
  queue.update(data);
  return {queue,row,host,calls,errors,document,buttons:()=>row.querySelector('.followup-delivery-actions').children,setData:d=>data=d,setWrite:fn=>write=fn,session:s=>session=s};
 }
@@ -64,4 +64,16 @@ test('busy choices retain nodes and semantic updates restore focus',async()=>{
  const f=await fixture(),button=f.buttons()[1];button.focus();let resolve;f.setWrite(()=>new Promise(r=>resolve=r));const pending=button.onclick();await tick();
  assert.equal(f.buttons()[1],button);assert.ok(button.disabled);resolve();await pending;assert.equal(f.buttons()[1],button);assert.equal(button.disabled,false);
  f.queue.update({queue:[{id:'a',message_id:'user:a',revision:3,choice:'steer',status:'pending'}],queue_state:{revision:4}});assert.notEqual(f.buttons()[1],button);assert.equal(f.document.activeElement,f.buttons()[1]);
+});
+
+// The shared access projection permits queue mutation only to its canonical owner.
+test('read-only queue projection keeps status visible and blocks every mutation',async()=>{
+ let allowed=false;const f=await fixture(()=>allowed);
+ assert.match(flatten(f.row),/Queued/);assert.ok(f.buttons().every(b=>b.disabled));
+ await f.buttons()[1].onclick();assert.equal(f.calls.length,0);assert.match(f.errors[0],/not available/);
+ const held={queue:[{id:'a',message_id:'user:a',revision:2,choice:'queue',status:'held'}],queue_state:{revision:4,held:true,reason:'Stopped'}};
+ f.queue.update(held);const resume=f.host.children[0].children[1];assert.ok(resume.disabled);
+ await resume.onclick();assert.equal(f.calls.length,0);
+ allowed=true;f.queue.update(held);assert.ok(f.buttons().every(b=>!b.disabled));assert.equal(f.host.children[0].children[1].disabled,false);
+ allowed=false;f.queue.update(held);assert.ok(f.buttons().every(b=>b.disabled));assert.ok(f.host.children[0].children[1].disabled);
 });

@@ -147,6 +147,18 @@ pub fn schemas() -> Vec<Value> {
         schemas.extend(core_compaction::schemas());
         schemas.extend(core_recall::schemas());
         schemas.extend(core_mode::schemas());
+        #[cfg(test)] schemas.push(json!({"type":"function","name":"test_owner_purchase","description":"Development-only owner authorization fixture",
+            "authorization":{"kind":"credential_owner","credential_kind":"test"},
+            "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}));
+        for schema in &mut schemas {
+            if crate::actions::supported(schema["name"].as_str().unwrap_or("")) {
+                schema["parameters"]["properties"]["_action"]=json!({"type":["object","null"],
+                    "properties":{"id":{"type":"string","minLength":1,"maxLength":128},
+                    "separate_from":{"type":["string","null"],"maxLength":128}},
+                    "required":["id"],"additionalProperties":false,
+                    "description":"Stable intended-action ID. Reuse for identical retries. Matching additional actions require a prior action reference, fresh user intent and human authorization; new IDs cannot bypass protection."});
+            }
+        }
         // Responses may require every property: nullable optional fields keep
         // live file calls and action-specific build arguments representable.
         for schema in &mut schemas {

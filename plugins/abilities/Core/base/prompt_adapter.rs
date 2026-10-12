@@ -35,13 +35,13 @@ async fn view(app:&App,sid:&str,run_id:&str)->Result<View> {
     let loaded=run["loaded_abilities"].clone();
     let (policy,mode_revision,visibility,state)=ability_controls(&scoped,sid).await?;
     let mode=session_mode(&scoped,sid).await?;
-    let access=scoped.store.live_access(scoped.store.current_user_id(),&agent).await?;
+    let access=crate::shared_chat::live_access(&scoped.store,crate::shared_chat::actor(&scoped),sid,&agent).await?;
     if !access.admitted() || live_tool_decision(&scoped,&access,"read_own_prompt",
         &policy,&visibility,&state,&loaded,mode["mode"]=="read_only")
         .permission==crate::access::Permission::Deny {
         bail!("Current-agent prompt read unavailable under current access");
     }
-    let authority=scoped.store.agent_authority(scoped.store.current_user_id(),&agent).await?;
+    let authority=scoped.store.agent_authority(crate::shared_chat::actor(&scoped),&agent).await?;
     let manager=authority["can_manage"].as_bool().unwrap_or(false);
     let fingerprint=crate::digest(&json!([agent,policy,mode_revision,visibility,state,mode,
         loaded,access.context_fingerprint(),authority,scoped.abilities.live_version()]));

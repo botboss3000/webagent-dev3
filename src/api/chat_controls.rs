@@ -299,6 +299,7 @@ mod tests {
         let (messages,_)=app.store.chat_snapshot(&sid).await.unwrap();
         assert_eq!(messages.iter().filter(|row|row["role"]=="user").count(),1);
         assert_eq!(messages.iter().filter(|row|row["role"]=="assistant").count(),1);
+        assert!(app.store.tool_result(&sid,&rid,"discover").await.unwrap().is_some());
         assert_eq!(messages.last().unwrap()["content"],"boundary complete");
         server.abort();
     }

@@ -82,20 +82,29 @@ pub(super) async fn execute_parallel_batch(
             ability_state_revision:ability_state["revision"].as_u64().unwrap_or(0),
         }),workflow::Decision::Pass)?;
         let receipt=run["workflow"]["receipts"]["pre_tool"].clone();
-        let pending=json!({"id":uuid(),"name":name,"arguments":args,"call_id":model_call["call_id"],
+        let mut pending=json!({"id":uuid(),"name":name,"arguments":args,"call_id":model_call["call_id"],
             "digest":digest(&args),"policy_version":policy["version"],"mode_revision":mode_revision,
             "visibility_revision":visibility["revision"],"ability_state_revision":ability_state["revision"],
             "access_revision":access.revision.clone(),"state":"requested","decision":null});
         crate::tool_execution::resolve(&visibility,&name)?;
-        let effective=live_tool_decision(app,access,&name,&policy,&visibility,
+        let mut effective=live_tool_decision(app,access,&name,&policy,&visibility,
             &ability_state,&run["loaded_abilities"],read_only).for_execution_mode(&execution_mode);
-        let result=if run["post_run_followup"]==true
+        let mut result=if run["post_run_followup"]==true
             && !crate::tool_execution::background_capable(&name) {
             Some(denied("Tool is unavailable during a background follow-up"))
         } else if args.get("invalid_arguments").is_some()
             || effective.permission==access::Permission::Deny {
             Some(denied("Tool invocation denied by policy or invalid arguments"))
         } else {None};
+        if result.is_none() {
+            let mut view=run.clone();view["pending"]=pending.clone();
+            result=match crate::actions::preflight(app,&mut view,&name,&args,&visibility).await {
+                Ok(result)=>result,
+                Err(_)=>Some(denied("Invalid action metadata or unavailable action record")),
+            };
+            pending=view["pending"].clone();
+            if pending["new_intent_confirmation"]==true {effective.permission=access::Permission::Ask;}
+        }
         let state=if result.is_some() {"done"}
             else if effective.permission==access::Permission::Ask {"waiting"}
             else {"requested"};
@@ -111,7 +120,7 @@ pub(super) async fn execute_parallel_batch(
     // again below before any worker sees them.
     if execution_mode["mode"]=="write" && execution_mode["execution_mode"]=="auto" {
         for item in run["batch"].as_array_mut().unwrap() {
-            if item["state"]!="waiting" {continue;}
+            if item["state"]!="waiting" || item["pending"]["new_intent_confirmation"]==true {continue;}
             item["state"]=json!("requested");
             item["pending"]["id"]=json!(uuid());
             item["pending"]["mode_revision"]=json!(mode_revision);
@@ -130,6 +139,7 @@ pub(super) async fn execute_parallel_batch(
                     run["pending"]=Value::Null;
                 },
                 Some("deny")=>{
+                    crate::actions::not_dispatched(app,&run,&run["batch"][idx]["pending"]).await?;
                     run["batch"][idx]["result"]=denied("Tool approval denied");
                     run["batch"][idx]["state"]=json!("done");
                     run["pending"]=Value::Null;

@@ -92,6 +92,7 @@ PYCONFIG
       --mount type=bind,src=/home/ar/webagent-dev3/runtime,dst=/run/v3 \
       --mount type=bind,src=/home/ar/webagent-dev3/gate-runtime,dst=/run/v3/gate \
       --mount type=bind,src=/home/ar/webagent-dev3/plugins/abilities,dst=/opt/v3/plugins/abilities,readonly \
+      --mount type=bind,src=/home/ar/webagent-dev3/plugins,dst=/live-checkout/plugins,readonly \
       --env V3_ABILITIES_ROOT=/opt/v3/plugins/abilities \
       --tmpfs /run:rw,nosuid,nodev,size=16m --tmpfs /tmp:rw,nosuid,nodev,size=32m \
       --stop-timeout 30 webagent-dev-v3-loop:local

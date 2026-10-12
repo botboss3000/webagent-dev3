@@ -3,6 +3,8 @@ use super::*;
 impl Store {
     pub(crate) async fn claim_manager_review(&self, id: &str) -> Result<Option<Value>> {
         let key = format!("manager_review:{id}");
+        let Some(saved)=self.get(&key).await? else {return Ok(None)};
+        if saved["status"]!="pending_review" || !self.requester_claim_ready(&saved["run"]).await? {return Ok(None);}
         let mut tx = self.pool.begin().await?;
         sqlx::query("UPDATE docs SET value=value WHERE key=?")
             .bind(&key)
@@ -84,6 +86,7 @@ impl Store {
                 return Err(anyhow!("Manager review lease expired"));
             }
             self.require_active_session(&mut tx, sid).await?;
+            self.require_participation(&mut tx,&record["run"]).await?;
             let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')")
                 .bind(sid).fetch_one(&mut *tx).await?;
             if count != 0 {
@@ -95,6 +98,7 @@ impl Store {
                 .await?;
             self.index_run(&mut tx, &run).await?;
             let message = &record["message"];
+            self.write_document(&mut tx,&format!("message_meta:{id}"),&json!({"author_id":message["author_id"],"context_eligible":true,"queued":false})).await?;
             // Naming begins only after the manager admits the message.
             self.begin_session_naming(&mut tx, sid, id, message).await?;
             let text = message["context_content"]
@@ -141,6 +145,7 @@ impl Store {
             format!("run_view:{id}"),
             format!("session:{sid}"),
         ]);
+        if state!="acceptable" {self.reconcile_requester_slots().await?;}
         Ok(true)
     }
 }
@@ -148,6 +153,7 @@ impl Store {
 mod tests {
     use super::*;
     async fn submitted(store: &Store, sid: &str, id: &str) -> Value {
+        if store.account_by_id("admin").await.unwrap().is_none(){store.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();}
         store
             .put(
                 &format!("session:{sid}"),

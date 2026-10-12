@@ -64,13 +64,24 @@ impl<'a> CallDraft<'a> {
         }
     }
 
-    pub(crate) fn validate(self) -> Result<ValidatedCall<'a>> {
+    pub(crate) fn validate(mut self) -> Result<ValidatedCall<'a>> {
         if self.instructions.is_empty() {
             return Err(typed_failure(
                 crate::model_selection::FailureKind::MalformedRequest,
                 false,
                 "Invalid provider instructions",
             ));
+        }
+        // Durable message authorship is application metadata, never provider
+        // input. Normalize recovered histories as well as freshly admitted turns.
+        // Tool arguments/results and reasoning identifiers remain unchanged.
+        for item in &mut self.input {
+            if let Some(object)=item.as_object_mut().filter(|object|object.contains_key("role")) {
+                for key in ["author_id","author_name","run_id","context_content",
+                    "participation_generation","context_eligible","queued"] {
+                    object.remove(key);
+                }
+            }
         }
         if let Some(budget) = self.selection.input_budget_bytes()? {
             #[derive(serde::Serialize)]
@@ -448,5 +459,31 @@ mod limit_tests {
   let ready=CallDraft::new(&selection,vec![],vec![],"s","help").validate().unwrap();
   let PreparedRequest::Subscription(request)=ready.request else {panic!("subscription")};
   assert_eq!(request.max_output_tokens,Some(2000));
+ }
+}
+
+#[cfg(test)]
+mod shared_message_wire_tests {
+ use super::*;
+ #[test]
+ fn subscription_first_and_recovered_user_messages_strip_internal_metadata() {
+  let selection=ProviderSelection { limits:None,provider:ProviderId::OpenaiSubscription,model:"fixture".into() };
+  let call=json!({"type":"function_call","id":"fc-provider","call_id":"call-1","name":"read","arguments":"{\"run_id\":\"argument-data\"}"});
+  let output=json!({"type":"function_call_output","call_id":"call-1","output":"{\"author_id\":\"result-data\"}"});
+  let reasoning=json!({"type":"reasoning","id":"reason-provider","encrypted_content":"opaque","summary":[]});
+  for recovered in [false,true] {
+   let mut input=vec![];
+   if recovered {input.extend([call.clone(),output.clone(),reasoning.clone()]);}
+   input.push(json!({"role":"user","content":"Shared request","type":"message",
+    "author_id":"credential-owner","author_name":"Owner","run_id":"internal-run",
+    "context_content":"attachment preparation","participation_generation":9,
+    "context_eligible":true,"queued":false}));
+   let ready=CallDraft::new(&selection,input,vec![],"s","guide").validate().unwrap();
+   let PreparedRequest::Subscription(request)=ready.request else {panic!("subscription")};
+   assert_eq!(request.input.last().unwrap(),&json!({"role":"user","content":"Shared request","type":"message"}));
+   if recovered {
+    assert_eq!(request.input[0],call);assert_eq!(request.input[1],output);assert_eq!(request.input[2],reasoning);
+   }
+  }
  }
 }

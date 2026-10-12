@@ -102,6 +102,7 @@ async fn catalog(app:&App,identity:&Value,id:&str,params:&HashMap<String,String>
                 tool["call_count"]=json!(call_counts.get(&name).copied().unwrap_or(0));
                 tool["execution"]=serde_json::to_value(crate::tool_execution::resolve(&visibility,&name)?).map_err(anyhow::Error::from)?;
                 tool["advanced_policies"]=crate::tool_execution::advanced_policies(&name);
+                tool["duplicate_protection_capable"]=json!(crate::actions::supported(&name));
                 tool["background_capable"]=json!(crate::tool_execution::background_capable(&name));
                 tool["max_supported_concurrency"]=json!(crate::tool_execution::max_supported_concurrency(&name));
                 let decision=live_tool_decision(&scoped,&access,&name,&policy,&visibility,&active,&loaded,false);
@@ -223,8 +224,8 @@ pub(crate) async fn execution_set(State(app):State<App>,Extension(identity):Exte
         return Err(bad("Unknown ability or tool"));
     }
     let fields=body.settings.as_object().ok_or_else(||bad("Execution settings required"))?;
-    if fields.len()!=3 || !fields.contains_key("mode") || !fields.contains_key("max_concurrency") || !fields.contains_key("on_run_end") {
-        return Err(bad("Expected mode, max_concurrency and on_run_end"));
+    if !(3..=4).contains(&fields.len()) || fields.keys().any(|key|!matches!(key.as_str(),"mode"|"max_concurrency"|"on_run_end"|"duplicate_protection")) || !fields.contains_key("mode") || !fields.contains_key("max_concurrency") || !fields.contains_key("on_run_end") {
+        return Err(bad("Expected execution settings with optional duplicate_protection"));
     }
     if !matches!(body.settings["mode"].as_str(),Some("foreground"|"background"|"model"))
         || !matches!(body.settings["on_run_end"].as_str(),Some("stop"|"silent"|"wake"))
@@ -412,6 +413,8 @@ pub(crate) async fn settings_set(State(app):State<App>,Extension(identity):Exten
         "terminal_control"=>body.settings.as_object().is_some_and(|m|m.len()==1 && matches!(m.get("terminal_caution").and_then(Value::as_str),Some("cautious"|"balanced"|"trusted"))),
         "codebase_admin"=>body.settings.as_object().is_some_and(|m|m.len()==1 && matches!(m.get("destructive_caution").and_then(Value::as_str),Some("cautious"|"balanced"|"trusted"))),
         "code_index"=>crate::tools::code_index_retrieval::validate_settings(&body.settings).is_ok(),
+        "optimization"=>serde_json::from_value::<crate::optimization_settings::OptimizationSettings>(body.settings.clone())
+            .is_ok_and(|settings| settings.validate().is_ok()),
         _=>false,
     };
     if !valid{return Err(bad("Unsupported Administrator settings"));}
@@ -676,5 +679,64 @@ mod code_index_settings_authority_tests {
         assert!(crate::tools::code_index_retrieval::authorize_attachment(
             &app, &sid, &run_id, &current).await.is_err());
         assert_eq!(saved["settings"]["code_index"], settings(true, 8_000));
+    }
+}
+
+#[cfg(test)]
+mod optimization_settings_authority_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn optimization_settings_persist_and_fence_invalid_stale_and_denied_writes() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let identity = json!({"_user_id": app.store.current_user_id()});
+        let revision = app.store.agent_abilities().await.unwrap()["revision"].as_u64().unwrap();
+        let settings = serde_json::to_value(crate::optimization_settings::OptimizationSettings {
+            attempts: 2, cpu_cores: 2, ram_mb: 4096,
+            ..Default::default()
+        }).unwrap();
+        let path = ("shared_default".into(), "optimization".into());
+        let saved = settings_set(State(app.clone()), Extension(identity.clone()), Path(path.clone()),
+            Json(SettingsBody { expected_revision: revision, settings: settings.clone() })).await.unwrap().0;
+        assert_eq!(saved["settings"]["optimization"], settings);
+        assert_eq!(app.store.agent_abilities().await.unwrap()["settings"]["optimization"], settings);
+        let stale = settings_set(State(app.clone()), Extension(identity.clone()), Path(path.clone()),
+            Json(SettingsBody { expected_revision: revision, settings: settings.clone() })).await.unwrap_err();
+        assert_eq!(stale.0, StatusCode::CONFLICT);
+        for invalid in [json!({"cpu_cores":3}), json!({"ram_mb":0}), json!({"unknown":true})] {
+            let result = settings_set(State(app.clone()), Extension(identity.clone()), Path(path.clone()),
+                Json(SettingsBody { expected_revision: revision + 1, settings: invalid })).await.unwrap_err();
+            assert_eq!(result.0, StatusCode::BAD_REQUEST);
+        }
+        assert!(settings_set(State(app.clone()), Extension(json!({"_user_id":"outsider"})), Path(path),
+            Json(SettingsBody { expected_revision: revision + 1, settings })).await.is_err());
+        assert_eq!(app.store.agent_abilities().await.unwrap()["revision"], revision + 1);
+    }
+}
+
+#[cfg(test)]
+mod duplicate_settings_tests {
+    use super::*;
+    #[tokio::test]
+    async fn duplicate_settings_use_existing_authority_revision_and_catalog_contract() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let identity=json!({"_user_id":app.store.current_user_id()});
+        let path=("shared_default".into(),"codebase_admin".into(),"prompt_slot_write".into());
+        let revision=app.store.agent_abilities().await.unwrap()["revision"].as_u64().unwrap();
+        let old=json!({"mode":"foreground","max_concurrency":1,"on_run_end":"stop"});
+        let saved=execution_set(State(app.clone()),Extension(identity.clone()),Path(path.clone()),
+            Json(ExecutionBody{expected_revision:revision,settings:old})).await.unwrap().0;
+        assert_eq!(saved["tool_execution"]["prompt_slot_write"]["duplicate_protection"],"on");
+        let mut off=saved["tool_execution"]["prompt_slot_write"].clone();off["duplicate_protection"]=json!("off");
+        assert_eq!(execution_set(State(app.clone()),Extension(identity.clone()),Path(path.clone()),
+            Json(ExecutionBody{expected_revision:revision,settings:off.clone()})).await.unwrap_err().0,StatusCode::CONFLICT);
+        let saved=execution_set(State(app.clone()),Extension(identity.clone()),Path(path),
+            Json(ExecutionBody{expected_revision:saved["revision"].as_u64().unwrap(),settings:off})).await.unwrap().0;
+        let catalog=read(State(app.clone()),Extension(identity),Path("shared_default".into())).await.unwrap().0;
+        let tool=catalog["abilities"].as_array().unwrap().iter().flat_map(|a|a["tools"].as_array().into_iter().flatten())
+            .find(|t|t["name"]=="prompt_slot_write").unwrap();
+        assert_eq!(tool["duplicate_protection_capable"],true);
+        assert_eq!(tool["execution"]["duplicate_protection"],"off");
+        assert_eq!(saved["tool_execution"]["prompt_slot_write"]["duplicate_protection"],"off");
     }
 }

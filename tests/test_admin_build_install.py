@@ -39,6 +39,7 @@ class InstallTests(unittest.TestCase):
         (self.source / "host.py").write_bytes(self.host)
         (self.source / "install.py").write_bytes(b"# fixture bootstrap\n")
         (self.source / "release.py").write_bytes(b"# fixture release\n")
+        (self.source / "performance.py").write_bytes(b"# fixture protected performance\n")
         index_source=self.source.parent/"code_index"
         index_source.mkdir()
         (index_source/"adapter.py").write_bytes(b"# fixture protected parser\n")
@@ -66,6 +67,9 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(0, self.fake.owner((service / "host.py").stat()))
         self.assertEqual(hashlib.sha256(b"# fixture protected parser\n").hexdigest(),result["scanner_sha256"])
         self.assertEqual(0,self.fake.owner((service/"index-scanner.py").stat()))
+        self.assertEqual(hashlib.sha256(b"# fixture protected performance\n").hexdigest(), result["performance_sha256"])
+        self.assertEqual(0o644,(service/"performance.py").stat().st_mode & 0o777)
+        self.assertEqual(0,self.fake.owner((service/"performance.py").stat()))
         self.assertEqual(result, installer.install())
 
     def test_reviewed_tree_install_is_confined_and_protects_parser(self):

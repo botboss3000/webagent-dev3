@@ -7,6 +7,9 @@ struct App {
     runtime_path: PathBuf,
     compaction_config_path: PathBuf,
     store: Store,
+    // Authentication actor remains distinct from canonical conversation storage.
+    chat_actor: Option<String>,
+    chat_access: Option<shared_chat::SessionAccess>,
     abilities: Arc<abilities::Catalog>,
     gate: Arc<Mutex<()>>,
     provider: provider::Provider,
@@ -194,6 +197,7 @@ async fn public_runs(app:&App,views:Vec<Value>)->Result<Vec<Value>>{
             result.push(public_run(&run));
         }else{result.push(public_run(&view));}
     }
+    shared_projection::runs(app,&mut result).await?;
     Ok(result)
 }
 fn public_code_index_retrieval(run: &Value) -> Value {
@@ -402,7 +406,7 @@ fn system_dispatch_run(run: &Value) -> Result<Value> {
     if plan.role != model_selection::ModelRole::System {return Err(anyhow!("Invalid System role plan"));}
     let state:model_selection::FailoverState=serde_json::from_value(run["system_failover_state"].clone())?;
     let candidate=plan.candidates.get(state.candidate_index).ok_or_else(||anyhow!("System candidates exhausted"))?;
-    Ok(json!({"id":run["id"],"session_id":run["session_id"],"agent_id":run["agent_id"],"selection_plan":plan,"failover_state":state,
+    Ok(json!({"id":run["id"],"session_id":run["session_id"],"requester_user_id":run["requester_user_id"],"agent_id":run["agent_id"],"selection_plan":plan,"failover_state":state,
         "uncertain":run["uncertain"],"provider_selection":provider::ProviderSelection { limits:candidate.limits.clone(),
             provider:candidate.transport.provider_id(),model:candidate.upstream_model.clone()}.value()}))
 }
@@ -518,6 +522,7 @@ fn policy_default() -> Value {
         let name=schema["name"].as_str().unwrap();
         policy["rules"][name]=json!(if tools::is_read(name){"allow"}else{"require_approval"});
     }
+    #[cfg(test)] { policy["rules"]["test_owner_purchase"]=json!("require_approval"); }
     policy
 }
 fn policy_decision<'a>(policy: &'a Value, name: &str) -> &'a str {
@@ -740,12 +745,15 @@ impl App {
             if let Some(previous)=&candidate.platform {
                 let source=account_catalog::Source{origin:account_catalog::Origin::Platform,
                     entry_id:account_catalog::platform_id(&previous.roster_id,&previous.entry.id)};
-                let pin=self.store.pin_platform_source(self.store.current_user_id(),&source).await?;
+                let pin=self.store.pin_platform_source(shared_chat::actor(self),&source).await?;
                 if pin.entry.transport!=candidate.transport {return Err(anyhow!("Adopted platform transport changed"));}
                 let capability=match plan.role {model_selection::ModelRole::ImageIn=>"image_in",model_selection::ModelRole::ImageOut=>"image_out",model_selection::ModelRole::Voice=>"voice",model_selection::ModelRole::Decision=>"decision",_=>"text"};
                 if !pin.entry.capabilities.contains(capability) {return Err(anyhow!("Published model lacks role capability"));}
                 candidate.upstream_model=pin.entry.upstream_model.clone();candidate.platform=Some(pin);
-            } else if !self.store.live_access(self.store.current_user_id(),&plan.agent_id).await?.model_allowed(&candidate.upstream_model) {
+            } else if !match &self.chat_access {
+                Some(access)=>shared_chat::live_access(&self.store,shared_chat::actor(self),&access.session_id,&plan.agent_id).await?,
+                None=>self.store.live_access(shared_chat::actor(self),&plan.agent_id).await?,
+            }.model_allowed(&candidate.upstream_model) {
                 return Err(anyhow!("BYO model outside tier"));
             }
         }
@@ -777,7 +785,8 @@ impl App {
         let catalog = self.store.model_catalog().await?;
         // Membership, account ceiling and roster revocation remain live even for recovered plans.
         let candidate = plan.candidates.get(state.candidate_index).ok_or_else(||anyhow!("Candidate missing"))?;
-        let access=self.store.live_access(self.store.current_user_id(),&plan.agent_id).await?;
+        let requester=run["requester_user_id"].as_str().unwrap_or(self.store.current_user_id());
+        let access=shared_chat::live_access(&self.store,requester,run["session_id"].as_str().unwrap_or(""),&plan.agent_id).await?;
         if !access.admitted() || (candidate.platform.is_none() && !access.model_allowed(&candidate.upstream_model)) {
             return Err(anyhow!("Model grant revoked"));
         }
@@ -788,7 +797,7 @@ impl App {
         if let Some(pin)=&candidate.platform {
             let live=catalog.platform_sources.get(&candidate.entry_id).ok_or_else(||anyhow!("Platform provenance removed"))?;
             if live.roster_id!=pin.roster_id || live.entry.id!=pin.entry.id {return Err(anyhow!("Platform provenance changed"));}
-            self.store.platform_dispatch_tokens(self.store.current_user_id(),&plan.agent_id,pin).await?;
+            self.store.platform_dispatch_tokens(requester,&plan.agent_id,pin).await?;
         } else if catalog.platform_sources.contains_key(&candidate.entry_id) {return Err(anyhow!("Platform provenance missing from plan"));}
         Ok(Some(candidate))
     }
@@ -800,7 +809,7 @@ impl App {
             }
         }
         if let Some(pin)=candidate.as_ref().and_then(|candidate|candidate.platform.as_ref()) {
-            return self.store.platform_dispatch_tokens(self.store.current_user_id(),run["agent_id"].as_str().unwrap_or(""),pin).await;
+            return self.store.platform_dispatch_tokens(run["requester_user_id"].as_str().unwrap_or(self.store.current_user_id()),run["agent_id"].as_str().unwrap_or(""),pin).await;
         }
         let reference = candidate.as_ref().map(|c| c.credential_ref.as_str()).unwrap_or("provider_tokens");
         if selection.provider == provider::ProviderId::OpenaiSubscription {
@@ -877,6 +886,7 @@ async fn run_process() -> Result<()> {
     }
     let store = Store::open(&root).await?;
     diagnostics::init(&root, &store, &role).await;
+    optimization::init(&root, &role).await;
     store.migrate_agent_storage(&root).await?;
     let (runtime, runtime_path) = loop_runtime::Config::initialize(&root, &store).await?;
     // One data-root authority, reread at call boundaries. Legacy JSON is only
@@ -901,6 +911,7 @@ async fn run_process() -> Result<()> {
             store.put(k, &v).await?;
         }
     }
+    store.backfill_shared_directory().await?;
     migrate_default_agent_model(&store).await?;
     migrate_provider_selection(&store).await?;
     // Catalog roles become authoritative once; later clears never restore legacy defaults.
@@ -919,6 +930,8 @@ async fn run_process() -> Result<()> {
         )?,
         message_api_token_hash: message_api_token_hash(&std::env::var("V3_MESSAGE_API_TOKEN").unwrap_or_default())?,
         store,
+        chat_actor: None,
+        chat_access: None,
         abilities: Arc::new(catalog),
         gate: Arc::new(Mutex::new(())),
         provider: provider::Provider::new(),

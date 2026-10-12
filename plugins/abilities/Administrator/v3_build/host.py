@@ -67,6 +67,13 @@ _release_spec = importlib.util.spec_from_file_location(
 release = importlib.util.module_from_spec(_release_spec)
 _release_spec.loader.exec_module(release)
 TASK_CONTEXT = CONTEXT + release.INSPECTION_CONTEXT
+
+_performance_file = (SOURCE / "host-build-service/performance.py"
+                     if str(__file__).startswith("/proc/self/fd/") else Path(__file__).with_name("performance.py"))
+_performance_spec = importlib.util.spec_from_file_location("v3_build_performance", _performance_file)
+performance = importlib.util.module_from_spec(_performance_spec)
+_performance_spec.loader.exec_module(performance)
+
 MAX_TASK_CONTEXT = 512 * 1024 * 1024
 
 
@@ -500,6 +507,21 @@ class DockerHTTP(http.client.HTTPConnection):
         self.sock.connect("/var/run/docker.sock")
 
 
+def loop_plugin_mounts(previous):
+    """Expose live removable packages without granting checkout write access."""
+    host = dict(previous)
+    target = "/live-checkout/plugins"
+    host["Mounts"] = [dict(item) for item in host.get("Mounts") or []
+                      if item.get("Target") != target]
+    # Replace either Docker mount representation to prevent inherited shadowing.
+    if host.get("Binds") is not None:
+        host["Binds"] = [item for item in host["Binds"]
+                         if len(item.split(":")) < 2 or item.split(":")[1] != target]
+    host["Mounts"].append({"Type": "bind", "Source": str(SOURCE / "plugins"),
+                           "Target": target, "ReadOnly": True})
+    return host
+
+
 class Runner:
     def __init__(self, source=SOURCE, snapshot_helper=None, snapshot_socket=None):
         self.source, self.snapshot_helper = Path(source), snapshot_helper
@@ -557,7 +579,9 @@ class Runner:
                 writer.join(timeout=5)
                 text = scrub(bytes(output).decode("utf-8", "replace"), self.secrets)
                 if code:
-                    raise RuntimeError("fixed command failed: " + text)
+                    error = RuntimeError("fixed command failed: " + text)
+                    error.exit_code = code
+                    raise error
                 return bytes(output).decode("utf-8", "strict") if private_raw else text
             finally:
                 event = getattr(self.job_context, "event", None)
@@ -754,17 +778,31 @@ class Runner:
         return self.check_space(MIN_SEQUENCE_FREE)
 
     def cargo_task(self, source, check_dir, task, timeout):
-        # Match the pinned Dockerfile toolchain and keep Cargo output outside
-        # the task source snapshot. No caller-controlled argv or image.
+        # Full Rust tests intentionally edit and restore their manifest-local
+        # configuration. Supply a disposable application-only copy: neither
+        # frozen task inputs nor inspection database backups are writable.
         image = "rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f"
         command = ["cargo", "check", "--locked"] if task == "check" else ["cargo", "test", "--locked", "--", "--test-threads=1"]
         check_dir.mkdir(parents=True, exist_ok=True)
-        return self.command(["docker", "run", "--rm", "--user", "1000:1000",
-                             "--mount", "type=bind,src=" + str(source) + ",dst=/build,readonly",
-                             "--mount", "type=bind,src=" + str(check_dir) + ",dst=/check",
-                             "-e", "CARGO_HOME=/check/cargo", "-e", "CARGO_TARGET_DIR=/check/target",
-                             "-e", "CARGO_BUILD_JOBS=2", "-w", "/build/v3", image, *command],
-                            timeout=timeout)
+        scratch = None
+        working = "/build/v3"
+        if task == "test":
+            scratch = check_dir / ("scratch-" + uuid.uuid4().hex)
+            blob = release.snapshot(Path(source), CONTEXT, context_digest)
+            release.extract(scratch, blob, context_digest)
+            working = "/check/" + scratch.name + "/v3"
+        source_mount = [] if task == "test" else [
+            "--mount", "type=bind,src=" + str(source) + ",dst=/build,readonly"]
+        try:
+            return self.command(["docker", "run", "--rm", "--user", "1000:1000",
+                                 *source_mount,
+                                 "--mount", "type=bind,src=" + str(check_dir) + ",dst=/check",
+                                 "-e", "CARGO_HOME=/check/cargo", "-e", "CARGO_TARGET_DIR=/check/target",
+                                 "-e", "CARGO_BUILD_JOBS=2", "-w", working, image, *command],
+                                timeout=timeout)
+        finally:
+            if scratch is not None:
+                shutil.rmtree(scratch)
 
     def build(self, blob, job_id, role):
         tag = "webagent-dev-v3" + ("-loop" if role == "loop" else "") + ":job-" + job_id
@@ -824,6 +862,8 @@ class Runner:
                 env.extend(("V3_UI_ROOT=/opt/v3/assets/current/v3/ui",
                             "V3_SHARED_UI_ROOT=/opt/v3/assets/current/ui"))
                 config["Env"] = env
+        if name == TARGETS[1]:
+            host = loop_plugin_mounts(host)
         # Container-id-derived values must not be reused. Preserve configured
         # mounts, network, limits, ports, restart policy and security options.
         host.pop("ContainerIDFile", None)
@@ -895,6 +935,7 @@ class Broker:
         self.work = json.loads(self.work_path.read_text()) if self.work_path.exists() else {}
         if not isinstance(self.work, dict) or len(self.work) > 1000:
             raise ValueError("invalid coordination registry")
+        self.performance = performance.Performance(self)
         self.work_activity = {key: self._work_content(item) for key, item in self.work.items()}
         for path in sorted(self.state.glob("*.json")):
             if path.is_symlink():
@@ -1827,6 +1868,33 @@ class Broker:
         if action == "begin": forwarded["mode"] = "isolated"
         return call("v3_build_work", forwarded)
 
+    performance_canonical = staticmethod(canonical)
+    performance_scrub = staticmethod(scrub)
+
+    def performance_snapshot(self, root):
+        blob = release.snapshot(root, TASK_CONTEXT, context_digest)
+        return blob, context_digest(blob)[0]
+
+    def performance_extract(self, blob, destination):
+        # Performance children receive application build inputs, never task
+        # inspection database backups or the writable task tree.
+        destination.mkdir(mode=0o700)
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:") as archive:
+            for member in archive:
+                name = member.name.removeprefix("./")
+                if not any(name == p or name.startswith(p + "/") for p in CONTEXT):
+                    continue
+                if member.isdir():
+                    (destination / name).mkdir(parents=True, exist_ok=True, mode=0o700)
+                elif member.isfile():
+                    target = destination / name
+                    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    with target.open("xb") as output:
+                        shutil.copyfileobj(archive.extractfile(member), output)
+                    target.chmod(member.mode & 0o755)
+                else:
+                    raise ValueError("performance snapshot special file forbidden")
+
     def handle(self, request):
         if not isinstance(request, dict) or set(request) - {"id", "name", "arguments", "workspace", "timeout_seconds", "trusted"}:
             raise ValueError("invalid broker request")
@@ -1844,6 +1912,8 @@ class Broker:
             raise ValueError("arguments must be an object")
         name = request.get("name")
         with self.lock:
+            if name == "performance_work":
+                return self.performance.handle(trusted, workspace, args)
             if name == "build_work":
                 return self.unified_build(request, args)
             if name in ("file_list", "file_read", "file_search", "file_edit", "file_write"):
@@ -1978,7 +2048,7 @@ class Broker:
                 if args:
                     raise ValueError("internal lease control takes no arguments")
                 incoming = self._incoming_lease(trusted) if name == "administrator_host_lease" else None
-                updated = 0
+                updated = self.performance.leases(trusted, workspace, incoming)
                 for job in self.jobs.values():
                     if not self._owned(job, trusted, workspace) or job["status"] not in ("queued", "running"):
                         continue
@@ -2912,6 +2982,7 @@ class Broker:
                     self._save(job)
 
     def shutdown(self):
+        self.performance.shutdown()
         self.pool.shutdown(wait=True)
         self.ui_pool.shutdown(wait=True)
         if self.lease is not None:
@@ -2940,7 +3011,7 @@ async def serve(broker, listener, bridge_listener=None):
                     "access_fingerprint": hashlib.sha256(b"python-v2-build-bridge").hexdigest(),
                     "bridge_caller": True}
             elif uid == 1000:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "v3_build_adopt_release", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": "codex-local", "session_id": LOCAL_WORKSPACE,

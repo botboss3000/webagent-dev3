@@ -20,11 +20,11 @@ fn request_id(args:&Value)->Result<&str> {
     Ok(value)
 }
 async fn browser_authority(app:&App,sid:&str)->Result<Value> {
-    let uid=app.store.current_user_id();
+    let uid=crate::shared_chat::actor(app);
     let account=app.store.account_by_id(uid).await?.ok_or_else(||anyhow!("Caller unavailable"))?;
     let key=format!("administrator_browser:{sid}");
     if let Some(old)=app.store.get(&key).await? {
-        if old["generation"]==account["generation"] && old["expires_at"].as_u64().unwrap_or(0)>now()+30 {
+        if old["user_id"]==uid && old["generation"]==account["generation"] && old["expires_at"].as_u64().unwrap_or(0)>now()+30 {
             return Ok(old);
         }
     }
@@ -46,9 +46,11 @@ pub(crate) async fn host_fingerprint(app:&App,sid:&str,run_id:&str,name:&str)->R
     let mut scoped=app.clone();scoped.store=app.store.for_agent(&agent).await?;
     let run=scoped.run(run_id).await?;
     if run["session_id"]!=sid {bail!("Host job run scope changed");}
+    if name=="performance_work" && !performance_run_live(&run){bail!("Performance run authority stopped");}
     let (policy,revision,visibility,state)=ability_controls(&scoped,sid).await?;
     let mode=session_mode(&scoped,sid).await?;
-    let access=scoped.store.live_access(scoped.store.current_user_id(),&agent).await?;
+    let access=crate::shared_chat::live_access(&scoped.store,crate::shared_chat::actor(&scoped),sid,&agent).await?;
+    if name=="performance_work" && !crate::optimization::available(){bail!("Optimization plugin authority withdrawn")}
     let work_finish=matches!(name,"v3_build_work_finish"|"build_work_finish");
     let policy_name=if work_finish {"build_work"} else {name};
     let work_permission=live_tool_decision(&scoped,&access,policy_name,
@@ -89,8 +91,9 @@ pub(crate) async fn host_fingerprint(app:&App,sid:&str,run_id:&str,name:&str)->R
     // still live. Policy, activation, and access remain in the fingerprint;
     // bundle bytes alone cannot revoke the job during its own deployment.
     let bundle=if work_finish {Value::Null} else {json!(scoped.abilities.live_version())};
-    Ok(digest(&json!([scoped.store.current_user_id(),sid,agent,access.context_fingerprint(),
-        policy,revision,visibility,state,mode,run["loaded_abilities"],bundle])))
+    Ok(digest(&json!([crate::shared_chat::actor(&scoped),sid,agent,access.context_fingerprint(),
+        policy,revision,visibility,state,mode,run["loaded_abilities"],bundle,
+        if name=="performance_work"{crate::optimization::generation()}else{None}])))
 }
 fn build_work_arguments(args:&Value)->Result<Value> {
     let object=args.as_object().ok_or_else(||anyhow!("Build work arguments must be an object"))?;
@@ -109,10 +112,109 @@ fn build_work_arguments(args:&Value)->Result<Value> {
     for key in relevant {if let Some(value)=object.get(*key) {forwarded.insert((*key).into(),value.clone());}}
     Ok(Value::Object(forwarded))
 }
+fn performance_effect_action(args:&Value)->bool {
+    matches!(args["action"].as_str(),Some("benchmark"|"profile_cpu"|"profile_allocations"))
+}
+fn performance_pending(receipt:&Value)->bool {
+    receipt["status"]=="success"
+        && matches!(receipt["output"]["status"].as_str(),Some("queued"|"running"))
+}
+fn performance_run_live(run:&Value)->bool {
+    run["status"]=="running" && run["error"]!="Cancelled by user"
+}
+
+/// Cancellation/reconciliation addresses the existing durable request only.
+/// It deliberately uses the admitted fingerprint rather than granting fresh
+/// performance authority after the caller has cancelled or lost access.
+async fn performance_cancel_existing(
+    app:&App,sid:&str,forwarded:&Value,fingerprint:&str,last:Value,
+)->Value {
+    let trusted=json!({"user_id":crate::shared_chat::actor(app),"session_id":sid,
+        "lease_until":now()+30,"access_fingerprint":fingerprint});
+    let mut args=forwarded.clone();args["action"]=json!("cancel");
+    let socket=std::path::Path::new("/run/v3/build/build.sock");
+    let _=tokio::time::timeout(Duration::from_secs(3),
+        tools::execute_trusted("performance_work",&args,sid,socket,Some(trusted.clone()),
+            CancellationToken::new())).await;
+    args["action"]=json!("status");
+    for _ in 0..3 {
+        if let Ok(Ok(receipt))=tokio::time::timeout(Duration::from_secs(2),
+            tools::execute_trusted("performance_work",&args,sid,socket,Some(trusted.clone()),
+                CancellationToken::new())).await {
+            if receipt["status"]=="success" && !performance_pending(&receipt) {
+                return receipt;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    json!({"status":"uncertain","uncertain":true,
+        "output":{"receipt":last,"cancel_requested":true,
+            "reason":"Performance interruption requires inspection of the existing request; never re-admit it."}})
+}
+
+async fn performance(app:&App,sid:&str,run_id:&str,args:&Value,cancel:CancellationToken)->Result<Value>{
+    if args.get("settings").is_some()||args.get("plugin_generation").is_some(){bail!("Effective performance settings are runtime owned")}
+    let run=app.run(run_id).await?;
+    let (_,_,visibility,_)=ability_controls(app,sid).await?;
+    let settings_value=run.get("optimization_request").and_then(|v|v.get("settings"))
+        .cloned().or_else(||visibility["settings"].get("optimization").cloned());
+    let settings:crate::optimization_settings::OptimizationSettings=match settings_value {
+        Some(value)=>serde_json::from_value(value)?,None=>Default::default()
+    };
+    settings.validate().map_err(anyhow::Error::msg)?;
+    let mut forwarded=args.clone();
+    forwarded["settings"]=serde_json::to_value(settings)?;
+    forwarded["plugin_generation"]=json!(crate::optimization::generation().ok_or_else(||anyhow!("Optimization plugin unavailable"))?);
+    let fingerprint=host_fingerprint(app,sid,run_id,"performance_work").await?;
+    let wait=performance_effect_action(args);
+    // Receipt reads and explicit cancellation cannot replace the renewal record
+    // belonging to an independently executing performance job.
+    if wait {
+        app.store.put(&format!("administrator_host:{sid}"),&json!({"session_id":sid,
+            "run_id":run_id,"tool_name":"performance_work","access_fingerprint":fingerprint})).await?;
+    }
+    let admitted=host(app,sid,run_id,"performance_work",&forwarded,cancel.clone()).await;
+    let mut receipt=match admitted {
+        Ok(value)=>value,
+        Err(error) if wait=>{
+            // Submission may have reached the broker. Reconcile/cancel by the
+            // original identity rather than repeat an admission with new IDs.
+            let result=performance_cancel_existing(app,sid,&forwarded,&fingerprint,
+                json!({"status":"unknown","reason":"Performance admission acknowledgement interrupted"})).await;
+            if result["status"]=="success" {return Ok(result);}
+            tracing::warn!("Performance admission interrupted; existing receipt retained");
+            let _=error;
+            return Ok(result);
+        }
+        Err(error)=>return Err(error),
+    };
+    if !wait {return Ok(receipt);}
+    let mut status_args=forwarded.clone();status_args["action"]=json!("status");
+    while performance_pending(&receipt) {
+        tokio::select! {
+            _=cancel.cancelled()=>{
+                return Ok(performance_cancel_existing(app,sid,&forwarded,&fingerprint,receipt).await);
+            }
+            _=tokio::time::sleep(Duration::from_secs(1))=>{}
+        }
+        let fresh=host_fingerprint(app,sid,run_id,"performance_work").await;
+        if !fresh.is_ok_and(|value|value==fingerprint) {
+            return Ok(performance_cancel_existing(app,sid,&forwarded,&fingerprint,receipt).await);
+        }
+        // Status uses the same request, pinned inputs and runtime settings.
+        // The broker never schedules effects for a status request.
+        match tokio::time::timeout(Duration::from_secs(5),
+            host(app,sid,run_id,"performance_work",&status_args,cancel.clone())).await {
+            Ok(Ok(value)) if value["status"]=="success"=>receipt=value,
+            _=>return Ok(performance_cancel_existing(app,sid,&forwarded,&fingerprint,receipt).await),
+        }
+    }
+    Ok(receipt)
+}
 async fn host(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:CancellationToken)->Result<Value> {
     let fingerprint_name=if name=="build_work" && matches!(args["action"].as_str(),Some("finish"|"decide")) {"build_work_finish"} else if name=="v3_build_work" && matches!(args["action"].as_str(),Some("finish"|"decide")) {"v3_build_work_finish"} else {name};
     let fingerprint=host_fingerprint(app,sid,run_id,fingerprint_name).await?;
-    let trusted=json!({"user_id":app.store.current_user_id(),"session_id":sid,
+    let trusted=json!({"user_id":crate::shared_chat::actor(app),"session_id":sid,
         "lease_until":now()+30,"access_fingerprint":fingerprint});
     if matches!(name,"v3_build_image"|"v3_worker_submit") || (matches!(name,"v3_build_work"|"build_work") && matches!(args["action"].as_str(),Some("finish"|"decide"))) {
         app.store.put(&format!("administrator_host:{sid}"),&json!({"session_id":sid,
@@ -224,6 +326,7 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
             }
         },
         "build_work"=>host(app,sid,run_id,name,args,cancel).await,
+        "performance_work"=>performance(app,sid,run_id,args,cancel).await,
         "repository_access"=>repository_access(app,sid,args,cancel).await,
         "read_diagnostics"=>{
             match diagnostics_target(args,run_id) {
@@ -389,5 +492,47 @@ mod diagnostics_tests {
         assert_eq!(missing["status"],"error");
         assert_eq!(missing["error_kind"],"diagnostics_unavailable");
         assert!(!missing.to_string().contains("never-return"));
+    }
+}
+
+#[cfg(test)]
+mod performance_foreground_tests {
+    use super::*;
+
+    #[test]
+    fn durable_wait_only_waits_for_successful_nonterminal_receipts() {
+        for state in ["queued","running"] {
+            assert!(performance_pending(&json!({"status":"success","output":{"status":state}})));
+        }
+        for state in ["completed","failed","cancelled","interrupted"] {
+            assert!(!performance_pending(&json!({"status":"success","output":{"status":state}})));
+        }
+        assert!(!performance_pending(&json!({"status":"error","output":{"status":"queued"}})));
+        assert!(!performance_pending(&json!({"status":"success","output":{}})));
+    }
+
+    #[test]
+    fn terminal_or_cancelled_performance_runs_cannot_renew_job_authority() {
+        assert!(performance_run_live(&json!({"status":"running"})));
+        for state in ["queued","waiting_approval","stopped","cancelled","completed","failed","recovery","paused"] {
+            assert!(!performance_run_live(&json!({"status":state})));
+        }
+        assert!(!performance_run_live(&json!({"status":"running","error":"Cancelled by user"})));
+    }
+}
+
+
+#[cfg(test)]
+mod performance_renewal_registration_tests {
+    use super::*;
+    #[test]
+    fn only_effect_actions_register_foreground_renewal_authority() {
+        for action in ["benchmark","profile_cpu","profile_allocations"] {
+            assert!(performance_effect_action(&json!({"action":action})));
+        }
+        for action in ["status","artifact","cancel","unknown"] {
+            assert!(!performance_effect_action(&json!({"action":action})));
+        }
+        assert!(!performance_effect_action(&json!({})));
     }
 }

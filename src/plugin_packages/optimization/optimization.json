@@ -1,0 +1,27 @@
+{
+  "display_name": "Optimization",
+  "kind": "ability",
+  "description": "Benchmark and profile isolated software workloads, then review measured CPU, allocation, memory and runtime improvements.",
+  "tools": [
+    "performance_work"
+  ],
+  "readiness": "ready",
+  "skill_summary": "Explicit /optimize resource measurement and bounded candidate experiments; no prompt or skill optimization.",
+  "icon": "gauge",
+  "color": "#67b87b",
+  "order": 95,
+  "config": {
+    "settings": [
+      "priority",
+      "attempts",
+      "total_seconds",
+      "profiling",
+      "cpu_cores",
+      "ram_mb",
+      "coverage",
+      "max_slowdown_percent",
+      "max_memory_regression_percent",
+      "allow_dependencies"
+    ]
+  }
+}

@@ -25,11 +25,15 @@ export function updateAdmission(bubble, admission) {
 }
 /** Builds one published transcript row; rejects malformed role/sequence/ID data and wires attachments, gutters, and user-text expansion. */
 export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSession=()=>null,note=()=>{},showContext=()=>{},historyAction=null}={}){
-  if(!['user','assistant'].includes(item.role)||!Number.isSafeInteger(item.seq)||item.seq<=0||typeof item.id!=='string')return null;
+  if(!['user','assistant','system'].includes(item.role)||!Number.isSafeInteger(item.seq)||item.seq<=0||typeof item.id!=='string')return null;
+  if(item.role==='system'){
+    const row=document.createElement('article');row.className='v3-message system';row.dataset.publicId=item.id;row.dataset.seq=String(item.seq);
+    const text=document.createElement('p');text.textContent=typeof item.content==='string'?item.content:JSON.stringify(item.content);row.append(text);return row;
+  }
   const profile=currentChatProfile()||{},role=item.role==='user'?'user':'agent';
   let text=typeof item.content==='string'?item.content:JSON.stringify(item.content);
   const bubble=document.createElement('article');bubble.className='chat-bubble '+role+' published';bubble.dataset.publicId=item.id;bubble.dataset.msgId=item.id;bubble.dataset.seq=String(item.seq);bubble.dataset.turnId=item.run_id;
-  const label=document.createElement('span');label.className='label';label.textContent=role==='user'?'You':'Agent';bubble.append(label);
+  const label=document.createElement('span');label.className='label';label.textContent=role==='user'?(item.author?.display_name||item.author?.user_id||item.author_name||item.author_id||item.author_display_name||item.author_user_id||'You'):'Agent';bubble.append(label);
   const body=document.createElement('div');
   if(role==='agent'){const section=document.createElement('div');section.className='turn-section llm-section md';section.dataset.sectionIdx='0';section.dataset.msgId=item.id;markdown(body,text);section.append(body);bubble.append(section);}else{body.className='bubble-body';linkify(body,text);bubble.append(body);}
   if(role==='user'&&Array.isArray(item.attachments)){

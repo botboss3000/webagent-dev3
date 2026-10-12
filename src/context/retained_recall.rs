@@ -8,6 +8,7 @@ pub async fn restore(
     run: &mut Value,
     policy: &tool_output::Policy,
 ) -> Result<bool> {
+    if run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id())!=app.store.current_user_id() {return Ok(false);}
     if !policy.enabled {
         return Ok(false);
     }
@@ -28,10 +29,7 @@ pub async fn restore(
     candidates.sort_by_key(|e| std::cmp::Reverse(e["last_used"].as_u64().unwrap_or(0)));
     let (permission, _, visibility, state) = ability_controls(app, sid).await?;
     let mode = session_mode(app, sid).await?;
-    let access = app
-        .store
-        .live_access(app.store.current_user_id(), agent)
-        .await?;
+    let access=crate::shared_chat::live_access(&app.store,run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id()),sid,agent).await?;
     if !access.admitted() {
         return Ok(false);
     }

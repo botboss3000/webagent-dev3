@@ -6,6 +6,51 @@ pub(crate) async fn requeue_auto_approval(app:&App,id:&str)->Result<()> {
     if app.active.lock().await.contains_key(id) {return Ok(());}
     let mut run=app.run(id).await?;
     let sid=run["session_id"].as_str().unwrap_or("").to_owned();
+    if status(&run)!="waiting_approval" {return Ok(());}
+    let mut restricted=Vec::new();
+    fn requires_specific_approval(pending:&Value)->bool {
+        !pending["authorization"].is_null() || pending["new_intent_confirmation"]==true
+    }
+    if requires_specific_approval(&run["pending"]){restricted.push(run["pending"].clone());}
+    if let Some(batch)=run["batch"].as_array(){
+        restricted.extend(batch.iter().map(|item|item["pending"].clone()).filter(requires_specific_approval));
+    }
+    if !restricted.is_empty(){
+        let requester=run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id());
+        let agent=run["agent_id"].as_str().unwrap_or("shared_default");
+        let access=crate::shared_chat::live_access(&app.store,requester,&sid,agent).await;
+        let mut actor_app=app.clone();actor_app.chat_actor=Some(requester.to_owned());
+        let controls=ability_controls(&actor_app,&sid).await;
+        let mut invalid=!app.store.participation_allows_run(&run).await?
+            || !app.run_model_authorized(&run).await
+            || access.as_ref().map_or(true,|access|!access.admitted());
+        for pending in restricted {
+            let revisions_valid=match (&controls,&access) {
+                (Ok((policy,mode,visibility,state)),Ok(access))=>
+                    pending["policy_version"]==policy["version"]
+                    && pending["mode_revision"].as_u64().unwrap_or(0)==*mode
+                    && pending["visibility_revision"]==visibility["revision"]
+                    && pending["ability_state_revision"]==state["revision"]
+                    && pending["access_revision"]==json!(access.revision),
+                _=>false,
+            };
+            if !revisions_valid || !crate::credential_authorization::valid(&app.store,&run,&pending).await? {invalid=true;break;}
+        }
+        if invalid {
+            fn cancel(pending:&mut Value){
+                if matches!(pending["state"].as_str(),Some("waiting"|"requested")){
+                    pending["state"]=json!("cancelled");pending["decision"]=Value::Null;pending["human_approved"]=json!(false);
+                }
+            }
+            cancel(&mut run["pending"]);
+            if let Some(batch)=run["batch"].as_array_mut(){for item in batch{cancel(&mut item["pending"]);}}
+            run["status"]=json!("stopped");run["error"]=json!("Specific action authorization changed; request a fresh action");
+            app.save(&mut run).await?;
+        }
+        // Credential ownership and an additional matching intent always require
+        // their specific human approval; Auto must not rewrite its stable ID.
+        return Ok(());
+    }
     if status(&run)!="waiting_approval" || run["pending"]["state"]!="waiting"
         || !session_mode(app,&sid).await.is_ok_and(|mode|
             mode["mode"]=="write" && mode["execution_mode"]=="auto") {
@@ -85,6 +130,7 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
             if let Err(error)=crate::followup_queue::scheduler_tick(&user_app).await {
                 tracing::warn!("Followup queue reconciliation deferred: {error}");
             }
+            if let Err(error)=user_app.store.drain_message_queues().await {tracing::warn!("Message queue drain deferred: {error}");}
             progress.at(Stage::RunScan);
             if let Ok(runs) = user_app.store.active_runs().await {
                 for view in runs {
@@ -121,10 +167,13 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
                     active.insert(id.clone(), cancel.clone());
                     drop(active);
                     if run["context_hydration_pending"] == true {
-                        match user_app.store.context(run["session_id"].as_str().unwrap()).await {
+                        let requester=run["requester_user_id"].as_str().unwrap_or(user_app.store.current_user_id());
+                        let context=if requester==user_app.store.current_user_id() {user_app.store.context(run["session_id"].as_str().unwrap()).await}
+                            else {user_app.store.shared_model_context(run["session_id"].as_str().unwrap()).await};
+                        match context {
                             Ok(mut input) => {
                                 // Keep saved notes beside the latest user turn as source data.
-                                memory::insert(&mut input,run["memory_context"].as_str());
+                                if requester==user_app.store.current_user_id(){memory::insert(&mut input,run["memory_context"].as_str());}
                                 run["input"] = json!(input);
                                 run["context_hydration_pending"] = json!(false);
                             },
@@ -136,7 +185,13 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
                         app.active.lock().await.remove(&id);
                         continue;
                     }
-                    let cloned = user_app.clone();
+                    let mut cloned = user_app.clone();
+                    cloned.chat_actor=run["requester_user_id"].as_str().map(str::to_owned);
+                    let requester=crate::shared_chat::actor(&cloned).to_owned();
+                    match crate::shared_chat::resolve(&cloned,run["session_id"].as_str().unwrap_or(""),&requester).await {
+                        Ok(access)=>cloned.chat_access=Some(access),
+                        Err(_)=>{app.active.lock().await.remove(&id);continue;}
+                    }
                     let lease_owner=owner.clone();
                     tokio::spawn(async move {
                         let epoch=run["lease_epoch"].as_i64().unwrap_or(0);
@@ -204,4 +259,84 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
     cleanup.abort();
     manager.abort();
     background.abort();
+}
+
+#[cfg(test)]
+mod credential_reconciliation_tests {
+ use super::*;
+ #[tokio::test]
+ async fn additional_action_approval_survives_auto_reconciliation_and_revocation(){
+  for batch in [false,true] {
+   let (_root,app)=crate::runtime_tests::fixture().await;
+   let sid=crate::runtime_tests::conversation(&app).await;
+   let rid=crate::runtime_tests::queued(&app,&sid).await;
+   app.store.put(&format!("session_mode:{sid}"),&json!({"mode":"write","execution_mode":"auto","revision":0})).await.unwrap();
+   let mut run=app.run(&rid).await.unwrap();
+   let (policy,mode,visibility,state)=ability_controls(&app,&sid).await.unwrap();
+   let access=crate::shared_chat::live_access(&app.store,app.store.current_user_id(),&sid,"shared_default").await.unwrap();
+   run["status"]=json!("waiting_approval");
+   let pending=json!({"id":"additional-wait","name":"save_own_skill","arguments":{},"state":"waiting","decision":null,
+    "new_intent_confirmation":true,"action_id":"additional-action","policy_version":policy["version"],"mode_revision":mode,
+    "visibility_revision":visibility["revision"],"ability_state_revision":state["revision"],"access_revision":access.revision});
+   run["pending"]=if batch {Value::Null}else{pending.clone()};
+   if batch {run["batch"]=json!([{"pending":pending},{"pending":{"id":"executing","state":"executing"}}]);}
+   app.store.put(&format!("run:{rid}"),&run).await.unwrap();
+   for _ in 0..3 {
+    requeue_auto_approval(&app,&rid).await.unwrap();
+    let waiting=app.run(&rid).await.unwrap();
+    assert_eq!(waiting["status"],"waiting_approval");
+    let held=if batch {&waiting["batch"][0]["pending"]}else{&waiting["pending"]};
+    assert_eq!(held,&pending);
+   }
+   app.store.put(&format!("session_mode:{sid}"),&json!({"mode":"read_only","execution_mode":"ask","revision":mode+1})).await.unwrap();
+   requeue_auto_approval(&app,&rid).await.unwrap();
+   let stopped=app.run(&rid).await.unwrap();assert_eq!(stopped["status"],"stopped");
+   let held=if batch {&stopped["batch"][0]["pending"]}else{&stopped["pending"]};
+   assert_eq!(held["state"],"cancelled");assert!(held["decision"].is_null());
+   if batch {assert_eq!(stopped["batch"][1]["pending"]["state"],"executing");}
+  }
+ }
+
+ #[tokio::test]
+ async fn restricted_waiting_authorization_is_never_auto_requeued_and_revocation_cancels_single_and_batch(){
+  for (batch,change_mode) in [(false,false),(true,false),(false,true)] {
+   let (_root,app)=crate::runtime_tests::fixture().await;
+   let sid=crate::runtime_tests::conversation(&app).await;
+   let rid=crate::runtime_tests::queued(&app,&sid).await;
+   let owner=app.store.current_user_id();
+   let credential=format!("tool_credential:{owner}:test");
+   app.store.put(&credential,&json!({"owner_user_id":owner,"version":1,"revoked":false})).await.unwrap();
+   app.store.put(&format!("session_mode:{sid}"),&json!({"mode":"write","execution_mode":"auto","revision":0})).await.unwrap();
+   let mut run=app.run(&rid).await.unwrap();
+   run["status"]=json!("waiting_approval");
+   run["pending"]=json!({"id":"owner-wait","name":"test_owner_purchase","arguments":{},"state":"waiting","decision":null,"policy_version":1,"mode_revision":0,"visibility_revision":0,"ability_state_revision":0,"access_revision":{}});
+   let (policy,mode,visibility,state)=ability_controls(&app,&sid).await.unwrap();
+   let access=crate::shared_chat::live_access(&app.store,owner,&sid,"shared_default").await.unwrap();
+   run["pending"]["policy_version"]=policy["version"].clone();
+   run["pending"]["mode_revision"]=json!(mode);
+   run["pending"]["visibility_revision"]=visibility["revision"].clone();
+   run["pending"]["ability_state_revision"]=state["revision"].clone();
+   run["pending"]["access_revision"]=json!(access.revision);
+   run["pending"]["authorization"]=crate::credential_authorization::resolve(&app.store,&run,"test_owner_purchase",&json!({})).await.unwrap().unwrap();
+   if batch {
+    run["batch"]=json!([{"pending":run["pending"]},{"pending":{"id":"already-executing","state":"executing","effect_evidence":"keep"}}]);
+    run["pending"]=Value::Null;
+   }
+   app.store.put(&format!("run:{rid}"),&run).await.unwrap();
+   requeue_auto_approval(&app,&rid).await.unwrap();
+   assert_eq!(app.run(&rid).await.unwrap()["status"],"waiting_approval");
+   // Exercise both explicit revocation and a credential version replacement.
+   if change_mode {
+    app.store.put(&format!("session_mode:{sid}"),&json!({"mode":"read_only","execution_mode":"ask","revision":mode+1})).await.unwrap();
+   } else {
+    app.store.put(&credential,&json!({"owner_user_id":owner,"version":2,"revoked":!batch})).await.unwrap();
+   }
+   requeue_auto_approval(&app,&rid).await.unwrap();
+   let stopped=app.run(&rid).await.unwrap();assert_eq!(stopped["status"],"stopped");
+   let pending=if batch {&stopped["batch"][0]["pending"]}else{&stopped["pending"]};
+   assert_eq!(pending["state"],"cancelled");assert!(pending["decision"].is_null());
+   if batch {assert_eq!(stopped["batch"][1]["pending"]["state"],"executing");assert_eq!(stopped["batch"][1]["pending"]["effect_evidence"],"keep");}
+   requeue_auto_approval(&app,&rid).await.unwrap();assert_eq!(app.run(&rid).await.unwrap()["status"],"stopped");
+  }
+ }
 }

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
@@ -278,6 +279,7 @@ impl Catalog {
                 if !valid_id(&id) || !ids.insert(id.clone()) {
                     bail!("Invalid or duplicate ability identifier: {id}");
                 }
+                if id == "optimization" { bail!("Optimization is reserved for its executable plugin"); }
                 let ability_path = folder.path();
                 // Pin exactly the bytes parsed here; live edits withdraw cached authority
                 // until a freshly validated catalog reload adopts the new declaration.
@@ -392,6 +394,24 @@ impl Catalog {
                 }
             }
         }
+        // A reserved dormant entry lets a validated package added after startup
+        // become available without reloading unrelated ability declarations.
+        if !ids.contains("optimization") {
+            let bytes = include_bytes!("plugin_packages/optimization/optimization.json");
+            let manifest: Manifest = serde_json::from_slice(bytes)?;
+            abilities.push(Ability {
+                id: "optimization".into(), path: crate::optimization::folder(),
+                manifest_digest: hex::encode(Sha256::digest(bytes)),
+                group: "Administrator".into(), group_name: "Administrator".into(),
+                group_order: 100, name: manifest.display_name,
+                description: manifest.description, skill_summary: manifest.skill_summary,
+                migration_note: manifest.migration_note, icon: manifest.icon, color: manifest.color,
+                order: manifest.order, kind: manifest.kind, readiness: Readiness::Ready,
+                config: manifest.config, tools: manifest.tools,
+                skill: Some(include_str!("plugin_packages/optimization/optimization.skill.md").into()),
+                tool_skills: BTreeMap::new(), selectable_skills: BTreeMap::new(),
+            });
+        }
         abilities.sort_by(|a, b| {
             (a.group_order, &a.group_name, a.order, &a.name, &a.id).cmp(&(
                 b.group_order,
@@ -410,6 +430,9 @@ impl Catalog {
     }
 
     fn present(ability: &Ability) -> bool {
+        if ability.id == "optimization" {
+            return crate::optimization::available();
+        }
         // Presence alone cannot retain an old executable declaration after an
         // operator disables or edits its manifest. Unreadable/changed bytes fail closed.
         [ability.path.as_path(), ability.path.parent().unwrap_or(ability.path.as_path()),
@@ -422,6 +445,10 @@ impl Catalog {
     // Only cached, validated bundle IDs can select an asset. Live edits withdraw
     // old guidance instead of importing instructions without a catalog reload.
     fn skill_live(ability: &Ability, kind: &str, name: &str, text: &str) -> bool {
+        if ability.id == "optimization" {
+            return kind == "ability" && name == "optimization"
+                && crate::optimization::guidance().is_some_and(|body| body == text);
+        }
         let path = match kind {
             "ability" if name == ability.id => ability.path.join(format!("{name}.skill.md")),
             "tool" if valid_id(name) => ability.path.join("tools").join(format!("{name}.skill.md")),
@@ -436,6 +463,15 @@ impl Catalog {
     /// Bounded validity fingerprint of cached manifests and skill assets only.
     /// A changed file cannot become trusted guidance; it merely invalidates the
     /// run-local schema/guidance cache until a validated reload adopts its bytes.
+    fn core_skill(ability: &Ability) -> Option<Cow<'_, str>> {
+        if ability.id == "optimization" {
+            return crate::optimization::guidance().map(Cow::Owned);
+        }
+        ability.skill.as_deref()
+            .filter(|text| Self::skill_live(ability, "ability", &ability.id, text))
+            .map(Cow::Borrowed)
+    }
+
     pub fn live_version(&self) -> String {
         let validity = self.abilities.iter().map(|ability| {
             let present = Self::present(ability);
@@ -452,14 +488,14 @@ impl Catalog {
             }
             json!([ability.id, present, assets])
         }).collect::<Vec<_>>();
-        hex::encode(Sha256::digest(serde_json::to_vec(&json!([self.version, validity]))
+        hex::encode(Sha256::digest(serde_json::to_vec(&json!([self.version, validity, crate::optimization::generation()]))
             .expect("Cached catalog validity is serializable")))
     }
 
     fn bundled_candidates<'a>(
         &'a self, ability_id: &str, visibility: &Value, state: &Value,
         allow_ability: &impl Fn(&str) -> bool, allow_tool: &impl Fn(&str) -> bool,
-    ) -> Result<(&'a Ability, Vec<(&'static str, &'a str, &'a String)>)> {
+    ) -> Result<(&'a Ability, Vec<(&'static str, &'a str, Cow<'a, str>)>)> {
         if !valid_id(ability_id) { bail!("Invalid bundled ability ID"); }
         let ability = self.abilities.iter().find(|a| a.id == ability_id)
             .filter(|a| Self::available(a, visibility, state)
@@ -469,17 +505,17 @@ impl Catalog {
             .context("Bundled skills unavailable under current access")?;
         let mut assets = Vec::new();
         if Self::skill_mode(visibility, ability_id) != "off" {
-            if let Some(text) = &ability.skill { assets.push(("ability", ability.id.as_str(), text)); }
+            if let Some(text) = Self::core_skill(ability) { assets.push(("ability", ability.id.as_str(), text)); }
         }
         for (name, text) in &ability.tool_skills {
             if Self::supported(name) && Self::tool_mode(visibility, name) != "off" && allow_tool(name) {
-                assets.push(("tool", name.as_str(), text));
+                assets.push(("tool", name.as_str(), Cow::Borrowed(text)));
             }
         }
         for (name, text) in &ability.selectable_skills {
             if Self::selectable_metadata(name,text).is_some()
                 && Self::selectable_mode(visibility, ability_id, name, text) != "off" {
-                assets.push(("selectable", name.as_str(), text));
+                assets.push(("selectable", name.as_str(), Cow::Borrowed(text)));
             }
         }
         assets.retain(|(kind, name, text)| Self::skill_live(ability, kind, name, text));
@@ -492,7 +528,7 @@ impl Catalog {
     ) -> Result<Vec<Value>> {
         let (ability, assets) = self.bundled_candidates(ability_id, visibility, state, &allow_ability, &allow_tool)?;
         Ok(assets.into_iter().map(|(kind, name, text)| {
-            let mode = Self::asset_mode(visibility, ability, kind, name, text);
+            let mode = Self::asset_mode(visibility, ability, kind, name, &text);
             let supplied = mode == "visible";
             json!({"ability_id":ability.id,"kind":kind,"skill_id":name,
                 "mode":mode,"availability":if supplied {"visible"} else {"discoverable"},
@@ -524,9 +560,9 @@ impl Catalog {
         let (_, _, text) = assets.into_iter().find(|(k, name, _)| *k == kind && *name == skill_id)
             .context("Bundled skill unavailable under current access")?;
         Ok(json!({"ability_id":ability.id,"kind":kind,"skill_id":skill_id,
-            "mode":Self::asset_mode(visibility,ability,kind,skill_id,text),
-            "availability":if Self::asset_mode(visibility,ability,kind,skill_id,text)=="visible" {"visible"} else {"discoverable"},
-            "requires_activation":Self::asset_mode(visibility,ability,kind,skill_id,text)!="visible",
+            "mode":Self::asset_mode(visibility,ability,kind,skill_id,&text),
+            "availability":if Self::asset_mode(visibility,ability,kind,skill_id,&text)=="visible" {"visible"} else {"discoverable"},
+            "requires_activation":Self::asset_mode(visibility,ability,kind,skill_id,&text)!="visible",
             "bytes":text.len(),"sha256":hex::encode(Sha256::digest(text.as_bytes())),
             "text":text,"source_kind":"untrusted_bundled_guidance","activates":false}))
     }
@@ -642,7 +678,7 @@ impl Catalog {
         let visible = Self::is_visible(visibility, &ability.id);
         let off = Self::is_off(visibility, &ability.id);
         let mut general_skills=Vec::new();
-        if ability.skill.as_ref().is_some_and(|text| Self::skill_live(ability,"ability",&ability.id,text)) {
+        if Self::core_skill(ability).is_some() {
             general_skills.push(json!({"skill_id":"core","title":"Skill","when_to_use":ability.skill_summary,
                 "mode":Self::skill_mode(visibility,&ability.id)}));
         }
@@ -658,7 +694,7 @@ impl Catalog {
             "kind":ability.kind,"readiness":ability.readiness,"config":ability.config,
             "skill_summary":ability.skill_summary,"migration_note":ability.migration_note,
             "icon":ability.icon,"color":ability.color,"tools":tools,
-            "has_skill":ability.skill.as_ref().is_some_and(|text| Self::skill_live(ability, "ability", &ability.id, text)),
+            "has_skill":Self::core_skill(ability).is_some(),
             "selectable_skills":ability.selectable_skills.iter().filter(|(name, text)| Self::skill_live(ability, "selectable", name, text) && Self::selectable_metadata(name,text).is_some() && Self::selectable_mode(visibility,&ability.id,name,text)!="off").map(|(name, _)| name).collect::<Vec<_>>(),
             "general_skills":general_skills,
             "skill_visibility":Self::skill_mode(visibility, &ability.id),
@@ -704,9 +740,9 @@ impl Catalog {
 
     /// Administrator viewer projection: only validated, unchanged bundle guidance.
     /// This does not activate the ability or alter model-facing visibility.
-    pub fn configuration_skill(&self, id: &str) -> Option<&str> {
+    pub fn configuration_skill(&self, id: &str) -> Option<Cow<'_ , str>> {
         let ability = self.abilities.iter().find(|ability| ability.id == id && Self::present(ability))?;
-        ability.skill.as_deref().filter(|text| Self::skill_live(ability, "ability", id, text))
+        Self::core_skill(ability)
     }
 
     pub fn configuration_skill_asset(&self, id: &str, kind: &str, name: &str) -> Option<&str> {
@@ -860,9 +896,9 @@ impl Catalog {
             // Visible core guidance is mandatory. Discoverable skill loads rebuild
             // their own context layer, independently of ability activation.
             if Self::skill_mode(visibility, &ability.id) == "visible" {
-                if let Some(skill) = ability.skill.as_ref().filter(|text| Self::skill_live(ability, "ability", &ability.id, text)) {
+                if let Some(skill) = Self::core_skill(ability) {
                     part.push_str("\n");
-                    part.push_str(skill);
+                    part.push_str(&skill);
                 }
             }
             for (tool, skill) in &ability.tool_skills {
@@ -917,9 +953,9 @@ impl Catalog {
                 skills.push(SkillInclusion {kind:kind.into(),id:name.into(),mode:mode.into(),included,
                     content_bytes:if included {body.len()} else {0},reason:reason.into()});
             };
-            if let Some(body)=ability.skill.as_ref().filter(|body|Self::skill_live(ability,"ability",id,body)) {
+            if let Some(body)=Self::core_skill(ability) {
                 let mode=Self::skill_mode(visibility,id);
-                add("ability",id,mode,body,mode=="visible"&&(normal||extra));
+                add("ability",id,mode,&body,mode=="visible"&&(normal||extra));
             }
             for (name,body) in &ability.tool_skills {
                 if names.contains(name.as_str()) && Self::skill_live(ability,"tool",name,body) {
@@ -1465,7 +1501,7 @@ mod tests {
     #[test]
     fn configuration_skill_rejects_unknown_and_changed_assets() {
         let (root, catalog) = fixture();
-        assert_eq!(catalog.configuration_skill("codebase_admin"), Some("Use scoped workspace tools."));
+        assert_eq!(catalog.configuration_skill("codebase_admin"), Some(Cow::Borrowed("Use scoped workspace tools.")));
         assert_eq!(catalog.configuration_skill("../codebase_admin"), None);
         assert_eq!(catalog.configuration_skill("missing"), None);
         fs::write(root.path().join("Administrator/codebase_admin/codebase_admin.skill.md"), "changed").unwrap();
@@ -1880,9 +1916,13 @@ mod tests {
     fn production_seed_manifest_loads() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities");
         let catalog = Catalog::load(&root).unwrap();
-        assert_eq!(catalog.abilities.len(), 81);
+        let ordinary = catalog.abilities.iter()
+            .filter(|entry| entry.id != "optimization").collect::<Vec<_>>();
+        assert_eq!(ordinary.len(), 81);
+        assert_eq!(catalog.abilities.iter().filter(|entry| entry.id == "optimization").count(), 1);
+        assert!(!catalog.known("optimization"));
         assert_eq!(catalog.abilities.iter().filter(|entry| Catalog::executable(entry)).count(), 9);
-        assert_eq!(catalog.abilities.iter().filter(|entry| entry.readiness == Readiness::Ready).count(), 8);
+        assert_eq!(ordinary.iter().filter(|entry| entry.readiness == Readiness::Ready).count(), 8);
         assert_eq!(catalog.abilities.iter().filter(|entry| entry.readiness == Readiness::Partial).count(), 1);
         assert!(catalog.abilities.iter().any(|entry| entry.id == "decision" && entry.tools == ["decide_with_jev", "score_directory_with_jev"]));
         let base = catalog.abilities.iter().find(|entry| entry.id == "base").unwrap();

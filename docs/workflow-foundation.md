@@ -342,6 +342,55 @@ Review acknowledges an exact revision and preserves source, receipts and
 uncertain effects. There is no model wake, automatic retry, chat-history
 publication or deletion.
 
+## Optimization experiment ownership
+
+Agent metadata ability_settings.optimization owns encrypted, revision-fenced
+preferences. User-owned run documents pin optimization_request settings and
+explicit command guidance; session_ability_state owns dependency activation.
+These use existing Store routing and retention without a database migration.
+The protected broker owns durable build-jobs/performance reservations, caller
+scope, frozen application-only source, pinned image/harness identities and
+bounded profiling artifacts. Plugin folders cannot grant execution or erase
+these records. Ephemeral data/optimization readiness and sockets are shared by
+API and loop; current policy and renewable host leases govern execution.
+Interrupted workloads retain charged reservations and never replay. Profiling
+outputs remain untrusted evidence rather than instructions.
+
+## Shared conversations and participation
+The application plane owns shared session directory, participants, hashed single-use
+invitations, invitation signing secret, bounded observation audit and requester run
+reservations. Reservations atomically enforce account run ceilings across canonical
+owners, reconcile legacy active work, and release only after a durable terminal
+outcome. Stable retry IDs retain uncertain admissions without freeing capacity
+merely because a canonical write is absent. Canonical chat,
+runs, attachments, shared help, per-message author/eligibility metadata, participation
+state, durable follow-up queue and mutation receipts remain in the original owner's
+user database. Personal participant read markers remain inside that canonical session.
+Existing conversations are indexed additively through authenticated Store operations.
+
+Shared access never changes authentication identity. Actor, storage owner, run requester
+and credential owner are separate values. A session invitation only supplies a scoped
+visitor relationship when general agent membership is absent; explicit revocation,
+account ceilings, agent restrictions and tool denials remain authoritative.
+Administrative viewing and joining are independent agent Identity policies.
+
+Inactive human messages and queue withdrawals are public human transcript only:
+they are never added to interactions, compaction or recall input. Participation
+generations fence claims, model/tool results, publication, background completion and
+recovery. Reactivation does not replay inactive transcript or resume stale work.
+
+Restricted tool credentials use app/secrets-plane tool_credential:<owner>:<kind>
+documents, bound to the authenticated requester. Authorization records bind account,
+credential version, arguments and current execution restrictions. No invitation,
+observer role, agent mode, or model-selected user ID delegates that authority.
+Tool results remain internal execution records and are not automatically published
+as chat messages. Owner-only approval projections expose actionable detail only
+to the credential owner.
+
+Help request/cancel/resolution transitions and retry receipts commit with staged
+metadata-only outbound events in the canonical user database. The existing outbox
+relay exports no conversation text, credentials, tool arguments or approval contents.
+
 ## Durable followup queue
 
 Encrypted user-owned followup_queue:<session> version-1 documents are the
@@ -372,3 +421,32 @@ its original message rather than rewriting part of that input. Ordinary Undo
 archives and removes affected queue entries. Fork includes only batches admitted
 before the chosen context boundary, with remapped attachments and immutable
 delivered status; it inherits no executable queue or review authority.
+
+## Duplicate-action protection
+Rust owns requester-scoped version-1 `action:` documents in the requester's user
+database, independent of the canonical conversation owner. They are always
+AEAD-encrypted, including administrator plaintext mode. The additive
+`action_index` stores only IDs, resource identifiers, hashed intent lookup values and state;
+`action_lock` reserves the SQLite writer before lookup, registration and claims.
+Arguments, origin message references, claims, attempts, provider keys, results and
+receipts remain sealed. Agent tool-execution settings own the revisioned
+`duplicate_protection` override; settings never grant permissions.
+
+Initial protected native adapters are prompt_slot_write, edit_own_prompt,
+save_own_skill and remove_own_skill. Canonical effect identity excludes retry
+preconditions; different effects remain separate. Equivalent prompt effects share
+a family. Matching additional actions bind a later admitted human origin and
+specific requester approval, including in Auto mode. Provider adapters must use
+the native stable provider key and supply authoritative reconciliation; this
+release adds no purchase or scheduling service.
+
+Native prompt/self-edit receipts commit with the agent-plane mutation and may
+resolve a running or uncertain requester-plane record after interruption, including
+when cancellation already held the owning run for recovery. Missing evidence
+never authorizes replay. Expired run ownership does not reclaim a consequential
+action. Late results are attempt-fenced. Action records survive compaction,
+Undo/Fork, and conversation deletion; no automatic expiry is introduced.
+Fork inherits no executable claims. Cross-plane reads and claims recheck live
+requester, resource, policy, participation and credential-owner authority.
+Bounded action statuses and saved-result lookup use get_task_checkpoint and
+call-scoped native guidance. Saved results remain untrusted evidence.

@@ -52,7 +52,7 @@ impl Store {
         let Some(mut session) = self.naming_session(tx, sid).await? else {
             return Ok(());
         };
-        if session["auto_naming"]["stage"] != "awaiting_message" {
+        if !matches!(session["auto_naming"]["stage"].as_str(),Some("awaiting_message"|"cancelled")) || session["participation"]["active"]==false {
             return Ok(());
         }
         let text = message["content"].as_str().unwrap_or("");
@@ -63,6 +63,8 @@ impl Store {
             text
         };
         session["auto_naming"] = json!({"version":1,"stage":"waiting_turn","run_id":rid,
+            "requester_user_id":message["author_id"].as_str().unwrap_or(self.current_user_id()),
+            "participation_generation":session["participation"]["generation"].as_u64().unwrap_or(0),
             "source":source.trim().chars().take(600).collect::<String>(),"attempts":0,"lease_until":0});
         self.naming_save(tx, sid, &mut session, true).await
     }
@@ -75,7 +77,7 @@ impl Store {
         let Some(mut session) = self.naming_session(tx, sid).await? else {
             return Ok(());
         };
-        if session["auto_naming"]["stage"] != "waiting_turn" {
+        if session["auto_naming"]["stage"] != "waiting_turn" || !naming_participation(&session) {
             return Ok(());
         }
         // A later successful turn can trigger a failed first run's naming, but
@@ -269,7 +271,7 @@ impl Store {
     }
 }
 fn naming_due(session: &Value, recovery: bool) -> bool {
-    if session["status"] != "active" {
+    if session["status"] != "active" || !naming_participation(session) {
         return false;
     }
     let naming = &session["auto_naming"];
@@ -284,9 +286,37 @@ fn naming_due(session: &Value, recovery: bool) -> bool {
         _ => false,
     }
 }
+fn naming_participation(session: &Value) -> bool {
+    session["participation"]["active"]!=false
+        && session["participation"]["generation"].as_u64().unwrap_or(0)
+            ==session["auto_naming"]["participation_generation"].as_u64().unwrap_or(0)
+}
 fn naming_owned(session: &Value, claim: &str) -> bool {
     session["status"] == "active"
+        && naming_participation(session)
         && session["auto_naming"]["stage"] == "generating"
         && session["auto_naming"]["claim"] == claim
         && session["auto_naming"]["lease_until"].as_u64().unwrap_or(0) > crate::now()
+}
+
+#[cfg(test)]
+mod participation_tests {
+ use super::*;
+ #[tokio::test]
+ async fn naming_binds_trusted_admitted_author_instead_of_storage_owner() {
+  let (_root,app)=crate::runtime_tests::fixture().await;
+  let sid=crate::runtime_tests::conversation(&app).await;
+  let actor=app.store.create_user_account("naming-participant","long-hash-placeholder").await.unwrap()["user_id"].as_str().unwrap().to_owned();
+  let mut session=app.store.get(&format!("session:{sid}")).await.unwrap().unwrap();
+  session["auto_naming"]=json!({"stage":"awaiting_message"});
+  app.store.put(&format!("session:{sid}"),&session).await.unwrap();
+  let mut tx=app.store.pool.begin().await.unwrap();
+  app.store.begin_session_naming(&mut tx,&sid,"participant-run",&json!({"author_id":actor,"content":"Participant title"})).await.unwrap();
+  tx.commit().await.unwrap();
+  app.store.cache.lock().unwrap().invalidate(&[format!("session:{sid}")]);
+  let saved=app.store.get(&format!("session:{sid}")).await.unwrap().unwrap();
+  assert_eq!(saved["auto_naming"]["requester_user_id"],actor);
+  assert_ne!(saved["auto_naming"]["requester_user_id"],app.store.current_user_id());
+  assert_eq!(saved["auto_naming"]["participation_generation"],0);
+ }
 }

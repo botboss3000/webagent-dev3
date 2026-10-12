@@ -333,15 +333,20 @@ async function boot(){
   await agentTabsQueue;
   await loadAgentTabs();
   await loadAgentRoster();
-  if(!agentRoster.length){$('agents-detail-region').hidden=true;if(sessionsScope)await showSessions('replace');window.__boot?.appReady();return;}
+  const inviteToken=new URL(location.href).searchParams.get('chat_invite');
+  if(inviteToken){
+    try{const redeemed=await api('/chat-invitations/redeem','POST',{token:inviteToken,client_request_id:keyId('invite:'+inviteToken)});const route=new URL(location.href);route.searchParams.delete('chat_invite');route.searchParams.set('session_id',redeemed.session_id);history.replaceState({},'',route);ids.delete('invite:'+inviteToken);}
+    catch(error){note('Invitation could not be redeemed: '+error.message);}
+  }
+  if(!agentRoster.length){$('agents-detail-region').hidden=true;await chat.sessions();const requested=new URL(location.href).searchParams.get('session_id');if(requested){try{await chat.open(requested,'replace');}catch(error){note('Conversation unavailable: '+error.message);}}if(sessionsScope)await showSessions('replace');window.__boot?.appReady();return;}
   $('agents-detail-region').hidden=false;
   await refresh();
   await mountAgentModels();
   await showAgentView(new URL(location.href).searchParams.get('agentView')||(me.is_admin?'config':'model'),'replace');
   const items=await chat.sessions();
   const requested=new URL(location.href).searchParams.get('session_id');
-  const selected=items.find(item=>item.id===requested)||items[0];
-  if(selected)await chat.open(selected.id,'replace');
+  const selected=items.find(item=>item.id===requested)||(requested?{id:requested}:items[0]);
+  if(selected){try{await chat.open(selected.id,'replace');}catch(error){note('Conversation unavailable: '+error.message);}}
   else if(requested){const route=new URL(location.href);route.searchParams.delete('session_id');history.replaceState({},'',route);}
   if(requested&&requested!==selected?.id)note('Requested conversation is unavailable. Showing your latest conversation.');
   if(initialTab==='account')showAccountPanel('replace');

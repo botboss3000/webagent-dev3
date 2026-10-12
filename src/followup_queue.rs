@@ -1,5 +1,12 @@
 //! Durable followup admission and safe delivery at Rust execution boundaries.
 use crate::*;
+fn successor_id(app: &App, sid: &str, entry: &Value) -> Result<String> {
+    let id=entry["id"].as_str().ok_or_else(||anyhow!("Followup entry id missing"))?;
+    if let Ok(id)=::uuid::Uuid::parse_str(id) {return Ok(id.to_string());}
+    let hash=digest(&json!(["webagent-private-followup-successor-v1",app.store.current_user_id(),sid,id]));
+    // A stable UUID preserves retries and legacy route expectations.
+    Ok(::uuid::Uuid::parse_str(&hash[..32])?.to_string())
+}
 pub(crate) fn public_entry(e: &Value) -> Value {
     json!({"id":e["id"],"message_id":e["message_id"],"revision":e["revision"],"choice":e["choice"],"status":if e["status"]=="pending"&&e["interrupt_committed"]==true {json!("interrupting")}else{e["status"].clone()},"content":e["content"],"attachments":e["attachments"],"consuming_run_id":e["consuming_run_id"],"batch_id":e["batch_id"],"review_status":e["review_status"]})
 }
@@ -31,6 +38,7 @@ pub(crate) async fn submit(
     s: &str,
     body: &Value,
 ) -> std::result::Result<Value, ApiError> {
+    if crate::shared_chat::actor(app)!=app.store.current_user_id(){return Err(ApiError(StatusCode::FORBIDDEN,"Private delivery controls belong to the conversation owner".into()));}
     let prepared = api::chat::prepare_followup(app, s, body).await?;
     let id = prepared.message["run_id"].as_str().unwrap().to_owned();
     let mut template = Value::Null;
@@ -61,6 +69,7 @@ pub(crate) async fn submit(
         .map_err(|e| conflict(&e.to_string()))
 }
 pub(crate) async fn interrupt_requested(app: &App, rid: &str) -> Result<bool> {
+    if let Some(run)=app.store.get(&format!("run:{rid}")).await? {if run["requester_user_id"].as_str().is_some_and(|actor|actor!=app.store.current_user_id()) || !app.store.participation_allows_run(&run).await? {return Ok(false);}}
     let Some(r) = app.store.get(&format!("run_view:{rid}")).await? else {
         return Ok(false);
     };
@@ -76,6 +85,7 @@ pub(crate) async fn interrupt_requested(app: &App, rid: &str) -> Result<bool> {
     }))
 }
 pub(crate) async fn apply_steering(app: &App, run: &mut Value) -> Result<bool> {
+    if run["requester_user_id"].as_str().is_some_and(|actor|actor!=app.store.current_user_id()){return Ok(false);}
     if interrupt_requested(app, run["id"].as_str().unwrap()).await? {
         return Ok(false);
     }
@@ -83,6 +93,7 @@ pub(crate) async fn apply_steering(app: &App, run: &mut Value) -> Result<bool> {
     app.store.followup_consume(&s, "steer", run, None).await
 }
 pub(crate) async fn finish_interrupt(app: &App, run: &mut Value) -> Result<bool> {
+    if run["requester_user_id"].as_str().is_some_and(|actor|actor!=app.store.current_user_id()){return Ok(false);}
     if run["uncertain"] == true || matches!(status(run), "recovery" | "waiting_external") {
         return Ok(false);
     }
@@ -109,7 +120,7 @@ pub(crate) async fn finish_interrupt(app: &App, run: &mut Value) -> Result<bool>
             .await?;
         return Ok(false);
     }
-    next["id"] = json!(uuid());
+    next["id"] = json!(successor_id(app,&s,&e)?);
     next["created_at"] = json!(now());
     next["updated_at"] = json!(now());
     next["input"] = run["input"].clone();
@@ -127,7 +138,18 @@ async fn review_entry(app: App, s: String, e: Value) -> Result<()> {
     };
     let id = e["id"].as_str().unwrap();
     let revision = e["revision"].as_u64().unwrap_or(0);
+    if e["template"]["requester_user_id"].as_str().is_some_and(|actor|actor!=app.store.current_user_id()){return Ok(());}
+    if !app.store.participation_allows_run(&e["template"]).await? {return Ok(());}
+    let mut quota=e["template"].clone();quota["id"]=json!(format!("followup-review:{}:{}:{id}",app.store.current_user_id(),s));
+    match app.store.requester_claim_ready(&quota).await {
+        Ok(true)=>{},
+        Ok(false)=>return Ok(()),
+        Err(error) if error.to_string()=="Account run limit reached"=>return Ok(()),
+        Err(error)=>return Err(error),
+    }
     let mut r = e["review"].clone();
+    r["run"]["id"]=quota["id"].clone();
+    r["run"]["requester_user_id"]=json!(app.store.current_user_id());
     r["status"] = json!("reviewing");
     r["deadline"] = json!(now() + 50);
     if !app
@@ -167,6 +189,7 @@ async fn review_entry(app: App, s: String, e: Value) -> Result<()> {
             )
             .await?;
     }
+    app.store.reconcile_requester_slots().await?;
     Ok(())
 }
 pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
@@ -181,7 +204,7 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
         let Some(session) = app.store.get(&format!("session:{s}")).await? else {
             continue;
         };
-        if session["status"].as_str().unwrap_or("active") != "active" {
+        if session["status"].as_str().unwrap_or("active") != "active" || app.store.participation_state(&s).await?["active"]!=true {
             continue;
         }
         let q = app.store.followup_queue(&s).await?;
@@ -330,7 +353,7 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
                 .await?;
             continue;
         }
-        next["id"] = json!(uuid());
+        next["id"] = json!(successor_id(app,&s,&e)?);
         next["created_at"] = json!(now());
         next["updated_at"] = json!(now());
         // An interrupt selected just as its original run completed becomes the next

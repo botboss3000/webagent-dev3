@@ -155,10 +155,18 @@ pub(crate) async fn recover(app: &App, startup: bool) -> Result<()> {
             && !tools::is_read(run["pending"]["name"].as_str().unwrap_or("")))
             || parallel_batch::executing_write(&run)
         {
+            crate::actions::interrupt_run(&user_app,&run).await?;
             run["status"] = json!("recovery");
             run["uncertain"] = json!(true);
             parallel_batch::mark_uncertain_writes(&mut run);
             run["error"] = json!("Tool outcome is uncertain after interruption");
+            if crate::actions::recover_results(&user_app,&mut run).await? {
+                run["uncertain"]=json!(false);
+                let permitted=resume && !app.shutoff().await? && user_app.run_model_authorized(&run).await
+                    && user_app.store.participation_allows_run(&run).await?;
+                run["status"]=json!(if permitted {"queued"} else {"stopped"});
+                run["error"]=json!("Recovered committed action result without replaying its effect");
+            }
         } else {
                 let allowed=user_app.run_model_authorized(&run).await;
             run["status"] = json!(if !resume || app.shutoff().await? || !allowed {

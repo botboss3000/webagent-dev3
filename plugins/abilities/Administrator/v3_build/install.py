@@ -159,6 +159,7 @@ def install(tree=None):
         host = read_regular(source, "host.py", 2 * 1024 * 1024, owner=1000)
         bootstrap = read_regular(source, "install.py", 2 * 1024 * 1024, owner=1000)
         release = read_regular(source, "release.py", 2 * 1024 * 1024, owner=1000)
+        performance = read_regular(source, "performance.py", 2 * 1024 * 1024, owner=1000)
         index_source = directory(source_path.parent / "code_index")
         try:
             scanner = read_regular(index_source, "adapter.py", 2*1024*1024, owner=1000)
@@ -170,14 +171,16 @@ def install(tree=None):
         compile(host, "host.py", "exec")
         compile(bootstrap, "bootstrap.py", "exec")
         compile(release, "release.py", "exec")
+        compile(performance, "performance.py", "exec")
         compile(scanner, "index-scanner.py", "exec")
         publish(service, "host.py", host, 0o644)
         publish(service, "bootstrap.py", bootstrap, 0o644)
         publish(service, "release.py", release, 0o644)
+        publish(service, "performance.py", performance, 0o644)
         publish(service, "index-scanner.py", scanner, 0o644)
-        manifest = {"host_sha256": hashlib.sha256(host).hexdigest(), "bootstrap_sha256": hashlib.sha256(bootstrap).hexdigest(), "release_sha256": hashlib.sha256(release).hexdigest(), "scanner_sha256":hashlib.sha256(scanner).hexdigest()}
+        manifest = {"performance_sha256": hashlib.sha256(performance).hexdigest(), "host_sha256": hashlib.sha256(host).hexdigest(), "bootstrap_sha256": hashlib.sha256(bootstrap).hexdigest(), "release_sha256": hashlib.sha256(release).hexdigest(), "scanner_sha256":hashlib.sha256(scanner).hexdigest()}
         publish(service, "installed.json", json.dumps(manifest, sort_keys=True).encode())
-        if read_regular(source, "host.py", 2 * 1024 * 1024, owner=1000) != host or read_regular(source, "install.py", 2 * 1024 * 1024, owner=1000) != bootstrap or read_regular(source, "release.py", 2 * 1024 * 1024, owner=1000) != release:
+        if read_regular(source, "performance.py", 2 * 1024 * 1024, owner=1000) != performance or read_regular(source, "host.py", 2 * 1024 * 1024, owner=1000) != host or read_regular(source, "install.py", 2 * 1024 * 1024, owner=1000) != bootstrap or read_regular(source, "release.py", 2 * 1024 * 1024, owner=1000) != release:
             raise ValueError("installation raced a source edit; repeat after writers pause")
         index_source = directory(source_path.parent / "code_index")
         try:
@@ -651,7 +654,7 @@ def start():
     service = directory(SERVICE)
     try:
         manifest = json.loads(read_regular(service, "installed.json", 4096, owner=0))
-        for name, key in (("host.py", "host_sha256"), ("bootstrap.py", "bootstrap_sha256"), ("release.py", "release_sha256"), ("index-scanner.py", "scanner_sha256")):
+        for name, key in (("host.py", "host_sha256"), ("bootstrap.py", "bootstrap_sha256"), ("release.py", "release_sha256"), ("index-scanner.py", "scanner_sha256"), ("performance.py", "performance_sha256")):
             body = read_regular(service, name, 2 * 1024 * 1024, owner=0)
             if hashlib.sha256(body).hexdigest() != manifest[key]:
                 raise ValueError("installed broker code digest changed")

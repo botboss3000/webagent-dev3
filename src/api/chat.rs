@@ -28,8 +28,9 @@ pub(crate) async fn send(
     let request_id = required(&body, "client_message_id", 128)?;
     let _guard = app.gate.lock().await;
     session_agent_id(&app,&id).await?;
-    let receipt_key = format!("receipt:message:{id}:{request_id}");
-    if let Some(receipt) = app.store.get(&receipt_key).await? {
+    let receipt_key = format!("receipt:message:{id}:{}:{request_id}",crate::shared_chat::actor(&app));
+    let legacy_receipt=if crate::shared_chat::actor(&app)==app.store.current_user_id(){app.store.get(&format!("receipt:message:{id}:{request_id}")).await?}else{None};
+    if let Some(receipt) = app.store.get(&receipt_key).await?.or(legacy_receipt) {
         if receipt["digest"] != digest(&body) {
             return Err(conflict("Message identifier reused with different input"));
         }
@@ -42,26 +43,23 @@ pub(crate) async fn send(
         }
         return Ok((StatusCode::ACCEPTED, Json(result)));
     }
-    if crate::followup_queue::should_queue(&app,&id).await? {
+    let participation=app.store.participation_state(&id).await?;
+    let legacy=participation["active"]==true && !crate::shared_chat::uses_shared_queue(&app,&id).await?;
+    if legacy && crate::followup_queue::should_queue(&app,&id).await? {
         let result=crate::followup_queue::submit(&app,&id,&body).await?;
         return Ok((StatusCode::ACCEPTED,Json(result)));
     }
     let prepared=match prepare_message(&app,&id,&body,None).await {
         Ok(prepared)=>prepared,
-        Err(error) if matches!(error.1.as_str(),"Resolve the existing run first"|"Resolve the pending message review first")=>{
+        Err(error) if legacy && matches!(error.1.as_str(),"Resolve the existing run first"|"Resolve the pending message review first")=>{
             return Ok((StatusCode::ACCEPTED,Json(crate::followup_queue::submit(&app,&id,&body).await?)));
         },
         Err(error)=>return Err(error),
     };
     let mut docs=prepared.docs;
     docs.push((receipt_key,json!({"digest":digest(&body),"result":prepared.result})));
-    if let Err(error)=app.store.atomic_docs_event(docs,&id,prepared.kind,&prepared.message).await {
-        if matches!(error.to_string().as_str(),"Session already has an active run"|"Resolve the pending message review first") {
-            return Ok((StatusCode::ACCEPTED,Json(crate::followup_queue::submit(&app,&id,&body).await?)));
-        }
-        return Err(admission_error(error));
-    }
-    Ok((StatusCode::ACCEPTED,Json(prepared.result)))
+    let result=app.store.admit_shared_message(docs,&id,prepared.kind,&prepared.message).await.map_err(admission_error)?;
+    Ok((StatusCode::ACCEPTED,Json(result)))
 }
 pub(crate) struct PreparedMessage {
     pub docs:Vec<(String,Value)>,
@@ -70,8 +68,17 @@ pub(crate) struct PreparedMessage {
     pub result:Value,
 }
 pub(super) fn admission_error(error:anyhow::Error)->ApiError {
-    if error.to_string()=="Session already has an active run" {conflict("Resolve the existing run first")}
+    if error.to_string()=="Participation revision changed" {conflict("Participation revision changed; resend against the current agent state")}
+    else if error.to_string()=="Account run limit reached" {conflict("Account run limit reached")}
+    else if error.to_string()=="Session already has an active run" {conflict("Resolve the existing run first")}
     else {ApiError::from(error)}
+}
+fn message_run_id(app:&App,sid:&str,body:&Value)->String {
+    let Some(request)=body["client_message_id"].as_str() else {return uuid()};
+    use sha2::Digest;
+    let hash=sha2::Sha256::digest(serde_json::to_vec(&json!({"actor":crate::shared_chat::actor(app),"owner":app.store.current_user_id(),"session":sid,"request":request,"body":digest(body)})).unwrap());
+    let mut bytes=[0u8;16];bytes.copy_from_slice(&hash[..16]);
+    uuid::Uuid::from_bytes(bytes).to_string()
 }
 pub(crate) async fn prepare_message(app:&App,id:&str,body:&Value,supplied_session:Option<&Value>)
     ->std::result::Result<PreparedMessage,ApiError> {
@@ -93,31 +100,33 @@ async fn prepare_message_inner(app:&App,id:&str,body:&Value,supplied_session:Opt
     };
     if supplied_session.is_none() && session["status"] != "active" { return Err(ApiError(StatusCode::NOT_FOUND,"Session not found".into())); }
     let agent_id=session["agent_id"].as_str().unwrap_or("shared_default").to_owned();
-    let access=app.store.live_access(app.store.current_user_id(),&agent_id).await
+    let access=crate::shared_chat::live_access(&app.store,crate::shared_chat::actor(app),id,&agent_id).await
         .map_err(|_|ApiError(StatusCode::FORBIDDEN,"Agent unavailable".into()))?;
     if !access.admitted() { return Err(ApiError(StatusCode::FORBIDDEN,"Agent unavailable".into())); }
-    if !followup && app.store.get(&format!("manager_pending:{id}")).await?.is_some() {
-        return Err(conflict("Resolve the pending message review first"));
+    let participation=app.store.participation_state(id).await.or_else(|error| if let Some(session)=supplied_session {Ok(session.get("participation").cloned().unwrap_or_else(||json!({"active":true,"revision":0,"generation":0})))} else {Err(error)})?;
+    if participation["active"]!=true {
+        let run_id=message_run_id(app,id,body);
+        let mut prepared=attachments::prepare(body.get("attachments"),id,&run_id).map_err(|_|bad("Invalid attachments"))?;
+        uploads::prepare_uploads(app,id,&run_id,body.get("attachment_ids"),&mut prepared).await?;
+        if text.trim().is_empty() && prepared.metadata.is_empty(){return Err(bad("Message text or attachments required"));}
+        let message=json!({"role":"user","content":text,"run_id":run_id,"author_id":crate::shared_chat::actor(app),"participation_generation":participation["generation"].as_u64().unwrap_or(0)});
+        let mut docs=prepared.records;docs.push((format!("message_attachments:{run_id}"),json!(prepared.metadata)));
+        return Ok(PreparedMessage{docs,kind:"human_message",message,result:json!({"run_id":null,"agent_active":false,"attachments":prepared.metadata})});
+    }
+    let active=app.store.active_runs().await?;
+    let reviews=app.store.list("manager_pending:").await?;
+    let session_busy=active.iter().any(|run|run["session_id"]==id && !terminal(status(run)))
+        || app.store.get(&format!("manager_pending:{id}")).await?.is_some()
+        || session["message_queue"].as_array().is_some_and(|queue|!queue.is_empty());
+    // Follow-ups queue behind this conversation; independent admissions retain the existing ceilings.
+    if !followup && !session_busy {
+        if active.len()+reviews.len()>=app.runtime.read().await.scheduler.max_unresolved_runs {return Err(conflict("Run queue is full"));}
     }
     let manager=crate::manager::prepare(&app,&agent_id).await
         .map_err(|_|conflict("Incoming-message review requires valid criteria and an authorized System model"))?;
-    let active = app.store.active_runs().await?;
-    let review_count=app.store.list("manager_pending:").await?.len();
-    if !followup && active.len()+review_count >= app.runtime.read().await.scheduler.max_unresolved_runs {
-        return Err(conflict("Run queue is full"));
-    }
-    if !followup && active.len()+review_count >= access.max_active_runs() as usize {
-        return Err(conflict("Account run limit reached"));
-    }
-    if !followup && active
-        .iter()
-        .any(|r| r["session_id"] == id && !terminal(status(r)))
-    {
-        return Err(conflict("Resolve the existing run first"));
-    }
     let workflow_policy = current_workflow_policy(&app).await?;
-    let input: Vec<Value> = Vec::new();
-    let run_id = uuid();
+    let input: Vec<Value> = if crate::shared_chat::actor(app)!=app.store.current_user_id() && supplied_session.is_none(){app.store.shared_model_context(id).await?}else{Vec::new()};
+    let run_id = message_run_id(app,id,body);
     // Attachment text is saved with this message, but remains untrusted user data
     // when the loop later hydrates context for the model.
     let mut prepared = attachments::prepare(body.get("attachments"), &id, &run_id)
@@ -126,7 +135,7 @@ async fn prepare_message_inner(app:&App,id:&str,body:&Value,supplied_session:Opt
     if text.trim().is_empty() && prepared.metadata.is_empty() {
         return Err(bad("Message text or attachments required"));
     }
-    let mut message = json!({"role":"user","content":text,"run_id":run_id});
+    let mut message = json!({"role":"user","content":text,"run_id":run_id,"author_id":crate::shared_chat::actor(app),"participation_generation":participation["generation"].as_u64().unwrap_or(0)});
     if !prepared.metadata.is_empty() {
         message["context_content"] = json!(prepared.context_content(text)?);
     }
@@ -178,13 +187,15 @@ async fn prepare_message_inner(app:&App,id:&str,body:&Value,supplied_session:Opt
     let instructions = assembled_agent_instructions(&agent_store, &agent_id).await?;
     let mut run = json!({"agent_id":agent_id,"selection_plan":plan,"failover_state":model_selection::FailoverState::default(),"instructions":instructions,"provider_selection":selection.value(),"id":run_id,"session_id":id,"status":"queued","phase":"model","context_hydration_pending":true,"input":input,"calls":[],"call_index":0,"loaded_abilities":[],"ability_catalog_version":app.abilities.version(),
         "turns":0,"attempt":0,"pending":null,"generation":"","uncertain":false,"error":null,"created_at":now(),"updated_at":now()});
+    run["requester_user_id"]=json!(crate::shared_chat::actor(app));
+    run["participation_generation"]=participation["generation"].clone();
     // Both role cursors survive recovery without changing one another on failover.
     run["system_selection_plan"] = json!(system_plan);
     run["system_failover_state"] = json!(model_selection::FailoverState::default());
     run["attachments"] = json!(prepared.metadata.clone());
     run["chat_model_revision"] = json!(saved_model.as_ref().and_then(|v|v["revision"].as_u64()).unwrap_or(0));
     // Freeze memory at admission; later edits cannot rewrite queued context.
-    run["memory_context"] = json!(memory::snapshot(app.store.list(&format!("memory:{id}:")).await?)?);
+    run["memory_context"] = if crate::shared_chat::actor(app)==app.store.current_user_id(){json!(memory::snapshot(app.store.list(&format!("memory:{id}:")).await?)?)}else{Value::Null};
     workflow::record(&mut run, &workflow_policy,
         &workflow::Input::Admission { request_digest:digest(&body) }, workflow::Decision::Pass)?;
     workflow::record(&mut run, &workflow_policy,
@@ -297,8 +308,10 @@ pub(crate) async fn events(
     let user_id=auth_doc["_user_id"].as_str().unwrap_or("admin").to_owned();
     let generation=auth_doc["generation"].clone();
     let agent_id=session_agent_id(&app,&id).await?;
-    let access_revision=app.store.live_access(&user_id,&agent_id).await
+    let access_revision=crate::shared_chat::live_access(&app.store,&user_id,&id,&agent_id).await
         .map_err(|_|ApiError(StatusCode::FORBIDDEN,"Agent unavailable".into()))?.revision;
+    let resolved=crate::shared_chat::resolve(&app,&id,&user_id).await.map_err(|_|ApiError(StatusCode::FORBIDDEN,"Session unavailable".into()))?;
+    if !resolved.can_write(){app.store.shared_observe_audit(&id,&user_id).await?;}
     let stream = futures_util::stream::unfold(
         (
             app,
@@ -309,7 +322,7 @@ pub(crate) async fn events(
             auth_key,
             expires,
             0u64,
-            user_id, generation, agent_id, access_revision, None::<(u64,u64)>, 0u64,
+            user_id, generation, agent_id, access_revision, None::<String>, 0u64,
         ),
         move |(app, id, mut cursor, mut queue, start, auth_key, expires, mut checked,
             user_id, generation, agent_id, access_revision, mut metadata_revision, mut metadata_checked)| async move {
@@ -319,10 +332,11 @@ pub(crate) async fn events(
                 if now() - start > 3600 || app.stop.is_cancelled() || now() >= expires {
                     return None;
                 }
-                if now() - checked >= 15 {
+                if crate::shared_chat::resolve(&app,&id,&user_id).await.is_err() {return None;}
+                if now() > checked {
                     let doc=app.store.get(&auth_key).await.ok().flatten();
                     let account=app.store.account_by_id(&user_id).await.ok().flatten();
-                    let access=app.store.live_access(&user_id,&agent_id).await.ok();
+                    let access=crate::shared_chat::live_access(&app.store,&user_id,&id,&agent_id).await.ok();
                     let valid=doc.as_ref().is_some_and(|doc|doc["generation"]==generation
                             && doc["expires"].as_u64().unwrap_or(0)>now())
                         && (if let Some(doc)=doc.as_ref().filter(|d|d.get("agent_id").is_some()) {super::embed::credential_valid(&app,doc).await} else {true})
@@ -332,7 +346,7 @@ pub(crate) async fn events(
                             && access::Principal::from_account(account)
                                 .is_ok_and(|principal|principal.active()))
                         && access.as_ref().is_some_and(|access|
-                            access.admitted() && access.revision==access_revision);
+                            (access.admitted() || app.chat_access.as_ref().is_some_and(|a|!a.can_write())) && access.revision==access_revision);
                     if !valid {
                         return None;
                     }
@@ -351,21 +365,21 @@ pub(crate) async fn events(
                     ));
                 }
                 queue = match app.store.chat_events(&id, cursor).await {
-                    Ok(mut v) => {if uploads::message_files(&app,&mut v).await.is_err() || crate::manager::decorate(&app,&mut v).await.is_err(){return None;} v},
+                    Ok(mut v) => {if uploads::message_files(&app,&mut v).await.is_err() || crate::manager::decorate(&app,&mut v).await.is_err() || crate::shared_projection::messages(&app,&mut v).await.is_err(){return None;} v},
                     Err(_) => return None,
                 };
                 if queue.is_empty() && now() > metadata_checked {
                     metadata_checked = now();
-                    let summary = app.store.session_read_summary(&id).await.ok()?;
+                    let summary = app.store.shared_read_summary(&id,&user_id).await.ok()?;
+                    let participation=app.store.participation_state(&id).await.ok()?;
                     let queue_state=crate::followup_queue::public(&app.store.followup_queue(&id).await.ok()?);
-                    let revision = (summary["metadata_revision"].as_u64().unwrap_or(0),queue_state["queue_state"]["revision"].as_u64().unwrap_or(0));
-                    if metadata_revision != Some(revision) {
-                        let queue_changed=metadata_revision.is_some_and(|previous|previous.1!=revision.1);
+                    let revision=digest(&json!([summary["metadata_revision"],participation["revision"],participation["generation"],queue_state["queue_state"]["revision"]]));
+                    if metadata_revision.as_ref() != Some(&revision) {
                         metadata_revision = Some(revision);
                         // Metadata events deliberately carry no SSE ID: event-log
                         // sequence numbers are not public chat sequence numbers.
-                        let event = Event::default().event(if queue_changed {"queue_updated"}else{"session_updated"})
-                            .data(json!({"session":summary,"queue":queue_state["queue"],"queue_state":queue_state["queue_state"]}).to_string());
+                        let event = Event::default().event("session_updated")
+                            .data(json!({"session":summary,"participation":participation,"queue":queue_state["queue"],"queue_state":queue_state["queue_state"],"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id()}).to_string());
                         return Some((Ok(event), (app, id, cursor, queue, start, auth_key,
                             expires, checked, user_id, generation, agent_id, access_revision,
                             metadata_revision, metadata_checked)));
@@ -442,7 +456,13 @@ pub(crate) async fn command(
 ) -> Api {
     let req = required(&body, "client_request_id", 128)?;
     let _guard = app.gate.lock().await;
-    let receipt_key = format!("receipt:run:{id}:{action}:{req}");
+    let stored=app.run(&id).await.map_err(|_|ApiError(StatusCode::NOT_FOUND,"Run not found".into()))?;
+    let requester=stored.pointer("/pending/authorization/owner_user_id").and_then(Value::as_str)
+        .or_else(||stored["requester_user_id"].as_str()).unwrap_or(app.store.current_user_id());
+    if matches!(action.as_str(),"resume"|"recovery") && requester!=crate::shared_chat::actor(&app) {
+        return Err(ApiError(StatusCode::FORBIDDEN,"Only the requesting user can reconcile or resume their run".into()));
+    }
+    let receipt_key = format!("receipt:run:{id}:{action}:{}:{req}",crate::shared_chat::actor(&app));
     if let Some(r) = app.store.get(&receipt_key).await? {
         if r["digest"] != digest(&body) {
             return Err(conflict("Identifier reused"));
@@ -450,7 +470,8 @@ pub(crate) async fn command(
         if matches!(action.as_str(),"cancel"|"pause") {
             if let Some(sid)=r["result"]["session_id"].as_str() {phase3_api::quiesce_session_resources(&app,sid).await?;}
         }
-        return Ok(Json(r["result"].clone()));
+        let mut views=vec![r["result"].clone()];crate::shared_projection::runs(&app,&mut views).await?;
+        return Ok(Json(views.remove(0)));
     }
     let mut run = app
         .run(&id)
@@ -458,6 +479,10 @@ pub(crate) async fn command(
         .map_err(|_| ApiError(StatusCode::NOT_FOUND, "Run not found".into()))?;
     if let Some(expected)=body.get("expected_run_revision") {
         if expected.as_u64().is_none() || expected!=&run["run_revision"] {return Err(conflict("Run changed; no control applied"));}
+    }
+    let generation_live=app.store.participation_allows_run(&run).await?;
+    if !generation_live && (action=="resume" || (action=="recovery" && body["decision"]=="retry")) {
+        return Err(conflict("Participation changed; send fresh instructions rather than restarting withdrawn work"));
     }
     match action.as_str() {
         "cancel" | "pause" => {
@@ -597,6 +622,10 @@ pub(crate) async fn command(
         }
         _ => return Err(ApiError(StatusCode::NOT_FOUND, "Unknown run action".into())),
     }
+    if action=="recovery" && !generation_live && !terminal(status(&run)) {
+        // Reconciliation records known outcomes but never revives withdrawn work.
+        run["status"]=json!(if run["uncertain"]==true{"recovery"}else{"stopped"});
+    }
     let result = public_run(&run);
     app.store
         .atomic_docs_event(
@@ -610,7 +639,8 @@ pub(crate) async fn command(
         )
         .await?;
     if matches!(action.as_str(),"cancel"|"pause") {phase3_api::quiesce_session_resources(&app,result["session_id"].as_str().unwrap()).await?;}
-    Ok(Json(result))
+    let mut views=vec![result];crate::shared_projection::runs(&app,&mut views).await?;
+    Ok(Json(views.remove(0)))
 }
 pub(crate) async fn approval(State(app): State<App>, Path(id): Path<String>, Json(body): Json<Value>) -> Api {
     let req = required(&body, "client_request_id", 128)?;
@@ -619,7 +649,7 @@ pub(crate) async fn approval(State(app): State<App>, Path(id): Path<String>, Jso
         return Err(bad("Invalid approval decision"));
     }
     let _guard = app.gate.lock().await;
-    let receipt_key = format!("receipt:approval:{id}:{req}");
+    let receipt_key = format!("receipt:approval:{id}:{}:{req}",crate::shared_chat::actor(&app));
     if let Some(r) = app.store.get(&receipt_key).await? {
         if r["digest"] != digest(&body) {
             return Err(conflict("Identifier reused"));
@@ -638,8 +668,21 @@ pub(crate) async fn approval(State(app): State<App>, Path(id): Path<String>, Jso
         return Err(conflict("Approval is no longer pending"));
     }
     let sid = run["session_id"].as_str().unwrap();
+    if run["pending"]["new_intent_confirmation"]==true && run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id())!=crate::shared_chat::actor(&app) {
+        return Err(ApiError(StatusCode::FORBIDDEN,"Only the requesting user may confirm an additional matching action".into()));
+    }
+    if let Some(owner)=run["pending"]["authorization"]["owner_user_id"].as_str() {
+        if owner!=crate::shared_chat::actor(&app) {return Err(ApiError(StatusCode::FORBIDDEN,"Only the credential owner may authorize this tool".into()));}
+    }
+    if !crate::credential_authorization::valid(&app.store,&run,&run["pending"]).await? {
+        run["pending"]["state"]=json!("cancelled");run["pending"]["decision"]=Value::Null;
+        run["pending"]["human_approved"]=json!(false);run["status"]=json!("stopped");
+        app.save(&mut run).await?;
+        return Err(conflict("Credential authorization changed"));
+    }
+    if !app.store.participation_allows_run(&run).await? {return Err(conflict("Agent is inactive or participation changed"));}
     let agent_id=run["agent_id"].as_str().unwrap_or("shared_default");
-    let access=app.store.live_access(app.store.current_user_id(),agent_id).await
+    let access=crate::shared_chat::live_access(&app.store,run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id()),sid,agent_id).await
         .map_err(|_|conflict("Access changed; approval is invalid"))?;
     if !access.admitted() || !app.run_model_authorized(&run).await {
         run["status"]=json!("stopped");
@@ -660,6 +703,12 @@ pub(crate) async fn approval(State(app): State<App>, Path(id): Path<String>, Jso
             .unwrap_or(0)
             != ability_state["revision"].as_u64().unwrap()
     {
+        if !run["pending"]["authorization"].is_null() {
+            run["pending"]["state"]=json!("cancelled");run["pending"]["decision"]=Value::Null;
+            run["pending"]["human_approved"]=json!(false);run["status"]=json!("stopped");
+            app.save(&mut run).await?;
+            return Err(conflict("Policy or session mode changed; owner authorization cancelled"));
+        }
         // BATCH-APPROVAL-REVOCATION: a changed policy invalidates only this
         // call. Its next pass gets a new pending ID and fresh revisions.
         let stale_id=run["pending"]["id"].clone();
@@ -698,4 +747,28 @@ pub(crate) async fn approval(State(app): State<App>, Path(id): Path<String>, Jso
         )
         .await?;
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod shared_command_projection_tests {
+ use super::*;
+ #[tokio::test]
+ async fn another_participant_can_stop_but_cannot_resume_or_read_owner_approval() {
+  let (_root,app)=crate::runtime_tests::fixture().await;
+  let sid=crate::runtime_tests::conversation(&app).await;
+  let rid=crate::runtime_tests::queued(&app,&sid).await;
+  let mut run=app.run(&rid).await.unwrap();
+  run["requester_user_id"]=json!("alice");run["status"]=json!("paused");
+  run["pending"]=json!({"id":"private-panel","state":"waiting","arguments":{"private":"owner-only"},"authorization":{"owner_user_id":"alice"}});
+  app.store.put(&key("run",&rid),&run).await.unwrap();
+  let mut bob=app.clone();bob.chat_actor=Some("bob".into());
+  let error=command(State(bob.clone()),Path((rid.clone(),"resume".into())),Json(json!({"client_request_id":"resume"}))).await.unwrap_err();
+  assert_eq!(error.0,StatusCode::FORBIDDEN);
+  for _ in 0..2 {
+   let Json(result)=command(State(bob.clone()),Path((rid.clone(),"cancel".into())),Json(json!({"client_request_id":"stop"}))).await.unwrap();
+   assert_eq!(result["can_decide"],false);
+   assert!(result["pending"].is_null());
+   assert!(!result.to_string().contains("owner-only"));
+  }
+ }
 }

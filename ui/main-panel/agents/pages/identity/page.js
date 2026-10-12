@@ -1,5 +1,6 @@
 
 'use strict';
+import { renderSharedChat } from './shared-chat.js';
 import { renderEmbedSettings } from './embed.js';
 import { renderVisibility } from './visibility.js';
 import { renderClosing } from './closing.js';
@@ -62,6 +63,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
     queue=task.catch(()=>{}); return task;
   };
   if(agent.can_manage)await renderEmbedSettings(content,request,{agentId});
+  renderSharedChat(content, agent, persist, request, {agentId});
   renderCompaction(content, agent, persist);
   renderToolOutputPolicy(content, agent, persist);
   const title = document.createElement('h3'); title.textContent = 'Chat modes'; content.append(title);

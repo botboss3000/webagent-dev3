@@ -47,6 +47,8 @@ pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
         message_api_token_hash: None,
         browser_login_bridge: None,
         store,
+        chat_actor: None,
+        chat_access: None,
         abilities: Arc::new(
             abilities::Catalog::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities"))
                 .unwrap(),

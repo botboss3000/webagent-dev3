@@ -53,6 +53,8 @@ fn validate(args: &Args) -> Result<()> {
 }
 struct View { app: App, fingerprint: String }
 async fn view(app: &App, sid: &str, run_id: &str) -> Result<View> {
+    if crate::shared_chat::actor(app)!=app.store.current_user_id() {bail!("Shared chat membership does not authorize caller-owned private records");}
+
     let agent = session_agent_id(app, sid).await?;
     let mut scoped = app.clone();
     scoped.store = app.store.for_agent(&agent).await?;
@@ -62,7 +64,7 @@ async fn view(app: &App, sid: &str, run_id: &str) -> Result<View> {
     }
     let (policy, revision, visibility, state) = ability_controls(&scoped, sid).await?;
     let mode = session_mode(&scoped, sid).await?;
-    let access = scoped.store.live_access(scoped.store.current_user_id(), &agent).await?;
+    let access = crate::shared_chat::live_access(&scoped.store,crate::shared_chat::actor(&scoped),sid,&agent).await?;
     if !access.admitted() || live_tool_decision(&scoped, &access, "recall_compacted",
         &policy, &visibility, &state, &run["loaded_abilities"], mode["mode"]=="read_only")
         .permission == crate::access::Permission::Deny {
@@ -191,7 +193,7 @@ async fn work(app: &App, sid: &str, run_id: &str, args: &Value) -> Result<Value>
             let agent=session_agent_id(&current.app,sid).await?;
             let (policy,_,visibility,state)=ability_controls(&current.app,sid).await?;
             let mode=session_mode(&current.app,sid).await?;
-            let access=current.app.store.live_access(current.app.store.current_user_id(),&agent).await?;
+            let access=crate::shared_chat::live_access(&current.app.store,crate::shared_chat::actor(&current.app),sid,&agent).await?;
             if live_tool_decision(&current.app,&access,&name,&policy,&visibility,&state,
                 &run["loaded_abilities"],mode["mode"]=="read_only").permission
                 != crate::access::Permission::Deny {

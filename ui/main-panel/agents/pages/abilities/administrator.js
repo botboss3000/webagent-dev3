@@ -75,8 +75,71 @@ function buildCodeIndexControls({ ability, data, request, scope, levelId, previe
   return panel;
 }
 
+function buildOptimizationControls({ ability, data, request, scope, levelId, previewUser, status, rerender }) {
+  const panel = node('div', 'ac-list v3-administrator-settings');
+  const enabled = !levelId && !previewUser;
+  panel.append(node('p', 'ac-hint', enabled
+    ? 'Defaults for explicit /optimize requests. Command overrides apply to that request only. Experiments produce a candidate for review.'
+    : 'Optimization settings are read-only while previewing a user or capability level.'));
+  const current = { priority: 'balanced', attempts: 3, total_seconds: 900, profiling: 'both',
+    cpu_cores: 1, ram_mb: 1024, coverage: 'standard', max_slowdown_percent: 0,
+    max_memory_regression_percent: 0, allow_dependencies: false, ...(data.settings?.[ability.id] || {}) };
+  const controls = {};
+  for (const [key, title, choices] of [
+    ['priority', 'Optimization priority', ['balanced', 'speed', 'memory']],
+    ['profiling', 'Profiling', ['none', 'cpu', 'allocations', 'both']],
+    ['coverage', 'Workload coverage', ['quick', 'standard', 'extended']],
+  ]) {
+    const input = node('select', 'ac-input ac-config-sel'); input.setAttribute('aria-label', title);
+    for (const value of choices) {
+      const option = node('option', '', value[0].toUpperCase() + value.slice(1)); option.value = value; input.append(option);
+    }
+    input.value = current[key]; input.disabled = !enabled; controls[key] = input; panel.append(row(title, input));
+  }
+  for (const [key, title, min, max] of [
+    ['attempts', 'Candidate attempts', 1, 10], ['total_seconds', 'Total runtime (seconds)', 1, 1800],
+    ['cpu_cores', 'CPU cores', 1, 2], ['ram_mb', 'RAM limit (MiB)', 128, 4096],
+    ['max_slowdown_percent', 'Maximum slowdown (%)', 0, 25],
+    ['max_memory_regression_percent', 'Maximum memory regression (%)', 0, 25],
+  ]) {
+    const input = field(title, String(current[key]), 'number');
+    input.min = String(min); input.max = String(max); input.step = '1'; input.disabled = !enabled;
+    controls[key] = input; panel.append(row(title, input));
+  }
+  const dependencies = field('Allow dependency changes', '', 'checkbox');
+  dependencies.checked = current.allow_dependencies === true; dependencies.disabled = !enabled;
+  controls.allow_dependencies = dependencies;
+  panel.append(row('Dependency changes', dependencies, 'Permission and sandbox restrictions still apply.'));
+  const inputs = Object.values(controls);
+  const save = async () => {
+    if (!enabled || inputs.some(input => input.disabled)) return;
+    if (inputs.some(input => input.type === 'number' && (input.value === '' || !input.checkValidity() || !Number.isInteger(Number(input.value))))) {
+      status.textContent = 'Enter integers within the displayed limits before saving.'; return;
+    }
+    const settings = {};
+    for (const [key, input] of Object.entries(controls)) {
+      settings[key] = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value;
+    }
+    for (const input of inputs) input.disabled = true;
+    status.textContent = 'Saving Optimization settings…';
+    try {
+      await request(scope + '/abilities/' + encodeURIComponent(ability.id) + '/settings', 'PUT',
+        { expected_revision: data.revision, settings });
+      await rerender({ administratorNotice: 'Optimization settings saved.' });
+    } catch (error) {
+      status.textContent = message(error);
+      for (const input of inputs) input.disabled = false;
+    }
+  };
+  for (const input of inputs) input.onchange = save;
+  return panel;
+}
+
 export function buildAdministratorControls({ ability, data, repository, request, scope,
   levelId, previewUser, status, rerender }) {
+  if (ability.id === 'optimization' && data.authority?.can_manage === true) {
+    return buildOptimizationControls({ ability, data, request, scope, levelId, previewUser, status, rerender });
+  }
   if (ability.id === 'code_index' && data.authority?.can_manage === true) {
     return buildCodeIndexControls({ ability, data, request, scope, levelId, previewUser, status, rerender });
   }

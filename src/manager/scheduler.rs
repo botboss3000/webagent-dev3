@@ -4,6 +4,13 @@ pub(super) async fn process(app: App, id: String) -> Result<()> {
     let Some(mut record) = app.store.claim_manager_review(&id).await? else {
         return Ok(());
     };
+    let app = match review_scope(&app, &record).await {
+        Ok(scoped) => scoped,
+        Err(_) => {
+            app.store.finish_manager_review(&record, "review_error", None).await?;
+            return Ok(());
+        }
+    };
     // Include credential refresh and authority reads in the operation deadline.
     let result = tokio::time::timeout(Duration::from_secs(45), review::judge(&app, &mut record))
         .await
@@ -22,7 +29,8 @@ pub(super) async fn process(app: App, id: String) -> Result<()> {
                 .await?
                 .resolve_role(agent, model_selection::ModelRole::System);
             let (current_settings, current_revision) = config::snapshot(&app.store, agent).await?;
-            if app.shutoff().await?
+            if participation_authorized(&app, &record).await.is_err()
+                || app.shutoff().await?
                 || current_settings != pinned
                 || current_revision != record["settings_revision"].as_u64().unwrap_or(0)
                 || live.is_err()
@@ -30,8 +38,7 @@ pub(super) async fn process(app: App, id: String) -> Result<()> {
                 || app.run_candidate(&record["run"]).await.is_err()
                 || app
                     .run_candidate(
-                        &json!({"agent_id":agent,"selection_plan":record["selection_plan"],
-                    "failover_state":record["failover_state"]}),
+                        &system_proxy(&app, &record),
                     )
                     .await
                     .is_err()

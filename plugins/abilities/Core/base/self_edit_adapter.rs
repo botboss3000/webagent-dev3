@@ -55,6 +55,8 @@ struct SaveArgs {
 struct RemoveArgs { name: String, expected_revision: i64 }
 struct View { app: App, fingerprint: String }
 async fn view(app: &App, sid: &str, run_id: &str, name: &str) -> Result<View> {
+    if crate::shared_chat::actor(app)!=app.store.current_user_id() {bail!("Shared chat membership does not authorize caller-owned private records");}
+
     // The user-owned session fixes the agent, and the run fixes the call.
     let agent = session_agent_id(app,sid).await?;
     let mut scoped = app.clone();
@@ -65,7 +67,7 @@ async fn view(app: &App, sid: &str, run_id: &str, name: &str) -> Result<View> {
     }
     let (policy,mode_revision,visibility,state) = ability_controls(&scoped,sid).await?;
     let mode = session_mode(&scoped,sid).await?;
-    let access = scoped.store.live_access(scoped.store.current_user_id(),&agent).await?;
+    let access = crate::shared_chat::live_access(&scoped.store,crate::shared_chat::actor(&scoped),sid,&agent).await?;
     if !access.admitted() || live_tool_decision(&scoped,&access,name,&policy,&visibility,
         &state,&run["loaded_abilities"],mode["mode"]=="read_only")
         .permission == crate::access::Permission::Deny {
@@ -85,7 +87,7 @@ async fn work(app: &App, sid: &str, run_id: &str, name: &str,
         bail!("Self-edit access changed before write");
     }
     // Bind the idempotency receipt to the authenticated actor and run.
-    let scope = crate::digest(&json!([sid,run_id,current.app.store.current_user_id(),
+    let scope = crate::digest(&json!([sid,run_id,crate::shared_chat::actor(&current.app),
         current.app.store.current_agent_id()]));
     match name {
         "edit_own_prompt" => {

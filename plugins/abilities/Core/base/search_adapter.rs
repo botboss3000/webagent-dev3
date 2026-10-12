@@ -81,6 +81,7 @@ fn public_page(page: Value, sid: &str, after_seq: i64, limit: usize, query: Opti
 }
 struct View { app: App, fingerprint: String }
 async fn view(app: &App, sid: &str, run_id: &str, name: &str) -> Result<View> {
+    if crate::shared_chat::actor(app)!=app.store.current_user_id() {bail!("Shared chat membership does not authorize cross-session reads");}
     // The current session is resolved in the authenticated user's data file.
     let agent = session_agent_id(app, sid).await?;
     let mut scoped = app.clone();
@@ -130,7 +131,7 @@ async fn work(app: &App, sid: &str, run_id: &str, name: &str, args: &Value) -> R
                     .context("Source session unavailable")?;
                 let agent = doc["agent_id"].as_str().unwrap_or("shared_default");
                 if !admitted(&current, agent).await { bail!("Source session unavailable"); }
-                let page = current.app.store.chat_page(source, after_seq, 50).await?;
+                let page = current.app.store.model_chat_page(source, after_seq, 50).await?;
                 let mut result = public_page(page, source, after_seq, limit, query)?;
                 result["mode"] = json!("exact_owned_session");
                 result
@@ -139,6 +140,7 @@ async fn work(app: &App, sid: &str, run_id: &str, name: &str, args: &Value) -> R
                     "active", limit, continuation).await?;
                 let mut hits = Vec::new();
                 for hit in page["results"].as_array().context("Search page unavailable")? {
+                    if !current.app.store.model_search_hit_allowed(hit).await? {continue;}
                     let agent = hit["agent_id"].as_str().unwrap_or("shared_default");
                     if admitted(&current, agent).await { hits.push(hit.clone()); }
                 }
@@ -162,6 +164,7 @@ async fn work(app: &App, sid: &str, run_id: &str, name: &str, args: &Value) -> R
             let mut seen = HashSet::new();
             let mut results = Vec::new();
             for hit in page["results"].as_array().context("Search page unavailable")? {
+                if !current.app.store.model_search_hit_allowed(hit).await? {continue;}
                 let Some(source) = hit["session_id"].as_str() else { continue; };
                 if source == sid || !seen.insert(source.to_owned()) { continue; }
                 let agent = hit["agent_id"].as_str().unwrap_or("shared_default");

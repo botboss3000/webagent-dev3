@@ -8,6 +8,9 @@ let chatRoot = null;
 // The optional chatRoot keeps widget queries scoped; document lookup supports the panel.
 const byId = id => chatRoot?.querySelector('#'+id) || document.getElementById(id);
 let surfaceActions = {};
+let sharedControls = {};
+/** Registers session-owned modular controls, used by both header and footer profiles. */
+export function setSharedChatControls(nodes){sharedControls=nodes;currentSurface="";if(documentConfig)applyChatConfig();}
 /** Supplies widget actions consumed by the generated chat header controls. */
 export function setChatSurfaceActions(actions){surfaceActions=actions;}
 /** Returns only supported panel/widget defaults from the loaded profile. */
@@ -105,7 +108,7 @@ function headerControl(name) {
     const status=document.createElement('span');status.textContent='';headerNodes.status=status;
     const dot=document.createElement('span');dot.className='agent-status-dot';headerNodes.dot=dot;
   }
-  return headerNodes[name];
+  return sharedControls[name] || headerNodes[name];
 }
 
 /** Rebuilds configured header rows from known controls; disabled/missing controls are skipped. */
@@ -213,14 +216,14 @@ function applyFooter(profile, mode) {
     footerNodes.send.style.display=hasText ? '' : 'none';
     footerNodes.mic.style.display=hasText ? 'none' : '';
     const row=byId('chat-footer-row');
-    const below=profile.active_footer?.below_pill || {};
+    const below=footer.below_pill || {};
     row.replaceChildren();
     for(const spec of below.rows || []) {
       const line=document.createElement('div'); line.className='chat-header-row';
       for(const zoneName of ['left','center','right']) {
         const zone=document.createElement('span'); zone.className='chat-header-zone chat-header-zone-'+zoneName;
         for(const name of spec[zoneName] || []) {
-          const node=footerControls[name]; const cfg=below.controls?.[name] || {};
+          const node=sharedControls[name] || footerControls[name]; const cfg=below.controls?.[name] || {};
           if(!node || cfg.enabled === false)continue;
           node.hidden=false;sizeControl(node,cfg);zone.append(node);
         }
@@ -229,7 +232,8 @@ function applyFooter(profile, mode) {
       row.append(line);
     }
     row.hidden=below.enabled === false;
-    row.classList.toggle('idle-collapsed',mode === 'idle');
+    row.classList.toggle('idle-collapsed',mode === 'idle'&&!footer.below_pill);
+    row.classList.toggle('v3-footer-configured',!!footer.below_pill);
     byId('chat-footer-handle').style.display=mode === 'idle' || row.hidden ? 'none' : '';
     window.lucide?.createIcons();
   } finally { applyingFooter=false; }

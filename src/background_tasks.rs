@@ -21,7 +21,8 @@ pub(crate) async fn permitted(app:&App,task:&Value)->Result<bool> {
     if origin["session_id"]!=sid || origin["agent_id"]!=agent
         || !matches!(status(&origin),"running"|"waiting_approval"|"waiting_external"|"queued"|"completed")
         || origin["post_run_followup"]==true || !app.run_model_authorized(&origin).await {return Ok(false);}
-    let access=app.store.live_access(app.store.current_user_id(),&agent).await?;
+    if !app.store.participation_allows_run(&origin).await? {return Ok(false);}
+    let access=crate::shared_chat::live_access(&app.store,origin["requester_user_id"].as_str().unwrap_or(app.store.current_user_id()),task["session_id"].as_str().unwrap_or(""),&agent).await?;
     if !access.admitted() {return Ok(false);}
     let (policy,mode_revision,visibility,state)=ability_controls(app,sid).await?;
     let mode=session_mode(app,sid).await?;
@@ -179,6 +180,7 @@ async fn run_task(app:&App,mut task:Value)->Result<()> {
     let rid=task["run_id"].as_str().unwrap_or("").to_owned();
     let id=task["id"].as_str().unwrap_or("").to_owned();
     let origin=app.run(&rid).await?;
+    let mut scoped=app.clone();scoped.chat_actor=origin["requester_user_id"].as_str().map(str::to_owned);let app=&scoped;
     let revision=task["revision"].as_u64().unwrap_or(0);
     if !permitted(app,&task).await.unwrap_or(false) || !matches!(status(&origin),"running"|"queued"|"waiting_approval"|"waiting_external"|"completed")
         || (status(&origin)=="completed" && task["on_run_end"]=="stop") {

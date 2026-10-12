@@ -507,10 +507,28 @@ fn scope_path(path: &str) -> bool {
     let path = path.strip_prefix("/api/v3").unwrap_or(path);
     matches!(
         path,
-        "/auth/me" | "/auth/ui-config" | "/sessions" | "/sessions/search" | "/user/status"
+        "/auth/me" | "/auth/ui-config" | "/sessions" | "/sessions/search" | "/sessions/stats" | "/user/status" | "/chat-invitations/redeem"
     ) || path.starts_with("/sessions/")
         || path.starts_with("/runs/")
         || path.starts_with("/approvals/")
+}
+async fn bound_run_session(app:&App,actor:&str,agent:&str,id:&str,approval:bool)->std::result::Result<Option<String>,ApiError>{
+    let mut stores=vec![app.store.clone()];
+    for entry in app.store.shared_sessions_for(actor).await?{
+        if entry["agent_id"]!=agent{continue;}
+        if let Some(owner)=entry["owner_id"].as_str(){stores.push(app.store.for_user(owner).await?);}
+    }
+    for store in stores{
+        let runs=if approval{store.active_runs().await?}else{store.get(&key("run",id)).await?.into_iter().collect()};
+        for run in runs{
+            if approval&&run["pending"]["id"]!=id{continue;}
+            let Some(sid)=run["session_id"].as_str()else{continue};
+            if let Ok(access)=crate::shared_chat::resolve(app,sid,actor).await{
+                if access.agent_id==agent{return Ok(Some(sid.to_owned()));}
+            }
+        }
+    }
+    Ok(None)
 }
 async fn scope_request(
     app: &App,
@@ -531,43 +549,29 @@ async fn scope_request(
     {
         return Err(denied());
     }
-    // Sessions remain caller-owned and bound to precisely the selected agent.
-    let parts: Vec<_> = path.trim_matches('/').split('/').collect();
-    let session = if parts.first() == Some(&"sessions") && parts.len() > 1 && parts[1] != "search" {
+    // A widget's credential remains bound to one agent, even when the canonical
+    // conversation lives in another participant's encrypted store.
+    let actor=crate::shared_chat::actor(app);
+    let parts:Vec<_>=path.trim_matches('/').split('/').collect();
+    let session=if parts.first()==Some(&"sessions")&&parts.len()>1&&!matches!(parts[1],"search"|"stats"){
         Some(parts[1].to_owned())
-    } else if parts.first() == Some(&"runs") && parts.len() > 1 {
-        Some(
-            app.run(parts[1])
-                .await?
-                .get("session_id")
-                .and_then(Value::as_str)
-                .ok_or_else(denied)?
-                .to_owned(),
-        )
-    } else if parts.first() == Some(&"approvals") && parts.len() > 1 {
-        app.store
-            .active_runs()
-            .await?
-            .into_iter()
-            .find(|r| r["pending"]["id"] == parts[1])
-            .and_then(|r| r["session_id"].as_str().map(str::to_owned))
-    } else {
-        None
-    };
-    if (parts.first() == Some(&"approvals") && session.is_none())
-        || session.as_deref().is_some_and(|s| s.is_empty())
-    {
-        return Err(denied());
+    }else if matches!(parts.first(),Some(&"runs")|Some(&"approvals"))&&parts.len()>1{
+        bound_run_session(app,actor,agent,parts[1],parts[0]=="approvals").await?
+    }else{None};
+    if matches!(parts.first(),Some(&"runs")|Some(&"approvals"))&&session.is_none(){return Err(denied());}
+    if let Some(id)=session{
+        let access=crate::shared_chat::resolve(app,&id,actor).await.map_err(|_|denied())?;
+        if access.agent_id!=agent{return Err(denied());}
     }
-    if let Some(id) = session {
-        let session = app
-            .store
-            .get(&key("session", &id))
-            .await?
-            .ok_or_else(denied)?;
-        if session["agent_id"].as_str().unwrap_or("shared_default") != agent {
-            return Err(denied());
-        }
+    if path=="/chat-invitations/redeem"{
+        let body=std::mem::take(request.body_mut());
+        let bytes=axum::body::to_bytes(body,2*1024*1024).await.map_err(|_|bad("Invalid invitation request"))?;
+        let value:Value=serde_json::from_slice(&bytes).map_err(|_|bad("Invalid invitation request"))?;
+        let token=value["token"].as_str().ok_or_else(denied)?;
+        let sid=app.store.shared_invite_session_for(token,actor).await?.ok_or_else(denied)?;
+        let directory=app.store.shared_directory(&sid).await?.ok_or_else(denied)?;
+        if directory["agent_id"]!=agent{return Err(denied());}
+        *request.body_mut()=axum::body::Body::from(bytes);
     }
     if path == "/sessions" && request.method() == axum::http::Method::POST {
         let body = std::mem::take(request.body_mut());
@@ -991,4 +995,38 @@ mod tests {
         .await
         .is_err());
     }
+}
+
+#[cfg(test)]
+mod shared_scope_tests{
+ use super::*;
+ #[tokio::test]
+ async fn shared_widget_sessions_runs_approvals_and_invites_keep_exact_agent_scope(){
+  let (_root,app)=crate::runtime_tests::fixture().await;
+  let account=app.store.create_user_account("widget-participant","fixture-long-password-hash").await.unwrap();let actor=account["user_id"].as_str().unwrap().to_owned();
+  app.store.update_account_access(&actor,1,crate::access::AccountStatus::Active,crate::access::Role::User,"basic").await.unwrap();
+  app.store.set_agent_membership(&actor,"shared_default",crate::access::Relationship::Caller,0).await.unwrap();
+  app.store.put("session:widget-shared",&json!({"id":"widget-shared","agent_id":"shared_default"})).await.unwrap();
+  app.store.register_shared_session("admin","widget-shared","shared_default").await.unwrap();
+  app.store.shared_join("widget-shared",&actor).await.unwrap();
+  app.store.put("run:widget-shared-run",&json!({"id":"widget-shared-run","session_id":"widget-shared","agent_id":"shared_default","status":"waiting_approval","pending":{"id":"widget-approval"}})).await.unwrap();
+  let mut caller=app.clone();caller.store=app.store.for_user(&actor).await.unwrap();let doc=json!({"agent_id":"shared_default"});
+  for path in ["/api/v3/sessions/widget-shared","/api/v3/sessions/widget-shared/events","/api/v3/runs/widget-shared-run/cancel","/api/v3/approvals/widget-approval"]{
+   let mut request=Request::builder().uri(path).body(axum::body::Body::empty()).unwrap();
+   assert!(scope_request(&caller,&doc,&mut request).await.is_ok(),"{path}");
+  }
+  let mut request=Request::builder().uri("/api/v3/sessions/widget-shared").body(axum::body::Body::empty()).unwrap();
+  assert!(scope_request(&caller,&json!({"agent_id":"another-agent"}),&mut request).await.is_err());
+  let other=app.store.create_user_account("widget-outsider","fixture-long-password-hash").await.unwrap();let other=other["user_id"].as_str().unwrap();
+  app.store.update_account_access(other,1,crate::access::AccountStatus::Active,crate::access::Role::User,"basic").await.unwrap();
+  let mut outsider=app.clone();outsider.store=app.store.for_user(other).await.unwrap();
+  let mut request=Request::builder().uri("/api/v3/sessions/widget-shared").body(axum::body::Body::empty()).unwrap();
+  assert!(scope_request(&outsider,&doc,&mut request).await.is_err());
+  let invite=app.store.shared_invite_issue("widget-shared","admin","widget-invite",86400).await.unwrap();
+  let mut request=Request::builder().method("POST").uri("/api/v3/chat-invitations/redeem").body(axum::body::Body::from(json!({"token":invite["token"],"client_request_id":"widget-redeem"}).to_string())).unwrap();
+  assert!(scope_request(&caller,&doc,&mut request).await.is_ok());
+  let retained=axum::body::to_bytes(request.into_body(),1024).await.unwrap();assert_eq!(serde_json::from_slice::<Value>(&retained).unwrap()["token"],invite["token"]);
+  let mut request=Request::builder().method("POST").uri("/api/v3/chat-invitations/redeem").body(axum::body::Body::from(json!({"token":invite["token"],"client_request_id":"widget-redeem"}).to_string())).unwrap();
+  assert!(scope_request(&caller,&json!({"agent_id":"another-agent"}),&mut request).await.is_err());
+ }
 }

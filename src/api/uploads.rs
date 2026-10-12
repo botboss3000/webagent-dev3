@@ -88,6 +88,7 @@ pub(crate) async fn upload(
     Json(body): Json<Value>,
 ) -> Api {
     let limits = limits(&app).await?;
+    let uploader = crate::shared_chat::actor(&app).to_owned();
     let aid = required(&body, "client_upload_id", 64)?;
     if Uuid::parse_str(aid).is_err() {
         return Err(bad("Invalid upload identifier"));
@@ -115,7 +116,7 @@ pub(crate) async fn upload(
     }
     let hash = hex::encode(Sha256::digest(&bytes));
     let fingerprint = digest(&json!([name, media, hash]));
-    let mut record = json!({"schema_version":2,"id":aid,"session_id":sid,"run_id":null,"name":name,"media_type":media,
+    let mut record = json!({"schema_version":2,"id":aid,"session_id":sid,"run_id":null,"uploader_id":uploader,"name":name,"media_type":media,
         "bytes":bytes.len(),"sha256":hash,"data":encoded,"upload_digest":fingerprint,"created_at":now(),"text":"",
         "preview":matches!(media.as_str(),"image/png"|"image/jpeg"|"image/gif"|"image/webp")});
     if media.starts_with("text/") || media.starts_with("application/") && media != "application/pdf"
@@ -133,7 +134,8 @@ pub(crate) async fn upload(
         return Err(ApiError(StatusCode::NOT_FOUND,"Session not found".into()));
     }
     if let Some(saved) = app.store.get(&key("attachment", aid)).await? {
-        if saved["session_id"] != sid || saved["upload_digest"] != fingerprint {
+        if saved["session_id"] != sid || saved["upload_digest"] != fingerprint
+            || draft_owner(&app, &saved) != uploader {
             return Err(conflict("Upload identifier reused"));
         }
         return Ok(Json(metadata(&saved)));
@@ -195,11 +197,23 @@ pub(crate) async fn lookup(app: &App, sid: &str, aid: &str) -> Result<Value, Api
         .filter(|v| v["session_id"] == sid)
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Attachment not found".into()))
 }
+// Unsent uploads belong to their authenticated uploader, independently of canonical storage.
+// Legacy records predate sharing and therefore belong to the storage owner.
+fn draft_owner<'a>(app: &'a App, record: &'a Value) -> &'a str {
+    record["uploader_id"].as_str().unwrap_or_else(|| app.store.current_user_id())
+}
+fn require_draft_owner(app: &App, record: &Value) -> Result<(), ApiError> {
+    if draft_owner(app, record) != crate::shared_chat::actor(app) {
+        return Err(ApiError(StatusCode::NOT_FOUND, "Attachment not found".into()));
+    }
+    Ok(())
+}
 pub(crate) async fn upload_content(
     State(app): State<App>,
     Path((sid, aid)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     let record = lookup(&app, &sid, &aid).await?;
+    if record["run_id"].is_null() { require_draft_owner(&app, &record)?; }
     let bytes = if record["schema_version"] == 1 {
         record["text"].as_str().unwrap_or("").as_bytes().to_vec()
     } else {
@@ -262,6 +276,7 @@ pub(crate) async fn prepare_uploads(
         if !record["run_id"].is_null() {
             return Err(conflict("Attachment is already sent"));
         }
+        require_draft_owner(app, &record)?;
         record["run_id"] = json!(rid);
         let text = record["text"].as_str().unwrap_or("");
         let excerpt: String = text.chars().take(16384).collect();
@@ -341,4 +356,41 @@ pub(crate) async fn upload_describe(
     current["described_by"] = run["selection_plan"]["candidates"][0]["entry_id"].clone();
     app.store.put(&key("attachment", &aid), &current).await?;
     Ok(Json(metadata(&current)))
+}
+
+#[cfg(test)]
+mod shared_upload_tests {
+    use super::*;
+    #[tokio::test]
+    async fn unsent_uploads_are_private_to_uploader_then_shared_when_sent() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = "shared-upload";
+        let aid = crate::uuid();
+        app.store.put(&key("session",sid),&json!({"id":sid,"agent_id":"shared_default","status":"active"})).await.unwrap();
+        let mut uploader = app.clone();
+        uploader.chat_actor = Some("alice".into());
+        let input = json!({"client_upload_id":aid,"name":"draft.txt","media_type":"text/plain","data":STANDARD.encode(b"private draft sentinel")});
+        upload(State(uploader.clone()),Path(sid.into()),Json(input.clone())).await.unwrap();
+        let mut record = lookup(&app,sid,&aid).await.unwrap();
+        assert_eq!(record["uploader_id"],"alice");
+        let content = upload_content(State(uploader.clone()),Path((sid.into(),aid.clone()))).await.unwrap();
+        assert_eq!(axum::body::to_bytes(content.into_body(),1024).await.unwrap().as_ref(),b"private draft sentinel");
+        for (actor,kind) in [("bob",crate::shared_chat::AccessKind::Participant),("staff",crate::shared_chat::AccessKind::Observer)] {
+            let mut other = app.clone();
+            other.chat_actor = Some(actor.into());
+            other.chat_access = Some(crate::shared_chat::SessionAccess {actor_id:actor.into(),owner_id:"admin".into(),session_id:sid.into(),agent_id:"shared_default".into(),kind});
+            assert_eq!(upload_content(State(other.clone()),Path((sid.into(),aid.clone()))).await.unwrap_err().0,StatusCode::NOT_FOUND);
+            assert_eq!(upload(State(other.clone()),Path(sid.into()),Json(input.clone())).await.unwrap_err().0,StatusCode::CONFLICT);
+            assert!(require_draft_owner(&other,&record).is_err());
+            record["run_id"] = json!("published-message");
+            app.store.put(&key("attachment",&aid),&record).await.unwrap();
+            assert!(upload_content(State(other),Path((sid.into(),aid.clone()))).await.is_ok());
+            record["run_id"] = Value::Null;
+            app.store.put(&key("attachment",&aid),&record).await.unwrap();
+        }
+        record.as_object_mut().unwrap().remove("uploader_id");
+        app.store.put(&key("attachment",&aid),&record).await.unwrap();
+        assert!(upload_content(State(app.clone()),Path((sid.into(),aid.clone()))).await.is_ok());
+        assert_eq!(upload_content(State(uploader),Path((sid.into(),aid))).await.unwrap_err().0,StatusCode::NOT_FOUND);
+    }
 }

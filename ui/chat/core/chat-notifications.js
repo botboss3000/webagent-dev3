@@ -85,7 +85,7 @@ export function mountChatNotifications({root,guard}) {
     const toggle=document.createElement('button');
     toggle.type='button';
     toggle.className='chat-notification-detail-toggle';
-    toggle.textContent=approval.name;
+    toggle.textContent=approval.new_intent_confirmation ? 'Additional action: '+approval.name : approval.name;
     toggle.title='Show tool call details';
     toggle.setAttribute('aria-controls',details.id);
     toggle.setAttribute('aria-expanded',String(!details.hidden));
@@ -98,11 +98,11 @@ export function mountChatNotifications({root,guard}) {
     };
     const actions=[
       // Decision callbacks are supplied by the panel and perform the authenticated API action.
-      {label:'Approve',kind:'approve',run:()=>decide('approve')},
+      {label:approval.new_intent_confirmation ? 'Approve additional action' : 'Approve',kind:'approve',run:()=>decide('approve')},
       {label:'Deny',kind:'deny',run:()=>decide('deny')}
     ];
     if(active?.id===run.id)actions.push({label:'Cancel run',kind:'neutral',run:cancel});
-    toolSlot.append(card({title:'Need approval:',details:{toggle,body:details},actions}));
+    toolSlot.append(card({title:approval.new_intent_confirmation ? 'Confirm a separate action after '+approval.separate_from+':' : 'Need approval:',details:{toggle,body:details},actions}));
   }
   // Remove tool-approval cards without affecting a mode confirmation.
   function clearTools(){toolSlot.replaceChildren();}

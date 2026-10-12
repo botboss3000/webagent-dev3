@@ -4,6 +4,18 @@ fn empty(s: &str) -> Value {
     json!({"schema_version":1,"session_id":s,"revision":0,"held":false,"reason":null,"entries":[]})
 }
 impl Store {
+    async fn legacy_followup_fence(&self,t:&mut sqlx::Transaction<'_,sqlx::Sqlite>,sid:&str,template:&Value)->Result<()> {
+        if template["requester_user_id"].as_str().is_some_and(|actor|actor!=self.current_user_id()) {return Err(anyhow!("Private followup requester mismatch"));}
+        if template["session_id"].as_str().is_some_and(|session|session!=sid) {return Err(anyhow!("Private followup session mismatch"));}
+        let mut fence=template.clone();if !fence.is_object(){fence=json!({});}fence["session_id"]=json!(sid);
+        self.require_participation(t,&fence).await
+    }
+    async fn legacy_message_meta(&self,t:&mut sqlx::Transaction<'_,sqlx::Sqlite>,entry:&Value,eligible:bool)->Result<()> {
+        let id=entry["id"].as_str().ok_or_else(||anyhow!("Followup id missing"))?;
+        let mut meta=json!({"author_id":self.current_user_id(),"context_eligible":eligible,"queued":!eligible});
+        if eligible {meta["context_content"]=entry["context_content"].clone();}
+        self.write_document(t,&format!("message_meta:{id}"),&meta).await
+    }
     pub(super) async fn queue_read_tx(
         &self,
         t: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -82,6 +94,7 @@ impl Store {
         let mut changed = q["held"] == true || !q["reason"].is_null();
         for e in q["entries"].as_array_mut().unwrap() {
             if matches!(e["status"].as_str(), Some("pending" | "reviewing" | "held")) {
+                self.legacy_message_meta(t,e,false).await?;
                 e["status"] = json!("cancelled");
                 e["choice"] = json!("cancel");
                 e["revision"] = json!(e["revision"]
@@ -160,6 +173,7 @@ impl Store {
             }
             return Ok(v["result"].clone());
         }
+        self.legacy_followup_fence(&mut t,s,&e["template"]).await?;
         let mut q = self.queue_read_tx(&mut t, s).await?;
         if q["entries"]
             .as_array()
@@ -179,6 +193,7 @@ impl Store {
         for (k, v) in docs {
             self.write_document(&mut t, &k, &v).await?;
         }
+        self.legacy_message_meta(&mut t,&e,false).await?;
         self.insert_chat(&mut t, s, e["id"].as_str().unwrap(), "user", &e["content"])
             .await?;
         q["entries"].as_array_mut().unwrap().push(e);
@@ -238,6 +253,7 @@ impl Store {
             e["choice"] = json!(choice);
             e["revision"] = json!(expected + 1);
             if choice == "cancel" {
+                self.legacy_message_meta(&mut t,e,false).await?;
                 e["status"] = json!("cancelled");
             }
             if choice == "interrupt" {
@@ -307,6 +323,7 @@ impl Store {
         {
             return Ok(false);
         }
+        if self.legacy_followup_fence(&mut t,s,&e["template"]).await.is_err(){return Ok(false);}
         e["revision"] = json!(expected + 1);
         e["status"] = json!(status);
         if let Some(r) = review {
@@ -412,9 +429,11 @@ impl Store {
             }
             picked.truncate(1);
         }
-        if picked.is_empty() {
-            return Ok(false);
-        }
+        if picked.is_empty() {return Ok(false);}
+        self.legacy_followup_fence(&mut t,s,run).await?;
+        for entry in &picked {self.legacy_followup_fence(&mut t,s,&entry["template"]).await?;}
+        if let Some(parent)=origin.as_deref(){self.legacy_followup_fence(&mut t,s,parent).await?;}
+
         // The preflight template must still belong to the actual first consumer;
         // a concurrent choice edit causes a fresh scheduler pass, never a wrong model.
         if choice != "steer"
@@ -422,6 +441,14 @@ impl Store {
             && run["selection_plan"] != picked[0]["template"]["selection_plan"]
         {
             return Ok(false);
+        }
+        if choice!="steer" {
+            let reservation=if let Some(parent)=origin.as_deref().filter(|parent|!matches!(parent["status"].as_str(),Some("completed"|"cancelled"|"stopped"|"failed"))){self.transfer_requester_run(parent,run).await}else{self.reserve_requester_run(run).await};
+            match reservation{
+                Ok(())=>{},
+                Err(error) if error.to_string()=="Account run limit reached"=>return Ok(false),
+                Err(error)=>return Err(error),
+            }
         }
         let rid = run["id"]
             .as_str()
@@ -562,6 +589,7 @@ impl Store {
             .await?;
         for e in q["entries"].as_array_mut().unwrap() {
             if picked.iter().any(|p| p["id"] == e["id"]) {
+                self.legacy_message_meta(&mut t,e,true).await?;
                 e["status"] = json!("delivered");
                 e["consuming_run_id"] = json!(rid);
                 e["batch_id"] = json!(batch);
@@ -597,6 +625,7 @@ mod tests {
     async fn fixture() -> (tempfile::TempDir, Store) {
         let root = tempfile::tempdir().unwrap();
         let s = Store::open(root.path()).await.unwrap();
+        s.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();
         s.put(
             "session:s",
             &json!({"id":"s","agent_id":"shared_default","status":"active"}),
@@ -1026,5 +1055,20 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("unsupported"));
+    }
+
+    #[tokio::test]
+    async fn private_queued_text_stays_excluded_after_deactivation_and_reactivation() {
+        let (_root,s)=fixture().await;
+        submit(&s,"private-sentinel","PRIVATE-QUEUED-SENTINEL","queue").await;
+        assert!(!s.model_message_allowed("s","private-sentinel").await.unwrap());
+        assert!(s.shared_model_context("s").await.unwrap().is_empty());
+        s.set_participation("s",s.current_user_id(),false,0,"off").await.unwrap();
+        assert_eq!(s.followup_queue("s").await.unwrap()["entries"][0]["status"],"cancelled");
+        s.set_participation("s",s.current_user_id(),true,1,"on").await.unwrap();
+        assert!(!s.model_message_allowed("s","private-sentinel").await.unwrap());
+        assert!(s.shared_model_context("s").await.unwrap().is_empty());
+        assert!(s.model_chat_page("s",0,50).await.unwrap()["messages"][0]["content"].is_null());
+        assert!(s.context("s").await.unwrap().is_empty());
     }
 }

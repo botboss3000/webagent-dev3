@@ -32,7 +32,25 @@ pub(crate) async fn sessions(State(app): State<App>, Query(args): Query<SessionL
     let recycled = match args.status.as_deref().unwrap_or("active") {
         "active" => false, "recycled" => true, _ => return Err(bad("Invalid session status")),
     };
-    let list = app.store.ordered_sessions_status(recycled).await?;
+    let mut list = app.store.ordered_sessions_status(recycled).await?;
+    let actor=crate::shared_chat::actor(&app);
+    let mut allowed=Vec::new();
+    for row in list {let agent=row["agent_id"].as_str().unwrap_or("shared_default");
+        if app.store.live_access(actor,agent).await.is_ok_and(|a|a.admitted()){allowed.push(row);}
+    }
+    let mut list=allowed;
+    for entry in app.store.shared_sessions_for(actor).await? {
+        let Some(sid)=entry["session_id"].as_str() else{continue};
+        if list.iter().any(|row|row["id"]==sid){continue;}
+        let Ok(scoped)=crate::shared_chat::scope(app.clone(),sid).await else{continue};
+        let mut summary=scoped.store.shared_read_summary(sid,actor).await?;
+        if (summary["status"]=="recycled")!=recycled{continue;}
+        summary["shared"]=json!(true);summary["owner_id"]=entry["owner_id"].clone();
+        list.push(summary);
+    }
+    list.sort_by(|a,b|b["pinned"].as_bool().cmp(&a["pinned"].as_bool())
+        .then_with(||b["last_active_at"].as_i64().cmp(&a["last_active_at"].as_i64()))
+        .then_with(||a["id"].as_str().cmp(&b["id"].as_str())));
     Ok(Json(json!({"sessions":list,"server_time":now()})))
 }
 pub(crate) async fn patch_session_api(State(app): State<App>, Path(id): Path<String>,
@@ -68,6 +86,7 @@ pub(crate) async fn create_session(State(app): State<App>, Json(body): Json<Valu
     let mut docs=prepared.docs;
     docs.push((receipt_key,json!({"digest":digest(&body),"result":prepared.result})));
     app.store.atomic_docs_event(docs,prepared.result["id"].as_str().unwrap(),"session_created",&prepared.result).await?;
+    app.store.register_shared_session(app.store.current_user_id(),prepared.result["id"].as_str().unwrap(),prepared.result["agent_id"].as_str().unwrap()).await?;
     Ok(Json(prepared.result))
 }
 pub(super) struct PreparedSession {
@@ -76,6 +95,9 @@ pub(super) struct PreparedSession {
     pub result: Value,
 }
 pub(super) async fn prepare_session(app:&App,body:&Value) -> std::result::Result<PreparedSession,ApiError> {
+    prepare_session_id(app,body,None).await
+}
+pub(super) async fn prepare_session_id(app:&App,body:&Value,id:Option<String>) -> std::result::Result<PreparedSession,ApiError> {
     let supplied = match body.get("title") {
         None | Some(Value::Null) => None,
         Some(Value::String(title)) => Some(title.trim()),
@@ -98,8 +120,9 @@ pub(super) async fn prepare_session(app:&App,body:&Value) -> std::result::Result
     let exists: Option<String> = sqlx::query_scalar("SELECT id FROM agents WHERE id=?")
         .bind(agent_id).fetch_optional(&agent_store.agent_pool).await.map_err(anyhow::Error::from)?;
     if exists.is_none() { return Err(bad("Agent not found")); }
-    let id = uuid();
-    let value = json!({"id":id,"agent_id":agent_id,"title":title,"checkpoint_input":[],"checkpoint_through":0,"created_at":now(),
+    let id = id.unwrap_or_else(uuid);
+    let initial_active=crate::shared_chat::policy(&app.store,agent_id).await?.initial_active;
+    let value = json!({"participation":{"active":initial_active,"revision":0,"generation":0},"id":id,"agent_id":agent_id,"title":title,"checkpoint_input":[],"checkpoint_through":0,"created_at":now(),
         "auto_naming":{"version":1,"stage":if supplied.is_some() {"locked"} else {"awaiting_message"}}});
     let result = json!({"id":id,"agent_id":agent_id,"title":title});
     let mode = {
@@ -118,15 +141,17 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
         .get(&key("session", &id))
         .await?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Session not found".into()))?;
+    if crate::shared_projection::observer(&app) {app.store.shared_observe_audit(&id,crate::shared_chat::actor(&app)).await?;}
     let (mut messages, last_seq) = app.store.chat_snapshot(&id).await?;
     uploads::message_files(&app,&mut messages).await?;
+    crate::shared_projection::messages(&app,&mut messages).await?;
     crate::manager::decorate(&app,&mut messages).await?;
     let usage=crate::usage::public(&app.store.get(&format!("session_usage:{id}")).await?.unwrap_or(Value::Null));
     let runs = public_runs(&app,app.store.recent_runs(Some(&id)).await?).await?;
     let components = app.store.base_chat_components(&id).await?;
     let queue=crate::followup_queue::public(&app.store.followup_queue(&id).await?);
     Ok(Json(
-        json!({"usage":usage,"session":app.store.session_read_summary(&id).await?,
+        json!({"access":{"observer":crate::shared_projection::observer(&app),"can_send":!crate::shared_projection::observer(&app),"can_control":!crate::shared_projection::observer(&app),"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id()},"usage":usage,"session":app.store.shared_read_summary(&id,crate::shared_chat::actor(&app)).await?,
         "messages":messages,"runs":runs,"components":components,"last_seq":last_seq,"queue":queue["queue"],"queue_state":queue["queue_state"]}),
     ))
 }
@@ -275,8 +300,14 @@ pub(crate) fn prompt_slot_error(error: anyhow::Error) -> ApiError {
     }
 }
 pub(crate) async fn execute_prompt_slot(app: &App, name: &str, args: &Value) -> Result<Value> {
+    execute_prompt_slot_receipted(app,name,args,None).await
+}
+pub(crate) async fn execute_prompt_slot_receipted(app:&App,name:&str,args:&Value,pending:Option<&str>)->Result<Value> {
+    let receipt_key=pending.map(|id|format!("agent:{}:action_prompt:{id}",app.store.current_agent_id()));
+    let hash=digest(args);
+    let receipt=receipt_key.as_deref().map(|key|(key,hash.as_str()));
     // A tool grant controls use; editing agent configuration also requires tenant authority.
-    if name=="prompt_slot_write" && !app.store.agent_authority(app.store.current_user_id(),app.store.current_agent_id()).await?
+    if name=="prompt_slot_write" && !app.store.agent_authority(crate::shared_chat::actor(app),app.store.current_agent_id()).await?
         ["can_manage"].as_bool().unwrap_or(false) {
         return Ok(json!({"status":"denied","output":"Agent administration required to edit prompts"}));
     }
@@ -302,19 +333,20 @@ pub(crate) async fn execute_prompt_slot(app: &App, name: &str, args: &Value) -> 
         }
         let result = if command.action == "put" {
             app.store
-                .upsert_prompt_slot(
+                .upsert_prompt_slot_receipted(
                     &command.slot_name,
                     command.content.as_deref().unwrap(),
                     command.order_index,
                     command.lock,
                     command.merge_mode.as_deref(),
                     command.expected_revision,
+                    receipt,
                 )
                 .await
                 .map(|slot| json!({"slot":slot}))
         } else {
             app.store
-                .delete_prompt_slot(&command.slot_name, command.expected_revision)
+                .delete_prompt_slot_receipted(&command.slot_name, command.expected_revision,receipt)
                 .await
                 .map(|deleted| json!({"deleted":deleted,"slot_name":command.slot_name}))
         };
@@ -598,7 +630,7 @@ async fn change_session_mode_authorized(
         let agent = session_agent_id(app,id).await?;
         let run = app.run(call.run_id).await?;
         let (policy,mode_revision,visibility,state)=ability_controls(app,id).await?;
-        let access=app.store.live_access(app.store.current_user_id(),&agent).await?;
+        let access=crate::shared_chat::live_access(&app.store,crate::shared_chat::actor(app),id,&agent).await?;
         if run["session_id"]!=id || run["agent_id"]!=agent
             || run["generation"]!=call.generation
             || run["status"]!="running" || run["phase"]!="tools"
@@ -661,7 +693,7 @@ pub(crate) async fn session_abilities(State(app): State<App>, Path(id): Path<Str
     let state = session_ability_state(&app, &id).await?;
     let mode=session_mode(&app,&id).await?;
     let agent_id=session_agent_id(&app,&id).await?;
-    let access=app.store.live_access(app.store.current_user_id(),&agent_id).await?;
+    let access=crate::shared_chat::live_access(&app.store,crate::shared_chat::actor(&app),&id,&agent_id).await?;
     let mut abilities=app.abilities.catalog_with(&policy,&visibility,&state);
     abilities.retain_mut(|entry|filter_ability_entry(&app,&access,entry,
         &policy,&visibility,&state,&json!([]),mode["mode"]=="read_only"));

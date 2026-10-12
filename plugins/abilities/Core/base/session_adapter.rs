@@ -100,12 +100,15 @@ async fn work(app:&App,sid:&str,name:&str,args:&Value)->Result<Value> {
             // Reuse the API's encrypted lookup and exact session/provenance checks.
             let Json(record)=attachment_get(State(app.clone()),Path((sid.to_owned(),query.attachment_id.clone())))
                 .await.map_err(|_|anyhow::anyhow!("Attachment unavailable in current session"))?;
+            if let Some(rid)=record["run_id"].as_str() {
+                if !app.store.model_message_allowed(sid,rid).await? {bail!("Attachment excluded from agent context");}
+            }
             attachment_page(record,&query)
         }
         "search_this_session" => {
             let query:SearchArgs=serde_json::from_value(args.clone()).context("Invalid session search arguments")?;
             search_args(&query)?;
-            let page=app.store.chat_page(sid,query.after_seq,50).await.context("Current-session chat unavailable")?;
+            let page=app.store.model_chat_page(sid,query.after_seq,50).await.context("Current-session chat unavailable")?;
             search_page(page,&query)
         }
         _=>bail!("Unknown session read tool"),

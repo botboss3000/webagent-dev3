@@ -1,5 +1,6 @@
 // @code-index {"version":1,"feature":"chat-panel","aliases":["chat panel","conversation panel","session transcript"],"purpose":"Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common/composer/keyboard_focus"],"profile_overrides":true}],"opportunities":[]}}
 // V2-style panel/client separation; markup and message protocol remain V3.
+import {mountSharedChat} from '../controls/shared-chat.js';
 import { createChatClient } from './client.js';
 import {mountFollowupQueue} from './followup-queue.js';
 import {mountTranscriptAnchor} from './transcript-anchor.js';
@@ -65,19 +66,20 @@ const stats=mountUsageStats({root,client,note});
 // Refreshes relative gutter times once per second while visible; destroy clears this timer.
 const gutterClock=setInterval(()=>{if(document.visibilityState==='visible')updateGutterTimes(root);},1000);
 // Session-control capability updates enable or disable the media adapter.
-const controls=mountSessionControls({root,client,guard,note,ensureSession,notifications,/* Forwards advertised attachment availability and limits to media controls. */onState:data=>{media?.setAvailable(data?.composer?.attachments===true,data?.composer?.attachment_limits);}});
-let submitting=false,sessionGeneration=0,creatingSession=null,media=null,historyBusy=false,historyLastSeq=0,historyRevision=0,historyDeferredRevision=0,closeUndoDialog=null;
+const controls=mountSessionControls({root,client,guard,note,ensureSession,notifications,canWrite:()=>sharedAccess?.can_control!==false,/* Forwards advertised attachment availability and limits to media controls. */onState:data=>{media?.setAvailable(sharedAccess?.can_send!==false&&data?.composer?.attachments===true,data?.composer?.attachment_limits);}});
+let submitting=false,sessionGeneration=0,creatingSession=null,media=null,historyBusy=false,historyLastSeq=0,historyRevision=0,historyDeferredRevision=0,historyReady=false,closeUndoDialog=null,canManageQueue=false;
 const historyRequests=new Map();
-const followups=mountFollowupQueue({root,host:$('chat-above-pill'),client,getSession:()=>session,guard,note,keyId,forgetKey,onSnapshot:syncSnapshot});
+const followups=mountFollowupQueue({root,host:$('chat-above-pill'),client,getSession:()=>session,canWrite:()=>canManageQueue&&sharedAccess?.can_control!==false,guard,note,keyId,forgetKey,onSnapshot:syncSnapshot});
 /** Rewinds rebuild the transcript; queue and poll snapshots may only merge the same history revision. */
 function historyChanged(summary){
   if((summary?.history_revision||0)>historyRevision){if(historyBusy)historyDeferredRevision=Math.max(historyDeferredRevision,summary.history_revision);else void open(session,'replace').catch(error=>note(error.message));}
 }
 function syncSnapshot(data){
   if(data.session?.id&&data.session.id!==session)return false;
+  if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}
   if((data.session?.history_revision||0)!==historyRevision){historyChanged(data.session);return false;}
   historyLastSeq=Math.max(historyLastSeq,data.last_seq||0);
-  for(const item of data.messages||[])message(item);followups.update(data);runs(data.runs||[]);return true;
+  for(const item of data.messages||[])message(item);followups.update(data);runs(data.runs||[],true);return true;
 }
 /** Confirms rewind and resolves existing composer text without silently discarding a draft. */
 function undoChoice(hasDraft){return new Promise(resolve=>{const dialog=document.createElement('dialog');dialog.className='wa-confirm-panel';const text=document.createElement('p');text.textContent='Undo this message and all later messages? This changes conversation history; external tool effects remain.';dialog.append(text);if(hasDraft){const hint=document.createElement('p');hint.textContent='The composer already has text. Choose how to return the undone message.';dialog.append(hint);}let settled=false;const finish=value=>{if(settled)return;settled=true;dialog.close();dialog.remove();closeUndoDialog=null;resolve(value);};for(const [label,value] of hasDraft?[['Clear & replace','replace'],['Keep current','keep'],['Append','append'],['Cancel',null]]:[['Undo','replace'],['Cancel',null]]){const node=document.createElement('button');node.type='button';node.className='ac-btn';node.textContent=label;node.onclick=()=>finish(value);dialog.append(node);}dialog.addEventListener('cancel',event=>{event.preventDefault();finish(null);});closeUndoDialog=()=>finish(null);document.body.append(dialog);dialog.showModal();dialog.querySelector('button:last-child').focus();});}
@@ -107,13 +109,15 @@ async function historyAction(kind,item){
   }catch(error){if(error.status>=400&&error.status<500&&!historyRequests.get(actionKey)?.result){const pending=historyRequests.get(actionKey);if(pending)forgetKey(pending.receipt);historyRequests.delete(actionKey);}note(error.message||'Conversation action failed');}
   finally{historyBusy=false;const pending=historyDeferredRevision;historyDeferredRevision=0;if(sid===session&&pending>historyRevision)void open(sid,'replace').catch(error=>note(error.message));}
 }
+let sharedAccess=null;
+const sharing=mountSharedChat({root,client,guard,note,ensureSession,onState:data=>{sharedAccess=data?.access||null;if(sharedAccess?.can_send===false)media?.setAvailable(false);runs(activityRuns);if(data&&session){const sid=session,epoch=sessionGeneration;client.snapshot(sid).then(snapshot=>{if(session!==sid||sessionGeneration!==epoch||!historyReady)return;if((snapshot.session.history_revision||0)!==historyRevision){if(historyBusy)historyDeferredRevision=Math.max(historyDeferredRevision,snapshot.session.history_revision||0);else void open(sid,'replace').catch(error=>note(error.message));return;}if(snapshot.access){sharedAccess=snapshot.access;canManageQueue=snapshot.access.can_manage_queue!==false;}for(const item of snapshot.messages||[])message(item);followups.update(snapshot);runs(snapshot.runs||[],true);}).catch(error=>note(error.message));}}});
 // Media changes reapply composer layout and refresh run-dependent button states.
 media=mountComposerMedia({root,client,ensureSession,note,guard,getState,refresh,/* Reapplies composer geometry and run-dependent actions after media changes. */changed:()=>{applyChatConfig();runs(activityRuns);}});
 let sessionItems=[];
 // Dropdown refresh reads sessions; its search reset delegates to the session-list controller.
 const dropdown=mountSessionDropdown($('session-dropdown'),{/* Reloads session options. */refresh:()=>sessions(),select:open,guard,/* Clears search through the list controller. */resetSearch:()=>sessionList.reset()});
 // Session-list refresh shares the session loader; recycle completion resets transcript and session-scoped state.
-const sessionList=createSessionList($('session-dropdown'),{guard,/* Shares the panel session loader. */refresh:()=>sessions(),select:open,client,/* Clears the selected transcript and its session-scoped controls after recycle. */recycled:()=>{followups.reset();anchor.reset();progress.reset();activity.disconnect();resetReads();session='';stats.disconnect();++sessionGeneration;controls.open('');media.open('');client.disconnect();$('chat-messages-inner').replaceChildren();notifications.clearTools();$('runs').replaceChildren();const url=new URL(location.href);url.searchParams.delete('session_id');history.replaceState({},'',url);}});
+const sessionList=createSessionList($('session-dropdown'),{guard,/* Shares the panel session loader. */refresh:()=>sessions(),select:open,client,/* Clears the selected transcript and its session-scoped controls after recycle. */recycled:()=>{followups.reset();anchor.reset();progress.reset();activity.disconnect();resetReads();session='';stats.disconnect();++sessionGeneration;controls.open('');sharing.disconnect();media.open('');client.disconnect();$('chat-messages-inner').replaceChildren();notifications.clearTools();$('runs').replaceChildren();const url=new URL(location.href);url.searchParams.delete('session_id');history.replaceState({},'',url);}});
 // Exposes dropdown configuration through the session-list controller.
 $('session-dropdown').configure=cfg=>sessionList.configure(cfg);
 const chatPanel=root;
@@ -133,7 +137,7 @@ const readAbort=new AbortController();
 const visibleRows=new Set();
 /** Debounces read acknowledgments to the highest visible sequence and fences stale session writes. */
 function queueRead(){
-  if(document.visibilityState!=='visible'||!session||!root.getClientRects().length||root.dataset.embedVisible==='false'){clearTimeout(readTimer);return;}
+  if(sharedAccess?.observer||document.visibilityState!=='visible'||!session||!root.getClientRects().length||root.dataset.embedVisible==='false'){clearTimeout(readTimer);return;}
   for(const row of visibleRows){if(row.isConnected)readPending=Math.max(readPending,Number(row.dataset.seq)||0);}
   clearTimeout(readTimer);
   if(readPending<=readThrough)return;
@@ -204,9 +208,9 @@ async function sessions(){const data=await client.sessions();$('sessions').repla
  * Route mode controls push/replace history; composer focus is restored only if the user did not move it.
  * Client snapshot failures propagate; control-load failures are reported through note.
  */
-async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{followups.reset();anchor.reset();progress.open(id);notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);controls.open(id).catch(error=>{if(id===session)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{historyLastSeq=data.last_seq||0;historyRevision=data.session.history_revision||0;readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);onEvent('session',{session_id:id});document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);followups.update(data);runs(data.runs||[]);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;try{media.published(item);}catch(error){note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);}catch(error){note('Transcript positioning unavailable: '+error.message);}return true;},summary=>{historyChanged(summary);void sessions().catch(error=>note(error.message));},syncSnapshot);if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
+async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{canManageQueue=false;sharedAccess={can_send:false,can_control:false};followups.reset();historyReady=false;anchor.reset();progress.open(id);notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);sharing.open(id).catch(error=>{if(id===session)note('Shared controls unavailable: '+error.message);});controls.open(id).catch(error=>{if(id===session)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}historyReady=true;historyLastSeq=data.last_seq||0;historyRevision=data.session.history_revision||0;readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);onEvent('session',{session_id:id});document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);followups.update(data);runs(data.runs||[],true);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;try{media.published(item);}catch(error){note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);}catch(error){note('Transcript positioning unavailable: '+error.message);}return true;},summary=>{historyChanged(summary);void sessions().catch(error=>note(error.message));},syncSnapshot);if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
 // Requests run cancellation and refreshes shell state even when the request fails.
-async function cancel(id){progress.note('Stopping…');try{await client.cancel(id,{client_request_id:keyId('cancel:'+id)});}finally{await refresh();}}
+async function cancel(id){if(sharedAccess?.can_control===false)throw Error('This conversation is read only');progress.note('Stopping…');try{await client.cancel(id,{client_request_id:keyId('cancel:'+id)});}finally{await refresh();}}
 // Adds/removes a transcript notice only for certain failed runs; uncertain outcomes remain in recovery UI.
 function failedRunMessages(items){
   const target=$('chat-messages-inner');
@@ -226,27 +230,30 @@ function failedRunMessages(items){
   }
 }
 /** Fans run snapshots to transport, controls, progress and activity, then paints composer and run actions. Approval, recovery, resume, and cancel handlers call their matching client endpoints. */
-function runs(items){onEvent('runs',{session_id:session,runs:items.filter(r=>r.session_id===session||!r.session_id).map(r=>({id:r.id,status:r.status,uncertain:!!r.uncertain,approval_id:r.pending?.id||null}))});client.updateRuns(items);anchor.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));progress.update(items);void stats.refresh();controls.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));activityRuns=items.filter(run=>run.session_id===session||!run.session_id);rememberRuns(activityRuns);if(session)paintActivity();$('runs').replaceChildren();notifications.clearTools();const relevant=items.filter(run=>run.session_id===session||!run.session_id);const pendingReview=!!$('chat-messages-inner').querySelector('[data-admission-status="pending_review"],[data-admission-status="reviewing"]');const active=relevant.find(run=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(run.status));$('chat-input-row').dataset.runStatus=active?.status||relevant[0]?.status||'Ready';$('chat-stop-btn').hidden=!active||$('chat-stop-btn').dataset.configEnabled==='false';$('chat-stop-btn').dataset.run=active?.id||'';$('chat-stop-btn').style.display=$('chat-stop-btn').hidden?'none':'';$('chat-send').disabled=historyBusy||!!getState().shutoff||submitting||!!media?.uploading;
+function runs(items,authoritative=false){if(!authoritative&&sharing.state&&activityRuns.length&&!items.some(run=>run.session_id===session))items=activityRuns;onEvent('runs',{session_id:session,runs:items.filter(r=>r.session_id===session||!r.session_id).map(r=>({id:r.id,status:r.status,uncertain:!!r.uncertain,approval_id:r.pending?.id||null}))});client.updateRuns(items);anchor.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));progress.update(items);void stats.refresh();controls.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));activityRuns=items.filter(run=>run.session_id===session||!run.session_id);rememberRuns(activityRuns);if(session)paintActivity();$('runs').replaceChildren();notifications.clearTools();const relevant=items.filter(run=>run.session_id===session||!run.session_id);const pendingReview=!!$('chat-messages-inner').querySelector('[data-admission-status="pending_review"],[data-admission-status="reviewing"]');const active=relevant.find(run=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(run.status));$('chat-input-row').dataset.runStatus=active?.status||relevant[0]?.status||'Ready';$('chat-stop-btn').hidden=!active||$('chat-stop-btn').dataset.configEnabled==='false';$('chat-stop-btn').dataset.run=active?.id||'';$('chat-stop-btn').style.display=$('chat-stop-btn').hidden?'none':'';$('chat-send').disabled=historyBusy||sharedAccess?.can_send===false||!!getState().shutoff||submitting||!!media?.uploading;
+$('chat-input').readOnly=sharedAccess?.can_send===false;
+$('chat-stop-btn').disabled=sharedAccess?.can_control===false;
 failedRunMessages(relevant);
 const continuing=!pendingReview&&!active&&!media?.count&&!$('chat-input').value.trim()&&$('chat-continue-btn').dataset.configEnabled!=='false';
 $('chat-continue-btn').hidden=!continuing;$('chat-continue-btn').style.display=continuing?'':'none';
-$('chat-continue-btn').disabled=!!getState().shutoff||submitting;
+$('chat-continue-btn').disabled=sharedAccess?.can_send===false||sharing.state?.participation?.active===false||!!getState().shutoff||submitting;
 // Context reports live in the composer panel and each bubble's More menu.
 // Ordinary active runs use the progress control and composer Stop button.
 // Approval and recovery cards retain their explicit decisions.
 for(const run of relevant){if(run.status==='completed'||(!run.uncertain&&['queued','running','waiting_gate','waiting_external','failed'].includes(run.status)))continue;const card=document.createElement('section');card.className='run-card';const title=document.createElement('strong');title.textContent=run.status+(run.error?' — '+run.error:'');card.append(title);
 if(run.pending && run.status==='waiting_approval'){
   const p=run.pending;
+  if(!p.id||p.can_decide===false||sharedAccess?.observer){const waiting=document.createElement('p');waiting.textContent=p.waiting_message||'Waiting for the authorized user';card.replaceChildren(waiting);$('runs').append(card);continue;}
   notifications.showTool({approval:p,run,active,expanded:expandedApprovals,decide:async decision=>{await client.decide(p.id,{decision,client_request_id:keyId('approval:'+p.id+':'+decision)});await refresh();},cancel:()=>cancel(run.id)});
   continue;
 }
-if(run.uncertain || run.status==='recovery'){
+if((run.uncertain || run.status==='recovery')&&sharedAccess?.can_control!==false){
   title.remove();
   card.append(createRecoveryDetails(run,{expanded:expandedRecovery,button,decide:async(decision,output)=>{
     await client.recover(run.id,{decision,output,client_request_id:keyId('recovery:'+run.id+':'+decision+':'+output)});await refresh();
   }}));
 }
-if(!run.uncertain && ['paused','stopped'].includes(run.status))card.append(button('Resume run',async()=>{await client.resume(run.id,{client_request_id:crypto.randomUUID()});await refresh();}));if(active?.id===run.id)card.append(button('Cancel run',()=>cancel(run.id)));$('runs').append(card);}}
+if(sharedAccess?.can_control!==false&&!run.uncertain && ['paused','stopped'].includes(run.status))card.append(button('Resume run',async()=>{await client.resume(run.id,{client_request_id:crypto.randomUUID()});await refresh();}));if(sharedAccess?.can_control!==false&&active?.id===run.id)card.append(button('Cancel run',()=>cancel(run.id)));$('runs').append(card);}}
 $('sessions').onchange=guard(()=>open($('sessions').value));
 /** Deduplicates session creation and rejects completion if the user changed sessions mid-request. */
 async function ensureSession(){
@@ -310,11 +317,11 @@ $('chat-input').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey&&!even
 $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
 
   /** Clears session visuals and disconnects every session-scoped transport/control. */
-  function disconnect(){followups.reset();elementContext='';anchor.reset();progress.reset();notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
+  function disconnect(){followups.reset();session='';activityRuns=[];elementContext='';anchor.reset();progress.reset();notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();sharing.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
   /** Disconnects and disposes panel-owned timers, observers, listeners, and mounted child controls. */
   function destroy(){
     ++sessionGeneration;closeUndoDialog?.();
-    disconnect();followups.destroy();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
+    disconnect();followups.destroy();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
     $('chat-input').onkeydown=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;
   }
@@ -342,9 +349,9 @@ $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
     /** Cancels the selected run by ID or the first active run; throws if none is active. */
     async stop(id){const run=id?selectedRun(id):activityRuns.find(r=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(r.status));if(!run)throw Error('No active run');await cancel(run.id);},
     /** Decides an approval only when it is pending in this conversation, then refreshes shell state. */
-    async approve(id,decision){const run=activityRuns.find(r=>r.pending?.id===id&&r.status==='waiting_approval');if(!run)throw Error('Approval is not pending in the selected conversation');await client.decide(id,{decision,client_request_id:keyId('approval:'+id+':'+decision)});await refresh();},
+    async approve(id,decision){const run=activityRuns.find(r=>r.pending?.id===id&&r.status==='waiting_approval');if(!run||run.pending.can_decide===false||sharedAccess?.observer)throw Error('Approval is not available to this user');await client.decide(id,{decision,client_request_id:keyId('approval:'+id+':'+decision)});await refresh();},
     /** Resolves a selected uncertain/recovery run and refreshes shell state. */
-    async recover(id,decision,output){const run=selectedRun(id);if(!run.uncertain&&run.status!=='recovery')throw Error('Run is not waiting for recovery');await client.recover(id,{decision,output,client_request_id:keyId('recovery:'+id+':'+decision+':'+output)});await refresh();}
+    async recover(id,decision,output){if(sharedAccess?.can_control===false)throw Error('This conversation is read only');const run=selectedRun(id);if(!run.uncertain&&run.status!=='recovery')throw Error('Run is not waiting for recovery');await client.recover(id,{decision,output,client_request_id:keyId('recovery:'+id+':'+decision+':'+output)});await refresh();}
   };
   mountedPanels.set(root, panel);
   return panel;

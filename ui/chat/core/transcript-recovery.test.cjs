@@ -44,8 +44,8 @@ test('other session completion does not fetch current snapshot',async()=>{
 test('transcript inserts recovered gaps in order without replacing existing rows',()=>{
  const source=fs.readFileSync(path.join(__dirname,'panel.js'),'utf8'),code=source.slice(source.indexOf('function message(item)'),source.indexOf('// Base presentation'));
  const children=[],target={children,insertBefore(row,before){const index=children.indexOf(before);children.splice(index<0?children.length:index,0,row);}};
- const context=vm.createContext({$:()=>target,createMessage:item=>({dataset:{publicId:item.id,seq:String(item.seq)}}),resolveAsset:undefined,gutterRuns:new Map(),client:{},session:'a',historyLastSeq:0,historyAction:null,note(){},stats:{},readObserver:{observe(){}},paintActivity(){},updateAdmission(){}});
- vm.runInContext(code,context);for(const seq of [9,5,9,2])context.message(msg(seq));assert.deepEqual(children.map(x=>Number(x.dataset.seq)),[2,5,9]);
+ const context=vm.createContext({$:()=>target,createMessage:item=>({dataset:{publicId:item.id,seq:String(item.seq)}}),resolveAsset:undefined,gutterRuns:new Map(),client:{},session:'a',historyLastSeq:0,historyAction(){},note(){},stats:{},readObserver:{observe(){}},paintActivity(){},updateAdmission(){}});
+ vm.runInContext(code,context);for(const seq of [9,5,9,2])context.message(msg(seq));assert.deepEqual(children.map(x=>Number(x.dataset.seq)),[2,5,9]);assert.equal(context.historyLastSeq,9);
 });
 
 test('named queue events refresh delivery state without duplicating public messages',async()=>{

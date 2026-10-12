@@ -46,6 +46,9 @@ impl Store {
                 | "run.completed"
                 | "run.failed"
                 | "run.waiting_approval"
+                | "session.help_requested"
+                | "session.help_cancelled"
+                | "session.help_resolved"
         ) {
             return Err(anyhow!("Unsupported notification type"));
         }

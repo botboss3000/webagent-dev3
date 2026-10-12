@@ -564,6 +564,29 @@ impl Store {
                     if let Some(value) = previous.get(field) { object.insert(field.into(), value.clone()); }
                 }
             }
+            // Participation and queue are independently revisioned authorities.
+            for (field,revision) in [("participation","revision"),("message_queue","queue_revision")] {
+                let older=if field=="participation" {
+                    previous[field][revision].as_u64().unwrap_or(0)>object.get(field).and_then(|v|v[revision].as_u64()).unwrap_or(0)
+                } else {
+                    previous[revision].as_u64().unwrap_or(0)>object.get(revision).and_then(Value::as_u64).unwrap_or(0)
+                };
+                if let Some(saved)=previous.get(field) {
+                    if older || !object.contains_key(field){object.insert(field.into(),saved.clone());}
+                }
+                if field=="message_queue" && (older||!object.contains_key(revision)) {
+                    if let Some(saved)=previous.get(revision){object.insert(revision.into(),saved.clone());}
+                }
+            }
+            let mut reads=previous["participant_reads"].as_object().cloned().unwrap_or_default();
+            if let Some(incoming)=object.get("participant_reads").and_then(Value::as_object) {
+                for (actor,cursor) in incoming {
+                    let value=cursor.as_u64().ok_or_else(||anyhow!("Invalid personal read cursor"))?;
+                    let old=reads.get(actor).and_then(Value::as_u64).unwrap_or(0);
+                    reads.insert(actor.clone(),json!(old.max(value)));
+                }
+            }
+            if !reads.is_empty(){object.insert("participant_reads".into(),Value::Object(reads));}
             // A runner may carry a full session snapshot from before a metadata
             // edit. Preserve the newer metadata while accepting its checkpoint.
             let stale = previous["metadata_revision"].as_u64().unwrap_or(0)
@@ -760,6 +783,7 @@ mod tests {
     async fn recycle_cancels_owned_work_and_fences_late_writers() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
+        store.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();
         store.put("session:s",&json!({"id":"s"})).await.unwrap();
         store.put("session:other",&json!({"id":"other"})).await.unwrap();
         store.put("run:r",&json!({"id":"r","session_id":"s","status":"queued","generation":"","lease_epoch":0,"run_revision":0})).await.unwrap();

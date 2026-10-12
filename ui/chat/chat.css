@@ -101,6 +101,16 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .v3-message.system{align-items:center}
 .v3-message.system .message-content{max-width:min(90%,680px);font-size:13px;color:var(--fg-2);background:var(--bg-elev);text-align:center}
 
+/* Shared controls use the configured header/footer rows; dialog remains panel scoped. */
+.chat-shared-control{white-space:nowrap;font-size:12px;padding:5px 9px}
+.v3-shared-chat-status{margin:0 12px 5px;font-size:11px;text-align:center}
+.v3-shared-chat-panel{position:absolute;z-index:80;top:80px;left:12px;right:12px;max-width:500px;max-height:calc(100% - 96px);overflow:auto;margin:auto;padding:16px;display:flex;flex-wrap:wrap;gap:10px;background:var(--bg-1);color:var(--fg);border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 30px #0003}
+.v3-shared-chat-panel[hidden]{display:none}.v3-shared-chat-panel>strong,.v3-shared-chat-panel>input,.v3-shared-chat-panel>div{width:100%;min-width:0}.v3-shared-chat-panel input{background:var(--bg-2);color:inherit;border:1px solid var(--border);padding:8px}
+
+/* Explicit idle-footer rows must override the inherited minimal-idle collapse. */
+#chat-input-area.footer-mode-idle .chat-footer-row.v3-footer-configured:not([hidden]){max-height:none;opacity:1;margin-top:2px;margin-bottom:2px;pointer-events:auto}
+.chat-footer-row.v3-footer-configured.expanded{max-height:none}
+
 /* Theme tokens keep durable delivery choices legible in docked and embedded chat. */
 .followup-delivery{font-size:13px;margin-top:10px;border-top:1px solid var(--border);padding-top:8px;color:var(--fg-2)}
 .followup-delivery p,.followup-queue-banner p{margin:0 0 6px;overflow-wrap:anywhere}

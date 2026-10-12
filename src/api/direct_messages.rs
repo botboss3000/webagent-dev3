@@ -47,7 +47,17 @@ pub(crate) async fn send(
         return Err(bad("text has invalid length"));
     }
     // Session preparation performs admission and limits but writes nothing.
-    let session = super::sessions::prepare_session(&app, &body).await?;
+    // A partial admission keeps its requester reservation. Retrying the same
+    // immutable request must address that same session and run reservation.
+    use sha2::Digest;
+    let hash = sha2::Sha256::digest(serde_json::to_vec(&json!({
+        "domain":"direct-message-session-v1", "actor":app.store.current_user_id(),
+        "request":request_id, "body":digest(&body)
+    })).unwrap());
+    let mut bytes=[0u8;16]; bytes.copy_from_slice(&hash[..16]);
+    bytes[6]=(bytes[6]&0x0f)|0x50; bytes[8]=(bytes[8]&0x3f)|0x80;
+    let sid=uuid::Uuid::from_bytes(bytes).to_string();
+    let session = super::sessions::prepare_session_id(&app, &body, Some(sid)).await?;
     let sid = session.result["id"].as_str().unwrap();
     let agent = session.result["agent_id"].as_str().unwrap();
     app.store = app.store.for_agent(agent).await?;
@@ -62,6 +72,7 @@ pub(crate) async fn send(
         .atomic_first_message(docs, sid, prepared.kind, &prepared.message, &session.result)
         .await
         .map_err(super::chat::admission_error)?;
+    app.store.register_shared_session(app.store.current_user_id(),sid,agent).await?;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
 

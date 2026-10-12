@@ -1,6 +1,7 @@
 //! One bounded tool-free System-model call. Recheck authority before admitting work.
 use super::*;
 pub(super) async fn judge(app: &App, record: &mut Value) -> Result<Verdict> {
+    participation_authorized(app, record).await?;
     let agent = record["agent_id"]
         .as_str()
         .ok_or_else(|| anyhow!("Missing agent"))?
@@ -11,8 +12,7 @@ pub(super) async fn judge(app: &App, record: &mut Value) -> Result<Verdict> {
     if current_settings != pinned || current_revision != settings_revision || app.shutoff().await? {
         return Err(anyhow!("Manager settings or authority changed"));
     }
-    let proxy = json!({"agent_id":agent,"selection_plan":record["selection_plan"],
-        "failover_state":record["failover_state"]});
+    let proxy = system_proxy(app, record);
     let candidate = app
         .run_candidate(&proxy)
         .await?
@@ -42,6 +42,10 @@ pub(super) async fn judge(app: &App, record: &mut Value) -> Result<Verdict> {
     let call_id = format!("manager:{}", record["id"].as_str().unwrap_or(""));
     let instructions = gates::incoming_message::instructions(&pinned.criteria);
     let call = async {
+        // Credential refresh may yield. Recheck the execution generation at the
+        // final provider boundary; inactive human conversation cannot be judged.
+        participation_authorized(app, record).await?;
+        app.run_candidate(&proxy).await?;
         let selection = &selection;
         let tokens = &tokens;
         let cancel = cancel.clone();
@@ -76,6 +80,7 @@ pub(super) async fn judge(app: &App, record: &mut Value) -> Result<Verdict> {
         .collect::<Vec<_>>()
         .join("");
     let verdict = verdict::parse(&text)?;
+    participation_authorized(app, record).await?;
     // A late result never grants access after revocation or a criteria edit.
     let (current_settings, current_revision) = config::snapshot(&app.store, &agent).await?;
     if app.shutoff().await? || current_settings != pinned || current_revision != settings_revision {

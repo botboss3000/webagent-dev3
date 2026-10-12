@@ -511,6 +511,17 @@ function _buildToolStateControl(toolMeta, opts) {
       out.push({ disclosure: true, label: 'Advanced policies', lines,
         note: 'Fixed runtime safeguards. Permission settings do not override them.' });
     }
+    if (showExecution && toolMeta.duplicate_protection_capable === true) {
+      out.push({ separator: true });
+      out.push({ info: true, className: 'ac-tool-state-head', label: 'Duplicate-action protection' });
+      for (const value of ['on', 'off']) out.push({
+        label: value === 'on' ? 'On' : 'Off for new actions',
+        checked: execution.duplicate_protection === value, radio: true,
+        disabled: !canEdit || savingExecution, keepOpen: true,
+        action: () => saveExecution('duplicate_protection', value),
+      });
+      out.push({ info: true, label: 'Saved and uncertain actions remain protected. A matching additional action needs fresh user intent and specific authorization.' });
+    }
     if (showExecution) {
       out.push({ separator: true });
       for (const [key, heading, choices] of [

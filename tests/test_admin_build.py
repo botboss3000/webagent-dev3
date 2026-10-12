@@ -545,6 +545,33 @@ class BuildTests(unittest.TestCase):
                             patch_text.encode())
         self.assertEqual("before\nconst note=text=>2;\nafter\n", target.read_text())
 
+    def test_loop_live_plugin_mount_preserves_runtime_and_readonly_source(self):
+        previous = {"ReadonlyRootfs": True, "Memory": 768 * 1024 * 1024,
+                    "Mounts": [{"Type": "bind", "Source": "/state", "Target": "/state"},
+                               {"Type": "bind", "Source": "/frozen", "Target": "/live-v3",
+                                "ReadOnly": True}]}
+        original = copy.deepcopy(previous)
+        mounted = host.loop_plugin_mounts(previous)
+        self.assertEqual(original, previous)
+        self.assertTrue(mounted["ReadonlyRootfs"])
+        self.assertEqual(previous["Memory"], mounted["Memory"])
+        self.assertEqual(previous["Mounts"], mounted["Mounts"][:-1])
+        self.assertEqual({"Type": "bind", "Source": str(host.SOURCE / "plugins"),
+                          "Target": "/live-checkout/plugins", "ReadOnly": True},
+                         mounted["Mounts"][-1])
+        self.assertFalse(any(m["Target"] == "/live-checkout" for m in mounted["Mounts"]))
+
+    def test_loop_live_plugin_mount_replaces_both_inherited_forms(self):
+        previous = {"Mounts": [{"Type": "bind", "Source": "/wrong",
+                               "Target": "/live-checkout/plugins", "ReadOnly": False}],
+                    "Binds": ["/wrong:/live-checkout/plugins:rw", "/state:/state:rw"]}
+        first = host.loop_plugin_mounts(previous)
+        second = host.loop_plugin_mounts(first)
+        self.assertEqual(first, second)
+        self.assertEqual(["/state:/state:rw"], second["Binds"])
+        self.assertEqual(1, len(second["Mounts"]))
+        self.assertTrue(second["Mounts"][0]["ReadOnly"])
+
     def test_release_mounts_pin_source_and_keep_state_writable(self):
         root = self.state / "release-fixture"
         for name in ("v3/ui", "v3/config", "v3/plugins/abilities",

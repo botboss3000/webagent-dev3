@@ -118,6 +118,13 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
     resumeQueue:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/queue/resume','POST',body),
     undo:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/undo','POST',body),
     fork:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/fork','POST',body),
+    sharing:id=>request('/sessions/'+encodeURIComponent(id)+'/sharing'),
+    invite:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/invitations','POST',body),
+    revokeInvite:(id,invite,body)=>request('/sessions/'+encodeURIComponent(id)+'/invitations/'+encodeURIComponent(invite),'DELETE',body),
+    redeemInvite:body=>request('/chat-invitations/redeem','POST',body),
+    participation:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/participation','PUT',body),
+    help:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/help','POST',body),
+    cancelHelp:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/help','DELETE',body),
     /** Reads recorded usage totals for one session. */
     usage:id=>request("/sessions/"+encodeURIComponent(id)+"/usage"),
     /** Reads administrator context-compaction settings. */

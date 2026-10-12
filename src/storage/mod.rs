@@ -14,6 +14,11 @@ mod background_followup;
 mod followup_queue;
 mod reasoning_cleanup;
 pub(crate) mod notifications;
+pub(crate) mod shared_chat;
+pub(crate) mod participation;
+mod shared_read;
+mod requester_quota;
+mod actions;
 
 use crate::access;
 use crate::cache::{Cache, ContextCache};
@@ -251,6 +256,7 @@ pub(crate) async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<S
             .execute(&pool).await?;
     }
     if runs {
+        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS action_lock(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision INTEGER NOT NULL); INSERT OR IGNORE INTO action_lock VALUES(1,0); CREATE TABLE IF NOT EXISTS action_index(id TEXT PRIMARY KEY,resource TEXT NOT NULL,intent_key TEXT NOT NULL,state TEXT NOT NULL); CREATE INDEX IF NOT EXISTS action_intent ON action_index(resource,intent_key);").execute(&pool).await?;
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS run_index(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,status TEXT NOT NULL,updated_at INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS runs_status ON run_index(status,updated_at);
             CREATE INDEX IF NOT EXISTS runs_session ON run_index(session_id,updated_at);
@@ -591,12 +597,17 @@ impl Store {
             || key.starts_with("followup_queue:")
             || key.starts_with("receipt:queue:")
             || key.starts_with("user_agent_page_preferences:")
+            || key.starts_with("message_meta:")
+            || key.starts_with("shared_help:")
+            || key.starts_with("receipt:shared_help:")
+            || key.starts_with("receipt:participation:")
             || key.starts_with("session_mode:")
             || key.starts_with("session_chat_controls:")
             || key.starts_with("session_naming:")
             || key.starts_with("receipt:chat_controls:")
             || key.starts_with("compaction_segment:")
             || key.starts_with("session_ability_state:")
+            || key.starts_with("action:")
             || key.starts_with("background_task:")
             || key.starts_with("run:")
             || key.starts_with("run_view:")
@@ -703,6 +714,12 @@ impl Store {
         merge_mode: Option<&str>,
         expected_revision: i64,
     ) -> Result<Value> {
+        self.upsert_prompt_slot_receipted(name,content,order_index,lock,merge_mode,expected_revision,None).await
+    }
+    pub(crate) async fn upsert_prompt_slot_receipted(
+        &self,name:&str,content:&str,order_index:Option<i64>,lock:Option<bool>,merge_mode:Option<&str>,
+        expected_revision:i64,receipt:Option<(&str,&str)>,
+    )->Result<Value> {
         Self::validate_prompt_slot_name(name)?;
         if content.len() > PROMPT_SLOT_CONTENT_MAX {
             return Err(anyhow!("Prompt slot content exceeds limit"));
@@ -722,6 +739,12 @@ impl Store {
         sqlx::query("UPDATE agent_prompts SET revision=revision WHERE 0")
             .execute(&mut *tx)
             .await?;
+        if let Some((key,hash))=receipt {
+            if let Some(record)=self.action_agent_receipt_tx(&mut tx,key).await? {
+                if record["arguments_digest"]!=hash {return Err(anyhow!("Action receipt input conflict"));}
+                return Ok(record["result"]["output"]["slot"].clone());
+            }
+        }
         let rows = sqlx::query(
             "SELECT slot_name,order_index,lock AS locked,merge_mode,content,revision,updated_at
              FROM agent_prompts WHERE agent_id=?",
@@ -806,16 +829,30 @@ impl Store {
             .bind(format!("{}:{name}",self.agent_id)).bind(&self.agent_id).bind(name).bind(order).bind(locked as i64).bind(&mode).bind(sealed)
             .bind(revision).bind(now).execute(&mut *tx).await?;
         }
+        let slot=json!({"slot_name":name,"order_index":order,"lock":locked,
+            "merge_mode":mode,"content":content,"revision":revision,"updated_at":now});
+        if let Some((key,hash))=receipt {
+            self.action_agent_receipt_write(&mut tx,key,hash,&json!({"status":"success","output":{"slot":slot}})).await?;
+        }
         tx.commit().await?;
-        Ok(json!({"slot_name":name,"order_index":order,"lock":locked,
-            "merge_mode":mode,"content":content,"revision":revision,"updated_at":now}))
+        Ok(slot)
     }
     pub async fn delete_prompt_slot(&self, name: &str, expected_revision: i64) -> Result<bool> {
+        self.delete_prompt_slot_receipted(name,expected_revision,None).await
+    }
+    pub(crate) async fn delete_prompt_slot_receipted(&self,name:&str,expected_revision:i64,receipt:Option<(&str,&str)>)->Result<bool> {
         Self::validate_prompt_slot_name(name)?;
         if expected_revision <= 0 {
             return Err(anyhow!("Invalid prompt slot revision"));
         }
         let mut tx = self.agent_pool.begin().await?;
+        sqlx::query("UPDATE agent_prompts SET revision=revision WHERE 0").execute(&mut *tx).await?;
+        if let Some((key,hash))=receipt {
+            if let Some(record)=self.action_agent_receipt_tx(&mut tx,key).await? {
+                if record["arguments_digest"]!=hash {return Err(anyhow!("Action receipt input conflict"));}
+                return Ok(record["result"]["output"]["deleted"]==true);
+            }
+        }
         let actual: Option<i64> =
             sqlx::query_scalar("SELECT revision FROM agent_prompts WHERE agent_id=? AND slot_name=?")
                 .bind(&self.agent_id).bind(name)
@@ -836,6 +873,9 @@ impl Store {
             .rows_affected();
         if changed != 1 {
             return Err(anyhow!("Prompt slot revision mismatch"));
+        }
+        if let Some((key,hash))=receipt {
+            self.action_agent_receipt_write(&mut tx,key,hash,&json!({"status":"success","output":{"deleted":true,"slot_name":name}})).await?;
         }
         tx.commit().await?;
         Ok(true)
@@ -1154,15 +1194,19 @@ impl Store {
             )
         });
         let rows = sqlx::query(
-            "SELECT seq,item FROM interactions WHERE session_id=? AND seq>? ORDER BY seq",
+            "SELECT seq,run_id,step,item FROM interactions WHERE session_id=? AND seq>? ORDER BY seq",
         )
         .bind(sid)
         .bind(cursor)
         .fetch_all(&self.pool)
         .await?;
         for row in rows {
-            input.push(self.unseal(&row.get::<Vec<u8>, _>("item"))?);
             cursor = row.get::<i64, _>("seq");
+            if row.get::<String,_>("step")=="user" {
+                let rid:String=row.get("run_id");
+                if self.get(&format!("message_meta:{rid}")).await?.is_some_and(|meta|meta["context_eligible"]==false || meta["queued"]==true) {continue;}
+            }
+            input.push(self.unseal(&row.get::<Vec<u8>, _>("item"))?);
         }
         self.context_cache
             .lock()
@@ -1397,6 +1441,7 @@ impl Store {
     async fn write_document(&self, tx: &mut sqlx::Transaction<'_,sqlx::Sqlite>, key: &str, value: &Value) -> Result<()> {
         if key.starts_with("run:") && !matches!(value["status"].as_str(), Some("completed" | "cancelled" | "failed")) {
             self.require_active_session(tx, value["session_id"].as_str().ok_or_else(||anyhow!("Run has no session"))?).await?;
+            if !matches!(value["status"].as_str(),Some("stopped"|"recovery")) {self.require_participation(tx,value).await?;}
         }
         let session_value;
         let value = if key.starts_with("session:") {
@@ -1649,8 +1694,9 @@ impl Store {
         };
         let mut tx = self.pool.begin().await?;
         sqlx::query("UPDATE docs SET key=key WHERE key=?").bind(format!("run:{rid}")).execute(&mut *tx).await?;
-        if !matches!(run["status"].as_str(), Some("completed" | "cancelled" | "failed")) {
-            self.require_active_session(&mut tx, run["session_id"].as_str().ok_or_else(||anyhow!("Run has no session"))?).await?;
+        self.require_active_session(&mut tx, run["session_id"].as_str().ok_or_else(||anyhow!("Run has no session"))?).await?;
+        if !matches!(kind,"run_status") || !matches!(run["status"].as_str(),Some("cancelled"|"stopped"|"recovery"|"failed")) {
+            self.require_participation(&mut tx,run).await?;
         }
         let expected=run["run_revision"].as_u64().unwrap_or(0);
         if let Some(raw)=sqlx::query_scalar::<_,Vec<u8>>("SELECT value FROM docs WHERE key=?")
@@ -1884,12 +1930,19 @@ impl Store {
             self.context_cache.lock().unwrap().invalidate(&self.context_cache_key(sid));
         }
         run["run_revision"]=json!(expected+1);
+        if matches!(run["status"].as_str(),Some("completed"|"cancelled"|"failed")) {self.reconcile_requester_slots().await?;}
         Ok(())
     }
     // Take temporary ownership of queued work in one transaction. A new
     // generation, lease epoch, and revision fence out a previous loop worker.
     pub async fn claim_run(&self, run: &mut Value, owner: &str, generation: &str) -> Result<bool> {
         let rid=run["id"].as_str().ok_or_else(||anyhow!("Run has no id"))?.to_owned();
+        let Some(saved)=self.get(&format!("run:{rid}")).await? else {return Ok(false)};
+        if saved["status"]!="queued" {return Ok(false);}
+        let mut lifecycle=self.pool.begin().await?;
+        self.require_active_session(&mut lifecycle,saved["session_id"].as_str().ok_or_else(||anyhow!("Run session missing"))?).await?;
+        lifecycle.commit().await?;
+        if !self.requester_claim_ready(&saved).await? {return Ok(false);}
         let mut tx=self.pool.begin().await?;
         let raw:Option<Vec<u8>>=sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
             .bind(format!("run:{rid}")).fetch_optional(&mut *tx).await?;
@@ -1899,6 +1952,8 @@ impl Store {
         // processes cannot bypass a queued provider retry's cooldown.
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
         if previous["provider_retry_at"].as_u64().is_some_and(|due| due > now) { return Ok(false); }
+        self.require_active_session(&mut tx,previous["session_id"].as_str().ok_or_else(||anyhow!("Run session missing"))?).await?;
+        if self.require_participation(&mut tx,&previous).await.is_err() {return Ok(false);}
         if previous["status"]!="queued" || previous["generation"]!=run["generation"]
             || previous["lease_epoch"]!=run["lease_epoch"]
             || previous["run_revision"]!=run["run_revision"] {return Ok(false);}
@@ -2005,7 +2060,7 @@ impl Store {
     pub async fn atomic_first_message(
         &self, docs:Vec<(String,Value)>,sid:&str,kind:&str,payload:&Value,created:&Value
     )->Result<()> {
-        if !matches!(kind,"message"|"manager_submission") || sid.is_empty() {
+        if !matches!(kind,"message"|"manager_submission"|"human_message") || sid.is_empty() {
             return Err(anyhow!("Invalid first-message admission"));
         }
         self.atomic_admission(docs,sid,kind,payload,Some(created)).await
@@ -2013,6 +2068,10 @@ impl Store {
     async fn atomic_admission(
         &self,mut docs:Vec<(String,Value)>,sid:&str,kind:&str,payload:&Value,created:Option<&Value>
     )->Result<()> {
+        if matches!(kind,"message"|"manager_submission") && payload["role"]=="user" {
+        if let Some((_,run))=docs.iter().find(|(key,_)|key.starts_with("run:")) {self.reserve_requester_run(run).await?;}
+        else if let Some((_,review))=docs.iter().find(|(key,_)|key.starts_with("manager_review:")) {self.reserve_requester_run(&review["run"]).await?;}
+        }
         let destination = if sid.is_empty() {
             &self.app_pool
         } else {
@@ -2096,7 +2155,7 @@ impl Store {
                 self.stage_run_notification(&mut tx,&value).await?;
             }
         }
-        if matches!(kind,"message"|"manager_submission") && payload["role"] == "user" {
+        if matches!(kind,"message"|"manager_submission"|"human_message") && payload["role"] == "user" {
             let run_id = payload["run_id"]
                 .as_str()
                 .ok_or_else(|| anyhow!("User message has no run ID"))?;
@@ -2105,6 +2164,8 @@ impl Store {
                 .ok_or_else(|| anyhow!("User message has no content"))?;
             self.insert_chat(&mut tx, sid, run_id, "user", &json!(text))
                 .await?;
+            self.write_document(&mut tx,&format!("message_meta:{run_id}"),
+                &json!({"author_id":payload["author_id"].as_str().unwrap_or(self.current_user_id()),"context_eligible":kind=="message","queued":false})).await?;
             if kind=="message" {
                 self.begin_session_naming(&mut tx, sid, run_id, payload).await?;
             }
@@ -3176,6 +3237,7 @@ mod tests {
     async fn renewal_fixture() -> (tempfile::TempDir, Store, Value) {
         let root=tempfile::tempdir().unwrap();
         let store=Store::open(root.path()).await.unwrap();
+        store.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();
         store.put("session:renew-session",&json!({"id":"renew-session","agent_id":"shared_default","status":"active"})).await.unwrap();
         let mut run=json!({"id":"renew-run","session_id":"renew-session","status":"queued",
             "generation":"","run_revision":0,"turns":1,"updated_at":1,
@@ -3258,6 +3320,8 @@ mod tests {
     async fn command_ack_and_lease_takeover_fence_terminal_publication() {
         let root=tempfile::tempdir().unwrap();
         let store=Store::open(root.path()).await.unwrap();
+        if store.account_by_id("admin").await.unwrap().is_none(){store.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();}
+
         store.put("session:s1",&json!({"id":"s1","agent_id":"shared_default","status":"active"})).await.unwrap();
         let run=json!({"id":"r1","session_id":"s1","status":"queued","generation":"",
             "input":[],"turns":1,"updated_at":1});
@@ -3319,6 +3383,7 @@ mod tests {
     async fn recovery_input_deltas_survive_reopen_and_reject_incomplete_rows() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
+        store.put("session:s",&json!({"id":"s","agent_id":"shared_default","status":"active"})).await.unwrap();
         let mut run = json!({"id":"delta","session_id":"s","status":"queued",
             "input":[{"role":"user","content":"雪".repeat(1000)}]});
         store.put("run:delta", &run).await.unwrap();
@@ -3359,6 +3424,7 @@ mod tests {
     #[tokio::test]
     async fn legacy_inline_recovery_remains_readable_and_upgrades_on_save() {
         let root=tempfile::tempdir().unwrap(); let store=Store::open(root.path()).await.unwrap();
+        store.put("session:s",&json!({"id":"s","agent_id":"shared_default","status":"active"})).await.unwrap();
         let mut run=json!({"id":"legacy-input","session_id":"s","status":"queued","input":[{"role":"user","content":"old"}]});
         sqlx::query("INSERT INTO docs(key,value) VALUES('run:legacy-input',?)")
             .bind(store.seal(&run).unwrap()).execute(&store.pool).await.unwrap();
@@ -3383,6 +3449,7 @@ mod tests {
     #[tokio::test]
     async fn recovery_manifest_upgrades_legacy_split_and_rejects_corruption() {
         let root=tempfile::tempdir().unwrap(); let store=Store::open(root.path()).await.unwrap();
+        store.put("session:s",&json!({"id":"s","agent_id":"shared_default","status":"active"})).await.unwrap();
         let mut run=json!({"id":"manifest","session_id":"s","status":"queued",
             "input":[{"role":"user","content":"雪"},{"role":"assistant","content":"reply"}]});
         store.put("run:manifest",&run).await.unwrap();

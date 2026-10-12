@@ -9,38 +9,39 @@ use std::collections::HashMap;
 async fn session_app(app: App, session_id: &str) -> Result<App, crate::ApiError> {
     session_app_lifecycle(app,session_id,false).await
 }
-async fn session_app_lifecycle(mut app: App, session_id: &str, lifecycle: bool) -> Result<App, crate::ApiError> {
-    let session = app.store.get(&crate::key("session", session_id)).await?
-        .ok_or_else(|| crate::ApiError(axum::http::StatusCode::NOT_FOUND,
-            "Session not found".into()))?;
-    if !lifecycle && session["status"] != "active" {
-        return Err(crate::ApiError(axum::http::StatusCode::NOT_FOUND,"Session not found".into()));
+async fn session_app_lifecycle(app:App,session_id:&str,lifecycle:bool)->Result<App,crate::ApiError>{
+    if lifecycle {crate::shared_chat::scope_lifecycle(app,session_id).await}
+    else {crate::shared_chat::scope(app,session_id).await}
+      .map_err(session_access_error)
+}
+fn session_access_error(error:anyhow::Error)->crate::ApiError {
+    if error.downcast_ref::<crate::shared_chat::SessionAuthorityDenied>().is_some() {
+        crate::ApiError(axum::http::StatusCode::FORBIDDEN,"Conversation authority unavailable".into())
+    } else {crate::ApiError(axum::http::StatusCode::NOT_FOUND,"Session not found".into())}
+}
+fn guard_access(app:&App,write:bool,owner_only:bool)->Result<(),crate::ApiError>{
+    let Some(access)=app.chat_access.as_ref() else {return Ok(())};
+    if (write&&!access.can_write()) || (owner_only&&!access.is_owner()){
+        return Err(crate::ApiError(axum::http::StatusCode::FORBIDDEN,"Conversation access does not permit this action".into()));
     }
-    let agent_id = session["agent_id"].as_str().unwrap_or("shared_default");
-    app.store = app.store.for_agent(agent_id).await
-        .map_err(|_| crate::ApiError(axum::http::StatusCode::NOT_FOUND,
-            "Agent not found".into()))?;
-    let user_id = app.store.current_user_id().to_owned();
-    let access = app.store.live_access(&user_id, agent_id).await
-        .map_err(|_| crate::ApiError(axum::http::StatusCode::NOT_FOUND,
-            "Agent not found".into()))?;
-    if !access.admitted() {
-        return Err(crate::ApiError(axum::http::StatusCode::FORBIDDEN,
-            "Agent access unavailable".into()));
-    }
-    Ok(app)
+    Ok(())
 }
 async fn run_app(app: App, run_id: &str) -> Result<App, crate::ApiError> {
-    let run = app.run(run_id).await
-        .map_err(|_| crate::ApiError(axum::http::StatusCode::NOT_FOUND,
-            "Run not found".into()))?;
-    if run["history_removed"] == true {
-        return Err(crate::conflict("This run was removed by Undo and cannot be controlled"));
+    let actor=crate::shared_chat::actor(&app).to_owned();
+    let mut candidates=vec![app.clone()];
+    for entry in app.store.shared_sessions_for(&actor).await? {
+        if let Some(owner)=entry["owner_id"].as_str() {
+            let mut scoped=app.clone();scoped.store=app.store.for_user(owner).await?;
+            scoped.chat_actor=Some(actor.clone());candidates.push(scoped);
+        }
     }
-    let session_id = run["session_id"].as_str()
-        .ok_or_else(|| crate::ApiError(axum::http::StatusCode::NOT_FOUND,
-            "Run not found".into()))?;
-    session_app(app, session_id).await
+    for candidate in candidates {
+        if let Ok(run)=candidate.run(run_id).await {
+            if run["history_removed"]==true { return Err(crate::conflict("This run was removed by Undo and cannot be controlled")); }
+            if let Some(sid)=run["session_id"].as_str(){return session_app(candidate,sid).await;}
+        }
+    }
+    Err(crate::ApiError(axum::http::StatusCode::NOT_FOUND,"Run not found".into()))
 }
 trait SessionPath { fn session_id(&self) -> &str; }
 impl SessionPath for String { fn session_id(&self) -> &str { self } }
@@ -58,6 +59,8 @@ macro_rules! path_arg {
             let app = match session_app(app, path.session_id()).await {
                 Ok(app) => app, Err(error) => return error.into_response(),
             };
+            let private=matches!(stringify!($inner),"state_inspect_api"|"source_review"|"promotions"|"promotion_review"|"promotion_receipt"|"memory_list"|"memory_delete"|"upload_delete"|"upload_describe"|"promotion_reject");
+            if let Err(error)=guard_access(&app,matches!(stringify!($inner),"memory_delete"|"upload_delete"|"upload_describe"|"promotion_reject"),private){return error.into_response();}
             crate::$inner(State(app), Path(path)).await.into_response()
         }
     };
@@ -69,6 +72,8 @@ macro_rules! path_json {
             let app = match session_app(app, path.session_id()).await {
                 Ok(app) => app, Err(error) => return error.into_response(),
             };
+            let owner_only=matches!(stringify!($inner),"recycle_session_api"|"restore_session_api"|"patch_session_api"|"memory_save"|"promotion_reject"|"voice_route"|"voice_control"|"voice_audio"|"voice_speech"|"undo_session_api"|"fork_session_api");
+            if let Err(error)=guard_access(&app,true,owner_only){return error.into_response();}
             crate::$inner(State(app), Path(path), Json(body)).await.into_response()
         }
     };
@@ -113,11 +118,23 @@ async fn direct_message(Extension(app):Extension<App>,Json(body):Json<Value>)->R
     crate::api::direct_messages::send(State(app),Json(body)).await.into_response()
 }
 path_arg!(snapshot => snapshot, String);
-path_json!(session_read => session_read_api, String, crate::SessionReadBody);
+async fn session_read(Extension(app):Extension<App>,Path(id):Path<String>,Json(body):Json<crate::SessionReadBody>)->Response {
+    let app=match session_app(app,&id).await{Ok(app)=>app,Err(error)=>return error.into_response()};
+    if let Err(error)=guard_access(&app,true,false){return error.into_response();}
+    let outcome=app.store.shared_ack_read(&id,crate::shared_chat::actor(&app),body.through_seq).await;
+    match outcome {
+        Ok(crate::store::session::SessionPatchOutcome::Saved(value))=>Json(value).into_response(),
+        Ok(crate::store::session::SessionPatchOutcome::NotFound)=>crate::ApiError(axum::http::StatusCode::NOT_FOUND,"Session not found".into()).into_response(),
+        Ok(crate::store::session::SessionPatchOutcome::Conflict(message))=>crate::conflict(message).into_response(),
+        Ok(crate::store::session::SessionPatchOutcome::Invalid(message))=>crate::bad(message).into_response(),
+        Err(error)=>crate::ApiError::from(error).into_response()
+    }
+}
 path_json!(session_undo => undo_session_api, String, crate::store::conversation_history::HistoryRequest);
 path_json!(session_fork => fork_session_api, String, crate::store::conversation_history::HistoryRequest);
 async fn session_lifecycle(app:App,id:String,body:crate::store::session::SessionLifecycle,restore:bool)->Response {
     let app=match session_app_lifecycle(app,&id,true).await {Ok(app)=>app,Err(error)=>return error.into_response()};
+    if let Err(error)=guard_access(&app,true,true){return error.into_response();}
     if restore {crate::restore_session_api(State(app),Path(id),Json(body)).await.into_response()}
     else {crate::recycle_session_api(State(app),Path(id),Json(body)).await.into_response()}
 }
@@ -128,7 +145,8 @@ async fn session_restore(Extension(app):Extension<App>,Path(id):Path<String>,Jso
     session_lifecycle(app,id,body,true).await
 }
 async fn session_purge(Extension(app):Extension<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Response {
-    let app=match session_app_lifecycle(app,&id,true).await {Ok(app)=>app,Err(error)=>return error.into_response()};
+    let app=match crate::shared_chat::scope_purge(app,&id).await.map_err(session_access_error) {Ok(app)=>app,Err(error)=>return error.into_response()};
+    if let Err(error)=guard_access(&app,true,true){return error.into_response();}
     crate::purge_session_api(State(app),Path(id),Json(body)).await.into_response()
 }
 path_json!(session_patch => patch_session_api, String, crate::store::session::SessionPatch);
@@ -154,6 +172,7 @@ async fn upload(Extension(app): Extension<App>, Path(sid): Path<String>,
     let body = match crate::api::uploads::request_body(&app,request).await {
         Ok(body) => body, Err(error) => return error.into_response(),
     };
+    if let Err(error)=guard_access(&app,true,false){return error.into_response();}
     crate::upload(State(app),Path(sid),Json(body)).await.into_response()
 }
 path_arg!(upload_delete => upload_delete, (String,String));
@@ -173,6 +192,7 @@ async fn state_inspect(Extension(app): Extension<App>, Path(id): Path<String>,
     let app = match session_app(app, &id).await {
         Ok(app) => app, Err(error) => return error.into_response(),
     };
+    if let Err(error)=guard_access(&app,false,true){return error.into_response();}
     crate::state_inspect_api(State(app), Path(id), Query(args)).await.into_response()
 }
 #[derive(serde::Deserialize)]
@@ -182,6 +202,7 @@ async fn activity(Extension(app): Extension<App>, Extension(identity): Extension
     let result: Result<_, crate::ApiError> = async {
         crate::phase3_api::administrator(&app, &identity).await?;
         let app=session_app(app,&id).await?;
+        guard_access(&app,false,true)?;
         let after=args.after.unwrap_or(0);
         if after<0 {return Err(crate::bad("Invalid activity cursor"));}
         let data=app.store.private_activity(&id,after).await?;
@@ -198,6 +219,7 @@ async fn context_snapshot(Extension(app):Extension<App>,Extension(identity):Exte
     let result:Result<_,crate::ApiError>=async {
         crate::phase3_api::administrator(&app,&identity).await?;
         let scoped=session_app(app.clone(),&sid).await?;
+        guard_access(&scoped,false,true)?;
         if scoped.store.current_user_id()!="admin" {return Err(crate::ApiError(axum::http::StatusCode::FORBIDDEN,"Fixed admin account required".into()));}
         let run=scoped.run(&rid).await.map_err(|_|crate::ApiError(axum::http::StatusCode::NOT_FOUND,"Run not found".into()))?;
         if run["session_id"]!=sid {return Err(crate::ApiError(axum::http::StatusCode::NOT_FOUND,"Run not found".into()));}
@@ -213,6 +235,7 @@ async fn run_logs(Extension(app): Extension<App>, Extension(identity): Extension
     let result: Result<_, crate::ApiError> = async {
         crate::phase3_api::administrator(&app,&identity).await?;
         let scoped=session_app(app.clone(),&sid).await?;
+        guard_access(&scoped,false,true)?;
         if args.after.unwrap_or(0)<0 {return Err(crate::bad("Invalid activity cursor"));}
         let run=scoped.run(&rid).await
             .map_err(|_|crate::ApiError(axum::http::StatusCode::NOT_FOUND,"Run not found".into()))?;
@@ -243,6 +266,7 @@ async fn promote(Extension(app): Extension<App>, Extension(identity): Extension<
     let app = match session_app(app, &id).await {
         Ok(app) => app, Err(error) => return error.into_response(),
     };
+    if let Err(error)=guard_access(&app,true,true){return error.into_response();}
     crate::promote(State(app), Path(id), Json(body)).await.into_response()
 }
 // Resolve caller-owned session and live agent access before queue mutation.
@@ -251,6 +275,7 @@ async fn followup_delivery(Extension(app): Extension<App>, Path((sid, mid)): Pat
     let app = match session_app(app, &sid).await {
         Ok(app) => app, Err(error) => return error.into_response(),
     };
+    if let Err(error)=guard_access(&app,true,true){return error.into_response();}
     crate::api::followup_queue::delivery(State(app), Path((sid, mid)), Json(body)).await.into_response()
 }
 async fn followup_resume(Extension(app): Extension<App>, Path(sid): Path<String>,
@@ -258,6 +283,7 @@ async fn followup_resume(Extension(app): Extension<App>, Path(sid): Path<String>
     let app = match session_app(app, &sid).await {
         Ok(app) => app, Err(error) => return error.into_response(),
     };
+    if let Err(error)=guard_access(&app,true,true){return error.into_response();}
     crate::api::followup_queue::resume(State(app), Path(sid), Json(body)).await.into_response()
 }
 async fn command(Extension(app): Extension<App>, Path((id, action)): Path<(String, String)>,
@@ -265,20 +291,32 @@ async fn command(Extension(app): Extension<App>, Path((id, action)): Path<(Strin
     let app = match run_app(app, &id).await {
         Ok(app) => app, Err(error) => return error.into_response(),
     };
+    if let Err(error)=guard_access(&app,true,false){return error.into_response();}
     crate::command(State(app), Path((id, action)), Json(body)).await.into_response()
 }
-async fn approval(Extension(app): Extension<App>, Path(id): Path<String>,
-    Json(body): Json<Value>) -> Response {
-    let run_id=match app.store.active_runs().await {
-        Ok(runs)=>runs.into_iter().find(|run|run["pending"]["id"]==id)
-            .and_then(|run|run["id"].as_str().map(str::to_owned)),
-        Err(_)=>None,
-    };
-    let Some(run_id)=run_id else {return crate::ApiError(axum::http::StatusCode::NOT_FOUND,"Approval not found".into()).into_response();};
-    let app = match run_app(app, &run_id).await {
-        Ok(app) => app, Err(error) => return error.into_response(),
-    };
-    crate::approval(State(app), Path(id), Json(body)).await.into_response()
+async fn approval(Extension(app): Extension<App>, Path(id): Path<String>, Json(body): Json<Value>) -> Response {
+    let actor=crate::shared_chat::actor(&app).to_owned();
+    let mut candidates=vec![app.clone()];
+    match app.store.shared_sessions_for(&actor).await {
+        Ok(entries)=>for entry in entries {if let Some(owner)=entry["owner_id"].as_str(){
+            if let Ok(store)=app.store.for_user(owner).await{let mut next=app.clone();next.store=store;next.chat_actor=Some(actor.clone());candidates.push(next);}
+        }},
+        Err(error)=>return crate::ApiError::from(error).into_response()
+    }
+    for candidate in candidates {
+        let Ok(runs)=candidate.store.active_runs().await else{continue};
+        for run in runs {
+            if run["pending"]["id"]!=id {continue;}
+            let owner=run.pointer("/pending/authorization/owner_user_id").and_then(Value::as_str)
+                .or_else(||run["requester_user_id"].as_str()).unwrap_or(candidate.store.current_user_id());
+            if owner!=actor{return crate::ApiError(axum::http::StatusCode::FORBIDDEN,"Only the requesting credential owner can authorize this action".into()).into_response();}
+            let Some(rid)=run["id"].as_str() else{continue};
+            let scoped=match run_app(candidate.clone(),rid).await{Ok(app)=>app,Err(error)=>return error.into_response()};
+            if let Err(error)=guard_access(&scoped,true,false){return error.into_response();}
+            return crate::approval(State(scoped),Path(id),Json(body)).await.into_response();
+        }
+    }
+    crate::ApiError(axum::http::StatusCode::NOT_FOUND,"Approval not found".into()).into_response()
 }
 
 // Only caller-owned run summaries; never provider credentials or admin policy.
@@ -400,6 +438,36 @@ mod session_statistics_tests {
         assert_eq!(result["sessions"][0]["message_count"],0);
         assert!(result["sessions"][0]["usage"].is_null());
     }
+}
+
+#[cfg(test)]
+mod shared_observer_mutation_tests {
+ use serde_json::json;
+ use sqlx::Row;
+ use tower::ServiceExt;
+ #[tokio::test]
+ async fn silent_observer_cannot_mutate_owner_resources() {
+  let (_root,app)=crate::runtime_tests::fixture().await;
+  let account=app.store.create_user_account("observer-owned","fixture-password-hash").await.unwrap();
+  let owner=account["user_id"].as_str().unwrap();
+  app.store.update_account_access(owner,1,crate::access::AccountStatus::Active,crate::access::Role::User,"basic").await.unwrap();
+  let storage=app.store.for_user(owner).await.unwrap();
+  storage.put("session:observer-guard",&json!({"id":"observer-guard","agent_id":"shared_default"})).await.unwrap();
+  app.store.register_shared_session(owner,"observer-guard","shared_default").await.unwrap();
+  let raw=sqlx::query("SELECT metadata FROM agents WHERE id='shared_default'").fetch_one(&app.store.agent_pool).await.unwrap();
+  let mut meta=app.store.unseal(&raw.get::<Vec<u8>,_>("metadata")).unwrap();
+  meta["shared_chat"]=json!({"admin_view":true});
+  sqlx::query("UPDATE agents SET metadata=?,revision=revision+1 WHERE id='shared_default'").bind(app.store.seal(&meta).unwrap()).execute(&app.store.agent_pool).await.unwrap();
+  let token=crate::uuid();
+  app.store.put(&format!("auth:{}",crate::digest(&json!(token))),&json!({"csrf":"fixture","expires":crate::now()+3600,"generation":"fixture-generation"})).await.unwrap();
+  let router=crate::router(app);
+  for (method,suffix) in [("DELETE","memories/missing"),("DELETE","attachments/missing"),("POST","attachments/missing/describe"),("POST","promotions/missing/reject"),("POST","promotions")] {
+   let request=axum::http::Request::builder().method(method).uri(format!("/api/v3/sessions/observer-guard/{suffix}"))
+    .header("cookie",format!("v3_session={token}")).header("x-csrf-token","fixture").header("content-type","application/json")
+    .body(axum::body::Body::from("{}")).unwrap();
+   assert_eq!(router.clone().oneshot(request).await.unwrap().status(),axum::http::StatusCode::FORBIDDEN,"{suffix}");
+  }
+ }
 }
 
 #[cfg(test)]

@@ -1,6 +1,12 @@
 //! Caller-scoped undo/fork; source history never grants runtime authority.
 use super::*;
 use crate::store::{conversation_history::HistoryRequest, session::SessionPatchOutcome};
+async fn register_fork(app: &App, result: &Value) -> Result<(), ApiError> {
+    let child = result["session_id"].as_str().ok_or_else(|| bad("Fork result unavailable"))?;
+    let agent = result["agent_id"].as_str().ok_or_else(|| bad("Fork agent unavailable"))?;
+    app.store.register_shared_session(app.store.current_user_id(),child,agent).await?;
+    Ok(())
+}
 async fn change(app: App, id: String, body: HistoryRequest, fork: bool) -> Api {
     let _guard = app.gate.lock().await;
     let receipt_key = format!("receipt:session:history:{id}:{}", body.client_request_id);
@@ -8,6 +14,7 @@ async fn change(app: App, id: String, body: HistoryRequest, fork: bool) -> Api {
         if receipt["digest"] != digest(&json!({"body":body,"fork":fork})) {
             return Err(conflict("Request identifier reused with different input"));
         }
+        if fork { register_fork(&app,&receipt["result"]).await?; }
         return Ok(Json(receipt["result"].clone()));
     }
     let child = if fork {
@@ -39,7 +46,10 @@ async fn change(app: App, id: String, body: HistoryRequest, fork: bool) -> Api {
         None
     };
     match app.store.conversation_history(&id, &body, child).await? {
-        SessionPatchOutcome::Saved(result) => Ok(Json(result)),
+        SessionPatchOutcome::Saved(result) => {
+            if fork { register_fork(&app,&result).await?; }
+            Ok(Json(result))
+        },
         SessionPatchOutcome::NotFound => Err(ApiError(
             StatusCode::NOT_FOUND,
             "Message or session not found".into(),

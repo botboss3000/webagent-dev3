@@ -1,4 +1,5 @@
 //! HTTP admission, administration, and routing. Rust checks authority before a run is queued.
+pub(crate) mod shared_chat;
 use super::*;
 mod auth;
 pub(crate) mod embed;
@@ -138,6 +139,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/auth/change-password", post(change_password))
         .route("/auth/logout", post(logout))
         .merge(user_api::router())
+        .merge(self::shared_chat::router())
         .merge(admin_api)
         .route_layer(middleware::from_fn_with_state(app.clone(), auth));
     let ui = std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into());

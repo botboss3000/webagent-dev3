@@ -183,6 +183,7 @@ impl Store {
             let mut attachment_map = HashMap::new();
             let mut run_map = HashMap::new();
             let mut message_map = HashMap::new();
+            let mut excluded_runs = HashSet::new();
             for row in chats
                 .iter()
                 .filter(|r| r.get::<i64, _>("seq") <= target_seq)
@@ -207,6 +208,25 @@ impl Store {
                     .clone();
                 let mid = crate::uuid();
                 message_map.insert(row.get::<String, _>("id"), mid.clone());
+                // Forked history preserves author attribution and permanent context exclusions.
+                // No queued message inherits dispatch eligibility in the independent child.
+                let old_mid: String = row.get("id");
+                for (old_key, new_key) in [
+                    (format!("message_meta:{old}"), format!("message_meta:{rid}")),
+                    (format!("message_meta:{old_mid}"), format!("message_meta:{mid}")),
+                ] {
+                    if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+                        .bind(&old_key).fetch_optional(&mut *tx).await? {
+                        let mut metadata = self.unseal(&raw)?;
+                        if metadata["context_eligible"] == false || metadata["queued"] == true {
+                            excluded_runs.insert(old.clone());
+                            metadata["context_eligible"] = json!(false);
+                        }
+                        metadata["queued"] = json!(false);
+                        metadata["session_id"] = json!(id);
+                        self.write_document(&mut tx, &new_key, &metadata).await?;
+                    }
+                }
                 if let Some(entry) = followup {
                     copied_followups.push((entry.clone(), rid.clone(), mid.clone()));
                 }
@@ -271,6 +291,7 @@ impl Store {
             let selected: Vec<_> = items
                 .iter()
                 .filter(|r| r.get::<i64, _>("seq") <= cutoff)
+                .filter(|r| !excluded_runs.contains(&r.get::<String, _>("run_id")))
                 .collect();
             let outputs: HashSet<String> = selected
                 .iter()
@@ -623,6 +644,7 @@ mod tests {
     async fn fixture() -> (tempfile::TempDir, Store) {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
+        store.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();
         store.put("session:s",&json!({"id":"s","title":"Original","agent_id":"shared_default","checkpoint_input":[],"checkpoint_through":0})).await.unwrap();
         for rid in ["r1", "r2"] {
             store.put(&format!("run:{rid}"),&json!({"id":rid,"session_id":"s","status":"completed","run_revision":0,"input":[]})).await.unwrap();
@@ -676,6 +698,37 @@ mod tests {
         match outcome {
             SessionPatchOutcome::Saved(v) => v,
             _ => panic!("expected saved outcome"),
+        }
+    }
+    #[tokio::test]
+    async fn fork_preserves_inactive_and_queued_exclusions_with_authorship() {
+        for queued in [false, true] {
+            let (_root, store) = fixture().await;
+            store.put("message_meta:r1",&json!({"author_id":"alice","context_eligible":queued,"queued":queued})).await.unwrap();
+            store.put("message_meta:user:r1",&json!({"author_id":"alice","author_name":"Alice","context_eligible":false,"queued":queued})).await.unwrap();
+            let selected = request(&store,"assistant:r2","fork-excluded").await;
+            let child = json!({"id":"excluded-child","agent_id":"shared_default","title":"Fork","participation":{"active":true,"revision":0,"generation":0}});
+            saved(store.conversation_history("s",&selected,Some((child,json!({}),100))).await.unwrap());
+            // Discard warmed source/child caches and rebuild durable model inputs.
+            store.context_cache.lock().unwrap().invalidate(&store.context_cache_key("excluded-child"));
+            let public = store.chat_snapshot("excluded-child").await.unwrap().0;
+            assert_eq!(public.len(),4);
+            let first = &public[0];
+            let rid = first["run_id"].as_str().unwrap();
+            let meta = store.get(&format!("message_meta:{rid}")).await.unwrap().unwrap();
+            assert_eq!(meta["author_id"],"alice");
+            assert_eq!(meta["context_eligible"],false);
+            assert_eq!(meta["queued"],false);
+            let meta = store.get(&format!("message_meta:{}",first["id"].as_str().unwrap())).await.unwrap().unwrap();
+            assert_eq!(meta["author_name"],"Alice");
+            let context = store.context("excluded-child").await.unwrap();
+            assert!(!json!(context).to_string().contains("question r1"));
+            assert!(!json!(context).to_string().contains("answer r1"));
+            let shared = store.shared_model_context("excluded-child").await.unwrap();
+            assert!(!json!(shared).to_string().contains("question r1"));
+            let page = store.model_chat_page("excluded-child",0,20).await.unwrap();
+            assert!(!page.to_string().contains("question r1"));
+            assert!(!store.model_search_hit_allowed(&json!({"session_id":"excluded-child","seq":first["seq"]})).await.unwrap());
         }
     }
     #[tokio::test]

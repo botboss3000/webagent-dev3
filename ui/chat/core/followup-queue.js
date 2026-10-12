@@ -1,5 +1,5 @@
 // Durable delivery state is display-only until a revision-checked user action commits.
-export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId,forgetKey,onSnapshot}) {
+export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId,forgetKey,onSnapshot,canWrite=()=>true}) {
   let generation=0,revision=-1,entries=[],held=false,bannerKey='';
   const busy=new Set();
   const banner=document.createElement('section');banner.className='followup-queue-banner';banner.hidden=true;host.append(banner);
@@ -13,7 +13,7 @@ export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId
       if(!entry){box?.remove();continue;}
       if(!box){box=document.createElement('div');box.className='followup-delivery';row.append(box);}
       const paintKey=JSON.stringify(entry);
-      if(box.queuePaintKey===paintKey){for(const button of box.querySelectorAll('button'))button.disabled=busy.has(entry.id);continue;}
+      if(box.queuePaintKey===paintKey){for(const button of box.querySelectorAll('button'))button.disabled=!canWrite()||busy.has(entry.id);continue;}
       const focused=box.contains(document.activeElement)?document.activeElement:null;
       box.queuePaintKey=paintKey;box.replaceChildren();row.dataset.deliveryStatus=entry.status;
       const status=document.createElement('p');status.className='followup-delivery-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.textContent=label(entry);box.append(status);
@@ -21,7 +21,7 @@ export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId
       if(terminal.has(entry.status)||entry.status==='interrupting'||entry.choice==='interrupt'){if(focused){status.tabIndex=-1;status.focus({preventScroll:true});}continue;}
       const actions=document.createElement('div');actions.className='followup-delivery-actions';actions.setAttribute('aria-label','Message delivery');
       for(const [choice,text] of [['interrupt','Interrupt'],['steer','Steer'],['queue','Remain queued'],['cancel','Cancel message']]){
-        const button=makeButton(text,()=>change(entry,choice));button.dataset.deliveryChoice=choice;button.disabled=busy.has(entry.id);button.setAttribute('aria-pressed',String(entry.choice===choice));actions.append(button);
+        const button=makeButton(text,()=>change(entry,choice));button.dataset.deliveryChoice=choice;button.disabled=!canWrite()||busy.has(entry.id);button.setAttribute('aria-pressed',String(entry.choice===choice));actions.append(button);
       }
       box.append(actions);
       if(focused){const replacement=[...actions.children].find(button=>button.dataset.deliveryChoice===focused.dataset.deliveryChoice&&!button.disabled);if(replacement)replacement.focus({preventScroll:true});else{status.tabIndex=-1;status.focus({preventScroll:true});}}
@@ -29,6 +29,7 @@ export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId
   }
   async function refresh(sid,epoch){const data=await client.snapshot(sid);if(epoch!==generation||sid!==getSession())return;onSnapshot(data);}
   async function change(entry,choice){
+    if(!canWrite())throw Error("Message delivery controls are not available to this user");
     if(busy.has(entry.id))return;
     const sid=getSession(),epoch=generation,key='delivery:'+sid+':'+entry.id+':'+entry.revision+':'+choice;
     busy.add(entry.id);paint();
@@ -39,16 +40,17 @@ export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId
   function update(data){
     const state=data.queue_state||{},next=Number(state.revision)||0;
     if(next<revision)return;revision=next;entries=Array.isArray(data.queue)?data.queue:[];held=!!state.held;
-    const nextBannerKey=JSON.stringify([held,state.reason,next]);
+    const nextBannerKey=JSON.stringify([held,state.reason,next,canWrite()]);
     if(nextBannerKey===bannerKey){paint();return;}
     const bannerFocused=banner.contains(document.activeElement);bannerKey=nextBannerKey;
     banner.replaceChildren();banner.hidden=!held;
     if(held){const text=document.createElement('p');text.setAttribute('role','status');text.textContent='Queue held'+(state.reason?' — '+state.reason:'');banner.append(text);const b=makeButton('Resume queue',async()=>{
+      if(!canWrite())throw Error('Queue resume is not available to this user');
       const sid=getSession(),epoch=generation,key='resume-queue:'+sid+':'+revision;b.disabled=true;
       try{await client.resumeQueue(sid,{client_request_id:keyId(key),expected_revision:revision});forgetKey(key);await refresh(sid,epoch);}
       catch(error){if(epoch===generation&&sid===getSession())await refresh(sid,epoch);throw error;}
-      finally{if(epoch===generation)b.disabled=false;}
-    });banner.append(b);if(bannerFocused)b.focus({preventScroll:true});}
+      finally{if(epoch===generation)b.disabled=!canWrite();}
+    });b.disabled=!canWrite();banner.append(b);if(bannerFocused)b.focus({preventScroll:true});}
     paint();
   }
   function reset(){++generation;revision=-1;entries=[];held=false;busy.clear();bannerKey='';banner.replaceChildren();banner.hidden=true;paint();}

@@ -11,7 +11,7 @@ pub fn owns(name: &str) -> bool {
 }
 pub fn schemas() -> Vec<Value> {
     [
-        ("get_task_checkpoint", "Read the current session's durable task checkpoint and revision", json!({}), vec![]),
+        ("get_task_checkpoint", "Read the current session's durable task checkpoint and revision plus bounded requester-owned action statuses; optional action_id reads a saved result", json!({"action_id":{"type":["string","null"],"maxLength":128}}), vec![]),
         ("update_task_checkpoint", "Save bounded task progress using a compare-and-swap revision; summaries are claims, not verified evidence",
             json!({"expected_revision":{"type":"integer","minimum":0},"update":{"type":"object",
                 "properties":{"summary":{"type":"string","minLength":20,"maxLength":1200},
@@ -37,7 +37,7 @@ pub fn schemas() -> Vec<Value> {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CheckpointArgs {}
+struct CheckpointArgs { #[serde(default)] action_id:Option<String> }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UpdateArgs { expected_revision:u64, update:Update }
@@ -216,7 +216,7 @@ async fn authorize(app:&App,sid:&str,rid:&str,pending_id:&str,name:&str)->Result
         || run["status"]!="running" {bail!("Task run unavailable for current session");}
     let (policy,mode_revision,visibility,state)=ability_controls(&scoped,sid).await?;
     let mode=session_mode(&scoped,sid).await?;
-    let access=scoped.store.live_access(scoped.store.current_user_id(),&agent).await?;
+    let access=crate::shared_chat::live_access(&scoped.store,crate::shared_chat::actor(&scoped),sid,&agent).await?;
     let pending=if run["pending"]["id"]==pending_id && run["pending"]["state"]=="executing" {
         Some(&run["pending"])
     } else {
@@ -242,8 +242,11 @@ async fn work(app:&App,sid:&str,rid:&str,pending_id:&str,name:&str,args:&Value)-
     let generation=authorize(app,sid,rid,pending_id,name).await?;
     match name {
         "get_task_checkpoint"=>{
-            let _:CheckpointArgs=serde_json::from_value(args.clone())?;
-            let state=app.store.base_task_checkpoint(sid,rid).await?;
+            let query:CheckpointArgs=serde_json::from_value(args.clone())?;
+            let mut state=app.store.base_task_checkpoint(sid,rid).await?;
+            let run=app.run(rid).await?;
+            state["actions"]=json!(crate::actions::statuses(app,&run).await?);
+            if let Some(id)=query.action_id {state["action"]=crate::actions::lookup(app,&run,&id).await?;}
             if authorize(app,sid,rid,pending_id,name).await? != generation {bail!("Task run generation changed");}
             Ok(json!({"status":"success","output":state}))
         }

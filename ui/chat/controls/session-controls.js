@@ -1,7 +1,7 @@
 // @code-index {"version":1,"feature":"chat-run-controls","aliases":["chat footer","run controls","model selection"],"purpose":"Locates session-scoped execution-mode and next-turn model controls Control visibility/layout: data/config/chat.json -> chat_common.{active_footer,idle_footer}.chat_pill.controls.{mode,model_changer,stop,continue}; run state is session-owned. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/active_footer/chat_pill/controls","/chat_common/idle_footer/chat_pill/controls"],"profile_overrides":true}],"opportunities":[]}}
 // V2 cycle/picker presentation with session-scoped, revision-fenced Rust writes.
 /** Purpose: Mount execution-mode and model controls for the current conversation. The optional onState callback receives refreshed control data so panel.js can gate composer features. The panel drives open/updateRuns/disconnect/destroy; this module reads client.controls and writes client.mode/client.model. */
-export function mountSessionControls({root,client,guard,note,ensureSession,notifications,onState=()=>{}}) {
+export function mountSessionControls({root,client,guard,note,ensureSession,notifications,onState=()=>{},canWrite=()=>true}) {
     // Resolve controls within this chat root rather than the whole document.
   const $=id=>root.querySelector('#'+id);
   const mode=$('chat-mode-btn'), model=$('chat-model-changer');
@@ -20,7 +20,7 @@ export function mountSessionControls({root,client,guard,note,ensureSession,notif
     const definition=modes.find(item=>item.id===state?.mode.execution_mode);
     mode.textContent=definition?.label||(state?.mode.mode==='write'?'Write':'Ask');
     mode.title=definition?definition.description+' · '+(state.mode.mode==='write'?'Write-capable':'Read-only'):'Choose execution mode';
-    mode.disabled=busy||!state;model.disabled=busy||!state;
+    mode.disabled=busy||!state||!canWrite();model.disabled=busy||!state||!canWrite();
     const selected=state?.models.find(item=>item.entry_id===state.model.entry_id);
     const running=active?.model?.model;
     model.querySelector('.cmc-name').textContent=selected?.label||running||'Choose model';
@@ -42,6 +42,7 @@ export function mountSessionControls({root,client,guard,note,ensureSession,notif
   }
     // Ensure a session and a current control snapshot before any mode/model action.
   async function ready(){
+    if(!canWrite())throw Error('This conversation is read only');
     if(!session)await ensureSession();
     await load();
     if(!state)throw Error('Conversation controls are not ready');

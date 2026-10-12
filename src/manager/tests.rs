@@ -96,6 +96,9 @@ async fn recycling_cancels_pending_review_without_provider_dispatch() {
 #[tokio::test]
 async fn unacceptable_keeps_chat_excludes_context_and_retry_does_not_rejudge() {
     let (_root, mut app) = crate::runtime_tests::fixture().await;
+    let raw:Vec<u8>=sqlx::query_scalar("SELECT metadata FROM agents WHERE id='shared_default'").fetch_one(&app.store.agent_pool).await.unwrap();
+    let mut metadata=app.store.unseal(&raw).unwrap();metadata["shared_chat"]=json!({"shareable":true});
+    sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'").bind(app.store.seal(&metadata).unwrap()).execute(&app.store.agent_pool).await.unwrap();
     settings(&app, true).await;
     let (server, calls) = provider(&mut app, r#"{"verdict":"unacceptable"}"#, false).await;
     let sid = session(&app).await;
@@ -113,15 +116,18 @@ async fn unacceptable_keeps_chat_excludes_context_and_retry_does_not_rejudge() {
     );
     assert!(app.store.context(&sid).await.unwrap().is_empty());
     assert!(app.store.active_runs().await.unwrap().is_empty());
-    // Followups remain visible and durable while the manager gate is pending.
-    let queued = crate::send(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(json!({"client_message_id":"other","text":"Sizes?"}))
-    ).await.unwrap().1.0;
-    assert_eq!(queued["delivery_state"], "queued");
-    assert_eq!(app.store.chat_snapshot(&sid).await.unwrap().0.len(), 2);
-    assert!(app.store.context(&sid).await.unwrap().is_empty());
+    // Active follow-ups remain visible and queue without dispatching another judge.
+    let followup = submit(&app, &sid, "other", "Sizes?").await;
+    assert_eq!(followup["queued"], true);
+    assert!(followup["review_id"].is_null());
+    assert!(calls.lock().await.is_empty());
+    let queued_session = app.store.get(&format!("session:{sid}")).await.unwrap().unwrap();
+    let queued = &queued_session["message_queue"][0];
+    let followup_id = queued["message"]["run_id"].as_str().unwrap().to_owned();
+    assert_eq!(queued["message"]["author_id"], app.store.current_user_id());
+    assert!(app.store.get(&format!("manager_review:{followup_id}")).await.unwrap().is_none());
+    app.store.drain_message_queues().await.unwrap();
+    assert!(app.store.get(&format!("manager_review:{followup_id}")).await.unwrap().is_none());
     super::scheduler::process(app.clone(), id.to_owned())
         .await
         .unwrap();
@@ -148,9 +154,20 @@ async fn unacceptable_keeps_chat_excludes_context_and_retry_does_not_rejudge() {
         "unacceptable"
     );
     assert!(!snapshot.to_string().contains("Only accept questions"));
-    // Cancel the separately queued followup before testing fresh admission.
-    app.store.followup_choice(&sid, queued["submission_id"].as_str(), 0, "cancel-other",
-        &json!({"choice":"cancel","expected_revision":0,"client_request_id":"cancel-other"})).await.unwrap();
+    // Completing the first verdict releases the next ordinary review in order.
+    app.store.drain_message_queues().await.unwrap();
+    let next = app.store.get(&format!("manager_review:{followup_id}")).await.unwrap().unwrap();
+    assert_eq!(next["status"], "pending_review");
+    assert_eq!(next["run"]["requester_user_id"], app.store.current_user_id());
+    assert_eq!(next["message"]["content"], "Sizes?");
+    assert_eq!(calls.lock().await.len(), 1);
+    super::scheduler::process(app.clone(), followup_id.clone()).await.unwrap();
+    assert_eq!(calls.lock().await.len(), 2);
+    assert!(app.store.context(&sid).await.unwrap().is_empty());
+    let first_retry = submit(&app, &sid, "request", "Write a Python program").await;
+    assert_eq!(first_retry["admission"]["status"], "unacceptable");
+    assert_eq!(calls.lock().await.len(), 2);
+    assert!(app.store.get(&format!("run:{id}")).await.unwrap().is_none());
     // Turning the gate off never admits a previously rejected message.
     settings(&app, false).await;
     submit(&app, &sid, "later", "What sizes do you have?").await;
@@ -296,5 +313,56 @@ async fn interrupted_claim_expires_without_another_provider_call() {
     );
     assert!(calls.lock().await.is_empty());
     assert!(app.store.active_runs().await.unwrap().is_empty());
+    server.abort();
+}
+
+#[tokio::test]
+async fn system_review_proxy_retains_trusted_requester_and_session() {
+    let (_root, app) = crate::runtime_tests::fixture().await;
+    let record = json!({"agent_id":"shared_default","session_id":"shared-session",
+        "requester_user_id":"untrusted-top-level-owner",
+        "run":{"requester_user_id":"participant-A","participation_generation":9},
+        "selection_plan":{"test":"plan"},"failover_state":{"candidate_index":0}});
+    let proxy = super::system_proxy(&app, &record);
+    assert_eq!(proxy["requester_user_id"], "participant-A");
+    assert_eq!(proxy["session_id"], "shared-session");
+    assert_eq!(proxy["participation_generation"], 9);
+    assert_eq!(proxy["selection_plan"], record["selection_plan"]);
+}
+
+#[tokio::test]
+async fn deactivated_review_never_dispatches_system_model() {
+    let (_root, mut app) = crate::runtime_tests::fixture().await;
+    settings(&app, true).await;
+    let (server, calls) = provider(&mut app, r#"{"verdict":"acceptable"}"#, false).await;
+    let sid = session(&app).await;
+    let result = submit(&app, &sid, "inactive-review", "What sizes?").await;
+    let id = result["review_id"].as_str().unwrap();
+    let mut record = app.store.claim_manager_review(id).await.unwrap().unwrap();
+    let state = app.store.participation_state(&sid).await.unwrap();
+    app.store.set_participation(&sid, app.store.current_user_id(), false,
+        state["revision"].as_u64().unwrap(), "deactivate-review").await.unwrap();
+    assert!(super::review::judge(&app, &mut record).await.is_err());
+    assert!(calls.lock().await.is_empty());
+    assert!(app.store.get(&format!("run:{id}")).await.unwrap().is_none());
+    server.abort();
+}
+
+#[tokio::test]
+async fn reactivation_cannot_revive_an_older_review_generation() {
+    let (_root, mut app) = crate::runtime_tests::fixture().await;
+    settings(&app, true).await;
+    let (server, calls) = provider(&mut app, r#"{"verdict":"acceptable"}"#, false).await;
+    let sid = session(&app).await;
+    let result = submit(&app, &sid, "old-review-generation", "What sizes?").await;
+    let id = result["review_id"].as_str().unwrap();
+    let mut record = app.store.claim_manager_review(id).await.unwrap().unwrap();
+    let state = app.store.participation_state(&sid).await.unwrap();
+    let off = app.store.set_participation(&sid, app.store.current_user_id(), false,
+        state["revision"].as_u64().unwrap(), "off-before-review").await.unwrap();
+    app.store.set_participation(&sid, app.store.current_user_id(), true,
+        off["revision"].as_u64().unwrap(), "on-before-review").await.unwrap();
+    assert!(super::review::judge(&app, &mut record).await.is_err());
+    assert!(calls.lock().await.is_empty());
     server.abort();
 }
