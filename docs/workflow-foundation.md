@@ -450,3 +450,25 @@ Fork inherits no executable claims. Cross-plane reads and claims recheck live
 requester, resource, policy, participation and credential-owner authority.
 Bounded action statuses and saved-result lookup use get_task_checkpoint and
 call-scoped native guidance. Saved results remain untrusted evidence.
+
+## Optional service module ownership
+
+The authenticated user owns always-AEAD module_state:<module> documents and
+receipt:module:<module>:<occurrence-hash> admission receipts. State includes
+definitions, pending work, remembered state, event cursors, delivery reservations,
+history and immutable mutation receipts. CAS revisions serialize updates; admission
+receipts commit with the ordinary message/run or manager-review transaction.
+They retain the user's existing history lifetime and explicit bounded quotas.
+
+Application-owned module_install:<module> binds enabled state and installation
+generation. Package files are explicitly administrator-installed code, not tool
+worker instructions. Packages use bounded host protocol frames and have no direct
+database/key interface. Ordinary run policy, requester quota and approval authority
+remain core-owned. Package removal retains user state but deactivates it on a new
+generation. Pending and uncertain effects are reconciled without silent replay.
+
+Ephemeral module lifetime and scoped request locks live beneath the state-root
+modules directory. Content-free, peer-checked dispatcher wake hints use the
+runtime control socket. Neither grants permission or replaces durable recovery.
+The independent outbound package consumes canonical lifecycle metadata through
+the existing administrator read contract; no conversation text is exported.

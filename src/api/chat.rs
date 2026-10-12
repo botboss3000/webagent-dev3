@@ -59,6 +59,7 @@ pub(crate) async fn send(
     let mut docs=prepared.docs;
     docs.push((receipt_key,json!({"digest":digest(&body),"result":prepared.result})));
     let result=app.store.admit_shared_message(docs,&id,prepared.kind,&prepared.message).await.map_err(admission_error)?;
+    crate::wake::notify(&app).await;
     Ok((StatusCode::ACCEPTED,Json(result)))
 }
 pub(crate) struct PreparedMessage {

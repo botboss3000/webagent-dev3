@@ -75,6 +75,8 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/event-readers/{id}",axum::routing::delete(notifications::revoke_reader))
         .route("/admin/events",get(notifications::read))
         .route("/admin/events/stream",get(notifications::stream))
+        .route("/admin/modules",get(crate::modules::admin_list))
+        .route("/admin/modules/{id}",post(crate::modules::lifecycle))
         .route("/status", get(overview))
         .route("/settings", put(settings))
         .route("/admin/app-settings/encryption", get(app_settings::read).put(app_settings::update))
@@ -99,6 +101,9 @@ pub(super) fn router(app: App) -> Router {
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth));
     // Model handlers enforce tenant authority themselves; all retain browser auth and CSRF.
     let api = Router::new()
+        .route("/modules/{id}/assets/{asset}",get(crate::ui_pages::module_asset))
+        .route("/modules/{id}/status",get(crate::modules::status_api))
+        .route("/modules/{id}/call",post(crate::modules::call_api))
         .route("/sessions/{sid}/administrator/artifacts/{id}",get(administrator::artifact))
         .route("/sessions/{sid}/administrator/notices",get(administrator::notices))
         .route("/sessions/{sid}/administrator/notices/{id}/review",post(administrator::review_notice))

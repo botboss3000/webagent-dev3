@@ -133,7 +133,10 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
     };
     request.extensions_mut().insert(caller);
     request.extensions_mut().insert(doc);
-    next.run(request).await
+    let mutation=!matches!(*request.method(),axum::http::Method::GET|axum::http::Method::HEAD|axum::http::Method::OPTIONS);
+    let response=next.run(request).await;
+    if mutation&&response.status().is_success(){crate::wake::notify(&app).await;}
+    response
 }
 pub(crate) async fn admin_auth(State(app): State<App>, request: Request, next: Next) -> Response {
     let Some(identity) = request.extensions().get::<Value>() else {

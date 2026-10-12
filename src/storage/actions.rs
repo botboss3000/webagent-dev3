@@ -76,6 +76,13 @@ impl Store {
         )
     }
     pub(crate) async fn action_origin(&self, sid: &str, rid: &str) -> Result<Value> {
+        // A scheduled prompt is executable work, not a fresh human message.
+        // It cannot authorize another matching consequential action.
+        if self.get(&format!("run:{rid}")).await?
+            .is_some_and(|run|run["module_binding"].is_object()) {
+            return Ok(Value::Null);
+        }
+
         let row = sqlx::query("SELECT id,seq,created_at FROM chat WHERE session_id=? AND run_id=? AND role='user' ORDER BY seq DESC LIMIT 1")
             .bind(sid).bind(rid).fetch_optional(&self.pool).await?;
         Ok(row.map(|row| json!({"storage_owner":self.user_id,"session_id":sid,"message_id":row.get::<String,_>("id"),"seq":row.get::<i64,_>("seq"),"created_at":row.get::<i64,_>("created_at")}))
@@ -572,5 +579,33 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(record["result"]["output"]["deleted"], true);
+    }
+}
+
+#[cfg(test)]
+mod module_origin_tests {
+    use super::*;
+    #[tokio::test]
+    async fn automatic_prompt_is_not_new_human_authorization() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","agent_id":"shared_default","status":"active"}),
+            )
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES('m','s','r','user',?,1)")
+            .bind(store.seal(&json!("A human command")).unwrap()).execute(&store.pool).await.unwrap();
+        assert!(!store.action_origin("s", "r").await.unwrap().is_null());
+        store
+            .put(
+                "run:r",
+                &json!({"id":"r","session_id":"s","module_binding":{"id":"automation"}}),
+            )
+            .await
+            .unwrap();
+        assert!(store.action_origin("s", "r").await.unwrap().is_null());
     }
 }

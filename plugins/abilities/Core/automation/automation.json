@@ -1,7 +1,7 @@
 {
   "display_name": "Automation",
   "kind": "ability",
-  "description": "Scheduled tasks and event-triggered jobs that can call integrations.",
+  "description": "Optional schedules, reminders and internal event-triggered agent tasks.",
   "tools": [
     "list_event_sources",
     "list_delivery_channels",
@@ -22,7 +22,7 @@
   "color": "#e0af68",
   "order": 4,
   "placeholder": false,
-  "readiness": "pending",
+  "readiness": "partial",
   "config": {
     "settings": [
       {
@@ -39,7 +39,7 @@
         "type": "boolean",
         "default": true,
         "ceiling": "off",
-        "hint": "ON (default) lets the agent set up real-time triggers — 'when an email arrives, do X', 'when a file is added, do Y'. OFF removes that entirely and the agent can only use timed/scheduled tasks. Event triggers still require the underlying source (Gmail, Slack, etc.) to be connected before they actually fire."
+        "hint": "Allows subscriptions to supported internal run/session events. External email, file and messaging event adapters are unavailable in v3."
       },
       {
         "key": "max_automations_per_user",
@@ -72,7 +72,7 @@
         "max": 10,
         "step": 1,
         "ceiling": "max",
-        "hint": "How many places one automation may fan its result out to at once (this chat, plus e.g. Telegram and a webhook). Requests with more targets than this are trimmed down to the limit. Keeps a single job from blasting a result to a long list of destinations."
+        "hint": "Caps result destinations. This module currently accepts exactly one explicit destination: an existing conversation, a new conversation or silent execution. External delivery adapters are unavailable."
       },
       {
         "key": "require_approval",
@@ -80,9 +80,10 @@
         "type": "boolean",
         "default": false,
         "ceiling": "on",
-        "hint": "ON makes every automation the agent creates start PAUSED — a person must switch it on from the Automation tab before it will ever run. Use this when you want the agent to propose schedules and triggers but never arm them by itself. OFF (default) lets the agent's automations start running immediately."
+        "hint": "ON makes every automation the agent creates start PAUSED \u2014 a person must switch it on from the Automation tab before it will ever run. Use this when you want the agent to propose schedules and triggers but never arm them by itself. OFF (default) lets the agent's automations start running immediately."
       }
     ]
   },
-  "migration_note": "Catalog metadata only. V3 adapter, configuration and credential lifecycle remain pending; v2 runtime and skills are not imported."
+  "migration_note": "Optional standalone Rust engine. Internal events, schedules, reminders and host-admitted chat/silent runs are implemented; adapter integrations remain unavailable. Installation and acceptance are required before callable availability.",
+  "required_module": "automation"
 }

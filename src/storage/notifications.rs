@@ -45,6 +45,8 @@ impl Store {
                 | "run.started"
                 | "run.completed"
                 | "run.failed"
+                | "run.cancelled"
+                | "run.stopped"
                 | "run.waiting_approval"
                 | "session.help_requested"
                 | "session.help_cancelled"
@@ -100,6 +102,8 @@ impl Store {
         let (kind, suffix) = match status {
             "completed" => ("run.completed", "terminal".to_owned()),
             "failed" => ("run.failed", "terminal".to_owned()),
+            "cancelled" => ("run.cancelled", "terminal".to_owned()),
+            "stopped" => ("run.stopped", "settled:stopped".to_owned()),
             "waiting_approval" => {
                 let pending = run["pending"]["id"].clone();
                 let batch: Vec<Value> = run["batch"]
@@ -284,6 +288,29 @@ mod tests {
             .unwrap();
         (root, store)
     }
+    #[tokio::test]
+    async fn stopped_and_cancelled_are_committed_once_with_no_payload_text() {
+        let (_root, store) = source().await;
+        for status in ["stopped", "cancelled"] {
+            let run = json!({"id":"settled","session_id":"s","status":status,"error":"private","input":"private"});
+            let mut tx = store.pool.begin().await.unwrap();
+            store.stage_run_notification(&mut tx, &run).await.unwrap();
+            tx.rollback().await.unwrap();
+            for _ in 0..2 {
+                let mut tx = store.pool.begin().await.unwrap();
+                store.stage_run_notification(&mut tx, &run).await.unwrap();
+                tx.commit().await.unwrap();
+            }
+        }
+        store.relay_notifications().await.unwrap();
+        let page = store.notification_page(0, 20).await.unwrap();
+        let rows = page["events"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["type"], "run.stopped");
+        assert_eq!(rows[1]["type"], "run.cancelled");
+        assert!(!page.to_string().contains("private"));
+    }
+
     #[tokio::test]
     async fn transactional_relay_deduplication_and_redaction() {
         let (_root, store) = source().await;

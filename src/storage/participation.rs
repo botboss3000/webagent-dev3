@@ -331,7 +331,7 @@ impl Store {
             .ok_or_else(|| anyhow!("Message id missing"))?;
         let receipts: Vec<_> = docs
             .iter()
-            .filter(|(k, _)| k.starts_with("receipt:message:"))
+            .filter(|(k, _)| k.starts_with("receipt:message:")||k.starts_with("receipt:module:"))
             .collect();
         for (key, input) in &receipts {
             if let Some(raw) =
@@ -374,7 +374,7 @@ impl Store {
         }
         let mut retained = Vec::new();
         for (key, mut value) in docs {
-            if key.starts_with("receipt:message:") {
+            if key.starts_with("receipt:message:")||key.starts_with("receipt:module:") {
                 value["result"] = result.clone();
                 self.write_document(&mut tx, &key, &value).await?;
             } else if key.starts_with("run:") || key.starts_with("manager_") {

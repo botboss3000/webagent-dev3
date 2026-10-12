@@ -1,4 +1,4 @@
-use axum::{extract::{Request, State}, http::StatusCode, middleware::Next,
+use axum::{extract::{Request, State, Path as RoutePath}, http::StatusCode, middleware::Next,
     response::Response, Json, Router};
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
@@ -92,7 +92,42 @@ pub async fn catalog(State(app): State<crate::App>) -> Result<Json<Value>, (Stat
     let ui = live_root(&app.store.root, Path::new("/live-checkout/ui"))
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|| frozen_root());
-    discover(Path::new(&ui)).map(Json).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+    let mut catalog=discover(Path::new(&ui)).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,e))?;
+    // Package-owned assets disappear with their package; the shell has no module engine imports.
+    for id in crate::modules::package_ids() {
+        if !crate::modules::available(&id) {continue;}
+        let Some(folder)=crate::modules::package_root(&id) else {continue;};
+        let descriptor=folder.join("page.json");
+        let Ok(meta)=fs::symlink_metadata(&descriptor) else {continue;};
+        if !meta.is_file() || meta.file_type().is_symlink() || meta.len()>4096 {continue;}
+        let Ok(bytes)=fs::read(descriptor) else {continue;};
+        let Ok(page)=serde_json::from_slice::<Descriptor>(&bytes) else {continue;};
+        if page.id!=id || page.label.trim().is_empty() {continue;}
+        let base=format!("/api/v3/modules/{id}/assets");
+        let html=page.html.as_deref().map(|name|asset(&folder,&base,name)).transpose();
+        let css=page.css.unwrap_or_default().iter().map(|name|asset(&folder,&base,name)).collect::<Result<Vec<_>,_>>();
+        let entry=page.entry.as_deref().map(|name|asset(&folder,&base,name)).transpose();
+        if let (Ok(html),Ok(css),Ok(entry))=(html,css,entry) {
+            catalog["main"].as_array_mut().unwrap().push(json!({"id":page.id,"label":page.label,"order":page.order,"html":html,"css":css,"entry":entry}));
+        }
+    }
+    catalog["main"].as_array_mut().unwrap().sort_by(|a,b|a["order"].as_i64().cmp(&b["order"].as_i64()).then_with(||a["label"].as_str().cmp(&b["label"].as_str())));
+    Ok(Json(catalog))
+}
+
+/// Only validated package UI assets are public to the authenticated shell.
+pub(crate) async fn module_asset(State(_app):State<crate::App>,RoutePath((id,name)):RoutePath<(String,String)>)->Response {
+    use axum::response::IntoResponse;
+    let mime=match name.as_str() {"page.js"=>"text/javascript; charset=utf-8","page.css"=>"text/css; charset=utf-8","page.html"=>"text/html; charset=utf-8",_=>return StatusCode::NOT_FOUND.into_response()};
+    if !crate::modules::available(&id) {return StatusCode::NOT_FOUND.into_response();}
+    let Some(root)=crate::modules::package_root(&id) else {return StatusCode::NOT_FOUND.into_response();};
+    let path=root.join(name);
+    let Ok(meta)=fs::symlink_metadata(&path) else {return StatusCode::NOT_FOUND.into_response();};
+    if !meta.is_file() || meta.file_type().is_symlink() || meta.len()>256*1024 {return StatusCode::NOT_FOUND.into_response();}
+    match tokio::fs::read(path).await {
+        Ok(bytes)=>([(axum::http::header::CONTENT_TYPE,mime),(axum::http::header::CACHE_CONTROL,"no-store")],bytes).into_response(),
+        Err(_)=>StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 fn frozen_root() -> String {

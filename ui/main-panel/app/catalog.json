@@ -9,6 +9,14 @@
       "order": 1
     },
     {
+      "id": "modules",
+      "title": "Modules",
+      "description": "Install, disable or remove optional service packages.",
+      "panelId": "app-modules-page",
+      "admin": true,
+      "order": 3
+    },
+    {
       "id": "settings",
       "title": "App Settings",
       "description": "Configure application storage and troubleshooting.",

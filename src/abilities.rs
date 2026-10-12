@@ -79,6 +79,7 @@ struct Ability {
     description: String,
     skill_summary: Option<String>,
     migration_note: Option<String>,
+    required_module: Option<String>,
     icon: Option<String>,
     color: Option<String>,
     order: i32,
@@ -107,6 +108,8 @@ struct Manifest {
     #[serde(default)]
     migration_note: Option<String>,
     #[serde(default)]
+    required_module: Option<String>,
+    #[serde(default)]
     icon: Option<String>,
     #[serde(default)]
     color: Option<String>,
@@ -127,6 +130,29 @@ struct GroupManifest {
 pub struct Catalog {
     abilities: Vec<Ability>,
     version: String,
+}
+
+fn optional_setting_value_valid(declaration: &Value, value: &Value) -> bool {
+    match declaration["type"].as_str() {
+        Some("boolean") => value.is_boolean(),
+        Some("number" | "integer") => {
+            let Some(number) = value.as_i64() else {
+                return false;
+            };
+            let bound = |key: &str| match declaration.get(key) {
+                None => Some(None),
+                Some(value) => value.as_i64().map(Some),
+            };
+            let (Some(min), Some(max)) = (bound("min"), bound("max")) else {
+                return false;
+            };
+            if min.zip(max).is_some_and(|(min, max)| min > max) {
+                return false;
+            }
+            min.is_none_or(|min| number >= min) && max.is_none_or(|max| number <= max)
+        }
+        _ => false,
+    }
 }
 
 fn valid_id(id: &str) -> bool {
@@ -316,7 +342,15 @@ impl Catalog {
                     && (readiness != Readiness::Placeholder || !manifest.tools.is_empty()) {
                     bail!("Invalid placeholder: {id}");
                 }
-                if matches!(readiness, Readiness::Ready | Readiness::Partial) &&
+                if manifest.required_module.as_deref().is_some_and(|module|
+                    !valid_id(module) || crate::modules::package_root(module).is_none()) {
+                    bail!("Unknown optional module requirement: {id}");
+                }
+                // An omitted optional service must not prevent ordinary app startup.
+                // Execution still requires its live healthy package and schemas.
+                let omitted_module=manifest.required_module.as_deref()
+                    .is_some_and(|module|!crate::modules::available(module));
+                if !omitted_module && matches!(readiness, Readiness::Ready | Readiness::Partial) &&
                     (!matches!(manifest.kind, EntryKind::Ability | EntryKind::VirtualCore) ||
                      !manifest.tools.iter().any(|tool| Self::supported(tool))) {
                     bail!("Ready entry has no installed adapter: {id}");
@@ -378,6 +412,7 @@ impl Catalog {
                     description: manifest.description,
                     skill_summary: manifest.skill_summary,
                     migration_note: manifest.migration_note,
+                    required_module: manifest.required_module,
                     icon: manifest.icon,
                     color: manifest.color,
                     order: manifest.order,
@@ -405,6 +440,7 @@ impl Catalog {
                 group: "Administrator".into(), group_name: "Administrator".into(),
                 group_order: 100, name: manifest.display_name,
                 description: manifest.description, skill_summary: manifest.skill_summary,
+                required_module: manifest.required_module,
                 migration_note: manifest.migration_note, icon: manifest.icon, color: manifest.color,
                 order: manifest.order, kind: manifest.kind, readiness: Readiness::Ready,
                 config: manifest.config, tools: manifest.tools,
@@ -568,7 +604,8 @@ impl Catalog {
     }
 
     fn executable(ability: &Ability) -> bool {
-        Self::present(ability) && matches!(ability.readiness, Readiness::Ready | Readiness::Partial)
+        Self::present(ability) && ability.required_module.as_deref().is_none_or(crate::modules::available)
+            && matches!(ability.readiness, Readiness::Ready | Readiness::Partial)
             && matches!(ability.kind, EntryKind::Ability | EntryKind::VirtualCore)
     }
 
@@ -579,6 +616,46 @@ impl Catalog {
 
     pub fn known(&self, id: &str) -> bool {
         self.abilities.iter().any(|ability| ability.id == id && Self::present(ability))
+    }
+
+    /// Optional package configuration is editable independently of installation.
+    /// This metadata validator grants neither executable tools nor tenant authority.
+    pub(crate) fn validate_optional_settings(&self, id: &str, settings: &Value) -> Option<bool> {
+        let ability = self.abilities.iter().find(|ability| ability.id == id)?;
+        ability.required_module.as_ref()?;
+        if !Self::present(ability) {
+            return Some(false);
+        }
+        let Some(declarations) = ability.config["settings"].as_array() else {
+            return Some(false);
+        };
+        let Some(values) = settings.as_object() else {
+            return Some(false);
+        };
+        if declarations.is_empty() || declarations.len() != values.len() {
+            return Some(false);
+        }
+        let mut declared = HashSet::new();
+        for declaration in declarations {
+            let Some(key) = declaration["key"].as_str().filter(|key| valid_id(key)) else {
+                return Some(false);
+            };
+            if !declared.insert(key) {
+                return Some(false);
+            }
+            let Some(default) = declaration.get("default") else {
+                return Some(false);
+            };
+            let Some(value) = values.get(key) else {
+                return Some(false);
+            };
+            if !optional_setting_value_valid(declaration, default)
+                || !optional_setting_value_valid(declaration, value)
+            {
+                return Some(false);
+            }
+        }
+        Some(true)
     }
 
     fn supported(name: &str) -> bool {
@@ -1923,7 +2000,10 @@ mod tests {
         assert!(!catalog.known("optimization"));
         assert_eq!(catalog.abilities.iter().filter(|entry| Catalog::executable(entry)).count(), 9);
         assert_eq!(ordinary.iter().filter(|entry| entry.readiness == Readiness::Ready).count(), 8);
-        assert_eq!(catalog.abilities.iter().filter(|entry| entry.readiness == Readiness::Partial).count(), 1);
+        assert_eq!(catalog.abilities.iter().filter(|entry| entry.readiness == Readiness::Partial).count(), 2);
+        let automation=catalog.abilities.iter().find(|entry|entry.id=="automation").unwrap();
+        assert_eq!(automation.required_module.as_deref(),Some("automation"));
+        assert!(!Catalog::executable(automation));
         assert!(catalog.abilities.iter().any(|entry| entry.id == "decision" && entry.tools == ["decide_with_jev", "score_directory_with_jev"]));
         let base = catalog.abilities.iter().find(|entry| entry.id == "base").unwrap();
         let mut installed: Vec<_> = base.tools.iter().filter(|name| Catalog::supported(name)).map(String::as_str).collect();
@@ -1958,4 +2038,201 @@ mod tests {
         assert!(!catalog.tool_available("maps_geocode",&v,&active,&run["loaded_abilities"]));
     }
 
+}
+
+
+#[cfg(test)]
+mod optional_module_tests {
+    use super::*;
+    #[test]
+    fn absent_optional_module_loads_without_exposing_execution() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("Core/automation");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("automation.json"),
+            json!({
+                "display_name":"Automation","kind":"ability","description":"Optional",
+                "readiness":"partial","required_module":"automation","tools":["schedule_task"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let catalog = Catalog::load(root.path()).unwrap();
+        let entry = catalog
+            .abilities
+            .iter()
+            .find(|a| a.id == "automation")
+            .unwrap();
+        assert!(!crate::modules::available("automation"));
+        assert!(!Catalog::executable(entry));
+        assert!(!catalog.tool_available(
+            "schedule_task",
+            &json!({"visibility":{"automation":"visible"}}),
+            &json!({"active":["automation"]}),
+            &Value::Null
+        ));
+    }
+}
+
+#[cfg(test)]
+mod optional_settings_schema_tests {
+    use super::*;
+    fn catalog() -> Catalog {
+        Catalog::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities")).unwrap()
+    }
+    fn defaults(catalog: &Catalog) -> Value {
+        let ability = catalog
+            .abilities
+            .iter()
+            .find(|ability| ability.required_module.as_deref() == Some("automation"))
+            .unwrap();
+        Value::Object(
+            ability.config["settings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|field| {
+                    (
+                        field["key"].as_str().unwrap().to_owned(),
+                        field["default"].clone(),
+                    )
+                })
+                .collect(),
+        )
+    }
+    #[test]
+    fn optional_schema_enforces_full_declared_types_keys_and_numeric_bounds() {
+        let catalog = catalog();
+        let settings = defaults(&catalog);
+        assert_eq!(
+            catalog.validate_optional_settings("automation", &settings),
+            Some(true)
+        );
+        let ability = catalog
+            .abilities
+            .iter()
+            .find(|ability| ability.id == "automation")
+            .unwrap();
+        for field in ability.config["settings"].as_array().unwrap() {
+            let key = field["key"].as_str().unwrap();
+            let mut missing = settings.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert_eq!(
+                catalog.validate_optional_settings("automation", &missing),
+                Some(false),
+                "missing {key}"
+            );
+            let mut malformed = settings.clone();
+            malformed[key] = json!("incorrect-type");
+            assert_eq!(
+                catalog.validate_optional_settings("automation", &malformed),
+                Some(false),
+                "type {key}"
+            );
+            if field["type"] == "number" {
+                for boundary in [
+                    field["min"].as_i64().unwrap(),
+                    field["max"].as_i64().unwrap(),
+                ] {
+                    let mut valid = settings.clone();
+                    valid[key] = json!(boundary);
+                    assert_eq!(
+                        catalog.validate_optional_settings("automation", &valid),
+                        Some(true)
+                    );
+                }
+                for outside in [
+                    field["min"].as_i64().unwrap() - 1,
+                    field["max"].as_i64().unwrap() + 1,
+                ] {
+                    let mut invalid = settings.clone();
+                    invalid[key] = json!(outside);
+                    assert_eq!(
+                        catalog.validate_optional_settings("automation", &invalid),
+                        Some(false)
+                    );
+                }
+                let mut fractional = settings.clone();
+                fractional[key] = json!(1.5);
+                assert_eq!(
+                    catalog.validate_optional_settings("automation", &fractional),
+                    Some(false)
+                );
+                let mut floating_integer = settings.clone();
+                floating_integer[key] = json!(2.0);
+                assert_eq!(
+                    catalog.validate_optional_settings("automation", &floating_integer),
+                    Some(false)
+                );
+            } else {
+                for boolean in [false, true] {
+                    let mut valid = settings.clone();
+                    valid[key] = json!(boolean);
+                    assert_eq!(
+                        catalog.validate_optional_settings("automation", &valid),
+                        Some(true)
+                    );
+                }
+            }
+        }
+        let mut unknown = settings.clone();
+        unknown["unreviewed_setting"] = json!(true);
+        assert_eq!(
+            catalog.validate_optional_settings("automation", &unknown),
+            Some(false)
+        );
+        assert_eq!(
+            catalog.validate_optional_settings("automation", &Value::Null),
+            Some(false)
+        );
+        assert_eq!(
+            catalog.validate_optional_settings("automation", &json!([])),
+            Some(false)
+        );
+        assert_eq!(
+            catalog.validate_optional_settings("unknown", &settings),
+            None
+        );
+        assert_eq!(
+            catalog.validate_optional_settings("codebase_admin", &settings),
+            None
+        );
+    }
+    #[test]
+    fn malformed_optional_declarations_fail_closed() {
+        for mutation in [
+            "duplicate",
+            "unknown-type",
+            "invalid-default",
+            "invalid-bound",
+            "reversed-bounds",
+            "missing-default",
+        ] {
+            let mut catalog = catalog();
+            let settings = defaults(&catalog);
+            let ability = catalog
+                .abilities
+                .iter_mut()
+                .find(|ability| ability.id == "automation")
+                .unwrap();
+            let fields = ability.config["settings"].as_array_mut().unwrap();
+            match mutation {
+                "duplicate" => fields[1] = fields[0].clone(),
+                "unknown-type" => fields[0]["type"] = json!("unsupported"),
+                "invalid-default" => fields[0]["default"] = json!(0),
+                "invalid-bound" => fields[2]["min"] = json!("zero"),
+                "reversed-bounds" => fields[2]["min"] = json!(201),
+                "missing-default" => {
+                    fields[0].as_object_mut().unwrap().remove("default");
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                catalog.validate_optional_settings("automation", &settings),
+                Some(false),
+                "{mutation}"
+            );
+        }
+    }
 }

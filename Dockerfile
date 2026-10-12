@@ -24,6 +24,13 @@ RUN --mount=type=cache,id=webagent-v3-registry,target=/usr/local/cargo/registry,
     && install -Dm755 /build/target/release/webagent-v3 /out/webagent-v3 \
     && install -Dm755 /build/target/release/webagent-diagnostics /out/webagent-diagnostics \
     && install -Dm755 /build/target/release/webagent-optimization /out/webagent-optimization \
+    && install -Dm755 /build/target/release/webagent-automation /out/modules/automation/webagent-automation \
+    && install -Dm755 /build/target/release/webagent-outbound-notifications /out/modules/outbound_notifications/webagent-outbound-notifications \
+    && cp /build/src/plugin_packages/automation/package.json /out/modules/automation/ \
+    && cp /build/src/plugin_packages/automation/tool-schemas.json /out/modules/automation/ \
+    && cp /build/src/plugin_packages/automation/page.* /out/modules/automation/ \
+    && cp /build/src/plugin_packages/outbound_notifications/package.json /out/modules/outbound_notifications/ \
+    && cp /build/src/plugin_packages/outbound_notifications/page.* /out/modules/outbound_notifications/ \
     && mkdir -p /out/optimization-cargo \
     && cp -a /usr/local/cargo/registry /out/optimization-cargo/registry
 
@@ -34,6 +41,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-cert
     && useradd -u 1101 -g 1100 -M -s /usr/sbin/nologin v3tools
 COPY --from=preview_tunnel /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
+# Distribution artifacts are installed only by explicit module administration.
+COPY --from=tested_builder /out/modules /usr/local/lib/webagent/modules
 COPY --from=tested_builder /out/webagent-diagnostics /usr/local/bin/webagent-diagnostics
 COPY --from=tested_builder /out/webagent-optimization /usr/local/bin/webagent-optimization
 COPY --from=tested_builder /out/optimization-cargo /opt/optimization-cargo

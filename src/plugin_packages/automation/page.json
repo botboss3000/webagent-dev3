@@ -1,0 +1,9 @@
+{
+  "id": "automation",
+  "label": "Automations",
+  "order": 5,
+  "entry": "page.js",
+  "css": [
+    "page.css"
+  ]
+}

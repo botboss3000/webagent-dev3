@@ -58,6 +58,13 @@ async fn call_foreground_inner(
     let settings=crate::tool_execution::resolve(&visibility,&name)?;
     let total_budget=loop_runtime::Config::read(&app.runtime_path)?.tools.max_parallel_calls;
     if cancel.is_cancelled() || app.shutoff().await? {anyhow::bail!("Tool cancelled before execution");}
+    // Optional-origin work holds a package lifetime lease through the effect.
+    // Uninstall cannot complete while an already authorized external write is running.
+    let binding_run=app.run(&run_id).await?;
+    let _module_lease=match crate::modules::binding_lease(&app,&binding_run).await {
+        Ok(lease)=>lease,
+        Err(_)=>return Ok(json!({"status":"denied","output":"Origin module unavailable; no operation dispatched"})),
+    };
     if !foreground_authorized(&app,&sid,&run_id,&generation,&name,&args,&pending_id).await? {
         return Ok(json!({"status":"denied","output":"Tool authorization changed; no operation dispatched"}));
     }
@@ -183,6 +190,8 @@ async fn call_raw_inner(
         }
     } else if tools::core_mode::owns(&name) {
         tools::core_mode::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if crate::modules::owns_tool(&name) {
+        crate::modules::tool_call(&app,&sid,&run_id,&name,&args,&pending_id,cancel).await
     } else if tools::administrator::owns(&name) {
         tools::administrator::execute(&app,&sid,&run_id,&name,&args,&pending_id,policy_version,cancel).await
     } else if tools::core_task::owns(&name) {

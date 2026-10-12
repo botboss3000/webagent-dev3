@@ -28,6 +28,8 @@ mod optimization;
 mod optimization_settings;
 mod optimization_prompt;
 mod services;
+mod modules;
+mod wake;
 mod session_naming;
 mod administrator_services;
 #[path = "api/browser_login.rs"] mod browser_login;

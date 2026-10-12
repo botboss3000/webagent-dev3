@@ -45,7 +45,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 pub fn is_read(name: &str) -> bool {
-    matches!(
+    crate::modules::is_read(name) || matches!(
         name,
         "task_status" | "task_wait" | "task_cancel"
             | "search_tools" | "list_tools" | "load_tool"
@@ -96,7 +96,7 @@ pub fn is_read(name: &str) -> bool {
 
 pub fn schemas() -> Vec<Value> {
     static SCHEMAS: OnceLock<Vec<Value>> = OnceLock::new();
-    SCHEMAS.get_or_init(|| { let mut schemas: Vec<Value> = [
+    let mut schemas=SCHEMAS.get_or_init(|| { let mut schemas: Vec<Value> = [
         ("file_list", "List a directory by absolute container path or relative live-checkout path", json!({"path":{"type":"string"}}), vec![]),
         ("file_read", "Read a bounded page of file lines from a container or live-checkout path", json!({"path":{"type":"string"},"offset":{"type":"integer","minimum":1,"maximum":10000000},"limit":{"type":"integer","minimum":1,"maximum":200}}), vec!["path"]),
         ("file_search", "Search container or live-checkout files by literal or regex query; outline comments in one file", json!({"path":{"type":"string"},"query":{"type":"string"},"regex":{"type":"boolean"},"file_glob":{"type":"string"},"comments_only":{"type":"boolean"}}), vec![]),
@@ -176,7 +176,10 @@ pub fn schemas() -> Vec<Value> {
             }
         }
         schemas
-    }).clone()
+    }).clone();
+    // Optional package schemas are live; a cached core catalog cannot resurrect removed tools.
+    schemas.extend(crate::modules::schemas());
+    schemas
 }
 
 pub async fn execute(

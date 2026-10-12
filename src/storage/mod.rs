@@ -19,6 +19,7 @@ pub(crate) mod participation;
 mod shared_read;
 mod requester_quota;
 mod actions;
+mod module_records;
 
 use crate::access;
 use crate::cache::{Cache, ContextCache};
@@ -591,7 +592,9 @@ impl Store {
     fn pool_for(&self, key: &str) -> &SqlitePool {
         if key.starts_with("agent:") || key.starts_with("agent_abilities:") {
             &self.agent_pool
-        } else if key.starts_with("session:")
+        } else if key.starts_with("module_state:")
+            || key.starts_with("receipt:module:")
+            || key.starts_with("session:")
             || key.starts_with("manager_review:")
             || key.starts_with("manager_pending:")
             || key.starts_with("followup_queue:")
@@ -1504,7 +1507,7 @@ impl Store {
             &metadata
         } else { value };
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-            .bind(key).bind(self.encode_for_pool(self.pool_for(key), stored)?).execute(&mut **tx).await?;
+            .bind(key).bind(if key.starts_with("module_state:")||key.starts_with("receipt:module:"){self.seal(stored)?}else{self.encode_for_pool(self.pool_for(key), stored)?}).execute(&mut **tx).await?;
         Ok(())
     }
 
@@ -1774,7 +1777,7 @@ impl Store {
                     .await?;
             }
         }
-        if kind == "working_message" {
+        if kind == "working_message" && run["module_silent"]!=true {
             // The private control result and public bubble commit together.
             let message_id = payload["id"].as_str()
                 .ok_or_else(|| anyhow!("Working message has no ID"))?;
@@ -1798,7 +1801,7 @@ impl Store {
                     item,
                 )
                 .await?;
-                if payload["auto_promote"] == true && item["type"] == "message" {
+                if run["module_silent"]!=true && payload["auto_promote"] == true && item["type"] == "message" {
                     if run["status"] == "completed" {
                         return Err(anyhow!("Final reply cannot be auto promoted"));
                     }
@@ -1820,11 +1823,11 @@ impl Store {
                 if text.trim().is_empty() {
                     return Err(anyhow!("Terminal reply is empty"));
                 }
-                self.insert_chat(&mut tx, sid, rid, "assistant", &json!(text))
-                    .await?;
+                if run["module_silent"]!=true {self.insert_chat(&mut tx, sid, rid, "assistant", &json!(text))
+                    .await?;}
                 // Naming is queued with terminal publication, never a detached
                 // after-commit hook that could be lost during restart.
-                self.queue_session_naming(&mut tx, sid, run).await?;
+                if run["module_silent"]!=true {self.queue_session_naming(&mut tx, sid, run).await?;}
             }
         }
         self.background_claim_delivery(&mut tx,run).await?;
@@ -2162,8 +2165,8 @@ impl Store {
             let text = payload["content"]
                 .as_str()
                 .ok_or_else(|| anyhow!("User message has no content"))?;
-            self.insert_chat(&mut tx, sid, run_id, "user", &json!(text))
-                .await?;
+            if payload["module_silent"]!=true {self.insert_chat(&mut tx, sid, run_id, "user", &json!(text))
+                .await?;}
             self.write_document(&mut tx,&format!("message_meta:{run_id}"),
                 &json!({"author_id":payload["author_id"].as_str().unwrap_or(self.current_user_id()),"context_eligible":kind=="message","queued":false})).await?;
             if kind=="message" {

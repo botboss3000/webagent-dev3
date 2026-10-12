@@ -1,0 +1,9 @@
+{
+  "id": "outbound_notifications",
+  "label": "Outbound notifications",
+  "order": 6,
+  "entry": "page.js",
+  "css": [
+    "page.css"
+  ]
+}

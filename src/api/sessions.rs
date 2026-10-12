@@ -43,6 +43,7 @@ pub(crate) async fn sessions(State(app): State<App>, Query(args): Query<SessionL
         let Some(sid)=entry["session_id"].as_str() else{continue};
         if list.iter().any(|row|row["id"]==sid){continue;}
         let Ok(scoped)=crate::shared_chat::scope(app.clone(),sid).await else{continue};
+        if scoped.store.get(&key("session",sid)).await?.is_some_and(|s|s["module_silent"]==true){continue;}
         let mut summary=scoped.store.shared_read_summary(sid,actor).await?;
         if (summary["status"]=="recycled")!=recycled{continue;}
         summary["shared"]=json!(true);summary["owner_id"]=entry["owner_id"].clone();
@@ -89,7 +90,7 @@ pub(crate) async fn create_session(State(app): State<App>, Json(body): Json<Valu
     app.store.register_shared_session(app.store.current_user_id(),prepared.result["id"].as_str().unwrap(),prepared.result["agent_id"].as_str().unwrap()).await?;
     Ok(Json(prepared.result))
 }
-pub(super) struct PreparedSession {
+pub(crate) struct PreparedSession {
     pub docs: Vec<(String,Value)>,
     pub value: Value,
     pub result: Value,
@@ -97,7 +98,7 @@ pub(super) struct PreparedSession {
 pub(super) async fn prepare_session(app:&App,body:&Value) -> std::result::Result<PreparedSession,ApiError> {
     prepare_session_id(app,body,None).await
 }
-pub(super) async fn prepare_session_id(app:&App,body:&Value,id:Option<String>) -> std::result::Result<PreparedSession,ApiError> {
+pub(crate) async fn prepare_session_id(app:&App,body:&Value,id:Option<String>) -> std::result::Result<PreparedSession,ApiError> {
     let supplied = match body.get("title") {
         None | Some(Value::Null) => None,
         Some(Value::String(title)) => Some(title.trim()),
@@ -786,5 +787,58 @@ async fn lifecycle_session_api(app: App, id: String, body: crate::store::session
         SessionPatchOutcome::NotFound => Err(ApiError(StatusCode::NOT_FOUND,"Session not found".into())),
         SessionPatchOutcome::Conflict(message) => Err(conflict(message)),
         SessionPatchOutcome::Invalid(message) => Err(bad(message)),
+    }
+}
+
+
+#[cfg(test)]
+mod silent_session_tests {
+    use super::*;
+    #[tokio::test]
+    async fn private_execution_does_not_create_visible_or_searchable_chat() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let visible = crate::runtime_tests::conversation(&app).await;
+        let silent = crate::runtime_tests::conversation(&app).await;
+        let mut doc = app
+            .store
+            .get(&key("session", &silent))
+            .await
+            .unwrap()
+            .unwrap();
+        doc["module_silent"] = json!(true);
+        doc["title"] = json!("Needle private execution");
+        app.store.put(&key("session", &silent), &doc).await.unwrap();
+        let listed = sessions(State(app.clone()), Query(SessionListArgs { status: None }))
+            .await
+            .unwrap()
+            .0;
+        assert!(listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == visible));
+        assert!(!listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == silent));
+        let searched = app
+            .store
+            .search_private_sessions("needle", "active", 50, None)
+            .await
+            .unwrap();
+        assert!(searched["results"].as_array().unwrap().is_empty());
+        let stats = app
+            .store
+            .session_statistics_page(false, 0, 100)
+            .await
+            .unwrap();
+        assert!(!stats.0.iter().any(|s| s["id"] == silent));
+        assert!(app
+            .store
+            .get(&key("session", &silent))
+            .await
+            .unwrap()
+            .is_some());
     }
 }

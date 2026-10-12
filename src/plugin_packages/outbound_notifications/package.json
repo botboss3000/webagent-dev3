@@ -1,0 +1,1 @@
+{"version":1,"id":"outbound_notifications","executable":"webagent-outbound-notifications","protocol":1,"public_operations":["list","create","update","rotate_key","delete","history","acknowledge_gap","prune_receipts"],"read_operations":["list","history"]}

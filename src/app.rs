@@ -773,6 +773,7 @@ impl App {
         }
     }
     async fn run_candidate(&self, run: &Value) -> Result<Option<model_selection::Candidate>> {
+        if !crate::modules::binding_valid(self,run).await {return Err(anyhow!("Module admission revoked"));}
         // Recovery cannot invent a role for an old run that never pinned one.
         let Some(value) = run.get("selection_plan").filter(|v| !v.is_null()) else {
             return Err(anyhow!("Legacy run has no pinned role; start a new message after configuring Standard"));

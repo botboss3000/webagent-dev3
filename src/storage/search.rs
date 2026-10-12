@@ -69,7 +69,7 @@ impl Store {
                 if size > RECORD_BYTES { cursor.skipped += 1; continue; }
                 bytes += size;
                 let doc = self.unseal(&row.get::<Vec<u8>,_>("value"))?;
-                if doc["status"] != status || agent.is_some_and(|id|doc["agent_id"].as_str().unwrap_or("shared_default")!=id) { continue; }
+                if doc["module_silent"] == true || doc["status"] != status || agent.is_some_and(|id|doc["agent_id"].as_str().unwrap_or("shared_default")!=id) { continue; }
                 if let Some(text) = snippet(doc["title"].as_str().unwrap_or(""), &query) {
                     results.push(json!({"kind":"title","session_id":cursor.last_key.trim_start_matches("session:"),"agent_id":doc["agent_id"].as_str().unwrap_or("shared_default"),"title":doc["title"],"snippet":text}));
                 }
@@ -84,7 +84,7 @@ impl Store {
                 if size > RECORD_BYTES || doc_size > RECORD_BYTES { cursor.skipped += 1; continue; }
                 bytes += size + doc_size;
                 let doc = self.unseal(&row.get::<Vec<u8>,_>("value"))?;
-                if doc["status"] != status || agent.is_some_and(|id|doc["agent_id"].as_str().unwrap_or("shared_default")!=id) { continue; }
+                if doc["module_silent"] == true || doc["status"] != status || agent.is_some_and(|id|doc["agent_id"].as_str().unwrap_or("shared_default")!=id) { continue; }
                 let content = self.unseal(&row.get::<Vec<u8>,_>("content"))?;
                 if let Some(text) = content.as_str().and_then(|s| snippet(s, &query)) {
                     results.push(json!({"kind":"message","session_id":row.get::<String,_>("session_id"),"agent_id":doc["agent_id"].as_str().unwrap_or("shared_default"),"title":doc["title"],"seq":cursor.seq,"role":row.get::<String,_>("role"),"snippet":text}));

@@ -156,3 +156,15 @@ container configuration provenance. Reference functions remain pending in
 - Sessions: `/app?tab=agents&agentScope=sessions&agentView=sessions`. Verify the Sessions entry, common-only Sessions navigation, bounded vertical wheel/touch scrolling and the page-docked V2 footer (visible before and after scrolling to the last row), across-agent caller-owned rows, active/recycled/all views, title/content search with continuation, sortable/resizable reference columns, selection and movable action panel, rename/pin, mark read, confirmed recycle, restore and undo, partial-batch failure feedback and reload persistence. Selection/listing must not acknowledge messages. Opening a row preserves its bound agent; configuring an individual agent has no Sessions tab. Pending controls identify absent V3 contracts. Check both themes and narrow viewport; no V2 API calls.
 
 - Follow-up delivery: `/app?session_id=<disposable-v3-session-id>`. While a run is active, Send two messages and verify the composer stays available and each original user bubble shows Queued with Interrupt, Steer, Remain queued and Cancel message. Choose Steer on one, Interrupt on the other; verify acknowledged states, no duplicate bubbles and the interruption note in affected tool results. Reload the exact route and restart a fixture while delivery is pending: choices and delivery receipts must persist. Leave two messages queued and verify one combined subsequent run. Stop or fail a fixture and verify Queue held and Resume queue; unresolved effects must block unsafe resumption. Check cancellation, stale revisions in two tabs, reconnect snapshot recovery, attachments, both themes, narrow viewport and the embedded panel. Queue status updates must not advance public message read cursors.
+
+- Modules: /app?tab=app&appView=modules. Installation administrator only. Verify
+  explicit install, healthy status, disable, retained-data uninstall and reinstall.
+  Ordinary chat remains ready with neither, either or both optional packages.
+- Automations: /app?tab=automation, only with an available package. Verify explicit
+  destination, one-shot/cron creation, revisioned editing, pause/resume, run now,
+  history, recycle/restore, partial-batch feedback, both themes and narrow screens.
+  Reload exact approval-waiting conversation after a deliberate restart.
+- Outbound notifications: /app?tab=outbound_notifications, administrator only with
+  the package available. Verify paused creation, explicit receiver signing-key
+  provisioning, enable/pause, rotation and bounded receipt history. Keep test
+  receivers disposable; never deliver live conversation content.

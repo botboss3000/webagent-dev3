@@ -190,7 +190,7 @@ impl Store {
         let mut summaries = Vec::with_capacity(rows.len());
         for row in rows {
             let session = self.unseal(&row.get::<Vec<u8>, _>("value"))?;
-            if session["status"] == if recycled { "recycled" } else { "active" } {
+            if session["module_silent"] != true && session["status"] == if recycled { "recycled" } else { "active" } {
                 let sid = session["id"].as_str().ok_or_else(|| anyhow!("Invalid session ID"))?;
                 summaries.push(self.read_summary_in(&mut tx, sid, &session).await?);
             }

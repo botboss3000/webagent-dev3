@@ -22,6 +22,8 @@ aes-gcm = "0.10"
 rand = "0.8"
 argon2 = "0.5"
 fs2 = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "limit", "set-header"] }
 tracing = "0.1"
@@ -38,3 +40,11 @@ path = "src/plugin_packages/diagnostics/main.rs"
 [[bin]]
 name = "webagent-optimization"
 path = "src/plugin_packages/optimization/main.rs"
+
+[[bin]]
+name = "webagent-automation"
+path = "src/plugin_packages/automation/main.rs"
+
+[[bin]]
+name = "webagent-outbound-notifications"
+path = "src/plugin_packages/outbound_notifications/main.rs"

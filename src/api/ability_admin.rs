@@ -415,9 +415,9 @@ pub(crate) async fn settings_set(State(app):State<App>,Extension(identity):Exten
         "code_index"=>crate::tools::code_index_retrieval::validate_settings(&body.settings).is_ok(),
         "optimization"=>serde_json::from_value::<crate::optimization_settings::OptimizationSettings>(body.settings.clone())
             .is_ok_and(|settings| settings.validate().is_ok()),
-        _=>false,
+        _=>app.abilities.validate_optional_settings(&ability,&body.settings).unwrap_or(false),
     };
-    if !valid{return Err(bad("Unsupported Administrator settings"));}
+    if !valid{return Err(bad("Unsupported or invalid ability settings"));}
     let mut scoped=admin_agent_view(&app,&id).await?;
     scoped.store=scoped.store.for_user(identity["_user_id"].as_str().ok_or_else(denied)?).await?;
     let mut value=agent_abilities(&scoped).await?;
@@ -738,5 +738,121 @@ mod duplicate_settings_tests {
         assert_eq!(tool["duplicate_protection_capable"],true);
         assert_eq!(tool["execution"]["duplicate_protection"],"off");
         assert_eq!(saved["tool_execution"]["prompt_slot_write"]["duplicate_protection"],"off");
+    }
+}
+
+#[cfg(test)]
+mod optional_package_settings_authority_tests {
+    use super::*;
+    fn defaults() -> Value {
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("plugins/abilities/Core/automation/automation.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        Value::Object(
+            manifest["config"]["settings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|field| {
+                    (
+                        field["key"].as_str().unwrap().to_owned(),
+                        field["default"].clone(),
+                    )
+                })
+                .collect(),
+        )
+    }
+    #[tokio::test]
+    async fn omitted_package_settings_preserve_authority_revision_and_no_execution_grants() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let original = app.store.agent_abilities().await.unwrap();
+        let revision = original["revision"].as_u64().unwrap();
+        let original_access = app
+            .store
+            .live_access("admin", "shared_default")
+            .await
+            .unwrap()
+            .ability_permission("automation");
+        let identity = json!({"_user_id":"admin"});
+        let path = ("shared_default".into(), "automation".into());
+        let configured = defaults();
+        let saved = settings_set(
+            State(app.clone()),
+            Extension(identity.clone()),
+            Path(path.clone()),
+            Json(SettingsBody {
+                expected_revision: revision,
+                settings: configured.clone(),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(saved["settings"]["automation"], configured);
+        assert_eq!(saved["revision"], revision + 1);
+        assert_eq!(saved["visibility"], original["visibility"]);
+        assert_eq!(saved["tool_modes"], original["tool_modes"]);
+        assert_eq!(
+            app.store.agent_abilities().await.unwrap()["settings"]["automation"],
+            configured
+        );
+        assert_eq!(
+            app.store
+                .live_access("admin", "shared_default")
+                .await
+                .unwrap()
+                .ability_permission("automation"),
+            original_access
+        );
+        let stale = settings_set(
+            State(app.clone()),
+            Extension(identity.clone()),
+            Path(path.clone()),
+            Json(SettingsBody {
+                expected_revision: revision,
+                settings: configured.clone(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(stale.0, StatusCode::CONFLICT);
+        let mut invalid = configured.clone();
+        invalid.as_object_mut().unwrap().remove("require_approval");
+        let malformed = settings_set(
+            State(app.clone()),
+            Extension(identity),
+            Path(path.clone()),
+            Json(SettingsBody {
+                expected_revision: revision + 1,
+                settings: invalid,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(malformed.0, StatusCode::BAD_REQUEST);
+        let outsider = settings_set(
+            State(app.clone()),
+            Extension(json!({"_user_id":"outsider"})),
+            Path(path),
+            Json(SettingsBody {
+                expected_revision: revision + 1,
+                settings: configured,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            outsider.0,
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND
+        ));
+        assert_eq!(
+            app.store.agent_abilities().await.unwrap()["revision"],
+            revision + 1
+        );
     }
 }
