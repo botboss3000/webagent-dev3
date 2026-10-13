@@ -1,7 +1,0 @@
-[package]
-name = "scheduler-probe-alpha"
-version = "0.1.0"
-edition = "2021"
-[[bin]]
-name = "scheduler_probe_alpha"
-path = "main.rs"
