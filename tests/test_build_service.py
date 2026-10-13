@@ -299,6 +299,36 @@ class PluginCompilationConcurrencyTests(unittest.TestCase):
    finally:broker.shutdown()
 
 
+class PluginStagingRebaseTests(unittest.TestCase):
+ def test_hot_plugin_stages_only_after_publication_rebase(self):
+  """Run the broker entry point against the real immutable stager after another plugin publishes."""
+  with tempfile.TemporaryDirectory()as temporary:
+   root=Path(temporary);runner=fixtures.FakeRunner();runner.hot_assets=True
+   broker=fixtures.host.Broker(root/"jobs",runner);broker.scheduler.mode="enforce"
+   original=fixtures.context(extra={"v3/ui/index.html":"entry","v3/plugins/abilities/Developer/probe/probe.skill.md":"beta"})
+   rebased=fixtures.context(extra={"v3/ui/index.html":"entry","v3/plugins/abilities/Developer/probe/probe.skill.md":"beta","v3/plugins/abilities/Developer/other/other.skill.md":"alpha"})
+   job={"job_id":str(uuid.uuid4()),"operation":"plugin_deploy","status":"queued",
+        "lease_until":time.time()+120,"created_at":time.time(),"release_root":str(root/"frozen"),"inputs_sha256":fixtures.host.context_digest(original)[0]}
+   broker.jobs[job["job_id"]]=job;compile_roots=[]
+   def compile_package(job_id,source_root=None):
+    """Record the source passed to compilation without executing a candidate tool."""
+    compile_roots.append(source_root);return []
+   def stage(blob,job_id):
+    """Use production immutable staging so an early original candidate cannot be overwritten."""
+    return fixtures.host.release.stage_assets(root/"assets",job_id,blob,fixtures.host.context_digest)
+   def publish(value,blob):
+    """Model a current publication rebase, then exercise the actual staging contract."""
+    stage(rebased,value["job_id"]);value.update(status="completed",phase="finished")
+   try:
+    with patch.object(broker,"_batch_lease"),patch.object(runner,"plugin_hot_swappable",create=True,return_value=True),patch.object(runner,"stage_assets",side_effect=stage),patch.object(runner,"build_ability_artifacts",create=True,side_effect=compile_package),patch.object(broker,"_run_ui_hot_locked",side_effect=publish):
+     broker._run(job,original)
+    self.assertEqual(job["status"],"completed",job.get("reason"))
+    self.assertEqual(compile_roots,[Path(job["release_root"])])
+    frozen=fixtures.host.release.snapshot(root/"assets/releases"/job["job_id"],("v3","ui"),fixtures.host.context_digest)
+    self.assertEqual(fixtures.host.context_digest(frozen)[0],fixtures.host.context_digest(rebased)[0])
+   finally:broker.shutdown()
+
+
 class PackagingStreamTests(unittest.TestCase):
  def test_fixed_command_accepts_bounded_file_stream(self):
   """The broker feeds a disk stream without retaining its entire packaging tar in memory."""

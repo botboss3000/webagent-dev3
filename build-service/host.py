@@ -3690,6 +3690,7 @@ class Broker:
             self._save(job)
 
     def _run(self, job, blob):
+        """Execute a sealed job; hot plugins compile before rebasing and stage immutable assets only afterward."""
         with self.lock:
             event = self.job_cancellations.setdefault(job["job_id"], threading.Event())
             if job.get("cancel_request"):
@@ -3714,10 +3715,6 @@ class Broker:
                 raise ValueError("General ability runtime contract unavailable; core migration required")
             if job["operation"] in ("index_deploy","plugin_deploy") and not self.runner.ui_hot_swappable():
                 raise ValueError("Index maintenance requires hot publication; container replacement is forbidden")
-            if job["operation"]=="plugin_deploy"and self.scheduler.mode=="enforce":
-                self._phase(job,"preparing_plugins")
-                self.runner.stage_assets(blob,job["job_id"])
-                self.runner.build_ability_artifacts(job["job_id"])
             if job["operation"] in HOT_OPERATIONS and self.runner.ui_hot_swappable():
                 self._run_ui_hot(job, blob)
                 return

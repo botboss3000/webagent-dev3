@@ -100,6 +100,9 @@ Controlled scheduling is described in ../docs/controlled-build-scheduler.md.
 Compilation and tests use identified containers and measured admission; unrelated
 standalone packages compile before taking the serialized publication lock.
 Publication rebases and revalidates verified cached outputs before activation.
+Compile directly from the job frozen source; create its immutable served asset
+revision only after the publication rebase, so independent releases cannot pin
+an earlier candidate under the final job revision.
 A successful build retains its source reservation until the agent verifies
 acceptance, commits its exact promoted inputs and explicitly completes ownership.
 The canonical maintenance ledger retains historical task/retry evidence under a bounded 512 MiB broker budget; scoped synchronization still limits each review transaction.
