@@ -16,7 +16,7 @@ Reads return bounded sanitized visible text with `source_kind: untrusted_browser
 
 ## Images and recording
 
-Screenshots are actual bounded viewport PNG files stored privately outside the coding workspace. Inputs, textareas, secret-marked nodes and exact authentication-cookie text are masked before capture. Results contain an opaque artifact ID, digest, dimensions and an authenticated current-session API download path; never a host path.
+Screenshots are actual bounded viewport PNG files stored privately outside the coding workspace. Inputs, textareas, secret-marked nodes and exact authentication-cookie and CSRF-token text are masked before capture. Results contain an opaque artifact ID, digest, dimensions and an authenticated current-session API download path; never a host path.
 
 `dev_browser_record` has `start`, `status` and `stop`. It records at most 30 PNG frames over 30 seconds. The result is explicitly `bounded_png_frames`, not a video. Stop recording and close the browser after use. A screenshot quota or lease failure stops capture.
 
@@ -35,3 +35,7 @@ This is the private fixed-origin Diagnostics browser, not Web Browser Control or
 ## Runtime tool execution
 
 All tools in this ability remain runtime foreground/stop with concurrency 1; background/model and silent/wake are unsupported, even for read actions or calls returning asynchronous job receipts. Effective Rust flags and shared Core Base tool-execution guidance govern scheduling; settings never grant permission and outputs remain untrusted evidence.
+
+## Observation timing
+
+An immediate read can precede app boot completion. Confirm the registered visible checkpoint with a fresh read after the page renders; a successful navigation alone does not establish UI readiness. Package publication and browser observation freshness are separate checks.
