@@ -1,11 +1,13 @@
 {
   "display_name": "Live Plugin Acceptance Fixture",
   "kind": "ability",
-  "description": "Temporary development fixture for live plugin publication and dispatch acceptance.",
+  "description": "Independent Python acceptance fixture, JSON_BETA.",
   "tools": [
     "live_fixture_echo"
   ],
   "readiness": "ready",
-  "config": {},
+  "config": {
+    "fixture_marker": "JSON_BETA"
+  },
   "order": 999
 }

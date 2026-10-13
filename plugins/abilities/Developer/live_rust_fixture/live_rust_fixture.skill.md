@@ -1,3 +1,3 @@
-# Standalone Rust acceptance
+# Rust live plugin acceptance
 
-Use live_rust_echo when requested. Report the returned marker exactly.
+Use live_rust_echo only when requested. Rust guidance marker RUST_GUIDANCE_BETA.

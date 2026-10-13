@@ -13,14 +13,17 @@
   "build": {
     "toolchain": "image-python3",
     "inputs": [
-      "runner.py"
+      "runner.py",
+      "helper.py"
     ],
     "dependencies": [],
     "flags": [],
     "assets": [
       "live_plugin_fixture.json",
       "live_plugin_fixture.skill.md",
-      "schemas.json"
+      "schemas.json",
+      "tools/live_fixture_echo.skill.md",
+      "skills/live_fixture_check.skill.md"
     ]
   }
 }

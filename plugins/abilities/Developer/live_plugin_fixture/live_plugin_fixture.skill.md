@@ -1,3 +1,3 @@
 # Live plugin acceptance
 
-Use live_fixture_echo when the user requests the live fixture. Report its returned marker exactly. The guidance marker is GUIDANCE_ALPHA.
+Use live_fixture_echo only for the requested acceptance echo. Report its returned marker exactly. The current own guidance marker is GUIDANCE_BETA.
