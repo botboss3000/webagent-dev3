@@ -1,0 +1,7 @@
+[package]
+name = "scheduler-probe-beta"
+version = "0.1.0"
+edition = "2021"
+[[bin]]
+name = "scheduler_probe_beta"
+path = "main.rs"

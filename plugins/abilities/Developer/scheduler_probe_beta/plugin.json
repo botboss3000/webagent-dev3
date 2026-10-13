@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "scheduler_probe_beta",
+  "dispatch": "isolated",
+  "protocol": 1,
+  "interface": 1,
+  "runtime": "executable",
+  "entrypoint": "scheduler_probe_beta",
+  "schemas": "schemas.json",
+  "effect": "write",
+  "tools": [
+    "scheduler_probe_beta_echo"
+  ],
+  "build": {
+    "inputs": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "main.rs"
+    ],
+    "dependencies": [],
+    "toolchain": "rust-1.90",
+    "flags": [],
+    "assets": [
+      "scheduler_probe_beta.json",
+      "scheduler_probe_beta.skill.md",
+      "schemas.json"
+    ]
+  }
+}
