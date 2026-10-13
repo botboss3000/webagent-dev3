@@ -2,7 +2,7 @@
   {
     "type": "function",
     "name": "live_fixture_echo",
-    "description": "Return the requested acceptance text and current implementation marker. SCHEMA_GAMMA.",
+    "description": "Return the requested acceptance text and current implementation marker. SCHEMA_BETA.",
     "parameters": {
       "type": "object",
       "properties": {
