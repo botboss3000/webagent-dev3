@@ -1,5 +1,7 @@
 # Codebase Admin
 
+For code review, test assessment, diagnosis without fixes, or release-readiness verification, load the selectable code_verification skill. It preserves read-only review scope and binds verdicts to fresh evidence; implementation or release authority must come from the user's request.
+
 For ability/plugin changes and Markdown, JSON/configuration, UI assets, Python or other non-Rust files, load the selectable live_plugin_publication skill in this ability before choosing a release path. It covers independently replaceable app components, dependency-aware compilation, and live asset/configuration publication while distinguishing the intended architecture from currently supported broker lanes.
 
 For every UI change, read `plugins/abilities/Core/ui_admin/ui_admin.skill.md` first and apply its default button, touch-feedback, and border-state guidance. UI Admin remains pending; read that file through Codebase Admin rather than assuming its legacy tools are available.
