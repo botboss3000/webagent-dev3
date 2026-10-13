@@ -147,3 +147,13 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
     border-color:color-mix(in oklab,var(--fg-1) 22%,transparent)!important;
   }
 }
+
+/* Ellipsis belongs to the title's text box, not an anonymous flex text item. */
+#chat-header #session-dropdown-label {
+  display:block;
+  flex:1 1 0%;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}

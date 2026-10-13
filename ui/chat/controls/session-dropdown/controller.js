@@ -465,31 +465,39 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
  // Resize callback reanchors an open detached menu without restarting its animation.
  const reposition=()=>{if(!menu.hidden)_positionOpenMenu();};
  window.addEventListener('resize',reposition,{signal:abort.signal});window.visualViewport?.addEventListener('resize',reposition,{signal:abort.signal});
- // The avatar shares the semicircle's center: half the border-box height
- // from the outer edge. Measure the icon too so profile/font changes stay aligned.
+ // Both end controls share the cap centers, half the border-box height from each edge.
  const avatar=root.querySelector('#session-dropdown-icon');
- const originalInset=[root.style.getPropertyValue('padding-left'),root.style.getPropertyPriority('padding-left')];
- const restoreAvatarInset=()=>{if(originalInset[0])root.style.setProperty('padding-left',...originalInset);else root.style.removeProperty('padding-left');};
- function updateAvatarInset(){
-   if(!root.getClientRects().length){restoreAvatarInset();return;}
+ const capActions=[...root.querySelectorAll('#session-dropdown-kebab, #session-dropdown-delete')];
+ const insetProperties=['padding-left','padding-right'];
+ const originalInsets=new Map(insetProperties.map(property=>[property,[root.style.getPropertyValue(property),root.style.getPropertyPriority(property)]]));
+ const restoreCapInset=property=>{const original=originalInsets.get(property);if(original[0])root.style.setProperty(property,...original);else root.style.removeProperty(property);};
+ function updateCapInsets(){
+   if(!root.getClientRects().length){insetProperties.forEach(restoreCapInset);return;}
    const style=getComputedStyle(root);
    const height=parseFloat(style.height);
    if(!Number.isFinite(height))return;
-   // Expanded corners end at the pill's side tangents; straight borders continue to the menu.
+   // Expanded corners end at the side tangents; straight borders continue to the menu.
    root.style.setProperty('--session-selector-cap-radius', `${height / 2}px`);
-   if(!avatar?.getClientRects().length){restoreAvatarInset();return;}
-   const width=parseFloat(getComputedStyle(avatar).width);
-   const border=parseFloat(style.borderLeftWidth)||0;
-   if(!Number.isFinite(width))return;
-   const inset=`max(0px, calc((${height}px - ${width}px) / 2 - ${border}px))`;
-   if(root.style.getPropertyValue('padding-left')!==inset)root.style.setProperty('padding-left',inset,'important');
+   // More owns the right cap unless an explicitly enabled Delete button follows it.
+   const endAction=capActions.filter(node=>node.getClientRects().length).pop();
+   for(const [property,node,borderProperty] of [['padding-left',avatar,'borderLeftWidth'],['padding-right',endAction,'borderRightWidth']]){
+     if(!node?.getClientRects().length){restoreCapInset(property);continue;}
+     const nodeStyle=getComputedStyle(node);
+     let width=parseFloat(nodeStyle.width);
+     if(nodeStyle.boxSizing!=='border-box')for(const key of ['paddingLeft','paddingRight','borderLeftWidth','borderRightWidth'])width+=parseFloat(nodeStyle[key])||0;
+     if(!Number.isFinite(width))continue;
+     const border=parseFloat(style[borderProperty])||0;
+     const inset=`max(0px, calc((${height}px - ${width}px) / 2 - ${border}px))`;
+     if(root.style.getPropertyValue(property)!==inset)root.style.setProperty(property,inset,'important');
+   }
  }
- const observer=new ResizeObserver(()=>{updateAvatarInset();reposition();});
+ const observer=new ResizeObserver(()=>{updateCapInsets();reposition();});
  observer.observe(root);if(avatar)observer.observe(avatar);
- updateAvatarInset();
+ for(const node of capActions)observer.observe(node,{box:'border-box'});
+ updateCapInsets();
  // Returned controller is the list renderer’s lifecycle/configuration bridge.
  // Expose menu lifecycle plus popup ownership to the sibling list renderer.
  /** Methods: open/close control the animated menu, isOpen reports visibility, setPopup transfers popup ownership to the list, and destroy invalidates pending opens and removes listeners. */
- const handle={open:openMenu,close:closeMenu,isOpen:()=>!menu.hidden,destroy(){_openRequestId++;menu._deferredOpenCleanup?.();closeMenu({immediate:true});abort.abort();_syncRowObserver.disconnect();observer.disconnect();restoreAvatarInset();root.style.removeProperty('--session-selector-cap-radius');clearTimeout(_openAnimationTimer);clearTimeout(_closeAnimationTimer);menu.remove();_closeRowActions();},setPopup(node){_closeRowActions();popup=node;}};
+ const handle={open:openMenu,close:closeMenu,isOpen:()=>!menu.hidden,destroy(){_openRequestId++;menu._deferredOpenCleanup?.();closeMenu({immediate:true});abort.abort();_syncRowObserver.disconnect();observer.disconnect();insetProperties.forEach(restoreCapInset);root.style.removeProperty('--session-selector-cap-radius');clearTimeout(_openAnimationTimer);clearTimeout(_closeAnimationTimer);menu.remove();_closeRowActions();},setPopup(node){_closeRowActions();popup=node;}};
  root._sessionDropdownController=handle;return handle;
 }
