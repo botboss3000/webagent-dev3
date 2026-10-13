@@ -5240,9 +5240,9 @@ async fn parallel_writes_need_independent_approvals_and_reconcile_uncertain_call
     run["loaded_abilities"]=json!(["codebase_admin"]);
     run["calls"]=json!([
         {"type":"function_call","call_id":"write-one","name":"file_write",
-            "arguments":"{\"path\":\"one\",\"content\":\"first\"}"},
+            "arguments":"{\"path\":\"/workspaces/parallel-approval/one\",\"content\":\"first\"}"},
         {"type":"function_call","call_id":"write-two","name":"file_write",
-            "arguments":"{\"path\":\"two\",\"content\":\"second\"}"}
+            "arguments":"{\"path\":\"/workspaces/parallel-approval/two\",\"content\":\"second\"}"}
     ]);
     for call in run["calls"].as_array().unwrap().clone() {
         run["input"].as_array_mut().unwrap().push(call);
@@ -5257,7 +5257,7 @@ async fn parallel_writes_need_independent_approvals_and_reconcile_uncertain_call
             let mut reader=BufReader::new(stream);
             let mut line=String::new();reader.read_line(&mut line).await.unwrap();
             let request:Value=serde_json::from_str(&line).unwrap();
-            let status=if request["arguments"]["path"]=="two" {"uncertain"} else {"success"};
+            let status=if request["arguments"]["path"]=="/workspaces/parallel-approval/two" {"uncertain"} else {"success"};
             let reply=json!({"id":request["id"],"status":status,
                 "output":{"path":request["arguments"]["path"]}});
             reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
@@ -5289,7 +5289,7 @@ async fn parallel_writes_need_independent_approvals_and_reconcile_uncertain_call
         parallel_batch::execute_parallel_batch(&app,&id,"third",
             &CancellationToken::new(),&policy,&access,app.run(&id).await.unwrap(),guard))
         .await.unwrap().unwrap();
-    worker.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5),worker).await.expect("Fake worker did not receive both approved workspace writes").unwrap();
     let recovering=app.run(&id).await.unwrap();
     assert_eq!(recovering["status"],"recovery");
     assert_eq!(recovering["batch"][0]["state"],"done");
@@ -5354,9 +5354,9 @@ async fn switching_waiting_parallel_writes_to_auto_runs_without_approval() {
     run["loaded_abilities"]=json!(["codebase_admin"]);
     run["calls"]=json!([
         {"type":"function_call","call_id":"auto-one","name":"file_write",
-            "arguments":"{\"path\":\"one\",\"content\":\"first\"}"},
+            "arguments":"{\"path\":\"/workspaces/parallel-auto/one\",\"content\":\"first\"}"},
         {"type":"function_call","call_id":"auto-two","name":"file_write",
-            "arguments":"{\"path\":\"two\",\"content\":\"second\"}"}
+            "arguments":"{\"path\":\"/workspaces/parallel-auto/two\",\"content\":\"second\"}"}
     ]);
     app.save(&mut run).await.unwrap();
     let policy=current_workflow_policy(&app).await.unwrap();
@@ -5393,8 +5393,12 @@ async fn switching_waiting_parallel_writes_to_auto_runs_without_approval() {
         parallel_batch::execute_parallel_batch(&app,&id,"after-auto",
             &CancellationToken::new(),&policy,&access,app.run(&id).await.unwrap(),guard))
         .await.unwrap().unwrap();
-    worker.await.unwrap();
     let after=app.run(&id).await.unwrap();
+    for item in after["batch"].as_array().unwrap() {
+        assert_eq!(item["result"]["status"],"success","Parallel write failed before worker dispatch: {}",item["result"]);
+    }
+    tokio::time::timeout(Duration::from_secs(5),worker).await
+        .expect("Fake worker did not receive both parallel writes").unwrap();
     assert_ne!(after["status"],"waiting_approval");
     assert_eq!(after["batch"][0]["state"],"done");
     assert_eq!(after["batch"][1]["state"],"done");

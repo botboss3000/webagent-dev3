@@ -46,6 +46,7 @@ def install(args):
  for p in sorted(reviewed.glob("*.py")):
   if p.is_symlink():raise PermissionError("Reviewed source symlink")
   digest.update(p.name.encode()+b"\0"+p.read_bytes())
+ digest.update(b"scheduler-defaults.json\0"+(reviewed/"scheduler-defaults.json").read_bytes())
  digest.update((reviewed.parent/"plugins/abilities/Administrator/code_index/adapter.py").read_bytes())
  digest.update((reviewed.parent/"plugins/abilities/Administrator/code_index/maintenance.py").read_bytes())
  release=digest.hexdigest();value["service_dir"]=str(install_root/"releases"/release);cfg.validate(value)

@@ -201,10 +201,10 @@ async def command(argv, base, timeout, lock):
            "CARGO_BUILD_JOBS": "1", "CARGO_INCREMENTAL": "0",
            "RUSTFLAGS": "-C debuginfo=0",
            "V3_ALLOWED_LISTEN_PORTS": ",".join(map(str, network_ports(base))),
-           "V3_UNRESTRICTED_DEV_SHELL": "1"}
+           "V3_COMMAND_SOURCE_ROOT":str(LIVE_CHECKOUT)}
     process = await asyncio.create_subprocess_exec(
         "/usr/bin/python3", "-I", str(Path(__file__).resolve()), "--runner", json.dumps(argv),
-        cwd=LIVE_CHECKOUT if LIVE_CHECKOUT.is_dir() else base,
+        cwd=base,
         env=env, start_new_session=True,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
     fcntl.flock(lock, fcntl.LOCK_UN)
@@ -806,18 +806,27 @@ def runner(argv):
     import runpy
     restrict = runpy.run_path(str(Path(__file__).with_name("sandbox.py")))["restrict"]
     read_paths = ()
-    if len(argv) == 5 and argv[:4] == [sys.executable, "-I", str(Path(__file__).resolve()), "--seed-inner"]:
+    if len(argv) == 5 and argv[1:4] == ["-I", str(Path(__file__).resolve()), "--seed-inner"]:
         spec = json.loads(argv[4])
         if set(spec) not in ({"base", "template", "stage"}, {"base", "template", "stage", "published"}) or type(spec.get("published",False)) is not bool or Path(spec["base"]).resolve() != Path.cwd() or not spec["stage"].startswith(".v3-seed-") or "/" in spec["stage"]:
             raise ValueError("invalid trusted seed invocation")
         read_paths = (Path(spec["template"]).parent if (Path(spec["template"]).parent/".code-index").is_dir() else Path(spec["template"]), Path(__file__).resolve(), Path(__file__).with_name("sandbox.py").resolve(),
                       Path(__file__).parent/"plugins/abilities/Administrator/code_index/adapter.py",Path(__file__).parent/"build-service")
-    # The development agent's approved shell can work across the mounted checkout.
-    # Other worker operations retain their existing scoped sandbox.
-    unconfined = os.environ.get("V3_UNRESTRICTED_DEV_SHELL") == "1"
+    if len(argv)==5 and argv[1:4]==["-I",str(Path(__file__).resolve()),"--index-inner"]:
+        spec=json.loads(argv[4])
+        if set(spec)!={"base","name","arguments"}or Path(spec["base"]).resolve()!=Path.cwd():raise ValueError("Invalid trusted index invocation")
+        read_paths=(Path(__file__).resolve(),Path(__file__).with_name("sandbox.py").resolve(),Path(__file__).parent/"plugins/abilities/Administrator/code_index",Path(__file__).parent/"build-service")
+    # Source writes require broker ownership. General commands may read source but only write this workspace.
+    source_read=Path(os.environ.get("V3_COMMAND_SOURCE_ROOT",str(LIVE_CHECKOUT)))
+    if source_read.is_dir():
+        # Grant source inputs individually; the checkout also contains state and other writers' private tasks.
+        names=("src","ui","plugins/abilities","plugins/gates","build-service","tests","docs","config",
+            "Cargo.toml","Cargo.lock","build.rs","Dockerfile","README.md","AGENTS.md","deploy.sh","launch.py",
+            "worker.py","ability_plugin_worker.py","sandbox.py","promote.py","ui-baseline.json","gate.Dockerfile","gate_worker.py",
+            "data/config/gates/message_visibility_v1.json","data/config/gates/closing_status_v1.json")
+        read_paths=(*read_paths,*(source_read/name for name in names))
     child = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
-                             preexec_fn=None if unconfined else
-                                 lambda: restrict(Path.cwd(), read_paths=read_paths))
+                             preexec_fn=lambda: restrict(Path.cwd(), read_paths=read_paths,deny_unix=True))
     try:
         result = child.wait()
     finally:

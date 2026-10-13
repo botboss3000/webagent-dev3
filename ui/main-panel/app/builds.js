@@ -1,4 +1,5 @@
 'use strict';
+import {schedulerPanel} from '../builds/scheduler.js';
 
 const phaseLabel = value => String(value || 'waiting').replaceAll('_', ' ');
 const when = value => Number.isFinite(value) ? new Date(value * 1000).toLocaleString() : '—';
@@ -105,7 +106,8 @@ export function mountBuilds(panel, onStatus = () => {}) {
   const toolbar = document.createElement('div');
   toolbar.className = 'build-toolbar';
   toolbar.append(update, filters, controls);
-  panel.append(toolbar, synchronization, leftovers, status, list);
+  const scheduler = schedulerPanel();
+  panel.append(toolbar, synchronization, scheduler.root, leftovers, status, list);
 
   const fact = (facts, label, value) => {
     const item = document.createElement('div');
@@ -140,6 +142,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
     }
   }
   function render() {
+    scheduler.update(snapshot);
     status.hidden = true;
     // Keep the disclosure node intact so polling never resets its open state.
     leftoverList.replaceChildren();
@@ -446,5 +449,5 @@ export function mountBuilds(panel, onStatus = () => {}) {
   update.addEventListener('click', () => { void load(); });
   void load();
   const timer = setInterval(load, 5000);
-  return () => { stopped = true; clearInterval(timer); onStatus(0); };
+  return () => { stopped = true; scheduler.destroy(); clearInterval(timer); onStatus(0); };
 }

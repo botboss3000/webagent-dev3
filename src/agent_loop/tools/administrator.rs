@@ -242,7 +242,7 @@ async fn host(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:Cancell
     let fingerprint=host_fingerprint(app,sid,run_id,fingerprint_name).await?;
     let trusted=json!({"user_id":crate::shared_chat::actor(app),"session_id":sid,
         "lease_until":now()+30,"access_fingerprint":fingerprint});
-    if matches!(name,"v3_build_image"|"v3_worker_submit") || (matches!(name,"v3_build_work"|"build_work") && matches!(args["action"].as_str(),Some("finish"|"decide"))) {
+    if matches!(name,"v3_build_image"|"v3_worker_submit") || (matches!(name,"v3_build_work"|"build_work") && matches!(args["action"].as_str(),Some("finish"|"decide"|"check"))) {
         app.store.put(&format!("administrator_host:{sid}"),&json!({"session_id":sid,
             "run_id":run_id,"tool_name":fingerprint_name,"access_fingerprint":fingerprint})).await?;
     }
@@ -327,6 +327,21 @@ fn diagnostics_response(selected:Option<&Value>,sid:&str)->Value {
     }
 }
 
+/// Relative source writes enter an owned draft; explicit runtime/workspace paths retain their tools.
+fn implicit_source_write(name: &str, args: &Value) -> Result<Option<String>> {
+    if !matches!(name, "file_edit" | "file_write") { return Ok(None); }
+    let raw = args["path"].as_str().ok_or_else(|| anyhow!("Source write path required"))?;
+    let relative = if let Some(value) = raw.strip_prefix("/live-checkout/") { value }
+        else if raw.starts_with('/') { return Ok(None); } else { raw };
+    if relative.is_empty() || relative.len() > 240 || relative.split('/').any(|p| p.is_empty() || p == "." || p == "..") {
+        bail!("Source path must be relative without traversal");
+    }
+    if matches!(relative.split('/').next(), Some("data" | "workspaces" | "target" | ".git" | "build-jobs" | "deployment-secrets")) {
+        bail!("Use the owning runtime or workspace API for this excluded source path");
+    }
+    Ok(Some(relative.to_owned()))
+}
+
 pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending_id:&str,policy_version:u64,cancel:CancellationToken)->Result<Value> {
     if cancel.is_cancelled(){bail!("Tool execution cancelled");}
     let agent=session_agent_id(app,sid).await?;
@@ -342,6 +357,11 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
         "file_list"|"file_read"|"file_search"|"file_edit"|"file_write"=>{
             if args.get("task_id").is_some_and(|value|!value.is_null()) {
                 host(app,sid,run_id,name,args,cancel).await
+            } else if let Some(path)=implicit_source_write(name,args)? {
+                let mut draft=args.clone();
+                draft["path"]=json!(path);
+                if draft["request_id"].is_null() {draft["request_id"]=json!(format!("implicit-{}",digest(&json!([sid,pending_id]))));}
+                host(app,sid,run_id,name,&draft,cancel).await
             } else {
                 let mut live=args.clone();
                 if let Some(object)=live.as_object_mut(){
@@ -353,7 +373,13 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
                 worker(app,sid,name,&live,trusted,cancel).await
             }
         },
-        "build_work"=>host(app,sid,run_id,name,args,cancel).await,
+        "build_work"=>{
+            let mut request=args.clone();
+            if request["action"]=="check" && request["request_id"].is_null() {
+                request["request_id"]=json!(format!("check-{}",digest(&json!([sid,pending_id]))));
+            }
+            host(app,sid,run_id,name,&request,cancel).await
+        },
         "performance_work"=>performance(app,sid,run_id,args,cancel).await,
         "repository_access"=>repository_access(app,sid,args,cancel).await,
         "read_diagnostics"=>{
@@ -399,6 +425,15 @@ pub fn valid_development_path(path:&str,sid:&str,agent:&str)->bool {
 }
 #[cfg(test)] mod tests {
     use super::*;
+    #[test] fn implicit_source_writes_are_broker_scoped() {
+        assert_eq!(implicit_source_write("file_write",&json!({"path":"src/app.rs"})).unwrap(),Some("src/app.rs".into()));
+        assert_eq!(implicit_source_write("file_edit",&json!({"path":"/live-checkout/ui/app.css"})).unwrap(),Some("ui/app.css".into()));
+        assert_eq!(implicit_source_write("file_write",&json!({"path":"/workspaces/own/file"})).unwrap(),None);
+        assert_eq!(implicit_source_write("file_read",&json!({"path":"src/app.rs"})).unwrap(),None);
+        for path in ["/live-checkout/../data/key","../src/app.rs","data/config/chat.json"] {
+            assert!(implicit_source_write("file_write",&json!({"path":path})).is_err());
+        }
+    }
     #[test] fn work_arguments_drop_irrelevant_optional_fields() {
         let zero="0".repeat(64);
         let begin=json!({"action":"begin","task_id":"v3-rust-parallel-1005a",

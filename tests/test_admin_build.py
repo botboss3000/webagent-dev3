@@ -919,10 +919,10 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(digest, result["inputs_sha256"])
         self.assertIn("check passed", result["log_excerpt"])
         self.assertEqual(30, command.call_args.args[-1])
-        with self.assertRaisesRegex(ValueError, "stale"):
+        with self.assertRaisesRegex(ValueError, "(?i)stale"):
             self.call("v3_cargo_task", {"task_id": "cargo-task", "task": "check",
                 "expected_inputs_sha256": "0" * 64})
-        with self.assertRaisesRegex(ValueError, "open isolated"):
+        with self.assertRaisesRegex(ValueError, "(?i)open isolated"):
             self.call("v3_cargo_task", {"task_id": "other-task", "task": "check",
                 "expected_inputs_sha256": digest})
         def change_during_check(*unused):

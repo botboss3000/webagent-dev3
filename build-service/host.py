@@ -40,6 +40,10 @@ _config_spec = importlib.util.spec_from_file_location("webagent_build_config", _
 _config_module = importlib.util.module_from_spec(_config_spec)
 _config_spec.loader.exec_module(_config_module)
 CONFIG = _config_module.load()
+_scheduler_spec=importlib.util.spec_from_file_location("build_scheduler",_module_root/"scheduler.py")
+scheduler_module=importlib.util.module_from_spec(_scheduler_spec);_scheduler_spec.loader.exec_module(scheduler_module)
+resource_module=scheduler_module.sibling("resources")
+executor_module=scheduler_module.sibling("executor")
 
 SOURCE = Path(CONFIG["checkout_root"])
 _maintenance_path=_module_root/"index-maintenance.py"
@@ -670,7 +674,8 @@ class Runner:
             def feed():
                 try:
                     if stdin is not None:
-                        proc.stdin.write(stdin)
+                        if hasattr(stdin,"read"):shutil.copyfileobj(stdin,proc.stdin,1024*1024)
+                        else:proc.stdin.write(stdin)
                         proc.stdin.close()
                 except (BrokenPipeError, OSError):
                     pass
@@ -689,7 +694,9 @@ class Runner:
                         # learned by the scrubber. Never publish partial raw data.
                         error.log = "" if private_raw else scrub(bytes(output).decode("utf-8", "replace"), self.secrets)
                         raise error
-                    if time.monotonic() > deadline:
+                    phase=getattr(self.job_context,"phase_container",None)
+                    paused=self.resources.elapsed_pause(phase)if phase and hasattr(self,"resources")else 0
+                    if time.monotonic() > deadline+paused:
                         raise TimeoutError("fixed build task timeout")
                     if select.select([proc.stdout], [], [], .2)[0]:
                         data = os.read(proc.stdout.fileno(), 65536)
@@ -751,6 +758,57 @@ class Runner:
             result=json.loads(receive(size))
             if result.get("workspace")!=workspace:raise PermissionError("Workspace helper scope changed")
             return result
+
+    def resource_request(self,args):
+        """Only the protected service peer can control an exact registered build container."""
+        args=dict(args)
+        if args.get("operation") not in {"stats","initialize","identity"}:
+            with self.resources.lock:
+                row=self.resources.rows.get(args.get("container"))
+                if not row or not row.get("container_id"):raise PermissionError("Registered compiler identity required")
+                args["expected_id"]=row["container_id"]
+        connection=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);connection.settimeout(6)
+        try:
+            connection.connect(str(Path(CONFIG["runtime_root"])/"resource.sock"));connection.sendall(canonical(args)+b"\n")
+            raw=bytearray()
+            while not raw.endswith(b"\n")and len(raw)<65536:
+                part=connection.recv(65536-len(raw))
+                if not part:raise RuntimeError("Protected resource helper unavailable")
+                raw.extend(part)
+            result=json.loads(raw)
+            if result.get("status")!="success":raise RuntimeError("Protected resource operation unavailable")
+            return result["output"]
+        finally:connection.close()
+    def cleanup_phase(self,name):
+        """Cancel/remove only the exact compiler container registered by this executor."""
+        with self.resources.lock:
+            row=self.resources.rows.get(name);identity=row.get("container_id")if row else None
+        if row is None:raise PermissionError("Unregistered compiler cleanup denied")
+        if not identity:
+            recovered=self.resource_request({"operation":"identity","container":name})
+            if recovered.get("missing"):return
+            identity=recovered.get("container_id")
+            if not identity or not re.fullmatch(r"[a-f0-9]{64}",identity):raise PermissionError("Compiler recovery identity unavailable")
+            with self.resources.condition:self.resources.rows[name]["container_id"]=identity;self.resources.persist()
+        if not re.fullmatch(r"[a-f0-9]{64}",identity):raise PermissionError("Compiler cleanup identity unavailable")
+        connection=DockerHTTP("localhost",timeout=10)
+        try:
+            connection.request("GET","/containers/"+name+"/json");response=connection.getresponse();body=response.read(1024*1024)
+            if response.status==404:return
+            if response.status!=200:raise RuntimeError("Compiler cleanup unavailable")
+            value=json.loads(body);labels=value.get("Config",{}).get("Labels",{})
+            if value["Id"]!=identity or labels.get("webagent.scheduler.instance")!=CONFIG["instance"]:
+                raise PermissionError("Compiler cleanup identity changed")
+        finally:connection.close()
+        connection=DockerHTTP("localhost",timeout=30)
+        try:
+            connection.request("DELETE","/containers/"+identity+"?force=true&v=true");response=connection.getresponse();response.read(4096)
+            if response.status not in {204,404}:raise RuntimeError("Compiler removal unconfirmed")
+        finally:connection.close()
+    execution_application_blob=staticmethod(lambda blob:release.archive({n:v for n,v in release.entries(blob,context_digest).items()if not release.inspection_path(n)},context_digest))
+    execution_entries=staticmethod(lambda blob:release.entries(blob,context_digest))
+    execution_source_digest_blob=staticmethod(lambda blob:context_digest(blob)[0])
+    execution_source_digest=staticmethod(lambda root:context_digest(release.snapshot(root,CONTEXT,context_digest))[0])
 
     def snapshot(self, inspection=False):
         # Helper path is service configuration, never a tool argument. It must
@@ -908,8 +966,42 @@ class Runner:
         except BaseException:
             shutil.rmtree(invocation);raise
 
-    def build_ability_artifacts(self,job_id):
-        root=ASSET_ROOT/"releases"/job_id
+    def plugin_artifact_verified(self,artifact,entry,key):
+        """Reuse a compiler result only when its immutable input key and stored output digest agree."""
+        binary=artifact/entry;receipt=artifact/"compiler-receipt.json"
+        if not binary.is_file()or not receipt.is_file():return False
+        if binary.is_symlink()or receipt.is_symlink()or binary.stat().st_nlink!=1 or binary.stat().st_size>32*1024*1024:
+            raise ValueError("Plugin cache identity invalid")
+        value=json.loads(receipt.read_bytes())
+        if value!={"input_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"recipe":executor_module.RUST+":release:locked:offline:debug0"}:
+            raise ValueError("Plugin cache output differs from verified compilation")
+        return True
+
+    @contextlib.contextmanager
+    def plugin_build_lock(self,key):
+        """Serialize one artifact key while unrelated package builds retain independent execution."""
+        folder=STATE/"plugin-build-locks";folder.mkdir(mode=0o700,parents=True,exist_ok=True)
+        fd=os.open(folder/key,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
+        try:
+            deadline=time.monotonic()+3600
+            while True:
+                try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);break
+                except BlockingIOError:
+                    job=getattr(self.job_context,"job",None);event=getattr(self.job_context,"event",None)
+                    if self.cancel.is_set()or(event is not None and event.is_set())or(job and(job.get("revoked")or job.get("lease_until",0)<=time.time())):
+                        raise PermissionError("Artifact admission cancelled")
+                    if time.monotonic()>deadline:raise TimeoutError("Artifact lock timeout")
+                    time.sleep(.1)
+            yield
+        finally:os.close(fd)
+
+    def build_ability_artifacts(self,job_id,source_root=None):
+        """Compile fixed declared inputs before publication; revalidation reuses verified immutable artifacts."""
+        root=ASSET_ROOT/"releases"/job_id if source_root is None else Path(source_root)
+        if source_root is not None:
+            active=getattr(self.job_context,"job",None)
+            if not active or active["job_id"]!=job_id or root!=Path(active["release_root"])or root.resolve()!=root:
+                raise ValueError("Owned frozen compiler source required")
         outputs=[]
         for declaration in sorted((root/ABILITY_ROOT).glob("*/*/plugin.json")):
             manifest=json.loads(declaration.read_bytes())
@@ -937,33 +1029,46 @@ class Runner:
             compile_build={k:v for k,v in build.items()if k!="assets"}
             key=hashlib.sha256(canonical({"build":compile_build,"entrypoint":entry,"inputs":inputs})).hexdigest()
             legacy_key=hashlib.sha256(canonical({"build":build,"entrypoint":entry,"inputs":inputs})).hexdigest()
-            artifact=ASSET_ROOT/"artifacts"/key;binary=artifact/entry
-            if binary.is_file():
-                outputs.append({"package":manifest["id"],"build_key":key,"reused":True});continue
-            legacy=ASSET_ROOT/"artifacts"/legacy_key/entry
-            if legacy.is_file()and not legacy.is_symlink():
+            with self.plugin_build_lock(key):
+                artifact=ASSET_ROOT/"artifacts"/key;binary=artifact/entry
+                if self.plugin_artifact_verified(artifact,entry,key):
+                    outputs.append({"package":manifest["id"],"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":True});continue
+                legacy=ASSET_ROOT/"artifacts"/legacy_key/entry
+                if self.plugin_artifact_verified(legacy.parent,entry,legacy_key):
+                    artifact.mkdir(parents=True,exist_ok=True);temporary=artifact/("."+entry+".new")
+                    shutil.copyfile(legacy,temporary);temporary.chmod(0o555);os.replace(temporary,binary)
+                    scheduler_module.Scheduler.write_record(artifact/"compiler-receipt.json",{"input_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"recipe":executor_module.RUST+":release:locked:offline:debug0"})
+                    outputs.append({"package":package.name,"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":True,"migrated_from":legacy_key})
+                    continue
+                cache=STATE/"plugin-builds"/key;cache.mkdir(parents=True,exist_ok=True)
+                # Only the declared application package enters the builder. No credentials,
+                # state, workspaces, control sockets or network enter compilation.
+                source=cache/"source";source.mkdir(exist_ok=True)
+                for name in names:
+                    target=source/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes((package/name).read_bytes())
+                controlled=getattr(getattr(self,"resources",None),"enabled",False)
+                if controlled:
+                    active=getattr(self.job_context,"job",None)
+                    if active is None or active["job_id"]!=job_id:raise ValueError("Owned attributable plugin job required")
+                    self.executor.phase(active,"plugin_compile","plugin",source,cache,
+                        ["cargo","build","--release","--locked","--offline","--bin",entry],
+                        "plugin:rust1.90:"+manifest["id"],600)
+                else:
+                    self.command(["docker","run","--rm","--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
+                        "--user",str(CONFIG["service_uid"])+":"+str(CONFIG["service_gid"]),"--pids-limit","128","--memory","2g","--cpus","1",
+                        "--tmpfs","/tmp:rw,size=128m,mode=1777","--mount","type=bind,src="+str(source)+",dst=/package,readonly",
+                        "--mount","type=bind,src="+str(cache)+",dst=/output","-w","/package",
+                        "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=1","-e","CARGO_PROFILE_RELEASE_DEBUG=0",
+                        "rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f",
+                        "cargo","build","--release","--locked","--offline","--bin",entry],timeout=600)
+                if any(hashlib.sha256((source/name).read_bytes()).hexdigest()!=inputs[name]for name in names):
+                    raise ValueError("Plugin build inputs changed")
+                output=cache/"target/release"/entry
+                if output.is_symlink()or not output.is_file()or output.stat().st_size>32*1024*1024:raise ValueError("Invalid plugin artifact")
                 artifact.mkdir(parents=True,exist_ok=True);temporary=artifact/("."+entry+".new")
-                shutil.copyfile(legacy,temporary);temporary.chmod(0o555);os.replace(temporary,binary)
-                outputs.append({"package":package.name,"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":True,"migrated_from":legacy_key})
-                continue
-            cache=STATE/"plugin-builds"/key;cache.mkdir(parents=True,exist_ok=True)
-            # Only the declared application package enters the builder. No credentials,
-            # state, workspaces, control sockets or network enter compilation.
-            source=cache/"source";source.mkdir(exist_ok=True)
-            for name in names:
-                target=source/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes((package/name).read_bytes())
-            self.command(["docker","run","--rm","--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
-                "--user",str(CONFIG["service_uid"])+":"+str(CONFIG["service_gid"]),"--pids-limit","128","--memory","2g","--cpus","1",
-                "--tmpfs","/tmp:rw,size=128m,mode=1777","--mount","type=bind,src="+str(source)+",dst=/package,readonly",
-                "--mount","type=bind,src="+str(cache)+",dst=/output","-w","/package",
-                "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=1","-e","CARGO_PROFILE_RELEASE_DEBUG=0",
-                "rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f",
-                "cargo","build","--release","--locked","--offline","--bin",entry],timeout=600)
-            output=cache/"target/release"/entry
-            if output.is_symlink()or not output.is_file()or output.stat().st_size>32*1024*1024:raise ValueError("Invalid plugin artifact")
-            artifact.mkdir(parents=True,exist_ok=True);temporary=artifact/("."+entry+".new")
-            shutil.copyfile(output,temporary);temporary.chmod(0o555);os.replace(temporary,binary)
-            outputs.append({"package":manifest["id"],"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":False})
+                shutil.copyfile(output,temporary);temporary.chmod(0o555);os.replace(temporary,binary)
+                scheduler_module.Scheduler.write_record(artifact/"compiler-receipt.json",{"input_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"recipe":executor_module.RUST+":release:locked:offline:debug0"})
+                outputs.append({"package":manifest["id"],"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":False})
         return outputs
 
     def validate_ui(self, job_id, changed):
@@ -1048,7 +1153,7 @@ class Runner:
 
     def core_compile_inputs(self):
         import posixpath
-        raw=self.command(["docker","exec",TARGETS[0],"cat","/usr/local/lib/webagent/core-inputs.txt"],timeout=10)
+        raw=self.command(["docker","exec",TARGETS[0],"cat","/usr/local/lib/webagent/core-inputs.txt"],timeout=10,private_raw=True)
         paths=set()
         for path in raw.splitlines():
             if path.startswith("/build/"):path=path[len("/build/"):]
@@ -1206,6 +1311,17 @@ class Runner:
                 finished.set();watcher.join(timeout=12)
                 subprocess.run(["docker","rm","-f",container],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
     def build(self, blob, job_id, role):
+        if hasattr(self,"resources")and self.resources.enabled:
+            job=getattr(self.job_context,"job",None)
+            if not job or job["job_id"]!=job_id:raise PermissionError("Bound compiler job required")
+            artifacts,compiler_log=self.executor.engine(job,blob,lambda root,data:release.extract(root,data,context_digest),lambda data:context_digest(data)[0])
+            packaging_path=Path(CONFIG["state_root"])/"execution"/job_id/("package-"+role+".tar")
+            if packaging_path.exists():raise ValueError("Packaging context requires reconciliation")
+            try:
+                packaging=self.executor.package(blob,artifacts,lambda data:release.entries(data,context_digest),role=role,destination=packaging_path)
+                image,package_log=self._build_packaged(packaging,job_id,role)
+            finally:packaging_path.unlink(missing_ok=True)
+            return image,(compiler_log if role=="api"else"")+package_log
         tag = TARGETS[1 if role=="loop" else 0]+":job-"+job_id
         log = self.command(["docker", "buildx", "build", "--builder", "default", "--load",
                             "--progress=plain", "--target", role, "-f", "v3/Dockerfile",
@@ -1214,6 +1330,19 @@ class Runner:
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
             raise ValueError("invalid image identity")
         return image, log
+
+    def _build_packaged(self,blob,job_id,role):
+        """Package already verified artifacts; BuildKit does not execute Cargo in this context."""
+        tag="webagent-v3-"+role+"-"+job_id
+        job=getattr(self.job_context,"job",None)
+        if job is None or job["job_id"]!=job_id:raise ValueError("Owned packaging job required")
+        with self.executor.packager(job,role=role)as builder:
+            with Path(blob).open("rb")as stream:
+                log=self.command(["docker","buildx","build","--builder",builder,"--load","--progress=plain","--target",role,"-f","v3/Dockerfile","-t",tag,"-"],stdin=stream,timeout=3600)
+        image=self.command(["docker","image","inspect","--format","{{.Id}}",tag],timeout=30).strip()
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}",image):raise ValueError("Image identity unavailable")
+        return image,log
+
 
     def export(self, images, destination):
         if any(not re.fullmatch(r"sha256:[0-9a-f]{64}", image) for image in images):
@@ -1319,7 +1448,7 @@ class Broker:
             raise ValueError("development build broker already running")
         self.runner = runner or Runner()
         self.lock = threading.RLock()
-        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG.get("scheduler",{}).get("max_phases",4)if CONFIG.get("scheduler",{}).get("mode")=="enforce"else 1)
         self.ui_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.deploy_lock = threading.RLock()
         self.active_ui = None
@@ -1328,6 +1457,8 @@ class Broker:
         self.queue_index = {}
         self.requests = {}
         self.active = None
+        self.active_jobs=set()
+        self.check_runs={}
         self.stopping = False
         self.maintenance_file=self.state/"coordination/maintenance.json"
         self.workspace_leases={}
@@ -1342,11 +1473,16 @@ class Broker:
         self.work = json.loads(self.work_path.read_text()) if self.work_path.exists() else {}
         if not isinstance(self.work, dict) or len(self.work) > 1000:
             raise ValueError("invalid coordination registry")
-        self.code_index_ledger=maintenance_engine.Ledger(Path(CONFIG["install_root"]).parent/"code-index-maintenance"if self.state==Path(CONFIG["state_root"])else self.state/"code-index-maintenance",inventory=getattr(self.runner,"maintenance_inventory",None))
+        self.code_index_ledger=maintenance_engine.Ledger(Path(CONFIG["install_root"]).parent/"code-index-maintenance"if self.state==Path(CONFIG["state_root"])else self.state/"code-index-maintenance",inventory=getattr(self.runner,"maintenance_inventory",None),max_bytes=512*1024*1024)
         self.runner.maintenance_snapshot_folder=self.code_index_ledger.folder/"snapshots"
         self.runner.maintenance_provider=self._code_index_snapshot
         self.runner.maintenance_activated=self._code_index_activated
         self.performance = performance.Performance(self)
+        self.scheduler=scheduler_module.Scheduler(self,CONFIG)
+        self.resources=resource_module.Resources(self.state,self.runner,CONFIG.get("scheduler",{}))
+        self.runner.resources=self.resources
+        self.runner.executor=executor_module.Executor(self.runner,self.resources,CONFIG)
+        self.resources.start()
         self.work_activity = {key: self._work_content(item) for key, item in self.work.items()}
         for path in sorted(self.state.glob("*.json")):
             if path==self.maintenance_file:continue
@@ -1385,7 +1521,25 @@ class Broker:
             for job in self.jobs.values():
                 if job.get("batch_members") and job["status"] not in ("queued", "running"):
                     self._mirror_batch(job)
+            self.scheduler.migrate_legacy()
             self._start_next()
+
+    scheduler_entries=staticmethod(lambda blob:release.entries(blob,context_digest))
+    scheduler_extract=staticmethod(lambda root,blob:release.extract(root,blob,context_digest))
+    scheduler_digest=staticmethod(lambda blob:context_digest(blob)[0])
+    scheduler_task_snapshot=staticmethod(lambda root:release.snapshot(root,TASK_CONTEXT,context_digest))
+    def scheduler_preserve_inspection(self,blob,tree):
+        """Copy only previously authorized read-only inspection snapshots into the new private generation."""
+        if not tree.exists():return blob
+        current=release.entries(blob,context_digest)
+        previous=release.entries(release.snapshot(tree,TASK_CONTEXT,context_digest),context_digest)
+        current.update({name:value for name,value in previous.items()if release.inspection_path(name)})
+        return release.archive(current,context_digest)
+    def scheduler_verify_health(self):
+        """Completion validates actual retained consumers, not only a past successful job flag."""
+        for name in TARGETS:
+            current=self.runner.inspect(name)
+            if not self.runner.healthy(name,current["Image"]):raise ValueError("Current consumer unhealthy")
 
     def _save(self, job):
         path = self.state / (job["job_id"] + ".json")
@@ -1579,6 +1733,8 @@ class Broker:
                     for name in ("debug", "release", "cargo-home", "session-naming-check/debug"):
                         candidates.append((checkout_target / name, {}, "rebuildable_checkout_cache"))
                 for key, item in self.work.items():
+                    if not self.scheduler.retention_allowed(key):
+                        continue
                     clearance = item.get("retention_clearance", {})
                     job = self.jobs.get(item.get("job_id"), {})
                     if (not re.fullmatch(r"[a-f0-9]{64}", key) or item.get("status") != "closed"
@@ -1601,6 +1757,8 @@ class Broker:
                     if re.fullmatch(r"[0-9a-f-]{36}", job_id):
                         candidates.append((self.state / job_id, item, "reconciled_job_artifacts"))
                 for cache, item, kind in candidates:
+                    if kind in {"reconciled_task_source", "reconciled_job_artifacts"} and not self.scheduler.retention_allowed(item["key"]):
+                        continue
                     if any(parent.is_symlink() for parent in (cache, *cache.parents)) or not cache.is_dir():
                         continue
                     resolved = cache.resolve()
@@ -1721,6 +1879,7 @@ class Broker:
         return True
 
     def _can_start_parallel_ui(self):
+        if self.scheduler.mode=="enforce":return False
         if self.active_ui is not None or self.active is None or self.stopping:
             return False
         active = self.jobs[self.active]
@@ -1771,7 +1930,7 @@ class Broker:
         completed = [job.get("finished_at", 0) for job in self.jobs.values()
                      if job.get("isolated") and (job["status"] == "completed"
                      or job.get("operator_adopted_at"))
-                     and job["operation"] in ("deploy", "build_deploy", "ui_deploy", "index_deploy", "host_service_deploy")
+                     and job["operation"] in ("deploy", "build_deploy", "ui_deploy", "index_deploy", "host_service_deploy", "plugin_deploy")
                      and job.get("effects_started")]
         latest = max(completed, default=0)
         return any(job["status"] == "uncertain"
@@ -1789,15 +1948,29 @@ class Broker:
         state=self._maintenance()
         return not state["drained"] or (trusted.get("local_caller") is True and args.get("task_id")==state.get("task_id") and state.get("task_id") is not None)
     def _start_next(self):
-        if (self.active is not None or self.active_ui is not None or self.stopping or
-                self._has_unresolved_release()):
+        self.scheduler.housekeeping()
+        controlled=self.scheduler.mode=="enforce"
+        if self.stopping or self._has_unresolved_release()or (not controlled and(self.active is not None or self.active_ui is not None)):
             return
+        if controlled and len(self.active_jobs)>=CONFIG["scheduler"]["max_phases"]:return
         # UI releases pass queued image builds, but never an active release.
         pending = sorted(self.jobs.values(), key=lambda value: (
             value.get("operation") not in HOT_OPERATIONS, value["created_at"]))
         for job in pending:
+            if job["operation"]=="check"and job["status"]=="queued"and job["job_id"]in self.check_runs:
+                if controlled and not self.scheduler.execution_eligible(job,[self.jobs[key]for key in self.active_jobs]):continue
+                call=self.check_runs.pop(job["job_id"])
+                self.active_jobs.add(job["job_id"]);self.active=next(iter(self.active_jobs),None)
+                job.update(status="running",phase="checking_source",started_at=time.time())
+                job.setdefault("phase_history",[]).append({"phase":"checking_source","at":job["started_at"]})
+                self._save(job);self.pool.submit(self._execute_check,*call)
+                if not controlled:return
+                if len(self.active_jobs)>=CONFIG["scheduler"]["max_phases"]:return
+                continue
             if not job.get("isolated") or job["status"] != "queued":
                 continue
+            if job["job_id"]in self.active_jobs:continue
+            if controlled and not self.scheduler.execution_eligible(job,[self.jobs[key]for key in self.active_jobs]):continue
             try:
                 task_id=job.get("task_id") or next((v["task_id"] for v in self.work.values() if v.get("job_id")==job["job_id"]),None)
                 if not self._maintenance_allowed({"local_caller":job.get("user_id")=="codex-local"},{"task_id":task_id}):continue
@@ -1814,7 +1987,7 @@ class Broker:
                 if not self._sync_job(job, live, candidate, changed):
                     continue
                 members = [self.jobs[jid] for jid in job.get("batch_members", ())] if resuming else []
-                if not resuming and job["operation"] == "build_deploy" and not job["synchronization"]["total"]:
+                if not controlled and not resuming and job["operation"] == "build_deploy" and not job["synchronization"]["total"]:
                     # Merge compatible queued work from the same caller before
                     # compiling. Each task retains its own durable job receipt.
                     for follower in pending:
@@ -1868,8 +2041,12 @@ class Broker:
                                   phase="batched_waiting")
                     self._save(member)
                 self._save(job)
-                self.active = job["job_id"]
+                self.active_jobs.add(job["job_id"])
+                self.active=next(iter(self.active_jobs))
                 self.pool.submit(self._run, job, candidate)
+                if controlled:
+                    if len(self.active_jobs)>=CONFIG["scheduler"]["max_phases"]:return
+                    continue
                 return
             except Exception as error:
                 job.update(status="failed", phase="admission_failed",
@@ -1902,11 +2079,12 @@ class Broker:
                 "requested_by": trusted["user_id"], "requested_at": time.time(),
                 "affected_job_ids": affected}
             parent["revoked"] = True
-            active = parent["job_id"] in (self.active, self.active_ui)
+            active = parent["job_id"]in self.active_jobs or parent["job_id"]==self.active_ui or parent["status"]=="running"
             if not active:
                 parent.update(status="cancelled", reason="queued job cancelled before execution",
                               finished_at=time.time())
             self._save(parent)  # Persist intent before signalling execution.
+            if not active:self.check_runs.pop(parent["job_id"],None)
             for member_id in parent.get("batch_members", []):
                 member = self.jobs[member_id]
                 member["cancel_request"] = parent["cancel_request"]
@@ -2030,6 +2208,7 @@ class Broker:
                 "summary": "Structured test result was not recorded; inspect the failure reason"}
 
     def _lease(self, job):
+        if self.scheduler.mode=="enforce"and job.get("ownership_id"):self.scheduler.assert_job(job)
         if job.get("revoked") or job.get("lease_until", 0) <= time.time():
             raise PermissionError("host job authorization expired or revoked; no automatic replay")
 
@@ -2172,6 +2351,16 @@ class Broker:
         # The same caller/session namespace and checked patch gate own task edits.
         name = request["name"]
         task_id = args.get("task_id")
+        if task_id is None and name in ("file_edit","file_write"):
+            request_id=args.get("request_id")
+            if not isinstance(request_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",request_id):raise ValueError("Stable implicit source request ID required")
+            owned=[i for i in self.work.values()if self._owned(i,trusted,workspace)and i.get("implicit_source")]
+            previous=next((i for i in owned if request_id in i.get("applies",{})),None)
+            current=previous or next((i for i in sorted(owned,key=lambda v:v["created_at"],reverse=True)if i["status"]=="open"),None)
+            task_id=current["task_id"]if current else"auto-source-"+hashlib.sha256(canonical([trusted["user_id"],workspace,request_id])).hexdigest()[:48]
+            args={**args,"task_id":task_id}
+            implicit=True
+        else:implicit=False
         if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", task_id):
             raise ValueError("task_id must be 8-80 letters, digits, underscores or hyphens")
         allowed = {
@@ -2205,6 +2394,7 @@ class Broker:
             call("v3_build_work", {"action": "begin", "task_id": task_id,
                 "summary": "Isolated source work: " + task_id, "mode": "isolated"})
             item = self.work[key]
+            if implicit:item["implicit_source"]=True;self._save_work()
         if item.get("mode") != "isolated" or item["status"] != "open":
             raise ValueError("task is no longer open; use a new task_id")
         forwarded = {"task_id": task_id, "path": path}
@@ -2292,6 +2482,7 @@ class Broker:
 
     def unified_build(self, request, args):
         action = args.get("action")
+        if action in self.scheduler.actions:return self.scheduler.handle(args,request["trusted"],request["workspace"])
         allowed = {"action", "task_id", "summary", "expected_inputs_sha256", "sync_decision",
             "expected_sync_digest", "offset", "job_id", "request_id", "check", "timeout_seconds"}
         if set(args) - allowed: raise ValueError("unsupported build_work argument")
@@ -2478,6 +2669,92 @@ class Broker:
         result.update(source_kind="untrusted_maintenance_metadata",completion_is_review_assertion=True)
         return result
 
+    def cargo_request(self,args,trusted,workspace):
+        """Capture under the coordinator lock; compile an isolated copy outside it and attest unchanged inputs."""
+        if set(args)-{"task_id","task","expected_inputs_sha256","timeout_seconds","request_id"}or not{"task_id","task","expected_inputs_sha256"}<=set(args):
+            raise ValueError("Task-scoped Cargo check arguments required")
+        task_id,task=args["task_id"],args["task"];expected=args["expected_inputs_sha256"];timeout=args.get("timeout_seconds",600)
+        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
+            raise ValueError("Bounded task Cargo request required")
+        request_id=args.get("request_id")
+        if request_id is not None and (not isinstance(request_id,str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",request_id)):
+            raise ValueError("Stable check request ID required")
+        request_key="check-"+hashlib.sha256(canonical([trusted["user_id"],workspace,task_id,request_id])).hexdigest() if request_id else None
+        request_signature=hashlib.sha256(canonical([task_id,task,expected,timeout])).hexdigest()
+        with self.lock:
+            self._incoming_lease(trusted)
+            if request_key:
+                previous=next((j for j in self.jobs.values() if j.get("request_key")==request_key),None)
+                if previous:
+                    if previous.get("check_signature")!=request_signature:raise ValueError("Check request ID reused with different inputs")
+                    return (previous.get("check_result") if previous["status"] not in {"queued","running"} else None) or {"task_id":task_id,"job_id":previous["job_id"],"task":task,"status":previous["status"],"inputs_sha256":previous["inputs_sha256"],"log_excerpt":scrub(previous.get("log",""))[-4096:]}
+            if not self._maintenance_allowed(trusted,{"task_id":task_id}):raise PermissionError("Build service drained")
+            self._incoming_lease(trusted)
+            key=hashlib.sha256(canonical([trusted["user_id"],workspace,task_id])).hexdigest();item=self.work.get(key)
+            if not item or item.get("mode")!="isolated"or item["status"]!="open":raise ValueError("Open isolated task required")
+            root=self.work_dir/"trees"/key;blob=release.snapshot(root,TASK_CONTEXT,context_digest);before=context_digest(blob)[0]
+            if before!=expected:raise ValueError("Stale task source inputs")
+            if any(j.get("task_id")==task_id and self._owned(j,trusted,workspace)and j["status"]in {"running","queued"}and (j["operation"]!="check"or self.scheduler.mode!="enforce"or not request_id)for j in self.jobs.values()):
+                raise ValueError("This task already has pending execution")
+            ownership_value=None
+            if self.scheduler.mode=="enforce":
+                self.scheduler.submit(item,trusted,workspace,["src","Cargo.toml","Cargo.lock"],before)
+                ownership_value=self.scheduler.store.get(key)
+            job_id=str(uuid.uuid4());event=threading.Event();self.job_cancellations[job_id]=event
+            job={"job_id":job_id,"request_key":request_key or "check-"+job_id,"check_signature":request_signature,"task_id":task_id,"user_id":trusted["user_id"],"workspace":workspace,
+                "operation":"check","status":"queued","phase":"queued_check","created_at":time.time(),"started_at":None if request_id else time.time(),
+                "inputs_sha256":before,"lease_until":time.time()+timeout+120,"access_fingerprint":trusted["access_fingerprint"],
+                "images":{},"log":"","phase_history":[],"summary":"Isolated Cargo "+task}
+            if ownership_value:
+                job.update(ownership_id=key,ownership_epoch=ownership_value["epoch"],source_generation=ownership_value["generation"])
+            self.jobs[job_id]=job;self._save(job)
+            item["last_check_job_id"]=job_id
+            item["last_activity_at"]=time.time();item.pop("leftover_notice",None);self._save_work()
+            self.check_runs[job_id]=(job,item,root,blob,before,task,timeout,event)
+            self._start_next()
+        if request_id:
+            return {"task_id":task_id,"job_id":job_id,"task":task,"status":"queued","inputs_sha256":before,"log_excerpt":""}
+        # Legacy synchronous callers wait outside the coordination lock.
+        deadline=time.monotonic()+timeout
+        while time.monotonic()<deadline:
+            with self.lock:
+                if job.get("check_result"):return job["check_result"]
+                if job["status"]not in {"queued","running"}:
+                    return {"task_id":task_id,"job_id":job_id,"task":task,"status":job["status"],"inputs_sha256":before,"log_excerpt":""}
+            time.sleep(0.05)
+        raise TimeoutError("Check remains queued or running; inspect the existing job receipt")
+
+    def _execute_check(self,job,item,root,blob,before,task,timeout,event):
+        """Execute a captured check outside coordination; interrupted jobs require an explicit new request."""
+        job_id=job["job_id"];task_id=job["task_id"]
+        with self.lock:
+            job.update(status="running",phase="checking_source",started_at=time.time());self._save(job)
+        try:
+            self._lease(job)
+            if event.is_set():raise PermissionError("Check cancelled before execution")
+            if context_digest(release.snapshot(root,TASK_CONTEXT,context_digest))[0]!=before:
+                raise ValueError("Task changed before check execution")
+            if hasattr(self.runner,"job_context"):self.runner.job_context.job=job;self.runner.job_context.event=event
+            if self.resources.enabled:
+                log=self.runner.executor.check(job,blob,task,timeout,lambda p,b:release.extract(p,b,context_digest))
+            else:log=self.runner.cargo_task(root,self.state/"checks"/job_id,task,timeout)
+            status="completed"
+        except Exception as error:
+            log=scrub(str(error));status="cancelled"if isinstance(error,PermissionError)else"failed"
+        finally:
+            if hasattr(self.runner,"job_context"):self.runner.job_context.job=None;self.runner.job_context.event=None
+        with self.lock:
+            after=context_digest(release.snapshot(root,TASK_CONTEXT,context_digest))[0]
+            if after!=before:status="stale"
+            job.update(status=status,phase="finished",finished_at=time.time(),log=scrub(log)[-MAX_LOG:],reason="Inputs unchanged"if after==before else"Task changed during check")
+            job["rust_tests"]={"status":("passed" if status=="completed" else status) if task=="test" else "not_run","check":task}
+            job["check_result"]={"task_id":task_id,"job_id":job_id,"task":task,"status":status,"inputs_sha256":after,"log_excerpt":scrub(log)[-4096:]}
+            job.setdefault("phase_history",[]).append({"phase":"finished","at":job["finished_at"]})
+            self._save(job);self.job_cancellations.pop(job_id,None);item["last_activity_at"]=time.time();self._save_work()
+            self.active_jobs.discard(job_id);self.active=next(iter(self.active_jobs),None)
+            self._start_next()
+        return job["check_result"]
+
     def handle(self, request):
         if not isinstance(request, dict) or set(request) - {"id", "name", "arguments", "workspace", "timeout_seconds", "trusted"}:
             raise ValueError("invalid broker request")
@@ -2500,6 +2777,10 @@ class Broker:
             with self.lock:
                 if args.get("action")not in {"list","get"}and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; maintenance disabled")
             return self.code_index_maintenance(args,trusted,workspace)
+        if name=="v3_cargo_task":return self.cargo_request(args,trusted,workspace)
+        if name=="build_work"and args.get("action")=="check":
+            if set(args)-{"action","task_id","check","expected_inputs_sha256","timeout_seconds","request_id"}:raise ValueError("Unsupported check arguments")
+            return self.cargo_request({"task_id":args.get("task_id"),"task":args.get("check","check"),"expected_inputs_sha256":args.get("expected_inputs_sha256"),"timeout_seconds":args.get("timeout_seconds",600),**({"request_id":args["request_id"]} if "request_id" in args else {})},trusted,workspace)
         with self.lock:
             if name == "build_service_maintenance":
                 if not trusted.get("local_caller") or set(args)-{"action","task_id"} or args.get("action") not in {"status","drain","resume"}:raise PermissionError("Operator maintenance required")
@@ -2510,12 +2791,16 @@ class Broker:
                     with os.fdopen(fd,"w") as stream:json.dump(state,stream);stream.flush();os.fsync(stream.fileno())
                     os.replace(temporary,self.maintenance_file)
                     if not state["drained"]:self._start_next()
-                return {**self._maintenance(),"busy":bool(self.active or self.active_ui),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
-            read_actions={"status","review","preflight","receipt","list","get","read","search","job","artifact"}
+                return {**self._maintenance(),"busy":bool(self.active or self.active_ui or any(j["status"]=="running"for j in self.jobs.values())),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
+            read_actions={"status","review","preflight","receipt","list","get","read","search","job","artifact","reservations","resources","takeover_preview"}
             read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
             if name not in read_names and args.get("action") not in read_actions and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; new work disabled")
             if name == "performance_work":
                 return self.performance.handle(trusted, workspace, args)
+            if name == "v3_build_scheduler":
+                if trusted["user_id"]!="admin"or workspace!="00000000-0000-0000-0000-000000000000":raise PermissionError("Administrator scheduler denied")
+                self._incoming_lease(trusted)
+                return self.scheduler.handle(args,trusted,workspace)
             if name == "build_work":
                 return self.unified_build(request, args)
             if name in ("file_list", "file_read", "file_search", "file_edit", "file_write"):
@@ -2589,8 +2874,8 @@ class Broker:
                     view = self._view(job, administrator=True)
                     view.pop("access_fingerprint", None)
                     view["log"] = view["log"][-2048:]
-                    view["task_id"] = tasks.get(job["job_id"], {}).get("task_id")
-                    summary = tasks.get(job["job_id"], {}).get("summary")
+                    view["task_id"] = tasks.get(job["job_id"], {}).get("task_id") or job.get("task_id")
+                    summary = tasks.get(job["job_id"], {}).get("summary") or job.get("summary")
                     if job["operation"] in HOT_OPERATIONS:
                         summary = "UI release · " + (summary or job["job_id"])
                     elif job.get("batch_parent") or job.get("batch_members"):
@@ -2627,7 +2912,8 @@ class Broker:
                 live = self._current_release_blob()
                 return {"leftovers": leftovers, "leftover_total": len(leftovers), "leftover_policy": policy,
                         "jobs": jobs, "busy": self.active is not None or self.active_ui is not None,
-                        "containers": containers, "synchronization": self._sync_report(live, live, ())}
+                        "containers": containers, "synchronization": self._sync_report(live, live, ()),
+                        "scheduler":self.scheduler.list(trusted,workspace,True),"resources":self.resources.snapshot()}
             if name == "v3_build_result":
                 if (trusted["user_id"] != "admin"
                         or workspace != "00000000-0000-0000-0000-000000000000"
@@ -2647,6 +2933,7 @@ class Broker:
                 view["finished_at"] = job.get("finished_at")
                 view["phase_history"] = job.get("phase_history", [])[-32:]
                 view["rust_tests"] = self._rust_test_result(job)
+                view["resources"]=self.resources.snapshot(job["job_id"])
                 return {"job": view}
             if name in ("administrator_host_lease", "administrator_host_revoke"):
                 if args:
@@ -2706,42 +2993,6 @@ class Broker:
                         return {"status": "ok", "service": "v3-build-worker.service",
                                 "active": True, "interrupted_job": None}
                 raise RuntimeError("Restart requested but fresh worker readiness was not confirmed; inspect host before retry")
-            if name == "v3_cargo_task":
-                if set(args) - {"task_id", "task", "expected_inputs_sha256", "timeout_seconds"} or not {
-                        "task_id", "task", "expected_inputs_sha256"} <= set(args):
-                    raise ValueError("task-scoped Cargo check arguments required")
-                task_id, task = args["task_id"], args["task"]
-                timeout = args.get("timeout_seconds", 600)
-                expected = args["expected_inputs_sha256"]
-                if (not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", task_id)
-                        or task not in ("check", "test")
-                        or not isinstance(expected, str) or not re.fullmatch(r"[a-f0-9]{64}", expected)
-                        or type(timeout) is not int or not 1 <= timeout <= 600):
-                    raise ValueError("bounded task Cargo request required")
-                key = hashlib.sha256(canonical([trusted["user_id"], workspace, task_id])).hexdigest()
-                item = self.work.get(key)
-                if not item or item.get("mode") != "isolated" or item["status"] != "open":
-                    raise ValueError("open isolated task required")
-                root = self.work_dir / "trees" / key
-                before = context_digest(release.snapshot(root, TASK_CONTEXT, context_digest))[0]
-                if before != expected:
-                    raise ValueError("stale task source inputs")
-                item["last_activity_at"] = time.time()
-                item.pop("leftover_notice", None)
-                self._save_work()
-                try:
-                    log = self.runner.cargo_task(root, self.state / "checks" / key, task, timeout)
-                    status = "completed"
-                except (RuntimeError, TimeoutError, ValueError) as error:
-                    log = scrub(str(error))
-                    status = "failed"
-                after = context_digest(release.snapshot(root, TASK_CONTEXT, context_digest))[0]
-                if after != before:
-                    status = "stale"
-                item["last_activity_at"] = time.time()
-                self._save_work()
-                return {"task_id": task_id, "task": task, "status": status,
-                        "inputs_sha256": after, "log_excerpt": scrub(log)[-4096:]}
             if name == "v3_source_read_batch":
                 if set(args) != {"task_id", "requests"} or not isinstance(args["requests"], list) or not 1 <= len(args["requests"]) <= 4:
                     raise ValueError("one to four task source reads required")
@@ -2980,6 +3231,9 @@ class Broker:
                     raise ValueError("stale source inputs")
                 source = tree / "v3"
                 paths, patch = inspect_source_patch_corrected(source, patch)
+                self.scheduler.guard(item,trusted,workspace,paths,request_id)
+                if isolated and context_digest(release.snapshot(tree,TASK_CONTEXT,context_digest))[0]!=current:
+                    raise ValueError("Queued task refreshed to current source; reread before applying a patch")
                 receipt = {"task_id": task_id, "request_id": request_id, "request_sha256": digest,
                            "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(),
                            "status": "dispatching", "paths": paths}
@@ -2991,6 +3245,7 @@ class Broker:
                     receipt.update(status="uncertain", reason="source apply outcome requires review")
                 else:
                     receipt.update(status="success", reason="checked patch applied")
+                    self.scheduler.edited(item,trusted,workspace,request_id)
                 self._save_work()
                 return dict(receipt)
             if name == "v3_build_work":
@@ -3004,7 +3259,7 @@ class Broker:
                     if selected is not None and (not isinstance(selected, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", selected)):
                         raise ValueError("bounded task_id required")
                     own = [dict(task_id=i["task_id"], status=i["status"], summary=i["summary"],
-                                inputs_sha256=i.get("inputs_sha256"), job_id=i.get("job_id"),
+                                inputs_sha256=i.get("inputs_sha256"), job_id=i.get("job_id"), last_check_job_id=i.get("last_check_job_id"),
                                 mode=i.get("mode", "shared"), workspace_path=i.get("workspace_path"),
                                 synchronization=i.get("synchronization"),
                                 workspace_inputs_sha256=(context_digest(release.snapshot(
@@ -3080,6 +3335,7 @@ class Broker:
                     mode = args.get("mode", "shared")
                     if mode not in ("shared", "isolated"):
                         raise ValueError("unsupported source work mode")
+                    if self.scheduler.mode=="enforce"and mode!="isolated":raise ValueError("Enforced ownership requires isolated source tasks")
                     if any(work.get("mode", "shared") != mode for work in self._open_work()):
                         raise ValueError("shared and isolated work modes cannot overlap")
                     if mode == "shared" and any(job.get("isolated") and job["status"] in ("queued", "running") for job in self.jobs.values()):
@@ -3119,6 +3375,7 @@ class Broker:
                         item["base_inputs_sha256"] = context_digest(blob)[0]
                     self.work[key] = item
                     self._save_work()
+                    self.scheduler.ensure(item,trusted,workspace)
                     return {"task_id": task_id, "status": "open", "open_count": len(self._open_work()),
                             "workspace_path": item.get("workspace_path"),
                             "workspace_inputs_sha256": item.get("base_inputs_sha256")}
@@ -3150,6 +3407,7 @@ class Broker:
                         raise ValueError("stale work inputs")
                     base_blob = (folder / "baseline.tar").read_bytes()
                     _, changed = release.candidate(base_blob, task_blob, base_blob, context_digest, allow_empty=True)
+                    self.scheduler.submit(item,trusted,workspace,changed,current)
                     live = self._current_release_blob()
                     try:
                         candidate, current_changed = release.candidate(base_blob, task_blob, live, context_digest, allow_empty=True)
@@ -3204,6 +3462,7 @@ class Broker:
                     if ui_only:
                         job["rust_tests"] = {"status": "not_required",
                             "summary": "Compatible assets/plugin; no core Rust build required"}
+                    job.update(ownership_id=item["key"],ownership_epoch=item.get("ownership_epoch"),source_generation=item.get("source_generation",0))
                     self._save(job)
                     self.jobs[job_id] = job
                     item.update(status="closed", inputs_sha256=current, job_id=job_id,
@@ -3335,9 +3594,9 @@ class Broker:
             changed.update(paths)
         if tested_runtime:
             before = {name: item for name, item in release.entries(blob, context_digest).items()
-                      if not hot_source_path(name)}
+                      if not hot_source_path(name)and not generic_package_path(name,blob)}
             after = {name: item for name, item in release.entries(merged, context_digest).items()
-                     if not hot_source_path(name)}
+                     if not hot_source_path(name)and not generic_package_path(name,merged)}
             if before != after:
                 raise ValueError("runtime build inputs changed during UI release")
             old_ui = release.entries(blob, context_digest)
@@ -3347,7 +3606,7 @@ class Broker:
             job["built_inputs_sha256"] = job["inputs_sha256"]
             job["rust_tests"] = {"status": "passed",
                 "summary": "Runtime inputs tested before UI asset rebase; UI assets validated separately"}
-        elif not all(hot_source_path(path) for path in changed):
+        elif not all(hot_source_path(path)or generic_package_path(path,blob)or generic_package_path(path,merged)for path in changed):
             raise ValueError("parallel UI release changed runtime inputs")
         digest = context_digest(merged)[0]
         release_root = folder / ("release-rebased-" + digest[:16])
@@ -3369,6 +3628,10 @@ class Broker:
         return merged
 
     def _run_ui_hot(self, job, blob):
+        """Compile independent packages outside publication, then rebase and revalidate under its short lock."""
+        if self.scheduler.mode=="enforce"and job["operation"]=="plugin_deploy":
+            self._phase(job,"compiling_plugins")
+            job["plugin_artifacts"]=self.runner.build_ability_artifacts(job["job_id"],source_root=Path(job["release_root"]))
         with self.deploy_lock:
             self._run_ui_hot_locked(job, blob)
 
@@ -3451,6 +3714,10 @@ class Broker:
                 raise ValueError("General ability runtime contract unavailable; core migration required")
             if job["operation"] in ("index_deploy","plugin_deploy") and not self.runner.ui_hot_swappable():
                 raise ValueError("Index maintenance requires hot publication; container replacement is forbidden")
+            if job["operation"]=="plugin_deploy"and self.scheduler.mode=="enforce":
+                self._phase(job,"preparing_plugins")
+                self.runner.stage_assets(blob,job["job_id"])
+                self.runner.build_ability_artifacts(job["job_id"])
             if job["operation"] in HOT_OPERATIONS and self.runner.ui_hot_swappable():
                 self._run_ui_hot(job, blob)
                 return
@@ -3479,6 +3746,10 @@ class Broker:
                         job["log"] = scrub(job["log"] + log, self.runner.secrets)
                         self._save(job)
                 self.runner.check_space(MIN_DEPLOY_FREE)
+                if self.scheduler.mode=="enforce":
+                    self._phase(job,"preparing_plugins")
+                    self.runner.stage_assets(blob,job["job_id"])
+                    self.runner.build_ability_artifacts(job["job_id"])
             if job["operation"] in ("deploy", "build_deploy", "ui_deploy", "index_deploy", "plugin_deploy"):
                 self.deploy_lock.acquire()
                 deploy_locked = True
@@ -3609,7 +3880,8 @@ class Broker:
                     if job["status"] not in ("uncertain", "interrupted"):
                         self._maybe_start_parallel_ui()
                 else:
-                    self.active = None
+                    self.active_jobs.discard(job["job_id"])
+                    self.active=next(iter(self.active_jobs),None)
                 if job["status"] not in ("uncertain", "interrupted"):
                     self._start_next()
 
@@ -3624,6 +3896,7 @@ class Broker:
                     self._save(job)
 
     def shutdown(self):
+        if hasattr(self,"resources"):self.resources.close()
         self.performance.shutdown()
         self.pool.shutdown(wait=True)
         self.ui_pool.shutdown(wait=True)
@@ -3666,7 +3939,7 @@ async def serve(broker, listener, bridge_listener=None):
             response = {"id": request.get("id"), "status": "success", "output": result}
         except Exception as error:
             response = {"id": request.get("id") if isinstance(request, dict) else None,
-                        "status": "failed", "output": scrub(str(error), broker.runner.secrets)}
+                        "status": "failed", "output": getattr(error,"details",scrub(str(error), broker.runner.secrets))}
         writer.write(canonical(response) + b"\n")
         await writer.drain()
         writer.close()

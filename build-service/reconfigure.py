@@ -7,12 +7,12 @@ def module(name,path):
 def plan(previous,candidate):
     """Reject migrations and select only listener, origin or API-resource consumers for retained-image replacement."""
     changed={key for key in previous if previous[key]!=candidate.get(key)}
-    allowed={"bind_address","port","public_origin","api_pids_limit"}
+    allowed={"bind_address","port","public_origin","api_pids_limit","scheduler"}
     if changed-allowed:raise ValueError("This reconfiguration cannot relocate storage, sockets, identities or installed code")
     roles=set()
     if changed&{"bind_address","port","api_pids_limit"}:roles.add("api")
     if "public_origin"in changed:roles.update(("api","loop"))
-    return {"changed_fields":sorted(changed),"services":sorted(roles),"compile_required":False}
+    return {"changed_fields":sorted(changed),"services":sorted(roles),"compile_required":False,**({"broker_restart":True}if "scheduler"in changed else{})}
 def probe_listener(address,port):
     """Reject active listeners while allowing a released listener's residual TCP TIME_WAIT connections."""
     family=socket.AF_INET6 if ":"in address else socket.AF_INET
@@ -36,7 +36,7 @@ def apply(config_path,candidate_path,task_id,dry_run=False):
     cfg=module("reconfiguration_config",folder/"config.py")
     previous=cfg.load(config_path);candidate=cfg.load(candidate_path)
     change=plan(previous,candidate)
-    if dry_run or not change["services"]:return {**change,"status":"validated"}
+    if dry_run or not change["changed_fields"]:return {**change,"status":"validated"}
     ensure_reconciled(previous["state_root"])
     state=operator(previous,config_path,["maintenance","status"])
     if state.get("busy")or state.get("queued")or not state.get("drained")or state.get("task_id")!=task_id:

@@ -629,7 +629,14 @@ print("SEEDED" if result["baseline_commit"] else "FAILED")
         checkout.mkdir()
         with mock.patch.object(worker, "LIVE_CHECKOUT", checkout):
             result = await self.run_tool("shell", {"command": "pwd"})
-        self.assertEqual(result["output"].strip(), str(checkout))
+        self.assertEqual(result["output"].strip(), str(worker.ROOT/self.session))
+        with mock.patch.object(worker,"LIVE_CHECKOUT",checkout):
+            (checkout/"README.md").write_text("source")
+            result=await self.run_tool("shell",{"command":"cat "+str(checkout/"README.md")})
+            self.assertEqual(result["output"],"source")
+            result=await self.run_tool("shell",{"command":"echo bypass > "+str(checkout/"README.md")})
+            self.assertEqual(result["status"],"failed")
+        self.assertEqual((checkout/"README.md").read_text(),"source")
 
     async def test_timeout(self):
         result = await self.run_tool("shell", {"command": "sleep 30"}, 1)
@@ -754,11 +761,14 @@ print("SEEDED" if result["baseline_commit"] else "FAILED")
             await self.run_tool("shell", {"command": "touch forbidden"})
 
     async def test_approved_shell_can_read_outside_session_workspace(self):
-        outside = Path(self.tmp.name) / "live-source.txt"
-        outside.write_text("LIVE_SOURCE")
-        result = await self.run_tool("shell", {"command": "cat " + str(outside)})
-        self.assertEqual(result["status"], "success", result)
-        self.assertEqual(result["output"], "LIVE_SOURCE")
+        source=Path(self.tmp.name)/"checkout";source.mkdir()
+        outside=source/"README.md";outside.write_text("LIVE_SOURCE")
+        with mock.patch.object(worker,"LIVE_CHECKOUT",source):
+            result=await self.run_tool("shell",{"command":"cat "+str(outside)})
+        self.assertEqual(result["status"],"success",result);self.assertEqual(result["output"],"LIVE_SOURCE")
+        private=Path(self.tmp.name)/"unrelated-private";private.write_text("PRIVATE_FIXTURE")
+        result=await self.run_tool("shell",{"command":"cat "+str(private)})
+        self.assertEqual(result["status"],"failed")
 
     async def test_output_is_bounded(self):
         result = await self.run_tool("python", {"code": "print('x' * 2000000)"})

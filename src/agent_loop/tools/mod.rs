@@ -114,8 +114,8 @@ pub(crate) fn native_schemas() -> Vec<Value> {
         ("state_inspect", "Read bounded public metadata for the current session; catalog, session, chat, or runs", json!({"resource":{"type":"string","enum":["catalog","session","chat","runs"]},"after":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":50}}), vec!["resource"]),
         ("source_patch", "Apply a checked text patch to the seeded v3 source; policy-gated", json!({"patch":{"type":"string"},"expected_review_sha256":{"type":"string"}}), vec!["patch","expected_review_sha256"]),
         ("promotion_propose", "Submit the current reviewed v3 source patch for administrator approval; does not change live source", json!({"expected_review_sha256":{"type":"string"},"summary":{"type":"string"}}), vec!["expected_review_sha256","summary"]),
-        ("shell", "Execute a shell command from the live development checkout; policy-gated", json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600}}), vec!["command"]),
-        ("python", "Execute Python from the live development checkout; policy-gated", json!({"code":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600}}), vec!["code"]),
+        ("shell", "Execute a shell command in this session workspace; source is read-only and source changes require broker task tools; policy-gated", json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600}}), vec!["command"]),
+        ("python", "Execute Python in this session workspace; source is read-only and source changes require broker task tools; policy-gated", json!({"code":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600}}), vec!["code"]),
     ].into_iter().map(|(name, description, properties, required)| json!({
         "type":"function", "name":name, "description":description,
         "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}

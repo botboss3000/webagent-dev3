@@ -1,3 +1,5 @@
-Run approved Python from /live-checkout. It can reach container paths permitted by its OS identity and mounts. Approval is required. Use it for bounded tasks and verification; the current worker does not isolate Python processes from sibling v3 workspaces.
+# python
 
-Python is not automatically scoped to an isolated broker task. Do not substitute live-checkout results for task verification or bypass task file tools. Live runtime policy determines authorization.
+Run approved python commands in the current session workspace. They may inspect mounted development source read-only and write only this workspace. Source writes require broker task file tools. Sibling workspaces, application state and control sockets are excluded from command access. Live runtime policy determines approval and authorization.
+
+For isolated task verification use build_work check with the current task digest. Workspace command results do not verify an isolated broker draft. Keep checks bounded and preserve cancellation/recovery.

@@ -1,12 +1,26 @@
 """Installation-owned paths and identities, never model arguments."""
 import json,os,pwd,re,stat
 from pathlib import Path
+# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Reviewed scheduler defaults merged with protected installation JSON. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds and resource thresholds.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent"]}],"opportunities":[]}}
+def scheduler_defaults():
+ """Load reviewed source defaults; protected installation overrides remain the operator authority."""
+ path=Path(__file__).with_name("scheduler-defaults.json")
+ if path.is_symlink():raise PermissionError("Scheduler defaults symlink")
+ return json.loads(path.read_text())
 def validate(value):
  """Validate installation authority, topology and the bounded API process/thread budget."""
  if not isinstance(value,dict):raise ValueError("Configuration must be an object")
- allowed={"instance","checkout_root","service_account","source_owner","state_root","workspace_root","runtime_root","install_root","service_dir","app_uid","app_gid","worker_uid","worker_gid","api_container","loop_container","gate_container","bind_address","port","public_origin","worker_control","api_pids_limit"}
+ allowed={"instance","checkout_root","service_account","source_owner","state_root","workspace_root","runtime_root","install_root","service_dir","app_uid","app_gid","worker_uid","worker_gid","api_container","loop_container","gate_container","bind_address","port","public_origin","worker_control","api_pids_limit","scheduler"}
  if set(value)-allowed:raise ValueError("Unknown installation field")
  v=dict(value)
+ policy=v.get("scheduler",{})
+ if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent"}:raise ValueError("Invalid scheduler policy")
+ policy={**scheduler_defaults(),**policy}
+ if policy["mode"]not in {"observe","enforce"}or type(policy["orphan_after_seconds"])is not int or not 60<=policy["orphan_after_seconds"]<=86400:raise ValueError("Invalid ownership policy")
+ for key,default,low,high in [("reserve_bytes",768*1024**2,256*1024**2,16*1024**3),("reserve_percent",10,5,50),("max_phases",4,1,16),("max_parked",2,0,8),("memory_pressure_percent",5,1,50)]:
+  policy.setdefault(key,default)
+  if type(policy[key])is not int or not low<=policy[key]<=high:raise ValueError("Invalid scheduler resource policy: "+key)
+ v["scheduler"]=policy
  # Legacy installations retain their prior budget until an explicit operator reconfiguration.
  v.setdefault("api_pids_limit",256)
  if type(v["api_pids_limit"])is not int or not 256<=v["api_pids_limit"]<=4096:
@@ -42,7 +56,7 @@ def defaults(root=None):
  try:user=pwd.getpwuid(os.getuid()).pw_name if os.getuid()!=0 else "webagent-build"
  except KeyError:user="webagent-build"
  install=Path("/var/lib/webagent/development/build-service")
- return dict(api_pids_limit=256,instance="development",checkout_root=str(root),service_account=user,source_owner=user,state_root=str(root/"build-jobs"),workspace_root=str(root/"workspaces"),runtime_root=str(root/"runtime/build"),install_root=str(install),service_dir=str(install/"releases/bootstrap"),app_uid=1100,app_gid=1100,worker_uid=1000,worker_gid=1000,api_container="webagent-dev-v3",loop_container="webagent-dev-v3-loop",gate_container="webagent-dev-v3-gate",bind_address="127.0.0.1",port=8081,public_origin="http://127.0.0.1:8081",worker_control="/var/lib/webagent-v3-build-worker/control.sock")
+ return dict(scheduler=scheduler_defaults(),api_pids_limit=256,instance="development",checkout_root=str(root),service_account=user,source_owner=user,state_root=str(root/"build-jobs"),workspace_root=str(root/"workspaces"),runtime_root=str(root/"runtime/build"),install_root=str(install),service_dir=str(install/"releases/bootstrap"),app_uid=1100,app_gid=1100,worker_uid=1000,worker_gid=1000,api_container="webagent-dev-v3",loop_container="webagent-dev-v3-loop",gate_container="webagent-dev-v3-gate",bind_address="127.0.0.1",port=8081,public_origin="http://127.0.0.1:8081",worker_control="/var/lib/webagent-v3-build-worker/control.sock")
 def load(path=None):
  path=path or os.environ.get("WEBAGENT_BUILD_CONFIG")
  if path:

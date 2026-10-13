@@ -1169,7 +1169,7 @@
   {
     "type": "function",
     "name": "build_work",
-    "description": "Manage an isolated development build task: optional begin, review diff, check, preflight, explicit finish to build/test/deploy, status, receipt, decide or abandon. File tools with task_id auto-create tasks. Never finish without deployment authorization.",
+    "description": "Manage isolated source ownership, checks and release generations. reservations reveals conflicts; reserve acquires modules before edits; finish builds/tests/publishes but retains ownership. acceptance verifies release/commit plus agent checks; complete explicitly frees ownership. continue reopens corrections, handoff transfers atomically. resources and bounded pause/resume/priority/reconcile control attributable phases; takeover requires administrator review.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1184,7 +1184,23 @@
             "decide",
             "review",
             "check",
-            "receipt"
+            "receipt",
+            "create",
+            "reservations",
+            "reserve",
+            "heartbeat",
+            "continue",
+            "acceptance",
+            "complete",
+            "handoff",
+            "takeover_preview",
+            "takeover",
+            "recover",
+            "resources",
+            "pause",
+            "resume",
+            "priority",
+            "reconcile"
           ]
         },
         "task_id": {
@@ -1232,6 +1248,80 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 600
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "maxLength": 240
+          }
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expected_epoch": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "phase_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": -2,
+          "maximum": 2
+        },
+        "target_task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,80}$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "acceptance": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "properties": {
+              "check": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "passed": {
+                "type": "boolean",
+                "enum": [
+                  true
+                ]
+              }
+            },
+            "required": [
+              "check",
+              "passed"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "task_key": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
         }
       },
       "required": [

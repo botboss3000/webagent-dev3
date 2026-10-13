@@ -100,6 +100,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/control", put(control))
         .route("/file-manager", post(file_manager::action))
         .route("/admin/builds", get(build_dashboard::list))
+        .route("/admin/builds/scheduler", post(build_dashboard::scheduler))
         .route("/admin/builds/{job_id}/result", get(build_dashboard::result))
         .route("/admin/builds/{job_id}/cancel", post(build_dashboard::cancel))
         .route("/admin/builds/leftovers/{id}/review", post(build_dashboard::review_leftover))

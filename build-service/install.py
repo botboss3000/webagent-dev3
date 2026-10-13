@@ -192,9 +192,11 @@ def install(tree=None):
         publish(service, "index-scanner.py", scanner, 0o644)
         publish(service,"index-maintenance.py",maintenance,0o644)
         extra={"index-maintenance.py":hashlib.sha256(maintenance).hexdigest()}
-        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py"):
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","resources.py","resource_control.py","executor.py","scheduler-defaults.json"):
             body=read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
-            compile(body,name,"exec");publish(service,name,body,0o644)
+            if name.endswith(".py"):compile(body,name,"exec")
+            else:json.loads(body)
+            publish(service,name,body,0o644)
             extra[name]=hashlib.sha256(body).hexdigest()
             if read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))!=body:raise ValueError("Installation raced source edit")
         assets=source_path/"shared-ui"
@@ -590,6 +592,7 @@ def _supervisor(service, ready):
     host_fd = None
     child = None
     snapshot_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    resource_listener = socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
     snapshot_stopping = threading.Event()
     try:
         # Bind through a retained directory descriptor, not a mutable path.
@@ -632,6 +635,13 @@ def _supervisor(service, ready):
         os.chown(snapshot_path,CONFIG["service_uid"],CONFIG["service_gid"])
         os.chmod(snapshot_path, 0o600)
         snapshot_listener.listen(4)
+        resource_path="/proc/self/fd/"+str(runtime)+"/resource.sock"
+        remove_stale_socket(runtime,"resource.sock",CONFIG["service_uid"])
+        resource_listener.bind(resource_path)
+        os.chown(resource_path,CONFIG["service_uid"],CONFIG["service_gid"]);os.chmod(resource_path,0o600);resource_listener.listen(8)
+        resource_body=read_regular(service,"resource_control.py",2*1024*1024,owner=0)
+        resource_namespace={"__name__":"protected_build_resources"}
+        exec(compile(resource_body,"protected-resource-control.py","exec"),resource_namespace)
         error_fd = os.open("broker-error.log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=runtime)
         error_info = os.fstat(error_fd)
         if not stat.S_ISREG(error_info.st_mode) or error_info.st_nlink != 1 or PRIVILEGES.owner(error_info) != 0:
@@ -646,6 +656,7 @@ def _supervisor(service, ready):
             _drop_and_exec(host_fd, listener.fileno(), bridge_listener.fileno())
         os.close(error_fd)
         threading.Thread(target=snapshot_server, args=(snapshot_listener, context, snapshot_stopping), daemon=True).start()
+        threading.Thread(target=resource_namespace["serve"],args=(resource_listener,snapshot_stopping,CONFIG),daemon=True).start()
         publish(runtime, "supervisor.pid", str(os.getpid()).encode())
         publish(runtime, "broker.pid", str(child).encode())
         deadline = time.monotonic() + 10
@@ -700,6 +711,7 @@ def _supervisor(service, ready):
                 pass
         snapshot_stopping.set()
         snapshot_listener.close()
+        resource_listener.close()
         publish(runtime, "ready.json", b'{"ready":false}')
         if ready is not None:
             os.close(ready)

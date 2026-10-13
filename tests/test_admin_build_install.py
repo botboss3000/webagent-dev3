@@ -40,11 +40,13 @@ class InstallTests(unittest.TestCase):
         (self.source / "install.py").write_bytes(b"# fixture bootstrap\n")
         (self.source / "release.py").write_bytes(b"# fixture release\n")
         (self.source / "performance.py").write_bytes(b"# fixture protected performance\n")
-        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","deploy.py","buildctl.py"):
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","resources.py","resource_control.py","executor.py"):
             (self.source/name).write_bytes(b"# fixture module\n")
+        (self.source/"scheduler-defaults.json").write_text("{}")
         index_source=self.v3/"plugins/abilities/Administrator/code_index"
         index_source.mkdir(parents=True)
         (index_source/"adapter.py").write_bytes(b"# fixture protected parser\n")
+        (index_source/"maintenance.py").write_bytes(b"# fixture protected ledger\n")
         self.fake = FakePrivileges()
         self.patches = [patch.object(installer.shutil, "disk_usage", return_value=types.SimpleNamespace(free=5*1024*1024*1024)),
                         patch.object(installer, "PRIVILEGES", self.fake),
@@ -72,6 +74,9 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(b"# fixture protected performance\n").hexdigest(), result["performance_sha256"])
         self.assertEqual(0o644,(service/"performance.py").stat().st_mode & 0o777)
         self.assertEqual(0,self.fake.owner((service/"performance.py").stat()))
+        for name in ("ownership.py","scheduler.py","resources.py","resource_control.py","executor.py","scheduler-defaults.json"):
+            self.assertEqual(hashlib.sha256((self.source/name).read_bytes()).hexdigest(),result["modules"][name])
+            self.assertEqual((self.source/name).read_bytes(),(service/name).read_bytes())
         self.assertEqual(result, installer.install())
 
     def test_reviewed_tree_install_is_confined_and_protects_parser(self):

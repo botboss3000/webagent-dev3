@@ -27,8 +27,8 @@ def call(name, arguments):
         connection.connect(SOCKET)
         connection.sendall(json.dumps(request, separators=(",", ":")).encode() + b"\n")
         with connection.makefile("rb") as stream:
-            raw = stream.readline(65537)
-    if not raw.endswith(b"\n") or len(raw) > 65536:
+            raw = stream.readline(2*1024*1024+1)
+    if not raw.endswith(b"\n") or len(raw) > 2*1024*1024:
         raise RuntimeError("bounded broker response unavailable")
     response = json.loads(raw)
     if response.get("id") != request_id:
@@ -153,7 +153,18 @@ def main():
     maintenance=commands.add_parser("maintenance")
     maintenance.add_argument("action",choices=("status","drain","resume"))
     maintenance.add_argument("--task-id")
+    schedule=commands.add_parser("schedule",help="structured ownership and resource control through build_work")
+    schedule.add_argument("--input",required=True,help="JSON request file, or - for stdin")
+    apply=commands.add_parser("apply",help="checked isolated source patch with derived ownership")
+    apply.add_argument("task_id");apply.add_argument("--patch",required=True)
+    apply.add_argument("--expected",required=True);apply.add_argument("--request-id",required=True)
     args = parser.parse_args()
+    if args.command=="schedule":
+        value=json.loads(sys.stdin.read(1024*1024)if args.input=="-"else Path(args.input).read_text())
+        print(json.dumps(call("build_work",value),sort_keys=True));return 0
+    if args.command=="apply":
+        patch=Path(args.patch).read_text()
+        print(json.dumps(call("v3_source_apply",{"task_id":args.task_id,"request_id":args.request_id,"expected_inputs_sha256":args.expected,"patch":patch}),sort_keys=True));return 0
     if args.command=="maintenance":
         print(json.dumps(call("build_service_maintenance",{"action":args.action,**({"task_id":args.task_id} if args.task_id else {})}),sort_keys=True));return 0
     if args.command == "wait":

@@ -14,6 +14,18 @@ class PluginTests(unittest.TestCase):
             with self.assertRaises(ValueError):runner.route(tool,{"request_id":"task-a"})
         with self.assertRaises(ValueError):runner.route("docker",{})
         with self.assertRaises(ValueError):runner.route("shell",{"task_id":"task-a"})
+    def test_source_writes_route_to_broker_and_aliases_cannot_bypass(self):
+        """Relative source edits enter drafts and alternate absolute aliases cannot mutate live source."""
+        self.assertEqual(runner.route("file_write",{"path":"src/app.rs","content":"draft"})["route"],"broker")
+        self.assertEqual(runner.route("file_edit",{"path":"/live-checkout/src/app.rs","old_text":"a","new_text":"b"})["route"],"broker")
+        with tempfile.TemporaryDirectory()as directory:
+            root=Path(directory);source=root/"source";source.mkdir();(source/"app.rs").write_text("original")
+            alias=root/"alias";alias.symlink_to(source,target_is_directory=True)
+            with patch.object(runner,"LIVE_CHECKOUT",source):
+                with self.assertRaisesRegex(ValueError,"broker-owned"):
+                    runner.file_operation({},root,{"path":str(alias/"app.rs"),"content":"bypass"},"file_write")
+            self.assertEqual((source/"app.rs").read_text(),"original")
+
     def test_process_file_journey_and_contract(self):
         with tempfile.TemporaryDirectory() as temporary:
             def call(name,args,version=1):

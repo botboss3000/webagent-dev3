@@ -92,3 +92,18 @@ as version numbers. New tool/selectable catalog IDs need coordinated installatio
 Package tests run in the retained API image as the worker UID, with no network,
 application state, credentials or control sockets. Host Python syntax feedback
 does not establish compatibility with the installed runtime.
+
+Controlled ownership, attributable parallel phases and operator policy adoption are described in ../docs/controlled-build-scheduler.md. Build completion retains source claims until explicit verified agent completion.
+
+
+Controlled scheduling is described in ../docs/controlled-build-scheduler.md.
+Compilation and tests use identified containers and measured admission; unrelated
+standalone packages compile before taking the serialized publication lock.
+Publication rebases and revalidates verified cached outputs before activation.
+A successful build retains its source reservation until the agent verifies
+acceptance, commits its exact promoted inputs and explicitly completes ownership.
+The canonical maintenance ledger retains historical task/retry evidence under a bounded 512 MiB broker budget; scoped synchronization still limits each review transaction.
+Complete Code Index review mutations while the task is open, before finish closes
+it; use a supported continuation or ledger publication for later review work.
+Between broker installation and source promotion, use the exact protected installed
+buildctl.py so its configuration parser matches the installed broker.

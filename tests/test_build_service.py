@@ -258,3 +258,52 @@ class CodebaseRegisteredGuidanceTests(unittest.TestCase):
   self.assertGreaterEqual(len(paths),4)
   for path in paths:
    self.assertTrue(fixtures.host.ability_asset_path(fixtures.host.CODEBASE_ROOT+"skills/"+path.name),path.name)
+
+
+class PluginCompilationConcurrencyTests(unittest.TestCase):
+ def test_independent_compilers_overlap_and_publications_serialize(self):
+  """Exercise the actual hot-release lock boundary with two bounded compiler barriers."""
+  import concurrent.futures,threading
+  with tempfile.TemporaryDirectory()as temporary:
+   root=Path(temporary);runner=fixtures.FakeRunner();broker=fixtures.host.Broker(root/"jobs",runner)
+   broker.scheduler.mode="enforce"
+   lock=threading.Lock();entered=set();compiled=set();both=threading.Event();published=[]
+   active=[0];maximum=[0]
+   jobs=[{"job_id":str(uuid.uuid4()),"operation":"plugin_deploy","status":"running",
+      "lease_until":time.time()+120,"created_at":time.time(),"release_root":str(root/str(i))}
+      for i in range(2)]
+   for job in jobs:broker.jobs[job["job_id"]]=job
+   def compile_package(job_id,source_root=None):
+    """Wait for both independent compilers, then model a verified artifact cache hit."""
+    with lock:
+     if job_id in compiled:return []
+     entered.add(job_id)
+     if len(entered)==2:both.set()
+    if not both.wait(2):raise TimeoutError("Publication lock prevented independent compilation")
+    with lock:compiled.add(job_id)
+    return []
+   def publish(job,blob):
+    """Revalidation hits the cache while the actual publication mutex remains exclusive."""
+    compile_package(job["job_id"])
+    with lock:active[0]+=1;maximum[0]=max(maximum[0],active[0])
+    try:time.sleep(.02);published.append(job["job_id"])
+    finally:
+     with lock:active[0]-=1
+   try:
+    with patch.object(runner,"build_ability_artifacts",create=True,side_effect=compile_package),patch.object(broker,"_run_ui_hot_locked",side_effect=publish):
+     with concurrent.futures.ThreadPoolExecutor(max_workers=2)as pool:
+      futures=[pool.submit(broker._run_ui_hot,job,b"frozen source")for job in jobs]
+      for future in futures:future.result(timeout=4)
+    self.assertEqual(entered,{job["job_id"]for job in jobs})
+    self.assertEqual(set(published),entered);self.assertEqual(maximum[0],1)
+   finally:broker.shutdown()
+
+
+class PackagingStreamTests(unittest.TestCase):
+ def test_fixed_command_accepts_bounded_file_stream(self):
+  """The broker feeds a disk stream without retaining its entire packaging tar in memory."""
+  import io
+  runner=fixtures.host.Runner()
+  result=runner.command(["python3","-I","-c","import sys; print(len(sys.stdin.buffer.read()))"],
+      stdin=io.BytesIO(b"x"*(2*1024*1024)),timeout=10)
+  self.assertEqual(result.strip(),str(2*1024*1024))

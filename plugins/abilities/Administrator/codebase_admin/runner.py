@@ -46,6 +46,10 @@ def file_operation(request, base, args, name):
     # The OS identity and container mounts determine which targets are reachable.
     default_root = LIVE_CHECKOUT if LIVE_CHECKOUT.is_dir() else base
     target = (relative if relative.is_absolute() else default_root / relative).resolve()
+    if name in ("file_write","file_edit")and LIVE_CHECKOUT.is_dir():
+        live=LIVE_CHECKOUT.resolve()
+        if target==live or target.is_relative_to(live)or any(parent.exists()and parent.samefile(live)for parent in target.parents):
+            raise ValueError("Source writes require broker-owned task routing; direct source effects denied")
     rootfd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     basefd = None
     directory = None
@@ -382,7 +386,7 @@ def file_operation(request, base, args, name):
             os.close(basefd)
         os.close(rootfd)
 
-IMPLEMENTATION_VERSION = "1.0.1"
+IMPLEMENTATION_VERSION = "1.1.0"
 TOOLS = ["file_list","file_read","file_search","file_edit","file_write","build_work",
          "state_inspect","prompt_slot_read","prompt_slot_write","shell","python"]
 def route(name,args):
@@ -393,6 +397,13 @@ def route(name,args):
         return {"route":"broker","arguments":{k:v for k,v in args.items() if v is not None}}
     if name in ("shell","python"):
         return {"route":"command","argv":["/bin/sh","-c",args["command"]] if name=="shell" else ["/usr/bin/python3","-I","-c",args["code"]]}
+    if name in ("file_edit","file_write"):
+        raw=args.get("path","")
+        if isinstance(raw,str)and(raw.startswith("/live-checkout/")or(raw and not raw.startswith("/"))):
+            relative=raw.removeprefix("/live-checkout/")
+            if any(p in ("",".","..")for p in relative.split("/"))or relative.split("/")[0]in {"data","workspaces","target",".git","build-jobs","deployment-secrets"}:
+                raise ValueError("Source path excluded; use the owning runtime/workspace API")
+            return {"route":"broker","arguments":{k:v for k,v in args.items()if v is not None}|{"path":relative}}
     live={k:v for k,v in args.items() if v is not None and k!="task_id"}
     if "request_id" in live or "expected_inputs_sha256" in live:raise ValueError("Task write arguments require task_id; live fallback denied")
     return {"route":"file","arguments":live}

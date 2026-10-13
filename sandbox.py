@@ -22,7 +22,28 @@ READ = (1 << 0) | (1 << 2) | (1 << 3)
 # No device-node creation or device ioctl access, including in the workspace.
 WRITE = sum(1 << bit for bit in (1, 4, 5, 7, 8, 9, 10, 12, 13, 14))
 
-def restrict(base, read_paths=()):
+def deny_unix_sockets():
+    """Deny Unix socket creation in command children; file confinement alone does not mediate connect."""
+    import platform
+    machine=platform.machine()
+    if machine=="x86_64":architecture,number=0xc000003e,41
+    elif machine=="aarch64":architecture,number=0xc00000b7,198
+    else:raise RuntimeError("Command socket fence requires a supported native architecture")
+    class Filter(ctypes.Structure):
+        _fields_=[("code",ctypes.c_ushort),("jt",ctypes.c_ubyte),("jf",ctypes.c_ubyte),("k",ctypes.c_uint32)]
+    class Program(ctypes.Structure):
+        _fields_=[("length",ctypes.c_ushort),("filter",ctypes.POINTER(Filter))]
+    # Verify architecture and reject x32/alternate syscall conventions before inspecting socket(domain).
+    instructions=(Filter*11)(
+        Filter(0x20,0,0,4),Filter(0x15,1,0,architecture),Filter(0x06,0,0,0x80000000),
+        Filter(0x20,0,0,0),Filter(0x35,0,1,0x40000000),Filter(0x06,0,0,0x80000000),
+        Filter(0x15,0,3,number),Filter(0x20,0,0,16),Filter(0x15,0,1,1),
+        Filter(0x06,0,0,0x00050001),Filter(0x06,0,0,0x7fff0000))
+    program=Program(len(instructions),instructions);libc=ctypes.CDLL(None,use_errno=True)
+    if libc.prctl(38,1,0,0,0)!=0 or libc.prctl(22,2,ctypes.byref(program),0,0)!=0:
+        raise OSError(ctypes.get_errno(),"Command Unix socket fence unavailable")
+
+def restrict(base, read_paths=(), deny_unix=False):
     base = Path(base).resolve(strict=True)
     libc = ctypes.CDLL(None, use_errno=True)
     def call(number, *args):
@@ -80,5 +101,6 @@ def restrict(base, read_paths=()):
         if libc.prctl(38, 1, 0, 0, 0) != 0:
             raise OSError(ctypes.get_errno(), "cannot set no_new_privs")
         call(446, ruleset, 0)
+        if deny_unix:deny_unix_sockets()
     finally:
         os.close(ruleset)

@@ -74,6 +74,7 @@ class ArtifactCacheTests(unittest.TestCase):
             hashes={name:hashlib.sha256(value).hexdigest()for name,value in inputs.items()}
             old=hashlib.sha256(fixtures.host.canonical({"build":build,"entrypoint":"fixture_runner","inputs":hashes})).hexdigest()
             retained=assets/"artifacts"/old/"fixture_runner";retained.parent.mkdir(parents=True);retained.write_bytes(b"retained artifact");retained.chmod(0o555)
+            (retained.parent/"compiler-receipt.json").write_text(json.dumps({"input_key":old,"artifact_sha256":hashlib.sha256(retained.read_bytes()).hexdigest(),"recipe":fixtures.host.executor_module.RUST+":release:locked:offline:debug0"}))
             runner=fixtures.host.Runner();runner.command=Mock(side_effect=AssertionError("Unexpected compilation"))
             with patch.object(fixtures.host,"ASSET_ROOT",assets),patch.object(fixtures.host,"STATE",state):
                 first=runner.build_ability_artifacts(job)[0]
@@ -84,3 +85,6 @@ class ArtifactCacheTests(unittest.TestCase):
             self.assertTrue(second["reused"]);self.assertEqual(first["build_key"],second["build_key"])
             self.assertEqual((assets/"artifacts"/second["build_key"]/"fixture_runner").read_bytes(),b"retained artifact")
             runner.command.assert_not_called()
+            binary=assets/"artifacts"/second["build_key"]/"fixture_runner";binary.chmod(0o755);binary.write_bytes(b"tampered")
+            with patch.object(fixtures.host,"ASSET_ROOT",assets),patch.object(fixtures.host,"STATE",state),self.assertRaisesRegex(ValueError,"differs from verified"):
+                runner.build_ability_artifacts(job)

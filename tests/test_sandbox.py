@@ -32,6 +32,29 @@ else: raise RuntimeError('sandbox write escaped')
             self.assertEqual((own/'result').read_text(),'ok')
             self.assertFalse((other/'escaped').exists())
 
+    def test_readonly_source_grant_never_permits_source_writes(self):
+        """Source inspection is compatible with workspace edits, while live checkout mutation stays denied."""
+        with tempfile.TemporaryDirectory()as directory:
+            root=Path(directory);own=root/"workspace";source=root/"source";own.mkdir();source.mkdir()
+            (source/"code.py").write_text("original")
+            code="import pathlib,sys; source,own=map(pathlib.Path,sys.argv[1:]); assert(source/'code.py').read_text()=='original'; (own/'result').write_text('ok');\ntry:(source/'code.py').write_text('changed')\nexcept PermissionError:pass\nelse:raise RuntimeError('source write escaped')"
+            result=subprocess.run(['/usr/bin/python3','-I','-c',code,str(source),str(own)],cwd=own,
+                preexec_fn=lambda:restrict(own,read_paths=(source,)),capture_output=True,timeout=5)
+            self.assertEqual(result.returncode,0,result.stderr.decode());self.assertEqual((source/"code.py").read_text(),"original")
+
+    def test_command_cannot_connect_operator_unix_socket(self):
+        """An external same-UID socket stays unreachable; own anonymous socketpairs still work."""
+        import socket
+        with tempfile.TemporaryDirectory()as directory:
+            root=Path(directory);own=root/"workspace";own.mkdir();path=root/"operator.sock"
+            listener=socket.socket(socket.AF_UNIX);listener.bind(str(path));listener.listen()
+            code="import socket,sys; socket.socketpair();\ntry:socket.socket(socket.AF_UNIX).connect(sys.argv[1])\nexcept PermissionError:print('denied')\nelse:raise RuntimeError('operator socket escaped')"
+            try:
+                result=subprocess.run(['/usr/bin/python3','-I','-c',code,str(path)],cwd=own,
+                    preexec_fn=lambda:restrict(own,deny_unix=True),capture_output=True,timeout=5)
+                self.assertEqual(result.returncode,0,result.stderr.decode());self.assertEqual(result.stdout.decode().strip(),"denied")
+            finally:listener.close()
+
     def test_child_cannot_signal_parent(self):
         with tempfile.TemporaryDirectory() as directory:
             base=Path(directory)

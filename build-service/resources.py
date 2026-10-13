@@ -1,0 +1,265 @@
+"""Measured phase admission and safe compiler parking; never pause tests or publication.
+
+Config: protected build-service.json -> scheduler. Estimates govern admission,
+not per-task hard memory limits. Insufficient reclaim waits for intervention.
+"""
+import copy,json,math,os,threading,time
+from pathlib import Path
+PARKABLE={"compile_test","compile_release","plugin_compile"}
+ESTIMATES={"engine":4*1024**3,"plugin":2*1024**3,"test":512*1024**2,"package":512*1024**2,"dependency":512*1024**2}
+def host_sample():
+    """Observe host headroom and pressure without reading any application state."""
+    memory={}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key,value=line.split(":",1);memory[key]=int(value.split()[0])*1024
+    pressure={}
+    for kind in ["cpu","memory","io"]:
+        try:
+            row=next(line for line in Path("/proc/pressure/"+kind).read_text().splitlines()if line.startswith("some "))
+            pressure[kind]=float(dict(p.split("=",1)for p in row.split()[1:])["avg10"])
+        except (OSError,ValueError,StopIteration):pressure[kind]=0.
+    return {"available":memory["MemAvailable"],"total":memory["MemTotal"],"swap_free":memory.get("SwapFree",0),"swap_total":memory.get("SwapTotal",0),"pressure":pressure}
+# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Measured admission and compiler parking. Config: build-service/scheduler-defaults.json -> reserve_bytes, reserve_percent, max_phases, max_parked, memory_pressure_percent; protected overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent"]}],"opportunities":[]}}
+class Resources:
+    """Control only broker-created container identities; ownership and execution authority remain separate."""
+    def __init__(self,state,runner,policy=None,clock=time.monotonic,sampler=host_sample):
+        """Restore measured history and fence unfinished phases for explicit recovery."""
+        self.runner=runner;self.policy=policy or{};self.enabled=self.policy.get("mode")=="enforce"
+        self.clock=clock;self.sampler=sampler;self.lock=threading.RLock();self.condition=threading.Condition(self.lock)
+        self.stop=threading.Event();self.rows={};self.profiles={};self.controls={};self.host=sampler()
+        self.folder=Path(state)/"scheduler";self.folder.mkdir(mode=0o700,exist_ok=True)
+        self.path=self.folder/"resources.json"
+        if self.path.is_symlink():raise PermissionError("Resource metadata symlink")
+        if self.path.exists():
+            value=json.loads(self.path.read_bytes());self.profiles=value.get("profiles",{});self.controls=value.get("controls",{})
+            # Recovery never automatically thaws or reruns an unclassified process.
+            for name,row in value.get("phases",{}).items():
+                if row["state"]not in {"finished","failed"}:
+                    row["state"]="recovery_required";row["revision"]=row.get("revision",0)+1
+                    row["paused_at"]=None;row["pause_timing_unconfirmed"]=True
+                self.rows[name]=row
+        self.initialized=False;self.last_save=0.;self.pressure_since=None;self.stable_since=None;self.cpu_budget=max(1,(os.cpu_count()or 1)-1);self.last_cpu_adjust=0.;self.last_cpu_recovery=0.
+        self.thread=None
+    def start(self):
+        """Run monitoring independently of broker request locks and frozen compiler groups."""
+        if self.thread is None:
+            self.thread=threading.Thread(target=self.loop,name="build-resource-monitor",daemon=True);self.thread.start()
+    def close(self):
+        """Stop admission and leave recoverable phase metadata; never silently thaw parked work."""
+        self.stop.set()
+        with self.condition:self.condition.notify_all();self.persist()
+        if self.thread is not None:self.thread.join(timeout=2)
+    def persist(self):
+        """Atomically retain bounded resource profiles and phase identities outside application storage."""
+        value={"version":1,"profiles":self.profiles,"phases":self.rows,"controls":self.controls}
+        temporary=self.path.with_suffix(".new")
+        if temporary.is_symlink():raise PermissionError("Resource metadata replaced")
+        fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,"w")as stream:json.dump(value,stream,separators=(",",":"));stream.flush();os.fsync(stream.fileno())
+        os.replace(temporary,self.path)
+    def estimate(self,profile,kind):
+        """Use an observed conservative peak with margin, retaining cold fallback estimates."""
+        values=self.profiles.get(profile,[])
+        if not values:return ESTIMATES[kind]
+        return max(64*1024**2,math.ceil(max(values)*1.2))
+    def reserve(self):
+        """Keep configurable host headroom, independent of a build's claimed requirements."""
+        return max(self.policy.get("reserve_bytes",768*1024**2),int(self.host["total"]*self.policy.get("reserve_percent",10)/100))
+    def can_admit(self,estimate):
+        """Account for resident RAM and remaining admitted peak demand before starting another phase."""
+        active=[r for r in self.rows.values()if r["state"]in {"admitted","running","parked","waiting_intervention"}]
+        if len(active)>=self.policy.get("max_phases",4):return False
+        remaining=sum(max(0,r["estimate"]-r.get("metrics",{}).get("memory",0))for r in active if r["state"]in {"admitted","running"})
+        return self.host["available"]-self.reserve()>=estimate+remaining and not any(r["state"]in {"recovery_required","waiting_intervention"}for r in self.rows.values())
+    def enter(self,name,job,phase,profile,kind):
+        """Wait for measured admission outside the broker lock; revocation still interrupts waiting."""
+        estimate=self.estimate(profile,kind)
+        with self.condition:
+            if job.get("revoked")or job.get("lease_until",float("inf"))<=time.time():raise PermissionError("Build authority expired")
+            component=job.get("artifact_component","engine"if kind=="engine"else profile)
+            def eligible():
+                """Require an available component and sufficient measured global headroom."""
+                conflict=any(r.get("component")==component and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
+                return not conflict and self.can_admit(estimate)
+            while self.enabled and not eligible():
+                if self.stop.is_set()or job.get("revoked")or job.get("lease_until",float("inf"))<=time.time():raise PermissionError("Build admission cancelled or authorization expired")
+                job["resource_waiting"]="headroom";self.condition.wait(.5)
+            if self.stop.is_set():raise PermissionError("Scheduler stopping")
+            if not self.initialized and self.enabled:
+                self.runner.resource_request({"operation":"initialize"});self.initialized=True
+            job.pop("resource_waiting",None)
+            now=self.clock()
+            self.rows[name]={"job_id":job["job_id"],"phase":phase,"profile":profile,"kind":kind,"component":component,"estimate":estimate,"priority":job.get("priority",0),"state":"admitted","revision":0,"started_at":time.time(),"started":now,"paused_seconds":0.,"paused_at":None,"metrics":{},"container_id":None}
+            self.persist()
+    def attached(self,name,identity):
+        """Bind the new phase to its exact container identity before the monitor controls it."""
+        with self.condition:
+            row=self.rows[name];row["container_id"]=identity;row["state"]="running";self.persist();self.condition.notify_all()
+    def elapsed_pause(self,name):
+        """Adjust execution timers by confirmed frozen intervals, not queue or reclaim guesses."""
+        with self.lock:
+            row=self.rows.get(name,{})
+            return row.get("paused_seconds",0.)+(self.clock()-row["paused_at"]if row.get("paused_at")is not None else 0.)
+    def finish(self,name,success):
+        """Retain a measured phase peak and wake eligible unrelated work."""
+        with self.condition:
+            row=self.rows[name]
+            if row.get("paused_at")is not None:row["paused_seconds"]+=self.clock()-row["paused_at"];row["paused_at"]=None
+            row["state"]="finished"if success else"failed";row["finished"]=self.clock()
+            peak=row.get("metrics",{}).get("peak_memory",0)
+            if peak>0 and success:self.profiles[row["profile"]]=(self.profiles.get(row["profile"],[])+[peak])[-20:]
+            completed=sorted((n for n,r in self.rows.items()if r["state"]in {"finished","failed"}),key=lambda n:self.rows[n].get("finished",0))
+            for old in completed[:-64]:del self.rows[old]
+            if len(self.profiles)>512:self.profiles={k:self.profiles[k]for k in sorted(self.profiles)[-512:]}
+            self.persist();self.condition.notify_all()
+    def act(self,name,operation):
+        """Freeze only eligible compilation, retaining task ownership and measurable pause intervals."""
+        with self.condition:
+            row=self.rows[name]
+            if operation=="freeze"and(row["phase"]not in PARKABLE or row["state"]!="running"):raise ValueError("Phase cannot be parked")
+            if operation=="thaw"and row["state"]not in {"parked","waiting_intervention"}:raise ValueError("Phase not parked")
+            result=self.runner.resource_request({"operation":operation,"container":name})
+            if result["container_id"]!=row["container_id"]:raise ValueError("Container identity changed")
+            if operation=="freeze":
+                if not result["frozen"]:raise ValueError("Freeze not acknowledged")
+                row["state"]="parked";row["paused_at"]=self.clock()
+            else:
+                if result["frozen"]:raise ValueError("Thaw not acknowledged")
+                row["paused_seconds"]+=self.clock()-row["paused_at"];row["paused_at"]=None;row["state"]="running"
+            row["metrics"]=result;row["revision"]=row.get("revision",0)+1;self.persist();self.condition.notify_all()
+    def intervention(self,name,reason):
+        """Insufficient reclaim never restarts work or releases its source reservations."""
+        with self.condition:
+            self.rows[name]["state"]="waiting_intervention";self.rows[name]["reason"]=reason;self.rows[name]["revision"]=self.rows[name].get("revision",0)+1;self.persist()
+    def control(self,job,args):
+        """Apply a bounded phase control with live owner authority, CAS and durable retry receipts."""
+        import hashlib,re
+        action=args["action"];request=args.get("request_id")
+        if not isinstance(request,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",request):raise ValueError("Stable resource request ID required")
+        phase_id=args.get("phase_id")
+        if not isinstance(phase_id,str)or not re.fullmatch(r"[a-f0-9]{64}",phase_id):raise ValueError("Opaque phase ID required")
+        revision=args.get("expected_revision")
+        if type(revision)is not int:raise ValueError("Expected resource revision required")
+        normalized=json.dumps([job["job_id"],args],sort_keys=True,separators=(",",":"))
+        digest=hashlib.sha256(normalized.encode()).hexdigest()
+        token=hashlib.sha256((job["job_id"]+request).encode()).hexdigest()
+        with self.condition:
+            receipt=self.controls.get(token)
+            if receipt:
+                if receipt["digest"]!=digest:raise ValueError("Resource request ID reused")
+                return copy.deepcopy(receipt["result"])
+            name=next((n for n,r in self.rows.items()if r["job_id"]==job["job_id"]and hashlib.sha256(n.encode()).hexdigest()==phase_id),None)
+            if name is None:raise ValueError("Phase unavailable")
+            row=self.rows[name]
+            if row.get("revision",0)!=revision:raise ValueError("Resource phase changed")
+            if action=="reconcile":
+                if row["state"]!="recovery_required"or job["status"]in {"queued","running"}or job.get("effects_started"):
+                    raise ValueError("Only stopped pre-publication phases may be reconciled")
+                self.runner.cleanup_phase(name)
+                row.update(state="failed",reason="Explicit orphan phase cleanup; no automatic restart",finished=self.clock(),paused_at=None)
+            else:
+                if job["status"]!="running"or job.get("revoked")or job.get("lease_until",0)<=time.time():raise PermissionError("Live executing owner authority required")
+                if action=="pause":
+                    self.act(name,"freeze");row["manual_pause"]=True
+                elif action=="resume":
+                    if self.host["available"]-self.reserve()<max(0,row["estimate"]-row["metrics"].get("memory",0)):
+                        raise ValueError("Insufficient measured headroom for resume")
+                    self.act(name,"thaw");row["manual_pause"]=False;row.pop("reason",None);row.pop("unconfirmed_thaw",None)
+                elif action=="priority":
+                    priority=args.get("priority")
+                    if type(priority)is not int or not -2<=priority<=2:raise ValueError("Priority must be between -2 and 2")
+                    if row["state"]not in {"running","parked","waiting_intervention"}:raise ValueError("Active phase required")
+                    row["priority"]=priority
+                else:raise ValueError("Unsupported resource action")
+            row["revision"]=row.get("revision",0)+1
+            result={"phase_id":phase_id,"job_id":job["job_id"],"state":row["state"],"revision":row["revision"]}
+            self.controls[token]={"digest":digest,"result":result}
+            if len(self.controls)>1024:self.controls.pop(next(iter(self.controls)))
+            self.persist();self.condition.notify_all();return result
+
+    def tick(self):
+        """Sample real containers, reduce contention, and park/resume with hysteresis."""
+        sample=self.sampler()
+        with self.condition:self.host=sample;names=[n for n,r in self.rows.items()if r["state"]in {"running","parked","waiting_intervention"}]
+        for name in names:
+            try:
+                result=self.runner.resource_request({"operation":"stats","container":name})
+                with self.lock:
+                    row=self.rows.get(name)
+                    if row and result["container_id"]==row["container_id"]:
+                        previous=row.get("last_sample")
+                        sampled=self.clock()
+                        if previous and sampled>previous["at"]:
+                            result["cpu_percent"]=round(max(0,result["cpu_usec"]-previous["cpu_usec"])/(sampled-previous["at"])/10000,1)
+                        row["last_sample"]={"at":sampled,"cpu_usec":result["cpu_usec"]};row["metrics"]=result
+                        if result["frozen"]and row["state"]=="running":
+                            row.update(state="waiting_intervention",paused_at=sampled,reason="Unconfirmed control outcome; explicit resume or cancellation required",revision=row.get("revision",0)+1)
+                            self.persist()
+                        elif not result["frozen"] and row["state"] in {"parked","waiting_intervention"} and not row.get("unconfirmed_thaw"):
+                            row.update(state="waiting_intervention",manual_pause=True,unconfirmed_thaw=True,
+                                reason="Unconfirmed thaw outcome; explicit resume or cancellation required",revision=row.get("revision",0)+1)
+                            self.persist()
+            except (OSError,ValueError,RuntimeError,TimeoutError):continue
+        if not self.enabled:return
+        now=self.clock()
+        if now-self.last_cpu_adjust>=5:
+            if sample["pressure"]["cpu"]>20:
+                self.cpu_budget=max(.5,self.cpu_budget-.5);self.last_cpu_recovery=now
+            elif now-self.last_cpu_recovery>=20:
+                self.cpu_budget=min(max(1,(os.cpu_count()or 1)-1),self.cpu_budget+.5);self.last_cpu_recovery=now
+            running=[n for n in names if self.rows[n]["state"]=="running"]
+            weights={n:1+max(0,self.rows[n]["priority"])+min(2,int((now-self.rows[n]["started"])/900))for n in running}
+            for name in running:
+                millis=max(100,int(1000*self.cpu_budget*weights[name]/sum(weights.values())))
+                self.runner.resource_request({"operation":"cpu","container":name,"cpu_millis":millis})
+            self.last_cpu_adjust=now
+        pressure=sample["pressure"]["memory"]>self.policy.get("memory_pressure_percent",5)
+        if pressure:
+            if self.pressure_since is None:self.pressure_since=now
+        else:self.pressure_since=None
+        low=sample["available"]<self.reserve()or(pressure and now-self.pressure_since>=5)
+        with self.lock:
+            parked=[n for n,r in self.rows.items()if r["state"]in {"parked","waiting_intervention"}]
+            candidates=sorted((n for n,r in self.rows.items()if r["state"]=="running"and r["phase"]in PARKABLE),key=lambda n:(self.rows[n]["priority"],-self.rows[n]["metrics"].get("memory",0),-self.rows[n]["started"]))
+        if low:
+            self.stable_since=None
+            if candidates and len(parked)<self.policy.get("max_parked",2):
+                name=candidates[0]
+                try:
+                    self.act(name,"freeze");before=self.rows[name]["metrics"].get("memory",0)
+                    budget=min(before,max(0,sample["swap_free"]-1024**3),sample["swap_total"]//2)
+                    attempts=0
+                    while budget>0 and attempts<16 and self.sampler()["available"]<self.reserve():
+                        amount=min(budget,256*1024**2)
+                        self.runner.resource_request({"operation":"reclaim","container":name,"bytes":amount})
+                        budget-=amount;attempts+=1
+                    after=self.runner.resource_request({"operation":"stats","container":name})
+                    with self.lock:self.rows[name]["metrics"]=after
+                    if self.sampler()["available"]<self.reserve():self.intervention(name,"Insufficient reclaimed headroom; owner or administrator action required")
+                except (OSError,ValueError,RuntimeError,TimeoutError):
+                    if self.rows[name]["state"]=="parked":self.intervention(name,"Reclaim unavailable or outcome needs inspection")
+        elif sample["available"]>self.reserve()+256*1024**2 and not pressure:
+            if self.stable_since is None:self.stable_since=now
+            if now-self.stable_since>=20:
+                with self.lock:
+                    eligible=sorted((n for n,r in self.rows.items()if r["state"]=="parked"and not r.get("manual_pause")),key=lambda n:self.rows[n]["started"])
+                for name in eligible:
+                    with self.lock:r=self.rows[name];needed=max(0,r["estimate"]-r["metrics"].get("memory",0))
+                    if sample["available"]-self.reserve()>=needed:
+                        self.act(name,"thaw");self.stable_since=now;break
+        with self.condition:
+            if now-self.last_save>=10:self.persist();self.last_save=now
+            self.condition.notify_all()
+    def loop(self):
+        """Keep helper failures observable without terminating the protected broker."""
+        while not self.stop.wait(.5):
+            try:self.tick()
+            except (OSError,ValueError,RuntimeError,TimeoutError):
+                with self.lock:self.host["controller_error"]="Resource sampling unavailable"
+    def snapshot(self,job_id=None):
+        """Return only content-free telemetry; frozen processes never hide unfinished ownership."""
+        with self.lock:
+            import hashlib
+            rows={hashlib.sha256(n.encode()).hexdigest():{k:v for k,v in r.items()if k not in {"container_id","last_sample","paused_at","started","finished"}}|{"phase_id":hashlib.sha256(n.encode()).hexdigest(),"paused_seconds":self.elapsed_pause(n)}
+                for n,r in self.rows.items()if job_id is None or r["job_id"]==job_id}
+            return copy.deepcopy({"enabled":self.enabled,"host":self.host,"reserve":self.reserve(),"phases":rows,"profiles":self.profiles if job_id is None else{}})
