@@ -1,4 +1,0 @@
-version = 4
-[[package]]
-name = "scheduler-probe-beta"
-version = "0.1.0"
