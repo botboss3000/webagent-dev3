@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "codebase_admin",
+  "protocol": 1,
+  "runtime": "python3",
+  "entrypoint": "runner.py",
+  "interface": 1,
+  "tools": [
+    "file_list",
+    "file_read",
+    "file_search",
+    "file_edit",
+    "file_write",
+    "build_work",
+    "state_inspect",
+    "prompt_slot_read",
+    "prompt_slot_write",
+    "shell",
+    "python"
+  ],
+  "build": {
+    "inputs": [
+      "runner.py"
+    ],
+    "dependencies": [],
+    "toolchain": "image-python3",
+    "flags": [
+      "-I",
+      "-B"
+    ],
+    "assets": [
+      "codebase_admin.json",
+      "codebase_admin.skill.md",
+      "tools",
+      "skills"
+    ]
+  }
+}

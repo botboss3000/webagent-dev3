@@ -17,6 +17,11 @@ from pathlib import Path
 spec = importlib.util.spec_from_file_location("worker", Path(__file__).parents[1] / "worker.py")
 worker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(worker)
+plugin_spec=importlib.util.spec_from_file_location("worker_codebase_unit",Path(__file__).parents[1]/"plugins/abilities/Administrator/codebase_admin/runner.py")
+plugin=importlib.util.module_from_spec(plugin_spec);plugin_spec.loader.exec_module(plugin)
+core_file_operation=worker.file_operation
+worker.file_operation=plugin.file_operation
+
 
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
@@ -39,6 +44,17 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.tmp.cleanup()
 
     async def run_tool(self, name, args, timeout=120):
+        if name in ("file_list","file_read","file_search","file_edit","file_write"):
+            plugin.LIVE_CHECKOUT=worker.LIVE_CHECKOUT
+            plugin.CONTEXT_CONFIG_PATH=worker.CONTEXT_CONFIG_PATH
+            # Exercise original descriptor/durability fault seams directly.
+            async def unit_call(name,args,base,**kw):
+                return await worker.synchronous(worker.file_operation,{},base,args,name)
+            with mock.patch.object(worker,"codebase_call",new=unit_call):
+                return await worker.execute({"workspace":self.session,"name":name,"arguments":args,"timeout_seconds":timeout})
+        if name=="decision_candidates":
+            with mock.patch.object(worker,"file_operation",new=core_file_operation):
+                return await worker.execute({"workspace":self.session,"name":name,"arguments":args,"timeout_seconds":timeout})
         return await worker.execute({"workspace": self.session, "name": name,
                                      "arguments": args, "timeout_seconds": timeout})
 

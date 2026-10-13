@@ -174,3 +174,51 @@ class DashboardHistoryTests(unittest.TestCase):
    self.assertNotIn("access_fingerprint",json.dumps(result))
    with self.assertRaises(PermissionError):fixture.call("v3_build_dashboard")
   finally:fixture.tearDown()
+
+
+class CodebasePublicationMetadataTests(unittest.TestCase):
+ def fixture(self,temporary):
+  import shutil
+  folder=Path(temporary)/"package"
+  shutil.copytree(Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/codebase_admin",folder)
+  return folder
+ def test_catalog_types_utf8_bounds_and_contract_are_validated_before_activation(self):
+  with tempfile.TemporaryDirectory() as temporary:
+   folder=self.fixture(temporary);path=folder/"codebase_admin.json";original=json.loads(path.read_bytes())
+   for field,value in (("display_name",[]),("description",""),("description","é"*501),("skill_summary",True),("icon",[]),("order",True),("placeholder",0)):
+    with self.subTest(field=field):
+     path.write_text(json.dumps({**original,field:value}))
+     with self.assertRaises(ValueError):fixtures.host.validate_codebase_package(folder)
+   path.write_text(json.dumps(original));fixtures.host.validate_codebase_package(folder)
+   path=folder/"plugin.json";value=json.loads(path.read_bytes());value["protocol"]=True;path.write_text(json.dumps(value))
+   with self.assertRaises(ValueError):fixtures.host.validate_codebase_package(folder)
+ def test_empty_guidance_and_new_catalog_ids_cannot_enter_the_hot_lane(self):
+  with tempfile.TemporaryDirectory() as temporary:
+   folder=self.fixture(temporary);(folder/"codebase_admin.skill.md").write_text("  ")
+   with self.assertRaises(ValueError):fixtures.host.validate_codebase_package(folder)
+  self.assertFalse(fixtures.host.codebase_source_path(fixtures.host.CODEBASE_ROOT+"skills/new_catalog_id.skill.md"))
+  self.assertFalse(fixtures.host.codebase_source_path(fixtures.host.CODEBASE_ROOT+"tools/not_registered.skill.md"))
+ def test_package_tests_use_retained_image_and_isolated_worker_identity(self):
+  from unittest.mock import Mock
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary);job=str(uuid.uuid4());folder=root/"releases"/job/fixtures.host.CODEBASE_ROOT
+   folder.parent.mkdir(parents=True);import shutil;shutil.copytree(Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/codebase_admin",folder)
+   runner=fixtures.host.Runner();runner.inspect=Mock(return_value={"Image":"sha256:retained-runtime"})
+   runner.command=Mock(return_value="OK")
+   with patch.object(fixtures.host,"ASSET_ROOT",root):
+    runner.validate_ui(job,[fixtures.host.CODEBASE_ROOT+"runner.py"])
+   args=runner.command.call_args.args[0]
+   self.assertEqual(args[:3],["docker","run","--rm"])
+   self.assertEqual(args[args.index("--network")+1],"none")
+   self.assertEqual(args[args.index("--user")+1],str(fixtures.host.CONFIG["worker_uid"])+":"+str(fixtures.host.CONFIG["worker_gid"]))
+   self.assertIn("sha256:retained-runtime",args)
+   self.assertEqual(args[-3:],["-I","-B","/package/test_runner.py"])
+
+
+class CodebaseRegisteredGuidanceTests(unittest.TestCase):
+ def test_every_installed_selectable_skill_has_an_independent_lane(self):
+  folder=Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/codebase_admin/skills"
+  paths=list(folder.glob("*.skill.md"))
+  self.assertEqual(len(paths),4)
+  for path in paths:
+   self.assertTrue(fixtures.host.codebase_source_path(fixtures.host.CODEBASE_ROOT+"skills/"+path.name),path.name)

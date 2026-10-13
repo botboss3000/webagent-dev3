@@ -68,9 +68,49 @@ UI_SOURCE_PREFIX = "v3/ui/"
 INDEX_METADATA_ROOT="v3/plugins/abilities/Administrator/code_index/"
 INDEX_METADATA_FILES={INDEX_METADATA_ROOT+"code-index-features.json",INDEX_METADATA_ROOT+"code_index.skill.md",INDEX_METADATA_ROOT+"skills/comment_maintenance.skill.md"}
 INDEX_METADATA_FILES.update(INDEX_METADATA_ROOT+"tools/"+name+".skill.md"for name in ("code_index_scan","code_index_lookup","code_index_coverage","code_index_trace","code_index_progress","code_index_maintenance"))
-HOT_OPERATIONS={"ui_deploy","index_deploy"}
+CODEBASE_ROOT="v3/plugins/abilities/Administrator/codebase_admin/"
+CODEBASE_TOOLS=["file_list","file_read","file_search","file_edit","file_write","build_work",
+                "state_inspect","prompt_slot_read","prompt_slot_write","shell","python"]
+def codebase_source_path(path):
+    if not path.startswith(CODEBASE_ROOT):return False
+    relative=path[len(CODEBASE_ROOT):]
+    return relative in {"runner.py","test_runner.py","plugin.json","codebase_admin.json","codebase_admin.skill.md"} or (
+        relative in {"tools/"+name+".skill.md" for name in CODEBASE_TOOLS}
+        or relative in {"skills/rust_quality.skill.md","skills/live_plugin_publication.skill.md","skills/ui_theming.skill.md","skills/ui_toggle_list.skill.md"})
+HOT_OPERATIONS={"ui_deploy","index_deploy","plugin_deploy"}
 # Limit no-compile publication to UI assets and explicit Code Index metadata paths.
-def hot_source_path(path):return path.startswith(UI_SOURCE_PREFIX)or path in INDEX_METADATA_FILES
+def hot_source_path(path):return path.startswith(UI_SOURCE_PREFIX)or path in INDEX_METADATA_FILES or codebase_source_path(path) or path=="v3/tests/test_codebase_plugin.py"
+
+EXPECTED_CODEBASE_MANIFEST={'version': 1, 'id': 'codebase_admin', 'protocol': 1, 'runtime': 'python3', 'entrypoint': 'runner.py', 'interface': 1, 'tools': ['file_list', 'file_read', 'file_search', 'file_edit', 'file_write', 'build_work', 'state_inspect', 'prompt_slot_read', 'prompt_slot_write', 'shell', 'python'], 'build': {'inputs': ['runner.py'], 'dependencies': [], 'toolchain': 'image-python3', 'flags': ['-I', '-B'], 'assets': ['codebase_admin.json', 'codebase_admin.skill.md', 'tools', 'skills']}}
+EXPECTED_CODEBASE_DECLARATION={'display_name': 'Codebase Admin', 'kind': 'ability', 'icon': 'folder-cog', 'color': '#bb9af7', 'description': 'Inspect and edit live development files or isolated source tasks, run checks, and release reviewed builds.', 'skill_summary': 'Use file tools without task_id for explicit live edits and runtime configuration; use one task_id for source changes intended for a build. Task creation is automatic. Finish explicitly to deploy.', 'migration_note': 'Unified file and protected broker workflow; runtime authorization remains authoritative.', 'order': 1, 'placeholder': False, 'tools': ['file_list', 'file_read', 'file_search', 'file_edit', 'file_write', 'build_work', 'state_inspect', 'prompt_slot_read', 'prompt_slot_write', 'shell', 'python'], 'readiness': 'ready', 'config': {'bias': {'key': 'destructive_caution', 'label': 'Caution on destructive actions', 'default': 'balanced', 'levels': {'cautious': 'Before any file delete, overwrite, bulk edit, or non-read-only shell command, STOP and ask the user to confirm in plain language what will change — even if they gave a broad instruction. Prefer the smallest reversible step and never act on your own initiative without an explicit go-ahead. (Restarting the server after a change is exempt — use restart_server.)', 'balanced': "Carry out the user's explicit file/shell commands directly, but ask first whenever YOU decide on your own initiative to delete, overwrite, or run something irreversible, and when an action is ambiguous or far-reaching.", 'trusted': "Act decisively on the user's intent without pausing to re-confirm routine writes, edits, or shell commands; only stop for clearly irreversible or repo-wide destructive actions (mass delete, force-push)."}}}}
+def validate_codebase_package(folder):
+    folder=Path(folder)
+    for name in ("plugin.json","runner.py","test_runner.py","codebase_admin.json","codebase_admin.skill.md"):
+        path=folder/name
+        bound={"plugin.json":4096,"runner.py":2*1024*1024,"test_runner.py":2*1024*1024,"codebase_admin.json":64*1024}.get(name)
+        if path.is_symlink() or not path.is_file() or (bound is not None and path.stat().st_size>bound):
+            raise ValueError("Incomplete or oversized Codebase Admin package")
+    manifest=json.loads((folder/"plugin.json").read_bytes())
+    if canonical(manifest)!=canonical(EXPECTED_CODEBASE_MANIFEST):raise ValueError("Incompatible Codebase Admin plugin contract")
+    declaration=json.loads((folder/"codebase_admin.json").read_bytes())
+    if declaration.get("tools")!=CODEBASE_TOOLS or declaration.get("kind")!="ability" or declaration.get("readiness")!="ready":raise ValueError("Incompatible Codebase Admin catalog")
+    for field,bound in (("display_name",100),("description",1000),("skill_summary",2000),("migration_note",2000)):
+        value=declaration.get(field)
+        if value is None and field in ("skill_summary","migration_note"):continue
+        if not isinstance(value,str) or len(value.encode("utf-8"))>bound or (field in ("display_name","description") and not value):
+            raise ValueError("Invalid Codebase Admin catalog metadata")
+    for field in ("icon","color"):
+        if declaration.get(field) is not None and not isinstance(declaration[field],str):
+            raise ValueError("Invalid Codebase Admin catalog metadata")
+    mutable={"display_name","description","skill_summary","migration_note","icon","color"}
+    if canonical({k:v for k,v in declaration.items() if k not in mutable})!=canonical({k:v for k,v in EXPECTED_CODEBASE_DECLARATION.items() if k not in mutable}):
+        raise ValueError("Codebase Admin interface/settings change needs coordinated installation")
+    compile((folder/"runner.py").read_bytes(),str(folder/"runner.py"),"exec")
+    for path in folder.rglob("*"):
+        if path.is_symlink():raise ValueError("Plugin symlink forbidden")
+        if path.is_file() and path.suffix==".md":
+            if not path.read_text(encoding="utf-8").strip():raise ValueError("Empty Codebase Admin guidance")
+    return hashlib.sha256((folder/"runner.py").read_bytes()).hexdigest()
 
 RUST_UI_FIXTURES = {"v3/ui/chat/chat_ui.json"}
 ASSET_ROOT = STATE / "ui-assets"
@@ -818,6 +858,18 @@ class Runner:
 
     def validate_ui(self, job_id, changed):
         root = ASSET_ROOT / "releases" / job_id
+        if any(codebase_source_path(name) for name in changed):
+            validate_codebase_package(root / CODEBASE_ROOT)
+            image=self.inspect(TARGETS[0])["Image"]
+            # Validate in the retained consumer runtime, not host Python.
+            # No application state, credentials, network or sockets enter this process.
+            self.command(["docker","run","--rm","--network","none","--read-only",
+                "--cap-drop","ALL","--security-opt","no-new-privileges",
+                "--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["worker_gid"]),
+                "--pids-limit","64","--memory","256m","--cpus","1",
+                "--tmpfs","/tmp:rw,size=64m,mode=1777",
+                "--mount","type=bind,src="+str(root / CODEBASE_ROOT)+",dst=/package,readonly",
+                "-w","/tmp","--entrypoint","python3",image,"-I","-B","/package/test_runner.py"],timeout=30)
         for name in changed:
             if not name.startswith(UI_SOURCE_PREFIX):
                 continue
@@ -846,6 +898,26 @@ class Runner:
                     item.get("Source") == str(ASSET_ROOT) and not item.get("RW")
                     for item in mounts) and
                 "V3_UI_ROOT=/opt/v3/assets/current/v3/ui" in env)
+
+    def plugin_hot_swappable(self):
+        for name in TARGETS:
+            value=self.inspect(name)
+            if not any(m.get("Destination")=="/opt/v3/assets" and m.get("Source")==str(ASSET_ROOT)
+                       and not m.get("RW") for m in value.get("Mounts",[])):
+                return False
+            if "V3_UI_ROOT=/opt/v3/assets/current/v3/ui" not in value.get("Config",{}).get("Env",[]):
+                return False
+        # Ask the installed worker contract, not a filename or source-byte guess.
+        program=("import socket,json; s=socket.socket(socket.AF_UNIX); s.settimeout(10); "
+            "s.connect('/run/v3/worker/tools.sock'); "
+            "s.sendall(json.dumps({'id':'plugin-protocol','name':'codebase_admin_protocol',"
+            "'workspace':'"+LOCAL_WORKSPACE+"','arguments':{}}).encode()+bytes([10])); "
+            "print(s.makefile('rb').readline(4096).decode())")
+        try:
+            reply=json.loads(self.command(["docker","exec","--user",str(CONFIG["app_uid"]),
+                TARGETS[0],"python3","-I","-B","-c",program],timeout=15))
+            return reply.get("status")=="success" and reply.get("output")=={"protocol":1,"interface":1}
+        except (OSError,RuntimeError,ValueError):return False
 
     def verify_ui(self, changed=()):
         # Static routes are public and must serve the exact selected bytes.
@@ -1756,7 +1828,7 @@ class Broker:
             return job["rust_tests"]
         if job["operation"] in HOT_OPERATIONS:
             return {"status": "not_required",
-                    "summary": "UI assets only; no Rust build or tests required"}
+                    "summary": "Compatible assets/plugin; no core Rust build required"}
         if job["status"] == "completed" and job.get("images", {}).get("api"):
             return {"status": "passed",
                     "summary": "Confirmed by successful tested API image; detailed test output was not retained"}
@@ -1815,7 +1887,7 @@ class Broker:
             for role, name in zip(("api", "loop"), TARGETS):
                 if not self.runner.healthy(name, images[role]):
                     return False
-            if job["operation"] in ("ui_deploy","index_deploy","host_service_deploy") and job.get("hot_assets"):
+            if job["operation"] in ("ui_deploy","index_deploy","plugin_deploy","host_service_deploy") and job.get("hot_assets"):
                 return True
             rollback = job.get("rollback", {})
             if set(rollback) != {"api", "loop"}:
@@ -1843,7 +1915,7 @@ class Broker:
             # Hot UI switches keep the containers; accept only the exact active
             # asset snapshot with both original images healthy and bytes served.
             if job.get("hot_assets"):
-                if job["operation"] not in ("ui_deploy","index_deploy","host_service_deploy") or self.runner.current_asset_id() != job["job_id"]:
+                if job["operation"] not in ("ui_deploy","index_deploy","plugin_deploy","host_service_deploy") or self.runner.current_asset_id() != job["job_id"]:
                     return False
                 for role, name in zip(("api", "loop"), TARGETS):
                     if not self.runner.healthy(name, job["images"][role]):
@@ -2297,7 +2369,7 @@ class Broker:
                     view["phase_history"] = job.get("phase_history", [])[-32:]
                     if job["operation"] in HOT_OPERATIONS:
                         legacy_tests = {"status": "not_required",
-                            "summary": "UI assets only; no Rust build or tests required"}
+                            "summary": "Compatible assets/plugin; no core Rust build required"}
                     elif job["status"] == "completed" and job.get("images", {}).get("api"):
                         legacy_tests = {"status": "passed",
                             "summary": "Confirmed by successful tested API image; detailed test output was not retained"}
@@ -2869,6 +2941,7 @@ class Broker:
                             return {"task_id": task_id, "status": "needs_synchronization" if decision == "synchronize" else "needs_decision", "synchronization": report}
                     ui_only = all(hot_source_path(path) for path in changed)
                     index_only=ui_only and(not changed or any(path in INDEX_METADATA_FILES for path in changed))
+                    plugin_only=ui_only and any(codebase_source_path(path) for path in changed)
                     host_only = self.host_source_only(current_changed,candidate,trusted)
                     lease_until, fingerprint = self._incoming_lease(trusted)
                     job_id = str(uuid.uuid4())
@@ -2879,7 +2952,7 @@ class Broker:
                     job = {"job_id": job_id, "request_key": "task-" + key,
                            "body_digest": hashlib.sha256(canonical([task_id, current])).hexdigest(),
                            "user_id": trusted["user_id"], "workspace": workspace,
-                           "operation": "host_service_deploy" if host_only else "index_deploy" if index_only else "ui_deploy" if ui_only else "build_deploy", "task_id":task_id, "isolated": True, "inputs_sha256": current,
+                           "operation": "host_service_deploy" if host_only else "plugin_deploy" if plugin_only else "index_deploy" if index_only else "ui_deploy" if ui_only else "build_deploy", "task_id":task_id, "isolated": True, "inputs_sha256": current,
                            "created_at": time.time(), "status": "queued", "phase": "waiting",
                            "images": {}, "log": "", "tool_name": "v3_build_work",
                            "lease_until": max(lease_until, time.time() + 4 * 3600),
@@ -2891,7 +2964,7 @@ class Broker:
                         job["rust_tests"]={"status":"not_required","summary":"Exact installed host broker and its docs/tests only; application runtime unchanged"}
                     if ui_only:
                         job["rust_tests"] = {"status": "not_required",
-                            "summary": "UI assets only; no Rust build or tests required"}
+                            "summary": "Compatible assets/plugin; no core Rust build required"}
                     self._save(job)
                     self.jobs[job_id] = job
                     item.update(status="closed", inputs_sha256=current, job_id=job_id,
@@ -3096,12 +3169,16 @@ class Broker:
         for role, name in zip(("api", "loop"), TARGETS):
             if not self.runner.healthy(name, job["images"][role]):
                 raise RuntimeError("V3 " + role + " unhealthy after UI switch")
+        if job["operation"]=="plugin_deploy":
+            for role,name in zip(("api","loop"),TARGETS):
+                if self.runner.inspect(name).get("Id")!=previous[role].get("Id"):
+                    raise RuntimeError("Unrelated container replaced during plugin publication")
         self._phase(job, "promoting_checkout")
         self.runner.promote_checkout(self._current_release_blob(), blob, job["changed_paths"])
         job["synchronization"] = self._sync_report(blob, blob, ())
         with self.lock:
             self._batch_lease(job)
-            job.update(status="completed", phase="finished", reason="Installed host service source published; application images unchanged" if job["operation"]=="host_service_deploy" else "UI assets served from frozen release",
+            job.update(status="completed", phase="finished", reason="Installed host service source published; application images unchanged" if job["operation"]=="host_service_deploy" else "Codebase Admin plugin published; application images unchanged" if job["operation"]=="plugin_deploy" else "UI assets served from frozen release",
                        finished_at=time.time())
             job.setdefault("phase_history", []).append(
                 {"phase": "finished", "at": job["finished_at"]})
@@ -3128,7 +3205,9 @@ class Broker:
                 if not self.runner.ui_hot_swappable():raise ValueError("Host source publication requires frozen asset mounts")
                 self._run_ui_hot(job,blob)
                 return
-            if job["operation"]=="index_deploy" and not self.runner.ui_hot_swappable():
+            if job["operation"]=="plugin_deploy" and not self.runner.plugin_hot_swappable():
+                raise ValueError("Codebase Admin independent runtime contract unavailable; core migration required")
+            if job["operation"] in ("index_deploy","plugin_deploy") and not self.runner.ui_hot_swappable():
                 raise ValueError("Index maintenance requires hot publication; container replacement is forbidden")
             if job["operation"] in HOT_OPERATIONS and self.runner.ui_hot_swappable():
                 self._run_ui_hot(job, blob)
@@ -3158,7 +3237,7 @@ class Broker:
                         job["log"] = scrub(job["log"] + log, self.runner.secrets)
                         self._save(job)
                 self.runner.check_space(MIN_DEPLOY_FREE)
-            if job["operation"] in ("deploy", "build_deploy", "ui_deploy", "index_deploy"):
+            if job["operation"] in ("deploy", "build_deploy", "ui_deploy", "index_deploy", "plugin_deploy"):
                 self.deploy_lock.acquire()
                 deploy_locked = True
                 if self._has_unresolved_release(job["job_id"]):

@@ -476,6 +476,16 @@ impl Catalog {
     }
 
     fn present(ability: &Ability) -> bool {
+        if ability.id=="codebase_admin" {
+            if let Some(path)=Self::published_skill(ability,"ability","codebase_admin") {
+                let Some(folder)=path.parent() else {return false;};
+                let metadata=read_bytes(&folder.join("plugin.json"),4096).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok());
+                let declaration=read_bytes(&folder.join("codebase_admin.json"),MAX_MANIFEST_BYTES).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok());
+                return metadata.is_some_and(|v|v["id"]=="codebase_admin" && v["protocol"]==1 && v["interface"]==1 && v["entrypoint"]=="runner.py" && v["runtime"]=="python3" && v["version"]==1 && v["tools"]==json!(ability.tools))
+                    && declaration.is_some_and(|v|v["tools"]==json!(ability.tools) && v["kind"]=="ability" && v["readiness"]=="ready")
+                    && read_bytes(&folder.join("runner.py"),2*1024*1024).is_ok();
+            }
+        }
         if ability.id=="mcp" {return crate::mcp::bridge::available();}
         if ability.id == "optimization" {
             return crate::optimization::available();
@@ -491,19 +501,20 @@ impl Catalog {
 
     // Only cached, validated bundle IDs can select an asset. Live edits withdraw
     // old guidance instead of importing instructions without a catalog reload.
-    /// Guidance follows the broker's active asset pointer; manifests/tool grants stay image-pinned.
+    /// Published guidance follows the broker pointer; compatible Codebase Admin metadata is live.
+    /// Tool/schema grants remain bound to the installed core interface.
     fn published_skill_path(ability:&Ability,kind:&str,name:&str,ui_root:Option<&Path>)->Option<PathBuf>{
-        if ability.id!="code_index" || !valid_id(name){return None;}
+        if !matches!(ability.id.as_str(),"code_index"|"codebase_admin") || !valid_id(name){return None;}
         let root=ui_root.filter(|root|root.ends_with(Path::new("v3/ui")))?;
-        let folder=root.parent()?.join("plugins/abilities/Administrator/code_index");
+        let folder=root.parent()?.join(format!("plugins/abilities/Administrator/{}",ability.id));
         match kind{
-            "ability" if name=="code_index"=>Some(folder.join("code_index.skill.md")),
+            "ability" if name==ability.id=>Some(folder.join(format!("{}.skill.md",ability.id))),
             "tool" if ability.tools.iter().any(|tool|tool==name)=>Some(folder.join("tools").join(format!("{name}.skill.md"))),
             "selectable" if ability.selectable_skills.contains_key(name)=>Some(folder.join("skills").join(format!("{name}.skill.md"))),
             _=>None,
         }
     }
-    /// Resolve only Code Index guidance through the trusted active asset pointer.
+    /// Resolve supported independently published guidance through the trusted asset pointer.
     fn published_skill(ability:&Ability,kind:&str,name:&str)->Option<PathBuf>{
         let root=std::env::var_os("V3_UI_ROOT").map(PathBuf::from);
         Self::published_skill_path(ability,kind,name,root.as_deref())
@@ -558,7 +569,7 @@ impl Catalog {
             for (name, text) in &ability.selectable_skills {
                 assets.push(json!(["selectable", name, present && Self::skill_live(ability, "selectable", name, text)]));
             }
-            let current_guidance=if ability.id=="code_index"{
+            let current_guidance=if matches!(ability.id.as_str(),"code_index"|"codebase_admin"){
                 let mut hashes=Vec::new();
                 if let Some(body)=Self::core_skill(ability){hashes.push(json!(["ability",ability.id,hex::encode(Sha256::digest(body.as_bytes()))]));}
                 for(name,text)in &ability.tool_skills{if let Some(body)=Self::asset_text(ability,"tool",name,text){hashes.push(json!(["tool",name,hex::encode(Sha256::digest(body.as_bytes()))]));}}
@@ -802,26 +813,39 @@ impl Catalog {
             general_skills.push(json!({"skill_id":"core","title":"Skill","when_to_use":ability.skill_summary,
                 "mode":Self::skill_mode(visibility,&ability.id)}));
         }
-        for (name,text) in &ability.selectable_skills {
-            if !Self::skill_live(ability,"selectable",name,text) {continue;}
-            if let Some((title,when,_))=Self::selectable_metadata(name,text) {
+        for (name,cached) in &ability.selectable_skills {
+            let Some(text)=Self::asset_text(ability,"selectable",name,cached) else {continue;};
+            if !Self::skill_live(ability,"selectable",name,&text) {continue;}
+            if let Some((title,when,_))=Self::selectable_metadata(name,&text) {
                 general_skills.push(json!({"skill_id":name,"title":title,"when_to_use":when,
-                    "mode":Self::selectable_mode(visibility,&ability.id,name,text)}));
+                    "mode":Self::selectable_mode(visibility,&ability.id,name,&text)}));
             }
         }
-        json!({"id":ability.id,"group":ability.group,"group_name":ability.group_name,
+        let mut described=json!({"id":ability.id,"group":ability.group,"group_name":ability.group_name,
             "name":ability.name,"description":ability.description,
             "kind":ability.kind,"readiness":ability.readiness,"config":ability.config,
             "skill_summary":ability.skill_summary,"migration_note":ability.migration_note,
             "icon":ability.icon,"color":ability.color,"tools":tools,
             "has_skill":Self::core_skill(ability).is_some(),
-            "selectable_skills":ability.selectable_skills.iter().filter(|(name, text)| Self::skill_live(ability, "selectable", name, text) && Self::selectable_metadata(name,text).is_some() && Self::selectable_mode(visibility,&ability.id,name,text)!="off").map(|(name, _)| name).collect::<Vec<_>>(),
+            "selectable_skills":ability.selectable_skills.iter().filter_map(|(name,cached)| Self::asset_text(ability,"selectable",name,cached).filter(|text|Self::skill_live(ability,"selectable",name,text) && Self::selectable_metadata(name,text).is_some() && Self::selectable_mode(visibility,&ability.id,name,text)!="off").map(|_|name)).collect::<Vec<_>>(),
             "general_skills":general_skills,
             "skill_visibility":Self::skill_mode(visibility, &ability.id),
             "visibility":if off {"off"} else if visible {"visible"} else {"discoverable"},
             "active":Self::active(state, &ability.id),
             "availability":if visible {"visible"} else if Self::active(state, &ability.id) {"activated"} else {"discoverable"},
-            "requires_activation":!visible && !Self::active(state, &ability.id)})
+            "requires_activation":!visible && !Self::active(state, &ability.id)});
+        if ability.id=="codebase_admin" {
+            if let Some(path)=Self::published_skill(ability,"ability","codebase_admin").and_then(|p|p.parent().map(|p|p.join("codebase_admin.json"))) {
+                if let Ok(bytes)=read_bytes(&path,MAX_MANIFEST_BYTES) {
+                    if let Ok(value)=serde_json::from_slice::<Value>(&bytes) {
+                        for (field,key) in [("name","display_name"),("description","description"),("skill_summary","skill_summary"),("migration_note","migration_note"),("icon","icon"),("color","color")] {
+                            if let Some(v)=value.get(key) {described[field]=v.clone();}
+                        }
+                    }
+                }
+            }
+        }
+        described
     }
 
     pub fn catalog_with(&self, policy: &Value, visibility: &Value, state: &Value) -> Vec<Value> {
@@ -851,7 +875,7 @@ impl Catalog {
                         "mode":Self::tool_mode(visibility,name),"supported":Self::supported(name),
                         "description":description,
                         "has_tool_skill":ability.tool_skills.get(name)
-                            .is_some_and(|text|Self::skill_live(ability,"tool",name,text))})
+                            .is_some_and(|text|Self::asset_text(ability,"tool",name,text).is_some())})
                 }).collect::<Vec<_>>());
                 item
             })
@@ -1274,7 +1298,7 @@ mod tests {
         let (root, catalog) = fixture();
         let mut ability = catalog.abilities[0].clone();
         let ui = root.path().join("assets/current/v3/ui");
-        assert!(Catalog::published_skill_path(&ability, "ability", "codebase_admin", Some(&ui)).is_none());
+        assert_eq!(Catalog::published_skill_path(&ability, "ability", "codebase_admin", Some(&ui)).unwrap(),root.path().join("assets/current/v3/plugins/abilities/Administrator/codebase_admin/codebase_admin.skill.md"));
         ability.id = "code_index".into();
         ability.tools = vec!["code_index_lookup".into()];
         let path = Catalog::published_skill_path(&ability, "ability", "code_index", Some(&ui)).unwrap();

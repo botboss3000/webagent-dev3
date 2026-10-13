@@ -1,3 +1,11 @@
+---
+id: live_plugin_publication
+title: Independent plugin publication
+when_to_use: Choosing publication for abilities, executable plugins, guidance and runtime assets.
+default_mode: discoverable
+minimum_access: registered
+---
+
 # Live plugin and non-Rust publication
 
 Use this skill when creating or editing abilities, executable plugins, Markdown guidance or documentation, JSON manifests/configuration/schemas, UI assets, Python workers, or other non-Rust files. Choose publication from the actual consumers and dependencies, not the file extension.
@@ -24,7 +32,17 @@ For an implementation task, first establish the current dependency graph and a r
 
 Before editing, identify each file's producer and consumers: API, loop, worker, plugin process, protected broker, browser and startup loader as applicable. Check whether it is embedded at compile time, copied into an image, read at startup, read per call, or resolved through a trusted published revision. Inspect current implementation; update this baseline when architecture changes.
 
-As checked on 2026-10-12:
+Codebase Admin interface 1 now implements an independent publication slice:
+runner.py performs live file effects in bounded isolated processes and prepares
+command execution. Core-to-worker and broker routes retain their existing contracts. Complete compatible packages use the protected broker's
+plugin_deploy lane. Existing ability/tool/selectable guidance is adopted by API
+and loop at model-call boundaries; the worker pins immutable revisions. The
+tool/schema interface and stateful core/broker services remain authoritative.
+The initial dispatch conversion requires a core release once; subsequent compatible
+package updates retain API, loop, worker and gate processes. New tool/schema
+interfaces or new selectable IDs require coordinated catalog installation.
+
+Other abilities retain the following baseline as checked on 2026-10-12:
 - src/app.rs loads Catalog at startup from V3_ABILITIES_ROOT; src/abilities.rs caches validated manifests and skills. Editing cached bytes does not adopt a new catalog; it can withdraw old declarations/guidance.
 - The general tool schema registry and many dispatch handlers remain compiled Rust. Merely dropping in a JSON declaration cannot make an unsupported tool executable.
 - src/abilities.rs resolves selected Code Index guidance through the active asset pointer. This is a special path, not a general live ability loader.

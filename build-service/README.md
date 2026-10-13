@@ -65,3 +65,21 @@ workflow. This host-only path does not grant agents installation authority.
 The administrator Builds dashboard returns every unreviewed retained-task notice
 and every non-adopted build receipt, without a display-page limit. Caller-scoped
 agent notice reads remain bounded independently from this administrator feed.
+
+
+Codebase Admin interface 1 is an independent Python executable package under
+plugins/abilities/Administrator/codebase_admin. Its build manifest lists runner.py
+as the executable input; existing guidance and compatible catalog metadata are
+runtime assets. Isolated tasks affecting only this package use plugin_deploy:
+validate the complete protocol/catalog, compile-check Python, run package tests,
+stage a frozen revision, then atomically activate the existing asset pointer.
+API, loop, worker and gate keep their images and processes. Incompatible tool or
+schema contracts require a coordinated core release. Core state/prompt APIs and
+protected broker effects keep their existing authorization and recovery.
+
+Compatible Codebase Admin metadata obeys the core loader's UTF-8 byte limits
+and types; contract fields compare canonical JSON so booleans cannot masquerade
+as version numbers. New tool/selectable catalog IDs need coordinated installation.
+Package tests run in the retained API image as the worker UID, with no network,
+application state, credentials or control sockets. Host Python syntax feedback
+does not establish compatibility with the installed runtime.
