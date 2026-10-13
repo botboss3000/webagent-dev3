@@ -1,13 +1,13 @@
 {
   "display_name": "Live Plugin Acceptance Fixture",
   "kind": "ability",
-  "description": "Independent Python acceptance fixture, JSON_BETA.",
+  "description": "Independent Python acceptance fixture, JSON_GAMMA.",
   "tools": [
     "live_fixture_echo"
   ],
   "readiness": "ready",
   "config": {
-    "fixture_marker": "JSON_BETA"
+    "fixture_marker": "JSON_GAMMA"
   },
   "order": 999
 }

@@ -22,7 +22,8 @@
     "assets": [
       "live_rust_fixture.json",
       "live_rust_fixture.skill.md",
-      "schemas.json"
+      "schemas.json",
+      "assets/runtime-marker.json"
     ]
   }
 }

@@ -6,4 +6,4 @@ default_mode: visible
 minimum_access: registered
 ---
 
-The current selectable guidance marker is SELECTABLE_BETA.
+The current selectable guidance marker is SELECTABLE_GAMMA.
