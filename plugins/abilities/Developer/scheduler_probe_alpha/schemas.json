@@ -1,0 +1,13 @@
+[
+  {
+    "type": "function",
+    "name": "scheduler_probe_alpha_echo",
+    "description": "Return the scheduler development acceptance marker",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  }
+]

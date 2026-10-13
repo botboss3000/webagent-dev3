@@ -1,0 +1,9 @@
+{
+  "display_name": "Scheduler alpha probe",
+  "kind": "ability",
+  "description": "Temporary development scheduler acceptance fixture",
+  "readiness": "ready",
+  "tools": [
+    "scheduler_probe_alpha_echo"
+  ]
+}
