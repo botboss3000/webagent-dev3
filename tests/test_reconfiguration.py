@@ -30,3 +30,22 @@ class BootstrapMigrationTests(unittest.TestCase):
   with tempfile.TemporaryDirectory()as temporary,patch.object(installer,"V3",Path(temporary)),patch.object(installer,"root_only",lambda:None):
    self.assertTrue(installer.snapshot_context(("v3/ability_plugin_worker.py",)))
    with self.assertRaises(FileNotFoundError):installer.snapshot_context(("v3/worker.py",))
+
+class ListenerPreflightTests(unittest.TestCase):
+ def test_active_listener_is_rejected(self):
+  """A live listener must block replacement even when address reuse is enabled."""
+  import socket
+  with socket.socket()as listener:
+   listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+   listener.bind(("127.0.0.1",0));listener.listen()
+   with self.assertRaises(OSError):reconfigure.probe_listener(*listener.getsockname())
+ def test_closed_listener_time_wait_does_not_block_return_to_original_port(self):
+  """An accepted connection outlives a closed listener without reserving that service."""
+  import socket
+  with socket.socket()as listener:
+   listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+   listener.bind(("127.0.0.1",0));address=listener.getsockname();listener.listen()
+   with socket.create_connection(address,timeout=2)as client:
+    accepted,_=listener.accept();accepted.close()
+    self.assertEqual(client.recv(1),b"")
+  reconfigure.probe_listener(*address)

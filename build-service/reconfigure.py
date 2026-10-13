@@ -13,6 +13,12 @@ def plan(previous,candidate):
     if changed&{"bind_address","port"}:roles.add("api")
     if "public_origin"in changed:roles.update(("api","loop"))
     return {"changed_fields":sorted(changed),"services":sorted(roles),"compile_required":False}
+def probe_listener(address,port):
+    """Reject active listeners while allowing a released listener's residual TCP TIME_WAIT connections."""
+    family=socket.AF_INET6 if ":"in address else socket.AF_INET
+    with socket.socket(family,socket.SOCK_STREAM)as check:
+        check.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+        check.bind((address,port))
 def operator(config,path,arguments):
     """Call the protected broker as its configured operator without printing private container settings."""
     result=subprocess.run(["sudo","-n","-u",config["service_account"],"env","WEBAGENT_BUILD_CONFIG="+str(path),"python3","-B",str(Path(config["service_dir"])/"buildctl.py"),*arguments],check=True,stdout=subprocess.PIPE)
@@ -46,8 +52,7 @@ def apply(config_path,candidate_path,task_id,dry_run=False):
             family=socket.AF_INET6 if ":"in address else socket.AF_INET
             with socket.socket(family,socket.SOCK_STREAM)as check:check.bind((address,0))
         if (candidate["bind_address"],candidate["port"])!=(previous["bind_address"],previous["port"]):
-            family=socket.AF_INET6 if ":"in address else socket.AF_INET
-            with socket.socket(family,socket.SOCK_STREAM)as check:check.bind((address,candidate["port"]))
+            probe_listener(address,candidate["port"])
     receipt_id=str(uuid.uuid4());root=Path(previous["state_root"])/"reconfiguration"/receipt_id;root.mkdir(parents=True,mode=0o700)
     source_keys=cfg.defaults().keys()
     old_raw={k:v for k,v in previous.items()if k in source_keys}

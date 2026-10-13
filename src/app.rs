@@ -674,6 +674,11 @@ fn marker(app: &App, shutoff: bool) -> Result<()> {
     FileExt::unlock(&lock)?;
     result
 }
+/// Restore persisted global control after launcher initialization, including API-only replacement.
+/// Never infer enablement from container health: a saved shutoff remains disabled.
+async fn restore_worker_control(app: &App) -> Result<()> {
+    marker(app, app.shutoff().await?)
+}
 impl App {
     async fn run(&self, id: &str) -> Result<Value> {
         self.store
@@ -980,7 +985,7 @@ async fn run_process() -> Result<()> {
     if role=="loop" {
         let progress=agent_loop::watchdog::Progress::new();
         let _watchdog=agent_loop::watchdog::Watchdog::start(progress.clone())?;
-        marker(&app, app.shutoff().await?)?;
+        restore_worker_control(&app).await?;
         recover(&app, true).await?;
         app.ready.store(true, Ordering::Release);
         let mut scheduler=tokio::spawn(scheduler_with_progress(app.clone(),progress));
@@ -1017,6 +1022,7 @@ async fn run_process() -> Result<()> {
         return Ok(());
     }
     recover_promotions(&app).await?;
+    restore_worker_control(&app).await?;
     app.ready.store(true, Ordering::Release);
     let listener = tokio::net::TcpListener::bind(
         std::env::var("V3_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".into()),

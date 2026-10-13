@@ -7259,3 +7259,16 @@ async fn workspace_host_uses_scoped_host_socket_and_rejects_missing_envelope() {
     assert!(!app.tool_socket.exists());
     server.await.unwrap();
 }
+
+/// API-only replacement must restore persisted enablement without clearing an intentional global stop.
+#[tokio::test]
+async fn worker_control_restores_saved_state_after_launcher_reset() {
+    let (_root, app) = fixture().await;
+    for shutoff in [false, true] {
+        app.store.put("control", &json!({"shutoff":shutoff})).await.unwrap();
+        std::fs::write(app.control_dir.join("shutoff"), b"1").unwrap();
+        restore_worker_control(&app).await.unwrap();
+        assert_eq!(std::fs::read(app.control_dir.join("shutoff")).unwrap(),
+                   if shutoff { b"1" } else { b"0" });
+    }
+}
