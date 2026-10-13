@@ -1,12 +1,16 @@
 'use strict';
-import { renderAgentDirectory } from '../agents/pages/catalog.js';
-import { mountUsers, mountPolicies, mountPageAccess } from './users/users.js';
-import { mountAppSettings } from './settings.js';
-import { mountFunctions } from './functions.js';
-import { mountModules } from './modules.js';
-import { mountAppModels } from './models/models.js';
+import { renderAgentDirectory } from './pages/config/page.js';
+import { loadAppPages } from './pages/catalog.js';
+import { createPagePreferences } from './pages/preferences.js';
+import { mountUsers } from './pages/users/page.js';
+import { mountPolicies } from './pages/user-policies/page.js';
+import { mountPageAccess } from './pages/page-access/page.js';
+import { mountAppSettings } from './pages/settings/page.js';
+import { mountFunctions } from './pages/functions/page.js';
+import { mountModules } from './pages/modules/page.js';
+import { mountAppModels } from './pages/models/page.js';
 import { wirePageTabDrag } from '../../shared/page-tabs.js';
-import { startView as startFiles, stopView as stopFiles, resetExplorerForRemount } from './explorer-view.js';
+import { startView as startFiles, stopView as stopFiles, resetExplorerForRemount } from './pages/files/page.js';
 
 export async function start(mount) {
   const generation=(mount._appGeneration||0)+1;mount._appGeneration=generation;
@@ -18,27 +22,34 @@ export async function start(mount) {
     mount._identityListener=()=>start(mount).catch(error=>{mount.textContent=error.message;});
     window.addEventListener('v3-identity-changed',mount._identityListener);
   }
-  const response = await fetch(new URL('./catalog.json', import.meta.url), {cache:'no-store'});
-  if (!response.ok) throw Error('App catalog unavailable');
-  const catalog = await response.json();
+  const catalogPages=await loadAppPages();
   if(!active())return;
-  if (!Array.isArray(catalog.pages)) throw Error('Invalid App catalog');
   const meResponse=await fetch('/api/v3/auth/me',{credentials:'same-origin'});
   const me=meResponse.ok?await meResponse.json():null;
   if(!active())return;
-  const pages=catalog.pages.filter(page=>!page.admin||me?.is_admin);
+  const visiblePages=catalogPages.filter(page=>!page.admin||me?.is_admin);
+  const configPage=visiblePages.find(page=>page.type==='directory');
+  const pages=visiblePages.filter(page=>page.type==='app_configuration');
   if (!Array.isArray(pages) || pages.some(page => !/^[a-z][a-z0-9-]*$/.test(page.id) || !page.title)) throw Error('Invalid App catalog');
   mount.innerHTML = '<div class="app-page-framework"><div class="agent-card active agent-card-tabs-only"><div class="agent-card-tabs-wrap"><div class="agent-card-tabs" role="tablist" aria-label="App pages"></div></div></div><div class="agent-detail-panel"><div class="agent-detail-content"><div id="app-config-page" class="agent-detail-body"></div><section id="app-files-page" class="agent-detail-body" hidden><h2>File Manager</h2><p role="status">Checking V3 File Manager…</p></section></div></div></div>';
   for(const page of pages) if(!mount.querySelector('#'+page.panelId)){const panel=document.createElement('section');panel.id=page.panelId;panel.className='agent-detail-body';panel.hidden=true;mount.querySelector('.agent-detail-content').append(panel);}
   if(me?.is_admin){await mountModules(mount.querySelector('#app-modules-page'));if(!active())return;mountFunctions(mount.querySelector('#app-functions-page'));mountAppSettings(mount.querySelector('#app-settings-page'));}
   if(me?.is_admin){await mountUsers(mount.querySelector('#app-users-page'));if(!active())return;await mountPolicies(mount.querySelector('#app-user-policies-page'));if(!active())return;await mountPageAccess(mount.querySelector('#app-page-access-page'));if(!active())return;const dispose=await mountAppModels(mount.querySelector('#app-models-page'));if(!active()){dispose();return;}mount._appModelsDispose=dispose;}
   const strip = mount.querySelector('[role=tablist]');
-  const all = [{id:'config',title:'Config',panelId:'app-config-page'}, ...pages];
-  const key = 'v3:app-page-tabs:v1';
-  let order;
-  try { order = JSON.parse(localStorage.getItem(key)); } catch {}
-  order = Array.isArray(order) ? [...new Set(order)].filter(id => all.some(p=>p.id===id)) : ['config'];
-  if (!order.includes('config')) order.push('config');
+  const all = [configPage, ...pages];
+  const status=document.createElement('p');status.setAttribute('role','status');status.className='app-preferences-status';mount.prepend(status);
+  const request=async(path,method='GET',body)=>{
+    const response=await fetch('/api/v3'+path,{method,credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json',...(method==='GET'?{}:{'x-csrf-token':me?.csrf_token})},...(body===undefined?{}:{body:JSON.stringify(body)})});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw Error(data.error||data.message||'Preference request failed ('+response.status+')');
+    return data;
+  };
+  let order=['config'];
+  const preferences=createPagePreferences({request,isCurrent:active,onError:message=>{if(active())status.textContent=message;}});
+  try{order=await preferences.load();}catch(error){status.textContent='App favorites unavailable: '+error.message;}
+  if(!active())return;
+  const visibleOrder=ids=>{const result=ids.filter(id=>all.some(p=>p.id===id));if(!result.includes('config'))result.push('config');return result;};
+  order=visibleOrder(order);
   let selected = new URL(location.href).searchParams.get('appView') || 'config';
   if (!all.some(p=>p.id===selected)) selected='config';
   const tabs = new Map();
@@ -57,7 +68,7 @@ export async function start(mount) {
         body:JSON.stringify({action:'tree',path:''})
       });
       if (!probe.ok) throw Error('V3 File Manager backend is not ready ('+probe.status+')');
-      const response=await fetch('/v3-ui/main-panel/app/files.html',{credentials:'same-origin'});
+      const response=await fetch('/v3-ui/main-panel/app/pages/files/files.html',{credentials:'same-origin'});
       if (!response.ok) throw Error('File Manager view unavailable');
       const markup=await response.text();
       if (!active() || selected!=='files') return;
@@ -103,6 +114,7 @@ export async function start(mount) {
     for (const id of order) strip.append(tabs.get(id));
     const host=mount.querySelector('#app-config-page');
     renderAgentDirectory(host,pages,id=>show(id),order,id=>{
+      if(!preferences.ready()){status.textContent='App favorites are unavailable. Reload to retry.';return;}
       order=order.includes(id)?order.filter(item=>item!==id):[id,...order];
       if(selected===id&&!order.includes(id)) selected='config';
       save();
@@ -111,7 +123,10 @@ export async function start(mount) {
     host.querySelector('.agent-config-settings-group-label').textContent='App pages';
     show(selected,false);
   }
-  function save() { try {localStorage.setItem(key,JSON.stringify(order));}catch{} sync();show(selected); }
+  function save() {
+    sync();show(selected);
+    void preferences.save(order,all.map(page=>page.id)).then(saved=>{if(active()&&saved){order=visibleOrder(saved);sync();}});
+  }
   for (const page of all) {
     const tab=document.createElement('button');tab.type='button';tab.id='app-tab-'+page.id;tab.textContent=page.title;
     tab.setAttribute('role','tab');tab.setAttribute('aria-controls',page.panelId);tab.onclick=()=>show(page.id);

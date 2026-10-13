@@ -23,6 +23,7 @@ mod administrator;
 mod model_catalog;
 mod account_models;
 mod agent_pages;
+mod app_pages;
 mod file_manager;
 mod build_dashboard;
 mod app_settings;
@@ -135,6 +136,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/agents/{id}/abilities/{ability}/tools/{tool}/skill-content",get(ability_admin::tool_skill_content))
         .route("/agents/{id}/abilities/{ability}/tools/{tool}/mode",put(ability_admin::tool_set))
         .route("/user/agent-page-favorites",get(agent_pages::read).put(agent_pages::save))
+        .route("/user/app-page-favorites",get(app_pages::read).put(app_pages::save))
         .route("/agents/{id}/embed",get(embed::config_get).put(embed::config_put))
         .route("/embed/challenges/{id}",get(embed::challenge_info))
         .route("/embed/authorize",post(embed::authorize))

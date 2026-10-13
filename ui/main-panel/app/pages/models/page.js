@@ -1,6 +1,6 @@
 'use strict';
-import { mountModelTable } from '../../../shared/models/model-table.js';
-import { initModelAnalytics } from '../../../shared/models/model-analytics.js';
+import { mountModelTable } from '../../../../shared/models/model-table.js';
+import { initModelAnalytics } from '../../../../shared/models/model-analytics.js';
 const MISSING='NEED BACKEND CONTRACT';
 const providers={deepseek:'DeepSeek',openai_api:'OpenAI API',openrouter:'OpenRouter',abacus:'Abacus RouteLLM',gemini:'Gemini',groq:'Groq',together:'Together',mistral:'Mistral',fireworks:'Fireworks',xai:'xAI',perplexity:'Perplexity',deepinfra:'DeepInfra'};
 const bases={deepseek:'https://api.deepseek.com',openai_api:'https://api.openai.com/v1',openrouter:'https://openrouter.ai/api/v1',abacus:'https://routellm.abacus.ai/v1',gemini:'https://generativelanguage.googleapis.com/v1beta/openai',groq:'https://api.groq.com/openai/v1',together:'https://api.together.xyz/v1',mistral:'https://api.mistral.ai/v1',fireworks:'https://api.fireworks.ai/inference/v1',xai:'https://api.x.ai/v1',perplexity:'https://api.perplexity.ai',deepinfra:'https://api.deepinfra.com/v1/openai'};
@@ -31,7 +31,7 @@ export async function mountAppModels(host) {
   if(!live())return()=>{};
   host.replaceChildren(template.content.querySelector('template').content.cloneNode(true));
   host.classList.add('v3-reference-models');host.querySelector('#settings-page-models').hidden=false;
-  for(const href of ['/v3-ui/shared/models/reference.css','/v3-ui/shared/models/pending.css','/v3-ui/main-panel/app/models/models.css']) {
+  for(const href of ['/v3-ui/shared/models/reference.css','/v3-ui/shared/models/pending.css','/v3-ui/main-panel/app/pages/models/models.css']) {
     const link=document.createElement('link');link.rel='stylesheet';link.href=href;host.prepend(link);
   }
   const q=selector=>host.querySelector(selector);

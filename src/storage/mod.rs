@@ -4,6 +4,7 @@
 pub(crate) mod session;
 pub(crate) mod conversation_history;
 mod agent_pages;
+mod app_pages;
 pub(crate) mod search;
 pub(crate) mod own_skills;
 pub(crate) mod base_task;
@@ -600,6 +601,7 @@ impl Store {
             || key.starts_with("followup_queue:")
             || key.starts_with("receipt:queue:")
             || key.starts_with("user_agent_page_preferences:")
+            || key.starts_with("user_app_page_preferences:")
             || key.starts_with("message_meta:")
             || key.starts_with("shared_help:")
             || key.starts_with("receipt:shared_help:")

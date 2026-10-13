@@ -1,5 +1,5 @@
-@import url("./users/users.css");
-@import url("./files.css");
+@import url("./pages/users/users.css");
+@import url("./pages/files/files.css");
 /* App reuses the Agents directory and tab markup/design; only scope differs. */
 #tab-app{padding:12px;min-height:100%}
 #app-settings-page{padding:16px;color:var(--fg-1)}
@@ -52,3 +52,5 @@
 #app-functions-page table{width:100%;border-collapse:collapse;font-size:12px}
 #app-functions-page th,#app-functions-page td{text-align:left;vertical-align:top;padding:10px;border-bottom:1px solid var(--border);overflow-wrap:anywhere;min-width:140px}
 #app-functions-page th{color:var(--fg-1)}
+
+#tab-app .agent-card-tabs button,#tab-app .agent-config-topic-heading,#tab-app .agent-config-star{-webkit-tap-highlight-color:transparent}

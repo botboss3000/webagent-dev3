@@ -1,12 +1,21 @@
 {
   "pages": [
     {
+      "id": "config",
+      "title": "Config",
+      "description": "Open an App configuration page.",
+      "panelId": "app-config-page",
+      "order": 0,
+      "type": "directory"
+    },
+    {
       "id": "functions",
       "title": "Functions",
       "description": "Configure run concurrency and loop scheduling.",
       "panelId": "app-functions-page",
       "admin": true,
-      "order": 1
+      "order": 1,
+      "type": "app_configuration"
     },
     {
       "id": "modules",
@@ -14,7 +23,8 @@
       "description": "Install, disable or remove optional service packages.",
       "panelId": "app-modules-page",
       "admin": true,
-      "order": 3
+      "order": 3,
+      "type": "app_configuration"
     },
     {
       "id": "settings",
@@ -22,7 +32,8 @@
       "description": "Configure application storage and troubleshooting.",
       "panelId": "app-settings-page",
       "admin": true,
-      "order": 5
+      "order": 5,
+      "type": "app_configuration"
     },
     {
       "id": "files",
@@ -30,7 +41,8 @@
       "description": "Browse and edit the live development checkout with Git Control.",
       "panelId": "app-files-page",
       "admin": true,
-      "order": 10
+      "order": 10,
+      "type": "app_configuration"
     },
     {
       "id": "users",
@@ -38,7 +50,8 @@
       "description": "Manage registered and anonymous accounts.",
       "panelId": "app-users-page",
       "order": 20,
-      "admin": true
+      "admin": true,
+      "type": "app_configuration"
     },
     {
       "id": "user-policies",
@@ -46,7 +59,8 @@
       "description": "Global registration and entitlement policies.",
       "panelId": "app-user-policies-page",
       "order": 30,
-      "admin": true
+      "admin": true,
+      "type": "app_configuration"
     },
     {
       "id": "page-access",
@@ -54,7 +68,8 @@
       "description": "Choose which audiences may access app destinations.",
       "panelId": "app-page-access-page",
       "order": 40,
-      "admin": true
+      "admin": true,
+      "type": "app_configuration"
     },
     {
       "id": "models",
@@ -62,7 +77,9 @@
       "description": "Configure and publish app-provided models.",
       "panelId": "app-models-page",
       "order": 50,
-      "admin": true
+      "admin": true,
+      "type": "app_configuration"
     }
-  ]
+  ],
+  "version": 2
 }
