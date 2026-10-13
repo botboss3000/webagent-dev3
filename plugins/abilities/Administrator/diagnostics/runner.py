@@ -2,7 +2,7 @@
 import asyncio,base64,contextlib,ctypes,importlib.util,json,os,signal,sys,time
 from pathlib import Path
 PROTOCOL=1
-IMPLEMENTATION_VERSION="1.0.0"
+IMPLEMENTATION_VERSION="1.0.1"
 MAX_FRAME=2*1024*1024
 TOOLS={"login_as_current_user","login_as_current_user_v3","dev_browser_action","dev_browser_record","administrator_artifact_get","close"}
 def adapter():
