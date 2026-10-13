@@ -2550,18 +2550,24 @@ class Broker:
 
     def host_source_only(self,changed,blob,trusted):
         # This operator path can publish only already-installed host code and its
-        # own docs/tests. Worker modules, policies and application code always build.
-        allowed={"v3/build-service/host.py","v3/build-service/README.md","v3/tests/test_build_service.py"}
+        # own docs/tests and paired ownership classifier. Each changed executable
+        # must match protected installation. Worker, policy and app changes still build.
+        allowed={"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+                 "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py"}
         if not trusted.get("local_caller") or not changed or not set(changed)<=allowed:return False
-        path=Path(CONFIG["service_dir"])/"host.py"
-        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
-        try:
-            meta=os.fstat(fd)
-            if not stat.S_ISREG(meta.st_mode) or meta.st_uid!=0 or meta.st_mode&0o022 or meta.st_nlink!=1:raise PermissionError("Protected installed host code required")
-            with os.fdopen(fd,"rb",closefd=False) as stream:installed=stream.read(2*1024*1024+1)
-            candidate=release.entries(blob,context_digest).get("v3/build-service/host.py")
-            return candidate is not None and candidate[1]==installed
-        finally:os.close(fd)
+        files=release.entries(blob,context_digest)
+        selected=["host.py"]+(["ownership.py"]if "v3/build-service/ownership.py"in changed else [])
+        for name in selected:
+            path=Path(CONFIG["service_dir"])/name
+            fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+            try:
+                meta=os.fstat(fd)
+                if not stat.S_ISREG(meta.st_mode)or meta.st_uid!=0 or meta.st_mode&0o022 or meta.st_nlink!=1:raise PermissionError("Protected installed broker code required")
+                with os.fdopen(fd,"rb",closefd=False)as stream:installed=stream.read(2*1024*1024+1)
+                candidate=files.get("v3/build-service/"+name)
+                if candidate is None or candidate[1]!=installed:return False
+            finally:os.close(fd)
+        return True
 
     def workspace_request(self,name,args,trusted,workspace):
         deadline,fingerprint=self._incoming_lease(trusted)

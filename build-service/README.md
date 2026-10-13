@@ -11,6 +11,9 @@ myapp --api-container myapp-api --loop-container myapp-loop --public-origin
 https://dev.example.com as root. A missing default webagent-build service
 account is created. Use --service-account for an existing Docker-enabled account.
 Source ownership is resolved from the checkout independently of service identity.
+A deleted standalone plugin file uses its sealed task-baseline manifest to retain
+ability ownership when its current manifest is also removed. Existing undeclared
+Rust files and compiler-attested inputs retain conservative engine ownership.
 Operators run buildctl as the configured service account (sudo -u ACCOUNT when
 needed); Unix peer identity authenticates this operator channel.
 Root-owned configuration under /etc/webagent/<instance>/ owns paths and identities.
@@ -54,8 +57,9 @@ to create app-owned data/config directories and seeds only absent defaults.
 It rejects symlinks and preserves existing configuration contents. Ordinary
 releases continue through the unprivileged broker and preserve runtime state.
 
-An isolated local operator task changing only host.py, this README and
-its test_build_service.py suite can publish after that exact host.py has been
+An isolated local operator task changing only host.py, ownership.py, this README
+and their test_build_service.py/test_scheduler_ownership.py suites can publish
+after each changed executable and the candidate host.py have been
 installed while idle. The service verifies the protected installed bytes again,
 freezes and indexes the source, verifies unchanged healthy application images
 and served assets, then performs checked source promotion. Application, worker,

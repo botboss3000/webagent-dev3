@@ -88,6 +88,22 @@ class OwnershipTests(unittest.TestCase):
         root=Path(self.root.name);folder=root/"plugins/abilities/Developer/test";folder.mkdir(parents=True)
         (folder/"plugin.json").write_text(json.dumps({"dispatch":"isolated"}));p="plugins/abilities/Developer/test/src/main.rs"
         self.assertNotIn("module:engine",m.Components(root).scopes([p]));self.assertIn("module:engine",m.Components(root,[p]).scopes([p]))
+    def test_deleted_isolated_manifest_retains_plugin_scope_without_hiding_core_inputs(self):
+        """Deletion uses the sealed baseline only for removed files and never overrides compiler dependencies."""
+        import io,tarfile
+        root=Path(self.root.name)/"v3";root.mkdir();package="plugins/abilities/Developer/removed"
+        path=package+"/main.rs";baseline=root.parent/"baseline.tar"
+        body=json.dumps({"dispatch":"isolated"}).encode()
+        with tarfile.open(baseline,"w")as archive:
+            member=tarfile.TarInfo("v3/"+package+"/plugin.json");member.size=len(body);archive.addfile(member,io.BytesIO(body))
+        self.assertNotIn("module:engine",m.Components(root).scopes([path]))
+        self.assertIn("module:engine",m.Components(root,[path]).scopes([path]))
+        folder=root/package;folder.mkdir(parents=True);(folder/"main.rs").write_text("new source")
+        self.assertIn("module:engine",m.Components(root).scopes([path]))
+        (folder/"main.rs").unlink();(folder/"plugin.json").write_text('{"dispatch":"native"}')
+        self.assertIn("module:engine",m.Components(root).scopes([path]))
+        (folder/"plugin.json").unlink();baseline.rename(root.parent/"original.tar");baseline.symlink_to(root.parent/"original.tar")
+        with self.assertRaises(PermissionError):m.Components(root).scopes([path])
     def test_symlink_database_rejected(self):
         p=Path(self.root.name)/"link";p.symlink_to(self.store.path)
         with self.assertRaises(PermissionError):m.Ownership(p)

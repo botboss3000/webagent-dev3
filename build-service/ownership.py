@@ -3,7 +3,7 @@
 Only broker-derived owners, scopes and verified evidence enter this store.
 Config: protected build-service.json -> scheduler ownership heartbeat policy.
 """
-import contextlib,hashlib,json,os,re,sqlite3,stat,time
+import contextlib,hashlib,json,os,re,sqlite3,stat,tarfile,time
 from pathlib import Path
 
 ACTIVE={"owned","validating","orphaned","takeover_pending"}
@@ -27,6 +27,23 @@ class Components:
     def __init__(self,root,compile_inputs=()):
         """Bind task source declarations to compiler-attested dependency paths."""
         self.root=Path(root);self.compile_inputs={source_path(p)for p in compile_inputs}
+    def deleted_isolated(self,path,parts):
+        """Read a bounded prior manifest from the broker baseline only when executable source is deleted."""
+        target=self.root/path
+        if target.exists()or target.is_symlink():return False
+        baseline=self.root.parent/"baseline.tar"
+        if baseline.is_symlink():raise PermissionError("Baseline manifest symlink rejected")
+        if not baseline.exists():return False
+        fd=os.open(baseline,os.O_RDONLY|os.O_NOFOLLOW)
+        with os.fdopen(fd,"rb")as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):raise PermissionError("Regular sealed baseline required")
+            with tarfile.open(fileobj=stream,mode="r:")as archive:
+                try:member=archive.getmember("v3/"+"/".join(parts[:4])+"/plugin.json")
+                except KeyError:return False
+                if not member.isfile()or not 0<member.size<=65536:return False
+                with archive.extractfile(member)as body:
+                    try:return json.loads(body.read(65537)).get("dispatch")=="isolated"
+                    except (ValueError,AttributeError):return False
     def scopes(self,paths):
         """Return canonical module and path claims, retaining core ownership for embedded inputs."""
         output=set()
@@ -39,6 +56,8 @@ class Components:
                 if manifest.is_file()and not manifest.is_symlink()and manifest.stat().st_size<=65536:
                     try:isolated=json.loads(manifest.read_bytes()).get("dispatch")=="isolated"
                     except (ValueError,AttributeError):pass
+                elif not manifest.exists()and not manifest.is_symlink():
+                    isolated=self.deleted_isolated(path,parts)
                 if path in self.compile_inputs or(path.endswith(".rs")and not isolated):output.add("module:engine")
             elif path.startswith("build-service/")or path.startswith("tests/test_build")or path.startswith("tests/test_scheduler"):
                 output.add("module:broker")

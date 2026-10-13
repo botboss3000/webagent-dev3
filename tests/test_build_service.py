@@ -158,6 +158,30 @@ class HostSourceReleaseTests(unittest.TestCase):
       with self.assertRaises(PermissionError):broker.host_source_only(["v3/build-service/host.py"],blob.getvalue(),{"local_caller":True})
    finally:broker.shutdown()
 
+class InstalledOwnershipPublicationTests(unittest.TestCase):
+ def test_changed_ownership_requires_exact_protected_executable(self):
+  """A broker-only ownership update requires installed bytes and cannot admit application changes."""
+  import os
+  from types import SimpleNamespace
+  with tempfile.TemporaryDirectory()as temporary:
+   root=Path(temporary);(root/"host.py").write_bytes(b"installed host");(root/"ownership.py").write_bytes(b"installed ownership")
+   broker=fixtures.host.Broker(root/"jobs",fixtures.FakeRunner())
+   protected=SimpleNamespace(st_mode=0o100644,st_uid=0,st_nlink=1)
+   def identity(fd):
+    """Supply root-owned inode metadata to exercise the installed-byte gate."""
+    return protected
+   blob=fixtures.context(extra={"v3/build-service/host.py":"installed host","v3/build-service/ownership.py":"installed ownership"})
+   changed=["v3/build-service/ownership.py","v3/tests/test_scheduler_ownership.py"]
+   try:
+    with patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"service_dir":str(root)}),patch.object(fixtures.host.os,"fstat",side_effect=identity):
+     self.assertTrue(broker.host_source_only(changed,blob,{"local_caller":True}))
+     (root/"ownership.py").write_bytes(b"different installed bytes")
+     self.assertFalse(broker.host_source_only(changed,blob,{"local_caller":True}))
+     self.assertFalse(broker.host_source_only(changed,blob,{}))
+     self.assertFalse(broker.host_source_only(changed+["v3/worker.py"],blob,{"local_caller":True}))
+   finally:broker.shutdown()
+
+
 class DashboardHistoryTests(unittest.TestCase):
  def test_administrator_feed_includes_all_notices_and_builds(self):
   fixture=fixtures.BuildTests();fixture.setUp()
