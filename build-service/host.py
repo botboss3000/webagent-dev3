@@ -1057,14 +1057,17 @@ class Runner:
         if "v3/src/main.rs"not in paths:raise ValueError("Installed compiler dependency manifest unavailable")
         return paths
     def diagnostics_hot_swappable(self):
-        """Probe the installed trusted worker before admitting native package updates."""
+        """Parse fixed private capability metadata before environment-value redaction.
+
+        Raw output stays local to this exact comparison; no frame is published.
+        """
         program=("import socket,json; s=socket.socket(socket.AF_UNIX); s.settimeout(10); "
             "s.connect('/run/v3/worker/tools.sock'); "
             "s.sendall(json.dumps({'id':'diagnostics-protocol','name':'diagnostics_protocol',"
             "'workspace':'"+LOCAL_WORKSPACE+"','arguments':{}}).encode()+bytes([10])); "
             "print(s.makefile('rb').readline(4096).decode())")
         try:
-            reply=json.loads(self.command(["docker","exec","--user",str(CONFIG["app_uid"]),TARGETS[0],"python3","-I","-B","-c",program],timeout=15))
+            reply=json.loads(self.command(["docker","exec","--user",str(CONFIG["app_uid"]),TARGETS[0],"python3","-I","-B","-c",program],timeout=15,private_raw=True))
             return reply.get("status")=="success" and reply.get("output")=={"protocol":1,"interface":1,"stateful":True}
         except Exception:return False
     def plugin_hot_swappable(self):

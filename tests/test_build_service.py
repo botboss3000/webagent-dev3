@@ -185,6 +185,17 @@ class DashboardHistoryTests(unittest.TestCase):
   finally:fixture.tearDown()
 
 
+class DiagnosticsProbeTests(unittest.TestCase):
+ def test_environment_redaction_does_not_corrupt_private_protocol_boolean(self):
+  """A container env value can equal JSON true; parse this fixed private frame."""
+  runner=fixtures.host.Runner();runner.secrets=["true"]
+  reply=json.dumps({"status":"success","output":{"protocol":1,"interface":1,"stateful":True}})
+  def command(argv,**kwargs):
+   return reply if kwargs.get("private_raw") else fixtures.host.scrub(reply,runner.secrets)
+  with patch.object(runner,"command",side_effect=command) as called:
+   self.assertTrue(runner.diagnostics_hot_swappable())
+   self.assertTrue(called.call_args.kwargs["private_raw"])
+
 class CodebasePublicationMetadataTests(unittest.TestCase):
  def fixture(self,temporary):
   import shutil
