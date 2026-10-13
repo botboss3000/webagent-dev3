@@ -77,11 +77,31 @@ def codebase_source_path(path):
     return relative in {"runner.py","test_runner.py","plugin.json","codebase_admin.json","codebase_admin.skill.md"} or (
         relative in {"tools/"+name+".skill.md" for name in CODEBASE_TOOLS}
         or relative in {"skills/rust_quality.skill.md","skills/live_plugin_publication.skill.md","skills/ui_theming.skill.md","skills/ui_toggle_list.skill.md"})
+DIAGNOSTICS_ROOT="v3/plugins/abilities/Administrator/diagnostics/"
+DIAGNOSTICS_MANIFEST={'version': 1, 'id': 'diagnostics', 'protocol': 1, 'interface': 1, 'runtime': 'python3', 'entrypoint': 'runner.py', 'tools': ['read_diagnostics', 'login_as_current_user', 'dev_browser_url', 'dev_browser_action', 'dev_browser_record'], 'build': {'inputs': ['runner.py', 'adapter.py'], 'dependencies': [], 'toolchain': 'image-python3', 'flags': ['-I', '-B'], 'assets': ['diagnostics.json', 'diagnostics.skill.md', 'tools', 'skills']}}
+def diagnostics_source_path(path):
+    """Only the installed native Diagnostics package may use this executable hot lane."""
+    if not path.startswith(DIAGNOSTICS_ROOT):return False
+    relative=path[len(DIAGNOSTICS_ROOT):]
+    return relative in {"runner.py","adapter.py","test_runner.py","plugin.json","diagnostics.json","diagnostics.skill.md","skills/journey_testing.skill.md"} or relative.startswith("tools/")and relative.endswith(".skill.md")
+def validate_diagnostics_package(folder):
+    """Validate a complete native contract before activating either consumer."""
+    folder=Path(folder)
+    for name in ("plugin.json","runner.py","adapter.py","test_runner.py","diagnostics.json","diagnostics.skill.md"):
+        path=folder/name
+        if path.is_symlink()or not path.is_file()or path.stat().st_size>2*1024*1024:raise ValueError("Incomplete Diagnostics package")
+    if canonical(json.loads((folder/"plugin.json").read_bytes()))!=canonical(DIAGNOSTICS_MANIFEST):raise ValueError("Incompatible Diagnostics contract")
+    declaration=json.loads((folder/"diagnostics.json").read_bytes())
+    if declaration.get("tools")!=DIAGNOSTICS_MANIFEST["tools"]or declaration.get("kind")!="ability"or declaration.get("readiness")!="ready":raise ValueError("Incompatible Diagnostics catalog")
+    for path in folder.rglob("*"):
+        if path.is_symlink():raise ValueError("Diagnostics package symlink")
+        if path.is_file()and path.suffix==".py":compile(path.read_bytes(),str(path),"exec")
+
 ABILITY_ROOT="v3/plugins/abilities/"
 def ability_asset_path(path):
     if not path.startswith(ABILITY_ROOT):return False
     # Rust adapters and legacy Python helpers still have core/image consumers.
-    return path.endswith((".json",".md")) or codebase_source_path(path)
+    return path.endswith((".json",".md")) or codebase_source_path(path) or diagnostics_source_path(path)
 def generic_package_path(path,blob):
     if not path.startswith(ABILITY_ROOT):return False
     parts=path[len(ABILITY_ROOT):].split("/")
@@ -964,6 +984,15 @@ class Runner:
                 "--tmpfs","/tmp:rw,size=64m,mode=1777",
                 "--mount","type=bind,src="+str(root / CODEBASE_ROOT)+",dst=/package,readonly",
                 "-w","/tmp","--entrypoint","python3",image,"-I","-B","/package/test_runner.py"],timeout=30)
+        if any(diagnostics_source_path(name) for name in changed):
+            validate_diagnostics_package(root / DIAGNOSTICS_ROOT)
+            if (active is None or active.get("operation")!="build_deploy") and not self.diagnostics_hot_swappable():
+                raise ValueError("Installed worker lacks native Diagnostics package support")
+            image=(active["images"]["api"] if active is not None and active.get("operation")=="build_deploy" else self.inspect(TARGETS[0])["Image"])
+            self.command(["docker","run","--rm","--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
+                "--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["worker_gid"]),"--pids-limit","64","--memory","256m",
+                "--tmpfs","/tmp:rw,size=64m,mode=1777","--mount","type=bind,src="+str(root / DIAGNOSTICS_ROOT)+",dst=/package,readonly",
+                "--entrypoint","python3",image,"-I","-B","/package/test_runner.py"],timeout=60)
         if any(name.startswith(ABILITY_ROOT) or name.startswith("v3/config/") or name=="v3/src/agent_loop/tools/administrator-schemas.json" for name in changed):
             # A foundation release introduces the validator itself. Validate with
             # its already-tested candidate API image; hot updates use the retained consumer.
@@ -1027,6 +1056,17 @@ class Runner:
             if normalized.startswith(("src/","plugins/","config/")):paths.add("v3/"+normalized)
         if "v3/src/main.rs"not in paths:raise ValueError("Installed compiler dependency manifest unavailable")
         return paths
+    def diagnostics_hot_swappable(self):
+        """Probe the installed trusted worker before admitting native package updates."""
+        program=("import socket,json; s=socket.socket(socket.AF_UNIX); s.settimeout(10); "
+            "s.connect('/run/v3/worker/tools.sock'); "
+            "s.sendall(json.dumps({'id':'diagnostics-protocol','name':'diagnostics_protocol',"
+            "'workspace':'"+LOCAL_WORKSPACE+"','arguments':{}}).encode()+bytes([10])); "
+            "print(s.makefile('rb').readline(4096).decode())")
+        try:
+            reply=json.loads(self.command(["docker","exec","--user",str(CONFIG["app_uid"]),TARGETS[0],"python3","-I","-B","-c",program],timeout=15))
+            return reply.get("status")=="success" and reply.get("output")=={"protocol":1,"interface":1,"stateful":True}
+        except Exception:return False
     def plugin_hot_swappable(self):
         for name in TARGETS:
             value=self.inspect(name)
@@ -1213,6 +1253,9 @@ class Runner:
         config["Image"] = image
         host = dict(previous["HostConfig"])
         if release_root is not None:
+            # Image releases adopt the protected operator budget; retained-image
+            # reconfiguration already carries its explicitly selected HostConfig.
+            if name == TARGETS[0]:host["PidsLimit"]=CONFIG["api_pids_limit"]
             host = release.release_mounts(host, Path(release_root), ASSET_ROOT)
             if name in TARGETS:
                 env = [value for value in config.get("Env", [])

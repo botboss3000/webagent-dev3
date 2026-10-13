@@ -5,12 +5,12 @@ def module(name,path):
     """Load an exact reviewed local operator module; callers never choose an application executable."""
     spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 def plan(previous,candidate):
-    """Reject state/identity migrations and select only listener/origin consumers for retained-image replacement."""
+    """Reject migrations and select only listener, origin or API-resource consumers for retained-image replacement."""
     changed={key for key in previous if previous[key]!=candidate.get(key)}
-    allowed={"bind_address","port","public_origin"}
+    allowed={"bind_address","port","public_origin","api_pids_limit"}
     if changed-allowed:raise ValueError("This reconfiguration cannot relocate storage, sockets, identities or installed code")
     roles=set()
-    if changed&{"bind_address","port"}:roles.add("api")
+    if changed&{"bind_address","port","api_pids_limit"}:roles.add("api")
     if "public_origin"in changed:roles.update(("api","loop"))
     return {"changed_fields":sorted(changed),"services":sorted(roles),"compile_required":False}
 def probe_listener(address,port):
@@ -77,6 +77,7 @@ def apply(config_path,candidate_path,task_id,dry_run=False):
             runner.stop(name);runner.rename(name,backup);renamed.append((name,backup))
             selected=copy.deepcopy(before[role])
             if role=="api":
+                selected["HostConfig"]["PidsLimit"]=candidate["api_pids_limit"]
                 selected["HostConfig"]["PortBindings"]={"8080/tcp":[{"HostIp":candidate["bind_address"],"HostPort":str(candidate["port"])}]}
             selected["Config"]["Env"]=[v for v in selected["Config"].get("Env",[])if not v.startswith("V3_PUBLIC_ORIGIN=")]+["V3_PUBLIC_ORIGIN="+candidate["public_origin"]]
             runner.create(name,before[role]["Image"],selected);created.append(name);runner.start(name)

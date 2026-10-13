@@ -6,7 +6,7 @@ Use `read_diagnostics` for the native bounded current-session/run diagnostic vie
 
 ## Authenticated browser
 
-`login_as_current_user` opens a private Chromium profile for the caller's current chat session and verifies `/api/v3/auth/me`. Authentication uses a short-lived HttpOnly `v3_session` cookie minted by Rust and passed separately from model arguments. Tokens, cookies and headers never enter tool results. A new authorization generation closes the old profile; expired, idle or revoked profiles cannot be reused.
+`login_as_current_user` opens a private Chromium profile for the caller's current chat session and verifies `/api/v3/auth/me`. Authentication uses a short-lived HttpOnly `v3_session` cookie minted by Rust and passed separately from model arguments. Tokens, cookies and headers never enter tool results. The verified identity response supplies the browser CSRF token privately; reads and screenshots mask it along with the authentication cookie. A new authorization generation closes the old profile; expired, idle or revoked profiles cannot be reused.
 
 The browser origin is fixed to `https://dev.webagent.live`. The route is supplied as an exact relative `path`; only implemented app routes and bounded current-session read APIs are accepted. Selected agent and conversation IDs must match Rust's current agent/session. External, production, file and data origins are unavailable.
 
@@ -23,6 +23,14 @@ Screenshots are actual bounded viewport PNG files stored privately outside the c
 After uncertain input or timeout, inspect the current page before another action. Neither restart nor recovery replays clicks, typing or navigation mutations. Profiles are discarded rather than restored; the immutable interaction journal remains original evidence.
 
 Use API validation when requested. This ability does not require a browser journey or force a screenshot for an API-only task.
+
+## Independently published native package
+
+The protected broker publishes this complete protocol-1 native package. Rust retains identity, cookie minting, policy, approvals, run diagnostics and artifact authorization. The worker supervises at most two private browser sessions; each process pins one immutable package revision through close, 180-second idle expiry or its current authorization lease. New browser sessions use the latest publication. Compatible runner/helper/guidance updates retain API, loop, gate and worker processes. Existing active sessions do not change implementation mid-action.
+
+Results identify plugin_revision, implementation_version and implementation_sha256. Capacity, startup, authentication, invalid-request and backend errors have distinct sanitized error_kind values. Transport loss during input remains uncertain and never authorizes replay. Artifact reads use a short-lived process without opening a browser or consuming a browser slot. Restart discards authenticated profiles; artifacts retain their existing session ownership and access checks.
+
+This is the private fixed-origin Diagnostics browser, not Web Browser Control or a personal-device browser. It does not emulate a phone operating system keyboard.
 
 ## Runtime tool execution
 

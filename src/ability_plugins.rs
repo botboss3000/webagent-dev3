@@ -63,7 +63,16 @@ impl Package {
         let bytes=read(&path,64*1024)?;
         let manifest:Value=serde_json::from_slice(&bytes)?;
         // Existing native package adapters retain their own contract.
-        if id=="codebase_admin" && manifest.get("dispatch").is_none(){return Ok(None);}
+        if matches!(id,"codebase_admin"|"diagnostics") && manifest.get("dispatch").is_none(){
+            if id=="diagnostics" {
+                let expected=json!({"version":1,"id":"diagnostics","protocol":1,"interface":1,"runtime":"python3","entrypoint":"runner.py",
+                    "tools":tools,"build":{"inputs":["runner.py","adapter.py"],"dependencies":[],"toolchain":"image-python3","flags":["-I","-B"],
+                    "assets":["diagnostics.json","diagnostics.skill.md","tools","skills"]}});
+                if manifest!=expected {anyhow::bail!("Unsupported native Diagnostics contract");}
+                for name in ["runner.py","adapter.py"] {read(&root.join(name),2*1024*1024)?;}
+            }
+            return Ok(None);
+        }
         if manifest["dispatch"]!="isolated"||manifest["protocol"].as_u64()!=Some(1)
             ||manifest["interface"].as_u64()!=Some(1)||manifest["id"]!=id
             ||manifest["tools"]!=json!(tools)||!matches!(manifest["runtime"].as_str(),Some("python3"|"executable"))
@@ -243,4 +252,28 @@ mod catalog_tests {
   value["protocol"]=json!(1);value["tools"]=json!(["file_read"]);std::fs::write(&p,serde_json::to_vec(&value).unwrap()).unwrap();
   assert!(Package::load(&path,"fixture_ability",&["file_read".into()]).is_err());
  }
+}
+
+#[cfg(test)]
+mod diagnostics_native_contract_tests {
+    use super::*;
+    #[test]
+    /// Browser credentials remain behind native dispatch; malformed or incomplete contracts cannot install.
+    fn diagnostics_retains_native_authority_and_rejects_incompatible_packages() {
+        let root=tempfile::tempdir().unwrap();
+        let tools=vec!["read_diagnostics".to_owned(),"login_as_current_user".to_owned(),"dev_browser_url".to_owned(),
+            "dev_browser_action".to_owned(),"dev_browser_record".to_owned()];
+        let manifest=json!({"version":1,"id":"diagnostics","protocol":1,"interface":1,"runtime":"python3","entrypoint":"runner.py",
+            "tools":tools,"build":{"inputs":["runner.py","adapter.py"],"dependencies":[],"toolchain":"image-python3","flags":["-I","-B"],
+            "assets":["diagnostics.json","diagnostics.skill.md","tools","skills"]}});
+        for name in ["runner.py","adapter.py"] {std::fs::write(root.path().join(name),"# native fixture\n").unwrap();}
+        std::fs::write(root.path().join("plugin.json"),serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(Package::load(root.path(),"diagnostics",&tools).unwrap().is_none());
+        let mut invalid=manifest.clone();invalid["protocol"]=json!(true);
+        std::fs::write(root.path().join("plugin.json"),serde_json::to_vec(&invalid).unwrap()).unwrap();
+        assert!(Package::load(root.path(),"diagnostics",&tools).is_err());
+        std::fs::write(root.path().join("plugin.json"),serde_json::to_vec(&manifest).unwrap()).unwrap();
+        std::fs::remove_file(root.path().join("adapter.py")).unwrap();
+        assert!(Package::load(root.path(),"diagnostics",&tools).is_err());
+    }
 }

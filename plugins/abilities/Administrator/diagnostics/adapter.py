@@ -27,7 +27,7 @@ PRIVATE_ROOT=Path("/run/v3/worker/browser")
 MAX_TEXT=16384
 MAX_PNG=1024*1024
 MAX_ARTIFACTS=40
-MAX_SESSIONS=8
+MAX_SESSIONS=2
 MAX_PRIVATE_SESSIONS=32
 MAX_ARTIFACT_BYTES=64*1024*1024
 IDLE_SECONDS=180
@@ -81,7 +81,7 @@ const candidates=[...document.querySelectorAll('input,textarea,[data-secret],[da
 const walk=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
 let node,count=0;
 while ((node=walk.nextNode()) && ++count<=5000) {
- if (node.nodeValue.includes(arguments[0]) && node.parentElement) candidates.push(node.parentElement);
+ if ((node.nodeValue.includes(arguments[0]) || (arguments[1] && node.nodeValue.includes(arguments[1]))) && node.parentElement) candidates.push(node.parentElement);
 }
 for (const node of candidates.slice(0,2000)) {
  const rect=node.getBoundingClientRect();
@@ -101,10 +101,15 @@ document.querySelectorAll('[data-v3-private-mask]').forEach(node=>node.remove())
 
 class Rejected(Exception):pass
 class Uncertain(Exception):pass
+class StartupFailure(Rejected):pass
+class AuthenticationFailure(Rejected):pass
+class CapacityFailure(Rejected):pass
 def canonical_id(value):
+    """Require canonical UUID spelling for private session and artifact ownership."""
     try:return isinstance(value,str) and str(uuid.UUID(value))==value
     except (ValueError,AttributeError):return False
 def validate_trusted(base,trusted):
+    """Validate worker-supplied current-caller authority and the bounded authentication lease."""
     if not isinstance(trusted,dict):raise Rejected("Trusted browser authorization required")
     sid=trusted.get("session_id")
     if not canonical_id(sid) or Path(base).name!=sid:raise Rejected("Browser session ownership mismatch")
@@ -121,6 +126,7 @@ def validate_trusted(base,trusted):
     if trusted.get("allowed_session_ids")!=[sid]:raise Rejected("Browser routes require the current session")
     return dict(trusted)
 def validate_path(path,trusted):
+    """Confine navigation to the fixed development origin and implemented current-session routes."""
     if not isinstance(path,str) or not 1<=len(path)<=2048 or any(ord(c)<32 for c in path) or "\\" in path:
         raise Rejected("Invalid development route")
     parsed=urlsplit(path)
@@ -149,6 +155,7 @@ def validate_path(path,trusted):
         if canonical_id(parsed.path.split("/")[-2]):return parsed.path
     raise Rejected("Unsupported current-session read route")
 def validate_args(name,args):
+    """Reject unknown or action-inapplicable fields before browser effects."""
     if not isinstance(args,dict):raise Rejected("Browser arguments must be an object")
     if name in {"login_as_current_user","login_as_current_user_v3"}:
         allowed={"path"};action="login"
@@ -178,6 +185,7 @@ def validate_args(name,args):
     if action=="type" and "text" not in args:raise Rejected("Type requires literal text")
     return action
 def png_metadata(data):
+    """Verify PNG bytes and dimensions before storing or serving a private screenshot."""
     if not isinstance(data,bytes) or not 24<=len(data)<=MAX_PNG or data[:8]!=b"\x89PNG\r\n\x1a\n" or data[12:16]!=b"IHDR":
         raise Rejected("Screenshot is not a bounded PNG")
     width,height=struct.unpack(">II",data[16:24])
@@ -185,11 +193,13 @@ def png_metadata(data):
     return {"media_type":"image/png","bytes":len(data),"width":width,"height":height,
         "sha256":hashlib.sha256(data).hexdigest()}
 def process_stamp(pid):
+    """Read process start time to avoid signalling a reused PID during stale-profile cleanup."""
     try:
         text=Path("/proc")/str(pid)/"stat"
         return text.read_text().rsplit(")",1)[1].split()[19]
     except (OSError,IndexError):return None
 def cleanup_prior(directory):
+    """Reap only a recorded matching browser process; never restore prior authenticated state."""
     record=directory/"driver.json"
     if not record.exists():return
     if record.is_symlink() or record.stat().st_size>1024:raise Rejected("Invalid browser process receipt")
@@ -207,6 +217,7 @@ def cleanup_prior(directory):
 def chrome_factory(profile,origin):
     # Selenium's debug transport logging includes cookie command bodies.
     # This private worker suppresses those libraries instead of trusting log redaction.
+    """Start fixed-origin Chromium with private storage and scrubbed partial-startup cleanup."""
     for name in ("selenium","selenium.webdriver.remote.remote_connection","urllib3","urllib3.connectionpool"):
         logger=logging.getLogger(name);logger.setLevel(logging.CRITICAL);logger.propagate=False
     from selenium import webdriver
@@ -227,25 +238,35 @@ def chrome_factory(profile,origin):
     options.add_experimental_option("prefs",{"download_restrictions":3,
         "credentials_enable_service":False,"profile.password_manager_enabled":False})
     service=Service(executable_path="/usr/bin/chromedriver",log_path="/dev/null",
-        popen_kw={"start_new_session":True},
+        popen_kw={"start_new_session":False},
         env={"PATH":"/usr/bin:/bin","HOME":str(profile),"TMPDIR":"/tmp",
              "XDG_CONFIG_HOME":str(profile/"config"),"XDG_CACHE_HOME":str(profile/"cache"),"LANG":"C.UTF-8"})
-    driver=webdriver.Chrome(service=service,options=options)
-    driver.set_page_load_timeout(PAGE_TIMEOUT)
-    driver.set_script_timeout(5)
-    driver.set_window_size(1280,900)
-    return driver
+    driver=None
+    try:
+        driver=webdriver.Chrome(service=service,options=options)
+        driver.set_page_load_timeout(PAGE_TIMEOUT)
+        driver.set_script_timeout(5)
+        driver.set_window_size(1280,900)
+        return driver
+    except Exception:
+        if driver is not None:
+            with contextlib.suppress(Exception):driver.quit()
+        with contextlib.suppress(Exception):service.stop()
+        raise StartupFailure("Private browser startup failed") from None
 
 class BrowserState:
     def __init__(self,sid,user,generation,cookie,expires,driver,directory):
+        """Initialize private state and synchronization without opening a browser."""
         self.sid=sid;self.user=user;self.generation=generation
-        self.cookie=cookie;self.expires=expires;self.driver=driver;self.directory=directory
+        self.cookie=cookie;self.csrf="";self.expires=expires;self.driver=driver;self.directory=directory
         self.lock=threading.RLock();self.cancelled=threading.Event()
         self.touched=time.monotonic();self.observed=None;self.observed_url=""
         self.observed_selector="";self.observed_at=0
 
+# @code-index {"version":1,"feature":"diagnostics-private-browser","aliases":["login as current user","private development browser"],"purpose":"Confines Diagnostics browser actions and artifacts to worker-bound current-caller authority; resource defaults live in this package and worker provisioning","span_lines":80,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Current-caller ownership and fixed-origin confinement are enforced security invariants."}}
 class BrowserService:
     def __init__(self,private_root=PRIVATE_ROOT,*,test_origin=None,driver_factory=None):
+        """Initialize private state and synchronization without opening a browser."""
         self.origin=ORIGIN
         if test_origin is not None:
             parsed=urlsplit(test_origin)
@@ -259,6 +280,7 @@ class BrowserService:
         self.recordings={}
         self.record_guards={}
     def directory(self,sid,user):
+        """Resolve an owner-bound private session directory outside the coding workspace."""
         self.root.mkdir(mode=0o700,parents=True,exist_ok=True)
         if self.root.is_symlink():raise Rejected("Invalid private browser root")
         directory=self.root/sid
@@ -279,14 +301,17 @@ class BrowserService:
         if artifacts.is_symlink():raise Rejected("Invalid artifact directory")
         return directory
     def safe_url(self,state):
+        """Check the observed URL after browser effects and reject cross-origin or cross-session state."""
         parsed=urlsplit(state.driver.current_url)
         origin=urlunsplit((parsed.scheme,parsed.netloc,"","",""))
         if origin!=self.origin:raise Uncertain("Browser left the fixed development origin; inspect the action before retrying")
         return validate_path(urlunsplit(("","",parsed.path,parsed.query,"")),{
             "session_id":state.sid,"agent_id":self._agent(state)})
     def _agent(self,state):
+        """Return the worker-bound agent for URL confinement."""
         return state.agent
     def kill(self,state):
+        """Invalidate observations and close the owned driver while preserving private artifacts."""
         state.cancelled.set();state.observed=None
         try:
             process=state.driver.service.process
@@ -299,27 +324,33 @@ class BrowserService:
         if profile.exists() and not profile.is_symlink():
             with contextlib.suppress(OSError):shutil.rmtree(profile)
     def drop(self,sid):
+        """Remove one profile under the service lock and close its driver."""
         with self.guard:
             state=self.states.pop(sid,None)
             if state:self.kill(state)
     def purge(self):
+        """Close idle or expired profiles before admitting new browser work."""
         for sid,state in list(self.states.items()):
             if state.expires<=time.time() or time.monotonic()-state.touched>IDLE_SECONDS:self.drop(sid)
     def open(self,trusted):
+        """Authenticate a new private profile as the current caller and reuse only matching authority."""
         sid=trusted["session_id"];self.purge()
         state=self.states.get(sid)
         if state and (state.user!=trusted["user_id"]):raise Rejected("Browser caller mismatch")
         if state and (state.cookie!=trusted["cookie"] or state.generation!=trusted["generation"] or state.agent!=trusted["agent_id"]):
             self.drop(sid);state=None
         if state:return state
-        if len(self.states)>=MAX_SESSIONS:raise Rejected("Browser session limit reached")
+        if len(self.states)>=MAX_SESSIONS:raise CapacityFailure("Private browser capacity reached")
         directory=self.directory(sid,trusted["user_id"])
         cleanup_prior(directory)
         profile=directory/"chrome"
         if profile.is_symlink():raise Rejected("Invalid browser profile")
         if profile.exists():shutil.rmtree(profile) # Restart never restores an authenticated profile.
         profile.mkdir(mode=0o700)
-        driver=self.factory(profile,self.origin)
+        try:driver=self.factory(profile,self.origin)
+        except Exception:
+            with contextlib.suppress(OSError):shutil.rmtree(profile)
+            raise StartupFailure("Private browser startup failed") from None
         state=BrowserState(sid,trusted["user_id"],trusted["generation"],trusted["cookie"],
             trusted["expires_at"],driver,directory)
         state.agent=trusted["agent_id"]
@@ -340,14 +371,18 @@ class BrowserService:
             if driver.current_url!=self.origin+"/api/v3/auth/me":raise Rejected("Identity verification redirected")
             identity=json.loads(driver.find_element("tag name","body").text[:16384])
             if identity.get("user_id")!=state.user:raise Rejected("Authenticated browser identity mismatch")
+            csrf=identity.get("csrf_token","")
+            if not isinstance(csrf,str) or len(csrf)>128:raise Rejected("Invalid browser identity metadata")
+            state.csrf=csrf
             driver.get(self.origin+validate_path("/app",trusted))
             self.safe_url(state)
             self.states[sid]=state
             return state
         except Exception:
             self.kill(state)
-            raise Rejected("Browser authentication failed without exposing credentials") from None
+            raise AuthenticationFailure("Private browser identity verification failed") from None
     def artifact(self,state,data):
+        """Store bounded PNG bytes with ownership, digest and quota metadata."""
         meta=png_metadata(data);folder=state.directory/"artifacts"
         existing=list(folder.iterdir())
         if len(existing)>=MAX_ARTIFACTS*2:raise Rejected("Private screenshot quota reached")
@@ -367,13 +402,15 @@ class BrowserService:
         return {**meta,"artifact_id":artifact,
             "path":"/api/v3/sessions/"+state.sid+"/administrator/artifacts/"+artifact}
     def screenshot(self,state):
+        """Mask credentials and editable content, capture a PNG, and invalidate the prior observation."""
         try:
-            state.driver.execute_script(MASK_SCRIPT,state.cookie)
+            state.driver.execute_script(MASK_SCRIPT,state.cookie,state.csrf)
             return self.artifact(state,state.driver.get_screenshot_as_png())
         finally:
             with contextlib.suppress(Exception):state.driver.execute_script(UNMASK_SCRIPT)
             state.observed=None
     def fresh_target(self,state,selector):
+        """Require unchanged recent DOM evidence before permitting visible non-secret input."""
         if state.observed is None or time.monotonic()-state.observed_at>READ_FRESH_SECONDS or state.driver.current_url!=state.observed_url:
             raise Rejected("Read the current page before each input action")
         current=state.driver.execute_script(OBSERVE_SCRIPT)
@@ -388,7 +425,10 @@ class BrowserService:
         if not element.is_displayed() or not element.is_enabled():raise Rejected("Input target is not visible and enabled")
         return element
     def run(self,name,args,base,trusted):
+        """Execute one validated action with serialized profile access and no automatic input replay."""
         trusted=validate_trusted(base,trusted);action=validate_args(name,args)
+        # Reject a route before starting Chromium or causing navigation.
+        if action in {"login","navigate"}:validate_path(args.get("path","/app"),trusted)
         with self.guard:
             self.purge()
             if action=="close":
@@ -408,6 +448,7 @@ class BrowserService:
                 result=state.driver.execute_script(READ_SCRIPT,args.get("selector","body"),state.cookie,MAX_TEXT)
                 if not isinstance(result,dict) or not isinstance(result.get("text"),str):raise Rejected("Invalid bounded DOM result")
                 result["text"]=result["text"][:MAX_TEXT].replace(state.cookie,"[redacted]")
+                if state.csrf:result["text"]=result["text"].replace(state.csrf,"[redacted]")
                 after=state.driver.execute_script(OBSERVE_SCRIPT)
                 if before==after and not result.get("truncated") and not result.get("missing"):
                     state.observed=after;state.observed_url=state.driver.current_url
@@ -428,6 +469,7 @@ class BrowserService:
             return {"status":"success","application":"v3","backend":"private_chromium","session_id":state.sid,
                 "source_kind":"untrusted_browser_observation",**result}
     async def call(self,name,args,base,trusted):
+        """Bound synchronous browser work and publish only sanitized known or uncertain outcomes."""
         sid=trusted.get("session_id") if isinstance(trusted,dict) else None
         operation=asyncio.create_task(asyncio.to_thread(self.run,name,args,base,trusted))
         try:return await asyncio.wait_for(asyncio.shield(operation),CALL_TIMEOUT)
@@ -440,12 +482,18 @@ class BrowserService:
         except Uncertain:
             if isinstance(sid,str):await asyncio.to_thread(self.drop,sid)
             return {"status":"uncertain","error_kind":"browser_uncertain","output":"Browser changed origin or input outcome is uncertain; no automatic replay"}
+        except (StartupFailure,AuthenticationFailure,CapacityFailure) as error:
+            kind={StartupFailure:"browser_startup_failed",AuthenticationFailure:"browser_authentication_failed",CapacityFailure:"browser_capacity"}[type(error)]
+            return {"status":"error","error_kind":kind,"output":"Private browser operation failed; credentials were not returned"}
+        except Rejected:
+            return {"status":"error","error_kind":"browser_invalid_request","output":"Private browser request rejected"}
         except Exception:
-            return {"status":"error","error_kind":"browser_rejected","output":"Browser request rejected or backend unavailable; credentials were not returned"}
+            return {"status":"error","error_kind":"browser_backend_failed","output":"Private browser backend failed; credentials were not returned"}
         finally:
             if not operation.done():
                 operation.add_done_callback(lambda task:task.exception() if not task.cancelled() else None)
     async def record_loop(self,base,trusted,record):
+        """Capture bounded private PNG frames until stop, quota, lease or backend failure."""
         try:
             for _ in range(30):
                 if record["stop"].is_set() or time.time()>=trusted["expires_at"]:break
@@ -459,12 +507,14 @@ class BrowserService:
         except asyncio.CancelledError:record["status"]="stopped"
         finally:record["completed_at"]=int(time.time())
     async def record(self,args,base,trusted):
+        """Serialize recorder state changes independently of per-frame browser access."""
         sid=trusted.get("session_id") if isinstance(trusted,dict) else None
         if not canonical_id(sid):
             return {"status":"error","error_kind":"browser_record_rejected","output":"Recorder request rejected"}
         lock=self.record_guards.setdefault(sid,asyncio.Lock())
         async with lock:return await self._record(args,base,trusted)
     async def _record(self,args,base,trusted):
+        """Start or stop a caller-bound recording and return bounded artifact metadata."""
         try:
             trusted=validate_trusted(base,trusted);action=validate_args("dev_browser_record",args);sid=trusted["session_id"]
             record=self.recordings.get(sid)
@@ -493,6 +543,7 @@ class BrowserService:
                 "max_frames":30,"max_seconds":30,"video":False}
         except Exception:return {"status":"error","error_kind":"browser_record_rejected","output":"Recorder request rejected"}
     def read_artifact(self,base,trusted,artifact):
+        """Authenticate private artifact ownership and verify stored bytes before returning a PNG."""
         trusted=validate_trusted(base,trusted)
         if not canonical_id(artifact):raise Rejected("Invalid artifact ID")
         folder=self.directory(trusted["session_id"],trusted["user_id"])/"artifacts"
@@ -511,6 +562,7 @@ class BrowserService:
         if any(record.get(k)!=actual[k] for k in actual):raise Rejected("Artifact digest changed")
         return data
     async def close_all(self,base):
+        """Stop recording and close one session profile during trusted worker quiescence."""
         sid=Path(base).name
         if not canonical_id(sid):return
         record=self.recordings.get(sid)
@@ -521,9 +573,12 @@ class BrowserService:
 
 _SERVICE=BrowserService()
 async def execute(name,args,base,trusted):
+    """Dispatch browser or recording work to the package-owned persistent service."""
     if name=="dev_browser_record":return await _SERVICE.record(args,base,trusted)
     return await _SERVICE.call(name,args,base,trusted)
 def read_artifact(base,trusted,artifact):
+    """Authenticate private artifact ownership and verify stored bytes before returning a PNG."""
     return _SERVICE.read_artifact(base,trusted,artifact)
 async def close_all(base):
+    """Stop recording and close one session profile during trusted worker quiescence."""
     await _SERVICE.close_all(base)

@@ -20,7 +20,7 @@ PNG=base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42m
 class Element:
     def __init__(self,driver,selector):self.driver=driver;self.selector=selector
     @property
-    def text(self):return json.dumps({"user_id":self.driver.identity})
+    def text(self):return json.dumps({"user_id":self.driver.identity,"csrf_token":self.driver.csrf})
     def is_displayed(self):return True
     def is_enabled(self):return True
     def click(self):
@@ -28,7 +28,7 @@ class Element:
         if self.driver.escape_on_click:self.driver.current_url="https://outside.invalid/"
     def send_keys(self,text):self.driver.typed.append(text);self.driver.revision+=1
 class Driver:
-    def __init__(self):self.current_url="";self.identity="admin";self.cookies=[];self.revision=0
+    def __init__(self):self.current_url="";self.identity="admin";self.csrf=str(uuid.uuid4());self.cookies=[];self.revision=0
     clicks=0
     escape_on_click=False
     closed=False
@@ -40,11 +40,11 @@ class Driver:
         return Element(self,selector)
     def execute_script(self,script,*args):
         if "V3_OBSERVE" in script:return self.revision
-        if "V3_READ" in script:return {"text":"Visible bounded text "+args[1],"missing":False,"truncated":False}
+        if "V3_READ" in script:return {"text":"Visible bounded text "+args[1]+" "+self.csrf,"missing":False,"truncated":False}
         if "V3_TARGET" in script:
             return {"allowed":True,"secret":args[0]=="#password","href":
                 "https://outside.invalid/" if args[0]=="#external" else "","tag":"input"}
-        if "V3_MASK" in script:self.revision+=1;return 1
+        if "V3_MASK" in script:self.masked_secrets=args;self.revision+=1;return 1
         if "V3_UNMASK" in script:self.revision+=1;return None
         raise AssertionError("Unexpected native script")
     def get_screenshot_as_png(self):return PNG
@@ -87,6 +87,15 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
     def test_native_read_script_preserves_javascript_newline_escape(self):
         self.assertIn("text+=chunk+'\\n';",browser.READ_SCRIPT)
         self.assertNotIn("text+=chunk+'\n';",browser.READ_SCRIPT)
+    async def test_identity_csrf_is_masked_in_read_and_screenshot(self):
+        await self.call("login_as_current_user",path="/api/v3/auth/me")
+        csrf=self.drivers[0].csrf
+        read=await self.call(action="read")
+        self.assertNotIn(csrf,read["text"])
+        self.assertNotIn(self.trusted["cookie"],read["text"])
+        shot=await self.call(action="screenshot")
+        self.assertEqual(shot["status"],"success")
+        self.assertEqual(self.drivers[0].masked_secrets,(self.trusted["cookie"],csrf))
     async def test_login_private_cookie_fixed_origin_and_current_routes(self):
         result=await self.call("login_as_current_user",path="/app?tab=agents&agent=shared_default&agentView=abilities")
         self.assertEqual(result["status"],"success")

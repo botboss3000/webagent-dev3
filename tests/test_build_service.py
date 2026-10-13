@@ -18,6 +18,15 @@ class ConfigurationTests(unittest.TestCase):
   value=config.defaults("/srv/one");value.update(service_account="builder",source_owner="owner")
   for overrides in ({"checkout_root":"/srv/../private"},{"checkout_root":"/srv/x,secret"},{"api_container":"webagent"},{"loop_container":value["api_container"]},{"port":True},{"app_uid":2301},{"public_origin":"https://user:password@example.invalid"}):
    with patch.object(config.pwd,"getpwnam",side_effect=self.account),self.assertRaises(ValueError):config.validate({**value,**overrides})
+ def test_api_thread_budget_is_bounded_and_legacy_compatible(self):
+  """A protected operator budget is typed; omitted legacy values remain 256."""
+  value=config.defaults("/srv/one");value.update(service_account="builder",source_owner="owner")
+  with patch.object(config.pwd,"getpwnam",side_effect=self.account):
+   for invalid in (True,0,255,4097):
+    with self.assertRaises(ValueError):config.validate({**value,"api_pids_limit":invalid})
+   legacy={k:v for k,v in value.items()if k!="api_pids_limit"}
+   self.assertEqual(config.validate(legacy)["api_pids_limit"],256)
+   self.assertEqual(config.validate({**value,"api_pids_limit":1024})["api_pids_limit"],1024)
  def test_unprotected_config_rejected(self):
   with tempfile.TemporaryDirectory() as base:
    path=Path(base)/"config";path.write_text("{}");path.chmod(0o666)

@@ -49,3 +49,12 @@ class ListenerPreflightTests(unittest.TestCase):
     accepted,_=listener.accept();accepted.close()
     self.assertEqual(client.recv(1),b"")
   reconfigure.probe_listener(*address)
+
+class ResourceBudgetTests(unittest.TestCase):
+ def test_api_thread_budget_replaces_only_api_with_retained_images(self):
+  """Changing a bounded budget must not compile or replace unrelated services."""
+  old={"port":8081,"bind_address":"127.0.0.1","public_origin":"https://dev.example","api_pids_limit":256}
+  result=reconfigure.plan(old,{**old,"api_pids_limit":1024})
+  self.assertEqual(result["services"],["api"])
+  self.assertEqual(result["changed_fields"],["api_pids_limit"])
+  self.assertFalse(result["compile_required"])

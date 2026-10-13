@@ -2,10 +2,15 @@
 import json,os,pwd,re,stat
 from pathlib import Path
 def validate(value):
+ """Validate installation authority, topology and the bounded API process/thread budget."""
  if not isinstance(value,dict):raise ValueError("Configuration must be an object")
- allowed={"instance","checkout_root","service_account","source_owner","state_root","workspace_root","runtime_root","install_root","service_dir","app_uid","app_gid","worker_uid","worker_gid","api_container","loop_container","gate_container","bind_address","port","public_origin","worker_control"}
+ allowed={"instance","checkout_root","service_account","source_owner","state_root","workspace_root","runtime_root","install_root","service_dir","app_uid","app_gid","worker_uid","worker_gid","api_container","loop_container","gate_container","bind_address","port","public_origin","worker_control","api_pids_limit"}
  if set(value)-allowed:raise ValueError("Unknown installation field")
  v=dict(value)
+ # Legacy installations retain their prior budget until an explicit operator reconfiguration.
+ v.setdefault("api_pids_limit",256)
+ if type(v["api_pids_limit"])is not int or not 256<=v["api_pids_limit"]<=4096:
+  raise ValueError("API process/thread budget must be an integer from 256 through 4096")
  if not re.fullmatch(r"[a-z][a-z0-9_-]{0,47}",v.get("instance","")):raise ValueError("Invalid instance ID")
  account=pwd.getpwnam(v.get("service_account","webagent-build"));owner=pwd.getpwnam(v.get("source_owner",account.pw_name))
  if account.pw_uid==0 or owner.pw_uid==0:raise ValueError("Non-root service and source identities required")
@@ -32,11 +37,12 @@ def validate(value):
  if origin.scheme not in {"http","https"} or not origin.netloc or origin.username or origin.password or origin.path not in {"","/"} or origin.query or origin.fragment:raise ValueError("Invalid origin")
  return v
 def defaults(root=None):
+ """Keep legacy installation defaults; resource changes require protected operator configuration."""
  root=Path(root or Path(__file__).resolve().parent.parent)
  try:user=pwd.getpwuid(os.getuid()).pw_name if os.getuid()!=0 else "webagent-build"
  except KeyError:user="webagent-build"
  install=Path("/var/lib/webagent/development/build-service")
- return dict(instance="development",checkout_root=str(root),service_account=user,source_owner=user,state_root=str(root/"build-jobs"),workspace_root=str(root/"workspaces"),runtime_root=str(root/"runtime/build"),install_root=str(install),service_dir=str(install/"releases/bootstrap"),app_uid=1100,app_gid=1100,worker_uid=1000,worker_gid=1000,api_container="webagent-dev-v3",loop_container="webagent-dev-v3-loop",gate_container="webagent-dev-v3-gate",bind_address="127.0.0.1",port=8081,public_origin="http://127.0.0.1:8081",worker_control="/var/lib/webagent-v3-build-worker/control.sock")
+ return dict(api_pids_limit=256,instance="development",checkout_root=str(root),service_account=user,source_owner=user,state_root=str(root/"build-jobs"),workspace_root=str(root/"workspaces"),runtime_root=str(root/"runtime/build"),install_root=str(install),service_dir=str(install/"releases/bootstrap"),app_uid=1100,app_gid=1100,worker_uid=1000,worker_gid=1000,api_container="webagent-dev-v3",loop_container="webagent-dev-v3-loop",gate_container="webagent-dev-v3-gate",bind_address="127.0.0.1",port=8081,public_origin="http://127.0.0.1:8081",worker_control="/var/lib/webagent-v3-build-worker/control.sock")
 def load(path=None):
  path=path or os.environ.get("WEBAGENT_BUILD_CONFIG")
  if path:
