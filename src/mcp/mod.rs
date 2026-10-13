@@ -44,10 +44,10 @@ pub(crate) async fn execute(
         return Ok(json!({"status":"denied","output":"MCP plugin is unavailable"}));
     }
     let agent = crate::session_agent_id(app, sid).await?;
-    let access = app
-        .store
-        .live_access(app.store.current_user_id(), &agent)
-        .await?;
+    // Shared runs keep the owner's storage while the sealed requester supplies authority.
+    let access =
+        crate::shared_chat::live_access(&app.store, crate::shared_chat::actor(app), sid, &agent)
+            .await?;
     anyhow::ensure!(access.admitted(), "MCP access revoked");
     match name {
         "mcp_list_connections" => connections::model_connections(app, &agent).await,

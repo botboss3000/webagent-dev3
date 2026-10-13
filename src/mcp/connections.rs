@@ -631,6 +631,13 @@ pub(super) async fn model_call(
     }
 }
 
+async fn model_identity(app: &App, agent: &str) -> Result<Value, ApiError> {
+    let identity = json!({"_user_id":crate::shared_chat::actor(app)});
+    // Connection management cannot inherit the conversation storage owner's rights.
+    authority(app, &identity, agent, true).await?;
+    Ok(identity)
+}
+
 pub(super) async fn model_add(
     app: &App,
     agent: &str,
@@ -638,6 +645,10 @@ pub(super) async fn model_add(
     cancel: CancellationToken,
 ) -> crate::Result<Value> {
     let denied = || json!({"status":"denied","output":"MCP connection update denied or stale; list saved connections before retrying"});
+    let identity = match model_identity(app, agent).await {
+        Ok(value) => value,
+        Err(_) => return Ok(denied()),
+    };
     let before = match load(app, agent).await {
         Ok(value) => value,
         Err(_) => return Ok(denied()),
@@ -665,7 +676,6 @@ pub(super) async fn model_add(
         },
         bearer: None,
     };
-    let identity = json!({"_user_id":app.store.current_user_id()});
     match save(
         app,
         &identity,
@@ -725,6 +735,47 @@ mod tests {
         let view = projection("shared_default", &catalog, "admin", true);
         assert!(!view.to_string().contains("private-secret-reference"));
         assert_eq!(view["connections"][0]["authenticated"], true);
+    }
+    #[tokio::test]
+    async fn shared_participant_cannot_inherit_owner_connection_management() {
+        let (_root, mut app) = crate::runtime_tests::fixture().await;
+        assert_eq!(
+            model_identity(&app, "shared_default").await.unwrap()["_user_id"],
+            "admin"
+        );
+        let account = app
+            .store
+            .create_user_account("mcp_participant", "fixture-password-hash")
+            .await
+            .unwrap();
+        let uid = account["user_id"].as_str().unwrap();
+        app.store
+            .update_account_access(
+                uid,
+                1,
+                crate::access::AccountStatus::Active,
+                crate::access::Role::User,
+                "basic",
+            )
+            .await
+            .unwrap();
+        app.store
+            .assign_agent_membership(
+                "admin",
+                uid,
+                "shared_default",
+                crate::access::Relationship::Member,
+                false,
+                0,
+            )
+            .await
+            .unwrap();
+        app.chat_actor = Some(uid.into());
+        assert_eq!(app.store.current_user_id(), "admin");
+        assert!(model_identity(&app, "shared_default").await.is_err());
+        let result = model_add(&app, "shared_default", &json!({"_user_id":"admin","connection_id":"participant","expected_revision":0,"name":"Do not create","endpoint":"https://example.com/mcp","allowed_tools":[]}), CancellationToken::new()).await.unwrap();
+        assert_eq!(result["status"], "denied");
+        assert_eq!(load(&app, "shared_default").await.unwrap().revision, 0);
     }
     #[tokio::test]
     async fn stale_updates_and_other_callers_cannot_remove_connections() {

@@ -44,7 +44,8 @@ https://registry.modelcontextprotocol.io/v0.1/servers with search, limit=50 and
 version=latest, and merges optional curated entries from mcp.json:
 `{"version":1,"servers":[{"name":"example","description":"...","remotes":[{"type":"streamable-http","url":"https://example.com/mcp"}]}]}`.
 Only remote metadata is returned; search never downloads or executes packages.
-Registry failure sets registry_available=false; curated results still work when
+Registry lookup has an eight-second budget inside the thirty-second IPC deadline.
+Registry failure or timeout sets registry_available=false; curated results still work when
 registry HTTP retrieval fails. Credential-free endpoint metadata is untrusted
 and is checked again with DNS pinning before any connection.
 

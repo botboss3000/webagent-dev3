@@ -512,6 +512,31 @@ fn catalog_entries(entries: &Value, query: &str, source: &str) -> Vec<Value> {
 }
 async fn search(root: &Path, query: &str) -> Result<Value> {
     let query = query.trim().to_lowercase();
+    let fetched = async {
+        let mut url = endpoint(REGISTRY)?;
+        url.query_pairs_mut()
+            .append_pair("limit", "50")
+            .append_pair("version", "latest")
+            .append_pair("search", &query);
+        let client = pinned_client(&url).await?;
+        let response = client
+            .get(url)
+            .header(header::ACCEPT, "application/json")
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            bail!("Registry unavailable")
+        }
+        Ok(serde_json::from_slice(&bounded_body(response).await?)?)
+    };
+    search_with_registry(root, &query, fetched, Duration::from_secs(8)).await
+}
+async fn search_with_registry<F: std::future::Future<Output = Result<Value>>>(
+    root: &Path,
+    query: &str,
+    fetched: F,
+    budget: Duration,
+) -> Result<Value> {
     let mut servers = Vec::new();
     let catalog_path = root.join("mcp.json");
     if let Ok(metadata) = tokio::fs::metadata(&catalog_path).await {
@@ -523,35 +548,23 @@ async fn search(root: &Path, query: &str) -> Result<Value> {
         if catalog["version"] != 1 {
             bail!("Catalog rejected")
         }
-        servers.extend(catalog_entries(&catalog["servers"], &query, "curated"));
+        servers.extend(catalog_entries(&catalog["servers"], query, "curated"));
     }
-    let mut url = endpoint(REGISTRY)?;
-    url.query_pairs_mut()
-        .append_pair("limit", "50")
-        .append_pair("version", "latest")
-        .append_pair("search", &query);
-    let fetched: Result<Value> = async {
-        let client = pinned_client(&url).await?;
-        let response = client
-            .get(url)
-            .header(header::ACCEPT, "application/json")
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            bail!("Registry unavailable")
-        }
-        Ok(serde_json::from_slice(&bounded_body(response).await?)?)
-    }
-    .await;
+    // A slow optional registry must finish before the IPC deadline so curated
+    // results can still be returned. Dropping the GET never repeats a tool call.
+    let fetched = tokio::time::timeout(budget, fetched)
+        .await
+        .unwrap_or_else(|_| Err(anyhow!("Registry unavailable")));
     let registry_available = fetched.is_ok();
     if let Ok(catalog) = fetched {
-        servers.extend(catalog_entries(&catalog["servers"], &query, "registry"));
+        servers.extend(catalog_entries(&catalog["servers"], query, "registry"));
     }
     let mut seen = std::collections::HashSet::new();
     servers.retain(|s| seen.insert(s["endpoint"].as_str().unwrap_or("").to_owned()));
     servers.truncate(100);
     Ok(json!({"servers":servers,"registry_available":registry_available}))
 }
+
 async fn operate(root: &Path, req: &Request, dispatched: &mut bool) -> Result<Value> {
     validate(req)?;
     if req.operation == "search" {
@@ -810,6 +823,30 @@ mod tests {
         assert_eq!(
             completed("call", json!({"content":[]}))["status"],
             "success"
+        );
+    }
+    #[tokio::test]
+    async fn slow_registry_returns_curated_results_before_ipc_timeout() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("mcp.json"), serde_json::to_vec(&json!({"version":1,"servers":[{"name":"DeepWiki","description":"GitHub repository documentation","remotes":[{"type":"streamable-http","url":"https://mcp.deepwiki.com/mcp"}]}]})).unwrap()).unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            search_with_registry(
+                root.path(),
+                "github",
+                std::future::pending::<Result<Value>>(),
+                Duration::from_millis(10),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result["registry_available"], false);
+        assert_eq!(result["servers"].as_array().unwrap().len(), 1);
+        assert_eq!(result["servers"][0]["source"], "curated");
+        assert_eq!(
+            result["servers"][0]["endpoint"],
+            "https://mcp.deepwiki.com/mcp"
         );
     }
     #[tokio::test]

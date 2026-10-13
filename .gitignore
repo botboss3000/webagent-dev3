@@ -27,3 +27,5 @@ node_modules/
 # Live administrator-installed application plugins are packaged independently.
 /plugins/diagnostics/
 /plugins/optimization/
+
+/plugins/mcp/
