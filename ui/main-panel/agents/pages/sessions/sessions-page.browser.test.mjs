@@ -1,15 +1,15 @@
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 import http from 'node:http';import fs from 'node:fs/promises';import path from 'node:path';import assert from 'node:assert/strict';
-const root=path.resolve(new URL('../../../..',import.meta.url).pathname);
+const root=path.resolve(new URL('../../../../..',import.meta.url).pathname);
 const server=http.createServer(async(req,res)=>{try{const file=path.resolve(root,'.'+new URL(req.url,'http://localhost').pathname.replace(/^\/v3-ui\//,'/ui/'));if(!file.startsWith(root+'/'))throw Error('bad');const data=await fs.readFile(file);res.setHeader('content-type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html');res.end(data);}catch{res.statusCode=404;res.end('Not found');}});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 let browser;try{
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/snap/bin/chromium',headless:true,args:['--no-sandbox']});
  const page=await browser.newPage({viewport:{width:1200,height:850}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto('http://127.0.0.1:'+server.address().port+'/ui/main-panel/agents/sessions/sessions.html');
+ await page.goto('http://127.0.0.1:'+server.address().port+'/ui/main-panel/agents/pages/sessions/sessions.html');
  const result=await page.evaluate(async()=>{
-  const html=await(await fetch('/ui/main-panel/agents/sessions/sessions.html')).text();document.body.innerHTML='<div id="tab-agents" class="active"><div id="sessions-region"><section id="sessions-section"></section></div></div>';
-  const style=document.createElement('link');style.rel='stylesheet';style.href='/ui/main-panel/agents/sessions/sessions.css';document.head.append(style);
+  const html=await(await fetch('/ui/main-panel/agents/pages/sessions/sessions.html')).text();document.body.innerHTML='<div id="tab-agents" class="active"><div id="sessions-region"><section id="sessions-section"></section></div></div>';
+  const style=document.createElement('link');style.rel='stylesheet';style.href='/ui/main-panel/agents/pages/sessions/sessions.css';document.head.append(style);
   const host=document.getElementById('sessions-section');host.innerHTML=html;
   const rows=[{id:'a',agent_id:'one',title:'Alpha',status:'active',metadata_revision:0,created_at:1,last_active_at:10,is_unread:true,unread_count:1,read_through_seq:0,last_public_seq:3,message_count:3,usage:{input_tokens:0,output_tokens:0,reported_calls:1,unreported_calls:0,known_cost_usd:0,unknown_cost_calls:0}},{id:'b',agent_id:'two',title:'Beta',status:'active',metadata_revision:0,created_at:1,last_active_at:9,is_unread:false,message_count:0},{id:'c',agent_id:'one',title:'Recycled',status:'recycled',metadata_revision:0,created_at:1,last_active_at:8,is_unread:false,message_count:0}];
   const writes=[],opens=[],calls=[];let failB=true;
@@ -20,7 +20,7 @@ let browser;try{
    const id=decodeURIComponent(parsed.pathname.split('/')[2]),row=rows.find(r=>r.id===id);if(method!=='GET'){writes.push({id,method,body:structuredClone(body)});if(id==='b'&&method==='DELETE'&&failB){const e=Error('fixture network failure');throw e;}if(method==='DELETE')row.status='recycled';if(parsed.pathname.endsWith('/restore'))row.status='active';if(method==='PATCH')Object.assign(row,body);if(method==='PUT')row.is_unread=false;row.metadata_revision++;return {session:structuredClone(row)};}
    throw Error('Unexpected '+url);
   };
-  const {mountSessions}=await import('/ui/main-panel/agents/sessions/js/sessions-page.js');
+  const {mountSessions}=await import('/ui/main-panel/agents/pages/sessions/js/sessions-page.js');
   window.fixture={host,rows,writes,opens,calls,setFailB:v=>{failB=v;},controller:mountSessions(host,{request,userId:'fixture',roster:[{id:'one',name:'Agent One'},{id:'two',name:'Agent Two'}],getSessionId:()=>null,open:id=>opens.push(id),changed:()=>{}})};
   await new Promise(r=>setTimeout(r,300));
   return {titles:[...host.querySelectorAll('.session-row-title-label')].map(n=>n.textContent),display:getComputedStyle(host).display};
@@ -61,7 +61,7 @@ let browser;try{
   const style=document.createElement('style');style.textContent='html,body{height:100%;margin:0}#main-panel{height:100%;overflow:auto}#agents-grid{display:flex;flex-direction:column} .agents-top-row{height:148px} .agent-card-tabs-only{min-height:39px} .sessions-footer{display:flex;min-height:32px} .agent-detail-content{height:520px;flex-direction:column}';
   document.head.append(style);
   const appStyle=document.createElement('link');appStyle.rel='stylesheet';appStyle.href='/ui/app.css';document.head.append(appStyle);
-  const {mountSessionsPage}=await import('/ui/main-panel/agents/sessions/page.js');
+  const {mountSessionsPage}=await import('/ui/main-panel/agents/pages/sessions/page.js');
   const rows=Array.from({length:200},(_,i)=>({id:'long-'+i,title:'Long catalog '+i,agent_id:'one',status:'active',metadata_revision:0,created_at:1,last_active_at:200-i,message_count:0}));
   window.longPage=await mountSessionsPage(document.getElementById('sessions-section'),{isCurrent:()=>true,request:async()=>({sessions:rows,next_offset:null}),userId:'long-fixture',roster:[{id:'one',name:'One'}],getSessionId:()=>null,open:()=>{},changed:()=>{}});
  });

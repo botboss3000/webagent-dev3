@@ -19,9 +19,10 @@ import { mountChatPanel } from './chat/core/panel.js';
 // v2 dom-utils imports v1 auth and uploads; v3 uses text nodes and its own transport.
 import { renderIdentity } from './main-panel/agents/pages/identity/page.js';
 import { renderAbilities } from './main-panel/agents/pages/abilities/page.js';
-import { loadAgentPages, renderAgentDirectory } from './main-panel/agents/pages/catalog.js';
-import { mountSelectionTable } from './main-panel/agents/pages/model-table.js';
-import { mountSessionsPage } from './main-panel/agents/sessions/page.js';
+import { loadAgentPages } from './main-panel/agents/pages/catalog.js';
+import { renderAgentDirectory } from './main-panel/agents/pages/config/page.js';
+import { mountSelectionTable } from './main-panel/agents/pages/model/page.js';
+import { mountSessionsPage } from './main-panel/agents/pages/sessions/page.js';
 import { mountAvailableModels } from './main-panel/account/available-models.js';
 let availableModelsDispose;
 let selectionTable;
@@ -30,6 +31,8 @@ let sessionsPage=null,sessionsGeneration=0;
 // Accept the original bookmark scope, then normalize it to the Sessions route.
 let sessionsScope=['sessions','all'].includes(new URL(location.href).searchParams.get('agentScope'));
 let agentPages=[];
+let configPage;
+let sessionsDescriptor;
 const $=id=>document.getElementById(id);
 let agentId=new URL(location.href).searchParams.get('agent')||'shared_default';
 let agentRoster=[];
@@ -58,9 +61,12 @@ async function mountAgents(){
       <form id="model-form" class="ac-ability-row ac-model-cfg-row"><label for="model" class="ac-ability-label"><span class="ac-ability-name">Model</span><span class="ac-ability-desc">Model ID used for new chat turns.</span></label><span class="ac-model-cfg-control"><input id="model" class="ac-input ac-input-sm" placeholder="gpt-6-luna" required pattern="[A-Za-z0-9._-]+"><button class="ac-btn ac-btn-primary ac-btn-sm">Save model</button></span></form>
     </div><details id="settings"><summary>Tool policies</summary><form id="policy-form"><div id="rules"></div><button type="submit">Save policies</button></form></details>
     </div><div id="identity-page" class="agent-detail-body" hidden></div><div id="abilities-page" hidden></div><div id="config-page" class="agent-detail-body" hidden></div></div></div>`;
-  agentPages=await loadAgentPages();
+  const pages=await loadAgentPages();
+  configPage=pages.find(page=>page.type==='directory');
+  sessionsDescriptor=pages.find(page=>page.type==='sessions');
+  agentPages=pages.filter(page=>page.type==='agent_configuration');
   const tabs=detail.querySelector('.agent-card-tabs');
-  for(const page of [{id:'config',title:'Config',panelId:'config-page'},...agentPages]){
+  for(const page of [configPage,...agentPages]){
     const tab=document.createElement('button');
     tab.id='agent-tab-'+page.id;tab.type='button';tab.textContent=page.title;
     tab.setAttribute('role','tab');tab.setAttribute('aria-controls',page.panelId);
@@ -85,8 +91,10 @@ async function mountAgents(){
   grid.append(region);
   const common=document.createElement('div');common.id='sessions-region';common.className='open';common.hidden=true;
   common.innerHTML='<div class="agent-row expanded agent-row-sessions"><div class="agent-card active agent-card-tabs-only"><div class="agent-card-tabs-wrap"><div class="agent-card-tabs" role="tablist" aria-label="Sessions pages"><button id="sessions-page-tab" type="button" role="tab" class="active" aria-selected="true" aria-controls="sessions-section">Sessions</button></div></div></div><div class="agent-detail-panel"><div class="agent-detail-content"><section id="sessions-section" role="tabpanel" aria-labelledby="sessions-page-tab"></section></div></div></div>';
+  common.querySelector('#sessions-page-tab').textContent=sessionsDescriptor.title;
+  common.querySelector('#sessions-page-tab').setAttribute('aria-controls',sessionsDescriptor.panelId);
   grid.append(common);
-  const css=document.createElement('link');css.rel='stylesheet';css.href='/v3-ui/main-panel/agents/sessions/sessions.css';document.head.append(css);
+  const css=document.createElement('link');css.rel='stylesheet';css.href='/v3-ui/main-panel/agents/pages/sessions/sessions.css';document.head.append(css);
   $('agents-grid').replaceWith(grid);
   const route=new URL(location.href);
   if(activeMainPage==='agents'){
@@ -102,6 +110,8 @@ function renderAgentCards(){
   squares.replaceChildren();
   const common=document.createElement('div');common.className='agent-row';
   common.innerHTML='<button type="button" class="agent-card agent-square" aria-label="Sessions"><div class="agent-card-top"><div class="agent-card-icon-wrap color-purple">'+ '<i data-lucide="messages-square"></i>'+'</div><div class="agent-card-meta"><div class="agent-card-name-row"><span class="agent-card-name">Sessions</span></div></div></div></button>';
+  common.firstElementChild.setAttribute('aria-label',sessionsDescriptor.title);
+  common.querySelector('.agent-card-name').textContent=sessionsDescriptor.title;
   common.firstElementChild.classList.toggle('activated',sessionsScope);common.firstElementChild.setAttribute('aria-pressed',String(sessionsScope));
   common.firstElementChild.onclick=guard(()=>showSessions());squares.append(common);
   for(const agent of agentRoster){
@@ -224,7 +234,7 @@ async function showSessions(routeMode='push'){
 async function showAgentView(view,routeMode='push'){
   if(sessionsScope){await showSessions(routeMode);return;}
   disposeSessionsPage();$('sessions-region').hidden=true;
-  const pages=[{id:'config',panelId:'config-page'},...agentPages];
+  const pages=[configPage,...agentPages];
   const selected=accountMe&&!accountMe.is_admin&&!['model','abilities','identity'].includes(view)?'model':pages.some(page=>page.id===view)?view:'config';
   for(const page of pages){
     $(page.panelId).hidden=page.id!==selected;
@@ -255,14 +265,14 @@ async function selectAgent(id){
   if(route.searchParams.get('agentView')==='sessions')route.searchParams.set('agentView','config');
   history.pushState({},'',route);
   renderAgentCards();
-  for(const page of [{panelId:'config-page'},...agentPages])$(page.panelId).hidden=true;
+  for(const page of [configPage,...agentPages])$(page.panelId).hidden=true;
   // Rebind configuration handlers without remounting or reopening the conversation.
   await Promise.all([
     mountAgentModels(),
     showAgentView(route.searchParams.get('agentView')||'config','replace')
   ]);
 }
-for(const page of [{id:'config'},...agentPages]){
+for(const page of [configPage,...agentPages]){
   $('agent-tab-'+page.id).onclick=guard(()=>showAgentView(page.id));
 }
 // Like V2, the favorite list is also the tab order; Config cannot be removed.
@@ -288,7 +298,7 @@ async function loadAgentTabs(){
 function syncAgentTabs(){
   const strip=document.querySelector('#agents-detail-region .agent-card-tabs');
   for(const id of agentTabOrder)strip.append($('agent-tab-'+id));
-  for(const page of [{id:'config'},...agentPages])$('agent-tab-'+page.id).hidden=!agentTabOrder.includes(page.id);
+  for(const page of [configPage,...agentPages])$('agent-tab-'+page.id).hidden=!agentTabOrder.includes(page.id);
   renderAgentDirectory($('config-page'),agentPages,view=>guard(()=>showAgentView(view))(),agentTabOrder,id=>{
     if(!agentTabsReady){note('Agent page preferences are unavailable. Reload to retry.');return;}
     if(agentTabOrder.includes(id))agentTabOrder=agentTabOrder.filter(item=>item!==id);

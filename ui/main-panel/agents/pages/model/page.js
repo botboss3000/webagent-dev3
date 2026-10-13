@@ -1,7 +1,7 @@
  'use strict';
-import { mountModelTable } from '../../../shared/models/model-table.js';
-import { initModelAnalytics } from '../../../shared/models/model-analytics.js';
-import { createModelAdapter } from '../../../shared/models/v3-adapter.js';
+import { mountModelTable } from '../../../../shared/models/model-table.js';
+import { initModelAnalytics } from '../../../../shared/models/model-analytics.js';
+import { createModelAdapter } from '../../../../shared/models/v3-adapter.js';
 import { mountModelLimits } from './model-limits.js';
 
 // Actual v2_ref Models mount: analytics sibling + shared renderer; only the adapter is v3-specific.

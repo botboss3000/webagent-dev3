@@ -6,12 +6,13 @@ const source=await fs.readFile(process.env.AGENT_NAVIGATION_SOURCE||new URL('../
 // Run the shell's actual card, route, and remount functions; replace only backend/page collaborators.
 const slice=(start,end)=>source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));
 const shell=slice('function renderAgentCards(){','async function loadAgentRoster(){')
- +slice('function disposeSessionsPage(){',"for(const page of [{id:'config'},...agentPages]){")
+ +slice('function disposeSessionsPage(){',"for(const page of [configPage,...agentPages]){")
  +(source.includes('async function mountAgentModels(){')?slice('async function mountAgentModels(){','// Registration mirrors'):'');
 const setup=`
 const $=id=>document.getElementById(id);
 let agentId='one',sessionsScope=true,sessionsPage=null,sessionsGeneration=0,selectionTable=null,agentSelectionQueue=Promise.resolve();
 const agentRoster=[{id:'one',name:'One'},{id:'two',name:'Two'}];
+const configPage={id:'config',panelId:'config-page'},sessionsDescriptor={id:'sessions',title:'Sessions',panelId:'sessions-section'};
 const agentPages=['model','identity','abilities'].map(id=>({id,panelId:id+'-page'})),agentTabOrder=['config','model','identity','abilities'];
 const accountMe={is_admin:true},activeMainPage='agents',api=async()=>({}),chat={sessionId:'keep'};
 let explicitAssignment=false;
