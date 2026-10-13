@@ -1,1 +1,1 @@
-Temporary scheduler acceptance fixture. It returns bounded text and has no external effects.
+Temporary scheduler acceptance fixture, guidance revision two. The executable still returns bounded text and has no external effects.
