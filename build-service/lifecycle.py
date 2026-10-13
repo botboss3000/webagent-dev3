@@ -68,7 +68,7 @@ def install(args):
    subprocess.run(["setfacl","-R","-m","u:"+account.pw_name+":rwX",str(path)],check=True)
    for directory in [path,*[p for p in path.rglob("*") if p.is_dir() and not p.is_symlink()]]:
     if directory.is_dir():subprocess.run(["setfacl","-m","d:u:"+account.pw_name+":rwX,d:u:"+value["source_owner"]+":rwX",str(directory)],check=True)
-  for relative in ("Cargo.toml","Cargo.lock","build.rs","Dockerfile",".gitignore","README.md","deploy.sh","launch.py","worker.py","sandbox.py","promote.py","ui-baseline.json","gate.Dockerfile","gate_worker.py"):
+  for relative in ("Cargo.toml","Cargo.lock","build.rs","Dockerfile",".gitignore","README.md","deploy.sh","launch.py","worker.py","ability_plugin_worker.py","sandbox.py","promote.py","ui-baseline.json","gate.Dockerfile","gate_worker.py"):
    file=checkout/relative
    if file.is_symlink():raise PermissionError("Source ACL file is a symlink")
    if file.is_file():subprocess.run(["setfacl","-m","u:"+account.pw_name+":rw",str(file)],check=True)
@@ -99,13 +99,17 @@ def install(args):
  unit.write_text(text);unit.chmod(0o644);subprocess.run(["systemctl","daemon-reload"],check=True)
  print(json.dumps({"installed":True,"version":release,"config":str(config_path),"unit":unit_name}))
 def main():
- parser=argparse.ArgumentParser();parser.add_argument("action",choices=("install","validate","status","start","stop","drain","resume"))
+ parser=argparse.ArgumentParser();parser.add_argument("action",choices=("install","validate","status","start","stop","drain","resume","reconfigure"))
  parser.add_argument("--config",default=os.environ.get("WEBAGENT_BUILD_CONFIG"));parser.add_argument("--instance",default="development")
  parser.add_argument("--checkout-root");parser.add_argument("--service-account",default="webagent-build")
  parser.add_argument("--api-container");parser.add_argument("--loop-container");parser.add_argument("--gate-container")
  parser.add_argument("--bind-address",default="127.0.0.1");parser.add_argument("--port",type=int,default=8081);parser.add_argument("--public-origin",default="http://127.0.0.1:8081")
- parser.add_argument("--install-tree");parser.add_argument("--task-id");args=parser.parse_args()
+ parser.add_argument("--install-tree");parser.add_argument("--task-id");parser.add_argument("--candidate-config");parser.add_argument("--dry-run",action="store_true");args=parser.parse_args()
  if args.action=="install":install(args);return
+ if args.action=="reconfigure":
+  if not args.config or not args.candidate_config or not args.task_id:parser.error("Exact current/candidate protected configs and task ID required")
+  operation=module("scoped_reconfiguration",Path(__file__).with_name("reconfigure.py"))
+  print(json.dumps(operation.apply(args.config,args.candidate_config,args.task_id,args.dry_run)));return
  if not args.config:parser.error("--config is required")
  config=cfg.load(args.config);os.environ["WEBAGENT_BUILD_CONFIG"]=args.config
  if args.action=="validate":print(json.dumps({"valid":True,"instance":config["instance"]}));return

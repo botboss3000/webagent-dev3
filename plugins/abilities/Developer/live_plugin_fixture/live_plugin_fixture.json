@@ -1,0 +1,11 @@
+{
+  "display_name": "Live Plugin Acceptance Fixture",
+  "kind": "ability",
+  "description": "Temporary development fixture for live plugin publication and dispatch acceptance.",
+  "tools": [
+    "live_fixture_echo"
+  ],
+  "readiness": "ready",
+  "config": {},
+  "order": 999
+}

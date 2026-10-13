@@ -356,6 +356,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
         }
         let access=access.unwrap();
         let mut app=app.clone();
+        app.abilities=crate::live_assets::catalog(&app.abilities);
         app.store=match app.store.for_agent(&agent_id).await {
             Ok(store)=>store,
             Err(_)=>{
@@ -487,9 +488,10 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                     run["agent_id"].as_str().unwrap_or("shared_default")).await?);
                 app.save(&mut run).await?;
             }
-            let instructions = provider::Provider::instructions_for_turn(
-                run["instructions"].as_str()
-                    .ok_or_else(|| anyhow!("Invalid pinned agent instructions"))?);
+            let source=app.abilities.source_root();
+            let instructions = provider::Provider::instructions_for_snapshot(
+                run["instructions"].as_str().unwrap_or(provider::DEFAULT_INSTRUCTIONS),&app.store.root,source,
+            )?;
             if run["turns"].as_u64().unwrap() >= if run["post_run_followup"]==true {workflow_policy.max_turns.min(3)} else {workflow_policy.max_turns} || run["attempt"].as_u64().unwrap() >= workflow_policy.max_attempts {
                 run["status"] = json!(if run["post_run_followup"]==true {"failed"} else {"paused"});
                 run["error"] = json!(if run["post_run_followup"]==true {"Read-only follow-up budget exhausted"} else {"Run limit reached; explicit continuation required"});
@@ -507,6 +509,10 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             // Hash only in memory; never publish private grant data in reports.
             let requester=run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id());
             let own_skills=app.store.for_user(requester).await?.list_own_skills().await?;
+            run["asset_revision"]=if app.abilities.published() {
+                app.abilities.source_root().and_then(|p|p.parent()).and_then(|p|p.file_name()).and_then(|s|s.to_str()).map(|s|json!(s)).unwrap_or(Value::Null)
+            }else{Value::Null};
+            run["plugin_bindings"]=json!(app.abilities.all_schemas().iter().filter_map(|s|s["name"].as_str().and_then(|name|app.abilities.plugin_binding(name).map(|binding|(name.to_owned(),binding)))).collect::<std::collections::BTreeMap<_,_>>());
             let asset_key = digest(&json!([app.abilities.live_version(), own_skills["revision"], policy, visibility,
                 ability_state, run["loaded_abilities"], run["selected_tools"], run["loaded_skills"], mode, access.context_fingerprint(), run["optimization_request"]]));
             if context_assets.as_ref().map(|entry| &entry.0) != Some(&asset_key) {
@@ -703,7 +709,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                 Ok(policy)=>policy,
                 Err(_)=>{run["status"]=json!("paused");run["error"]=json!("Invalid tool output policy; review Identity");app.save(&mut run).await?;return Ok(());}
             };
-            let retention_prompts=match crate::tool_output::Prompts::read(&app.store.root) {
+            let retention_prompts=match crate::tool_output::Prompts::read_at(&app.store.root,app.abilities.source_root()) {
                 Ok(prompts)=>prompts,
                 Err(_)=>{run["status"]=json!("paused");run["error"]=json!("Invalid tool output prompts; review app prompts configuration");app.save(&mut run).await?;return Ok(());}
             };
@@ -1063,7 +1069,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             }
             crate::tool_output::advance(&mut current)?;
             if crate::tool_output::effective(&app.store,&agent_id).await?!=retention_policy
-                || crate::tool_output::Prompts::read(&app.store.root)?!=retention_prompts {
+                || crate::tool_output::Prompts::read_at(&app.store.root,app.abilities.source_root())?!=retention_prompts {
                 drop(sender);drop(dispatch_guard);let _=collector.await;continue;
             }
             workflow::record(&mut current, &workflow_policy,

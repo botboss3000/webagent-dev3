@@ -192,7 +192,7 @@ def install(tree=None):
         publish(service, "index-scanner.py", scanner, 0o644)
         publish(service,"index-maintenance.py",maintenance,0o644)
         extra={"index-maintenance.py":hashlib.sha256(maintenance).hexdigest()}
-        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","deploy.py","buildctl.py"):
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py"):
             body=read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
             compile(body,name,"exec");publish(service,name,body,0o644)
             extra[name]=hashlib.sha256(body).hexdigest()
@@ -432,7 +432,7 @@ def snapshot_context(context):
                     try:
                         info = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
                     except FileNotFoundError:
-                        if inspection:
+                        if inspection or name=="v3/ability_plugin_worker.py":
                             continue
                         raise
                     if inspection and not stat.S_ISDIR(info.st_mode):

@@ -487,6 +487,16 @@ impl Provider {
             .or_else(||pinned.strip_prefix(LEGACY_DEFAULT_INSTRUCTIONS)).unwrap_or(pinned);
         format!("{}{}", Self::configured_base_instructions(), slots)
     }
+    pub(crate) fn instructions_for_snapshot(pinned:&str,root:&std::path::Path,source:Option<&std::path::Path>)->Result<String> {
+        let value=crate::live_assets::resolved_prompts_at(root,source)?;
+        let mut parts=Vec::new();
+        for key in ["base_instructions","closing_reporting","jev_guidance"] {
+            let text=value[key].as_str().ok_or_else(||anyhow!("Invalid live base prompt"))?.trim();
+            if !text.is_empty(){parts.push(text.to_owned());}
+        }
+        let slots=pinned.strip_prefix(DEFAULT_INSTRUCTIONS).or_else(||pinned.strip_prefix(LEGACY_DEFAULT_INSTRUCTIONS)).unwrap_or(pinned);
+        Ok(format!("{}{}",parts.join("\n\n"),slots))
+    }
     pub(crate) fn configured_base_instructions() -> String {
         static CACHE: OnceLock<Mutex<(Option<(u128, u128)>, String)>> = OnceLock::new();
         let cache = CACHE.get_or_init(|| Mutex::new((None, DEFAULT_INSTRUCTIONS.to_string())));
@@ -495,7 +505,7 @@ impl Provider {
         let loaded = (|| -> Result<((u128, u128), String)> {
             let metadata = std::fs::metadata(path)?;
             let modified = metadata.modified()?.duration_since(UNIX_EPOCH)?.as_nanos();
-            let bytes = std::fs::read(path)?;
+            let bytes = serde_json::to_vec(&crate::live_assets::resolved_prompts(std::path::Path::new("."))?)?;
             let hash = bytes.iter().fold(0u128, |state, byte| state.wrapping_mul(31).wrapping_add(u128::from(*byte)));
             let freshness = (modified, hash);
             if cache.0 == Some(freshness) {

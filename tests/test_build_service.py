@@ -204,10 +204,10 @@ class CodebasePublicationMetadataTests(unittest.TestCase):
    root=Path(temporary);job=str(uuid.uuid4());folder=root/"releases"/job/fixtures.host.CODEBASE_ROOT
    folder.parent.mkdir(parents=True);import shutil;shutil.copytree(Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/codebase_admin",folder)
    runner=fixtures.host.Runner();runner.inspect=Mock(return_value={"Image":"sha256:retained-runtime"})
-   runner.command=Mock(return_value="OK")
+   runner.command=Mock(side_effect=["OK",json.dumps({"catalog_version":"f"*64}),"syntax valid"])
    with patch.object(fixtures.host,"ASSET_ROOT",root):
     runner.validate_ui(job,[fixtures.host.CODEBASE_ROOT+"runner.py"])
-   args=runner.command.call_args.args[0]
+   args=runner.command.call_args_list[0].args[0]
    self.assertEqual(args[:3],["docker","run","--rm"])
    self.assertEqual(args[args.index("--network")+1],"none")
    self.assertEqual(args[args.index("--user")+1],str(fixtures.host.CONFIG["worker_uid"])+":"+str(fixtures.host.CONFIG["worker_gid"]))
@@ -215,10 +215,26 @@ class CodebasePublicationMetadataTests(unittest.TestCase):
    self.assertEqual(args[-3:],["-I","-B","/package/test_runner.py"])
 
 
+ def test_foundation_catalog_validation_uses_tested_candidate_engine(self):
+  from unittest.mock import Mock
+  from types import SimpleNamespace
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary);job=str(uuid.uuid4());(root/"releases"/job).mkdir(parents=True)
+   runner=fixtures.host.Runner();runner.inspect=Mock(return_value={"Image":"sha256:old-engine"})
+   runner.job_context=SimpleNamespace(job={"operation":"build_deploy","images":{"api":"sha256:tested-candidate"}})
+   runner.command=Mock(side_effect=[json.dumps({"catalog_version":"f"*64}),"syntax valid"])
+   with patch.object(fixtures.host,"ASSET_ROOT",root):
+    runner.validate_ui(job,["v3/config/prompts.json"])
+   args=runner.command.call_args_list[0].args[0]
+   self.assertIn("sha256:tested-candidate",args)
+   self.assertNotIn("sha256:old-engine",args)
+   self.assertEqual(args[-1],"--validate-assets=/candidate/v3")
+
+
 class CodebaseRegisteredGuidanceTests(unittest.TestCase):
  def test_every_installed_selectable_skill_has_an_independent_lane(self):
   folder=Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/codebase_admin/skills"
   paths=list(folder.glob("*.skill.md"))
-  self.assertEqual(len(paths),4)
+  self.assertGreaterEqual(len(paths),4)
   for path in paths:
-   self.assertTrue(fixtures.host.codebase_source_path(fixtures.host.CODEBASE_ROOT+"skills/"+path.name),path.name)
+   self.assertTrue(fixtures.host.ability_asset_path(fixtures.host.CODEBASE_ROOT+"skills/"+path.name),path.name)

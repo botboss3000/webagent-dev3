@@ -15,7 +15,8 @@ pub(crate) struct Config {
 }
 impl Default for Config {
     fn default() -> Self {
-        let shipped: Value = serde_json::from_slice(include_bytes!("../../config/prompts.json"))
+        let bytes=crate::live_assets::prompt_defaults().unwrap_or_else(|_|include_bytes!("../../config/prompts.json").to_vec());
+        let shipped: Value = serde_json::from_slice(&bytes)
             .expect("Valid shipped prompts");
         serde_json::from_value(shipped["session_naming"].clone()).expect("Valid shipped naming settings")
     }
@@ -33,7 +34,7 @@ impl Config {
         { return Err(anyhow!("Invalid session naming settings")); }
         Ok(())
     }
-    fn parse(value: &Value) -> Result<Self> {
+    pub(super) fn parse(value: &Value) -> Result<Self> {
         // Accept the earlier prompt-only format; missing settings use shipped defaults.
         let supplied = if value.is_string() { json!({"prompt":value}) } else { value.clone() };
         let mut resolved = serde_json::to_value(Self::default())?;
@@ -49,7 +50,7 @@ impl Config {
             if std::fs::metadata(&path)?.len() > 4 * 1024 * 1024 {
                 return Err(anyhow!("Prompts file exceeds bound"));
             }
-            let prompts: Value = serde_json::from_slice(&std::fs::read(path)?)?;
+            let prompts=crate::live_assets::resolved_prompts(root)?;
             if prompts.get("session_naming").is_none() { return Ok(Self::default()); }
             Self::parse(&prompts["session_naming"])
         })();

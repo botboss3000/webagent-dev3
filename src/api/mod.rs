@@ -27,6 +27,7 @@ mod app_pages;
 mod file_manager;
 mod build_dashboard;
 mod app_settings;
+pub(crate) mod live_configuration;
 mod loop_settings;
 pub(crate) mod notifications;
 pub(crate) mod repository;
@@ -80,6 +81,9 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/modules/{id}",post(crate::modules::lifecycle))
         .route("/status", get(overview))
         .route("/settings", put(settings))
+        .route("/admin/configuration",get(live_configuration::list))
+        .route("/admin/configuration/{id}",get(live_configuration::get_config).put(live_configuration::put_config))
+        .route("/admin/publication/status",get(live_configuration::publication))
         .route("/admin/app-settings/encryption", get(app_settings::read).put(app_settings::update))
         .route("/admin/loop-runtime", get(loop_settings::read).put(loop_settings::update))
         .route("/admin/context-compaction", get(context_config_get).put(context_config_put))
@@ -89,7 +93,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/access/registration", get(registration::access_mode).put(registration::set_mode))
         .route("/workflow/policy", get(workflow_policy_get).put(workflow_policy_set))
         .route("/agents/{id}/model", get(agent_model).put(agent_model_set))
-        .route("/policy", put(policy_set))
+        .route("/policy", get(policy_get).put(policy_set))
         .route("/abilities", get(ability_catalog))
         .route("/provider/login", post(provider_start))
         .route("/provider/logout", post(provider_logout))
@@ -177,7 +181,7 @@ pub(super) fn router(app: App) -> Router {
                 && sqlx::query("SELECT 1").execute(&app.store.pool).await.is_ok()
                 && sqlx::query("SELECT 1").execute(&app.store.agent_pool).await.is_ok()
                 && app.store.loop_fresh(10).await.unwrap_or(false);
-            (if healthy{StatusCode::OK}else{StatusCode::SERVICE_UNAVAILABLE},Json(json!({"ready":healthy})))
+            (if healthy{StatusCode::OK}else{StatusCode::SERVICE_UNAVAILABLE},Json(json!({"ready":healthy,"catalog_version":app.abilities.version()})))
         }))
         .route_service("/setup.html",ServeFile::new(format!("{ui}/setup.html")))
         .route_service("/app",ServeFile::new(format!("{ui}/index.html")))

@@ -36,6 +36,10 @@ RUN --mount=type=cache,id=webagent-v3-registry,target=/usr/local/cargo/registry,
     && mkdir -p /out/optimization-cargo \
     && cp -a /usr/local/cargo/registry /out/optimization-cargo/registry
 
+RUN --mount=type=cache,id=webagent-v3-target,target=/build/target,sharing=locked \
+    awk 'FNR==1 {sub(/^[^:]*: /,"");print}' /build/target/release/deps/webagent_v3-*.d \
+      | tr ' ' '\n' | LC_ALL=C sort -u > /out/core-inputs.txt
+RUN test -s /out/core-inputs.txt
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS api
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates curl tini git ripgrep build-essential pkg-config chromium chromium-driver python3-selenium valgrind heaptrack linux-perf \
     && rm -rf /var/lib/apt/lists/* \
@@ -43,6 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-cert
     && useradd -u 1101 -g 1100 -M -s /usr/sbin/nologin v3tools
 COPY --from=preview_tunnel /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
+COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inputs.txt
 # Distribution artifacts are installed only by explicit module administration.
 COPY --from=tested_builder /out/modules /usr/local/lib/webagent/modules
 COPY --from=tested_builder /out/webagent-mcp /usr/local/bin/webagent-mcp
@@ -50,7 +55,7 @@ COPY --from=tested_builder /out/webagent-diagnostics /usr/local/bin/webagent-dia
 COPY --from=tested_builder /out/webagent-optimization /usr/local/bin/webagent-optimization
 COPY --from=tested_builder /out/optimization-cargo /opt/optimization-cargo
 COPY --from=tested_builder /usr/local/rustup/toolchains/1.90.0-x86_64-unknown-linux-gnu /opt/rust
-COPY v3/worker.py v3/sandbox.py v3/launch.py v3/promote.py /opt/v3/
+COPY v3/worker.py v3/ability_plugin_worker.py v3/sandbox.py v3/launch.py v3/promote.py /opt/v3/
 COPY v3/build-service /opt/v3/build-service
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/gates /opt/v3/plugins/gates
@@ -77,6 +82,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 1100 v3 && useradd -u 1100 -g 1100 -M -s /usr/sbin/nologin v3loop
 COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
+COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inputs.txt
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/gates /opt/v3/plugins/gates
 ENV V3_PROCESS_ROLE=loop V3_STATE_ROOT=/state V3_WORKSPACE_ROOT=/workspaces

@@ -1,7 +1,8 @@
 //! Revisioned agent connection metadata and separate owner-bound credentials.
+use crate::State;
 use crate::{json, Api, ApiError, App, CancellationToken, Value};
 use axum::{
-    extract::{Path, State},
+    extract::{Path},
     http::StatusCode,
     Extension, Json,
 };

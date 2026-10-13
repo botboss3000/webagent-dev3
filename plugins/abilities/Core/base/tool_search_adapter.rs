@@ -56,7 +56,7 @@ async fn eligible(app:&App,sid:&str,agent:&str,loaded:&Value)->Result<Vec<Value>
             let name=tool["name"].as_str().context("Invalid tool name")?;if owns(name) {continue;}
             let decision=live_tool_decision(app,&access,name,&policy,&visibility,&state,&json!([marker(name)]),read_only);
             if decision.permission==crate::access::Permission::Deny {continue;}
-            let description=crate::tools::schemas().into_iter().find(|schema|schema["name"]==name).and_then(|schema|schema["description"].as_str().map(str::to_owned)).unwrap_or_default();
+            let description=app.abilities.all_schemas().into_iter().find(|schema|schema["name"]==name).and_then(|schema|schema["description"].as_str().map(str::to_owned)).unwrap_or_default();
             let (_,visible)=app.abilities.tool_gate(name,&visibility,&state,loaded);
             let selected=loaded.as_array().is_some_and(|items|items.contains(&json!(marker(name))));
             let availability=if visible {if selected {"activated"} else {"visible"}} else {"discoverable"};

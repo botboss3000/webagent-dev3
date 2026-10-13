@@ -55,7 +55,8 @@ fn read_prompt(root: &std::path::Path, agent: &str) -> Result<Option<String>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    let prompts: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let _=bytes;
+    let prompts=crate::live_assets::resolved_prompts(root)?;
     match prompts
         .get("manager_incoming_message")
         .and_then(|entries| entries.get(agent))

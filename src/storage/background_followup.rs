@@ -1,3 +1,4 @@
+#[cfg(test)] use crate::State;
 use super::*;
 
 impl Store {
@@ -68,7 +69,7 @@ impl Store {
 #[cfg(test)]
 mod followup_tests {
     use super::*;
-    use axum::{extract::{Path, State}, Json};
+    use axum::{extract::{Path}, Json};
 
     async fn save_run(store: &Store, run: &Value) {
         let mut transaction = store.pool.begin().await.unwrap();

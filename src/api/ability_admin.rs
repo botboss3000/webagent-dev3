@@ -28,7 +28,7 @@ async fn grant_ceiling(app:&App,identity:&Value,abilities:&Value,tools:&Value,pr
         let map=grants.as_object().ok_or_else(||bad("Permission maps required"))?;
         let mut ids:std::collections::BTreeSet<String>=map.keys().cloned().collect();
         if let Some(old)=previous.as_object() {ids.extend(old.keys().cloned());}
-        if ability {ids.extend(app.abilities.ids());} else {ids.extend(crate::tools::schemas().iter().filter_map(|s|s["name"].as_str().map(str::to_owned)));}
+        if ability {ids.extend(app.abilities.ids());} else {ids.extend(app.abilities.all_schemas().iter().filter_map(|s|s["name"].as_str().map(str::to_owned)));}
         ids.insert("*".into());
         let default=if ability && !base {Permission::Deny} else {Permission::Auto};
         for name in ids {
@@ -42,7 +42,7 @@ async fn grant_ceiling(app:&App,identity:&Value,abilities:&Value,tools:&Value,pr
     }
     // Ability and tool permissions interact: raising an ability can expose an
     // inherited Auto tool even when its own map did not change.
-    for schema in crate::tools::schemas() {
+    for schema in app.abilities.all_schemas() {
         let name=schema["name"].as_str().unwrap_or("");
         let owners=app.abilities.tool_abilities(name,&Value::Null,&Value::Null,&Value::Null);
         if owners.is_empty() {continue;}

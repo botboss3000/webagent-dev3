@@ -1,6 +1,7 @@
 //! Optional System-role naming: no chat publication, tools or context mutation.
 use crate::*;
 pub(crate) mod config;
+pub(crate) fn validate_settings(value:&Value)->Result<()> {config::Config::parse(value).map(|_|())}
 pub(crate) fn fallback(text: &str) -> String {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let excerpt: String = normalized

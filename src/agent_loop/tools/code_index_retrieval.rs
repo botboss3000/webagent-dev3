@@ -322,11 +322,12 @@ fn retrieval_prompt_settings() -> Result<(String, String)> {
     );
     let path = root.join("config/prompts.json");
     let bytes = match std::fs::read(path) {
-        Ok(bytes) => Some(bytes),
+        Ok(_) => Some(serde_json::to_vec(&crate::live_assets::resolved_prompts(&root)?)?),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error).context("Could not read live prompt configuration"),
     };
-    let embedded = include_str!("../../../config/prompts.json");
+    let defaults=crate::live_assets::prompt_defaults()?;
+    let embedded=std::str::from_utf8(&defaults)?;
     Ok((
         prompt_from_config(embedded, bytes.as_deref())?,
         candidate_question_from_config(embedded, bytes.as_deref())?,

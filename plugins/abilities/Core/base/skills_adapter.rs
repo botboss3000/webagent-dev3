@@ -199,7 +199,9 @@ pub(crate) async fn context_guidance(app:&App,sid:&str,run_id:&str,read_only:boo
             "kind":selected["kind"],"skill_id":selected["skill_id"]})) else {continue;};
         if validate_load(&query).is_err() {continue;}
         let Ok(mut asset)=load_asset(&current,&query) else {continue;};
-        if !same_asset(selected,&asset) {continue;}
+        // Published bundles replace selected guidance at the next call.
+        // Agent-owned edits retain their explicit revision fence.
+        if !same_asset(selected,&asset) && (query.kind=="own" || !current.app.abilities.published()) {continue;}
         mark_availability(&mut asset,&Value::Null,&current.loaded);
         if asset["requires_activation"]==false {continue;}
         if let Some(text)=asset["text"].as_str() {

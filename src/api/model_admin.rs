@@ -1,8 +1,9 @@
 //! Agent-scoped model administration. Installation oversight never implies credential ownership.
+use crate::State;
 use crate::{App, Api, ApiError};
 use crate::access::{Principal, Relationship};
 use crate::model_selection::Catalog;
-use axum::{extract::{State, Path, Query}, Extension, Json, Router, routing::get, http::StatusCode};
+use axum::{extract::{Path, Query}, Extension, Json, Router, routing::get, http::StatusCode};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 

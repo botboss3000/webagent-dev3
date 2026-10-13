@@ -1,8 +1,9 @@
 //! Native reads are confined to the caller-owned session supplied by Rust.
 //! No tool argument can select a different user, session, database or private interaction.
+use crate::State;
 use crate::{App, attachment_get};
 use anyhow::{bail, Context, Result};
-use axum::{extract::{State, Path}, Json};
+use axum::{extract::{Path}, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;

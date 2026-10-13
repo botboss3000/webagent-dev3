@@ -56,7 +56,7 @@ BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
 CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
     "v3/src", "v3/ui", "v3/plugins/abilities", "v3/plugins/gates", "v3/worker.py",
-    "v3/sandbox.py", "v3/launch.py", "v3/promote.py", "v3/ui-baseline.json", "v3/tests",
+    "v3/sandbox.py", "v3/ability_plugin_worker.py", "v3/launch.py", "v3/promote.py", "v3/ui-baseline.json", "v3/tests",
     "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service",
     "v3/data/config/gates/message_visibility_v1.json",
     "v3/data/config/gates/closing_status_v1.json",
@@ -77,9 +77,37 @@ def codebase_source_path(path):
     return relative in {"runner.py","test_runner.py","plugin.json","codebase_admin.json","codebase_admin.skill.md"} or (
         relative in {"tools/"+name+".skill.md" for name in CODEBASE_TOOLS}
         or relative in {"skills/rust_quality.skill.md","skills/live_plugin_publication.skill.md","skills/ui_theming.skill.md","skills/ui_toggle_list.skill.md"})
+ABILITY_ROOT="v3/plugins/abilities/"
+def ability_asset_path(path):
+    if not path.startswith(ABILITY_ROOT):return False
+    # Rust adapters and legacy Python helpers still have core/image consumers.
+    return path.endswith((".json",".md")) or codebase_source_path(path)
+def generic_package_path(path,blob):
+    if not path.startswith(ABILITY_ROOT):return False
+    parts=path[len(ABILITY_ROOT):].split("/")
+    if len(parts)<3:return False
+    entries=release.entries(blob,context_digest)
+    prefix=ABILITY_ROOT+"/".join(parts[:2])+"/"
+    raw=entries.get(prefix+"plugin.json")
+    if raw is None:return False
+    manifest=json.loads(raw[1])
+    if manifest.get("dispatch")!="isolated":return False
+    return "/".join(parts[2:]) in manifest.get("build",{}).get("inputs",[])+manifest.get("build",{}).get("assets",[])+["plugin.json"]
+def native_package_migration(path,baseline):
+    if not path.startswith(ABILITY_ROOT):return False
+    parts=path[len(ABILITY_ROOT):].split("/")
+    if len(parts)<3:return False
+    prefix=ABILITY_ROOT+"/".join(parts[:2])+"/"
+    entries=release.entries(baseline,context_digest)
+    raw=entries.get(prefix+parts[1]+".json")
+    if raw is None:return False
+    installed=entries.get(prefix+"plugin.json")
+    if installed is not None and json.loads(installed[1]).get("dispatch")=="isolated":return False
+    declaration=json.loads(raw[1])
+    return declaration.get("readiness")in("ready","partial")or declaration.get("kind")in("virtual_core","service")or bool(declaration.get("required_module"))
 HOT_OPERATIONS={"ui_deploy","index_deploy","plugin_deploy"}
 # Limit no-compile publication to UI assets and explicit Code Index metadata paths.
-def hot_source_path(path):return path.startswith(UI_SOURCE_PREFIX)or path in INDEX_METADATA_FILES or codebase_source_path(path) or path=="v3/tests/test_codebase_plugin.py"
+def hot_source_path(path):return path.startswith(UI_SOURCE_PREFIX)or path in INDEX_METADATA_FILES or ability_asset_path(path) or (path.startswith("v3/config/") and path.endswith(".json")) or path=="v3/src/agent_loop/tools/administrator-schemas.json" or path=="v3/tests/test_codebase_plugin.py"
 
 EXPECTED_CODEBASE_MANIFEST={'version': 1, 'id': 'codebase_admin', 'protocol': 1, 'runtime': 'python3', 'entrypoint': 'runner.py', 'interface': 1, 'tools': ['file_list', 'file_read', 'file_search', 'file_edit', 'file_write', 'build_work', 'state_inspect', 'prompt_slot_read', 'prompt_slot_write', 'shell', 'python'], 'build': {'inputs': ['runner.py'], 'dependencies': [], 'toolchain': 'image-python3', 'flags': ['-I', '-B'], 'assets': ['codebase_admin.json', 'codebase_admin.skill.md', 'tools', 'skills']}}
 EXPECTED_CODEBASE_DECLARATION={'display_name': 'Codebase Admin', 'kind': 'ability', 'icon': 'folder-cog', 'color': '#bb9af7', 'description': 'Inspect and edit live development files or isolated source tasks, run checks, and release reviewed builds.', 'skill_summary': 'Use file tools without task_id for explicit live edits and runtime configuration; use one task_id for source changes intended for a build. Task creation is automatic. Finish explicitly to deploy.', 'migration_note': 'Unified file and protected broker workflow; runtime authorization remains authoritative.', 'order': 1, 'placeholder': False, 'tools': ['file_list', 'file_read', 'file_search', 'file_edit', 'file_write', 'build_work', 'state_inspect', 'prompt_slot_read', 'prompt_slot_write', 'shell', 'python'], 'readiness': 'ready', 'config': {'bias': {'key': 'destructive_caution', 'label': 'Caution on destructive actions', 'default': 'balanced', 'levels': {'cautious': 'Before any file delete, overwrite, bulk edit, or non-read-only shell command, STOP and ask the user to confirm in plain language what will change — even if they gave a broad instruction. Prefer the smallest reversible step and never act on your own initiative without an explicit go-ahead. (Restarting the server after a change is exempt — use restart_server.)', 'balanced': "Carry out the user's explicit file/shell commands directly, but ask first whenever YOU decide on your own initiative to delete, overwrite, or run something irreversible, and when an action is ambiguous or far-reaching.", 'trusted': "Act decisively on the user's intent without pausing to re-confirm routine writes, edits, or shell commands; only stop for clearly irreversible or repo-wide destructive actions (mass delete, force-push)."}}}}
@@ -102,7 +130,11 @@ def validate_codebase_package(folder):
     for field in ("icon","color"):
         if declaration.get(field) is not None and not isinstance(declaration[field],str):
             raise ValueError("Invalid Codebase Admin catalog metadata")
-    mutable={"display_name","description","skill_summary","migration_note","icon","color"}
+    if type(declaration.get("order",0)) is not int or not -(2**31)<=declaration.get("order",0)<2**31:
+        raise ValueError("Invalid Codebase Admin order")
+    if declaration.get("config") is not None and not isinstance(declaration["config"],dict):
+        raise ValueError("Invalid Codebase Admin configuration")
+    mutable={"display_name","description","skill_summary","migration_note","icon","color","config","order"}
     if canonical({k:v for k,v in declaration.items() if k not in mutable})!=canonical({k:v for k,v in EXPECTED_CODEBASE_DECLARATION.items() if k not in mutable}):
         raise ValueError("Codebase Admin interface/settings change needs coordinated installation")
     compile((folder/"runner.py").read_bytes(),str(folder/"runner.py"),"exec")
@@ -480,7 +512,7 @@ def inspect_source_patch_corrected(root, patch):
     paths = []
     allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                      ".gitignore", "README.md", "deploy.sh", "launch.py",
-                     "worker.py", "sandbox.py", "promote.py", "ui-baseline.json"}
+                     "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json"}
     allowed_dirs = {"src", "plugins", "tests", "ui", "docs", "config", "build-service"}
     for record in records:
         fields = record.split(b"\t", 2)
@@ -856,8 +888,70 @@ class Runner:
         except BaseException:
             shutil.rmtree(invocation);raise
 
+    def build_ability_artifacts(self,job_id):
+        root=ASSET_ROOT/"releases"/job_id
+        outputs=[]
+        for declaration in sorted((root/ABILITY_ROOT).glob("*/*/plugin.json")):
+            manifest=json.loads(declaration.read_bytes())
+            if manifest.get("dispatch")!="isolated"or manifest.get("build",{}).get("toolchain")!="rust-1.90":continue
+            package=declaration.parent;build=manifest["build"];entry=manifest.get("entrypoint")
+            if manifest.get("runtime")!="executable"or not isinstance(entry,str)or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}",entry)or build.get("dependencies")!=[]or build.get("flags")!=[]:
+                raise ValueError("Unsupported standalone Rust build contract")
+            names=build.get("inputs")
+            if not isinstance(names,list)or len(names)>1024 or not {"Cargo.toml","Cargo.lock"}<=set(names)or len(names)!=len(set(names)):raise ValueError("Locked declared Rust inputs required")
+            inputs={}
+            for name in names:
+                if not isinstance(name,str)or not re.fullmatch(r"[A-Za-z0-9_./-]+",name)or any(p in ("",".","..")for p in name.split("/")):raise ValueError("Unsafe build input")
+                path=package/name
+                if path.is_symlink()or not path.is_file()or path.stat().st_size>16*1024*1024:raise ValueError("Invalid build input")
+                inputs[name]=hashlib.sha256(path.read_bytes()).hexdigest()
+            for source in package.rglob("*.rs"):
+                if str(source.relative_to(package))not in inputs:raise ValueError("Undeclared Rust source")
+                text=source.read_text()
+                for match in re.finditer(r"include(?:_str|_bytes)?!\s*\(\s*([^)]+)\)",text):
+                    raw=match[1].strip()
+                    if not re.fullmatch(r'"[^"]+"',raw):raise ValueError("Dynamic compile include is not supported")
+                    include=(source.parent/raw[1:-1]).resolve()
+                    if not include.is_relative_to(package)or str(include.relative_to(package))not in inputs:raise ValueError("Undeclared compile include")
+            # Runtime assets belong to the bundle generation, not executable compilation.
+            compile_build={k:v for k,v in build.items()if k!="assets"}
+            key=hashlib.sha256(canonical({"build":compile_build,"entrypoint":entry,"inputs":inputs})).hexdigest()
+            legacy_key=hashlib.sha256(canonical({"build":build,"entrypoint":entry,"inputs":inputs})).hexdigest()
+            artifact=ASSET_ROOT/"artifacts"/key;binary=artifact/entry
+            if binary.is_file():
+                outputs.append({"package":manifest["id"],"build_key":key,"reused":True});continue
+            legacy=ASSET_ROOT/"artifacts"/legacy_key/entry
+            if legacy.is_file()and not legacy.is_symlink():
+                artifact.mkdir(parents=True,exist_ok=True);temporary=artifact/("."+entry+".new")
+                shutil.copyfile(legacy,temporary);temporary.chmod(0o555);os.replace(temporary,binary)
+                outputs.append({"package":package.name,"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":True,"migrated_from":legacy_key})
+                continue
+            cache=STATE/"plugin-builds"/key;cache.mkdir(parents=True,exist_ok=True)
+            # Only the declared application package enters the builder. No credentials,
+            # state, workspaces, control sockets or network enter compilation.
+            source=cache/"source";source.mkdir(exist_ok=True)
+            for name in names:
+                target=source/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes((package/name).read_bytes())
+            self.command(["docker","run","--rm","--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
+                "--user",str(CONFIG["service_uid"])+":"+str(CONFIG["service_gid"]),"--pids-limit","128","--memory","2g","--cpus","1",
+                "--tmpfs","/tmp:rw,size=128m,mode=1777","--mount","type=bind,src="+str(source)+",dst=/package,readonly",
+                "--mount","type=bind,src="+str(cache)+",dst=/output","-w","/package",
+                "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=1","-e","CARGO_PROFILE_RELEASE_DEBUG=0",
+                "rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f",
+                "cargo","build","--release","--locked","--offline","--bin",entry],timeout=600)
+            output=cache/"target/release"/entry
+            if output.is_symlink()or not output.is_file()or output.stat().st_size>32*1024*1024:raise ValueError("Invalid plugin artifact")
+            artifact.mkdir(parents=True,exist_ok=True);temporary=artifact/("."+entry+".new")
+            shutil.copyfile(output,temporary);temporary.chmod(0o555);os.replace(temporary,binary)
+            outputs.append({"package":manifest["id"],"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":False})
+        return outputs
+
     def validate_ui(self, job_id, changed):
         root = ASSET_ROOT / "releases" / job_id
+        (ASSET_ROOT/"artifacts").mkdir(parents=True,exist_ok=True)
+        artifacts=self.build_ability_artifacts(job_id)
+        active=getattr(getattr(self,"job_context",None),"job",None)
+        if active is not None:active["plugin_artifacts"]=artifacts
         if any(codebase_source_path(name) for name in changed):
             validate_codebase_package(root / CODEBASE_ROOT)
             image=self.inspect(TARGETS[0])["Image"]
@@ -870,8 +964,32 @@ class Runner:
                 "--tmpfs","/tmp:rw,size=64m,mode=1777",
                 "--mount","type=bind,src="+str(root / CODEBASE_ROOT)+",dst=/package,readonly",
                 "-w","/tmp","--entrypoint","python3",image,"-I","-B","/package/test_runner.py"],timeout=30)
+        if any(name.startswith(ABILITY_ROOT) or name.startswith("v3/config/") or name=="v3/src/agent_loop/tools/administrator-schemas.json" for name in changed):
+            # A foundation release introduces the validator itself. Validate with
+            # its already-tested candidate API image; hot updates use the retained consumer.
+            image=(active["images"]["api"] if active is not None
+                and active.get("operation")=="build_deploy" else self.inspect(TARGETS[0])["Image"])
+            result=self.command(["docker","run","--rm","--network","none","--read-only",
+                "--cap-drop","ALL","--security-opt","no-new-privileges",
+                "--user",str(CONFIG["app_uid"])+":"+str(CONFIG["app_gid"]),
+                "--pids-limit","64","--memory","256m","--tmpfs","/tmp:rw,size=64m,mode=1777",
+                "--mount","type=bind,src="+str(root)+",dst=/candidate,readonly",
+                "--mount","type=bind,src="+str(ASSET_ROOT/"artifacts")+",dst=/opt/v3/assets/artifacts,readonly",
+                "--entrypoint","/usr/local/bin/webagent-v3",image,"--validate-assets=/candidate/v3"],timeout=30)
+            receipt=json.loads(result)
+            program=("import json,pathlib; root=pathlib.Path('/candidate/v3/plugins/abilities'); "
+                "packages=[p for p in root.glob('*/*/plugin.json') if json.loads(p.read_bytes()).get('dispatch')=='isolated']; "
+                "[(compile(source.read_bytes(),str(source),'exec')) for p in packages "
+                "if json.loads(p.read_bytes()).get('runtime')=='python3' for source in p.parent.rglob('*.py')]; print('syntax valid')")
+            self.command(["docker","run","--rm","--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
+                "--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["worker_gid"]),"--pids-limit","64","--memory","256m",
+                "--tmpfs","/tmp:rw,size=64m,mode=1777","--mount","type=bind,src="+str(root)+",dst=/candidate,readonly",
+                "--entrypoint","python3",image,"-I","-B","-c",program],timeout=30)
+            if not isinstance(receipt.get("catalog_version"),str):raise ValueError("Installed catalog validator unavailable")
         for name in changed:
             if not name.startswith(UI_SOURCE_PREFIX):
+                path=root/name
+                if path.is_file()and path.suffix==".json":json.loads(path.read_text(encoding="utf-8"))
                 continue
             path = root / name
             if not path.is_file():
@@ -899,6 +1017,16 @@ class Runner:
                     for item in mounts) and
                 "V3_UI_ROOT=/opt/v3/assets/current/v3/ui" in env)
 
+    def core_compile_inputs(self):
+        import posixpath
+        raw=self.command(["docker","exec",TARGETS[0],"cat","/usr/local/lib/webagent/core-inputs.txt"],timeout=10)
+        paths=set()
+        for path in raw.splitlines():
+            if path.startswith("/build/"):path=path[len("/build/"):]
+            normalized=posixpath.normpath(path)
+            if normalized.startswith(("src/","plugins/","config/")):paths.add("v3/"+normalized)
+        if "v3/src/main.rs"not in paths:raise ValueError("Installed compiler dependency manifest unavailable")
+        return paths
     def plugin_hot_swappable(self):
         for name in TARGETS:
             value=self.inspect(name)
@@ -910,15 +1038,33 @@ class Runner:
         # Ask the installed worker contract, not a filename or source-byte guess.
         program=("import socket,json; s=socket.socket(socket.AF_UNIX); s.settimeout(10); "
             "s.connect('/run/v3/worker/tools.sock'); "
-            "s.sendall(json.dumps({'id':'plugin-protocol','name':'codebase_admin_protocol',"
+            "s.sendall(json.dumps({'id':'plugin-protocol','name':'ability_plugins_protocol',"
             "'workspace':'"+LOCAL_WORKSPACE+"','arguments':{}}).encode()+bytes([10])); "
             "print(s.makefile('rb').readline(4096).decode())")
         try:
             reply=json.loads(self.command(["docker","exec","--user",str(CONFIG["app_uid"]),
                 TARGETS[0],"python3","-I","-B","-c",program],timeout=15))
-            return reply.get("status")=="success" and reply.get("output")=={"protocol":1,"interface":1}
+            return reply.get("status")=="success" and reply.get("output")=={"protocol":1,"catalog":1,"dispatch":1}
         except (OSError,RuntimeError,ValueError):return False
 
+    def verify_plugin_adoption(self,job_id):
+        # A healthy shared server may queue readiness behind catalog work. Keep
+        # each attempt bounded while allowing the protected consumer to respond.
+        deadline=time.monotonic()+45
+        program=("import json,pathlib; root=pathlib.Path('/state/publication'); "
+                 "print(json.dumps({r:json.loads((root/(r+'.json')).read_text()) for r in ['api','loop']}))")
+        while time.monotonic()<deadline:
+            # Readiness acquires an API snapshot; the scheduler acquires the loop snapshot.
+            connection=http.client.HTTPConnection({"0.0.0.0":"127.0.0.1","::":"::1"}.get(CONFIG["bind_address"],CONFIG["bind_address"]),CONFIG["port"],timeout=15)
+            try:
+                connection.request("GET","/health/ready");response=connection.getresponse();ready=json.loads(response.read(4096))
+                receipt=json.loads(self.command(["docker","exec","--user",str(CONFIG["app_uid"]),TARGETS[0],"python3","-I","-B","-c",program],timeout=10,private_raw=True))
+                if response.status==200 and all(receipt[r]["revision"]==job_id and receipt[r]["catalog_version"]==ready["catalog_version"]for r in ("api","loop")):
+                    return {r:{"revision":job_id,"catalog_version":ready["catalog_version"]}for r in ("api","loop")}
+            except (OSError,RuntimeError,ValueError,KeyError):pass
+            finally:connection.close()
+            time.sleep(.25)
+        raise RuntimeError("API and loop did not adopt the published catalog")
     def verify_ui(self, changed=()):
         # Static routes are public and must serve the exact selected bytes.
         paths = [("v3/ui/index.html", "/app")]
@@ -1805,7 +1951,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts") if key in job}
         if "reason" in job:
             # Compiler failures are at the end of a bounded build transcript.
             view["reason"] = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
@@ -1901,6 +2047,46 @@ class Broker:
             return True
         except Exception:
             return False
+
+    def _reconcile_plugin_publication(self, job, trusted, workspace):
+        # Operator continuation after an uncertain adoption check. Never activate
+        # assets or execute/build a package again; verify the already selected release.
+        if (job.get("operation")!="plugin_deploy" or job.get("status")!="uncertain"
+                or job.get("phase")!="checking_ui" or not job.get("hot_assets")
+                or not job.get("effects_started")):
+            raise ValueError("Only an interrupted plugin adoption check can continue")
+        deadline,fingerprint=self._incoming_lease(trusted)
+        if (not trusted.get("local_caller") or not self._owned(job,trusted,workspace)
+                or job.get("revoked") or job.get("batch_members")
+                or job.get("access_fingerprint")!=fingerprint):
+            raise PermissionError("Fresh matching operator authority required for reconciliation")
+        if self.runner.current_asset_id()!=job["job_id"]:
+            raise ValueError("Active publication changed; reconciliation refused")
+        candidate=(self.state/job["job_id"]/"candidate.tar").read_bytes()
+        if context_digest(candidate)[0]!=job["inputs_sha256"]:
+            raise ValueError("Candidate changed; reconciliation refused")
+        for role,name in zip(("api","loop"),TARGETS):
+            if not self.runner.healthy(name,job["images"][role]):
+                raise ValueError("Retained consumer changed or unhealthy")
+            identity=job.get("consumer_before",{}).get(role,{}).get("id")
+            if identity is not None and self.runner.inspect(name)["Id"]!=identity:
+                raise ValueError("Retained consumer identity changed")
+        self.runner.verify_ui(job.get("changed_paths",()))
+        job["consumer_adoption"]=self.runner.verify_plugin_adoption(job["job_id"])
+        # This explicit operator request authorizes only the remaining checked
+        # source promotion. Ordinary expired leases still cannot be renewed.
+        job["lease_until"]=min(deadline,time.time()+180)
+        job["operator_reconciliation_authorized_at"]=time.time()
+        self._save(job)
+        self._phase(job,"promoting_checkout")
+        self.runner.promote_checkout(self._current_release_blob(),candidate,job.get("changed_paths",()))
+        job.update(status="completed",phase="finished",finished_at=time.time(),
+            operator_reconciled_at=time.time(),
+            reason="Existing plugin publication verified and source promoted; no effects replayed",
+            synchronization=self._sync_report(candidate,candidate,()))
+        self._save(job)
+        self._start_next()
+        return {"job_id":job["job_id"],"status":"completed","effects_replayed":False}
 
     def _runtime_release_matches(self, job):
         # An operator may accept a healthy deployed image while checkout
@@ -2299,6 +2485,8 @@ class Broker:
                        and other.get("finished_at", 0) > job.get("finished_at", 0)
                        for other in self.jobs.values()):
                     raise ValueError("newer uncertain release requires review")
+                if job.get("operation")=="plugin_deploy" and job.get("phase")=="checking_ui":
+                    return self._reconcile_plugin_publication(job,trusted,workspace)
                 if not self._runtime_release_matches(job):
                     raise ValueError("uncertain release does not match healthy runtime")
                 job["operator_adopted_at"] = time.time()
@@ -2570,7 +2758,7 @@ class Broker:
                 allowed_dirs = {"src", "plugins", "tests", "ui", "docs", "config", "build-service"}
                 allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                                  ".gitignore", "README.md", "deploy.sh", "launch.py",
-                                 "worker.py", "sandbox.py", "promote.py", "ui-baseline.json"}
+                                 "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json"}
                 if (name_path and (not re.fullmatch(r"[A-Za-z0-9_./-]+", name_path)
                         or any(part in ("", ".", "..") for part in parts)
                         or (parts[0] not in allowed_dirs and not release.inspection_path("v3/" + name_path)))):
@@ -2939,9 +3127,14 @@ class Broker:
                             return {"task_id": task_id, "status": "abandoned", "synchronization": report}
                         if decision != "proceed":
                             return {"task_id": task_id, "status": "needs_synchronization" if decision == "synchronize" else "needs_decision", "synchronization": report}
-                    ui_only = all(hot_source_path(path) for path in changed)
+                    package_changed=[path for path in changed if not hot_source_path(path) and (
+                        generic_package_path(path,candidate) or generic_package_path(path,base_blob))]
+                    core_inputs=self.runner.core_compile_inputs() if package_changed and hasattr(self.runner,"core_compile_inputs") else set()
+                    ui_only = all(hot_source_path(path) or (
+                        (generic_package_path(path,candidate) or generic_package_path(path,base_blob))
+                        and path not in core_inputs and not native_package_migration(path,base_blob)) for path in changed)
                     index_only=ui_only and(not changed or any(path in INDEX_METADATA_FILES for path in changed))
-                    plugin_only=ui_only and any(codebase_source_path(path) for path in changed)
+                    plugin_only=ui_only and any((path.startswith(ABILITY_ROOT) and path not in INDEX_METADATA_FILES) or path.startswith("v3/config/") or path=="v3/src/agent_loop/tools/administrator-schemas.json" for path in changed)
                     host_only = self.host_source_only(current_changed,candidate,trusted)
                     lease_until, fingerprint = self._incoming_lease(trusted)
                     job_id = str(uuid.uuid4())
@@ -3155,6 +3348,7 @@ class Broker:
                     for role, name in zip(("api", "loop"), TARGETS)}
         with self.lock:
             job["images"] = {role: previous[role]["Image"] for role in ("api", "loop")}
+            job["consumer_before"]={role:{"id":previous[role]["Id"],"image":previous[role]["Image"]}for role in ("api","loop")}
             job["asset_previous"] = self.runner.current_asset_id()
             self._save(job)
         self._phase(job, "switching_ui")
@@ -3170,6 +3364,8 @@ class Broker:
             if not self.runner.healthy(name, job["images"][role]):
                 raise RuntimeError("V3 " + role + " unhealthy after UI switch")
         if job["operation"]=="plugin_deploy":
+            if hasattr(self.runner,"verify_plugin_adoption"):
+                job["consumer_adoption"]=self.runner.verify_plugin_adoption(job["job_id"])
             for role,name in zip(("api","loop"),TARGETS):
                 if self.runner.inspect(name).get("Id")!=previous[role].get("Id"):
                     raise RuntimeError("Unrelated container replaced during plugin publication")
@@ -3178,7 +3374,7 @@ class Broker:
         job["synchronization"] = self._sync_report(blob, blob, ())
         with self.lock:
             self._batch_lease(job)
-            job.update(status="completed", phase="finished", reason="Installed host service source published; application images unchanged" if job["operation"]=="host_service_deploy" else "Codebase Admin plugin published; application images unchanged" if job["operation"]=="plugin_deploy" else "UI assets served from frozen release",
+            job.update(status="completed", phase="finished", reason="Installed host service source published; application images unchanged" if job["operation"]=="host_service_deploy" else "Ability assets and packages published; application images unchanged" if job["operation"]=="plugin_deploy" else "UI assets served from frozen release",
                        finished_at=time.time())
             job.setdefault("phase_history", []).append(
                 {"phase": "finished", "at": job["finished_at"]})
@@ -3206,7 +3402,7 @@ class Broker:
                 self._run_ui_hot(job,blob)
                 return
             if job["operation"]=="plugin_deploy" and not self.runner.plugin_hot_swappable():
-                raise ValueError("Codebase Admin independent runtime contract unavailable; core migration required")
+                raise ValueError("General ability runtime contract unavailable; core migration required")
             if job["operation"] in ("index_deploy","plugin_deploy") and not self.runner.ui_hot_swappable():
                 raise ValueError("Index maintenance requires hot publication; container replacement is forbidden")
             if job["operation"] in HOT_OPERATIONS and self.runner.ui_hot_swappable():

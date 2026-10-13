@@ -1,4 +1,5 @@
 //! Persistent participation and follow-up admission share the conversation writer.
+#[cfg(test)] use crate::State;
 use super::*;
 fn state(session: &Value) -> Value {
     session
@@ -530,7 +531,7 @@ impl Store {
 mod tests {
     use super::*;
     use axum::{
-        extract::{Path, State},
+        extract::{Path},
         Json,
     };
     async fn fixture() -> (tempfile::TempDir, Store) {

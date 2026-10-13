@@ -1,9 +1,38 @@
 //! Runtime acceptance tests using isolated encrypted storage and a local provider fixture.
+use axum::extract::State as AxumState;
 use super::*;
 use axum::body::Body;
 use futures_util::StreamExt;
 use tempfile::TempDir;
 use tower::ServiceExt;
+
+/// Build a stable native test catalog without installed isolated packages or their external artifacts.
+/// Publication validates complete plugin snapshots separately; native fixture assertions must not depend on them.
+pub(crate) fn native_catalog() -> abilities::Catalog {
+    static ROOT: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
+    let root = ROOT.get_or_init(|| {
+        let target = tempfile::tempdir().expect("native catalog fixture");
+        /// Copy source declarations once, excluding only explicitly isolated plugin directories.
+        fn copy_native(source: &std::path::Path, target: &std::path::Path) {
+            let declaration = source.join("plugin.json");
+            if declaration.is_file() {
+                let manifest: Value = serde_json::from_slice(&std::fs::read(declaration).unwrap()).unwrap();
+                if manifest["dispatch"] == "isolated" { return; }
+            }
+            std::fs::create_dir_all(target).unwrap();
+            for entry in std::fs::read_dir(source).unwrap() {
+                let entry = entry.unwrap();
+                assert!(!entry.file_type().unwrap().is_symlink(), "native fixture source symlink");
+                let output = target.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() { copy_native(&entry.path(), &output); }
+                else { std::fs::copy(entry.path(), output).unwrap(); }
+            }
+        }
+        copy_native(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities"), target.path());
+        target
+    });
+    abilities::Catalog::load(root.path()).expect("validated native fixture catalog")
+}
 
 pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
     let root = tempfile::tempdir().unwrap();
@@ -50,8 +79,7 @@ pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
         chat_actor: None,
         chat_access: None,
         abilities: Arc::new(
-            abilities::Catalog::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities"))
-                .unwrap(),
+            native_catalog(),
         ),
         gate: Arc::new(Mutex::new(())),
         provider: provider::Provider::new(),
@@ -1267,7 +1295,8 @@ async fn agent_loop_creates_reviewable_proposal_without_dispatching_broker() {
         }
     }
     let legacy=_root.path().join("legacy-abilities");
-    copy_catalog(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities"),&legacy);
+    // Extend only the native fixture; external plugin artifacts belong to publication tests.
+    copy_catalog(app.abilities.snapshot_root(),&legacy);
     let path=legacy.join("Administrator/codebase_admin/codebase_admin.json");
     let mut manifest:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     for tool in ["source_review","promotion_propose"] {manifest["tools"].as_array_mut().unwrap().push(json!(tool));}
@@ -1379,7 +1408,7 @@ async fn automatic_code_index_retrieval_is_attempted_once_but_off_by_default() {
     let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
     let captured = requests.clone();
     let mock = Router::new().route("/responses", post(
-        |State(requests): State<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
+        |AxumState(requests): AxumState<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
             let mut requests=requests.lock().await;
             requests.push(body);
             let output=json!([{"type":"message","role":"assistant",
@@ -1417,7 +1446,7 @@ async fn reasoning_only_completion_continues_to_one_final_publication() {
     let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
     let captured = requests.clone();
     let mock = Router::new().route("/responses", post(
-        |State(requests): State<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
+        |AxumState(requests): AxumState<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
             let mut requests = requests.lock().await;
             requests.push(body);
             let output = if requests.len() == 1 {
@@ -1467,7 +1496,7 @@ async fn agent_loop_gates_tool_and_denial_continues_without_worker() {
     fixture_model(&app, "pinned-model").await;
     let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
     let captured = requests.clone();
-    let mock = Router::new().route("/responses", post(|State(requests): State<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
+    let mock = Router::new().route("/responses", post(|AxumState(requests): AxumState<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
         let mut requests = requests.lock().await;
         requests.push(body);
         let output = if requests.len() == 1 {
@@ -1641,7 +1670,7 @@ async fn long_run_compacts_before_model_and_keeps_full_message_history() {
         .route(
             "/responses",
             post(
-                |State(requests): State<Arc<Mutex<Vec<Value>>>>,
+                |AxumState(requests): AxumState<Arc<Mutex<Vec<Value>>>>,
                  Json(body): Json<Value>| async move {
                     let mut requests = requests.lock().await;
                     requests.push(body);
@@ -6245,7 +6274,7 @@ async fn background_execution_journey(behavior: &str) {
     app.store.save_agent_abilities(&visibility,revision).await.unwrap();
     let (request_sender,mut requests)=tokio::sync::mpsc::unbounded_channel::<BackgroundJourneyRequest>();
     let mock=Router::new().route("/responses",axum::routing::post(
-        |State(sender):State<tokio::sync::mpsc::UnboundedSender<BackgroundJourneyRequest>>,
+        |AxumState(sender): AxumState<tokio::sync::mpsc::UnboundedSender<BackgroundJourneyRequest>>,
          Json(body):Json<Value>| async move {
             let (reply_sender,reply_receiver)=tokio::sync::oneshot::channel();
             sender.send((body,reply_sender)).unwrap();
@@ -6651,7 +6680,7 @@ async fn tool_output_control_can_accompany_final_reply_without_an_extra_call() {
     let requests=Arc::new(Mutex::new(Vec::<Value>::new()));
     let captured=requests.clone();
     let mock=Router::new().route("/responses",post(
-        |State(requests):State<Arc<Mutex<Vec<Value>>>>,Json(body):Json<Value>| async move {
+        |AxumState(requests): AxumState<Arc<Mutex<Vec<Value>>>>,Json(body):Json<Value>| async move {
             requests.lock().await.push(body);
             let event=json!({"type":"response.completed","response":{"status":"completed","output":[
                 {"type":"function_call","call_id":"retain-important","name":"manage_tool_context",
@@ -6983,7 +7012,7 @@ async fn provider_recovery_retries_stream_failure_and_publishes_one_final_reply(
 
 #[test]
 fn consolidated_codebase_schema_and_guidance_contract() {
-    let catalog = abilities::Catalog::load(std::path::Path::new("plugins/abilities")).unwrap();
+    let catalog = native_catalog();
     let schema = tools::schemas();
     for name in ["file_read","file_list","file_search","file_edit","file_write"] {
         let tool=schema.iter().find(|s|s["name"]==name).unwrap();

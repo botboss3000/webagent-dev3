@@ -72,6 +72,9 @@ struct Ability {
     #[serde(skip_serializing)]
     path: PathBuf,
     manifest_digest: String,
+    plugin: Option<crate::ability_plugins::Package>,
+    #[serde(skip_serializing)]
+    frozen: bool,
     group: String,
     group_name: String,
     group_order: i32,
@@ -128,6 +131,9 @@ struct GroupManifest {
 
 #[derive(Clone)]
 pub struct Catalog {
+    root:PathBuf,
+    published:bool,
+    native_overrides:BTreeMap<String,(String,String)>,
     abilities: Vec<Ability>,
     version: String,
 }
@@ -256,7 +262,32 @@ fn optional_skill(path: &Path) -> Result<Option<String>> {
 }
 
 impl Catalog {
+    /// Freeze a completely validated catalog for one immutable publication revision.
+    pub(crate) fn load_snapshot(root:&Path)->Result<Self> {
+        let mut catalog=Self::load(root)?;
+        catalog.published=true;
+        for ability in &mut catalog.abilities {ability.frozen=true;}
+        Ok(catalog)
+    }
+    /// Bind only a currently executable isolated owner; pending declarations cannot dispatch.
+    pub(crate) fn plugin_binding(&self,name:&str)->Option<Value> {
+        self.abilities.iter().filter_map(|a|a.plugin.as_ref().filter(|_|Self::executable(a))).find_map(|p|p.binding(name))
+    }
+    /// Combine compiled contracts with present isolated schemas without probing unrelated modules.
+    pub(crate) fn all_schemas(&self)->Vec<Value> {
+        let mut schemas=crate::tools::native_schemas();
+        for schema in &mut schemas {
+            if let Some((original,description))=schema["name"].as_str().and_then(|name|self.native_overrides.get(name)){
+                if let Some(text)=schema["description"].as_str(){schema["description"]=json!(text.replace(original,description));}
+            }
+        }
+        schemas.extend(self.abilities.iter().filter_map(|a|a.plugin.as_ref().filter(|_|Self::present(a))).flat_map(|p|p.schemas.clone()));
+        schemas
+    }
+
+    /// Validate manifest ownership and guidance before admitting any catalog revision.
     pub fn load(root: &Path) -> Result<Self> {
+        let native_overrides=crate::live_assets::native_schema_overrides(root)?;
         let mut abilities = Vec::new();
         let mut ids = HashSet::new();
         let mut owners = BTreeMap::new();
@@ -265,7 +296,7 @@ impl Catalog {
             Ok(groups) => groups,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let version = hex::encode(Sha256::digest(b"[]"));
-                return Ok(Self { abilities, version });
+                return Ok(Self { abilities, version,root:root.to_owned(),published:false,native_overrides });
             }
             Err(error) => return Err(error).with_context(|| format!("Cannot read ability catalog: {}", root.display())),
         };
@@ -333,9 +364,12 @@ impl Catalog {
                 {
                     bail!("Invalid active ability: {id}");
                 }
+                let plugin=crate::ability_plugins::Package::load(&ability_path,&id,&manifest.tools)?;
+                if plugin.is_some() && manifest.kind!=EntryKind::Ability {bail!("Isolated packages cannot declare trusted core or service kinds");}
+                let installed=|name:&str|plugin.as_ref().is_some_and(|p|p.owns(name)) || Self::supported(name);
                 let readiness = manifest.readiness.clone().unwrap_or_else(|| {
                     if manifest.placeholder || manifest.kind == EntryKind::Placeholder { Readiness::Placeholder }
-                    else if manifest.tools.iter().any(|tool| Self::supported(tool)) { Readiness::Ready }
+                    else if manifest.tools.iter().any(|tool| installed(tool)) { Readiness::Ready }
                     else { Readiness::Pending }
                 });
                 if (manifest.placeholder || manifest.kind == EntryKind::Placeholder)
@@ -352,7 +386,7 @@ impl Catalog {
                     .is_some_and(|module|!crate::modules::available(module));
                 if !omitted_module && matches!(readiness, Readiness::Ready | Readiness::Partial) &&
                     (!matches!(manifest.kind, EntryKind::Ability | EntryKind::VirtualCore) ||
-                     !manifest.tools.iter().any(|tool| Self::supported(tool))) {
+                     !manifest.tools.iter().any(|tool| installed(tool))) {
                     bail!("Ready entry has no installed adapter: {id}");
                 }
                 for directory in ["tools", "skills"] {
@@ -366,7 +400,7 @@ impl Catalog {
                 for tool in &manifest.tools {
                     if !valid_id(tool) { bail!("Invalid tool identifier: {tool}"); }
                     // Installed schemas have exactly one authority-owning entry.
-                    if Self::supported(tool) && owners.insert(tool.clone(), id.clone()).is_some() {
+                    if owners.insert(tool.clone(), id.clone()).is_some() {
                         bail!("Duplicate installed tool owner: {tool}");
                     }
                     if !local.insert(tool) {
@@ -405,6 +439,7 @@ impl Catalog {
                     id,
                     path: ability_path,
                     manifest_digest,
+                    plugin, frozen:false,
                     group: group_id.clone(),
                     group_name: group_name.clone(),
                     group_order: group_meta.order,
@@ -437,6 +472,7 @@ impl Catalog {
             abilities.push(Ability {
                 id: "optimization".into(), path: crate::optimization::folder(),
                 manifest_digest: hex::encode(Sha256::digest(bytes)),
+                plugin:None, frozen:false,
                 group: "Administrator".into(), group_name: "Administrator".into(),
                 group_order: 100, name: manifest.display_name,
                 description: manifest.description, skill_summary: manifest.skill_summary,
@@ -449,7 +485,7 @@ impl Catalog {
             });
         }
         abilities.push(Ability {
-            id:"mcp".into(),path:crate::mcp::bridge::folder(),manifest_digest:"mcp-v1".into(),
+            id:"mcp".into(),path:crate::mcp::bridge::folder(),manifest_digest:"mcp-v1".into(),plugin:None,frozen:false,
             group:"Connections".into(),group_name:"Connections".into(),group_order:90,
             name:"MCP".into(),description:"Connect this agent to external MCP servers and explicitly permitted operations.".into(),
             skill_summary:Some("Discover MCP servers, manage agent connections and call permitted remote tools.".into()),
@@ -467,16 +503,22 @@ impl Catalog {
                 &b.id,
             ))
         });
-        let version = hex::encode(Sha256::digest(serde_json::to_vec(&abilities)?));
-        Ok(Self { abilities, version })
+        let version = hex::encode(Sha256::digest(serde_json::to_vec(&json!([abilities,native_overrides]))?));
+        Ok(Self { abilities, version,root:root.to_owned(),published:false,native_overrides })
     }
 
+    pub(crate) fn empty()->Self {Self{root:PathBuf::new(),published:false,native_overrides:BTreeMap::new(),abilities:Vec::new(),version:hex::encode(Sha256::digest(b"[]"))}}
+    pub(crate) fn snapshot_root(&self)->&Path {&self.root}
+    pub(crate) fn published(&self)->bool {self.published}
+    pub(crate) fn source_root(&self)->Option<&Path> {
+        self.root.ends_with("plugins/abilities").then(||self.root.parent().and_then(Path::parent)).flatten()
+    }
     pub fn version(&self) -> &str {
         &self.version
     }
 
     fn present(ability: &Ability) -> bool {
-        if ability.id=="codebase_admin" {
+        if ability.id=="codebase_admin" && !ability.frozen {
             if let Some(path)=Self::published_skill(ability,"ability","codebase_admin") {
                 let Some(folder)=path.parent() else {return false;};
                 let metadata=read_bytes(&folder.join("plugin.json"),4096).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok());
@@ -504,7 +546,7 @@ impl Catalog {
     /// Published guidance follows the broker pointer; compatible Codebase Admin metadata is live.
     /// Tool/schema grants remain bound to the installed core interface.
     fn published_skill_path(ability:&Ability,kind:&str,name:&str,ui_root:Option<&Path>)->Option<PathBuf>{
-        if !matches!(ability.id.as_str(),"code_index"|"codebase_admin") || !valid_id(name){return None;}
+        if ability.frozen || !matches!(ability.id.as_str(),"code_index"|"codebase_admin") || !valid_id(name){return None;}
         let root=ui_root.filter(|root|root.ends_with(Path::new("v3/ui")))?;
         let folder=root.parent()?.join(format!("plugins/abilities/Administrator/{}",ability.id));
         match kind{
@@ -590,7 +632,7 @@ impl Catalog {
         let ability = self.abilities.iter().find(|a| a.id == ability_id)
             .filter(|a| Self::available(a, visibility, state)
                 && allow_ability(ability_id)
-                && a.tools.iter().any(|tool| Self::supported(tool)
+                && a.tools.iter().any(|tool| self.installed(tool)
                     && Self::tool_mode(visibility, tool) != "off" && allow_tool(tool)))
             .context("Bundled skills unavailable under current access")?;
         let mut assets = Vec::new();
@@ -598,7 +640,7 @@ impl Catalog {
             if let Some(text) = Self::core_skill(ability) { assets.push(("ability", ability.id.as_str(), text)); }
         }
         for (name, text) in &ability.tool_skills {
-            if Self::supported(name) && Self::tool_mode(visibility, name) != "off" && allow_tool(name) {
+            if self.installed(name) && Self::tool_mode(visibility, name) != "off" && allow_tool(name) {
                 if let Some(body)=Self::asset_text(ability,"tool",name,text){assets.push(("tool",name.as_str(),body));}
             }
         }
@@ -712,8 +754,11 @@ impl Catalog {
         Some(true)
     }
 
+    fn installed(&self,name:&str)->bool {
+        self.abilities.iter().any(|a|a.plugin.as_ref().is_some_and(|p|p.owns(name))) || Self::supported(name)
+    }
     fn supported(name: &str) -> bool {
-        crate::tools::schemas().iter().any(|schema| schema["name"] == name)
+        crate::tools::native_schemas().iter().any(|schema| schema["name"] == name)
     }
 
     fn allowed(policy: &Value, name: &str) -> bool {
@@ -798,13 +843,13 @@ impl Catalog {
             && (Self::is_visible(visibility, &ability.id) || Self::active(state, &ability.id))
     }
 
-    fn describe(ability: &Ability, policy: &Value, visibility: &Value, state: &Value) -> Value {
+    fn describe(&self, ability: &Ability, policy: &Value, visibility: &Value, state: &Value) -> Value {
         let tools = ability
             .tools
             .iter()
-            .filter(|name| Self::executable(ability) && Self::supported(name) && Self::allowed(policy, name) && Self::tool_mode(visibility, name) != "off")
+            .filter(|name| Self::executable(ability) && self.installed(name) && Self::allowed(policy, name) && Self::tool_mode(visibility, name) != "off")
             .map(|name| json!({"name":name,"policy":policy["rules"][name],
-                        "mode":Self::tool_mode(visibility,name),"supported":Self::supported(name)}))
+                        "mode":Self::tool_mode(visibility,name),"supported":self.installed(name)}))
             .collect::<Vec<_>>();
         let visible = Self::is_visible(visibility, &ability.id);
         let off = Self::is_off(visibility, &ability.id);
@@ -834,7 +879,7 @@ impl Catalog {
             "active":Self::active(state, &ability.id),
             "availability":if visible {"visible"} else if Self::active(state, &ability.id) {"activated"} else {"discoverable"},
             "requires_activation":!visible && !Self::active(state, &ability.id)});
-        if ability.id=="codebase_admin" {
+        if ability.id=="codebase_admin" && !ability.frozen {
             if let Some(path)=Self::published_skill(ability,"ability","codebase_admin").and_then(|p|p.parent().map(|p|p.join("codebase_admin.json"))) {
                 if let Ok(bytes)=read_bytes(&path,MAX_MANIFEST_BYTES) {
                     if let Ok(value)=serde_json::from_slice::<Value>(&bytes) {
@@ -855,24 +900,27 @@ impl Catalog {
                 Self::executable(ability)
                     && !Self::is_off(visibility, &ability.id)
                     && !Self::suppressed(state, &ability.id)
-                    && ability.tools.iter().any(|name| Self::supported(name) && Self::allowed(policy, name) && Self::tool_mode(visibility,name) != "off")
+                    && ability.tools.iter().any(|name| self.installed(name) && Self::allowed(policy, name) && Self::tool_mode(visibility,name) != "off")
             })
-            .map(|ability| Self::describe(ability, policy, visibility, state))
+            .map(|ability| self.describe(ability, policy, visibility, state))
             .collect()
     }
 
+    /// Project installed tools and guidance for administrators using one schema snapshot.
     pub fn configuration_catalog(&self, policy: &Value, visibility: &Value) -> Vec<Value> {
+        // Resolve dynamic package availability once for this projection.
+        let schemas=self.all_schemas();
         self.abilities
             .iter()
             .filter(|ability| Self::present(ability))
             .map(|ability| {
-                let mut item = Self::describe(ability, policy, visibility, &Value::Null);
-                item["available"] = json!(Self::executable(ability) && ability.tools.iter().any(|name| Self::supported(name)));
+                let mut item = self.describe(ability, policy, visibility, &Value::Null);
+                item["available"] = json!(Self::executable(ability) && ability.tools.iter().any(|name| self.installed(name)));
                 item["tools"] = json!(ability.tools.iter().map(|name| {
-                    let description=crate::tools::schemas().iter().find(|schema|schema["name"]==*name)
+                    let description=schemas.iter().find(|schema|schema["name"]==*name)
                         .and_then(|schema|schema["description"].as_str()).unwrap_or("").to_owned();
                     json!({"name":name,"policy":policy["rules"][name],
-                        "mode":Self::tool_mode(visibility,name),"supported":Self::supported(name),
+                        "mode":Self::tool_mode(visibility,name),"supported":self.installed(name),
                         "description":description,
                         "has_tool_skill":ability.tool_skills.get(name)
                             .is_some_and(|text|Self::asset_text(ability,"tool",name,text).is_some())})
@@ -904,7 +952,7 @@ impl Catalog {
     /// A shared tool name must meet every owning ability permission.
     pub fn tool_abilities(&self,name:&str,_visibility:&Value,_state:&Value,
         _loaded:&Value) -> Vec<String> {
-        if !Self::supported(name) {return Vec::new();}
+        if !self.installed(name) {return Vec::new();}
         self.abilities.iter().filter(|ability| {
             Self::executable(ability) && ability.tools.iter().any(|tool|tool==name)
         }).map(|ability|ability.id.clone()).collect()
@@ -919,7 +967,7 @@ impl Catalog {
         state: &Value,
         loaded: &Value,
     ) -> (bool, bool) {
-        let supported = Self::supported(name);
+        let supported = self.installed(name);
         let mut available = false;
         let mut visible = false;
         let selected=Self::contains_id(loaded,&crate::tools::core_tool_search::marker(name));
@@ -978,7 +1026,7 @@ impl Catalog {
                 "parameters":{"type":"object","properties":{"ability_id":{"type":"string"}},
                     "required":["ability_id"],"additionalProperties":false}}),
         ];
-        schemas.extend(crate::tools::schemas().into_iter().filter(|tool| {
+        schemas.extend(self.all_schemas().into_iter().filter(|tool| {
             let name = tool["name"].as_str().unwrap_or("");
             Self::allowed(policy, name) && self.tool_available(name, visibility, state, loaded)
         }));
@@ -1020,7 +1068,7 @@ impl Catalog {
                 || !allow_ability(&ability.id)
                 || Self::is_off(visibility, &ability.id)
                 || !ability.tools.iter().any(|tool| {
-                    Self::supported(tool) && Self::allowed(policy, tool) && eligible_tool(tool)
+                    self.installed(tool) && Self::allowed(policy, tool) && eligible_tool(tool)
                 })
                 || Self::suppressed(state, &ability.id)
                 || !(Self::is_visible(visibility, &ability.id) || Self::active(state, &ability.id))
@@ -1046,7 +1094,7 @@ impl Catalog {
             }
             for (tool, cached) in &ability.tool_skills {
                 let Some(skill)=Self::asset_text(ability,"tool",tool,cached)else{continue;};
-                if Self::supported(tool) && Self::allowed(policy, tool)
+                if self.installed(tool) && Self::allowed(policy, tool)
                     && supplied_tool(tool)
                     && Self::skill_live(ability, "tool", tool, &skill)
                     && Self::tool_mode(visibility, tool) == "visible" {
@@ -1253,7 +1301,7 @@ impl Catalog {
                 if Self::suppressed(state, id) {
                     return json!({"status":"denied","output":"Ability suppressed in this session"});
                 }
-                let ability = Self::describe(entry, policy, visibility, state);
+                let ability = self.describe(entry, policy, visibility, state);
                 if ability["tools"].as_array().is_none_or(Vec::is_empty) {
                     return json!({"status":"denied","output":"Ability unavailable under current policy"});
                 }
@@ -2050,8 +2098,7 @@ mod tests {
 
     #[test]
     fn selected_tool_markers_preserve_off_and_suppressed_controls() {
-        let root=Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities");
-        let catalog=Catalog::load(&root).unwrap();
+        let catalog=crate::runtime_tests::native_catalog();
         let loaded=json!(["tool:file_read"]);
         let mut visibility=json!({"visibility":{"codebase_admin":"discoverable"},
             "tool_modes":{"file_read":"discoverable"}});
@@ -2066,8 +2113,7 @@ mod tests {
 
     #[test]
     fn code_index_comment_maintenance_skill_is_discoverable() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities");
-        let catalog = Catalog::load(&root).unwrap();
+        let catalog = crate::runtime_tests::native_catalog();
         let visibility = json!({"visibility":{"code_index":"visible"}});
         let active = json!({"active":["code_index"],"suppressed":[]});
         let listed = catalog.bundled_skill_list("code_index", &visibility, &active,
@@ -2083,8 +2129,7 @@ mod tests {
 
     #[test]
     fn production_seed_manifest_loads() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities");
-        let catalog = Catalog::load(&root).unwrap();
+        let catalog = crate::runtime_tests::native_catalog();
         let ordinary = catalog.abilities.iter()
             .filter(|entry| !matches!(entry.id.as_str(),"optimization"|"mcp")).collect::<Vec<_>>();
         assert_eq!(ordinary.len(), 81);
@@ -2112,7 +2157,7 @@ mod tests {
     }
     #[test]
     fn web_access_loading_policy_and_visibility_gates() {
-        let catalog=Catalog::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities")).unwrap();
+        let catalog=crate::runtime_tests::native_catalog();
         let mut p=crate::policy_default();
         let mut v=json!({"visibility":{"web_access":"discoverable"}});
         let mut run=json!({"loaded_abilities":[]});
@@ -2173,7 +2218,7 @@ mod optional_module_tests {
 mod optional_settings_schema_tests {
     use super::*;
     fn catalog() -> Catalog {
-        Catalog::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities")).unwrap()
+        crate::runtime_tests::native_catalog()
     }
     fn defaults(catalog: &Catalog) -> Value {
         let ability = catalog

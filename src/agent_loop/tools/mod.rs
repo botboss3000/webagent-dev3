@@ -97,6 +97,9 @@ pub fn is_read(name: &str) -> bool {
 }
 
 pub fn schemas() -> Vec<Value> {
+    let mut schemas=native_schemas();schemas.extend(crate::ability_plugins::current_schemas());schemas
+}
+pub(crate) fn native_schemas() -> Vec<Value> {
     static SCHEMAS: OnceLock<Vec<Value>> = OnceLock::new();
     let mut schemas=SCHEMAS.get_or_init(|| { let mut schemas: Vec<Value> = [
         ("file_list", "List a directory by absolute container path or relative live-checkout path", json!({"path":{"type":"string"}}), vec![]),

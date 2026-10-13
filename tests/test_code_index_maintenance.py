@@ -164,3 +164,22 @@ class MaintenanceTests(unittest.TestCase):
   self.assertEqual(done["status"],"complete");self.assertEqual(done["reviewer"],actor)
 
 if __name__=="__main__":unittest.main()
+
+class LedgerCapacityTests(unittest.TestCase):
+ def test_oversized_transaction_rolls_back_and_keeps_the_store_readable(self):
+  with tempfile.TemporaryDirectory()as temporary:
+   db=ledger.Ledger(Path(temporary)/"ledger",max_bytes=64*1024)
+   with db.connect()as conn:
+    conn.execute("CREATE TABLE capacity_probe(value BLOB)")
+   with self.assertRaisesRegex(ValueError,"storage budget"):
+    with db.connect()as conn:
+     conn.execute("INSERT INTO capacity_probe VALUES (?)",(b"x"*(128*1024),))
+   with db.connect()as conn:
+    self.assertEqual(conn.execute("SELECT COUNT(*) FROM capacity_probe").fetchone()[0],0)
+   self.assertLessEqual(db.path.stat().st_size,db.max_bytes)
+ def test_constructor_budget_remains_bounded_and_the_default_preserves_growth(self):
+  with tempfile.TemporaryDirectory()as temporary:
+   for value in (True,4095,1024*1024*1024+1):
+    with self.assertRaises(ValueError):ledger.Ledger(Path(temporary)/"invalid",max_bytes=value)
+   db=ledger.Ledger(Path(temporary)/"ledger")
+   self.assertEqual(db.max_bytes,256*1024*1024)

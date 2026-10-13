@@ -349,7 +349,8 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
                     object.retain(|_,value|!value.is_null());
                     if object.contains_key("expected_inputs_sha256") || object.contains_key("request_id") {bail!("Task write arguments require task_id; live fallback denied");}
                 }
-                worker(app,sid,name,&live,None,cancel).await
+                let trusted=run["asset_revision"].as_str().map(|revision|json!({"codebase_revision":revision}));
+                worker(app,sid,name,&live,trusted,cancel).await
             }
         },
         "build_work"=>host(app,sid,run_id,name,args,cancel).await,

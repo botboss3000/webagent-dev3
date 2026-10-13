@@ -26,7 +26,7 @@ pub(crate) async fn update(State(app):State<App>,Json(body):Json<Value>)->Api{
  config.validate().map_err(|_|bad("Invalid runtime settings or limits"))?;
  config.persist(&app.runtime_path)?;
  let config=snapshot(&app)?;
- Ok(Json(json!({"digest":crate::digest(&config),"config":config,"restart_required":true})))
+ Ok(Json(json!({"digest":crate::digest(&config),"config":config,"restart_required":false,"adoption":"next_scheduler_tick"})))
 }
 #[cfg(test)] mod tests{
  use super::*;

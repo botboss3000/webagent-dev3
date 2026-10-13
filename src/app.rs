@@ -851,6 +851,17 @@ async fn run_process() -> Result<()> {
                 .add_directive("webagent_v3=info".parse()?),
         )
         .init();
+    if let Some(path)=std::env::args().skip(1).find_map(|arg|arg.strip_prefix("--validate-assets=").map(PathBuf::from)) {
+        let catalog=abilities::Catalog::load_snapshot(&path.join("plugins/abilities"))?;
+        let prompts:Value=serde_json::from_slice(&std::fs::read(path.join("config/prompts.json"))?)?;
+        crate::api::live_configuration::validate_prompts(&prompts)?;
+        for (file,id)in [("app-settings.json","app_settings"),("chat.json","chat"),("context-compaction.json","context_compaction"),("tool-output-retention.json","tool_output_retention"),("access-policy.json","access_policy")] {
+            let value:Value=serde_json::from_slice(&std::fs::read(path.join("config").join(file))?)?;
+            crate::api::live_configuration::validate(id,&value)?;
+        }
+        println!("{}",json!({"catalog_version":catalog.version(),"abilities":catalog.ids().len()}));
+        return Ok(());
+    }
     let root = PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
     let role=std::env::var("V3_PROCESS_ROLE").unwrap_or_else(|_|"api".into());
     if role=="health" {
@@ -928,7 +939,7 @@ async fn run_process() -> Result<()> {
         .unwrap_or_else(|_| "/opt/v3/plugins/abilities".to_owned());
     let catalog = abilities::Catalog::load(&PathBuf::from(abilities_root))?;
     store.ensure_agent_connections(&catalog.ids()).await?;
-    let max_active_runs = runtime.scheduler.max_active_runs;
+    live_assets::initialize_prompt_baseline(&root)?;
     let app = App {
         runtime: Arc::new(RwLock::new(runtime)), runtime_path, compaction_config_path,
         browser_login_bridge: browser_login::Bridge::configure(
@@ -945,7 +956,7 @@ async fn run_process() -> Result<()> {
         refresh: Arc::new(Mutex::new(())),
         login: Arc::new(RwLock::new(None)),
         active: Arc::new(Mutex::new(HashMap::new())),
-        slots: Arc::new(Semaphore::new(if max_active_runs == 0 { Semaphore::MAX_PERMITS } else { max_active_runs })),
+        slots: Arc::new(Semaphore::new(Semaphore::MAX_PERMITS)),
         ready: Arc::new(AtomicBool::new(false)),
         stop: CancellationToken::new(),
         login_attempts: Arc::new(Mutex::new(Vec::new())),

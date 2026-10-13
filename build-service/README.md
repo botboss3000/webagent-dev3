@@ -67,6 +67,15 @@ and every non-adopted build receipt, without a display-page limit. Caller-scoped
 agent notice reads remain bounded independently from this administrator feed.
 
 
+General drop-in ability publication is described in ../docs/drop-in-abilities.md.
+All ability catalogs/skills and source JSON configuration templates can use
+plugin_deploy once the general engine/worker contract is installed. New isolated
+Python or standalone executable packages publish independently; the installed
+engine validates the complete candidate and API/loop adoption is verified.
+Existing native adapters keep their core interfaces. Runtime configuration changes
+use domain APIs; protected infrastructure changes use lifecycle reconfigure, which
+retains images and replaces only affected services.
+
 Codebase Admin interface 1 is an independent Python executable package under
 plugins/abilities/Administrator/codebase_admin. Its build manifest lists runner.py
 as the executable input; existing guidance and compatible catalog metadata are

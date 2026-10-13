@@ -24,6 +24,8 @@ mod background_tasks;
 mod background_followup;
 mod followup_queue;
 mod abilities;
+mod live_assets;
+mod ability_plugins;
 mod optimization;
 mod mcp;
 mod optimization_settings;
@@ -66,7 +68,7 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    extract::{DefaultBodyLimit, Path, Query, Request, State},
+    extract::{DefaultBodyLimit, Path, Query, Request},
     http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{
@@ -101,6 +103,7 @@ use uuid::Uuid;
 
 // Shared state stays at crate root so API and loop modules use one authority.
 include!("app.rs");
+include!("ability_state.rs");
 mod api;
 use api::*;
 mod manager;

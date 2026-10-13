@@ -93,7 +93,7 @@ class StableWorkerContractTests(unittest.TestCase):
                                    "Config":{"Env":["V3_UI_ROOT=/opt/v3/assets/current/v3/ui"]}}
         def command(args,**kwargs):
             compile(args[-1],"<protocol probe>","exec")
-            return json.dumps({"status":"success","output":{"protocol":1,"interface":1}})
+            return json.dumps({"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}})
         runner.command=command
         self.assertTrue(runner.plugin_hot_swappable())
         runner.command=lambda *a,**k:json.dumps({"status":"failed","output":"unknown tool"})

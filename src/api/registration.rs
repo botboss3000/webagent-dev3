@@ -18,15 +18,7 @@ impl Store {
     }
     pub(crate) fn read_access_policy(&self) -> Result<Value> {
         let value: Value = serde_json::from_slice(&std::fs::read(self.access_policy_path())?)?;
-        if !value.is_object() || !matches!(value["registration"].as_str(), Some("open"|"restricted")) {
-            return Err(anyhow!("Invalid access-policy.json registration policy"));
-        }
-        if value.get("revision").is_some_and(|v|v.as_u64().is_none_or(|n|n==0)) {return Err(anyhow!("Invalid policy revision"));}
-        if let Some(tiers)=value.get("tiers") {
-            let map=tiers.as_object().ok_or_else(||anyhow!("Invalid policy tiers"))?;
-            for (id,definition) in map {let tier:access::Tier=serde_json::from_value(definition.clone())?;tier.validate()?;if tier.id!=*id {return Err(anyhow!("Tier identity mismatch"));}}
-        }
-        if let Some(pages)=value.get("pages") {validate_pages(pages)?;}
+        validate_configuration(&value)?;
         Ok(value)
     }
     pub(crate) fn save_page_policy(&self, pages:Value, expected:u64) -> Result<Value> {
@@ -350,4 +342,17 @@ mod advanced_policy_tests {
         let after=app.store.live_access("admin","shared_default").await.unwrap();
         assert_ne!(before.revision.policy,after.revision.policy);
     }
+}
+
+pub(crate) fn validate_configuration(value:&Value)->Result<()> {
+        if !value.is_object() || !matches!(value["registration"].as_str(), Some("open"|"restricted")) {
+            return Err(anyhow!("Invalid access-policy.json registration policy"));
+        }
+        if value.get("revision").is_some_and(|v|v.as_u64().is_none_or(|n|n==0)) {return Err(anyhow!("Invalid policy revision"));}
+        if let Some(tiers)=value.get("tiers") {
+            let map=tiers.as_object().ok_or_else(||anyhow!("Invalid policy tiers"))?;
+            for (id,definition) in map {let tier:access::Tier=serde_json::from_value(definition.clone())?;tier.validate()?;if tier.id!=*id {return Err(anyhow!("Tier identity mismatch"));}}
+        }
+        if let Some(pages)=value.get("pages") {validate_pages(pages)?;}
+    Ok(())
 }

@@ -259,13 +259,21 @@ pub(crate) async fn agent_tool_mode_set(
     phase3_api::quiesce_agent(&app,&id).await?;
     Ok(Json(value))
 }
+pub(crate) async fn policy_get(State(app):State<App>)->Api {
+    let policy=app.store.get("policy").await?.unwrap_or_else(policy_default);
+    let names:std::collections::BTreeSet<String>=app.abilities.all_schemas().iter()
+        .chain(crate::mcp::all_schemas().iter()).filter_map(|s|s["name"].as_str().map(str::to_owned))
+        .chain(["list_abilities","load_ability"].into_iter().map(str::to_owned)).collect();
+    Ok(Json(json!({"version":policy["version"],"rules":policy["rules"],"catalog_names":names})))
+}
+/// Save a complete policy for the request-pinned live catalog and quiesce affected runs.
 pub(crate) async fn policy_set(State(app): State<App>, Json(body): Json<Value>) -> Api {
     let rules = body["rules"]
         .as_object()
         .ok_or_else(|| bad("rules required"))?;
     // Discovery is dispatched by Rust rather than tools::execute, but its
     // installation rules are still required by the same live permission check.
-    let names: std::collections::BTreeSet<String> = tools::schemas().into_iter()
+    let names: std::collections::BTreeSet<String> = app.abilities.all_schemas().into_iter()
         .chain(crate::mcp::all_schemas())
         .filter_map(|schema| schema["name"].as_str().map(str::to_owned))
         .chain(["list_abilities", "load_ability"].into_iter().map(str::to_owned))
@@ -285,6 +293,7 @@ pub(crate) async fn policy_set(State(app): State<App>, Json(body): Json<Value>) 
     }
     let _guard = app.gate.lock().await;
     let old = app.store.get("policy").await?.unwrap();
+    if body.get("expected_version").is_some_and(|v|v!=&old["version"]){return Err(conflict("Installation policy changed; reload before saving"));}
     let value = json!({"version":old["version"].as_u64().unwrap()+1,"rules":rules});
     app.store.put("policy", &value).await?;
     app.store

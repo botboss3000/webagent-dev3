@@ -1,0 +1,26 @@
+{
+  "id": "live_plugin_fixture",
+  "dispatch": "isolated",
+  "protocol": 1,
+  "interface": 1,
+  "runtime": "python3",
+  "entrypoint": "runner.py",
+  "schemas": "schemas.json",
+  "effect": "write",
+  "tools": [
+    "live_fixture_echo"
+  ],
+  "build": {
+    "toolchain": "image-python3",
+    "inputs": [
+      "runner.py"
+    ],
+    "dependencies": [],
+    "flags": [],
+    "assets": [
+      "live_plugin_fixture.json",
+      "live_plugin_fixture.skill.md",
+      "schemas.json"
+    ]
+  }
+}

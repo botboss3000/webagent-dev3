@@ -827,6 +827,82 @@
           "end_line": 24
         }
       ]
+    },
+    {
+      "id": "live-ability-publication",
+      "aliases": [
+        "drop in abilities",
+        "live plugins",
+        "live prompts",
+        "plugin publication"
+      ],
+      "purpose": "Validated immutable ability catalogs, isolated tool dispatch, saved configuration overrides and independently built package artifacts. Config: config/prompts.json -> base_instructions, closing_reporting and jev_guidance; source defaults remain separate from runtime overrides.",
+      "locations": [
+        {
+          "path": "src/live_assets.rs",
+          "start_line": 1,
+          "end_line": 80
+        },
+        {
+          "path": "src/live_assets.rs",
+          "start_line": 81,
+          "end_line": 148
+        },
+        {
+          "path": "src/ability_plugins.rs",
+          "start_line": 1,
+          "end_line": 80
+        },
+        {
+          "path": "src/ability_plugins.rs",
+          "start_line": 81,
+          "end_line": 160
+        },
+        {
+          "path": "src/ability_plugins.rs",
+          "start_line": 161,
+          "end_line": 240
+        },
+        {
+          "path": "src/ability_plugins.rs",
+          "start_line": 241,
+          "end_line": 246
+        },
+        {
+          "path": "src/api/live_configuration.rs",
+          "start_line": 1,
+          "end_line": 80
+        },
+        {
+          "path": "src/api/live_configuration.rs",
+          "start_line": 81,
+          "end_line": 134
+        },
+        {
+          "path": "ability_plugin_worker.py",
+          "start_line": 1,
+          "end_line": 80
+        },
+        {
+          "path": "ability_plugin_worker.py",
+          "start_line": 81,
+          "end_line": 122
+        }
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "config/prompts.json",
+            "pointers": [
+              "/base_instructions",
+              "/closing_reporting",
+              "/jev_guidance"
+            ]
+          }
+        ],
+        "opportunities": []
+      }
     }
   ]
 }

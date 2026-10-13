@@ -177,6 +177,9 @@ async fn call_raw_inner(
     if !crate::optimization_prompt::bind_task(&app,&run_id,&optimization_run,&args).await? {
         return Ok(json!({"status":"denied","output":"An explicit optimization run must reuse its single isolated task; changing task IDs cannot reset experiment budgets"}));
     }
+    if optimization_run["plugin_bindings"].get(&name).is_some() {
+        return crate::ability_plugins::execute(&app,&sid,&name,&args,&pending_id,&optimization_run["plugin_bindings"][&name],cancel).await;
+    }
     if name=="promotion_propose" {
         propose_promotion(&app,&sid,&pending_id,&run_id,&args,policy_version,cancel).await
     } else if matches!(name.as_str(),"prompt_slot_read"|"prompt_slot_write") {
@@ -229,6 +232,9 @@ async fn call_raw_inner(
     } else if tools::core_directory_decision::owns(&name) {
         // Rust checks file_list authority before the worker returns names to Jev.
         tools::core_directory_decision::execute(&app,&sid,&run_id,&args,cancel).await
+    } else if matches!(name.as_str(),"shell"|"python") && optimization_run["asset_revision"].is_string() {
+        tools::execute_trusted(&name,&args,&sid,&app.tool_socket,
+            Some(json!({"codebase_revision":optimization_run["asset_revision"]})),cancel).await
     } else {
         tools::execute(&name,&args,&sid,&app.tool_socket,cancel).await
     }

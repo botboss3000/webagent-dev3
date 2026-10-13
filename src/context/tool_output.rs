@@ -184,15 +184,15 @@ impl Prompts {
     /// Read live prompts. Missing section/keys fall back to validated embedded JSON;
     /// malformed present values fail closed.
     pub fn read(root: &Path) -> Result<Self> {
-        let template: Value = serde_json::from_slice(include_bytes!("../../config/prompts.json"))
+        Self::read_at(root,crate::live_assets::published_root().as_deref())
+    }
+    pub(crate) fn read_at(root:&Path,source:Option<&Path>)->Result<Self>{
+        let template: Value = serde_json::from_slice(&crate::live_assets::prompt_defaults_at(source)?)
             .context("Embedded prompt configuration is malformed")?;
         let (guidance_default, placeholder_default) = embedded_prompt_defaults(&template)?;
         let path = root.join("config/prompts.json");
-        let live = match fs::read(path) {
-            Ok(bytes) => serde_json::from_slice::<Value>(&bytes)?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => template.clone(),
-            Err(error) => return Err(error.into()),
-        };
+        let _=path;
+        let live=crate::live_assets::resolved_prompts_at(root,source)?;
         let section = live.get("tool_output_retention");
         if section.is_some_and(|value| !value.is_object()) {
             bail!("Invalid tool output retention prompt section");

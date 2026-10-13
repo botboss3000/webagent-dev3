@@ -73,8 +73,10 @@ def source_inventory(scanner,root,scope,index_folder=None):
 
 class Ledger:
     """Broker-owned store; reviewer identity and source roots are supplied by the broker."""
-    def __init__(self,folder,scanner=None,inventory=None):
+    def __init__(self,folder,scanner=None,inventory=None,max_bytes=256*1024*1024):
         """Open the protected persistent store without following ledger symlinks."""
+        if type(max_bytes)is not int or not 4096<=max_bytes<=1024*1024*1024:raise ValueError("Invalid ledger byte budget")
+        self.max_bytes=max_bytes
         self.folder=Path(folder);self.scanner=scanner or load_scanner();self.inventory=inventory or(lambda root,scope,folder:source_inventory(self.scanner,root,scope,folder))
         if self.folder.is_symlink():raise ValueError("Ledger directory symlink rejected")
         self.folder.mkdir(mode=0o700,parents=True,exist_ok=True)
@@ -86,10 +88,14 @@ class Ledger:
     def connect(self):
         """Commit or roll back one bounded ledger transaction and close its connection."""
         if self.path.exists()and(self.path.is_symlink()or self.path.stat().st_nlink!=1):raise ValueError("Invalid ledger inode")
-        if self.path.exists()and self.path.stat().st_size>128*1024*1024:raise ValueError("Ledger storage bound exceeded")
+        if self.path.exists()and self.path.stat().st_size>self.max_bytes:raise ValueError("Ledger storage bound exceeded")
         conn=sqlite3.connect(self.path,timeout=5);conn.row_factory=sqlite3.Row;conn.execute("PRAGMA trusted_schema=OFF")
         try:
             yield conn
+            # Admission alone cannot bound a transaction that grows the ledger.
+            # Reject before commit so an oversized sync cannot brick later reads.
+            allocated=conn.execute("PRAGMA page_count").fetchone()[0]*conn.execute("PRAGMA page_size").fetchone()[0]
+            if allocated>self.max_bytes:raise ValueError("Ledger storage budget would be exceeded; narrow the maintenance scope")
             conn.commit()
         except BaseException:
             conn.rollback();raise

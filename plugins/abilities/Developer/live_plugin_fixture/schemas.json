@@ -1,0 +1,20 @@
+[
+  {
+    "type": "function",
+    "name": "live_fixture_echo",
+    "description": "Return the live fixture implementation marker with the supplied text.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

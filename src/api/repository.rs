@@ -1,6 +1,7 @@
 //! Tenant repository connections. Private tokens never enter API projections.
+use crate::State;
 use crate::{App, Api, ApiError};
-use axum::{extract::{Path, State}, http::StatusCode, Extension, Json};
+use axum::{extract::{Path}, http::StatusCode, Extension, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;

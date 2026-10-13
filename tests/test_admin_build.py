@@ -44,7 +44,7 @@ class FakeRunner:
         self.source_config=host.CONFIG
         self.secrets = ["NEVER-EXPOSE-THIS"]
         self.calls = []
-        self.containers = {name: {"Image": "sha256:" + "1" * 64,
+        self.containers = {name: {"Id": name+"-initial", "Image": "sha256:" + "1" * 64,
                            "State": {"Status": "running", "Health": {"Status": "healthy"}},
                            "Config": {"Env": ["TOKEN=NEVER-EXPOSE-THIS"]}, "HostConfig": {"Memory": 5}}
                            for name in host.TARGETS}

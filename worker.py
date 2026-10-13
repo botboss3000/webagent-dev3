@@ -287,6 +287,17 @@ async def codebase_call(name,args,base,operation="execute",revision=None):
         with contextlib.suppress(ProcessLookupError):os.killpg(process.pid,signal.SIGKILL)
 
 async def execute_locked(request, lock):
+    if request["name"]=="ability_plugin_invoke":
+        binding=(request.get("trusted")or{}).get("ability_plugin")
+        if not isinstance(binding,dict):raise ValueError("Trusted plugin binding required")
+        base=workspace_path(request["workspace"])
+        fcntl.flock(lock,fcntl.LOCK_UN)
+        import runpy
+        bridge=runpy.run_path(str(Path(__file__).with_name("ability_plugin_worker.py")))
+        return await bridge["invoke"](binding,request.get("arguments",{}),base,terminate)
+    if request["name"]=="ability_plugins_protocol":
+        fcntl.flock(lock,fcntl.LOCK_UN)
+        return {"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}}
     if request["name"]=="codebase_admin_protocol":
         fcntl.flock(lock,fcntl.LOCK_UN)
         return {"status":"success","output":{"protocol":1,"interface":1}}
@@ -297,7 +308,7 @@ async def execute_locked(request, lock):
     name = request["name"]
     if name in ("shell","python"):
         fcntl.flock(lock,fcntl.LOCK_UN)
-        planned=await codebase_call(name,args,base,"plan")
+        planned=await codebase_call(name,args,base,"plan",revision=(request.get("trusted")or{}).get("codebase_revision"))
         if planned["status"]!="success" or planned["output"]["route"]!="command":return planned
         return await command(planned["output"]["argv"],base,min(max(int(request.get("timeout_seconds",120)),1),600),lock)
     if name in ("file_list","file_read","file_search","file_edit","file_write"):

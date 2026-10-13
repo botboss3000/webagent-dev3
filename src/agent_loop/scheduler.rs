@@ -103,6 +103,20 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
         if app.stop.is_cancelled() || !app.ready.load(Ordering::Acquire) {
             break;
         }
+        // Adopt scheduler and cache limits without replacing active runs.
+        match loop_runtime::Config::read(&app.runtime_path) {
+            Ok(config)=>{
+                let mut previous=app.runtime.write().await;
+                if previous.cache.document_budget_bytes!=config.cache.document_budget_bytes
+                    ||previous.cache.context_budget_bytes!=config.cache.context_budget_bytes {
+                    app.store.configure_cache(config.cache.document_budget_bytes,config.cache.context_budget_bytes);
+                }
+                *previous=config;
+            },
+            Err(_)=>{tracing::error!("Live runtime configuration rejected");tokio::time::sleep(Duration::from_secs(1)).await;continue;}
+        }
+        let snapshot=live_assets::catalog(&app.abilities);
+        let _=live_assets::record_adoption(&app.store.root,"loop",&snapshot);
         progress.at(Stage::Heartbeat);
         if now().saturating_sub(last_heartbeat)>=2 {
             if let Err(error)=app.store.write_loop_heartbeat(&owner).await {
@@ -163,6 +177,8 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
                     if active.contains_key(&id) {
                         continue;
                     }
+                    let ceiling=app.runtime.read().await.scheduler.max_active_runs;
+                    if ceiling!=0 && active.len()>=ceiling {break;}
                     let permit = match app.slots.clone().try_acquire_owned() {
                         Ok(p) => p,
                         Err(_) => break,

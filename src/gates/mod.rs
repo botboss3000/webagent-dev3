@@ -57,7 +57,7 @@ pub fn manifest(id: &str) -> Result<Manifest> {
     Ok(item)
 }
 
-fn validate_manifest(id: &str, item: &Manifest) -> Result<()> {
+pub(crate) fn validate_manifest(id: &str, item: &Manifest) -> Result<()> {
     if item.schema_version != 1 || item.id != id {
         bail!("Invalid gate manifest identity");
     }

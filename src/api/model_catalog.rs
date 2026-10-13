@@ -1,6 +1,7 @@
 //! Installation catalog lifecycle. Browser authentication and CSRF are inherited from api::router.
+use crate::State;
 use crate::{App, Api, ApiError, platform_catalog::{Entry, Mutation}};
-use axum::{extract::{State, Path}, Extension, Json, Router, routing::{get, post}};
+use axum::{extract::{Path}, Extension, Json, Router, routing::{get, post}};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
