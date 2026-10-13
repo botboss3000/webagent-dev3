@@ -44,7 +44,11 @@ The API listens at `100.112.23.15:8081`; the public app is
 The writable `/live-checkout` is only this V3 root. Shared V2 UI assets are fixed
 read-only build inputs. Never restore a writable V2 mount to a V3 container.
 
-For UI work read the Codebase Admin and Diagnostics skills in
+Before working on abilities, executable plugins, Markdown guidance/documentation, JSON manifests/configuration/schemas, UI assets, Python workers or other non-Rust files, read [Live plugin and non-Rust publication](plugins/abilities/Administrator/codebase_admin/skills/live_plugin_publication.skill.md). Use it to choose the supported release path and apply the direction toward independently replaceable app components, dependency-aware compilation and live asset/configuration updates. Do not infer hot-update support or compilation requirements from file extensions.
+
+For every UI change, first read [UI Admin interaction guidance](plugins/abilities/Core/ui_admin/ui_admin.skill.md). Apply its default tap-highlight, touch-haptic, and border-state guidance to all buttons and button-like controls. UI Admin execution remains pending; Codebase Admin is the active editing workflow.
+
+Also read the Codebase Admin and Diagnostics skills in
 `plugins/abilities/Administrator`, plus `docs/ui-journeys.md`; navigate directly
 to registered routes. Check Code Index availability and report unavailable
 coverage rather than claiming it passed. Keep comments at non-obvious authority,

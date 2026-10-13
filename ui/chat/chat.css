@@ -121,3 +121,29 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .followup-delivery-actions button:focus-visible,.followup-queue-banner button:focus-visible{outline:2px solid var(--fg-1);outline-offset:2px}
 .followup-queue-banner{margin:8px 12px;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elev);color:var(--fg-1);font-size:13px}
 .followup-queue-banner[hidden]{display:none}
+
+/* Expanded selector: quarter-circle cap corners meet vertical sides at half
+   the measured title height. The open-radius token also overrides the profile's
+   inline closed-pill radius without changing the closed shape or avatar inset. */
+#chat-header #session-dropdown.open {
+  --session-selector-open-radius: var(--session-selector-cap-radius,20px) var(--session-selector-cap-radius,20px) 0 0;
+  border-bottom-color:transparent!important;
+}
+#chat-header #session-dropdown.open.flip-up {
+  --session-selector-open-radius: 0 0 var(--session-selector-cap-radius,20px) var(--session-selector-cap-radius,20px);
+  border-top-color:transparent!important;
+  border-bottom-color:var(--border)!important;
+}
+
+/* The menu is portaled to body while open, so both roots own transparent tap feedback. */
+#session-dropdown,
+#session-dropdown-menu {
+  -webkit-tap-highlight-color:transparent;
+}
+
+/* Touch browsers retain :hover after a tap; the closed selector keeps its chip outline. */
+@media (max-width:800px) and (hover:none) and (pointer:coarse) {
+  #chat-header #session-dropdown:not(.open):hover {
+    border-color:color-mix(in oklab,var(--fg-1) 22%,transparent)!important;
+  }
+}

@@ -15,7 +15,7 @@ COPY v3/plugins ./plugins
 COPY v3/plugins/abilities ./plugins/abilities
 COPY v3/ui ./ui
 # Bound compiler concurrency on the shared 7 GiB development host.
-ENV CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0
+ENV CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 # Keep Cargo downloads and artifacts across source changes; publish the tested
 # binary outside the cache mount so both runtime targets copy one exact build.
 RUN --mount=type=cache,id=webagent-v3-registry,target=/usr/local/cargo/registry,sharing=locked \
@@ -23,6 +23,7 @@ RUN --mount=type=cache,id=webagent-v3-registry,target=/usr/local/cargo/registry,
     cargo test --locked -- --test-threads=1 \
     && cargo build --release --locked \
     && install -Dm755 /build/target/release/webagent-v3 /out/webagent-v3 \
+    && install -Dm755 /build/target/release/webagent-mcp /out/webagent-mcp \
     && install -Dm755 /build/target/release/webagent-diagnostics /out/webagent-diagnostics \
     && install -Dm755 /build/target/release/webagent-optimization /out/webagent-optimization \
     && install -Dm755 /build/target/release/webagent-automation /out/modules/automation/webagent-automation \
@@ -44,6 +45,7 @@ COPY --from=preview_tunnel /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
 # Distribution artifacts are installed only by explicit module administration.
 COPY --from=tested_builder /out/modules /usr/local/lib/webagent/modules
+COPY --from=tested_builder /out/webagent-mcp /usr/local/bin/webagent-mcp
 COPY --from=tested_builder /out/webagent-diagnostics /usr/local/bin/webagent-diagnostics
 COPY --from=tested_builder /out/webagent-optimization /usr/local/bin/webagent-optimization
 COPY --from=tested_builder /out/optimization-cargo /opt/optimization-cargo

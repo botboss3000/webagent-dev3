@@ -573,6 +573,25 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(1, len(second["Mounts"]))
         self.assertTrue(second["Mounts"][0]["ReadOnly"])
 
+    def test_loop_release_mounts_include_read_only_active_guidance(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "release"
+            (root / "v3/plugins/abilities").mkdir(parents=True)
+            assets = Path(folder) / "assets"
+            assets.mkdir()
+            old = {"Mounts": [{"Type": "bind", "Source": "/old/abilities",
+                              "Target": "/opt/v3/plugins/abilities", "ReadOnly": True},
+                             {"Type": "bind", "Source": "/state",
+                              "Target": "/state", "ReadOnly": False}]}
+            mounted = host.release.release_mounts(old, root, assets)["Mounts"]
+            active = [m for m in mounted if m["Target"] == "/opt/v3/assets"]
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0]["Source"], str(assets))
+            self.assertTrue(active[0]["ReadOnly"])
+            again = host.release.release_mounts({"Mounts": mounted}, root, assets)["Mounts"]
+            self.assertEqual(again, mounted)
+            self.assertFalse(next(m for m in mounted if m["Target"] == "/state")["ReadOnly"])
+
     def test_release_mounts_pin_source_and_keep_state_writable(self):
         root = self.state / "release-fixture"
         for name in ("v3/ui", "v3/config", "v3/plugins/abilities",
@@ -1099,6 +1118,61 @@ class BuildTests(unittest.TestCase):
         self.assertIn("v3/ui/parallel.css", combined)
         self.assertIn("v3/src/runtime.rs", combined)
 
+    def test_mixed_index_switches_during_build_and_runtime_inherits_metadata(self):
+        bootstrap = self.call("v3_build_work", {"action": "begin", "task_id": "bootstrap-ui",
+            "summary": "Migrate asset mount", "mode": "isolated"})
+        first_file = Path(bootstrap["workspace_path"], "src/bootstrap.rs")
+        first_file.parent.mkdir(exist_ok=True)
+        first_file.write_text("bootstrap")
+        digest = self.call("v3_build_work", {"action": "status", "task_id": "bootstrap-ui"})["own"][0]["workspace_inputs_sha256"]
+        first = self.call("v3_build_work", {"action": "finish", "task_id": "bootstrap-ui",
+            "expected_inputs_sha256": digest})
+        self.assertEqual("completed", self.wait(first)["status"])
+
+        runtime = self.call("v3_build_work", {"action": "begin", "task_id": "running-runtime",
+            "summary": "Runtime work", "mode": "isolated"})
+        ui = self.call("v3_build_work", {"action": "begin", "task_id": "parallel-ui",
+            "summary": "UI work", "mode": "isolated"})
+        runtime_file = Path(runtime["workspace_path"], "src/runtime.rs")
+        runtime_file.parent.mkdir(exist_ok=True)
+        runtime_file.write_text("runtime")
+        ui_file = Path(ui["workspace_path"], "ui/parallel.css")
+        ui_file.parent.mkdir(exist_ok=True)
+        ui_file.write_text("body {}")
+        metadata=Path(ui["workspace_path"])/"plugins/abilities/Administrator/code_index/code_index.skill.md"
+        metadata.parent.mkdir(parents=True,exist_ok=True);metadata.write_text("Validated guidance")
+        digests = {item["task_id"]: item["workspace_inputs_sha256"]
+                   for item in self.call("v3_build_work", {"action": "status"})["own"]}
+        self.runner.block = threading.Event()
+        full = self.call("v3_build_work", {"action": "finish", "task_id": "running-runtime",
+            "expected_inputs_sha256": digests["running-runtime"]})
+        for _ in range(100):
+            if self.broker.jobs[full["job_id"]]["phase"] == "building_api":
+                break
+            time.sleep(.01)
+        self.assertEqual("building_api", self.broker.jobs[full["job_id"]]["phase"])
+        fast = self.call("v3_build_work", {"action": "finish", "task_id": "parallel-ui",
+            "expected_inputs_sha256": digests["parallel-ui"]})
+        self.assertEqual("running", self.broker.jobs[full["job_id"]]["status"])
+        self.assertEqual(self.broker.jobs[fast["job_id"]]["operation"],"index_deploy")
+        self.assertTrue(self.broker.jobs[fast["job_id"]].get("parallel_ui"))
+        for _ in range(100):
+            if self.call("v3_worker_job", {"job_id": fast["job_id"]})["status"] == "completed":
+                break
+            time.sleep(.01)
+        self.assertEqual("completed", self.call("v3_worker_job", {"job_id": fast["job_id"]})["status"])
+        self.assertEqual("running", self.call("v3_worker_job", {"job_id": full["job_id"]})["status"])
+        self.assertEqual(fast["job_id"], self.runner.asset_id)
+        self.runner.block.set()
+        final = self.wait(full)
+        self.assertEqual("completed", final["status"])
+        self.assertIn("built_inputs_sha256", self.broker.jobs[full["job_id"]])
+        combined = host.release.entries(
+            (self.state / full["job_id"] / "candidate.tar").read_bytes(), host.context_digest)
+        self.assertIn("v3/ui/parallel.css", combined)
+        self.assertIn("v3/src/runtime.rs", combined)
+        self.assertIn("v3/plugins/abilities/Administrator/code_index/code_index.skill.md",combined)
+
     def test_ui_release_passes_queued_build_and_later_build_inherits_assets(self):
         tasks = []
         for name in ("first", "second", "ui-third"):
@@ -1543,6 +1617,33 @@ class BuildTests(unittest.TestCase):
         self.assertEqual({"image": "new", "custom": "yes"}, value["Labels"])
 
 
+    def test_index_metadata_and_ledger_only_use_no_compile_lane(self):
+        self.runner.hot_assets=True
+        for n,files in enumerate(({}, {"plugins/abilities/Administrator/code_index/code-index-features.json": '{"version":1,"features":[]}'}, {"plugins/abilities/Administrator/code_index/code_index.skill.md": "Reviewed guidance", "ui/index.html": "<main>paired</main>"})):
+            task_id="index-hot-"+str(n)
+            task=self.call("v3_build_work", {"action":"begin","task_id":task_id,"summary":"Index metadata","mode":"isolated"})
+            for path,body in files.items():
+                target=Path(task["workspace_path"])/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(body)
+            digest=self.call("v3_build_work",{"action":"status","task_id":task_id})["own"][0]["workspace_inputs_sha256"]
+            job=self.wait(self.call("v3_build_work",{"action":"finish","task_id":task_id,"expected_inputs_sha256":digest}))
+            self.assertEqual("index_deploy",job["operation"]);self.assertEqual("completed",job["status"])
+        self.assertFalse(any(call[0]=="build" for call in self.runner.calls))
+    def test_maintenance_cross_session_writes_require_operator_and_live_authority(self):
+        task=self.call("v3_build_work",{"action":"begin","task_id":"index-auth-task","summary":"Reviews","mode":"isolated"})
+        root=Path(task["workspace_path"]);(root/"one.py").write_text("def first(): pass\n")
+        key=root.parent.name
+        sync={"action":"sync","task_id":"index-auth-task","scope":"one.py","request_id":"index-sync-one"}
+        result=self.call("code_index_maintenance",sync)
+        self.assertEqual(result["task_key"],key)
+        rows=self.call("code_index_maintenance",{"action":"list","task_id":"index-auth-task"})["results"]
+        self.assertEqual(len(rows),2)
+        foreign={**self.trusted,"user_id":"another"}
+        with self.assertRaises(PermissionError):self.call("code_index_maintenance",{**sync,"task_key":key},trusted=foreign)
+        operator={**foreign,"local_caller":True}
+        result=self.call("code_index_maintenance",{**sync,"task_key":key,"request_id":"operator-sync"},trusted=operator)
+        self.assertEqual(result["task_key"],key)
+        with self.assertRaises(PermissionError):self.call("code_index_maintenance",{**sync,"request_id":"expired-sync"},trusted={**self.trusted,"lease_until":0})
+
 class IndexParserPairingTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -1558,7 +1659,7 @@ class IndexParserPairingTests(unittest.TestCase):
         self.temp.cleanup()
 
     def blob(self, adapter):
-        return context(extra={host.INDEX_ADAPTER_MEMBER: adapter.decode("utf-8"),
+        return context(extra={"v3/plugins/abilities/Administrator/code_index/maintenance.py": Path(host._maintenance_path).read_text(),host.INDEX_ADAPTER_MEMBER: adapter.decode("utf-8"),
                               "v3/ui/index.html": "<main>fixture</main>"})
 
     def runner(self):

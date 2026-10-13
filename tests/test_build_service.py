@@ -1,5 +1,5 @@
 """Portable configuration and persistent build admission contract."""
-import importlib.util,tempfile,time,types,unittest,uuid
+import importlib.util,tempfile,time,types,unittest,uuid,json
 from pathlib import Path
 from unittest.mock import patch
 import test_admin_build as fixtures
@@ -148,3 +148,29 @@ class HostSourceReleaseTests(unittest.TestCase):
      else:
       with self.assertRaises(PermissionError):broker.host_source_only(["v3/build-service/host.py"],blob.getvalue(),{"local_caller":True})
    finally:broker.shutdown()
+
+class DashboardHistoryTests(unittest.TestCase):
+ def test_administrator_feed_includes_all_notices_and_builds(self):
+  fixture=fixtures.BuildTests();fixture.setUp()
+  try:
+   broker=fixture.broker
+   for index in range(65):
+    key=f"{index:064x}"
+    broker.work[key]={"task_id":f"retained-{index}","user_id":"codex-local",
+     "workspace":fixture.workspace,"status":"open","created_at":time.time()-90000}
+    broker.work_activity[key]=broker._work_content(broker.work[key])
+   for index in range(35):
+    job_id=str(uuid.uuid4())
+    broker.jobs[job_id]={"job_id":job_id,"status":"completed","phase":"finished",
+     "operation":"build_deploy","created_at":index,"user_id":"codex-local",
+     "workspace":fixture.workspace,"access_fingerprint":"f"*64}
+   trusted={"user_id":"admin","session_id":"00000000-0000-0000-0000-000000000000",
+    "lease_until":time.time()+30,"access_fingerprint":"a"*64}
+   result=fixture.call("v3_build_dashboard",trusted=trusted,workspace=trusted["session_id"])
+   self.assertEqual(result["leftover_total"],65)
+   self.assertEqual(len(result["leftovers"]),65)
+   self.assertEqual(len(result["jobs"]),35)
+   self.assertEqual([job["created_at"] for job in result["jobs"]],list(range(34,-1,-1)))
+   self.assertNotIn("access_fingerprint",json.dumps(result))
+   with self.assertRaises(PermissionError):fixture.call("v3_build_dashboard")
+  finally:fixture.tearDown()

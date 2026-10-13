@@ -265,7 +265,8 @@ pub(crate) async fn policy_set(State(app): State<App>, Json(body): Json<Value>) 
         .ok_or_else(|| bad("rules required"))?;
     // Discovery is dispatched by Rust rather than tools::execute, but its
     // installation rules are still required by the same live permission check.
-    let names: std::collections::BTreeSet<String> = tools::schemas().iter()
+    let names: std::collections::BTreeSet<String> = tools::schemas().into_iter()
+        .chain(crate::mcp::all_schemas())
         .filter_map(|schema| schema["name"].as_str().map(str::to_owned))
         .chain(["list_abilities", "load_ability"].into_iter().map(str::to_owned))
         .collect();

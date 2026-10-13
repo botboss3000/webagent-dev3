@@ -1298,5 +1298,115 @@
         "expected_inputs_sha256"
       ]
     }
+  },
+  {
+    "type": "function",
+    "name": "code_index_maintenance",
+    "description": "Read and update the shared source-bound documentation/index maintenance ledger. Administrator-only; task reviews never publish source or grant editing authority. Published/private snapshots are read-only.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "list",
+            "get",
+            "sync",
+            "claim",
+            "record",
+            "release"
+          ]
+        },
+        "root": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "live (default) for shared/task ledger; published or a confined private workspace root for snapshot reads"
+        },
+        "task_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,80}$"
+        },
+        "task_key": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Cross-session task selection is server-operator only"
+        },
+        "scope": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "entry_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{8,80}$"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_hash": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "in_progress",
+            "complete",
+            "needs_review"
+          ]
+        },
+        "checks": {
+          "type": "object",
+          "description": "documentation, connections, breadcrumbs, configuration, index_freshness: verified or an object {status:not_applicable,rationale:...}; freshness cannot be not applicable"
+        },
+        "remaining_work": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "reconciliation": {
+          "type": "object",
+          "description": "For removed entries: kind deleted or renamed; renamed requires replacement_entry_id"
+        },
+        "feature": {
+          "type": "string",
+          "maxLength": 48
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "claim_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{32}$",
+          "description": "Opaque coordination handle returned by claim; required while recording or releasing an active claim. Never grants access."
+        },
+        "configuration_assessment": {
+          "type": "object",
+          "description": "Code Index configuration assessment: configured references, opportunity, or not_applicable with rationale. Current runtime values are forbidden."
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "strict": false
   }
 ]

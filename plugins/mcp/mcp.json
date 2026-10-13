@@ -1,0 +1,1 @@
+{"version": 1, "servers": [{"name": "DeepWiki", "description": "Public GitHub repository documentation; no credentials required.", "remotes": [{"type": "streamable-http", "url": "https://mcp.deepwiki.com/mcp"}]}]}

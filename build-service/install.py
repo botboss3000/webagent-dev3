@@ -172,6 +172,7 @@ def install(tree=None):
         performance = read_regular(source, "performance.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
         index_source = directory(source_path.parent / "plugins/abilities/Administrator/code_index")
         try:
+            maintenance = read_regular(index_source, "maintenance.py", 2*1024*1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
             scanner = read_regular(index_source, "adapter.py", 2*1024*1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
         finally:
             os.close(index_source)
@@ -183,12 +184,14 @@ def install(tree=None):
         compile(release, "release.py", "exec")
         compile(performance, "performance.py", "exec")
         compile(scanner, "index-scanner.py", "exec")
+        compile(maintenance,"index-maintenance.py","exec")
         publish(service, "host.py", host, 0o644)
         publish(service, "bootstrap.py", bootstrap, 0o644)
         publish(service, "release.py", release, 0o644)
         publish(service, "performance.py", performance, 0o644)
         publish(service, "index-scanner.py", scanner, 0o644)
-        extra={}
+        publish(service,"index-maintenance.py",maintenance,0o644)
+        extra={"index-maintenance.py":hashlib.sha256(maintenance).hexdigest()}
         for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","deploy.py","buildctl.py"):
             body=read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
             compile(body,name,"exec");publish(service,name,body,0o644)
@@ -211,11 +214,12 @@ def install(tree=None):
             raise ValueError("installation raced a source edit; repeat after writers pause")
         index_source = directory(source_path.parent / "plugins/abilities/Administrator/code_index")
         try:
-            if read_regular(index_source, "adapter.py", 2*1024*1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != scanner:
+            if read_regular(index_source, "adapter.py", 2*1024*1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != scanner or read_regular(index_source,"maintenance.py",2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))!=maintenance:
                 raise ValueError("installation raced an index parser edit")
         finally:
             os.close(index_source)
         for name,expected in extra.items():
+            if name=="index-maintenance.py":continue # Ability source was rechecked through its pinned directory above.
             if hashlib.sha256(read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))).hexdigest()!=expected:raise ValueError("Installation raced a module edit")
         return manifest
     finally:

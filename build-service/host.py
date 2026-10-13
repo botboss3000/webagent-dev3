@@ -42,6 +42,13 @@ _config_spec.loader.exec_module(_config_module)
 CONFIG = _config_module.load()
 
 SOURCE = Path(CONFIG["checkout_root"])
+_maintenance_path=_module_root/"index-maintenance.py"
+if not _maintenance_path.exists():
+    if _module_root != SOURCE/"build-service":raise RuntimeError("Protected maintenance engine unavailable")
+    _maintenance_path=SOURCE/"plugins/abilities/Administrator/code_index/maintenance.py"
+_maintenance_spec=importlib.util.spec_from_file_location("code_index_maintenance_engine",_maintenance_path)
+maintenance_engine=importlib.util.module_from_spec(_maintenance_spec);_maintenance_spec.loader.exec_module(maintenance_engine)
+
 STATE = Path(CONFIG["state_root"])
 SOCKET = Path(CONFIG["runtime_root"])/"build.sock"
 BRIDGE_SOCKET = Path(CONFIG["runtime_root"])/"python.sock"
@@ -58,6 +65,13 @@ CONTEXT = (
     "ui/main-panel/agents/agents.html", "ui/main-panel/agents/agents.css",
     "ui/vendor/fonts", "ui/vendor/lucide", "ui/favicon.svg")
 UI_SOURCE_PREFIX = "v3/ui/"
+INDEX_METADATA_ROOT="v3/plugins/abilities/Administrator/code_index/"
+INDEX_METADATA_FILES={INDEX_METADATA_ROOT+"code-index-features.json",INDEX_METADATA_ROOT+"code_index.skill.md",INDEX_METADATA_ROOT+"skills/comment_maintenance.skill.md"}
+INDEX_METADATA_FILES.update(INDEX_METADATA_ROOT+"tools/"+name+".skill.md"for name in ("code_index_scan","code_index_lookup","code_index_coverage","code_index_trace","code_index_progress","code_index_maintenance"))
+HOT_OPERATIONS={"ui_deploy","index_deploy"}
+# Limit no-compile publication to UI assets and explicit Code Index metadata paths.
+def hot_source_path(path):return path.startswith(UI_SOURCE_PREFIX)or path in INDEX_METADATA_FILES
+
 RUST_UI_FIXTURES = {"v3/ui/chat/chat_ui.json"}
 ASSET_ROOT = STATE / "ui-assets"
 TARGETS = (CONFIG["api_container"], CONFIG["loop_container"])
@@ -139,6 +153,7 @@ def require_paired_index_parser(blob, protected_path):
 
 
 def canonical(value):
+    """Serialize stable structured receipts without formatting-dependent differences."""
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
@@ -721,6 +736,10 @@ class Runner:
     def stage_assets(self, blob, job_id):
         scanner = Path(CONFIG["service_dir"])/"index-scanner.py"
         require_paired_index_parser(blob, scanner)
+        with tarfile.open(fileobj=io.BytesIO(blob))as archive:
+            try:engine=archive.extractfile("v3/plugins/abilities/Administrator/code_index/maintenance.py").read()
+            except KeyError:raise ValueError("Candidate maintenance engine missing")from None
+        if hashlib.sha256(engine).hexdigest()!=hashlib.sha256(Path(_maintenance_path).read_bytes()).hexdigest():raise ValueError("Install the reviewed maintenance engine while the broker is idle before publication")
         destination = release.stage_assets(ASSET_ROOT, job_id, blob, context_digest)
         self.readable_assets(destination)
         index = destination / ".code-index"
@@ -732,18 +751,27 @@ class Runner:
         if index.exists():
             release.verify_index(destination, job_id, context_digest(blob)[0])
             return destination
+        provider=getattr(self,"maintenance_provider",None)
+        reviews=provider(job_id)if callable(provider)else []
+        input_folder=Path(getattr(self,"maintenance_snapshot_folder",STATE/"code-index-maintenance"/"snapshots"));input_folder.mkdir(mode=0o700,parents=True,exist_ok=True)
+        input_path=input_folder/(job_id+".json")
+        payload=canonical(reviews)
+        if len(payload)>64*1024*1024:raise ValueError("Maintenance snapshot exceeds bound")
+        fd=os.open(input_path,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,"wb")as stream:stream.write(payload);stream.flush();os.fsync(stream.fileno())
         # Candidate Python is never executed; the matched protected parser is mounted read-only.
         temporary = destination / (".index-stage-" + str(uuid.uuid4()))
         temporary.mkdir(mode=0o755)
         try:
             image = self.inspect(TARGETS[0])["Image"]
-            program = ("import runpy; m=runpy.run_path('/scanner.py'); "
+            program = ("import runpy,json; m=runpy.run_path('/scanner.py'); "
                        "m['build_published']('/source','/output'," + repr(job_id) +
-                       "," + repr(context_digest(blob)[0]) + ")")
+                       "," + repr(context_digest(blob)[0]) + ",json.load(open('/maintenance.json')))")
             self.command(["docker", "run", "--rm", "--network", "none",
                 "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
                 "--user", str(CONFIG["service_uid"])+":"+str(CONFIG["service_gid"]), "--memory", "1g", "--pids-limit", "64",
                 "--tmpfs", "/tmp:rw,size=64m,mode=1777",
+                "-v", str(input_path)+":/maintenance.json:ro",
                 "-v", str(scanner)+":/scanner.py:ro",
                 "-v", str(destination)+":/source:ro",
                 "-v", str(temporary)+":/output:rw", "--entrypoint", "python3",
@@ -762,6 +790,32 @@ class Runner:
                 shutil.rmtree(temporary)
         return destination
 
+    def maintenance_inventory(self,root,scope,folder):
+        """Scan with the protected engine in the same API-image parser environment as publication."""
+        folder=Path(folder);folder.mkdir(mode=0o700,parents=True,exist_ok=True)
+        invocation=folder/("scan-"+uuid.uuid4().hex);invocation.mkdir(mode=0o700)
+        scanner=Path(CONFIG["service_dir"])/"index-scanner.py"
+        engine=Path(CONFIG["service_dir"])/"index-maintenance.py"
+        image=self.inspect(TARGETS[0])["Image"]
+        program=("import runpy,json; m=runpy.run_path('/index-maintenance.py'); "
+                 "value=m['source_inventory'](m['load_scanner'](),'/source',"+repr(scope)+",'/output'); "
+                 "json.dump(value,open('/output/inventory.json','w'))")
+        try:
+            self.command(["docker","run","--rm","--network","none","--read-only","--cap-drop","ALL",
+                "--security-opt","no-new-privileges","--user",str(CONFIG["service_uid"])+":"+str(CONFIG["service_gid"]),
+                "--memory","1g","--pids-limit","64","--tmpfs","/tmp:rw,size=64m,mode=1777",
+                "-v",str(root)+":/source:ro","-v",str(invocation)+":/output:rw",
+                "-v",str(scanner)+":/index-scanner.py:ro","-v",str(engine)+":/index-maintenance.py:ro",
+                "--entrypoint","python3",image,"-I","-B","-c",program],timeout=120)
+            result=invocation/"inventory.json"
+            if result.is_symlink()or result.stat().st_size>64*1024*1024:raise ValueError("Maintenance inventory exceeds bound")
+            files,units,scan=json.loads(result.read_bytes());scan["parser_environment"]=image
+            os.replace(invocation/"index.sqlite",folder/"index.sqlite")
+            shutil.rmtree(invocation)
+            return files,units,scan
+        except BaseException:
+            shutil.rmtree(invocation);raise
+
     def validate_ui(self, job_id, changed):
         root = ASSET_ROOT / "releases" / job_id
         for name in changed:
@@ -779,7 +833,10 @@ class Runner:
         return release.current_asset_id(ASSET_ROOT)
 
     def activate_assets(self, job_id):
-        return release.activate_assets(ASSET_ROOT, job_id)
+        previous=release.activate_assets(ASSET_ROOT, job_id)
+        callback=getattr(self,"maintenance_activated",None)
+        if callable(callback):callback(job_id)
+        return previous
 
     def ui_hot_swappable(self):
         api = self.inspect(TARGETS[0])
@@ -939,7 +996,7 @@ class Runner:
         host = dict(previous["HostConfig"])
         if release_root is not None:
             host = release.release_mounts(host, Path(release_root), ASSET_ROOT)
-            if name == TARGETS[0]:
+            if name in TARGETS:
                 env = [value for value in config.get("Env", [])
                        if not value.startswith(("V3_UI_ROOT=", "V3_SHARED_UI_ROOT="))]
                 env.extend(("V3_UI_ROOT=/opt/v3/assets/current/v3/ui",
@@ -1000,7 +1057,7 @@ class Broker:
         self.lock = threading.RLock()
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.ui_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        self.deploy_lock = threading.Lock()
+        self.deploy_lock = threading.RLock()
         self.active_ui = None
         self.jobs = {}
         self.job_cancellations = {}
@@ -1010,6 +1067,7 @@ class Broker:
         self.stopping = False
         self.maintenance_file=self.state/"coordination/maintenance.json"
         self.workspace_leases={}
+        self.code_index_leases={}
         self.work_dir = self.state / "coordination"
         if self.work_dir.is_symlink():
             raise ValueError("symlink coordination state forbidden")
@@ -1020,6 +1078,10 @@ class Broker:
         self.work = json.loads(self.work_path.read_text()) if self.work_path.exists() else {}
         if not isinstance(self.work, dict) or len(self.work) > 1000:
             raise ValueError("invalid coordination registry")
+        self.code_index_ledger=maintenance_engine.Ledger(Path(CONFIG["install_root"]).parent/"code-index-maintenance"if self.state==Path(CONFIG["state_root"])else self.state/"code-index-maintenance",inventory=getattr(self.runner,"maintenance_inventory",None))
+        self.runner.maintenance_snapshot_folder=self.code_index_ledger.folder/"snapshots"
+        self.runner.maintenance_provider=self._code_index_snapshot
+        self.runner.maintenance_activated=self._code_index_activated
         self.performance = performance.Performance(self)
         self.work_activity = {key: self._work_content(item) for key, item in self.work.items()}
         for path in sorted(self.state.glob("*.json")):
@@ -1412,8 +1474,8 @@ class Broker:
             base = (folder / "base.tar").read_bytes()
             task = (folder / "task.tar").read_bytes()
             live = self._current_release_blob()
-            candidate, changed = release.candidate(base, task, live, context_digest)
-            if not all(path.startswith(UI_SOURCE_PREFIX) for path in changed):
+            candidate, changed = release.candidate(base, task, live, context_digest, allow_empty=True)
+            if not all(hot_source_path(path) for path in changed):
                 raise ValueError("parallel UI release contains non-UI source")
             if not self._sync_job(job, live, candidate, changed):
                 return
@@ -1437,7 +1499,7 @@ class Broker:
         if not self._can_start_parallel_ui():
             return
         for job in sorted(self.jobs.values(), key=lambda value: value["created_at"]):
-            if job.get("isolated") and job["status"] == "queued" and job["operation"] == "ui_deploy":
+            if job.get("isolated") and job["status"] == "queued" and job["operation"] in HOT_OPERATIONS:
                 self._start_parallel_ui(job)
                 return
 
@@ -1445,7 +1507,7 @@ class Broker:
         completed = [job.get("finished_at", 0) for job in self.jobs.values()
                      if job.get("isolated") and (job["status"] == "completed"
                      or job.get("operator_adopted_at"))
-                     and job["operation"] in ("deploy", "build_deploy", "ui_deploy", "host_service_deploy")
+                     and job["operation"] in ("deploy", "build_deploy", "ui_deploy", "index_deploy", "host_service_deploy")
                      and job.get("effects_started")]
         latest = max(completed, default=0)
         return any(job["status"] == "uncertain"
@@ -1468,7 +1530,7 @@ class Broker:
             return
         # UI releases pass queued image builds, but never an active release.
         pending = sorted(self.jobs.values(), key=lambda value: (
-            value.get("operation") != "ui_deploy", value["created_at"]))
+            value.get("operation") not in HOT_OPERATIONS, value["created_at"]))
         for job in pending:
             if not job.get("isolated") or job["status"] != "queued":
                 continue
@@ -1484,7 +1546,7 @@ class Broker:
                 if resuming:
                     base = (folder / "admitted_base.tar").read_bytes()
                     task = (folder / "candidate.tar").read_bytes()
-                candidate, changed = release.candidate(base, task, live, context_digest)
+                candidate, changed = release.candidate(base, task, live, context_digest, allow_empty=True)
                 if not self._sync_job(job, live, candidate, changed):
                     continue
                 members = [self.jobs[jid] for jid in job.get("batch_members", ())] if resuming else []
@@ -1623,7 +1685,7 @@ class Broker:
                         and peer["status"] in pending and not peer.get("batch_parent")
                         and (administrator or (peer["user_id"], peer["workspace"]) ==
                              (job["user_id"], job["workspace"]))),
-                       key=lambda peer: (peer.get("operation") != "ui_deploy", peer["created_at"], peer["job_id"]))
+                       key=lambda peer: (peer.get("operation") not in HOT_OPERATIONS, peer["created_at"], peer["job_id"]))
         report = {"checked_at": time.time(), "peers": [], "peer_count": len(peers),
                   "truncated": False, "advisory": True}
         try:
@@ -1637,8 +1699,8 @@ class Broker:
                 other = self._queue_changes(peer)
                 overlap = sorted(set(own) & set(other))
                 first, second = (own, other) if (
-                    job.get("operation") != "ui_deploy", job["created_at"], job["job_id"]) <= (
-                    peer.get("operation") != "ui_deploy", peer["created_at"], peer["job_id"]) else (other, own)
+                    job.get("operation") not in HOT_OPERATIONS, job["created_at"], job["job_id"]) <= (
+                    peer.get("operation") not in HOT_OPERATIONS, peer["created_at"], peer["job_id"]) else (other, own)
                 bad = [name for name in overlap if first[name][1] not in second[name]]
                 conflicts += bool(bad)
                 same_caller = (job["user_id"], job["workspace"], job.get("access_fingerprint")) == (
@@ -1671,7 +1733,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance") if key in job}
         if "reason" in job:
             # Compiler failures are at the end of a bounded build transcript.
             view["reason"] = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
@@ -1692,7 +1754,7 @@ class Broker:
     def _rust_test_result(self, job):
         if job.get("rust_tests"):
             return job["rust_tests"]
-        if job["operation"] == "ui_deploy":
+        if job["operation"] in HOT_OPERATIONS:
             return {"status": "not_required",
                     "summary": "UI assets only; no Rust build or tests required"}
         if job["status"] == "completed" and job.get("images", {}).get("api"):
@@ -1753,7 +1815,7 @@ class Broker:
             for role, name in zip(("api", "loop"), TARGETS):
                 if not self.runner.healthy(name, images[role]):
                     return False
-            if job["operation"] in ("ui_deploy","host_service_deploy") and job.get("hot_assets"):
+            if job["operation"] in ("ui_deploy","index_deploy","host_service_deploy") and job.get("hot_assets"):
                 return True
             rollback = job.get("rollback", {})
             if set(rollback) != {"api", "loop"}:
@@ -1781,7 +1843,7 @@ class Broker:
             # Hot UI switches keep the containers; accept only the exact active
             # asset snapshot with both original images healthy and bytes served.
             if job.get("hot_assets"):
-                if job["operation"] not in ("ui_deploy","host_service_deploy") or self.runner.current_asset_id() != job["job_id"]:
+                if job["operation"] not in ("ui_deploy","index_deploy","host_service_deploy") or self.runner.current_asset_id() != job["job_id"]:
                     return False
                 for role, name in zip(("api", "loop"), TARGETS):
                     if not self.runner.healthy(name, job["images"][role]):
@@ -2033,6 +2095,85 @@ class Broker:
         finally:
             with self.lock:self.workspace_leases.pop(key,None)
 
+    def _maintenance_job_summary(self,job):
+        """Attach informational documentation counts to the durable release receipt."""
+        path=ASSET_ROOT/"releases"/job["job_id"]/".code-index/manifest.json"
+        if path.is_file():job["maintenance"]=json.loads(path.read_bytes()).get("maintenance",{})
+        self._save(job)
+
+    def _code_index_authorize(self,lease,key):
+        """Reject maintenance when its live authority or isolated task has expired."""
+        with self.lock:
+            self._lease(lease)
+            item=self.work.get(key)
+            if not item or item["status"]!="open":raise PermissionError("Maintenance task froze; no further review writes")
+
+    def _code_index_snapshot(self,job_id):
+        """Merge eligible task evidence with the current published ledger for final projection."""
+        self._code_index_reconcile()
+        with self.lock:
+            job=self.jobs.get(job_id,{})
+            ids={job_id,*job.get("batch_members",[])}
+            keys=[key for key,item in self.work.items()if item.get("job_id")in ids]
+            return self.code_index_ledger.snapshot(keys)
+    def _code_index_reconcile(self):
+        # Immutable active projection wins after restart or rollback. No task/private DB is read.
+        """Restore the active immutable release projection after restart or rollback."""
+        with self.deploy_lock:
+            current=self.runner.current_asset_id()
+            if current and current!=self.code_index_ledger.active_release() and (ASSET_ROOT/"releases"/current/".code-index/index.sqlite").is_file():
+                self._code_index_activated(current)
+    def _code_index_activated(self,job_id):
+        """Import the paired release ledger; legacy indexes initialize pending reviews."""
+        root=ASSET_ROOT/"releases"/job_id
+        conn=sqlite3.connect("file:"+str(root/".code-index/index.sqlite")+"?mode=ro",uri=True)
+        try:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='maintenance_records'").fetchone():
+                memory=sqlite3.connect(":memory:");memory.row_factory=sqlite3.Row
+                try:
+                    conn.backup(memory);memory.executescript(self.code_index_ledger.scanner.DDL)
+                    self.code_index_ledger.scanner.project_maintenance(memory,[])
+                    rows=[json.loads(row[0])for row in memory.execute("SELECT body FROM maintenance_records")]
+                finally:memory.close()
+            else:rows=[json.loads(row[0])for row in conn.execute("SELECT body FROM maintenance_records")]
+        finally:conn.close()
+        self.code_index_ledger.activate(job_id,rows)
+    def code_index_maintenance(self,args,trusted,workspace):
+        """Serve shared review reads or validated isolated-task mutations through broker authority."""
+        self._code_index_reconcile()
+        actor={"user_id":trusted["user_id"],"session_id":workspace,"transport":"operator"if trusted.get("local_caller")else"webagent"}
+        action=args.get("action")
+        if args.get("root","live")!="live":
+            if args.get("root")!="published"or action not in {"list","get"}:raise ValueError("CLI snapshot reads require root published; private roots use WebAgent workspace tools")
+            return self.code_index_ledger.scanner.execute_published("code_index_maintenance",args,ASSET_ROOT/"releases"/self.runner.current_asset_id())
+        if action in {"list","get"}:
+            result=self.code_index_ledger.list(args)
+            result.update(source_kind="untrusted_maintenance_metadata",completion_is_review_assertion=True)
+            return result
+        key=args.get("task_key")
+        if key is not None:
+            if not trusted.get("local_caller"):raise PermissionError("Cross-session task selection is operator-only")
+            if not isinstance(key,str)or not re.fullmatch("[0-9a-f]{64}",key):raise ValueError("Canonical task key required")
+        else:
+            task_id=args.get("task_id")
+            if not isinstance(task_id,str)or not re.fullmatch("[A-Za-z0-9_-]{8,80}",task_id):raise ValueError("Registered task_id required")
+            key=hashlib.sha256(canonical([trusted["user_id"],workspace,task_id])).hexdigest()
+        item=self.work.get(key)
+        if not item or item.get("mode")!="isolated"or item["status"]!="open":raise ValueError("Open isolated maintenance task required")
+        if trusted.get("lease_until",0)<=time.time():raise PermissionError("Maintenance authority expired")
+        source=self.work_dir/"trees"/key/"v3"
+        if source.is_symlink()or not source.is_dir():raise ValueError("Maintenance source unavailable")
+        lease={"user_id":trusted["user_id"],"workspace":workspace,"lease_until":trusted.get("lease_until",0),"access_fingerprint":trusted.get("access_fingerprint"),"revoked":False}
+        lease_key=(trusted["user_id"],workspace,args.get("request_id"),uuid.uuid4().hex)
+        with self.lock:self.code_index_leases[lease_key]=lease
+        try:
+            result=self.code_index_ledger.mutate(args,actor,key,item["task_id"],source,authorize=lambda:self._code_index_authorize(lease,key))
+        finally:
+            with self.lock:self.code_index_leases.pop(lease_key,None)
+        if lease.get("lease_until",0)<=time.time()or lease.get("revoked"):raise PermissionError("Maintenance authority expired; inspect the original request receipt")
+        result.update(source_kind="untrusted_maintenance_metadata",completion_is_review_assertion=True)
+        return result
+
     def handle(self, request):
         if not isinstance(request, dict) or set(request) - {"id", "name", "arguments", "workspace", "timeout_seconds", "trusted"}:
             raise ValueError("invalid broker request")
@@ -2051,6 +2192,10 @@ class Broker:
         name = request.get("name")
         if name in ("workspace_seed","source_review","source_patch","v3_workspace_status","v3_workspace_action") or (name=="v3_cargo_task" and "task_id" not in args):
             return self.workspace_request(name,args,trusted,workspace)
+        if name=="code_index_maintenance":
+            with self.lock:
+                if args.get("action")not in {"list","get"}and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; maintenance disabled")
+            return self.code_index_maintenance(args,trusted,workspace)
         with self.lock:
             if name == "build_service_maintenance":
                 if not trusted.get("local_caller") or set(args)-{"action","task_id"} or args.get("action") not in {"status","drain","resume"}:raise PermissionError("Operator maintenance required")
@@ -2062,7 +2207,7 @@ class Broker:
                     os.replace(temporary,self.maintenance_file)
                     if not state["drained"]:self._start_next()
                 return {**self._maintenance(),"busy":bool(self.active or self.active_ui),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
-            read_actions={"status","review","preflight","receipt","list","read","search","job","artifact"}
+            read_actions={"status","review","preflight","receipt","list","get","read","search","job","artifact"}
             read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
             if name not in read_names and args.get("action") not in read_actions and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; new work disabled")
             if name == "performance_work":
@@ -2134,13 +2279,13 @@ class Broker:
                 jobs = []
                 # Adopted releases remain addressable by ID but are no longer pending in the queue.
                 recent = (job for job in self.jobs.values() if not job.get("operator_adopted_at"))
-                for job in sorted(recent, key=lambda row: row["created_at"], reverse=True)[:20]:
+                for job in sorted(recent, key=lambda row: row["created_at"], reverse=True):
                     view = self._view(job, administrator=True)
                     view.pop("access_fingerprint", None)
                     view["log"] = view["log"][-2048:]
                     view["task_id"] = tasks.get(job["job_id"], {}).get("task_id")
                     summary = tasks.get(job["job_id"], {}).get("summary")
-                    if job["operation"] == "ui_deploy":
+                    if job["operation"] in HOT_OPERATIONS:
                         summary = "UI release · " + (summary or job["job_id"])
                     elif job.get("batch_parent") or job.get("batch_members"):
                         summary = "Shared build · " + (summary or job["job_id"])
@@ -2150,7 +2295,7 @@ class Broker:
                     view["started_at"] = job.get("started_at")
                     view["finished_at"] = job.get("finished_at")
                     view["phase_history"] = job.get("phase_history", [])[-32:]
-                    if job["operation"] == "ui_deploy":
+                    if job["operation"] in HOT_OPERATIONS:
                         legacy_tests = {"status": "not_required",
                             "summary": "UI assets only; no Rust build or tests required"}
                     elif job["status"] == "completed" and job.get("images", {}).get("api"):
@@ -2174,7 +2319,7 @@ class Broker:
                 policy = self._reconcile_leftover_state()
                 leftovers = self._leftover_views(administrator=True)
                 live = self._current_release_blob()
-                return {"leftovers": leftovers[:50], "leftover_total": len(leftovers), "leftover_policy": policy,
+                return {"leftovers": leftovers, "leftover_total": len(leftovers), "leftover_policy": policy,
                         "jobs": jobs, "busy": self.active is not None or self.active_ui is not None,
                         "containers": containers, "synchronization": self._sync_report(live, live, ())}
             if name == "v3_build_result":
@@ -2202,6 +2347,11 @@ class Broker:
                     raise ValueError("internal lease control takes no arguments")
                 incoming = self._incoming_lease(trusted) if name == "administrator_host_lease" else None
                 updated = self.performance.leases(trusted, workspace, incoming)
+                for lease in self.code_index_leases.values():
+                    if lease["user_id"]==trusted["user_id"]and lease["workspace"]==workspace:
+                        if incoming and not lease["revoked"]and lease["lease_until"]>time.time()and lease["access_fingerprint"]==incoming[1]:lease["lease_until"]=incoming[0]
+                        else:lease["revoked"]=True
+                        updated+=1
                 for job in list(self.workspace_leases.values()):
                     if self._owned(job,trusted,workspace):
                         if incoming and job["lease_until"]>time.time() and job["access_fingerprint"]==incoming[1] and not job.get("revoked"):job["lease_until"]=incoming[0]
@@ -2588,7 +2738,7 @@ class Broker:
                         base = (self.state / job["job_id"] / "admitted_base.tar").read_bytes()
                         task = (self.state / job["job_id"] / "candidate.tar").read_bytes()
                     live = self._current_release_blob()
-                    candidate, changed = release.candidate(base, task, live, context_digest)
+                    candidate, changed = release.candidate(base, task, live, context_digest, allow_empty=True)
                     offset = args.get("offset", 0)
                     if type(offset) is not int or offset < 0:
                         raise ValueError("Nonnegative offset required")
@@ -2693,10 +2843,10 @@ class Broker:
                     if current != expected:
                         raise ValueError("stale work inputs")
                     base_blob = (folder / "baseline.tar").read_bytes()
-                    _, changed = release.candidate(base_blob, task_blob, base_blob, context_digest)
+                    _, changed = release.candidate(base_blob, task_blob, base_blob, context_digest, allow_empty=True)
                     live = self._current_release_blob()
                     try:
-                        candidate, current_changed = release.candidate(base_blob, task_blob, live, context_digest)
+                        candidate, current_changed = release.candidate(base_blob, task_blob, live, context_digest, allow_empty=True)
                     except ValueError:
                         # Existing stale-task admission remains a durable failed job.
                         candidate = release.archive({name: value for name, value in release.entries(task_blob, context_digest).items()
@@ -2717,7 +2867,8 @@ class Broker:
                             return {"task_id": task_id, "status": "abandoned", "synchronization": report}
                         if decision != "proceed":
                             return {"task_id": task_id, "status": "needs_synchronization" if decision == "synchronize" else "needs_decision", "synchronization": report}
-                    ui_only = all(path.startswith(UI_SOURCE_PREFIX) for path in changed)
+                    ui_only = all(hot_source_path(path) for path in changed)
+                    index_only=ui_only and(not changed or any(path in INDEX_METADATA_FILES for path in changed))
                     host_only = self.host_source_only(current_changed,candidate,trusted)
                     lease_until, fingerprint = self._incoming_lease(trusted)
                     job_id = str(uuid.uuid4())
@@ -2728,7 +2879,7 @@ class Broker:
                     job = {"job_id": job_id, "request_key": "task-" + key,
                            "body_digest": hashlib.sha256(canonical([task_id, current])).hexdigest(),
                            "user_id": trusted["user_id"], "workspace": workspace,
-                           "operation": "host_service_deploy" if host_only else "ui_deploy" if ui_only else "build_deploy", "task_id":task_id, "isolated": True, "inputs_sha256": current,
+                           "operation": "host_service_deploy" if host_only else "index_deploy" if index_only else "ui_deploy" if ui_only else "build_deploy", "task_id":task_id, "isolated": True, "inputs_sha256": current,
                            "created_at": time.time(), "status": "queued", "phase": "waiting",
                            "images": {}, "log": "", "tool_name": "v3_build_work",
                            "lease_until": max(lease_until, time.time() + 4 * 3600),
@@ -2868,13 +3019,13 @@ class Broker:
             part_dir = self.state / part["job_id"]
             merged, paths = release.candidate(
                 (part_dir / "base.tar").read_bytes(),
-                (part_dir / "task.tar").read_bytes(), merged, context_digest)
+                (part_dir / "task.tar").read_bytes(), merged, context_digest, allow_empty=part.get("operation")=="index_deploy")
             changed.update(paths)
         if tested_runtime:
             before = {name: item for name, item in release.entries(blob, context_digest).items()
-                      if not name.startswith(UI_SOURCE_PREFIX)}
+                      if not hot_source_path(name)}
             after = {name: item for name, item in release.entries(merged, context_digest).items()
-                     if not name.startswith(UI_SOURCE_PREFIX)}
+                     if not hot_source_path(name)}
             if before != after:
                 raise ValueError("runtime build inputs changed during UI release")
             old_ui = release.entries(blob, context_digest)
@@ -2884,7 +3035,7 @@ class Broker:
             job["built_inputs_sha256"] = job["inputs_sha256"]
             job["rust_tests"] = {"status": "passed",
                 "summary": "Runtime inputs tested before UI asset rebase; UI assets validated separately"}
-        elif not all(path.startswith(UI_SOURCE_PREFIX) for path in changed):
+        elif not all(hot_source_path(path) for path in changed):
             raise ValueError("parallel UI release changed runtime inputs")
         digest = context_digest(merged)[0]
         release_root = folder / ("release-rebased-" + digest[:16])
@@ -2920,6 +3071,7 @@ class Broker:
             return
         self._phase(job, "indexing_source")
         self.runner.stage_assets(blob, job["job_id"])
+        self._maintenance_job_summary(job)
         self.runner.validate_ui(job["job_id"], job["changed_paths"])
         prepared = release.snapshot(Path(job["release_root"]), CONTEXT, context_digest)
         if context_digest(prepared)[0] != job["inputs_sha256"]:
@@ -2976,7 +3128,9 @@ class Broker:
                 if not self.runner.ui_hot_swappable():raise ValueError("Host source publication requires frozen asset mounts")
                 self._run_ui_hot(job,blob)
                 return
-            if job["operation"] == "ui_deploy" and self.runner.ui_hot_swappable():
+            if job["operation"]=="index_deploy" and not self.runner.ui_hot_swappable():
+                raise ValueError("Index maintenance requires hot publication; container replacement is forbidden")
+            if job["operation"] in HOT_OPERATIONS and self.runner.ui_hot_swappable():
                 self._run_ui_hot(job, blob)
                 return
             if job["operation"] in ("build", "build_deploy"):
@@ -3004,7 +3158,7 @@ class Broker:
                         job["log"] = scrub(job["log"] + log, self.runner.secrets)
                         self._save(job)
                 self.runner.check_space(MIN_DEPLOY_FREE)
-            if job["operation"] in ("deploy", "build_deploy", "ui_deploy"):
+            if job["operation"] in ("deploy", "build_deploy", "ui_deploy", "index_deploy"):
                 self.deploy_lock.acquire()
                 deploy_locked = True
                 if self._has_unresolved_release(job["job_id"]):
@@ -3015,13 +3169,14 @@ class Broker:
                     return
                 self._phase(job, "indexing_source")
                 self.runner.stage_assets(blob, job["job_id"])
+                self._maintenance_job_summary(job)
                 self.runner.validate_ui(job["job_id"], job.get("changed_paths", ()))
                 with self.lock:
                     job["asset_previous"] = self.runner.current_asset_id()
                     self._save(job)
                 self._phase(job, "capturing_rollback")
                 previous = {role: self.runner.inspect(name) for role, name in zip(("api", "loop"), TARGETS)}
-                if job["operation"] == "ui_deploy":
+                if job["operation"] in HOT_OPERATIONS:
                     job["images"] = {role: previous[role]["Image"] for role in ("api", "loop")}
                 private = self.state / job["job_id"]
                 private.mkdir(mode=0o700, exist_ok=bool(job.get("isolated")))
@@ -3177,7 +3332,7 @@ async def serve(broker, listener, bridge_listener=None):
                     "access_fingerprint": hashlib.sha256(b"python-v2-build-bridge").hexdigest(),
                     "bridge_caller": True}
             elif uid == CONFIG["service_uid"]:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "code_index_maintenance"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": "codex-local", "session_id": LOCAL_WORKSPACE,
@@ -3213,6 +3368,7 @@ async def serve(broker, listener, bridge_listener=None):
 
 
 def main():
+    """Validate structured operator input and call the existing authenticated broker transport."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--listener-fd", type=int, required=True)
     parser.add_argument("--bridge-listener-fd", type=int)

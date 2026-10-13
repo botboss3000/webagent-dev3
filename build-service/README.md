@@ -61,3 +61,7 @@ freezes and indexes the source, verifies unchanged healthy application images
 and served assets, then performs checked source promotion. Application, worker,
 workspace executor, policy and other module changes always use the image build
 workflow. This host-only path does not grant agents installation authority.
+
+The administrator Builds dashboard returns every unreviewed retained-task notice
+and every non-adopted build receipt, without a display-page limit. Caller-scoped
+agent notice reads remain bounded independently from this administrator feed.

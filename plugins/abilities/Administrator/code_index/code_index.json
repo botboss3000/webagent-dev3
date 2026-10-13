@@ -4,7 +4,7 @@
   "icon": "scan-search",
   "color": "#7aa2f7",
   "description": "Build a bounded, line-complete derived index of the caller's isolated V3 source snapshot, with symbol ownership, static references, explicit parser uncertainty and live freshness.",
-  "skill_summary": "Scan the current session workspace, check coverage and freshness, and navigate exact indexed lines, symbols and static references. Read-only queries never rescan.",
+  "skill_summary": "Maintain source-bound documentation reviews, resume unfinished work, verify fresh scans, and navigate indexed code. Scans never certify documentation.",
   "migration_note": "Compiled V3 adapter, scoped policy and configuration passed focused tests and authenticated V3 API acceptance. Execution still requires applicable installation, account-tier, agent, membership and session grants.",
   "order": 4,
   "placeholder": false,
@@ -13,7 +13,8 @@
     "code_index_lookup",
     "code_index_coverage",
     "code_index_trace",
-    "code_index_progress"
+    "code_index_progress",
+    "code_index_maintenance"
   ],
   "readiness": "ready",
   "config": {}

@@ -333,6 +333,7 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
     let run=app.run(run_id).await?;
     if run["session_id"]!=sid || run["agent_id"].as_str().unwrap_or("shared_default")!=agent {bail!("Current run/session mismatch");}
     match name {
+        "code_index_maintenance"=>super::code_index_maintenance::execute(app,sid,run_id,args,cancel).await,
         "code_index_lookup"=>{
             let mut result=worker(app,sid,name,args,None,cancel.clone()).await?;
             super::code_index_configuration::attach(app,args,&mut result,&cancel).await?;

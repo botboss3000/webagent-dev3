@@ -1,7 +1,7 @@
 ---
 id: comment_maintenance
 title: Function comments and UI connections
-when_to_use: Use when documenting or refreshing function intent, constraints, side effects, or verified relationships in chat UI and index.html code.
+when_to_use: Use when documenting or refreshing function intent, constraints, side effects, or verified relationships across source files and meaningful feature groups.
 default_mode: discoverable
 minimum_access: registered
 ---
@@ -70,3 +70,47 @@ Use an optional configuration object in a marker, map feature, or map location:
     {"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles/user/bg_dark"],"profile_overrides":true}],"opportunities":[]}
 
 profile_overrides expands matching chat_common pointers to desktop, mobile, and widget overlays. These are raw configured values, not a claim about the active surface's effective merged value. A location assessment overrides its feature assessment. Refresh assessments and references after every relevant edit. Never copy current runtime values into breadcrumbs or the index database.
+
+## Shared maintenance procedure
+
+Use an existing authorized isolated broker task. List live pending/needs_review records, filtered by task, scope or feature; inspect claims and remaining-work notes. Synchronize that task after source edits, and page all affected records. Claim one bounded function or feature group and retain the returned opaque claim ID. Even agents using the same operator account have separate claims. Claims expire after 30 minutes and abandoned work remains visible; use the original request ID to recover a lost claim receipt. An expired claim can be reclaimed against the latest revision.
+
+Trace implementation and both ends of relevant connections. Assess configuration as configured, opportunity or not_applicable with rationale; verify paths and JSON Pointers for configured behavior. Update human comments and searchable metadata before scanning. Sync refreshes task-source evidence but never asserts documentation completion. Record all five checks: documentation (purpose/intent/constraints), connections, breadcrumbs, configuration, index_freshness. Use verified or not_applicable with a bounded rationale; freshness must be verified. Parser uncertainty requires explicit human inspection of the file for meaningful functions/groups, not treating a fallback scan as complete semantic analysis.
+
+Record complete only for current source/dependency hashes, with your claim, current expected_revision and no remaining work. Complete every active child before the file summary. A removed unit requires reconciliation kind deleted or renamed; a rename names a current replacement entry and does not certify that replacement. Stop by releasing with concrete remaining-work notes. Do not declare affected coding work complete until these reviews and the index are current. Publication reports incompleteness without blocking.
+
+### WebAgent examples
+
+Use task_id from your existing isolated build task, never another caller's task_key. These calls use the normal runtime's authenticated identity and authority:
+
+```text
+code_index_maintenance(action="sync", task_id="chat-documentation", scope="ui/chat", request_id="chat-sync-0001")
+code_index_maintenance(action="list", task_id="chat-documentation", status="pending", limit=50)
+code_index_maintenance(action="claim", task_id="chat-documentation", entry_id="<returned entry_id>", expected_revision=<returned revision>, request_id="chat-claim-0001")
+code_index_maintenance(action="record", task_id="chat-documentation", entry_id="<claimed entry_id>", expected_revision=<claim revision>, source_hash="<claim source_hash>", claim_id="<claim.id>", status="complete", checks={"documentation":"verified","connections":"verified","breadcrumbs":"verified","configuration":"verified","index_freshness":"verified"}, configuration_assessment={"status":"opportunity","opportunities":["Expose the verified presentation preference in the owning chat profile"]}, remaining_work=[], request_id="chat-review-0001")
+code_index_maintenance(action="release", task_id="chat-documentation", entry_id="<claimed entry_id>", expected_revision=<current revision>, claim_id="<claim.id>", remaining_work=["Trace the mobile profile override before certification"], request_id="chat-release-0001")
+```
+
+The record/release examples are alternatives. Copy actual IDs, hashes, revisions and assessments from your review; never copy the opportunity assessment without verifying it. Repeating a mutation requires the same request ID and identical input. A revision conflict requires rereading and reviewing the changed evidence, then using a new request ID. After an uncertain result inspect the original receipt/state before issuing another mutation.
+
+Published entries have new IDs in the published namespace; never reuse a task entry ID for a published get. Discover the matching entries with code_index_maintenance(action="list", root="published", scope="v3/plugins/abilities/Administrator/code_index/adapter.py", status="complete", limit=5), then get each returned entry_id with root published and no task_id. Published source paths retain the archive v3/ prefix; private task paths do not. The live canonical ledger exposes the same published IDs with task_id published and logical paths without v3/. Match source_hash, review_task_id, reviewer and publication.release_id when verifying promotion. A zero-result page is not coverage evidence. Follow next_offset when a bounded list has_more, or use exact get once an ID is known.
+
+### Server CLI examples
+
+External agents require server access and the existing protected broker operator channel. Run on the authoritative server checkout; honor its source-edit/build workflow. The CLI creates no public API, MCP listener or new credentials. Mutation payloads are structured JSON files, not shell-embedded JSON:
+
+```sh
+python3 -B plugins/abilities/Administrator/code_index/maintenance_cli.py list --task-id chat-documentation --status pending --limit 50
+python3 -B plugins/abilities/Administrator/code_index/maintenance_cli.py sync --input /tmp/chat-sync.json
+python3 -B plugins/abilities/Administrator/code_index/maintenance_cli.py claim --input /tmp/chat-claim.json
+python3 -B plugins/abilities/Administrator/code_index/maintenance_cli.py record --input /tmp/chat-review.json
+```
+
+Sync input example:
+```json
+{"task_id":"chat-documentation","scope":"ui/chat","request_id":"chat-sync-cli-0001"}
+```
+
+Claim/review JSON uses the same fields as the WebAgent examples. The operator may provide the returned task_key to review an authorized WebAgent task, including its task_id; this does not change source editing permissions. Reviewer attribution derives from Unix peer identity. Use WEBAGENT_BUILD_CONFIG only when the installation requires an explicit existing protected configuration path. Published reads use root published; live reads show shared ownership and task evidence. Do not edit the ledger SQLite file directly.
+
+Rename receipts bind the replacement file, unit, source hash and metadata dependencies. Publication rebinds its entry ID to the published namespace and invalidates a reconciliation when its replacement changed during rebase. The replacement itself still needs its own review.

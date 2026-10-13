@@ -252,7 +252,7 @@ async def execute_locked(request, lock):
     fcntl.flock(lock, fcntl.LOCK_UN)
     if name.startswith("code_index_") and name in {
             "code_index_scan", "code_index_lookup", "code_index_coverage",
-            "code_index_trace", "code_index_progress"}:
+            "code_index_trace", "code_index_progress", "code_index_maintenance"}:
         module = administrator_plugin("code_index")
         if args.get("root") == "published":
             # Resolve once; concurrent activation cannot mix source and index.

@@ -523,6 +523,10 @@ fn policy_default() -> Value {
         let name=schema["name"].as_str().unwrap();
         policy["rules"][name]=json!(if tools::is_read(name){"allow"}else{"require_approval"});
     }
+    for schema in mcp::all_schemas() {
+        let name=schema["name"].as_str().unwrap();
+        policy["rules"][name]=json!(if tools::is_read(name){"allow"}else{"require_approval"});
+    }
     #[cfg(test)] { policy["rules"]["test_owner_purchase"]=json!("require_approval"); }
     policy
 }
@@ -889,6 +893,7 @@ async fn run_process() -> Result<()> {
     let store = Store::open(&root).await?;
     diagnostics::init(&root, &store, &role).await;
     optimization::init(&root, &role).await;
+    mcp::bridge::init(&root, &role).await;
     store.migrate_agent_storage(&root).await?;
     let (runtime, runtime_path) = loop_runtime::Config::initialize(&root, &store).await?;
     // One data-root authority, reread at call boundaries. Legacy JSON is only

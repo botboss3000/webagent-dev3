@@ -1,0 +1,3 @@
+# Shared maintenance ledger
+
+Use action list/get for bounded shared review discovery. Mutations sync/claim/record/release bind to an authorized isolated broker task. Read the Code Index comment_maintenance subskill for checklist and CLI examples. Supply stable request IDs, current revisions, source hashes and the returned claim ID. Reviewer identity is authenticated, never caller-supplied. Sync refreshes evidence without certifying documentation; completion is a source-bound reviewer assertion. Private/published roots are read-only snapshots. Incomplete documentation is informational at publication.

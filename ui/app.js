@@ -318,7 +318,7 @@ wirePageTabDrag(document.querySelector('#agents-detail-region .agent-card-tabs')
 async function loadGuestPolicy(){try{const policy=await api('/auth/access-mode');$('guest-login').hidden=!policy.guest_access;document.querySelector('.private-access-approval').hidden=!!policy.guest_access;}catch{$('guest-login').hidden=true;}}
 $('guest-login').onclick=async()=>{const btn=$('guest-login');btn.disabled=true;try{const result=await api('/auth/guest-login','POST',{});csrf=result.csrf_token;await boot();}catch(error){$('registration-status').textContent=error.message;}finally{btn.disabled=false;}};
 function out(){disposeSessionsPage();widget?.hide();agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
-async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;$('shutoff').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}if(!$('rules').children.length)for(const [tool,rule]of Object.entries(state.policy?.rules||{})){const label=document.createElement('label');label.textContent=tool;const select=document.createElement('select');select.name=tool;for(const value of ['allow','deny','require_approval']){const option=document.createElement('option');option.value=value;option.textContent=value.replaceAll('_',' ');select.append(option);}select.value=rule;label.append(select);$('rules').append(label);}chat.runs(state.runs||[]);}
+async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;$('shutoff').querySelector('span').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}if(!$('rules').children.length)for(const [tool,rule]of Object.entries(state.policy?.rules||{})){const label=document.createElement('label');label.textContent=tool;const select=document.createElement('select');select.name=tool;for(const value of ['allow','deny','require_approval']){const option=document.createElement('option');option.value=value;option.textContent=value.replaceAll('_',' ');select.append(option);}select.value=rule;label.append(select);$('rules').append(label);}chat.runs(state.runs||[]);}
 // Explicit role administration replaces the legacy default-model form for every agent.
 async function boot(){
   const me=await api('/auth/me');
@@ -433,9 +433,22 @@ $('login-form').onsubmit=async event=>{
   finally{submit.disabled=false;}
 };
 const accountMenu=$('user-dropdown-menu');
+// V2's body-level portal keeps the panel out of the header carousel's clipping context.
+document.body.append(accountMenu);
+function positionAccountMenu(){
+  if(accountMenu.hidden)return;
+  const anchor=(document.body.classList.contains('mobile-mode')?$('main-header'):$('top-user-id')).getBoundingClientRect();
+  accountMenu.style.marginTop='0';
+  accountMenu.style.top=Math.max(8,Math.min(Math.round(anchor.bottom+6),innerHeight-accountMenu.offsetHeight-8))+'px';
+  accountMenu.style.left=Math.max(8,Math.min(Math.round(anchor.left),innerWidth-accountMenu.offsetWidth-8))+'px';
+}
 function closeAccountMenu(){accountMenu.hidden=true;$('top-user-id').setAttribute('aria-expanded','false');}
-$('top-user-id').onclick=event=>{event.stopPropagation();accountMenu.hidden=!accountMenu.hidden;$('top-user-id').setAttribute('aria-expanded',String(!accountMenu.hidden));};
-document.addEventListener?.('click',event=>{if(!accountMenu.hidden&&!event.target.closest('#user-dropdown-menu, #top-user-id'))closeAccountMenu();});
+$('top-user-id').onclick=event=>{event.stopPropagation();accountMenu.hidden=!accountMenu.hidden;$('top-user-id').setAttribute('aria-expanded',String(!accountMenu.hidden));positionAccountMenu();};
+const closeOutsideAccountMenu=event=>{if(!accountMenu.hidden&&!event.target.closest('#user-dropdown-menu, #top-user-id'))closeAccountMenu();};
+document.addEventListener('pointerdown',closeOutsideAccountMenu,true);
+document.addEventListener('click',closeOutsideAccountMenu,true);
+window.addEventListener('resize',positionAccountMenu);
+document.querySelector('#main-tabs').addEventListener('scroll',positionAccountMenu);
 document.addEventListener?.('keydown',event=>{if(event.key==='Escape')closeAccountMenu();});
 let accountMe=null;
 function renderAccount(me){
@@ -476,7 +489,7 @@ function showMainPage(id,routeMode='push'){
   if(mobileLayout.matches)showMobileView('main');
   updateMobileNavigation();
 }
-$('manage-account').onclick=showAccountPanel;
+$('manage-account').onclick=()=>{closeAccountMenu();showAccountPanel();};
 $('account-profile-form').onsubmit=async event=>{
   event.preventDefault();
   const status=$('account-profile-status');
@@ -655,7 +668,23 @@ function setupHeaderPullRefresh(){
 }
 setupHeaderPullRefresh();
 $('logout').onclick=guard(async()=>{await api('/auth/logout','POST',{});out();});
-$('theme').onclick=()=>{document.body.classList.toggle('light-mode');localStorage.setItem('v3-theme',document.body.classList.contains('light-mode')?'light':'dark');};document.body.classList.toggle('light-mode',localStorage.getItem('v3-theme')==='light');
+const systemTheme=matchMedia('(prefers-color-scheme: light)');
+let themeChoice='system';
+try{const saved=localStorage.getItem('v3-theme');if(['light','dark','system'].includes(saved))themeChoice=saved;}catch{}
+function applyAccountTheme(){
+  document.body.classList.toggle('light-mode',themeChoice==='light'||themeChoice==='system'&&systemTheme.matches);
+  for(const option of accountMenu.querySelectorAll('.theme-option')){
+    const active=option.dataset.theme===themeChoice;
+    option.classList.toggle('active',active);option.setAttribute('aria-pressed',String(active));
+  }
+}
+for(const option of accountMenu.querySelectorAll('.theme-option'))option.onclick=()=>{
+  themeChoice=option.dataset.theme;
+  try{localStorage.setItem('v3-theme',themeChoice);}catch{}
+  applyAccountTheme();
+};
+systemTheme.addEventListener('change',()=>{if(themeChoice==='system')applyAccountTheme();});
+applyAccountTheme();
 $('shutoff').onclick=guard(async()=>{await api('/control','PUT',{shutoff:!state.shutoff,client_request_id:crypto.randomUUID()});await refresh();});
 $('connect').onclick=guard(async()=>{await api('/provider/login','POST',{});await refresh();$('device').scrollIntoView({block:'nearest'});});
 $('disconnect').onclick=guard(async()=>{await api('/provider/logout','POST',{});await refresh();});

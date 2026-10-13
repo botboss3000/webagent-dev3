@@ -62,7 +62,12 @@ function sizeControl(node, config) {
   const trigger = node.querySelector('.session-dropdown-trigger');
   if (trigger) { trigger.style.height='100%'; trigger.style.minHeight='0'; trigger.style.boxSizing='border-box'; }
   if (config.font_size) { node.style.fontSize=config.font_size; if(trigger) trigger.style.fontSize=config.font_size; }
-  if (config.border_radius) node.style.borderRadius=config.border_radius === 'pill' ? `calc(${size || '40px'} / 2)` : config.border_radius;
+  if (config.border_radius) {
+    const sessionPill = node.dataset.headerControl === 'session_dropdown';
+    // A pill stays semicircular even when its rendered height exceeds the profile size.
+    const radius = config.border_radius === 'pill' ? (sessionPill ? '999px' : `calc(${size || '40px'} / 2)`) : config.border_radius;
+    node.style.setProperty('border-radius', sessionPill ? `var(--session-selector-open-radius, ${radius})` : radius, sessionPill ? 'important' : '');
+  }
   if (config.min_width) node.style.minWidth=config.min_width;
   if (config.max_width) node.style.maxWidth=config.max_width;
 }

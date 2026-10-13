@@ -80,9 +80,24 @@ export function mountBuilds(panel, onStatus = () => {}) {
   status.hidden = true;
   const list = document.createElement('div');
   list.className = 'build-list';
-  list.setAttribute('aria-label', 'Recent development builds');
-  const leftovers = document.createElement('section');
-  leftovers.setAttribute('aria-label', 'Retained tasks needing investigation');
+  list.setAttribute('aria-label', 'Development builds');
+  const leftovers = document.createElement("details");
+  leftovers.className = "build-card build-retained";
+  leftovers.setAttribute("aria-label", "Retained tasks needing investigation");
+  const leftoverSummary = document.createElement("summary");
+  leftoverSummary.className = "build-retained-summary";
+  const leftoverTitle = document.createElement("h3");
+  leftoverTitle.textContent = "Retained tasks needing investigation";
+  const leftoverCount = document.createElement("span");
+  leftoverCount.className = "build-retained-count";
+  const leftoverChevron = document.createElement("span");
+  leftoverChevron.className = "build-retained-chevron";
+  leftoverChevron.setAttribute("aria-hidden", "true");
+  leftoverChevron.textContent = "▸";
+  const leftoverList = document.createElement("div");
+  leftoverList.className = "build-retained-list";
+  leftoverSummary.append(leftoverTitle, leftoverCount, leftoverChevron);
+  leftovers.append(leftoverSummary, leftoverList);
   const reviewed = new Set();
   const reviewErrors = new Map();
   const synchronization = document.createElement('div');
@@ -126,17 +141,14 @@ export function mountBuilds(panel, onStatus = () => {}) {
   }
   function render() {
     status.hidden = true;
-    leftovers.replaceChildren();
+    // Keep the disclosure node intact so polling never resets its open state.
+    leftoverList.replaceChildren();
     const notices = Array.isArray(snapshot.leftovers) ? snapshot.leftovers : [];
     leftovers.hidden = !notices.length;
-    if (notices.length) {
-      const title = document.createElement('h3');
-      title.textContent = 'Retained tasks needing investigation';
-      leftovers.append(title);
-    }
+    leftoverCount.textContent = String(notices.length);
     for (const notice of notices) {
       const card = document.createElement('article');
-      card.className = 'build-card';
+      card.className = "build-retained-notice";
       const text = document.createElement('p');
       text.textContent = notice.notification;
       const detail = document.createElement('p');
@@ -179,12 +191,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
         const error = document.createElement('p'); error.setAttribute('role', 'status');
         error.textContent = reviewErrors.get(notice.id); card.append(error);
       }
-      leftovers.append(card);
-    }
-    if (snapshot.leftover_total > notices.length) {
-      const more = document.createElement('p');
-      more.textContent = 'Showing ' + notices.length + ' of ' + snapshot.leftover_total + ' retained-task notices.';
-      leftovers.append(more);
+      leftoverList.append(card);
     }
     showSynchronization(synchronization, snapshot.synchronization);
     const jobs = snapshot.jobs;
@@ -430,7 +437,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
       if (!Array.isArray(data.jobs)) throw Error('Build status response is invalid');
       if (!stopped) { snapshot = data; onStatus(data.jobs.filter(isActive).length); render(); }
     } catch (error) {
-      if (!stopped) { leftovers.replaceChildren(); onStatus(0); status.hidden = false; status.textContent = error.message; }
+      if (!stopped) { leftovers.hidden = true; onStatus(0); status.hidden = false; status.textContent = error.message; }
     } finally {
       loading = false;
       update.disabled = false;

@@ -25,6 +25,7 @@ mod background_followup;
 mod followup_queue;
 mod abilities;
 mod optimization;
+mod mcp;
 mod optimization_settings;
 mod optimization_prompt;
 mod services;

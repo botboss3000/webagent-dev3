@@ -1,6 +1,7 @@
 // V3 data adapter for the v2 Abilities composition, prompts group, and ability rows.
 import { buildAbilitiesOverview } from './overview.js';
 import { buildAdministratorControls } from './administrator.js';
+import { buildMcpControls } from './mcp.js';
 import { buildPromptsGroup } from './prompts.js';
 import { buildGroup, setGroupStatus } from './table.js';
 import { buildPolicyControls, permissionControl, effectiveLabel, readinessLabel } from './policy.js';
@@ -115,6 +116,8 @@ export async function renderAbilities(host, request, options) {
   };
   const buildAbilityBody = (detail, ability) => {
     if (detail.childElementCount) return;
+    if (ability.id === 'mcp') detail.append(buildMcpControls({ ability, request, scope,
+      canManage, levelId, previewUser, status }));
     const tools = _buildAbilitySettingsList();
     tools.classList.add('v3-ability-tools');
     const generalSkills = ability.general_skills ||

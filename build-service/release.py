@@ -90,7 +90,7 @@ def snapshot(root, allowlist, validate):
     return archive(files, validate)
 
 
-def candidate(base_blob, task_blob, live_blob, validate):
+def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False):
     base, task, live = (entries(value, validate) for value in
                         (base_blob, task_blob, live_blob))
     # Inspection bytes attest the task, but cannot enter release merging.
@@ -101,7 +101,7 @@ def candidate(base_blob, task_blob, live_blob, validate):
                          if not inspection_path(name)} for files in (base, task, live))
     changed = [name for name in sorted(set(base) | set(task))
                if base.get(name) != task.get(name)]
-    if not changed or len(changed) > 256 or any(
+    if (not changed and not allow_empty) or len(changed) > 256 or any(
             not name.startswith("v3/") or name.startswith("v3/data/")
             for name in changed):
         raise ValueError("isolated task has no bounded V3 source changes")
@@ -117,7 +117,7 @@ def candidate(base_blob, task_blob, live_blob, validate):
 
 
 def release_mounts(previous, root, asset_root=None):
-    """Pin code mounts to a frozen version, preserving state and runtime mounts."""
+    """Pin code mounts and expose the read-only active guidance snapshot to API and loop."""
     mapping = {
         "/live-v3": "v3",
         "/opt/v3/config": "v3/config",
@@ -144,7 +144,7 @@ def release_mounts(previous, root, asset_root=None):
         target = mount.get("Target")
         if api and asset_root is not None and target in legacy_assets:
             continue
-        if api and asset_root is not None and target == "/opt/v3/assets":
+        if asset_root is not None and target == "/opt/v3/assets":
             mount["Source"] = str(asset_root)
             mount["ReadOnly"] = True
             seen.add(target)
@@ -156,14 +156,14 @@ def release_mounts(previous, root, asset_root=None):
             mount["ReadOnly"] = True
             seen.add(target)
         mounts.append(mount)
-    if api and asset_root is not None and "/opt/v3/assets" not in seen:
+    if asset_root is not None and "/opt/v3/assets" not in seen:
         if not asset_root.is_dir() or asset_root.is_symlink():
             raise ValueError("stable asset mount unavailable")
         mounts.append({"Type": "bind", "Source": str(asset_root),
                        "Target": "/opt/v3/assets", "ReadOnly": True})
         seen.add("/opt/v3/assets")
     required = ({"/live-v3", "/opt/v3/assets" if asset_root is not None else "/opt/v3/ui"} if api
-                else {"/opt/v3/plugins/abilities"})
+                else {"/opt/v3/plugins/abilities"} | ({"/opt/v3/assets"} if asset_root is not None else set()))
     if not required <= seen:
         raise ValueError("required release mounts absent")
     host["Mounts"] = mounts

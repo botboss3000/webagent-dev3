@@ -34,6 +34,10 @@ tempfile = "3"
 http-body-util = "0.1"
 
 [[bin]]
+name = "webagent-mcp"
+path = "src/plugin_packages/mcp/main.rs"
+
+[[bin]]
 name = "webagent-diagnostics"
 path = "src/plugin_packages/diagnostics/main.rs"
 

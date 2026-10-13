@@ -168,3 +168,5 @@ container configuration provenance. Reference functions remain pending in
   the package available. Verify paused creation, explicit receiver signing-key
   provisioning, enable/pause, rotation and bounded receipt history. Keep test
   receivers disposable; never deliver live conversation content.
+
+- MCP: `/app?tab=agents&agent=<authorized-fixture-agent>&agentView=abilities`. Expand MCP and verify live plugin availability, search/manual HTTPS connection creation, explicit tool selection, private bearer input, revisioned enable/disable/remove and reload persistence. Disable mcp_add_connection independently and confirm permitted existing calls remain usable. Read-only capability previews must not mutate connections. Remove or atomically replace the administrator-installed plugins/mcp directory and verify immediate tool withdrawal and supervisor lifecycle without restarting the app. Interrupted external calls require reconciliation; no automatic write replay. Test only disposable development connections and restore fixture grants.

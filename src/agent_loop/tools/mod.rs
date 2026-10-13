@@ -9,6 +9,8 @@ pub(crate) mod core_directory_decision;
 pub(crate) mod code_index_retrieval;
 #[path = "../../../plugins/abilities/Administrator/code_index/configuration_adapter.rs"]
 pub(crate) mod code_index_configuration;
+#[path = "../../../plugins/abilities/Administrator/code_index/maintenance_adapter.rs"]
+pub(crate) mod code_index_maintenance;
 #[path = "../../../plugins/abilities/Core/base/adapter.rs"]
 pub(crate) mod core_utilities;
 #[path = "../../../plugins/abilities/Core/base/session_adapter.rs"]
@@ -45,7 +47,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 pub fn is_read(name: &str) -> bool {
-    crate::modules::is_read(name) || matches!(
+    crate::modules::is_read(name) || matches!(name,"mcp_list_connections"|"mcp_search_servers"|"mcp_inspect_server"|"mcp_list_tools") || matches!(
         name,
         "task_status" | "task_wait" | "task_cancel"
             | "search_tools" | "list_tools" | "load_tool"
@@ -179,6 +181,7 @@ pub fn schemas() -> Vec<Value> {
     }).clone();
     // Optional package schemas are live; a cached core catalog cannot resurrect removed tools.
     schemas.extend(crate::modules::schemas());
+    schemas.extend(crate::mcp::schemas());
     schemas
 }
 
@@ -201,6 +204,7 @@ pub async fn execute(
             | "source_patch"
             | "shell"
             | "python"
+            | "code_index_maintenance"
             | "code_index_scan"
             | "code_index_lookup"
             | "code_index_coverage"

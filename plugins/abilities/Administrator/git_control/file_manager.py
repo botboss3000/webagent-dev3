@@ -404,7 +404,7 @@ async def _git_live_snapshot(adapter, repo, repo_name):
         name = line[3:]
         try:
             parts(name)
-            data, _ = adapter.read_source(repo, name)
+            data, _ = adapter.read_source(repo, name, max_bytes=adapter.GIT_SOURCE_LIMIT)
             untracked.append([name, hashlib.sha256(data).hexdigest()])
         except (Rejected, adapter.Rejected):
             untracked.append([name, "unavailable"])
@@ -435,7 +435,10 @@ async def _git_status(adapter, repo, repo_name):
         committable = True
         reason = ""
         try:
-            adapter.path(repo, name, True)
+            source = adapter.path(repo, name, True)
+            if source.exists() and source.stat().st_size > adapter.GIT_SOURCE_LIMIT:
+                committable = False
+                reason = f"File exceeds {adapter.GIT_SOURCE_LIMIT // (1024 * 1024)} MiB Git scan limit"
         except adapter.Rejected:
             committable = False
             reason = "Submodule, directory or symlink: commit separately"
@@ -723,7 +726,7 @@ async def _git_commit(adapter, repo, args):
         raise Rejected("Review changed; refresh before committing")
     for name in paths:
         parts(name)
-        content, _ = adapter.read_source(repo, name, True)
+        content, _ = adapter.read_source(repo, name, True, max_bytes=adapter.GIT_SOURCE_LIMIT)
         if content is not None and adapter.secret(content):
             raise Rejected("Source contains possible credentials")
     staged = (await adapter.command(repo, ["diff", "--cached", "--name-only", "-z"])).split(b"\x00")

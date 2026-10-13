@@ -42,6 +42,49 @@ class GitTests(unittest.IsolatedAsyncioTestCase):
   pushed=subprocess.run(["git","--git-dir",str(self.remote),"rev-parse","main"],capture_output=True,check=True).stdout.decode().strip()
   self.assertEqual(pushed,self.run_git("rev-parse","HEAD"))
 
+ async def test_file_manager_commit_large_binary_and_secret_guard(self):
+  fm_spec=importlib.util.spec_from_file_location("file_manager",FILE.with_name("file_manager.py"))
+  fm=importlib.util.module_from_spec(fm_spec);fm_spec.loader.exec_module(fm)
+  payload=b"\0"*5533648
+  (self.repo/"worker.bin").write_bytes(payload)
+  view=await fm._git_status(git,self.repo,"__root__")
+  self.assertTrue(next(row for row in view["untracked"] if row["path"]=="worker.bin")["committable"])
+  result=await fm._git_commit(git,self.repo,{"repo":"__root__","paths":["worker.bin"],"message":"binary fixture","expected_head":view["head"],"expected_review_sha256":view["review_sha256"]})
+  self.assertEqual(result["status"],"committed")
+  blob=subprocess.run(["git","show","HEAD:worker.bin"],cwd=self.repo,capture_output=True,check=True).stdout
+  self.assertEqual(blob,payload)
+  (self.repo/"worker.bin").write_bytes(payload+b"\naccess_token="+b"x"*24+b"\n")
+  view=await fm._git_status(git,self.repo,"__root__")
+  before=self.run_git("rev-parse","HEAD")
+  with self.assertRaisesRegex(fm.Rejected,"credentials"):
+   await fm._git_commit(git,self.repo,{"repo":"__root__","paths":["worker.bin"],"message":"guard fixture","expected_head":view["head"],"expected_review_sha256":view["review_sha256"]})
+  self.assertEqual(self.run_git("rev-parse","HEAD"),before)
+  self.assertEqual(self.run_git("diff","--cached","--name-only"),"")
+
+ async def test_git_commit_scan_bound_matches_status_and_preserves_editor_bound(self):
+  fm_spec=importlib.util.spec_from_file_location("file_manager",FILE.with_name("file_manager.py"))
+  fm=importlib.util.module_from_spec(fm_spec);fm_spec.loader.exec_module(fm)
+  (self.repo/"large.bin").write_bytes(b"\0"*(1048576+1))
+  with self.assertRaisesRegex(git.Rejected,"large.bin:.*1 MiB"):
+   git.read_source(self.repo,"large.bin")
+  with (self.repo/"oversized.bin").open("wb") as stream:stream.truncate(git.GIT_SOURCE_LIMIT+1)
+  view=await fm._git_status(git,self.repo,"__root__")
+  row=next(row for row in view["untracked"] if row["path"]=="oversized.bin")
+  self.assertFalse(row["committable"]);self.assertIn("16 MiB",row["skip_reason"])
+  before=self.run_git("rev-parse","HEAD")
+  with self.assertRaisesRegex(git.Rejected,"oversized.bin:.*16 MiB"):
+   await fm._git_commit(git,self.repo,{"repo":"__root__","paths":["oversized.bin"],"message":"oversized fixture","expected_head":view["head"],"expected_review_sha256":view["review_sha256"]})
+  self.assertEqual(self.run_git("rev-parse","HEAD"),before)
+  self.assertEqual(self.run_git("diff","--cached","--name-only"),"")
+
+ async def test_mcp_credential_url_fixtures_are_commit_safe(self):
+  root=FILE.parents[4]
+  for name in ("src/mcp/connections.rs","src/plugin_packages/mcp/main.rs","tests/test_admin_git.py"):
+   with self.subTest(file=name):
+    self.assertFalse(git.secret((root/name).read_bytes()))
+  for credentials in (b"u:p",b"user:password"):
+   self.assertTrue(git.secret(b"https://"+credentials+b"@service.example"))
+
  async def test_file_manager_commit_more_than_64_paths(self):
   fm_spec=importlib.util.spec_from_file_location("file_manager",FILE.with_name("file_manager.py"))
   fm=importlib.util.module_from_spec(fm_spec);fm_spec.loader.exec_module(fm)

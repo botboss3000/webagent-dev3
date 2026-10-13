@@ -1,5 +1,9 @@
 # Codebase Admin
 
+For ability/plugin changes and Markdown, JSON/configuration, UI assets, Python or other non-Rust files, load the selectable live_plugin_publication skill in this ability before choosing a release path. It covers independently replaceable app components, dependency-aware compilation, and live asset/configuration publication while distinguishing the intended architecture from currently supported broker lanes.
+
+For every UI change, read `plugins/abilities/Core/ui_admin/ui_admin.skill.md` first and apply its default button, touch-feedback, and border-state guidance. UI Admin remains pending; read that file through Codebase Admin rather than assuming its legacy tools are available.
+
 For v3 Rust work, load the selectable rust_quality skill in this ability for ownership, async design, correctness, and measured optimization guidance. This standard skill remains authoritative for task editing and release workflow.
 
 Choose the target from the request. Explicit direct/live edits and runtime configuration (such as data/config/chat.json) use file tools without task_id (or with null). Application source changes intended for a build/release use file tools with one stable task_id, 8-80 letters/digits/underscores/hyphens. Do not ask the user to choose a tool. Do not use live edits as a fallback when a task edit fails.

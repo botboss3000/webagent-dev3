@@ -4,6 +4,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 LIMIT=65536
 SCAN_LINE_LIMIT=1024*1024
+# Git hashes/scans whole files; the editor/conflict reader keeps its smaller cap.
+GIT_SOURCE_LIMIT=16*1024*1024
 NETWORK_TRANSPORT=None
 _SANDBOX_ROOT=contextvars.ContextVar("git_workspace_root",default=None)
 _RESTRICT=runpy.run_path(str(Path(__file__).resolve().parents[4]/"sandbox.py"))["restrict"]
@@ -46,7 +48,7 @@ def _source_parent(repo,raw):
   return fd,parts[-1]
  except BaseException:os.close(fd);raise
 
-def _read_at(parent,name,missing=False):
+def _read_at(parent,name,missing=False,max_bytes=1048576):
  try:fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC,dir_fd=parent)
  except FileNotFoundError:
   if missing:return None,None
@@ -54,20 +56,22 @@ def _read_at(parent,name,missing=False):
  except OSError as error:raise Rejected("Source file replaced or unavailable") from error
  try:
   before=os.fstat(fd)
-  if not stat.S_ISREG(before.st_mode) or before.st_size>1048576:raise Rejected("Bounded regular source file required")
+  if not stat.S_ISREG(before.st_mode):raise Rejected("Regular source file required")
+  if before.st_size>max_bytes:raise Rejected(f"Source file exceeds {max_bytes//1048576} MiB read limit")
   chunks=[];total=0
   while data:=os.read(fd,65536):
    total+=len(data)
-   if total>1048576:raise Rejected("Source file exceeds read bound")
+   if total>max_bytes:raise Rejected("Source file exceeds read bound")
    chunks.append(data)
   after=os.fstat(fd)
   if (before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns):raise Rejected("Source changed during read")
   return b"".join(chunks),before.st_mode&0o777
  finally:os.close(fd)
 
-def read_source(repo,raw,missing=False):
+def read_source(repo,raw,missing=False,max_bytes=1048576):
  parent,name=_source_parent(repo,raw)
- try:return _read_at(parent,name,missing)
+ try:return _read_at(parent,name,missing,max_bytes)
+ except Rejected as error:raise Rejected(f'{raw}: {error}') from error
  finally:os.close(parent)
 
 def _before_publish(repo,raw):
@@ -211,7 +215,7 @@ async def head(repo):return (await command(repo,["rev-parse","--verify","HEAD"])
 async def review_digest(repo):
  parts=[await head(repo),(await command(repo,["status","--porcelain=v1","-z"])).hex(),(await command(repo,["diff","--no-ext-diff","--no-textconv","HEAD","--"])).hex()]
  for raw in sorted(filter(None,(await command(repo,["ls-files","--others","--exclude-standard","-z"])).split(b"\0"))):
-  name=raw.decode();data,_=read_source(repo,name)
+  name=raw.decode();data,_=read_source(repo,name,max_bytes=GIT_SOURCE_LIMIT)
   parts.append([name,hashlib.sha256(data).hexdigest()])
  return hashlib.sha256(json.dumps(parts,sort_keys=True).encode()).hexdigest()
 async def snapshot(base,repo="webagent-v3"):
@@ -334,7 +338,7 @@ async def commit_and_push(base,args):
  ps=paths(p,args["paths"]);message=text(args["message"])
  if secret(message.encode()):raise Rejected("Commit message contains possible credentials")
  for name in ps:
-  data,_=read_source(p,name,True)
+  data,_=read_source(p,name,True,max_bytes=GIT_SOURCE_LIMIT)
   if data is not None and secret(data):raise Rejected("Source contains possible credentials")
  await transport(base,p,args.get("remote","origin"),"push")
  await fence(p,args["expected_head"])

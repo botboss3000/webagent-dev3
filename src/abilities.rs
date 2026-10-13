@@ -305,7 +305,7 @@ impl Catalog {
                 if !valid_id(&id) || !ids.insert(id.clone()) {
                     bail!("Invalid or duplicate ability identifier: {id}");
                 }
-                if id == "optimization" { bail!("Optimization is reserved for its executable plugin"); }
+                if matches!(id.as_str(),"optimization"|"mcp") { bail!("Ability ID is reserved for its executable plugin"); }
                 let ability_path = folder.path();
                 // Pin exactly the bytes parsed here; live edits withdraw cached authority
                 // until a freshly validated catalog reload adopts the new declaration.
@@ -448,6 +448,16 @@ impl Catalog {
                 tool_skills: BTreeMap::new(), selectable_skills: BTreeMap::new(),
             });
         }
+        abilities.push(Ability {
+            id:"mcp".into(),path:crate::mcp::bridge::folder(),manifest_digest:"mcp-v1".into(),
+            group:"Connections".into(),group_name:"Connections".into(),group_order:90,
+            name:"MCP".into(),description:"Connect this agent to external MCP servers and explicitly permitted operations.".into(),
+            skill_summary:Some("Discover MCP servers, manage agent connections and call permitted remote tools.".into()),
+            migration_note:None,required_module:None,icon:Some("plug".into()),color:None,order:1,
+            kind:EntryKind::Ability,readiness:Readiness::Ready,config:json!({}),
+            tools:crate::mcp::all_schemas().iter().filter_map(|s|s["name"].as_str().map(str::to_owned)).collect(),
+            skill:Some(crate::mcp::GUIDANCE.into()),tool_skills:BTreeMap::new(),selectable_skills:BTreeMap::new(),
+        });
         abilities.sort_by(|a, b| {
             (a.group_order, &a.group_name, a.order, &a.name, &a.id).cmp(&(
                 b.group_order,
@@ -466,6 +476,7 @@ impl Catalog {
     }
 
     fn present(ability: &Ability) -> bool {
+        if ability.id=="mcp" {return crate::mcp::bridge::available();}
         if ability.id == "optimization" {
             return crate::optimization::available();
         }
@@ -480,7 +491,34 @@ impl Catalog {
 
     // Only cached, validated bundle IDs can select an asset. Live edits withdraw
     // old guidance instead of importing instructions without a catalog reload.
+    /// Guidance follows the broker's active asset pointer; manifests/tool grants stay image-pinned.
+    fn published_skill_path(ability:&Ability,kind:&str,name:&str,ui_root:Option<&Path>)->Option<PathBuf>{
+        if ability.id!="code_index" || !valid_id(name){return None;}
+        let root=ui_root.filter(|root|root.ends_with(Path::new("v3/ui")))?;
+        let folder=root.parent()?.join("plugins/abilities/Administrator/code_index");
+        match kind{
+            "ability" if name=="code_index"=>Some(folder.join("code_index.skill.md")),
+            "tool" if ability.tools.iter().any(|tool|tool==name)=>Some(folder.join("tools").join(format!("{name}.skill.md"))),
+            "selectable" if ability.selectable_skills.contains_key(name)=>Some(folder.join("skills").join(format!("{name}.skill.md"))),
+            _=>None,
+        }
+    }
+    /// Resolve only Code Index guidance through the trusted active asset pointer.
+    fn published_skill(ability:&Ability,kind:&str,name:&str)->Option<PathBuf>{
+        let root=std::env::var_os("V3_UI_ROOT").map(PathBuf::from);
+        Self::published_skill_path(ability,kind,name,root.as_deref())
+    }
+    /// Read current published guidance; other abilities retain cached declaration validation.
+    fn asset_text<'a>(ability:&'a Ability,kind:&str,name:&str,cached:&'a str)->Option<Cow<'a,str>>{
+        if let Some(path)=Self::published_skill(ability,kind,name){
+            return optional_skill(&path).ok().flatten().map(Cow::Owned);
+        }
+        Self::skill_live(ability,kind,name,cached).then_some(Cow::Borrowed(cached))
+    }
+
     fn skill_live(ability: &Ability, kind: &str, name: &str, text: &str) -> bool {
+        if let Some(path)=Self::published_skill(ability,kind,name){return optional_skill(&path).ok().flatten().is_some_and(|current|current==text);}
+        if ability.id=="mcp" {return crate::mcp::bridge::available()&&kind=="ability"&&name=="mcp"&&text==crate::mcp::GUIDANCE;}
         if ability.id == "optimization" {
             return kind == "ability" && name == "optimization"
                 && crate::optimization::guidance().is_some_and(|body| body == text);
@@ -503,9 +541,7 @@ impl Catalog {
         if ability.id == "optimization" {
             return crate::optimization::guidance().map(Cow::Owned);
         }
-        ability.skill.as_deref()
-            .filter(|text| Self::skill_live(ability, "ability", &ability.id, text))
-            .map(Cow::Borrowed)
+        ability.skill.as_deref().and_then(|text|Self::asset_text(ability,"ability",&ability.id,text))
     }
 
     pub fn live_version(&self) -> String {
@@ -522,7 +558,14 @@ impl Catalog {
             for (name, text) in &ability.selectable_skills {
                 assets.push(json!(["selectable", name, present && Self::skill_live(ability, "selectable", name, text)]));
             }
-            json!([ability.id, present, assets])
+            let current_guidance=if ability.id=="code_index"{
+                let mut hashes=Vec::new();
+                if let Some(body)=Self::core_skill(ability){hashes.push(json!(["ability",ability.id,hex::encode(Sha256::digest(body.as_bytes()))]));}
+                for(name,text)in &ability.tool_skills{if let Some(body)=Self::asset_text(ability,"tool",name,text){hashes.push(json!(["tool",name,hex::encode(Sha256::digest(body.as_bytes()))]));}}
+                for(name,text)in &ability.selectable_skills{if let Some(body)=Self::asset_text(ability,"selectable",name,text){hashes.push(json!(["selectable",name,hex::encode(Sha256::digest(body.as_bytes()))]));}}
+                json!(hashes)
+            }else{Value::Null};
+            json!([ability.id, present, assets,current_guidance])
         }).collect::<Vec<_>>();
         hex::encode(Sha256::digest(serde_json::to_vec(&json!([self.version, validity, crate::optimization::generation()]))
             .expect("Cached catalog validity is serializable")))
@@ -545,13 +588,13 @@ impl Catalog {
         }
         for (name, text) in &ability.tool_skills {
             if Self::supported(name) && Self::tool_mode(visibility, name) != "off" && allow_tool(name) {
-                assets.push(("tool", name.as_str(), Cow::Borrowed(text)));
+                if let Some(body)=Self::asset_text(ability,"tool",name,text){assets.push(("tool",name.as_str(),body));}
             }
         }
         for (name, text) in &ability.selectable_skills {
             if Self::selectable_metadata(name,text).is_some()
                 && Self::selectable_mode(visibility, ability_id, name, text) != "off" {
-                assets.push(("selectable", name.as_str(), Cow::Borrowed(text)));
+                if let Some(body)=Self::asset_text(ability,"selectable",name,text){assets.push(("selectable",name.as_str(),body));}
             }
         }
         assets.retain(|(kind, name, text)| Self::skill_live(ability, kind, name, text));
@@ -822,7 +865,7 @@ impl Catalog {
         Self::core_skill(ability)
     }
 
-    pub fn configuration_skill_asset(&self, id: &str, kind: &str, name: &str) -> Option<&str> {
+    pub fn configuration_skill_asset(&self, id: &str, kind: &str, name: &str) -> Option<Cow<'_ ,str>> {
         let ability = self.abilities.iter().find(|a| a.id == id && Self::present(a))?;
         let text = match kind {
             "skill" if valid_id(name) => ability.selectable_skills.get(name)
@@ -830,8 +873,7 @@ impl Catalog {
             "tool" if valid_id(name) && ability.tools.iter().any(|tool| tool == name) => ability.tool_skills.get(name),
             _ => None,
         }?;
-        Self::skill_live(ability, if kind == "skill" {"selectable"} else {"tool"}, name, text)
-            .then_some(text.as_str())
+        Self::asset_text(ability,if kind=="skill"{"selectable"}else{"tool"},name,text)
     }
 
     /// Installed owners of a tool, independent of visibility or activation.
@@ -978,24 +1020,26 @@ impl Catalog {
                     part.push_str(&skill);
                 }
             }
-            for (tool, skill) in &ability.tool_skills {
+            for (tool, cached) in &ability.tool_skills {
+                let Some(skill)=Self::asset_text(ability,"tool",tool,cached)else{continue;};
                 if Self::supported(tool) && Self::allowed(policy, tool)
                     && supplied_tool(tool)
-                    && Self::skill_live(ability, "tool", tool, skill)
+                    && Self::skill_live(ability, "tool", tool, &skill)
                     && Self::tool_mode(visibility, tool) == "visible" {
                     part.push_str("\n\nTool ");
                     part.push_str(tool);
                     part.push_str(":\n");
-                    part.push_str(skill);
+                    part.push_str(&skill);
                 }
             }
-            for (name, skill) in &ability.selectable_skills {
-                if Self::selectable_mode(visibility, &ability.id, name, skill) == "visible"
-                    && Self::skill_live(ability, "selectable", name, skill) {
+            for (name, cached) in &ability.selectable_skills {
+                let Some(skill)=Self::asset_text(ability,"selectable",name,cached)else{continue;};
+                if Self::selectable_mode(visibility, &ability.id, name, &skill) == "visible"
+                    && Self::skill_live(ability, "selectable", name, &skill) {
                     part.push_str("\n\nSkill ");
                     part.push_str(name);
                     part.push_str(":\n");
-                    part.push_str(skill);
+                    part.push_str(&skill);
                 }
             }
             // Administrator-selected guidance is mandatory; assembly budgets the complete request.
@@ -1034,17 +1078,19 @@ impl Catalog {
                 let mode=Self::skill_mode(visibility,id);
                 add("ability",id,mode,&body,mode=="visible"&&(normal||extra));
             }
-            for (name,body) in &ability.tool_skills {
-                if names.contains(name.as_str()) && Self::skill_live(ability,"tool",name,body) {
+            for (name,cached) in &ability.tool_skills {
+                let Some(body)=Self::asset_text(ability,"tool",name,cached)else{continue;};
+                if names.contains(name.as_str()) && Self::skill_live(ability,"tool",name,&body) {
                     let mode=Self::tool_mode(visibility,name);
-                    add("tool",name,mode,body,sent.contains(name.as_str())
+                    add("tool",name,mode,&body,sent.contains(name.as_str())
                         && ((normal&&mode=="visible") || (mode!="off"&&selected(name))));
                 }
             }
-            for (name,body) in &ability.selectable_skills {
-                if Self::selectable_metadata(name,body).is_some() && Self::skill_live(ability,"selectable",name,body) {
-                    let mode=Self::selectable_mode(visibility,id,name,body);
-                    add("selectable",name,mode,body,normal&&mode=="visible");
+            for (name,cached) in &ability.selectable_skills {
+                let Some(body)=Self::asset_text(ability,"selectable",name,cached)else{continue;};
+                if Self::selectable_metadata(name,&body).is_some() && Self::skill_live(ability,"selectable",name,&body) {
+                    let mode=Self::selectable_mode(visibility,id,name,&body);
+                    add("selectable",name,mode,&body,normal&&mode=="visible");
                 }
             }
             Some(AbilityInclusion {id:id.into(),visibility:entry["visibility"].as_str()?.into(),
@@ -1221,6 +1267,28 @@ pub fn is_discovery(name: &str) -> bool {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+
+    #[test]
+    fn index_guidance_is_confined_to_registered_published_assets() {
+        let (root, catalog) = fixture();
+        let mut ability = catalog.abilities[0].clone();
+        let ui = root.path().join("assets/current/v3/ui");
+        assert!(Catalog::published_skill_path(&ability, "ability", "codebase_admin", Some(&ui)).is_none());
+        ability.id = "code_index".into();
+        ability.tools = vec!["code_index_lookup".into()];
+        let path = Catalog::published_skill_path(&ability, "ability", "code_index", Some(&ui)).unwrap();
+        assert_eq!(path, root.path().join("assets/current/v3/plugins/abilities/Administrator/code_index/code_index.skill.md"));
+        assert!(Catalog::published_skill_path(&ability, "tool", "../secret", Some(&ui)).is_none());
+        assert!(Catalog::published_skill_path(&ability, "tool", "unregistered", Some(&ui)).is_none());
+        assert!(Catalog::published_skill_path(&ability, "ability", "code_index", Some(Path::new("/tmp/other"))).is_none());
+        let tool = Catalog::published_skill_path(&ability, "tool", "code_index_lookup", Some(&ui)).unwrap();
+        fs::create_dir_all(tool.parent().unwrap()).unwrap();
+        fs::write(&tool, "First published instructions").unwrap();
+        assert_eq!(optional_skill(&tool).unwrap().unwrap(), "First published instructions");
+        fs::write(&tool, "Next published instructions").unwrap();
+        assert_eq!(optional_skill(&tool).unwrap().unwrap(), "Next published instructions");
+    }
 
     fn fixture() -> (TempDir, Catalog) {
         let root = tempfile::tempdir().unwrap();
@@ -1994,8 +2062,10 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities");
         let catalog = Catalog::load(&root).unwrap();
         let ordinary = catalog.abilities.iter()
-            .filter(|entry| entry.id != "optimization").collect::<Vec<_>>();
+            .filter(|entry| !matches!(entry.id.as_str(),"optimization"|"mcp")).collect::<Vec<_>>();
         assert_eq!(ordinary.len(), 81);
+        assert_eq!(catalog.abilities.iter().filter(|entry|entry.id=="mcp").count(),1);
+        assert!(!catalog.known("mcp"));
         assert_eq!(catalog.abilities.iter().filter(|entry| entry.id == "optimization").count(), 1);
         assert!(!catalog.known("optimization"));
         assert_eq!(catalog.abilities.iter().filter(|entry| Catalog::executable(entry)).count(), 9);

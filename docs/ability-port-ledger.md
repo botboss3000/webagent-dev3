@@ -72,7 +72,7 @@ Paths named `plugin <id>.py` refer to the owning V2 folder matching the ID and g
 | Core/image_vision | plugin image_vision.py; source handlers/adapter | pending; no registered V3 adapter/configuration path | vision provider credential/endpoint | 1 declared / 0 skills |
 | Core/model_switcher | plugin model_switcher.py; source handlers/adapter | pending; no registered V3 adapter/configuration path | No external secret indicated; scoped settings/runtime authority; 1 declared settings | 5 declared / 0 skills |
 | Core/p2p | plugin p2p.py; app/p2p/ | pending; no registered V3 adapter/configuration path | peer identity/keys and sync transport | 4 declared / 0 skills |
-| Core/ui_admin | plugin ui_admin.py; plugins/admin/ui_tools.py | pending; no registered V3 adapter/configuration path | No external secret indicated; scoped settings/runtime authority | 7 declared / 0 skills |
+| Core/ui_admin | plugin ui_admin.py; plugins/admin/ui_tools.py | pending; no registered V3 adapter/configuration path | No external secret indicated; scoped settings/runtime authority | 7 declared / 1 ability skill (frontend guidance; execution remains pending) |
 | Core/user_files | plugin user_files.py; app/user_workspace.py | pending; no registered V3 adapter/configuration path | No external secret indicated; scoped settings/runtime authority | 4 declared / 0 skills |
 | Core/visualizer | plugin visualizer.py; app/visualizer/ | pending; no registered V3 adapter/configuration path | user vault + artifact service; 1 declared settings | 16 declared / 0 skills |
 | Developer/github | Product placeholder; no executable contract | placeholder; intentionally unavailable | Separate product specification required | 0 declared / 0 skills |

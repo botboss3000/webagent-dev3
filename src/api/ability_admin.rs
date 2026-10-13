@@ -90,7 +90,7 @@ async fn catalog(app:&App,identity:&Value,id:&str,params:&HashMap<String,String>
         ability["installed"]=json!(ability["tools"].as_array().is_some_and(|ts|ts.iter().any(|t|t["supported"]==true)));
         // Current adapters have no per-agent credential settings. Unsupported workflows
         // cannot claim configured or ready from their declaration alone.
-        ability["configured"]=json!(ready);
+        ability["configured"]=json!(if ability_id=="mcp" {ready&&crate::mcp::configured(&scoped,id).await} else {ready});
         ability["effective"]=json!({"permission":if ready {permission} else {Permission::Deny},"reason":reason});
         let active=json!({"active":[ability_id],"suppressed":[]});let loaded=json!([ability_id]);
         let mut usable=false;

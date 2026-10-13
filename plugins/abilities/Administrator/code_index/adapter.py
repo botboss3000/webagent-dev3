@@ -60,6 +60,7 @@ CREATE INDEX IF NOT EXISTS edges_value ON edges(value);
 CREATE TABLE IF NOT EXISTS feature_locations(feature_id TEXT,source_path TEXT,source_line INTEGER,file_path TEXT,start_line INTEGER,end_line INTEGER,aliases TEXT,purpose TEXT,location_purpose TEXT,origin TEXT,target_sha256 TEXT,source_sha256 TEXT,PRIMARY KEY(feature_id,source_path,source_line,file_path,start_line,end_line));
 CREATE INDEX IF NOT EXISTS feature_locations_id ON feature_locations(feature_id);
 CREATE TABLE IF NOT EXISTS feature_configurations(feature_id TEXT,file_path TEXT,start_line INTEGER,end_line INTEGER,configuration TEXT NOT NULL,PRIMARY KEY(feature_id,file_path,start_line,end_line));
+CREATE TABLE IF NOT EXISTS maintenance_records(entry_id TEXT PRIMARY KEY,file_path TEXT NOT NULL,unit_id TEXT NOT NULL,body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS batches(batch_id TEXT PRIMARY KEY,scope TEXT NOT NULL,status TEXT NOT NULL,requested_files INTEGER NOT NULL,indexed_files INTEGER NOT NULL,started_at TEXT NOT NULL,completed_at TEXT,error TEXT NOT NULL,revision INTEGER);
 """
 
@@ -702,6 +703,7 @@ def coverage(conn,rootfd,args):
             unindexed=page([{"path":p} for p in unindexed],args["offset"],args["limit"]))
     return result
 def scan(conn,rootfd,args):
+    """Replace derived source coverage atomically; successful scans discover reviews without certifying them."""
     scope=args.get("file_path") if args["action"]=="scan_file" else args.get("scope","")
     if scope is None:raise ValueError("scan_file requires file_path")
     deadline=time.monotonic()+30
@@ -738,6 +740,7 @@ def scan(conn,rootfd,args):
             conn.executemany("DELETE FROM files WHERE path=?",[(p,) for p in removed])
         for item in scans:store_scan(conn,item)
         refresh_features(conn,rootfd)
+        project_maintenance(conn,[json.loads(row[0])for row in conn.execute("SELECT body FROM maintenance_records")])
         if conn.execute("SELECT COALESCE(SUM(line_count),0) FROM files").fetchone()[0]>MAX_TOTAL_LINES:
             raise ValueError("Stored index line limit exceeded")
         if conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]>MAX_FILES:raise ValueError("Stored file count exceeds limit")
@@ -761,15 +764,15 @@ ACTIONS={"code_index_scan":{"discover","scan","scan_file"},
     "code_index_lookup":{"file","line","symbol","edge","search","snippet"},
     "code_index_coverage":{"report","gaps","stale"},
     "code_index_trace":{"symbol","selector","event","endpoint","data_attribute","import","asset"},
-    "code_index_progress":{"list","get"}}
+    "code_index_progress":{"list","get"},"code_index_maintenance":{"list","get"}}
 FIELDS={"code_index_scan":{"scope","file_path","batch_id","expected_revision"},
     "code_index_lookup":{"query","file_path","line_no","start_line","end_line","max_chars","feature_id"},
     "code_index_coverage":set(),"code_index_trace":{"kind","value"},
-    "code_index_progress":{"batch_id"}}
+    "code_index_progress":{"batch_id"},"code_index_maintenance":{"scope","entry_id","status","feature"}}
 def validated(name,args):
     if name not in ACTIONS or not isinstance(args,dict) or set(args)-({"root","limit","offset"}|FIELDS[name]|({"action"} if name!="code_index_trace" else set())):
         raise ValueError("Invalid Code Index arguments")
-    action=args.get("action",{"code_index_coverage":"report","code_index_progress":"list"}.get(name,""))
+    action=args.get("action",{"code_index_coverage":"report","code_index_progress":"list","code_index_maintenance":"list"}.get(name,""))
     if name=="code_index_trace":action=args.get("kind","")
     if action not in ACTIONS[name]:raise ValueError("Unsupported Code Index action")
     # Providers may populate every optional schema property. Only this action's
@@ -783,6 +786,7 @@ def validated(name,args):
         "code_index_coverage":{"report":set(),"gaps":set(),"stale":set()},
         "code_index_trace":{kind:{"value"} for kind in ACTIONS["code_index_trace"]},
         "code_index_progress":{"list":set(),"get":{"batch_id"}},
+        "code_index_maintenance":{"list":{"scope","status","feature"},"get":{"entry_id"}},
     }[name][action]
     result={key:value for key,value in args.items() if key in fields|{"root","limit","offset"}}
     result["action"]=action
@@ -1002,7 +1006,109 @@ def annotate_freshness(conn,rootfd,result):
         row["stale"]=state[row.get("file_path",row.get("path"))] or bool(row.get("source_path") and state.get(row["source_path"],True))
     result.update(stale_count=sum(state.values()),freshness_scope="returned_files")
     return result
+def maintenance_dependencies(conn,path):
+    """Bind navigation/configuration source metadata without copying runtime values."""
+    pairs={}
+    for row in conn.execute("SELECT DISTINCT source_path,source_sha256 FROM feature_locations WHERE file_path=?",(path,)):
+        pairs[row[0].removeprefix("v3/")]=row[1]
+    for row in conn.execute("SELECT configuration FROM feature_configurations WHERE file_path=?",(path,)):
+        for ref in json.loads(row[0]).get("references",[]):
+            target=ref["path"];found=conn.execute("SELECT sha256 FROM files WHERE path IN (?,?)",(target,"v3/"+target)).fetchone()
+            if found:pairs[target]=found[0]
+    return [{"path":p,"sha256":h}for p,h in sorted(pairs.items())]
+def maintenance_units(conn,file):
+    """Discovery is a pending inventory; uncertain parsers never certify completeness."""
+    path=file["path"];rows=[{"unit_id":"__file__","label":"File documentation and inventory","start_line":1 if file["line_count"]else 0,"end_line":file["line_count"],"features":[]}];seen={}
+    for symbol in conn.execute("SELECT * FROM symbols WHERE file_path=? ORDER BY start_line,name",(path,)):
+        name="symbol:"+str(symbol["parent_symbol"]or"")+":"+symbol["kind"]+":"+symbol["name"];seen[name]=seen.get(name,0)+1
+        rows.append({"unit_id":name+":"+str(seen[name]),"label":symbol["name"],"start_line":symbol["start_line"],"end_line":symbol["end_line"],"features":[]})
+    for row in conn.execute("SELECT feature_id,MIN(start_line),MAX(end_line) FROM feature_locations WHERE file_path=? GROUP BY feature_id",(path,)):
+        rows.append({"unit_id":"feature:"+row[0],"label":row[0],"start_line":row[1],"end_line":row[2],"features":[row[0]]})
+    locations=[dict(row)for row in conn.execute("SELECT f.feature_id,f.start_line,f.end_line,c.configuration FROM feature_locations f LEFT JOIN feature_configurations c ON c.feature_id=f.feature_id AND c.file_path=f.file_path AND c.start_line=f.start_line AND c.end_line=f.end_line WHERE f.file_path=?",(path,))]
+    for unit in rows:
+        if not unit["unit_id"].startswith("feature:"):unit["features"]=sorted(set(unit["features"])|{loc["feature_id"]for loc in locations if unit["start_line"]<=loc["end_line"]and unit["end_line"]>=loc["start_line"]})
+        applicable={json.dumps(json.loads(loc["configuration"]),sort_keys=True)for loc in locations if loc["configuration"]is not None and loc["feature_id"]in unit["features"]and unit["start_line"]<=loc["end_line"]and unit["end_line"]>=loc["start_line"]}
+        unit["configuration_assessment"]=json.loads(next(iter(applicable)))if len(applicable)==1 else {"status":"unassessed","references":[],"opportunities":[]}
+    return rows
+def project_maintenance(conn,reviews):
+    """Project exact-source reviews; fresh scans only discover pending work."""
+    if not isinstance(reviews,list)or len(reviews)>100000:raise ValueError("Maintenance snapshot exceeds bound")
+    selected={}
+    for review in reviews:
+        key=(review["file_path"].removeprefix("v3/"),review["unit_id"]);old=selected.get(key)
+        if old is None or review.get("assessment_at",review.get("reviewed_at")or 0)>=old.get("assessment_at",old.get("reviewed_at")or 0):selected[key]=review
+    files=[dict(row)for row in conn.execute("SELECT * FROM files ORDER BY path")]
+    virtual=any(f["path"].startswith("v3/")for f in files);seen=set();output=[];invalidated=0;invalidated_bindings=0
+    for file in files:
+        if virtual and not file["path"].startswith("v3/"):continue
+        logical=file["path"].removeprefix("v3/");deps=maintenance_dependencies(conn,file["path"])
+        for unit in maintenance_units(conn,file):
+            key=(logical,unit["unit_id"]);seen.add(key);old=selected.get(key)
+            row=dict(old)if old else {"status":"pending","checks":{},"remaining_work":[],"reviewer":None,"reviewed_at":None,"previous_review":None,"revision":0}
+            if old and(old.get("source_hash")!=file["sha256"]or old.get("dependencies",[])!=deps or old.get("removed")):
+                invalidated_bindings+=1;invalidated+=int(bool(old.get("reviewer"))or bool(old.get("checks")));row.update(status="needs_review",previous_review={"source_hash":old.get("source_hash"),"checks":old.get("checks",{}),"reviewer":old.get("reviewer")},checks={})
+            if row["status"]=="in_progress":row["status"]="pending"
+            if old:
+                row["review_task_id"]=old.get("review_task_id",old.get("task_id"))
+                row["review_task_key"]=old.get("review_task_key",old.get("task_key"))
+                if old.get("source_hash")==file["sha256"]and old.get("dependencies",[])==deps and old.get("configuration_assessment",{}).get("status")!="unassessed":unit["configuration_assessment"]=old["configuration_assessment"]
+            row.update(**unit,file_path=file["path"],source_hash=file["sha256"],dependencies=deps,parser_status=file["parser_status"],removed=False,claim=None,task_key="published",task_id="published",entry_id=sha(json.dumps(["published",logical,unit["unit_id"]],sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()))
+            output.append(row)
+    for key,old in selected.items():
+        if key in seen:continue
+        row=dict(old);path=("v3/"if virtual else"")+key[0];file=next((f for f in files if f["path"]==path),None);current=file["sha256"]if file else None
+        stable=old.get("removed")and old.get("source_hash")==current
+        if not stable:
+            invalidated_bindings+=1;invalidated+=int(bool(old.get("reviewer"))or bool(old.get("checks")));row.update(status="needs_review",previous_review={"source_hash":old.get("source_hash"),"checks":old.get("checks",{}),"reviewer":old.get("reviewer")},checks={})
+        row.update(file_path=path,removed=True,source_hash=current,claim=None,task_key="published",task_id="published",entry_id=sha(json.dumps(["published",key[0],key[1]],sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()));output.append(row)
+    by_unit={(r["file_path"].removeprefix("v3/"),r["unit_id"]):r for r in output}
+    for row in output:
+        reconciliation=row.get("reconciliation",{})
+        if row["removed"]and reconciliation.get("kind")=="renamed":
+            target=by_unit.get((reconciliation.get("replacement_file_path","").removeprefix("v3/"),reconciliation.get("replacement_unit_id")))
+            valid=target and not target["removed"]and target["source_hash"]==reconciliation.get("replacement_source_hash")and target.get("dependencies",[])==reconciliation.get("replacement_dependencies",[])
+            if valid:row["reconciliation"]={**reconciliation,"replacement_entry_id":target["entry_id"]}
+            elif row["status"]=="complete":
+                invalidated+=1;row.update(status="needs_review",previous_review={"source_hash":row["source_hash"],"checks":row["checks"],"reviewer":row.get("reviewer")},checks={})
+                if not row["remaining_work"]:row["remaining_work"]=["Reconcile the renamed replacement against the final source candidate"]
+        if row["unit_id"]=="__file__"and row["status"]=="complete"and not row["removed"] and any(child["file_path"]==row["file_path"]and child["unit_id"]!="__file__"and child["status"]!="complete"for child in output):
+            row.update(status="needs_review",previous_review={"source_hash":row["source_hash"],"checks":row["checks"],"reviewer":row.get("reviewer")},checks={});invalidated+=1
+    if len(output)>100000:raise ValueError("Maintenance inventory exceeds bound")
+    conn.execute("DELETE FROM maintenance_records")
+    for row in output:conn.execute("INSERT INTO maintenance_records VALUES(?,?,?,?)",(row["entry_id"],row["file_path"],row["unit_id"],json.dumps(row,sort_keys=True)))
+    counts={s:sum(r["status"]==s for r in output)for s in ("pending","in_progress","complete","needs_review")}
+    return {"counts":counts,"removed":sum(bool(r["removed"])for r in output),"invalidated_reviews":invalidated,"invalidated_source_bindings":invalidated_bindings,"invalidated_files":sorted({r["file_path"]for r in output if r["status"]=="needs_review"})[:32],"documentation_gate":"informational"}
+def maintenance_read(conn,rootfd,args):
+    """Read bounded immutable/private review snapshots and flag changed source as needing review."""
+    if args["action"]not in {"list","get"}:raise ValueError("Published/private maintenance snapshots are read-only; use a broker task")
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='maintenance_records'").fetchone():return dict(page([],args["offset"],args["limit"]),ledger_available=False)
+    rows=[json.loads(row[0])for row in conn.execute("SELECT body FROM maintenance_records ORDER BY file_path,unit_id")]
+    scope=args.get("scope","");relative_parts(scope,True)
+    if scope:rows=[r for r in rows if r["file_path"]==scope or r["file_path"].startswith(scope.rstrip("/")+"/")]
+    if args.get("entry_id"):rows=[r for r in rows if r["entry_id"]==args["entry_id"]]
+    if args.get("feature"):rows=[r for r in rows if args["feature"]in r["features"]]
+    hashes={}
+    def current_hash(path):
+        if path not in hashes:
+            try:hashes[path]=sha(read_source(rootfd,path))
+            except(OSError,ValueError):hashes[path]=None
+        return hashes[path]
+    for row in rows:
+        try:actual=current_hash(row["file_path"])
+        except FileNotFoundError:actual=None
+        stale=actual!=row["source_hash"]
+        for dep in row.get("dependencies",[]):
+            target=("v3/"if row["file_path"].startswith("v3/")else"")+dep["path"]
+            try:stale=stale or current_hash(target)!=dep["sha256"]
+            except(OSError,ValueError):stale=True
+        row["stale"]=stale
+        if stale:row["status"]="needs_review"
+    if args.get("status"):rows=[r for r in rows if r["status"]==args["status"]]
+    return page(rows,args["offset"],args["limit"])
+
 def dispatch(conn,rootfd,name,args):
+    """Route bounded source-index actions inside the selected confined source snapshot."""
+    if name=="code_index_maintenance":return maintenance_read(conn,rootfd,args)
     if name=="code_index_scan":
         if args["action"]!="discover":return scan(conn,rootfd,args)
         paths=source_files(rootfd,args.get("scope",""),time.monotonic()+30)
@@ -1068,7 +1174,7 @@ def source_digest(root):
         rows.append([rel, info.st_mode & 0o100, sha(data)])
     return sha(json.dumps(rows, separators=(",", ":")).encode())
 
-def build_published(root, output, release_id, candidate_digest):
+def build_published(root, output, release_id, candidate_digest, maintenance=None):
     """Build a complete fresh index; publish no files until coverage validates."""
     uuid.UUID(release_id)
     if not re.fullmatch("[0-9a-f]{64}", candidate_digest):
@@ -1082,6 +1188,7 @@ def build_published(root, output, release_id, candidate_digest):
         conn.execute("PRAGMA foreign_keys=ON")
         conn.executescript(DDL)
         scan(conn, fd, {"action":"scan", "scope":"", "limit":1, "offset":0})
+        maintenance_report=project_maintenance(conn,maintenance or [])
         report = coverage(conn, fd, {"action":"report", "limit":1, "offset":0})
         if any(report[k] for k in ("gaps", "stale_count", "unindexed_count")):
             raise ValueError("Published index coverage incomplete")
@@ -1103,7 +1210,7 @@ def build_published(root, output, release_id, candidate_digest):
             raise ValueError("Published index database bound exceeded")
         limitations = [dict(row) for row in conn.execute(
             "SELECT path,parser_status,parser_notes FROM files WHERE parser_status!='ok' ORDER BY path")]
-        manifest = {"index_version":INDEX_VERSION, "schema_version":1,
+        manifest = {"maintenance":maintenance_report,"index_version":INDEX_VERSION, "schema_version":1,
             "parser_sha256":sha(Path(__file__).read_bytes()), "parser_versions":parser_versions(), "release_id":release_id,
             "candidate_sha256":candidate_digest, "source_sha256":before,
             "index_sha256":sha(blob), "file_count":report["file_count"],
@@ -1164,6 +1271,13 @@ def seed_private_index(release, stage):
         if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='feature_configurations'").fetchone():
             conn.execute("DELETE FROM feature_configurations WHERE file_path NOT LIKE 'v3/%'")
             conn.execute("UPDATE feature_configurations SET file_path=substr(file_path,4)")
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='maintenance_records'").fetchone():
+            rows=[json.loads(row[0])for row in conn.execute("SELECT body FROM maintenance_records")]
+            conn.execute("DELETE FROM maintenance_records")
+            for row in rows:
+                if not row["file_path"].startswith("v3/"):continue
+                row["file_path"]=row["file_path"][3:]
+                conn.execute("INSERT INTO maintenance_records VALUES(?,?,?,?)",(row["entry_id"],row["file_path"],row["unit_id"],json.dumps(row,sort_keys=True)))
         conn.execute("DELETE FROM batches")
         conn.commit()
         if conn.execute("PRAGMA foreign_key_check").fetchone():

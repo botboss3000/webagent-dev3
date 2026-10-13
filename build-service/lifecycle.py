@@ -47,10 +47,16 @@ def install(args):
   if p.is_symlink():raise PermissionError("Reviewed source symlink")
   digest.update(p.name.encode()+b"\0"+p.read_bytes())
  digest.update((reviewed.parent/"plugins/abilities/Administrator/code_index/adapter.py").read_bytes())
+ digest.update((reviewed.parent/"plugins/abilities/Administrator/code_index/maintenance.py").read_bytes())
  release=digest.hexdigest();value["service_dir"]=str(install_root/"releases"/release);cfg.validate(value)
  config_path=Path(args.config or "/etc/webagent/"+args.instance+"/build-service.json")
  secure_dirs(config_path.parent);secure_dirs(Path(value["service_dir"]).parent)
+ ledger_root=Path(value["install_root"]).parent/"code-index-maintenance"
+ secure_dirs(ledger_root.parent)
+ if ledger_root.is_symlink():raise PermissionError("Ledger root symlink")
+ ledger_root.mkdir(mode=0o700,exist_ok=True)
  account=pwd.getpwnam(value["service_account"])
+ os.chown(ledger_root,account.pw_uid,account.pw_gid);os.chmod(ledger_root,0o700)
  if account.pw_uid!=pwd.getpwnam(value["source_owner"]).pw_uid:
   import shutil
   if not shutil.which("setfacl"):raise RuntimeError("Install the Linux acl package before using a separate service account")

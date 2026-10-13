@@ -101,10 +101,15 @@ body {
 #chat-toggle-btn.connection-connecting span{color:var(--warning);animation:chat-connection-pulse 1.2s ease-in-out infinite}
 @keyframes chat-connection-pulse{50%{opacity:.4}}
 @media(prefers-reduced-motion:reduce){#chat-toggle-btn.connection-connecting span{animation:none}}
-#main-header #user-dropdown-menu.user-dropdown-menu{position:absolute;top:calc(100% - 2px);left:14px;z-index:1100;width:min(280px,calc(100vw - 28px));min-width:0;padding:8px}
-#user-dropdown-menu .user-dropdown-current-row{padding:8px 10px;color:var(--fg-1)}
-#user-dropdown-menu button{display:block;width:100%;padding:9px 10px;border:0;border-radius:8px;background:transparent;color:var(--fg-1);text-align:left;cursor:pointer}
-#user-dropdown-menu button:hover{background:rgba(var(--brand-rgb),.08)}
+/* Use the V2 account panel styles; the body portal escapes header clipping. */
+#user-dropdown-menu.user-dropdown-menu{width:min(360px,calc(100vw - 16px));min-width:0;max-height:calc(100dvh - 16px);overflow-y:auto;box-sizing:border-box}
+#user-dropdown-menu[hidden]{display:none!important}
+#user-dropdown-menu .v3-account-avatar{display:grid;place-items:center;flex:0 0 48px;width:48px;height:48px;border-radius:50%;background:var(--bg-tint);color:var(--fg-1)}
+#user-dropdown-menu .v3-account-avatar svg{width:28px;height:28px}
+#user-dropdown-menu button{font-family:inherit}
+#user-dropdown-menu .theme-option{display:flex;align-items:center;justify-content:center}
+#user-dropdown-menu .user-dropdown-action[hidden]{display:none}
+#user-dropdown-menu #shutoff{color:var(--danger)}
 #shutoff{color:var(--danger)}
 #stage{display:flex!important;flex:1;min-height:0;overflow:hidden}
 #main-panel{display:block!important;position:relative!important;flex:1 1 55%;width:auto!important;min-width:0;overflow:auto!important}

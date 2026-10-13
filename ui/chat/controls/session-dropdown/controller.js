@@ -438,6 +438,20 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
   }
 
 
+ /** Gives touch actions a brief optional pulse, without affecting mouse/keyboard behavior. */
+ function touchFeedback(event){
+   if(event.detail===0)return;
+   const touch=event.pointerType ? event.pointerType==='touch' : window.matchMedia?.('(pointer: coarse)').matches;
+   if(!touch||typeof navigator.vibrate!=='function')return;
+   const owner=event.target.closest?.('#session-dropdown-menu, #session-dropdown');
+   const control=event.target.closest?.('button, [role="button"], .session-row');
+   if(owner!==event.currentTarget||!control||control.disabled||control.getAttribute('aria-disabled')==='true'||control.classList.contains('recycled'))return;
+   // Capture runs before action handlers can stop propagation or detach the menu.
+   try{navigator.vibrate(10);}catch{/* Unsupported or blocked haptics must never block a tap. */}
+ }
+ root.addEventListener('click',touchFeedback,{capture:true,signal:abort.signal});
+ menu.addEventListener('click',touchFeedback,{capture:true,signal:abort.signal});
+
  /** Toggles open/closed unless a closing animation is still in progress. */
  function toggle(){if(!menu.hidden && menu.dataset.state!=='closing')closeMenu();else if(menu.dataset.state!=='closing')openMenu();}
  root.addEventListener('click',e=>{if(e.target.closest('button,input'))return;e.stopPropagation();toggle();},{signal:abort.signal});
@@ -451,10 +465,31 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
  // Resize callback reanchors an open detached menu without restarting its animation.
  const reposition=()=>{if(!menu.hidden)_positionOpenMenu();};
  window.addEventListener('resize',reposition,{signal:abort.signal});window.visualViewport?.addEventListener('resize',reposition,{signal:abort.signal});
- const observer=new ResizeObserver(reposition);observer.observe(root);
+ // The avatar shares the semicircle's center: half the border-box height
+ // from the outer edge. Measure the icon too so profile/font changes stay aligned.
+ const avatar=root.querySelector('#session-dropdown-icon');
+ const originalInset=[root.style.getPropertyValue('padding-left'),root.style.getPropertyPriority('padding-left')];
+ const restoreAvatarInset=()=>{if(originalInset[0])root.style.setProperty('padding-left',...originalInset);else root.style.removeProperty('padding-left');};
+ function updateAvatarInset(){
+   if(!root.getClientRects().length){restoreAvatarInset();return;}
+   const style=getComputedStyle(root);
+   const height=parseFloat(style.height);
+   if(!Number.isFinite(height))return;
+   // Expanded corners end at the pill's side tangents; straight borders continue to the menu.
+   root.style.setProperty('--session-selector-cap-radius', `${height / 2}px`);
+   if(!avatar?.getClientRects().length){restoreAvatarInset();return;}
+   const width=parseFloat(getComputedStyle(avatar).width);
+   const border=parseFloat(style.borderLeftWidth)||0;
+   if(!Number.isFinite(width))return;
+   const inset=`max(0px, calc((${height}px - ${width}px) / 2 - ${border}px))`;
+   if(root.style.getPropertyValue('padding-left')!==inset)root.style.setProperty('padding-left',inset,'important');
+ }
+ const observer=new ResizeObserver(()=>{updateAvatarInset();reposition();});
+ observer.observe(root);if(avatar)observer.observe(avatar);
+ updateAvatarInset();
  // Returned controller is the list renderer’s lifecycle/configuration bridge.
  // Expose menu lifecycle plus popup ownership to the sibling list renderer.
  /** Methods: open/close control the animated menu, isOpen reports visibility, setPopup transfers popup ownership to the list, and destroy invalidates pending opens and removes listeners. */
- const handle={open:openMenu,close:closeMenu,isOpen:()=>!menu.hidden,destroy(){_openRequestId++;menu._deferredOpenCleanup?.();closeMenu({immediate:true});abort.abort();_syncRowObserver.disconnect();observer.disconnect();clearTimeout(_openAnimationTimer);clearTimeout(_closeAnimationTimer);menu.remove();_closeRowActions();},setPopup(node){_closeRowActions();popup=node;}};
+ const handle={open:openMenu,close:closeMenu,isOpen:()=>!menu.hidden,destroy(){_openRequestId++;menu._deferredOpenCleanup?.();closeMenu({immediate:true});abort.abort();_syncRowObserver.disconnect();observer.disconnect();restoreAvatarInset();root.style.removeProperty('--session-selector-cap-radius');clearTimeout(_openAnimationTimer);clearTimeout(_closeAnimationTimer);menu.remove();_closeRowActions();},setPopup(node){_closeRowActions();popup=node;}};
  root._sessionDropdownController=handle;return handle;
 }

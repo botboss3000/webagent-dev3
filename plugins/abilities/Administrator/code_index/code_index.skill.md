@@ -114,3 +114,15 @@ Configuration metadata is bounded to four file references, sixteen JSON pointers
 For a feature without implemented settings:
     {"status":"opportunity","references":[],"opportunities":["Consider a bounded retry delay setting."]}
 An opportunity documents potential and does not add a setting. The four statuses distinguish implemented configuration, an opportunity, an intentional invariant, and an unreviewed feature.
+
+## Resumable maintenance
+
+Use `code_index_maintenance` for durable review progress. The protected broker owns the live database outside source and release mounts. `root="live"` is shared authorized maintenance metadata; `root="published"` and private workspace roots expose read-only snapshots. A private scan never certifies published documentation. New seeds inherit the published ledger snapshot. Initial discovered files are pending, even when comments already exist.
+
+Follow [comment_maintenance](skills/comment_maintenance.skill.md) for the full review procedure and structured examples. Inspect outstanding work; synchronize the exact isolated broker task; claim a bounded unit; trace implementation, callers and configuration; update comments and metadata; rescan; record checks against the current source hash and revision; release with concrete remaining-work notes before stopping. Source changes invalidate completed reviews for that file; metadata dependencies can also invalidate reviews. Review removed units explicitly and reconcile deletions or renames. Never transfer completion across an ambiguous rename.
+
+Do not declare coding work complete while affected documentation and index maintenance are unfinished. Report precise unfinished units when stopping. Publication does not enforce this human completion rule: incomplete documentation counts are informational. Machine verification checks source/dependency hashes, index freshness, metadata, revisions and retry receipts; documentation accuracy is the named reviewer's assertion.
+
+`code_index_progress` reports scan history. `code_index_maintenance` reports review status, attributed evidence, claims and remaining work. These are separate histories. Canonical maintenance history survives rebuilds; publication projects matching reviews into the paired immutable source/index snapshot. Rebase changes invalidate mismatching evidence. Claims coordinate maintainers without granting source editing permission.
+
+Qualifying ledger-only, feature-map and allowlisted Code Index guidance releases use the broker's `index_deploy` lane, with UI priority and no compilation or container replacement. UI plus allowed index metadata can publish together. Source comments, parsers, schemas, policy, executable code and broker changes require the appropriate full release. The final candidate still passes the zero-gap/stale/unindexed gate. Guidance resolves from the active published snapshot; schema and access remain image-pinned.
