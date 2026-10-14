@@ -103,6 +103,11 @@ Its placement and state-dependent radius are applied by
 `ui/chat/controls/chat-config.js`. The rollout covers chat controls; unrelated application pages retain their own
 interaction wiring.
 
+The public `ui/chat/widget/window.js` module must stay dependency-free: the
+external embed host imports that asset directly. Inject the shared synchronous
+feedback callback into its shell/launcher APIs. Pass only validated UI settings
+through the existing iframe bridge; never forward vibration requests across it.
+
 Browser references:
 [Tap highlight](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/-webkit-tap-highlight-color),
 [Vibration API](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/vibrate).
