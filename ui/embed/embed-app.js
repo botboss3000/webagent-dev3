@@ -1,4 +1,5 @@
-// @code-index {"version":1,"feature":"chat-embed-runtime","aliases":["embedded chat runtime","iframe chat session","embedded chat commands"],"purpose":"Locates the embedded chat runtime, credential lifecycle, session wiring, and serialized parent command bridge. Presentation profile is supplied by the public descriptor; authorization policy remains server-authoritative in the encrypted agent embed record.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common","/chat_widget"],"profile_overrides":false}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-embed-runtime","aliases":["embedded chat runtime","iframe chat session","embedded chat commands"],"purpose":"Locates the embedded chat runtime, credential lifecycle, session wiring, and serialized parent command bridge. Presentation profile is supplied by the public descriptor; authorization policy remains server-authoritative in the encrypted agent embed record. Touch feedback: ui/vibrate.json -> enabled, duration_ms; gestures stay client-owned.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common","/chat_widget"],"profile_overrides":false},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+import {vibrationConfigReady,getVibrationConfig} from '../shared/vibrate.js';
 import {mountChatPanel} from '../chat/core/panel.js';
 import {initChatConfig,setChatSurfaceActions} from '../chat/controls/chat-config.js';
 import {watchAuthorization} from './auth-handoff.js';
@@ -107,4 +108,6 @@ window.addEventListener('message',event=>{
 });
 window.addEventListener('pagehide',()=>{clearInterval(poll);authWatch?.cancel();chat.destroy();clearAssets();credential=null;popup?.close();});
 parent.postMessage({namespace,version,type:'ready',channel},hostOrigin);
+// Only sanitized UI configuration crosses the bridge; each host tap requests its own local pulse.
+void vibrationConfigReady.then(()=>emit('vibration-config',{config:getVibrationConfig()}));
 emit('theme',{theme:document.body.classList.contains('light-mode')?'light':'dark'});

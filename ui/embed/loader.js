@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-embed-host","aliases":["embedded chat host","iframe chat widget","embed bridge"],"purpose":"Creates the floating embed host and launcher from the descriptor profile, then exposes the authenticated iframe bridge and bounded parent command API. Origin/channel validation, authorization and command checks remain fixed security invariants.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common","/chat_widget"],"profile_overrides":false}],"opportunities":[],"rationale":"These pointers control presentation only; origin binding, channel validation and authorization checks are fixed security invariants."}}
+// @code-index {"version":1,"feature":"chat-embed-host","aliases":["embedded chat host","iframe chat widget","embed bridge"],"purpose":"Creates the floating embed host and launcher from the descriptor profile, then exposes the authenticated iframe bridge and bounded parent command API. Origin/channel validation, authorization and command checks remain fixed security invariants. Touch feedback: ui/vibrate.json -> enabled, duration_ms; gestures stay client-owned.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common","/chat_widget"],"profile_overrides":false},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[],"rationale":"These pointers control presentation only; origin binding, channel validation and authorization checks are fixed security invariants."}}
 (() => {
  'use strict';
  const script=document.currentScript;
@@ -16,7 +16,7 @@
  const iframe=document.createElement('iframe');iframe.hidden=true;iframe.title='WebAgent chat';iframe.referrerPolicy='origin';iframe.src=origin+'/embed/'+encodeURIComponent(agent)+'?origin='+encodeURIComponent(location.origin);
  // Allow the first-party authentication popup without sharing its credential with the embedding page.
  iframe.setAttribute('allow','clipboard-write; microphone; autoplay');
- let channel=null,shell=null,launcher=null,failed=null,destroyed=false;
+ let channel=null,shell=null,launcher=null,failed=null,destroyed=false,vibrationConfig=null;
  const requests=new Map(),listeners=new Map();
  let resolveReady,rejectReady;
  const ready=new Promise((resolve,reject)=>{resolveReady=resolve;rejectReady=reject});
@@ -30,6 +30,7 @@
   const message=event.data;
   if(!message||message.namespace!==namespace||message.version!==version)return;
   if(message.type==='ready'){
+   vibrationConfig=null;
    if(typeof message.channel!=='string'||message.channel.length<16)return;
    if(channel&&channel!==message.channel){for(const request of requests.values()){clearTimeout(request.timer);request.reject(new Error('Chat reloaded. Retry the action.'))}requests.clear()}
    channel=message.channel;clearTimeout(timer);resolveReady();command('visibility',{visible:shell?.isOpen()||false}).catch(()=>{});notify('ready',{});return;
@@ -38,7 +39,7 @@
   if(message.type==='result'){
    const request=requests.get(message.id);if(!request)return;requests.delete(message.id);clearTimeout(request.timer);
    if(message.ok)request.resolve(message.result);else request.reject(new Error(typeof message.error==='string'?message.error:'Chat action failed.'));
-  }else if(message.type==='event'&&typeof message.event==='string'){if(message.event==='theme'&&['light','dark'].includes(message.data?.theme))host.dataset.theme=message.data.theme;else if(message.event==='minimize')shell?.minimize();else if(message.event==='close')shell?.close();notify(message.event,message.data);}
+  }else if(message.type==='event'&&typeof message.event==='string'){if(message.event==='vibration-config'){const value=message.data?.config;vibrationConfig=typeof value?.enabled==='boolean'&&Number.isSafeInteger(value.duration_ms)&&value.duration_ms>=0?{enabled:value.enabled,duration_ms:value.duration_ms}:null;}else if(message.event==='theme'&&['light','dark'].includes(message.data?.theme))host.dataset.theme=message.data.theme;else if(message.event==='minimize')shell?.minimize();else if(message.event==='close')shell?.close();notify(message.event,message.data);}
  }
  window.addEventListener('message',onMessage);
  // Purpose: Send a correlated command after readiness; requests time out after 30 seconds and advise reconciling uncertain effects before retry.
@@ -75,16 +76,18 @@
   const response=await fetch(origin+'/api/v3/embed/'+encodeURIComponent(agent)+'/descriptor?origin='+encodeURIComponent(location.origin),{credentials:'omit'});
   if(!response.ok)throw new Error('Chat embedding is unavailable for this website.');
   const descriptor=await response.json();
-  const {mergeProfile,createFloatingChat,createChatLauncher}=await import(origin+'/v3-ui/chat/widget/window.js');
+  const {mergeProfile,createFloatingChat,createChatLauncher,createTouchVibration}=await import(origin+'/v3-ui/chat/widget/window.js');
   if(destroyed)throw new Error('Widget destroyed.');
+  // Host chrome uses local user activation and the iframe-loaded central UI configuration.
+  const feedback=createTouchVibration(()=>vibrationConfig);
   const profile=mergeProfile(descriptor.chat_ui?.chat_common||{},descriptor.chat_ui?.chat_widget||{});
   shell=createFloatingChat({
-   panel:iframe,profile,container:shadow,embedded:true,storageKey:'webagent.widget.'+origin+'.'+agent+'.geometry',
+   panel:iframe,profile,feedback,container:shadow,embedded:true,storageKey:'webagent.widget.'+origin+'.'+agent+'.geometry',
    onMinimize(){launcher.show('minimized');command('visibility',{visible:false}).catch(()=>{});notify('minimize',{})},
    onClose(){launcher.show('closed');command('visibility',{visible:false}).catch(()=>{});notify('close',{})}
   });
   iframe.hidden=false;
-  launcher=createChatLauncher({profile,storageKey:'webagent.widget.'+origin+'.'+agent+'.draft',onOpen:()=>api.open(),onPickup:text=>command('setElementContext',{text}),onAction:async type=>{if(type==='close_all'){await api.close();return}await api.open();if(type==='sessions')await command('showSessions');else if(type==='new_session')await api.newSession();else if(type!=='open_all')throw new Error('Unknown launcher action');},onSend:async text=>{await api.open();return command('send',{text})}});
+  launcher=createChatLauncher({profile,feedback,storageKey:'webagent.widget.'+origin+'.'+agent+'.draft',onOpen:()=>api.open(),onPickup:text=>command('setElementContext',{text}),onAction:async type=>{if(type==='close_all'){await api.close();return}await api.open();if(type==='sessions')await command('showSessions');else if(type==='new_session')await api.newSession();else if(type!=='open_all')throw new Error('Unknown launcher action');},onSend:async text=>{await api.open();return command('send',{text})}});
   shadow.append(launcher.element);
   return descriptor;
  })();

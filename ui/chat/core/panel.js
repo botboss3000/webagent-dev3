@@ -1,5 +1,6 @@
-// @code-index {"version":1,"feature":"chat-panel","aliases":["chat panel","conversation panel","session transcript"],"purpose":"Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common/composer/keyboard_focus"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-panel","aliases":["chat panel","conversation panel","session transcript"],"purpose":"Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides. Touch feedback: ui/vibrate.json -> enabled, duration_ms; gestures stay client-owned.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common/composer/keyboard_focus"],"profile_overrides":true},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
 // V2-style panel/client separation; markup and message protocol remain V3.
+import {mountChatControlFeedback} from '../controls/feedback.js';
 import {mountSharedChat} from '../controls/shared-chat.js';
 import { createChatClient } from './client.js';
 import {mountFollowupQueue} from './followup-queue.js';
@@ -83,7 +84,7 @@ function syncSnapshot(data){
   for(const item of data.messages||[])message(item);followups.update(data);runs(data.runs||[],true);return true;
 }
 /** Confirms rewind and resolves existing composer text without silently discarding a draft. */
-function undoChoice(hasDraft){return new Promise(resolve=>{const dialog=document.createElement('dialog');dialog.className='wa-confirm-panel';const text=document.createElement('p');text.textContent='Undo this message and all later messages? This changes conversation history; external tool effects remain.';dialog.append(text);if(hasDraft){const hint=document.createElement('p');hint.textContent='The composer already has text. Choose how to return the undone message.';dialog.append(hint);}let settled=false;const finish=value=>{if(settled)return;settled=true;dialog.close();dialog.remove();closeUndoDialog=null;resolve(value);};for(const [label,value] of hasDraft?[['Clear & replace','replace'],['Keep current','keep'],['Append','append'],['Cancel',null]]:[['Undo','replace'],['Cancel',null]]){const node=document.createElement('button');node.type='button';node.className='ac-btn';node.textContent=label;node.onclick=()=>finish(value);dialog.append(node);}dialog.addEventListener('cancel',event=>{event.preventDefault();finish(null);});closeUndoDialog=()=>finish(null);document.body.append(dialog);dialog.showModal();dialog.querySelector('button:last-child').focus();});}
+function undoChoice(hasDraft){return new Promise(resolve=>{const dialog=document.createElement('dialog');dialog.className='wa-confirm-panel';dialog.dataset.chatControlSurface='undo';const text=document.createElement('p');text.textContent='Undo this message and all later messages? This changes conversation history; external tool effects remain.';dialog.append(text);if(hasDraft){const hint=document.createElement('p');hint.textContent='The composer already has text. Choose how to return the undone message.';dialog.append(hint);}let settled=false;const finish=value=>{if(settled)return;settled=true;dialog.close();dialog.remove();closeUndoDialog=null;resolve(value);};for(const [label,value] of hasDraft?[['Clear & replace','replace'],['Keep current','keep'],['Append','append'],['Cancel',null]]:[['Undo','replace'],['Cancel',null]]){const node=document.createElement('button');node.type='button';node.className='ac-btn';node.textContent=label;node.onclick=()=>finish(value);dialog.append(node);}dialog.addEventListener('cancel',event=>{event.preventDefault();finish(null);});closeUndoDialog=()=>finish(null);document.body.append(dialog);dialog.showModal();dialog.querySelector('button:last-child').focus();});}
 /** Uses the displayed transcript cursor, durable retry identity and panel generation fence. */
 async function historyAction(kind,item){
   if(historyBusy||submitting)return;
@@ -322,7 +323,7 @@ $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
   function disconnect(){followups.reset();session='';activityRuns=[];elementContext='';anchor.reset();progress.reset();notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();sharing.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
   /** Disconnects and disposes panel-owned timers, observers, listeners, and mounted child controls. */
   function destroy(){
-    ++sessionGeneration;closeUndoDialog?.();
+    disposeFeedback();++sessionGeneration;closeUndoDialog?.();
     disconnect();followups.destroy();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
     $('chat-input').onkeydown=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;
@@ -355,6 +356,8 @@ $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
     /** Resolves a selected uncertain/recovery run and refreshes shell state. */
     async recover(id,decision,output){if(sharedAccess?.can_control===false)throw Error('This conversation is read only');const run=selectedRun(id);if(!run.uncertain&&run.status!=='recovery')throw Error('Run is not waiting for recovery');await client.recover(id,{decision,output,client_request_id:keyId('recovery:'+id+':'+decision+':'+output)});await refresh();}
   };
+  // One capture owner also covers chat portals and the shell Chat/Float buttons.
+  const disposeFeedback=mountChatControlFeedback(root,{portals:true,shell:true});
   mountedPanels.set(root, panel);
   return panel;
 }

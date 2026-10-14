@@ -93,13 +93,15 @@ Loading or reading this document grants no tool permissions.
 
 ## Current reference implementation
 
-The conversation selector demonstrates these defaults in
-`ui/chat/chat.css` and
-`ui/chat/controls/session-dropdown/controller.js`, using `ui/shared/vibrate.js`
-and the central `ui/vibrate.json` configuration.
+The shared chat rollout applies these defaults through `ui/chat/controls/feedback.js`,
+`ui/chat/widget/window.js`, `ui/chat/chat.css`, and `ui/chat/widget/window.css`,
+using `ui/shared/vibrate.js` and the central `ui/vibrate.json` configuration.
+The panel owns dynamic controls and body portals; widget chrome registers its
+own roots. External hosts receive only validated configuration through the
+existing source/origin/channel-bound iframe bridge and request pulses locally.
 Its placement and state-dependent radius are applied by
-`ui/chat/controls/chat-config.js`. These are a reference for the requested
-future shared-button rollout, not a claim that all existing buttons conform.
+`ui/chat/controls/chat-config.js`. The rollout covers chat controls; unrelated application pages retain their own
+interaction wiring.
 
 Browser references:
 [Tap highlight](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/-webkit-tap-highlight-color),

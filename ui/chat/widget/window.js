@@ -9,11 +9,11 @@ export function clampGeometry(value,profile={},viewport={width:innerWidth,height
  const height=Math.min(maxH,Math.max(Math.min(maxH,finite(cfg.min_height,320)),finite(value.height,finite(cfg.height,620))));
  return {width,height,x:narrow?margin:Math.max(margin,Math.min(viewport.width-width-margin,finite(value.x,viewport.width-width-20))),y:Math.max(margin,Math.min(viewport.height-height-margin,finite(value.y,viewport.height-height-20)))};
 }
-/** Wraps the chat panel in a movable, resizable window with open/minimize/close/dock states. Geometry is restored and saved under storageKey, viewport changes reclamp it, and destroy removes listeners and shell nodes. */
-export function createFloatingChat({panel,profile={},storageKey='webagent.widget.geometry',onMinimize=()=>{},onClose=()=>{},onDock=()=>{},embedded=false,container=document.body}){
+/** Wraps the chat panel in a movable, resizable window with open/minimize/close/dock states. Geometry is restored and saved under storageKey, viewport changes reclamp it, and destroy removes listeners and shell nodes. The optional synchronous feedback callback is registered on the shell; destroy releases that registration. */
+export function createFloatingChat({panel,profile={},storageKey='webagent.widget.geometry',onMinimize=()=>{},onClose=()=>{},onDock=()=>{},embedded=false,container=document.body,feedback}){
  const anchor=document.createComment('chat dock position');panel.before(anchor);
  const shell=document.createElement('section');shell.className='wa-chat-window';shell.hidden=true;shell.setAttribute('aria-label','Chat window');
- const bar=document.createElement('div');bar.className='wa-chat-window-bar';bar.tabIndex=0;bar.setAttribute('aria-label','Move chat window with arrow keys; hold Shift to resize');
+ const bar=document.createElement('div'),disposeFeedback=mountControlFeedback(shell,{vibrate:feedback});bar.className='wa-chat-window-bar';bar.tabIndex=0;bar.setAttribute('aria-label','Move chat window with arrow keys; hold Shift to resize');
  const grip=document.createElement('span');grip.textContent='⋮⋮';grip.setAttribute('aria-hidden','true');bar.append(grip);
  const content=document.createElement('div');content.className='wa-chat-window-content';shell.append(bar,content);container.append(shell);
  // Reparenting a live iframe reloads its document and loses in-memory authentication.
@@ -36,7 +36,7 @@ export function createFloatingChat({panel,profile={},storageKey='webagent.widget
  dock(){anchor.parentNode?.insertBefore(panel,anchor.nextSibling);shell.hidden=true;mode='docked';onDock()},
  setProfile(next){profile=next||{};shell.dataset.resizable=String(profile.window?.resizable!==false);layout()},
  isOpen(){return mode==='open'},get state(){return mode},
- destroy(){if(disposed)return;api.dock();disposed=true;window.removeEventListener('resize',layout);shell.remove();anchor.remove()}};
+ destroy(){if(disposed)return;disposeFeedback();api.dock();disposed=true;window.removeEventListener('resize',layout);shell.remove();anchor.remove()}};
  if(!embedded)button('Dock chat','↗',()=>api.dock());button('Minimize chat','−',()=>api.minimize());button('Close chat','×',()=>api.close());
  // Purpose: Bind pointer move/resize gestures; layout clamps and persists resulting geometry.
  function gesture(el,edge){el.addEventListener('pointerdown',e=>{
@@ -59,10 +59,10 @@ export function createFloatingChat({panel,profile={},storageKey='webagent.widget
  if(e.shiftKey?profile.window?.resizable===false:profile.window?.movable===false)return;e.preventDefault();const [x,y]=keys[e.key];if(e.shiftKey){geometry.width+=x;geometry.height+=y}else{geometry.x+=x;geometry.y+=y}layout()});
  window.addEventListener('resize',layout);api.setProfile(profile);return api;
 }
-/** Builds the launcher, draft input, and corner actions. Draft text is kept in localStorage until a successful send; callbacks own chat actions, and the feature controller handles pickup, drag, focus, and teardown. */
-export function createChatLauncher({profile={},onOpen=()=>{},onSend=async()=>{},onAction=async()=>{throw Error('Unknown launcher action')},onPickup=()=>{},storageKey='webagent.widget.draft'}){
+/** Builds the launcher, draft input, and corner actions. Draft text is kept in localStorage until a successful send; callbacks own chat actions, and the feature controller handles pickup, drag, focus, and teardown. The optional synchronous feedback callback covers launcher/corner actions and is disposed by destroy. */
+export function createChatLauncher({profile={},onOpen=()=>{},onSend=async()=>{},onAction=async()=>{throw Error('Unknown launcher action')},onPickup=()=>{},storageKey='webagent.widget.draft',feedback}){
  const element=document.createElement('div');element.className='wa-chat-launcher';
- const button=document.createElement('button');button.type='button';button.className='wa-launcher-main';
+ const button=document.createElement('button'),disposeFeedback=mountControlFeedback(element,{vibrate:feedback});button.type='button';button.className='wa-launcher-main';
  const form=document.createElement('form');form.hidden=true;
  const input=document.createElement('input');input.type='text';input.setAttribute('aria-label','Chat message');
  const send=document.createElement('button');send.type='submit';send.textContent='Send';
@@ -80,7 +80,7 @@ export function createChatLauncher({profile={},onOpen=()=>{},onSend=async()=>{},
   const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');icon.setAttribute('viewBox','0 0 24 24');icon.setAttribute('width','27');icon.setAttribute('height','27');icon.setAttribute('fill','none');icon.setAttribute('stroke','currentColor');icon.setAttribute('stroke-width','2');icon.setAttribute('aria-hidden','true');
   icon.innerHTML=profile.launcher?.icon==='message-circle'?'<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7A8.5 8.5 0 1 1 21 11.5Z"/>':'<g class="wla-antenna" style="transform-origin:12px 8px"><path d="M12 8V4H8"/></g><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2M20 14h2"/><g class="wla-eye-blink" style="transform-origin:9px 14px"><path d="M9 13v2"/></g><g class="wla-eye-blink" style="transform-origin:15px 14px"><path d="M15 13v2"/></g>';icon.classList.add('wla-bot-svg');button.append(icon);
   if(profile.launcher?.mode==='pill'||profile.launcher?.shape==='pill'){const label=document.createElement('span');label.textContent=profile.launcher?.label||'Chat';button.append(label);}
- }button.setAttribute('aria-label',state==='minimized'?'Restore chat':profile.launcher?.aria_label||'Open chat');button.title=profile.launcher?.label||'Chat';features?.decorate();},hide(){element.hidden=true;features.dismiss()},setProfile(next){profile=next||{};element.dataset.shape=profile.launcher?.shape||'circle';element.dataset.position=({left:'bottom-left',right:'bottom-right'})[profile.launcher?.position]||profile.launcher?.position||'bottom-right';element.style.setProperty('--launcher-accent',profile.launcher?.accent||'var(--brand,#a78bfa)');features?.rebuild(profile);input.placeholder=profile.launcher?.placeholder||'Type a message';api.show(state)},destroy(){features.destroy();element.remove()}};
+ }button.setAttribute('aria-label',state==='minimized'?'Restore chat':profile.launcher?.aria_label||'Open chat');button.title=profile.launcher?.label||'Chat';features?.decorate();},hide(){element.hidden=true;features.dismiss()},setProfile(next){profile=next||{};element.dataset.shape=profile.launcher?.shape||'circle';element.dataset.position=({left:'bottom-left',right:'bottom-right'})[profile.launcher?.position]||profile.launcher?.position||'bottom-right';element.style.setProperty('--launcher-accent',profile.launcher?.accent||'var(--brand,#a78bfa)');features?.rebuild(profile);input.placeholder=profile.launcher?.placeholder||'Type a message';api.show(state)},destroy(){disposeFeedback();features.destroy();element.remove()}};
  features=wireLauncherFeatures({element,button,profile,onAction,onPickup,error,storageKey});api.setProfile(profile);return api;
 }
 
@@ -152,3 +152,212 @@ function wireLauncherFeatures({element,button,profile,onAction,onPickup,error,st
 
 /** Recursively overlays object-valued widget profile fields; arrays and scalar values replace the base. */
 export function mergeProfile(base,override){const result={...base};for(const [key,value] of Object.entries(override||{}))result[key]=value&&typeof value==='object'&&!Array.isArray(value)?mergeProfile(base?.[key]||{},value):value;return result;}
+
+// @code-index {"version":1,"feature":"ui-vibration","aliases":["chat touch feedback","chat control haptics"],"purpose":"Shared optional touch-feedback factories and bounded gesture ownership. Config: ui/vibrate.json -> enabled, duration_ms, supplied by the native helper or validated iframe configuration bridge. This widget asset remains dependency-free for external embedding.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+/** Builds a synchronous pulse callback from current validated UI settings; unavailable APIs stay quiet.
+ * The settings getter is local: embedded hosts receive configuration data, never a forwarded haptic request.
+ */
+export function createTouchVibration(getConfig) {
+  return event => {
+    try {
+      const config = getConfig();
+      if (config?.enabled !== true || !Number.isSafeInteger(config.duration_ms) || config.duration_ms <= 0 || event.detail === 0) return;
+      const touch = event.pointerType ? event.pointerType === 'touch' : window.matchMedia?.('(pointer: coarse)').matches;
+      if (!touch || typeof navigator.vibrate !== 'function') return;
+      navigator.vibrate(config.duration_ms);
+    } catch { /* Optional feedback cannot block control activation. */ }
+  };
+}
+
+const registries = new WeakMap();
+const CONTROL_SELECTOR = 'button, [role="button"], [role="menuitem"], summary, .session-row';
+const STOP_SELECTOR = 'input, textarea, select, a, [contenteditable]';
+const PORTAL_SELECTOR = [
+  '#session-dropdown-menu',
+  '.session-row-actions[data-source="session-list"]',
+  '.v3-chat-model-list',
+  '.v3-context-panel',
+  '.chat-control-lock-popover',
+  '.bubble-more-menu',
+  '.chat-element-full-view-backdrop',
+  '[data-chat-control-surface="undo"]',
+].join(',');
+const SHELL_SELECTOR = '#chat-toggle-btn, #chat-float-btn, #embed-connect, #embed-guest';
+const MAX_TRACKED_POINTERS = 4;
+const MAX_PENDING_CLICKS = 4;
+const CLICK_ASSOCIATION_MS = 800;
+const DRAG_THRESHOLD = 5;
+
+/** Keeps only DOM elements from composed paths, including controls inside open shadow roots. */
+function elementsIn(path) {
+  return path.filter(node => node?.nodeType === 1);
+}
+
+/** Finds the nearest action target without promoting edits, links, or form controls to a row action. */
+function findControl(path) {
+  for (const node of elementsIn(path)) {
+    if (node.matches(CONTROL_SELECTOR)) return node;
+    if (node.matches(STOP_SELECTOR)) return null;
+  }
+  return null;
+}
+
+/** Rejects controls disabled by themselves or by an ancestor surface. */
+function isUnavailable(path, control) {
+  for (const node of elementsIn(path)) {
+    if (node.hidden || node.matches(':disabled') || node.inert || node.hasAttribute('inert') || node.getAttribute('aria-disabled') === 'true') return true;
+    if (node.classList.contains('tier-locked')) return true;
+    if (node.classList.contains('chat-element-full-view-message')) return true;
+  }
+  if (control.matches(':disabled')) return true;
+  return control.matches('.session-row.recycled');
+}
+
+/** Resolves the nearest enabled control and its owning synchronous callback, or null outside registered surfaces. */
+function resolveControl(state, path) {
+  const control = findControl(path);
+  if (!control || isUnavailable(path, control)) return null;
+  for (const registration of state.registrations) {
+    if (!registration.root.isConnected) continue;
+    const inRoot = path.includes(registration.root);
+    const inPortal = registration.portals && elementsIn(path).some(node => node.matches(PORTAL_SELECTOR));
+    const inShell = registration.shell && elementsIn(path).some(node => node.matches(SHELL_SELECTOR));
+    if (inRoot || inPortal || inShell) return {control, vibrate: registration.vibrate};
+  }
+  return null;
+}
+
+/** Drops old compatibility-click records without timers or unbounded retained state. */
+function prunePending(state, now) {
+  state.pendingClicks = state.pendingClicks.filter(item => now - item.time <= CLICK_ASSOCIATION_MS);
+}
+
+/** Associates a completed click with its touch gesture, rejecting scrolls, drags, and ambiguous legacy clicks. */
+function touchGestureForClick(state, event, control) {
+  if (event.pointerType && event.pointerType !== 'touch') return false;
+  const now = Date.now();
+  prunePending(state, now);
+  const pointerId = Number.isFinite(event.pointerId) ? event.pointerId : null;
+  if (pointerId !== null) {
+    const index = state.pendingClicks.findIndex(item => item.pointerId === pointerId);
+    if (index < 0) return false;
+    const [gesture] = state.pendingClicks.splice(index, 1);
+    return !gesture.moved && gesture.control === control;
+  }
+  // Older engines may dispatch a MouseEvent for a touch click; only accept one
+  // unambiguous recent completed touch on the same action target.
+  const matches = state.pendingClicks
+    .map((item, index) => ({item, index}))
+    .filter(({item}) => !item.moved && item.control === control);
+  if (matches.length !== 1) return false;
+  state.pendingClicks.splice(matches[0].index, 1);
+  return true;
+}
+
+/** Owns the single capture listener set shared by all registrations in a document. */
+function createRegistry(doc) {
+  const state = {doc, registrations: new Set(), activePointers: new Map(), pendingClicks: [], listeners: []};
+  const listen = (type, handler, options = {}) => {
+    doc.addEventListener(type, handler, {capture: true, passive: options.passive ?? true});
+    state.listeners.push([type, handler]);
+  };
+  listen('pointerdown', event => {
+    if (event.pointerType !== 'touch') return;
+    const path = event.composedPath?.() || [event.target];
+    const control = resolveControl(state, path)?.control;
+    if (!control) return;
+    if (state.activePointers.size >= MAX_TRACKED_POINTERS && !state.activePointers.has(event.pointerId)) {
+      state.activePointers.delete(state.activePointers.keys().next().value);
+    }
+    state.activePointers.set(event.pointerId, {pointerId: event.pointerId, x: event.clientX, y: event.clientY, control, moved: false});
+  });
+  listen('pointermove', event => {
+    const gesture = state.activePointers.get(event.pointerId);
+    if (!gesture || gesture.moved) return;
+    if (Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > DRAG_THRESHOLD) gesture.moved = true;
+  });
+  listen('pointerup', event => {
+    const gesture = state.activePointers.get(event.pointerId);
+    if (!gesture) return;
+    state.activePointers.delete(event.pointerId);
+    const path = event.composedPath?.() || [event.target];
+    const control = resolveControl(state, path)?.control;
+    if (!control || control !== gesture.control || gesture.moved) gesture.moved = true;
+    state.pendingClicks.push({...gesture, time: Date.now()});
+    if (state.pendingClicks.length > MAX_PENDING_CLICKS) state.pendingClicks.shift();
+  });
+  listen('pointercancel', event => { state.activePointers.delete(event.pointerId); });
+  listen('scroll', () => {
+    for (const gesture of state.activePointers.values()) gesture.moved = true;
+    for (const gesture of state.pendingClicks) gesture.moved = true;
+  }, {passive: true});
+  // Older touch engines can emit compatibility MouseEvents without PointerEvents.
+  // Track their actual touch sequence rather than guessing from a coarse pointer alone.
+  if (!doc.defaultView?.PointerEvent) {
+    listen('touchstart', event => {
+      const control = resolveControl(state, event.composedPath())?.control;
+      if (!control) return;
+      for (const touch of event.changedTouches) {
+        if (state.activePointers.size >= MAX_TRACKED_POINTERS) state.activePointers.delete(state.activePointers.keys().next().value);
+        state.activePointers.set(touch.identifier, {pointerId: touch.identifier, x: touch.clientX, y: touch.clientY, control, moved: false});
+      }
+    });
+    listen('touchmove', event => {
+      for (const touch of event.changedTouches) {
+        const gesture = state.activePointers.get(touch.identifier);
+        if (gesture && Math.hypot(touch.clientX - gesture.x, touch.clientY - gesture.y) > DRAG_THRESHOLD) gesture.moved = true;
+      }
+    });
+    listen('touchend', event => {
+      const control = resolveControl(state, event.composedPath())?.control;
+      for (const touch of event.changedTouches) {
+        const gesture = state.activePointers.get(touch.identifier);
+        state.activePointers.delete(touch.identifier);
+        if (!gesture) continue;
+        if (control !== gesture.control) gesture.moved = true;
+        state.pendingClicks.push({...gesture, time: Date.now()});
+        if (state.pendingClicks.length > MAX_PENDING_CLICKS) state.pendingClicks.shift();
+      }
+    });
+    listen('touchcancel', event => {
+      for (const touch of event.changedTouches) state.activePointers.delete(touch.identifier);
+    });
+  }
+  listen('click', event => {
+    if (event.detail === 0) return;
+    const path = event.composedPath?.() || [event.target];
+    const resolved = resolveControl(state, path);
+    if (!resolved || !touchGestureForClick(state, event, resolved.control)) return;
+    try { resolved.vibrate(event); } catch { /* Optional feedback cannot block an action. */ }
+  });
+  return state;
+}
+
+// @code-index {"version":1,"feature":"chat-feedback-ownership","aliases":["chat button feedback","touch gesture ownership"],"purpose":"Registers one synchronous feedback owner for chat controls, detached portals and shadow widget chrome. Config: ui/vibrate.json -> enabled, duration_ms, supplied through the UI pulse callback. Native and embedded owners dispose registration with their surface.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+/** Registers one owned surface with a synchronous feedback callback; the disposer releases its capture listeners.
+ * Shared document capture handles dynamic children, open-shadow controls, and declared body portals once per click.
+ * Only completed touch gestures qualify; drags, scrolling, edits, disabled and inert actions remain quiet.
+ */
+export function mountControlFeedback(root, {portals = false, shell = false, vibrate} = {}) {
+  const doc = root?.ownerDocument;
+  if (!doc || typeof vibrate !== 'function') return () => {};
+  let state = registries.get(doc);
+  if (!state) {
+    state = createRegistry(doc);
+    registries.set(doc, state);
+  }
+  const registration = {root, portals, shell, vibrate};
+  state.registrations.add(registration);
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    state.registrations.delete(registration);
+    if (state.registrations.size) return;
+    state.activePointers.clear();
+    state.pendingClicks.length = 0;
+    for (const [type, handler] of state.listeners) doc.removeEventListener(type, handler, true);
+    state.listeners.length = 0;
+    registries.delete(doc);
+  };
+}

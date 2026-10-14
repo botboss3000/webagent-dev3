@@ -135,9 +135,39 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
   border-bottom-color:var(--border)!important;
 }
 
-/* The menu is portaled to body while open, so both roots own transparent tap feedback. */
-#session-dropdown,
-#session-dropdown-menu {
+/* Keep native tap wash transparent across the panel, known body portals, and shell actions. */
+:where(
+  #chat-panel,
+  #session-dropdown,
+  #session-dropdown-menu,
+  .session-row-actions[data-source="session-list"],
+  .v3-chat-model-list,
+  .v3-context-panel,
+  .chat-control-lock-popover,
+  .bubble-more-menu,
+  .chat-element-full-view-backdrop,
+  [data-chat-control-surface="undo"],
+  #chat-toggle-btn,
+  #chat-float-btn,
+  #embed-connect,
+  #embed-guest
+) {
+  -webkit-tap-highlight-color:transparent;
+}
+
+/* Set the inherited value on actionable primitives too, so shared control rules cannot restore the native wash. */
+:where(
+  #chat-panel,
+  #session-dropdown-menu,
+  .session-row-actions[data-source="session-list"],
+  .v3-chat-model-list,
+  .v3-context-panel,
+  .chat-control-lock-popover,
+  .bubble-more-menu,
+  .chat-element-full-view-backdrop,
+  [data-chat-control-surface="undo"]
+) :where(button,[role="button"],[role="menuitem"],summary),
+:where(#chat-toggle-btn,#chat-float-btn,#embed-connect,#embed-guest) {
   -webkit-tap-highlight-color:transparent;
 }
 

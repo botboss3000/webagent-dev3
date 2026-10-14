@@ -36,3 +36,12 @@ body.light-mode .wa-launcher-main,:host([data-theme=light]) .wa-launcher-main{co
 @media(prefers-reduced-motion:reduce){.wa-chat-launcher>.wa-launcher-main,.wla-eye-blink.blinking{animation:none}.wa-chat-launcher>.wa-launcher-main,.wa-launcher-main>svg,.wa-launcher-corner,.wla-antenna{transition:none!important}.wa-chat-launcher>.wa-launcher-main:hover,.wa-chat-launcher .wa-launcher-corner:hover{transform:none}}
 
 .wa-chat-launcher[data-shape=circle]>.wa-launcher-main{overflow:visible}
+
+
+/* Cover native controls in both the document-level chat window and embed ShadowRoot. */
+:where(.wa-chat-window,.wa-chat-launcher) {
+  -webkit-tap-highlight-color:transparent;
+}
+:where(.wa-chat-window,.wa-chat-launcher) :where(button,[role="button"],[role="menuitem"],summary) {
+  -webkit-tap-highlight-color:transparent;
+}
