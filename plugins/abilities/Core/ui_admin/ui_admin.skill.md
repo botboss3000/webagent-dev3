@@ -27,7 +27,9 @@ Loading or reading this document grants no tool permissions.
 ## Optional touch haptics
 
 - On a completed, enabled touch activation, request one brief pulse with
-  `navigator.vibrate(10)` where available. Call from the user interaction
+  `requestTouchVibration(event)` from `ui/shared/vibrate.js` where available.
+  Config: `ui/vibrate.json` -> `enabled`, `duration_ms` (milliseconds); loaded
+  once per page and adopted on reload. Call from the user interaction
   handler before asynchronous work. Treat this as a request, not proof that
   hardware vibrated.
 - Detect touch from the click's `pointerType`. For older touch-generated mouse
@@ -93,7 +95,8 @@ Loading or reading this document grants no tool permissions.
 
 The conversation selector demonstrates these defaults in
 `ui/chat/chat.css` and
-`ui/chat/controls/session-dropdown/controller.js`.
+`ui/chat/controls/session-dropdown/controller.js`, using `ui/shared/vibrate.js`
+and the central `ui/vibrate.json` configuration.
 Its placement and state-dependent radius are applied by
 `ui/chat/controls/chat-config.js`. These are a reference for the requested
 future shared-button rollout, not a claim that all existing buttons conform.

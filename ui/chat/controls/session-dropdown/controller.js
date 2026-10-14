@@ -1,4 +1,5 @@
-// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector"],"purpose":"Mounts the V3 session selector menu lifecycle and interaction wiring Config: data/config/chat.json -> chat_common.chat_header.controls.session_dropdown (trigger and menu). Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/chat_header/controls/session_dropdown"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector"],"purpose":"Mounts the V3 session selector menu lifecycle and interaction wiring Config: data/config/chat.json -> chat_common.chat_header.controls.session_dropdown (trigger and menu). Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides. Touch feedback uses ui/vibrate.json -> enabled, duration_ms.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/chat_header/controls/session_dropdown"],"profile_overrides":true},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+import {requestTouchVibration} from '../../../shared/vibrate.js';
 // Adapted from running v2 session-dropdown/controller.js. V3 owns data/actions.
 /** Mounts menu positioning, keyboard/focus behavior, animation, and teardown around V3-owned data callbacks. */
 export function mountSessionDropdown(root, {refresh, select, guard, resetSearch = () => {}}) {
@@ -438,16 +439,13 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
   }
 
 
- /** Gives touch actions a brief optional pulse, without affecting mouse/keyboard behavior. */
+ /** Delegates enabled dropdown actions to shared feedback. Config: ui/vibrate.json -> enabled, duration_ms. */
  function touchFeedback(event){
-   if(event.detail===0)return;
-   const touch=event.pointerType ? event.pointerType==='touch' : window.matchMedia?.('(pointer: coarse)').matches;
-   if(!touch||typeof navigator.vibrate!=='function')return;
    const owner=event.target.closest?.('#session-dropdown-menu, #session-dropdown');
    const control=event.target.closest?.('button, [role="button"], .session-row');
    if(owner!==event.currentTarget||!control||control.disabled||control.getAttribute('aria-disabled')==='true'||control.classList.contains('recycled'))return;
    // Capture runs before action handlers can stop propagation or detach the menu.
-   try{navigator.vibrate(10);}catch{/* Unsupported or blocked haptics must never block a tap. */}
+   requestTouchVibration(event);
  }
  root.addEventListener('click',touchFeedback,{capture:true,signal:abort.signal});
  menu.addEventListener('click',touchFeedback,{capture:true,signal:abort.signal});
