@@ -911,7 +911,7 @@
         "component catalog",
         "context service"
       ],
-      "purpose": "Connects engine catalog discovery, source defaults, runtime controls, per-call host validation, model dispatch fencing and Functions UI. Config: config/engine-components.json -> disabled (initial defaults only). The context-assembly package is deliberately withdrawn; registered host contracts and catalog tombstones remain authoritative.",
+      "purpose": "Connects optional engine package discovery, source defaults, runtime controls, per-call host validation, model dispatch fencing and Functions UI. Config: config/engine-components.json -> disabled (initial defaults only). Installed context packages supply validated limits and runtime requirements; registered host contracts and catalog withdrawal tombstones remain authoritative when optional packages are absent.",
       "locations": [
         {
           "path": "src/engine_components.rs",
