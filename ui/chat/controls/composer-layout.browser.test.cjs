@@ -106,11 +106,11 @@ async function fadeHeight(p,height){await p.evaluate(h=>{fadeVh=h;visualViewport
 test('keyboard opening/closing fades composer controls while notices, draft and focus survive',async t=>{
  const p=await fadeFixture(t);await p.evaluate(()=>{const note=document.createElement('button');note.id='approval-probe';note.textContent='Approve';document.querySelector('#chat-above-pill').append(note);});
  for(const h of [500,844]){
-  await fadeHeight(p,h);assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.hasAttribute('data-keyboard-fading')),true);await p.waitForTimeout(55);
-  assert(Number(await p.locator('#chat-input-row').evaluate(e=>getComputedStyle(e).opacity))<.2);
+  const out=await p.evaluate(h=>{fadeVh=h;visualViewport.dispatchEvent(new Event('resize'));const row=document.querySelector('#chat-input-row');for(const a of row.getAnimations()){a.pause();a.currentTime=a.effect.getTiming().duration;}return{fading:document.querySelector('#chat-input-area').hasAttribute('data-keyboard-fading'),opacity:Number(getComputedStyle(row).opacity)};},h);assert.equal(out.fading,true);
+  assert(out.opacity<.2,'completed fade-out makes the composer transparent');
   assert.equal(await p.locator('#approval-probe').evaluate(e=>getComputedStyle(e).opacity),'1');
   const state=await stable(p);assert.equal(state.focused,true);assert.equal(state.parent,true);assert.equal(state.blur,0);assert.equal(state.focus,0);assert.equal(state.value,'retained draft');assert.equal(state.start,2);assert.equal(state.end,7);
-  await p.waitForTimeout(150);assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.hasAttribute('data-keyboard-fading')),false);assert.equal(await p.locator('#chat-input-row').evaluate(e=>getComputedStyle(e).opacity),'1');
+  await p.waitForFunction(()=>document.querySelector('#chat-input-row').getAnimations().length===0);assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.hasAttribute('data-keyboard-fading')),false);assert.equal(await p.locator('#chat-input-row').evaluate(e=>getComputedStyle(e).opacity),'1');
  }
 });
 test('fade configuration disables effects and adopts alternate durations without reparenting',async t=>{
@@ -142,11 +142,11 @@ test('disabling fade during an animation cancels effects immediately',async t=>{
  assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);assert.equal(await p.locator('#chat-input-row').evaluate(e=>getComputedStyle(e).opacity),'1');assert.equal((await stable(p)).focused,true);
 });
 
-test('configured half-second fade-out and fade-in complete without losing editor focus',async t=>{
- const p=await fadeFixture(t,{enabled:true,fade_out_ms:500,fade_in_ms:500,settle_ms:80});
- const started=await p.evaluate(()=>{fadeVh=500;visualViewport.dispatchEvent(new Event('resize'));const a=document.querySelector('#chat-input-row').getAnimations()[0];return a?.effect.getTiming().duration;});assert.equal(started,500);
+test('configured two-second fade-out and fade-in complete without losing editor focus',async t=>{
+ const p=await fadeFixture(t,{enabled:true,fade_out_ms:2000,fade_in_ms:2000,settle_ms:80});
+ const started=await p.evaluate(()=>{fadeVh=500;visualViewport.dispatchEvent(new Event('resize'));const a=document.querySelector('#chat-input-row').getAnimations()[0];return a?.effect.getTiming().duration;});assert.equal(started,2000);await p.waitForTimeout(900);assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.hasAttribute('data-keyboard-fading')),true);
  await p.waitForFunction(()=>document.querySelector('#chat-input-row').getAnimations().some(a=>a.effect.getKeyframes().at(-1).opacity==='1'));
- assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().find(a=>a.effect.getKeyframes().at(-1).opacity==='1')?.effect.getTiming().duration),500);
+ assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().find(a=>a.effect.getKeyframes().at(-1).opacity==='1')?.effect.getTiming().duration),2000);
  await p.waitForFunction(()=>getComputedStyle(document.querySelector('#chat-input-row')).opacity==='1'&&document.querySelector('#chat-input-row').getAnimations().length===0);
  const state=await stable(p);assert.equal(state.focused,true);assert.equal(state.blur,0);assert.equal(state.focus,0);assert.equal(state.value,'retained draft');
 });

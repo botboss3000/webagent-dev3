@@ -103,7 +103,7 @@
     document.addEventListener('focusout', function () { setTimeout(applyKb, 0); });
 
     // @code-index {"version":1,"feature":"composer-keyboard-fade","aliases":["composer fade","keyboard fade"],"purpose":"Fades only composer/footer controls during mobile keyboard-sized viewport changes. Config: data/config/chat.json -> chat_common.composer.keyboard_fade, with desktop/mobile/widget profile overrides; saved settings are adopted on UI config reload.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/composer/keyboard_fade/enabled","/chat_common/composer/keyboard_fade/fade_out_ms","/chat_common/composer/keyboard_fade/fade_in_ms","/chat_common/composer/keyboard_fade/settle_ms"],"profile_overrides":true}],"opportunities":[]}}
-    var fadeSettings = {enabled: false, fade_out_ms: 500, fade_in_ms: 500, settle_ms: 80};
+    var fadeSettings = {enabled: false, fade_out_ms: 2000, fade_in_ms: 2000, settle_ms: 80};
     var fadeSignature = '', fadeAnimations = [], fadeArea = null;
     var fadeActive = false, fadeCooling = false, fadeSettleTimer = null, fadeDeadline = null;
     var fadeHeight = vv ? vv.height : window.innerHeight, fadeStableHeight = fadeHeight;
@@ -124,7 +124,7 @@
       return ['#chat-input-row', '#chat-footer-row', '#chat-footer-handle']
         .map(function (selector) { return area.querySelector(selector); }).filter(Boolean);
     }
-    /** Ends a motion burst and restores each control's current CSS opacity with a short fade-in. */
+    /** Ends a motion burst and restores each control's current CSS opacity with the configured fade-in. */
     function revealComposerFade(watchdog) {
       clearTimeout(fadeDeadline); fadeActive = false;
       fadeCooling = watchdog === true; fadeStableHeight = fadeHeight;
@@ -141,7 +141,7 @@
         fadeAnimations.push(effect);
       });
     }
-    /** Holds one fade across resize bursts, with a fixed watchdog so noisy events cannot leave controls faded. */
+    /** Holds one fade across resize bursts, with a bounded watchdog so noisy events cannot leave controls faded. */
     function beginComposerFade(area) {
       var controls = composerFadeControls(area);
       if (!controls.length || controls.some(function (node) { return typeof node.animate !== 'function'; })) return;
@@ -151,8 +151,8 @@
       controls.forEach(function (node, index) {
         fadeAnimations.push(node.animate([{opacity: current[index]}, {opacity: 0}], {duration: fadeSettings.fade_out_ms, easing: 'ease-in', fill: 'forwards'}));
       });
-      // This recovery bound is an invariant, not a user-tunable delay.
-      fadeDeadline = setTimeout(function () { revealComposerFade(true); }, 700);
+      // Bound noisy events without truncating the configured fade-out; maximum is 2200 ms.
+      fadeDeadline = setTimeout(function () { revealComposerFade(true); }, Math.max(700, fadeSettings.fade_out_ms + 200));
     }
     /** Detects cumulative height changes; rotation, zoom, desktop and browser-chrome jitter bypass the fade. */
     function updateComposerFade(height) {
@@ -182,8 +182,8 @@
       function duration(key, fallback, maximum) {
         return typeof raw[key] === 'number' && Number.isFinite(raw[key]) && raw[key] >= 0 && raw[key] <= maximum ? raw[key] : fallback;
       }
-      var next = {enabled: raw.enabled === true, fade_out_ms: duration('fade_out_ms', 500, 500),
-        fade_in_ms: duration('fade_in_ms', 500, 500), settle_ms: duration('settle_ms', 80, 250)};
+      var next = {enabled: raw.enabled === true, fade_out_ms: duration('fade_out_ms', 2000, 2000),
+        fade_in_ms: duration('fade_in_ms', 2000, 2000), settle_ms: duration('settle_ms', 80, 250)};
       var signature = JSON.stringify(next);
       if (signature === fadeSignature) return;
       cancelComposerFade(); fadeSettings = next; fadeSignature = signature;
