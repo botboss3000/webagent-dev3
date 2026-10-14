@@ -163,3 +163,6 @@ The original job, frozen 4f97c9a2 source, compiler artifacts and stage receipts 
 
 
 Final strict lifecycle repeat: coordinated projection release 13f82a31-4d3b-4c25-ac7e-074143606458 deployed, promoted and committed after unchanged-source retained verification. The regression preserves modern persisted-view component markers through the host Store boundary. The next supported engine publication withdraws only background-dispatch; original strict public-marker, retained-input and manual-control assertions remain required before restoration. Paired polling/event measurements and prior successful receipts remain preserved. Human index work stays deferred through this acceptance.
+
+
+Final withdrawal 237afff3-3763-4abd-93a9-539208c6746e deployed and committed with unchanged core identities. The original public API fixture verified three retained inputs with bounded background component markers and no assistant publication; exact manual pause/cancel removed their markers and stayed fenced. Restore the exact descriptor and supported verified 0.1.1 artifact next. Selective restoration, exactly one final reply, bounded background read/process reuse and final cleanup remain required. This factual ledger progress binds a new restoration source identity without changing implementation, broker tests or cache policy.

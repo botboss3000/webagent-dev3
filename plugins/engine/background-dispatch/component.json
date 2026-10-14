@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "background-dispatch",
+  "group": "engine-loop",
+  "interface_version": 1,
+  "implementation_version": "0.1.1",
+  "operation": "background.plan",
+  "modes": [
+    "live",
+    "linked"
+  ],
+  "runtime_requirements": [],
+  "build": {
+    "package": "webagent-background-service",
+    "source_inputs": [
+      "crates/background-service",
+      "crates/background-dispatch",
+      "crates/background-contracts",
+      "crates/engine-service",
+      "Cargo.toml",
+      "Cargo.lock"
+    ],
+    "toolchain": "1.90.0",
+    "features": [],
+    "runtime_assets": []
+  },
+  "executable": "artifact/webagent-background-service",
+  "limits": {
+    "max_request_bytes": 65536,
+    "max_response_bytes": 65536,
+    "timeout_ms": 1000,
+    "max_concurrency": 1
+  }
+}
