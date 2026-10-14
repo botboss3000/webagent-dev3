@@ -4,7 +4,7 @@ const mib = bytes => Number.isFinite(bytes) ? (bytes / 1024 ** 2).toFixed(1) + '
 const label = value => String(value || 'waiting').replaceAll('_', ' ');
 
 /** Keep logical tasks visible independently of dismissible build receipt cards. */
-// @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Builds task/resource controls; indirect Config: build-service/scheduler-defaults.json -> mode and resource thresholds via protected broker snapshot.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent"]}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Builds task/resource controls; indirect Config: build-service/scheduler-defaults.json -> mode and resource thresholds via protected broker snapshot. Touch feedback is page-owned: ui/vibrate.json -> enabled, duration_ms.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent"]},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
 export function schedulerPanel() {
   const root = document.createElement('section');
   root.className = 'build-scheduler';
@@ -20,14 +20,7 @@ export function schedulerPanel() {
   let snapshot = {}, stopped = false, busy = false, offset = 0, updateRevision = 0;
   const requests = new Map();
 
-  // This surface owns feedback for its new controls; keyboard and mouse remain quiet.
-  const feedback = event => {
-    if (!event.detail || !event.target.closest('button:not(:disabled)')) return;
-    if (event.pointerType !== 'touch' && !(event.sourceCapabilities?.firesTouchEvents
-      || (!event.pointerType && matchMedia('(pointer: coarse)').matches))) return;
-    try { navigator.vibrate?.(10); } catch {}
-  };
-  root.addEventListener('click', feedback, true);
+  // Page-owned feedback uses ui/vibrate.json -> enabled, duration_ms.
 
   /** Authenticate each closed scheduler action and retain its exact retry ID on uncertain failure. */
   async function send(args) {
@@ -182,6 +175,6 @@ export function schedulerPanel() {
       }
       if (!stopped && revision === updateRevision) { snapshot = value; render(); }
     },
-    destroy() { stopped = true; root.removeEventListener('click', feedback, true); }
+    destroy() { stopped = true; }
   };
 }

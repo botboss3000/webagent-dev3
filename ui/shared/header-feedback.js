@@ -45,3 +45,6 @@ import './agents-feedback.js';
 
 // App page feedback is independently mounted after the catalog inserts its root.
 import './app-control-feedback.js';
+
+// Remaining main pages and detached consent own their native action feedback.
+import './remaining-control-feedback.js';

@@ -1,4 +1,5 @@
 'use strict';
+// @code-index {"version":1,"feature":"engine-component-control-feedback","aliases":["engine component buttons"],"purpose":"Engine component buttons delegate feedback to the App page owner. Config: ui/vibrate.json -> enabled, duration_ms. Revision-fenced component authorization remains in the owning request handler.","span_lines":65,"configuration":{"status":"configured","references":[{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
 // Engine controls withdraw functionality; package editing/publication stays broker-owned.
 export function mountEngineComponents(host) {
  const section=document.createElement('section');section.className='app-engine-components';
@@ -14,12 +15,7 @@ export function mountEngineComponents(host) {
  const list=document.createElement('div'),status=document.createElement('p');status.setAttribute('role','status');section.append(list,status);
  const refresh=document.createElement('button');refresh.type='button';refresh.className='app-engine-button';refresh.textContent='Refresh components';refresh.style.webkitTapHighlightColor='transparent';section.append(refresh);host.append(section);
  let snapshot=null,busy=false;
- /** Request one optional pulse only for an enabled touch activation. */
- function feedback(event) {
-  if(event.detail===0)return;
-  const touch=event.pointerType==='touch'||!event.pointerType&&matchMedia('(pointer: coarse)').matches;
-  if(touch&&typeof navigator.vibrate==='function'){try{navigator.vibrate(10);}catch{}}
- }
+ // App's page owner supplies touch feedback: ui/vibrate.json -> enabled, duration_ms.
  /** Authenticate administrator reads and revision-fenced writes through the owning API. */
  async function request(method='GET',component,body) {
   const response=await fetch('/api/v3/auth/me',{credentials:'same-origin',cache:'no-store'});
@@ -39,8 +35,8 @@ export function mountEngineComponents(host) {
    if(component.runtime_requirements?.length){const dependencies=document.createElement('p');dependencies.textContent='Requires: '+component.runtime_requirements.join(', ');row.append(dependencies);}
    const button=document.createElement('button');button.type='button';button.className='app-engine-button';button.style.webkitTapHighlightColor='transparent';
    button.textContent=component.enabled?'Disable component':'Enable component';button.disabled=component.installed===false&&!component.enabled;
-   button.onclick=async event=>{
-    if(busy||button.disabled)return;feedback(event);busy=true;button.disabled=true;refresh.disabled=true;status.textContent='Updating component…';
+   button.onclick=async()=>{
+    if(busy||button.disabled)return;busy=true;button.disabled=true;refresh.disabled=true;status.textContent='Updating component…';
     try{const next=await request('PUT',component.id,{expected_revision:snapshot.revision,expected_catalog_revision:snapshot.catalog_revision,enabled:!component.enabled});
      if(!host.isConnected)return;render(next);status.textContent=component.enabled?'Component disabled. Affected work pauses at its next boundary.':'Component enabled. Eligible paused work resumes on the next scheduler tick.';}
     catch(error){if(host.isConnected)status.textContent=error.message;}
@@ -57,5 +53,5 @@ export function mountEngineComponents(host) {
   catch(error){if(host.isConnected)status.textContent=error.message;}
   finally{busy=false;if(host.isConnected)refresh.disabled=false;}
  }
- refresh.onclick=event=>{if(!busy){feedback(event);load();}};load();
+ refresh.onclick=()=>{if(!busy)load();};load();
 }
