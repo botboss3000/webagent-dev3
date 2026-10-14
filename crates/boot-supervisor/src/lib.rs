@@ -1,7 +1,7 @@
 //! Replaceable recovery selection; the host owns desired state, crash guards and Docker.
 use anyhow::Result;
 use webagent_boot_contracts::*;
-pub const IMPLEMENTATION_VERSION: &str = "0.1.0";
+pub const IMPLEMENTATION_VERSION: &str = "0.1.1";
 /// Select only host-qualified faults, with a timer only while an actual recovery is pending.
 pub fn plan(input: &Request) -> Result<Plan> {
  validate_request(input)?;

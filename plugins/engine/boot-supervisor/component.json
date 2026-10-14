@@ -16,7 +16,7 @@
   "executable": "artifact/webagent-boot-service",
   "group": "engine-loop",
   "id": "boot-supervisor",
-  "implementation_version": "0.1.0",
+  "implementation_version": "0.1.1",
   "interface_version": 1,
   "limits": {
     "max_concurrency": 1,

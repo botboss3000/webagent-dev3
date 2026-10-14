@@ -220,3 +220,15 @@ publication; fixed installed boot authority/docs/tests use the existing verified
 host-source lane. These are host authority boundaries around the pure Rust
 policy, not permission-bearing live implementations. Initial source is promoted
 but remains uncommitted pending the corrected publication and acceptance.
+
+Boot source correction a9afa9ea-04e5-434c-89cf-56fe12757560 used the verified
+host_service_deploy lane without replacing core containers. Foundation and
+corrected exact 23-path promotion committed as a3112a4a6ac3e8aba9300c6151ef846c41a8d86c.
+The real black tty has zero nonblank/nonblack cells. A matched 20-second quiet
+sample showed console, launcher and planner at zero ticks but original host at
+35 ticks (1.749985%); after host event filtering all four recorded zero ticks.
+Current host-source hash 0092c60a39f252af63ba4addbb5c7bca7fc215e1023f54b1231b9dbe102354c4
+and required-service checks passed. A compatible 0.1.1 identity-only policy
+replacement now exercises the independent engine lane; interface and behavior
+remain unchanged. Withdrawal, real retained-input/selective-start fixtures,
+restoration reuse and final published review closure remain pending.
