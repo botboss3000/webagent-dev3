@@ -232,3 +232,13 @@ and required-service checks passed. A compatible 0.1.1 identity-only policy
 replacement now exercises the independent engine lane; interface and behavior
 remain unchanged. Withdrawal, real retained-input/selective-start fixtures,
 restoration reuse and final published review closure remain pending.
+
+Compatible boot publication ecdabf32-9cca-4a7d-9004-b82b98c64a8b / commit
+8eace94ad01848dc14b46e7454547fa3bd107736 compiled only the registered service
+closure, reused unchanged context/background artifacts and left core identities
+and the host daemon unchanged. API/loop/boot adopted; old launcher child retired
+and new child adopted a76da94230c6d203b5342d47a7a814f83dd21e68c4351388a70bbe32c00c10c2.
+Real confined 0.1.1 calls matched three stable-library cases with reuse and drain.
+Withdraw only its descriptor next, retaining accepted recovery state without a
+linked fallback; the real disposable-container fixture will fence manual-off
+and uncertainty and verify selective restoration through the same host adapter.
