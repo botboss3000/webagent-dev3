@@ -1,0 +1,7 @@
+/* Page-owned controls and detached menus inherit transparent native tap feedback.
+   Keep selected/pressed backgrounds, outlined borders and destructive/disabled states. */
+[data-page-control-feedback] { -webkit-tap-highlight-color: transparent; }
+[data-page-control-feedback] :is(button, [role="button"], [role="menuitem"], [role="switch"], [role="checkbox"], [role="radio"], summary, a[href]):focus-visible {
+  outline: 2px solid var(--accent, currentColor);
+  outline-offset: -2px;
+}

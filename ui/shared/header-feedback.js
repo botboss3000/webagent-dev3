@@ -42,3 +42,6 @@ window.addEventListener('pageshow', event => { if (event.persisted) dispose = mo
 
 // The shell interaction entry also discovers the independently mounted Agents surface.
 import './agents-feedback.js';
+
+// App page feedback is independently mounted after the catalog inserts its root.
+import './app-control-feedback.js';
