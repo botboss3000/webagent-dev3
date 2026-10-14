@@ -53,3 +53,13 @@ for exactly installed boot authority bytes and their own docs/tests. Healthy
 hosts ignore broker log writes; release-blocked faults remain retained and a
 contended effect lease schedules only a real-fault retry. Runtime replacement,
 withdrawal/selective restoration, final CPU and publication evidence remain pending.
+
+## Live lifecycle verification
+Compatible 0.1.1 publication ecdabf32-9cca-4a7d-9004-b82b98c64a8b replaced the
+planner independently, reused unchanged context/background artifacts, preserved
+API/loop/gate and daemon identity, retired the old generation, and matched three
+stable-library cases. Withdrawal 415d30c1-0bad-47bc-a980-cabf96f57196 paused the real
+host and preserved its pending state. Three stopped disposable containers had
+zero effects, with manual-off and uncertain states retained. Restoration uses
+the exact verified sealed 0.1.1 artifact; selective-start/cleanup evidence follows
+the supported restoration receipt, rather than an inferred rollback or fallback.

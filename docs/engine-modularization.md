@@ -242,3 +242,15 @@ Real confined 0.1.1 calls matched three stable-library cases with reuse and drai
 Withdraw only its descriptor next, retaining accepted recovery state without a
 linked fallback; the real disposable-container fixture will fence manual-off
 and uncertainty and verify selective restoration through the same host adapter.
+
+Boot withdrawal 415d30c1-0bad-47bc-a980-cabf96f57196 / commit
+6ec4f2d2640b5b138feb8bf68a9e6cafb2c858c5 published a valid tombstone; API/loop/boot
+adopted and the service retired without changing core identities. The real
+Docker fixture retained all three stopped inputs with zero effects, including
+one eligible start, one manual-off and one uncertain state. The host's durable
+pending/component-pause evidence remained true without linked fallback. Restore
+the exact verified 0.1.1 sealed descriptor/artifact now; also restore its Code
+Index map location/configuration reference. Source and served descriptor bytes
+must match so dependency reviews remain valid. Selective real start, unchanged
+manual/uncertain states, reuse/drain, cleanup and final CPU/review closure remain
+required before completing source ownership.
