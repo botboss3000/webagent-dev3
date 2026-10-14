@@ -1,4 +1,4 @@
-// SISTER-PANEL: V2-PILL-RENDERER — exact ui/shared/js/chat-pill-config.js snapshot; only login import differs.
+// V2 schema adapter with V3-specific incremental layout and focus-preserving reconciliation.
 // @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat pill layout"],"purpose":"Normalizes chat pill settings and renders configured composer controls Config: data/config/chat.json -> chat_common, chat_desktop, chat_mobile, chat_widget, chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
 'use strict';
 
@@ -403,166 +403,175 @@ function applyStatsConfig(statsEl, cfg = {}) {
   }
 }
 
-/** Renders normalized composer rows and applies control state; returns normalized settings. */
+// Per-pill ownership keeps remounts independent and bounds carousel/pending work.
+const pillLayouts = new WeakMap();
+
+/** Disconnects owned observers and cancels deferred moves before a panel remount. */
+export function disposeChatPillLayout(pillEl) {
+  const state = pillLayouts.get(pillEl);
+  if (!state) return;
+  state.disposed = true;
+  clearTimeout(state.timer);
+  pillEl.removeEventListener('focusout', state.onBlur);
+  for (const zone of state.zones) zone.observer?.disconnect();
+  pillLayouts.delete(pillEl);
+}
+
+/** Adopts the boot rows so initial focus does not require disconnecting the editor. */
+function createPillLayout(els) {
+  const pillEl = els.pill;
+  let rows = pillEl.querySelector(':scope > .chat-pill-layout-rows');
+  if (!rows) {
+    rows = document.createElement('div');
+    rows.className = 'chat-pill-layout-rows';
+    const preview = pillEl.querySelector(':scope > #chat-preview-bar');
+    pillEl.insertBefore(rows, preview?.nextSibling || pillEl.firstChild);
+  }
+  const zones = [];
+  for (let index = 0; index < 2; index++) {
+    let row = rows.querySelector(`[data-pill-row="${index}"]`);
+    if (!row) {
+      row = document.createElement('div'); row.className = 'chat-pill-layout-row';
+      row.dataset.pillRow = String(index); rows.appendChild(row);
+    }
+    for (const name of ZONES) {
+      let element = row.querySelector(`.chat-pill-layout-zone-${name}`);
+      if (!element) {
+        element = document.createElement('div');
+        element.className = `chat-pill-layout-zone chat-pill-layout-zone-${name}`;
+        row.appendChild(element);
+      }
+      zones.push({element, strip: null, observer: null, update: null});
+    }
+  }
+  const state = {zones, pending: null, timer: null, disposed: false};
+  // Natural focus departure applies the latest deferred configuration after other handlers settle.
+  state.onBlur = () => {
+    clearTimeout(state.timer);
+    state.timer = setTimeout(() => {
+      const pending = state.pending;
+      if (!state.disposed && pending && pillEl.isConnected) applyChatPillLayout(pending.els, pending.pill);
+    }, 0);
+  };
+  pillEl.addEventListener('focusout', state.onBlur);
+  pillLayouts.set(pillEl, state);
+  return state;
+}
+
+/** Creates one carousel owner per zone; retained zones retain listeners and observers. */
+function enableCarousel(zone) {
+  const element = zone.element;
+  element.classList.add('chat-pill-zone-carousel');
+  const left = document.createElement('button'), right = document.createElement('button');
+  left.type = right.type = 'button';
+  left.className = 'chat-pill-zone-chev left'; right.className = 'chat-pill-zone-chev right';
+  left.setAttribute('aria-label', 'Scroll left'); right.setAttribute('aria-label', 'Scroll right');
+  left.innerHTML = '&#10094;'; right.innerHTML = '&#10095;';
+  const strip = document.createElement('div'); strip.className = 'chat-pill-zone-carousel-strip';
+  element.append(left, strip, right);
+  zone.strip = strip; zone.chevrons = [left, right];
+  const update = () => {
+    const overflow = strip.scrollWidth - strip.clientWidth > 1;
+    element.classList.toggle('has-overflow', overflow);
+    left.classList.toggle('visible', overflow && strip.scrollLeft > 1);
+    right.classList.toggle('visible', overflow && strip.scrollLeft < strip.scrollWidth - strip.clientWidth - 1);
+  };
+  // Retained click/scroll listeners read current strip geometry rather than stale layout values.
+  const step = () => Math.max(60, Math.floor(strip.clientWidth * .6));
+  left.addEventListener('click', () => strip.scrollBy({left: -step(), behavior: 'smooth'}));
+  right.addEventListener('click', () => strip.scrollBy({left: step(), behavior: 'smooth'}));
+  strip.addEventListener('scroll', update, {passive: true});
+  zone.update = update;
+  if (typeof ResizeObserver !== 'undefined') {
+    zone.observer = new ResizeObserver(update); zone.observer.observe(strip);
+  }
+}
+
+/** Moves only changed controls; moveBefore preserves focus/selection on connected nodes. */
+function placeControl(parent, node, before = null) {
+  if (node === before || (node.parentNode === parent && node.nextSibling === before)) return;
+  if (parent.moveBefore && parent.isConnected && node.isConnected) parent.moveBefore(node, before);
+  else parent.insertBefore(node, before);
+}
+
+/** Reconciles configured rows and styles without blur/refocus; unsafe focused moves wait for natural blur. */
 export function applyChatPillLayout(els, rawPill = {}) {
   const pill = normalizeChatPill(rawPill);
   const pillEl = els?.pill;
   if (!pillEl) return pill;
-
-  // A focused textarea is temporarily parked as a direct pill child below the
-  // generated rows while they are replaced. Chromium can leave its blinking
-  // caret painted at that transient position. Blur before the move, then put
-  // focus and the selection back only after the textarea reaches its final
-  // zone so no stray caret remains beneath the composer.
-  const inputHadFocus = Boolean(els.input && document.activeElement === els.input);
-  const inputSelection = inputHadFocus ? {
-    start: els.input.selectionStart,
-    end: els.input.selectionEnd,
-    direction: els.input.selectionDirection,
-  } : null;
-  els.input?._chatPillRevealCaret?.();
-  pillEl.classList.remove('chat-pill-caret-suppressed');
-  if (inputHadFocus) {
-    // Chromium can retain the textarea's caret as a detached compositor layer
-    // even after blur if the focused node is reparented in the same frame. Hide
-    // the caret before that frame and keep it hidden through programmatic focus
-    // restoration. Genuine pointer/keyboard input below reveals it immediately.
-    pillEl.classList.add('chat-pill-caret-suppressed');
-    void els.input.offsetHeight;
-    els.input.blur();
-  }
-
-  // The static shell uses the active two-row shape while boot/auth/config
-  // settle. From here onward the normalized profile owns all geometry.
-  pillEl.classList.remove('chat-pill-boot');
-
-  const known = [
-    els.input,
-    els.stats,
-    els.pillButtons,
-    els.mic,
-    els.send,
-    els.attach,
-    els.stop,
-    els.continue,
-  ].filter(Boolean);
-
-  // Rescue stable nodes before removing the old generated rows. Moving the
-  // nodes preserves all listeners registered by chat-send/attachments.
-  for (const el of known) {
-    if (pillEl.contains(el)) pillEl.appendChild(el);
-  }
-  pillEl.querySelector(':scope > .chat-pill-layout-rows')?.remove();
-
-  if (els.pillButtons) {
-    if (els.mic) els.pillButtons.appendChild(els.mic);
-    if (els.send) els.pillButtons.appendChild(els.send);
-  }
-
-  const controls = {
-    textarea: els.input,
-    stats: els.stats,
-    mic_send: els.pillButtons,
-    mic: els.mic,
-    send: els.send,
-    attach: els.attach,
-    stop: els.stop,
-    continue: els.continue,
-  };
-  for (const el of Object.values(controls)) hideElement(el);
-
+  const state = pillLayouts.get(pillEl) || createPillLayout(els);
+  const controls = {textarea: els.input, stats: els.stats, mic_send: els.pillButtons,
+    mic: els.mic, send: els.send, attach: els.attach, stop: els.stop, continue: els.continue};
   const names = configuredRowControls(pill);
-  setButtonMode(pillEl, names);
-  pillEl.classList.add('chat-pill-row-layout');
-
-  const rowsEl = document.createElement('div');
-  rowsEl.className = 'chat-pill-layout-rows';
-
-  for (let rowIndex = 0; rowIndex < 2; rowIndex += 1) {
-    const rowCfg = pill.rows[rowIndex];
-    const rowEl = document.createElement('div');
-    rowEl.className = 'chat-pill-layout-row';
-    rowEl.setAttribute('data-pill-row', String(rowIndex));
-
-    for (const zone of ZONES) {
-      const zoneCfg = rowCfg[zone];
-      const zoneEl = document.createElement('div');
-      zoneEl.className = `chat-pill-layout-zone chat-pill-layout-zone-${zone}`;
-      // Apply per-zone alignment from config (overrides CSS default of flex-end)
-      if (zoneCfg.align) zoneEl.style.alignItems = zoneCfg.align;
-      // Apply per-zone padding from config
-      if (zoneCfg.padding) zoneEl.style.padding = zoneCfg.padding;
-
-      if (zoneCfg.carousel) {
-        // ── Zone-level carousel (scrollable strip with chevrons) ──
-        zoneEl.classList.add('chat-pill-zone-carousel');
-        const chevLeft = document.createElement('button');
-        chevLeft.type = 'button';
-        chevLeft.className = 'chat-pill-zone-chev left';
-        chevLeft.setAttribute('aria-label', 'Scroll left');
-        chevLeft.innerHTML = '&#10094;';
-
-        const strip = document.createElement('div');
-        strip.className = 'chat-pill-zone-carousel-strip';
-
-        const chevRight = document.createElement('button');
-        chevRight.type = 'button';
-        chevRight.className = 'chat-pill-zone-chev right';
-        chevRight.setAttribute('aria-label', 'Scroll right');
-        chevRight.innerHTML = '&#10095;';
-
-        zoneEl.appendChild(chevLeft);
-        zoneEl.appendChild(strip);
-        zoneEl.appendChild(chevRight);
-
-        for (const name of zoneCfg.carousel) {
-          if (!names.includes(name)) continue;
-          const el = controls[name];
-          if (!el) continue;
-          showElement(el);
-          strip.appendChild(el);
-        }
-
-        // Wire chevrons
-        // Recompute carousel controls after strip/content geometry changes.
-        const update = () => {
-          const overflow = strip.scrollWidth - strip.clientWidth > 1;
-          zoneEl.classList.toggle('has-overflow', overflow);
-          chevLeft.classList.toggle('visible', overflow && strip.scrollLeft > 1);
-          chevRight.classList.toggle('visible', overflow && strip.scrollLeft < strip.scrollWidth - strip.clientWidth - 1);
-        };
-        // Scroll by a fraction of the visible strip, with a minimum usable increment.
-        const scrollStep = () => Math.max(60, Math.floor(strip.clientWidth * 0.6));
-        chevLeft.addEventListener('click', () => { strip.scrollBy({ left: -scrollStep(), behavior: 'smooth' }); });
-        chevRight.addEventListener('click', () => { strip.scrollBy({ left: scrollStep(), behavior: 'smooth' }); });
-        strip.addEventListener('scroll', update, { passive: true });
-        requestAnimationFrame(update);
-        if (typeof ResizeObserver !== 'undefined') {
-          new ResizeObserver(update).observe(strip);
-        }
-      } else {
-        // ── Standard inline controls ──
-        for (const name of zoneCfg.controls) {
-          if (!names.includes(name)) continue;
-          const el = controls[name];
-          if (!el || zoneEl.contains(el)) continue;
-          showElement(el);
-          if (name === 'mic_send') {
-            showElement(els.mic);
-            showElement(els.send);
-          }
-          zoneEl.appendChild(el);
-        }
-      }
-
-      rowEl.appendChild(zoneEl);
-    }
-    rowsEl.appendChild(rowEl);
+  const desired = new Map();
+  const zoneNames = state.zones.map((zone, index) => {
+    const cfg = pill.rows[Math.floor(index / 3)][ZONES[index % 3]];
+    return (cfg.carousel || cfg.controls).filter(name => names.includes(name) && controls[name]);
+  });
+  for (let index = 0; index < state.zones.length; index++) {
+    for (const name of zoneNames[index]) desired.set(controls[name], index);
   }
-
-  const preview = pillEl.querySelector(':scope > #chat-preview-bar');
-  if (preview?.nextSibling) pillEl.insertBefore(rowsEl, preview.nextSibling);
-  else pillEl.prepend(rowsEl);
+  if (names.includes('mic_send')) {
+    desired.set(els.mic, 'buttons'); desired.set(els.send, 'buttons');
+  }
+  const focused = document.activeElement;
+  // A focused editor may stay focused after OS dismissal. Never restore focus automatically.
+  // Without moveBefore, defer any structural operation that disconnects/hides that editor.
+  const unsafeMove = [...new Set(Object.values(controls).filter(Boolean))].some(node => {
+    if (node !== focused && !node.contains(focused)) return false;
+    const target = desired.get(node);
+    if (target === undefined) return true;
+    if (target === 'buttons') return node.parentNode !== els.pillButtons;
+    const zone = state.zones[target];
+    const carousel = Boolean(pill.rows[Math.floor(target / 3)][ZONES[target % 3]].carousel);
+    const siblings = zoneNames[target].map(name => controls[name]).filter(el => desired.get(el) === target);
+    const next = siblings[siblings.indexOf(node) + 1] || null;
+    return node.parentNode !== (carousel ? zone.strip : zone.element) || node.nextSibling !== next;
+  });
+  const deferStructure = unsafeMove && typeof pillEl.moveBefore !== 'function';
+  state.pending = deferStructure ? {els, pill: rawPill} : null;
+  pillEl.classList.remove('chat-pill-boot');
+  pillEl.classList.add('chat-pill-row-layout');
+  for (let index = 0; index < state.zones.length; index++) {
+    const zone = state.zones[index], cfg = pill.rows[Math.floor(index / 3)][ZONES[index % 3]];
+    zone.element.style.alignItems = cfg.align || '';
+    zone.element.style.padding = cfg.padding || '';
+    if (!deferStructure && cfg.carousel && !zone.strip) enableCarousel(zone);
+  }
+  if (!deferStructure) {
+    setButtonMode(pillEl, names);
+    for (const node of new Set(Object.values(controls).filter(Boolean))) {
+      if (!desired.has(node)) {
+        if (pillEl.contains(node) && node.parentNode !== pillEl) placeControl(pillEl, node);
+        hideElement(node);
+      } else showElement(node);
+    }
+    if (names.includes('mic_send')) {
+      placeControl(els.pillButtons, els.mic, els.pillButtons.firstChild);
+      placeControl(els.pillButtons, els.send);
+    }
+    for (let index = 0; index < state.zones.length; index++) {
+      const zone = state.zones[index], cfg = pill.rows[Math.floor(index / 3)][ZONES[index % 3]];
+      const parent = cfg.carousel ? zone.strip : zone.element;
+      // Reverse insertion retains nodes already at their correct position.
+      let before = null;
+      for (const name of [...zoneNames[index]].reverse()) {
+        const node = controls[name];
+        if (desired.get(node) !== index) continue;
+        placeControl(parent, node, before); before = node;
+      }
+    }
+    for (let index = 0; index < state.zones.length; index++) {
+      const zone = state.zones[index], cfg = pill.rows[Math.floor(index / 3)][ZONES[index % 3]];
+      if (!cfg.carousel && zone.strip) {
+        zone.observer?.disconnect(); zone.observer = null;
+        zone.strip.remove(); for (const button of zone.chevrons) button.remove();
+        zone.strip = null; zone.update = null;
+        zone.element.classList.remove('chat-pill-zone-carousel', 'has-overflow');
+      }
+      zone.update?.();
+    }
+  }
 
   const textareaCfg = pill.controls.textarea || {};
   if (els.input) {
@@ -588,37 +597,6 @@ export function applyChatPillLayout(els, rawPill = {}) {
 
   // Clear stale inline display values left by older/static shell versions.
   pillEl.style.removeProperty('display');
-
-  if (inputHadFocus && els.input) {
-    try {
-      els.input.focus({ preventScroll: true });
-      if (inputSelection.start !== null && inputSelection.end !== null) {
-        els.input.setSelectionRange(
-          inputSelection.start,
-          inputSelection.end,
-          inputSelection.direction || 'none',
-        );
-      }
-    } catch (_) { /* Focus restoration is best-effort during teardown. */ }
-
-    // Restore the textarea caret only after its temporary DOM move is complete.
-    const revealCaret = () => {
-      pillEl.classList.remove('chat-pill-caret-suppressed');
-      els.input.removeEventListener('pointerdown', revealCaret, true);
-      els.input.removeEventListener('keydown', revealCaret, true);
-      els.input.removeEventListener('beforeinput', revealCaret, true);
-      els.input.removeEventListener('blur', revealCaret, true);
-      if (els.input._chatPillRevealCaret === revealCaret) {
-        delete els.input._chatPillRevealCaret;
-      }
-    };
-    els.input._chatPillRevealCaret = revealCaret;
-    els.input.addEventListener('pointerdown', revealCaret, true);
-    els.input.addEventListener('keydown', revealCaret, true);
-    // Virtual keyboards may emit beforeinput without a keydown event.
-    els.input.addEventListener('beforeinput', revealCaret, true);
-    els.input.addEventListener('blur', revealCaret, true);
-  }
 
   return pill;
 }

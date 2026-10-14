@@ -1,6 +1,6 @@
 // @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"Applies the V3 chat surface profile from data/config/chat.json (runtime /state/config/chat.json, or V3_CHAT_UI_CONFIG_PATH), including chat_common, desktop/mobile/widget overlays, and chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
 import { applyBubblePaint } from '../core/bubble-paint.js';
-import { applyChatPillLayout } from './chat-pill-config.js';
+import { applyChatPillLayout, disposeChatPillLayout } from './chat-pill-config.js';
 import { initFooterHandle } from './footer-handle.js';
 // V3 reads the v3/data/config/chat.json schema. Unknown controls are
 // skipped until their v3 features exist; the controls below are live in v3.
@@ -24,6 +24,28 @@ let headerNodes = null;
 let currentSurface = '';
 let currentFooterMode = '';
 let listenersBound = false;
+let panelObserver = null;
+let observedPanel = null;
+let geometryFrame = null;
+
+/** Coalesces geometry notifications; height-only changes keep the resolved layout cache. */
+function scheduleChatGeometry() {
+  if (geometryFrame !== null) return;
+  geometryFrame = requestAnimationFrame(() => { geometryFrame = null; applyChatConfig(); });
+}
+
+/** Updates transient controls independently of configured row structure. */
+function applyComposerState() {
+  if (!footerNodes) return;
+  const {pill, input, stop, continue: continuation, send, mic} = footerNodes;
+  const text = !!input.value.trim() || !!Number(pill.dataset.attachmentCount);
+  pill.classList.toggle('has-text', text);
+  send.style.display = text ? '' : 'none'; mic.style.display = text ? 'none' : '';
+  stop.hidden = !stop.dataset.run || stop.dataset.configEnabled === 'false';
+  stop.style.display = stop.hidden ? 'none' : '';
+  continuation.hidden = !!stop.dataset.run || text || continuation.dataset.configEnabled === 'false';
+  continuation.style.display = continuation.hidden ? 'none' : '';
+}
 
 /** Recursively overlays object values while replacing arrays and scalar values. */
 export function mergeProfile(base, override) {
@@ -209,17 +231,8 @@ function applyFooter(profile, mode) {
     if(profile.messages?.pill_placeholder)footerNodes.input.placeholder=profile.messages.pill_placeholder;
     applyChatPillLayout(footerNodes,pill);
     footerNodes.stop.dataset.configEnabled=String(pill.controls?.stop?.enabled !== false);
-    footerNodes.stop.hidden=!footerNodes.stop.dataset.run || pill.controls?.stop?.enabled === false;
-    footerNodes.stop.style.display=footerNodes.stop.hidden ? 'none' : '';
     footerNodes.continue.dataset.configEnabled=String(pill.controls?.continue?.enabled !== false);
-    const continuing=!footerNodes.stop.dataset.run && !footerNodes.input.value.trim() && !Number(footerNodes.pill.dataset.attachmentCount) && pill.controls?.continue?.enabled !== false;
-    footerNodes.continue.hidden=!continuing;
-    footerNodes.continue.style.display=continuing ? '' : 'none';
-    // V2 mic/send presentation includes staged attachments.
-    const hasText=!!footerNodes.input.value.trim()||!!Number(footerNodes.pill.dataset.attachmentCount);
-    footerNodes.pill.classList.toggle('has-text',hasText);
-    footerNodes.send.style.display=hasText ? '' : 'none';
-    footerNodes.mic.style.display=hasText ? 'none' : '';
+    applyComposerState();
     const row=byId('chat-footer-row');
     const below=footer.below_pill || {};
     row.replaceChildren();
@@ -254,11 +267,7 @@ export function applyChatConfig() {
   const mode = byId('chat-input').value || focused === byId('chat-input') || (currentFooterMode === 'active' && inComposer) ? 'active' : 'idle';
   if (applyingFooter) return;
   if (surface === currentSurface && mode === currentFooterMode) {
-    const text=!!byId('chat-input').value.trim()||!!Number(byId('chat-input-row').dataset.attachmentCount);
-    footerNodes?.pill.classList.toggle('has-text',text);
-    if(footerNodes){footerNodes.send.style.display=text ? '' : 'none';footerNodes.mic.style.display=text ? 'none' : '';
-      const continuing=!footerNodes.stop.dataset.run&&!text&&footerNodes.continue.dataset.configEnabled!=='false';
-      footerNodes.continue.hidden=!continuing;footerNodes.continue.style.display=continuing?'':'none';}
+    applyComposerState();
     return;
   }
   const surfaceChanged = surface !== currentSurface;
@@ -287,7 +296,7 @@ export function applyChatConfig() {
   messages?.style.setProperty('--chat-fade-top', top + 'px');
   messages?.style.setProperty('--chat-fade-top-stops', top > 0 ? `transparent 0, #000 ${top}px` : '#000 0');
   messages?.style.setProperty('--chat-fade-bottom', bottom + 'px');
-  applyHeader(profile);
+  if (surfaceChanged) applyHeader(profile);
   applyFooter(profile, mode);
 }
 
@@ -303,15 +312,22 @@ export async function initChatConfig({config:provided,root=null} = {}) {
   const config = data.chat_ui || data;
   if (!config?.chat_common) return;
   // A remount replaces the partial; never reuse detached header/pill nodes.
-  if (footerNodes && footerNodes.input !== byId('chat-input')) { headerNodes=null; footerNodes=null; footerControls=null; currentSurface=''; currentFooterMode=''; }
+  if (footerNodes && footerNodes.input !== byId('chat-input')) { disposeChatPillLayout(footerNodes.pill); headerNodes=null; footerNodes=null; footerControls=null; currentSurface=''; currentFooterMode=''; }
   documentConfig = config;
   currentSurface = '';
   currentFooterMode = '';
   applyChatConfig();
+  const panel = byId('chat-panel');
+  if (observedPanel !== panel) {
+    panelObserver?.disconnect();
+    if (geometryFrame !== null) { cancelAnimationFrame(geometryFrame); geometryFrame = null; }
+    observedPanel = panel;
+    panelObserver = new ResizeObserver(scheduleChatGeometry);
+    panelObserver.observe(panel);
+  }
   if (!listenersBound) {
     listenersBound = true;
-    window.addEventListener('resize', () => { currentSurface = ''; applyChatConfig(); });
-    new ResizeObserver(applyChatConfig).observe(byId('chat-panel'));
+    window.addEventListener('resize', scheduleChatGeometry);
     // Defer focusout until the destination has focus; a synchronous textarea
     // blur must not detach a stats/mode/model control before its click fires.
     // Delegation also survives chat-partial remounts.

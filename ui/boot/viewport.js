@@ -1,3 +1,4 @@
+// @code-index {"version":1,"feature":"mobile-keyboard-viewport","aliases":["keyboard dismissal","mobile keyboard","visible viewport"],"purpose":"Tracks viewport geometry and OS keyboard dismissal; only trusted editor interaction clears dismissal, and programmatic focus never clears it.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Focus preservation and honoring OS keyboard dismissal are interaction invariants rather than user preferences."}}
 "use strict";
   // Track the visible viewport height so the app shrinks when the mobile
   // on-screen keyboard appears. dvh handles browser chrome but on Android
@@ -82,7 +83,6 @@
         || target.isContentEditable;
     }
     document.addEventListener('focusin', function (event) {
-      if (needsMobileKeyboardLock(event.target)) keyboardDismissed = false;
       apply();       // update --app-height NOW so iOS Safari's auto-scroll
       applyKb();     // doesn't overshoot before the rAF loop kicks in
       // This lock exists only for a mobile soft keyboard. Running it for every
@@ -90,5 +90,15 @@
       // click, which makes controls across the app appear to need two clicks.
       if (needsMobileKeyboardLock(event.target)) rAFScrollLock();
     });
+    // Only deliberate editor engagement clears OS dismissal; programmatic focus does not.
+    function engageEditor(event) {
+      if (!event.isTrusted || !needsMobileKeyboardLock(event.target)) return;
+      keyboardDismissed = false;
+      applyKb();
+    }
+    document.addEventListener('pointerdown', engageEditor, true);
+    document.addEventListener('keydown', engageEditor, true);
+    document.addEventListener('beforeinput', engageEditor, true);
+    document.addEventListener('input', engageEditor, true);
     document.addEventListener('focusout', function () { setTimeout(applyKb, 0); });
   })();

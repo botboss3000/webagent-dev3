@@ -326,14 +326,14 @@
         },
         {
           "path": "ui/chat/controls/chat-config.js",
-          "start_line": 149,
-          "end_line": 188,
+          "start_line": 179,
+          "end_line": 218,
           "purpose": "Applies footer mode, binds shell controls, and initializes the footer handle."
         },
         {
           "path": "ui/chat/controls/chat-config.js",
-          "start_line": 238,
-          "end_line": 277,
+          "start_line": 261,
+          "end_line": 300,
           "purpose": "Selects the active chat profile and updates footer presentation."
         },
         {
@@ -519,8 +519,9 @@
         },
         {
           "path": "ui/chat/controls/chat-pill-config.js",
-          "start_line": 407,
-          "end_line": 486
+          "start_line": 498,
+          "end_line": 577,
+          "purpose": "Reconciles configured composer controls while preserving editor focus; unsupported focused moves wait for natural focus departure."
         }
       ],
       "configuration": {
