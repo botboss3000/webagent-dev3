@@ -1171,13 +1171,14 @@ class Runner:
                 "V3_UI_ROOT=/opt/v3/assets/current/v3/ui" in env)
 
     def core_compile_inputs(self):
+        """Preserve normalized installed compiler inputs, including embedded documentation."""
         import posixpath
         raw=self.command(["docker","exec",TARGETS[0],"cat","/usr/local/lib/webagent/core-inputs.txt"],timeout=10,private_raw=True)
         paths=set()
         for path in raw.splitlines():
             if path.startswith("/build/"):path=path[len("/build/"):]
             normalized=posixpath.normpath(path)
-            if normalized.startswith(("src/","crates/","plugins/","config/")):paths.add("v3/"+normalized)
+            if normalized.startswith(("src/","crates/","plugins/","config/","docs/")):paths.add("v3/"+normalized)
         if "v3/src/main.rs"not in paths:raise ValueError("Installed compiler dependency manifest unavailable")
         return paths
     def diagnostics_hot_swappable(self):
@@ -3486,10 +3487,22 @@ class Broker:
                             return {"task_id": task_id, "status": "needs_synchronization" if decision == "synchronize" else "needs_decision", "synchronization": report}
                     package_changed=[path for path in changed if not hot_source_path(path) and (
                         generic_package_path(path,candidate) or generic_package_path(path,base_blob))]
-                    core_inputs=self.runner.core_compile_inputs() if package_changed and hasattr(self.runner,"core_compile_inputs") else set()
-                    ui_only = all(hot_source_path(path) or (
+                    docs_changed=any(path.startswith("v3/docs/")and path.endswith(".md")for path in changed)
+                    core_inputs=set();docs_attested=False
+                    if package_changed or docs_changed:
+                        try:
+                            core_inputs=self.runner.core_compile_inputs()
+                            docs_attested=isinstance(core_inputs,set)and "v3/src/main.rs"in core_inputs
+                            if not isinstance(core_inputs,set):core_inputs=set()
+                        except (AttributeError,OSError,RuntimeError,ValueError,TimeoutError):
+                            core_inputs=set()
+                    # Ordinary notes are assets only when installed compiler evidence excludes them.
+                    ui_only = all((hot_source_path(path) or (
+                        docs_attested and path.startswith("v3/docs/")and path.endswith(".md")) or (
                         (generic_package_path(path,candidate) or generic_package_path(path,base_blob))
-                        and path not in core_inputs and not native_package_migration(path,base_blob)) for path in changed)
+                        and not native_package_migration(path,base_blob)))
+                        and path not in core_inputs and not path.startswith("v3/crates/context-contracts/")for path in changed)
+                    if (package_changed or docs_changed)and not docs_attested:ui_only=False
                     engine_changed=any(path.startswith("v3/plugins/engine/")or path.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/"))for path in changed)
                     if engine_changed and not self.runner.engine_hot_swappable():ui_only=False
                     index_only=ui_only and(not changed or any(path in INDEX_METADATA_FILES for path in changed))

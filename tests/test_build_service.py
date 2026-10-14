@@ -361,3 +361,49 @@ class PackagingStreamTests(unittest.TestCase):
   result=runner.command(["python3","-I","-c","import sys; print(len(sys.stdin.buffer.read()))"],
       stdin=io.BytesIO(b"x"*(2*1024*1024)),timeout=10)
   self.assertEqual(result.strip(),str(2*1024*1024))
+
+class DocumentationHotRoutingTests(unittest.TestCase):
+ """Exercise actual isolated finish routing with production compiler attestations."""
+ setUp=fixtures.BuildTests.setUp
+ tearDown=fixtures.BuildTests.tearDown
+ call=fixtures.BuildTests.call
+ wait=fixtures.BuildTests.wait
+ def route(self,extra=None,attestation=True,ledger=True):
+  """Classify a leaf implementation, descriptor, UI and ledger candidate through the broker."""
+  if getattr(self,"_route_started",False):self.tearDown();self.setUp()
+  self._route_started=True
+  self.runner.blob=fixtures.context(extra={"v3/plugins/engine/context-assembly/component.json":"{}"})
+  if attestation is True:self.runner.core_compile_inputs=lambda:{"v3/src/main.rs","v3/crates/context-contracts/src/lib.rs"}
+  elif attestation is False:self.runner.core_compile_inputs=lambda:(_ for _ in()).throw(ValueError("unknown installed manifest"))
+  elif attestation is not None:self.runner.core_compile_inputs=lambda:attestation
+  task=self.call("v3_build_work",{"action":"begin","task_id":"docs-routing-"+uuid.uuid4().hex,"summary":"Leaf plus ordinary ledger","mode":"isolated"})
+  paths={"crates/context-assembly/src/lib.rs":"leaf","plugins/engine/context-assembly/component.json":"{\"updated\":true}","ui/catalog.css":"body{}","docs/engine-modularization.md":"ledger",**(extra or {})}
+  if not ledger:paths.pop("docs/engine-modularization.md")
+  for name,body in paths.items():
+   path=Path(task["workspace_path"])/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(body)
+  digest=self.call("v3_build_work",{"action":"status","task_id":task["task_id"]})["own"][0]["workspace_inputs_sha256"]
+  result=self.call("v3_build_work",{"action":"finish","task_id":task["task_id"],"expected_inputs_sha256":digest})
+  return self.wait(result)["operation"]
+ def test_leaf_descriptor_ui_and_ledger_publish_without_core_build(self):
+  """The exact four changed categories retain independent engine publication."""
+  self.assertEqual(self.route(),"plugin_deploy")
+ def test_embedded_ledger_forces_core_build(self):
+  """A compiler-declared doc must not be treated as an ordinary asset."""
+  self.assertEqual(self.route(attestation={"v3/src/main.rs","v3/docs/engine-modularization.md"}),"build_deploy")
+ def test_shared_contract_cargo_and_root_core_require_build(self):
+  """Shared contracts and root build inputs never become leaf-only assets."""
+  for name in ("crates/context-contracts/src/lib.rs","Cargo.toml","src/main.rs"):
+   with self.subTest(name=name):self.assertEqual(self.route(extra={name:"changed"}),"build_deploy")
+ def test_absent_unknown_or_unrecognized_attestation_requires_build(self):
+  """Missing or unrecognized installed evidence cannot grant documentation publication."""
+  for value in (None,False,set(),{"v3/docs/other.md"}):
+   with self.subTest(value=value):self.assertEqual(self.route(attestation=value),"build_deploy")
+ def test_leaf_without_ledger_requires_known_compiler_attestation(self):
+  """A leaf-only candidate cannot bypass unavailable installed compiler evidence."""
+  for value in (None,False,set(),{"v3/docs/other.md"}):
+   with self.subTest(value=value):self.assertEqual(self.route(attestation=value,ledger=False),"build_deploy")
+ def test_installed_docs_inputs_are_normalized_and_retained(self):
+  """Absolute and relative compiler paths preserve embedded docs identities."""
+  runner=fixtures.host.Runner(source=Path(self.temp.name),snapshot_socket=None)
+  runner.command=lambda *a,**kw:"/build/src/main.rs\n/build/docs/../docs/engine-modularization.md\ndocs/other.md\n"
+  self.assertEqual(runner.core_compile_inputs(),{"v3/src/main.rs","v3/docs/engine-modularization.md","v3/docs/other.md"})
