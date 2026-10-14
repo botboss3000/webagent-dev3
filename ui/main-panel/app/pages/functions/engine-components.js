@@ -2,10 +2,17 @@
 // Engine controls withdraw functionality; package editing/publication stays broker-owned.
 export function mountEngineComponents(host) {
  const section=document.createElement('section');section.className='app-engine-components';
+ // Own button styling here so controls remain readable without another page's CSS.
+ const styles=document.createElement('style');styles.textContent=`
+ .app-engine-components .app-engine-button { color:var(--fg-1,#eee);background:var(--bg-2,#282828);border:1px solid var(--border-strong,var(--border,#777));border-radius:8px;padding:8px 12px;min-height:44px;font:inherit;cursor:pointer; }
+ .app-engine-components .app-engine-button:hover:not(:disabled) { background:var(--bg-elev,var(--bg-2,#282828)); }
+ .app-engine-components .app-engine-button:focus-visible { outline:2px solid var(--fg-1,#eee);outline-offset:2px; }
+ .app-engine-components .app-engine-button:disabled { opacity:.55;cursor:default; }
+ `;section.append(styles);
  const heading=document.createElement('h3');heading.textContent='Engine components';section.append(heading);
  const note=document.createElement('p');note.textContent='Disable a required component to pause affected work. Restoring it resumes only work paused for that component. Install, replace, or remove packages through the build broker.';section.append(note);
  const list=document.createElement('div'),status=document.createElement('p');status.setAttribute('role','status');section.append(list,status);
- const refresh=document.createElement('button');refresh.type='button';refresh.className='members-btn';refresh.textContent='Refresh components';refresh.style.webkitTapHighlightColor='transparent';section.append(refresh);host.append(section);
+ const refresh=document.createElement('button');refresh.type='button';refresh.className='app-engine-button';refresh.textContent='Refresh components';refresh.style.webkitTapHighlightColor='transparent';section.append(refresh);host.append(section);
  let snapshot=null,busy=false;
  /** Request one optional pulse only for an enabled touch activation. */
  function feedback(event) {
@@ -30,7 +37,7 @@ export function mountEngineComponents(host) {
    row.append(label);
    if(component.implementation_version){const version=document.createElement('p');version.textContent='Implementation '+component.implementation_version+' · interface '+component.interface_version;row.append(version);}
    if(component.runtime_requirements?.length){const dependencies=document.createElement('p');dependencies.textContent='Requires: '+component.runtime_requirements.join(', ');row.append(dependencies);}
-   const button=document.createElement('button');button.type='button';button.className='members-btn';button.style.webkitTapHighlightColor='transparent';
+   const button=document.createElement('button');button.type='button';button.className='app-engine-button';button.style.webkitTapHighlightColor='transparent';
    button.textContent=component.enabled?'Disable component':'Enable component';button.disabled=component.installed===false&&!component.enabled;
    button.onclick=async event=>{
     if(busy||button.disabled)return;feedback(event);busy=true;button.disabled=true;refresh.disabled=true;status.textContent='Updating component…';

@@ -18,7 +18,13 @@ pub fn prepare_incremental<'a>(request: Request<'a>, state: &mut crate::context_
     state.sync(request.history)?;
     // Input selects once; assembly alone combines the selected ingredients in stable order.
     let selected = context_input::select(request.contributions, request.identity).map_err(|_| Failure::new("invalid_contribution", "selection"))?;
-    let mut instructions = format!("{}{}", request.base, request.guidance);
+    // Reserve exact included UTF-8 bytes once; stable instruction order and accounting stay unchanged.
+    let capacity = selected.iter().filter(|decision| decision.disposition == "included")
+        .fold(request.base.len().saturating_add(request.guidance.len()), |bytes, decision|
+            bytes.saturating_add(1).saturating_add(decision.item.content.len()));
+    let mut instructions = String::with_capacity(capacity);
+    instructions.push_str(request.base);
+    instructions.push_str(request.guidance);
     for decision in &selected {
         if decision.disposition == "included" { instructions.push('\n'); instructions.push_str(&decision.item.content); }
     }
