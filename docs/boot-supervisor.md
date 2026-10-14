@@ -63,3 +63,14 @@ host and preserved its pending state. Three stopped disposable containers had
 zero effects, with manual-off and uncertain states retained. Restoration uses
 the exact verified sealed 0.1.1 artifact; selective-start/cleanup evidence follows
 the supported restoration receipt, rather than an inferred rollback or fallback.
+
+
+Completion: restoration 9ea3dec4-8b12-41ca-bdf0-470c22689ad7 reused the exact
+verified 0.1.1 artifact; one eligible real fixture started exactly once while
+manual-off and uncertainty remained stopped, then all fixtures were removed.
+A real unhealthy fixture verified grace deferral and one generation-fenced
+restart with injected expiry; it was removed. Final three 20-second samples
+recorded zero CPU ticks across daemon, launcher, planner and console. The real
+tty was entirely blank with black backgrounds. Ordinary user wake and recovery
+permissions remain in the host; no process/resource claim implies whole-server
+CPU reduction. Full receipts and sampling limits are in engine-modularization.md.

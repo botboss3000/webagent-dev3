@@ -28,6 +28,10 @@ backend change is warranted by the reported busy-loop hypothesis.
 | Background planning contracts | shared-contracts | webagent-background-contracts version-1 library | Bounded metadata and independent host validation | Deployed; full workspace and optimized equivalence verified |
 | Background selection policy | engine-loop | webagent-background-dispatch library | Independent implementation replacement, linked stable calls | Deployed; paired CPU/claim measurements and compatible 0.1.1 replacement verified |
 | Background service transport | engine-loop | webagent-background-service over reusable webagent-engine-service | Confined private pipes without host authority | Strict withdrawal, retained-input pause, selective restoration and process reuse verified |
+| Boot recovery DTOs | shared-contracts | webagent-boot-contracts version-1 library | Bounded metadata with independent host validation | Deployed; shared contract paths require coordinated publication |
+| Boot recovery selection | engine-loop | webagent-boot-supervisor library | Healthy idle has no deadline; stable build calls directly | Deployed; stable/live equality and independent 0.1.1 replacement verified |
+| Boot service wrapper | engine-loop | webagent-boot-service over webagent-engine-service | Confined reusable private pipes | Replacement, withdrawal retention, selective restoration and exact artifact reuse verified |
+| Boot event, persistence and Docker authority | engine-loop | Protected boot_host.py plus fixed webagent-boot-host launch authority | Host owns permissions, credentials, desired/uncertain state and effects | Deployed; existing pre-exec sandbox reused and verified |
 | API, loop scheduling, authority, storage and recovery | engine-loop | Existing main application | Keep run ownership, credentials, persistence and permission checks authoritative | Remain embedded |
 | Existing abilities and module hosts | module-host | Existing supported native/isolated paths | Preserve tool identities, grants and publication behavior | Unchanged by extraction |
 
@@ -254,3 +258,62 @@ Index map location/configuration reference. Source and served descriptor bytes
 must match so dependency reviews remain valid. Selective real start, unchanged
 manual/uncertain states, reuse/drain, cleanup and final CPU/review closure remain
 required before completing source ownership.
+
+
+### Boot idle completion evidence, 2026-10-14
+Foundation 097d0a9c-f256-4eea-8c59-0f20abc6e98c passed 882 Rust cases,
+zero failed/five existing ignored, all optimized linked/live equality, reuse and
+drain checks, three compiler cap proofs and two package cap proofs. All observed
+memory.max values were 4026531840, swap.max zero, and OOM events/kills zero.
+Compiler peaks were 3904643072/2829176832/2862731264; package peaks
+4032573440/409649152. Host correction a9afa9ea-04e5-434c-89cf-56fe12757560
+passed 48 unchanged-input cases and the installed-source lane; combined exact
+23-path commit a3112a4a6ac3e8aba9300c6151ef846c41a8d86c preserves both receipts.
+Installed authority d8f09cd37ac851efd7612819bc91c2310f852526d2f643751e7ecec7666e4575
+matches source; boot host hash is 0092c60a39f252af63ba4addbb5c7bca7fc215e1023f54b1231b9dbe102354c4.
+Its launcher and stable executable are attested artifacts from the foundation.
+
+Compatible ecdabf32-9cca-4a7d-9004-b82b98c64a8b / 8eace94ad01848dc14b46e7454547fa3bd107736
+changed only implementation identity, descriptor and ledger; the registered
+service closure compiled independently, context/background artifacts reused,
+and old generations retired with daemon/core identities unchanged. Three real
+confined metadata calls matched the stable direct library with reuse/drain.
+Withdrawal 415d30c1-0bad-47bc-a980-cabf96f57196 / 6ec4f2d2640b5b138feb8bf68a9e6cafb2c858c5
+retired the process, adopted its tombstone and retained pending state without
+linked fallback. Real stopped disposable containers had zero effects with
+manual-off/uncertain fences. Restore 9ea3dec4-8b12-41ca-bdf0-470c22689ad7 /
+943c33fd656482d96857b9adf04f3f8a655873e7 reused all three exact verified engine
+artifacts, including boot a76da94230c6d203b5342d47a7a814f83dd21e68c4351388a70bbe32c00c10c2.
+Exactly one eligible container started; manual-off and uncertain containers
+stayed stopped. A second call reused its process with no duplicate start/deadline.
+Source and served sealed descriptor bytes match. All three fixtures were removed.
+
+An additional real unhealthy disposable container proved grace deferral and
+one generation-fenced restart after injecting expiry into only the test host's
+own grace marker. No real 45-second sustained-health timing is claimed. Its
+first bounded health wait expired because the fixture retained the image's
+30-second start grace; explicit one-second fixture parameters corrected the
+setup. The fixture was removed after each attempt. Production, v2, retired
+development containers and application data were untouched.
+
+The console's old rendering baseline was 8.2% over a matched earlier 20-second
+sample. The black console recorded zero ticks; initial host bookkeeping wake
+churn recorded 35 ticks over 20.000170501 seconds (1.749985%). The corrected host,
+native launcher, planner and console all recorded zero ticks in three final
+20-second intervals (0.00% observed; nonzero usage below sampling resolution is
+not excluded). The real tty had zero nonblank characters and nonblack background
+cells. Textual 8.2.8 presentation tests cover network/password screens, retained
+masked input, mouse non-wake, consumed keyboard wake, status refresh, resize and
+timer suspension. Its parser waits for actual input/deadlines with shutdown wake;
+the PTY fixture verifies bare Escape, zero idle ticks and clean exit. Existing
+12 dashboard/six network scenarios passed. No pinned-rustfmt pass is claimed:
+the pinned compiler image does not include rustfmt.
+
+Final human reviews are refreshed against these exact served descriptor pins and
+source/dependency evidence, including historical rename/deletion bindings; the
+paired final source/index receipt binds their completion. Numeric/lifecycle and
+source receipts are retained under build-jobs, operator evidence under
+/var/lib/webagent/development/boot-acceptance and the task acceptance directory.
+The final source owner closes only after healthy publication, exact commit,
+all affected published reviews current, fixture cleanup and restored disk-guard
+timer state. Historical pending entries above are superseded by this evidence.

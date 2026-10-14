@@ -149,3 +149,33 @@ The complete-tests-v4 certificate retains the exact Cargo-declared unit/integrat
 
 
 The second registered engine interface is background-dispatch (`background.plan`, interface 1). Its fixed independent recipe builds webagent-background-service and the declared background-dispatch/contracts plus reusable engine-service closure. Requests contain only bounded lifecycle metadata; storage, authority and execution remain core-owned. New contracts require coordinated release and broker registration installation. Compatible implementation publications retain core consumers only when live adoption and actual compile closure permit it. Each output is sealed by its component identity; multi-component retries must process every output. See docs/engine-modularization.md for current progress/evidence.
+
+
+## Boot recovery component and host authority
+The third fixed engine registration is boot-supervisor (boot.plan, interface 1).
+Its declared closure builds webagent-boot-service, boot-supervisor/contracts and
+the reusable engine-service wrapper. Stable builds call the Rust library through
+--boot-plan. Shared boot-contracts edits require coordinated publication even
+when a changed manifest is not a Rust dep-info file. Compatible implementation
+updates use the engine lane only with actual API/loop/boot live-mode adoption.
+
+The protected boot_host.py adapter owns Docker event transport, persistence,
+desired state, manual/uncertain pauses, crash guards and every container effect.
+webagent-boot-host is a fixed host executable reusing the existing pre-exec
+confinement; install it only from the successful release's attested artifact,
+alongside its protected hash receipt. Library/service descriptors cannot replace
+that authority or choose its targets. The UI is an unprivileged keyboard-woken
+status/control client outside this checkout. See docs/boot-supervisor.md.
+
+Host-source publication allows only the already-installed fixed boot authority
+module and its explicit docs/tests, with exact protected byte equality. Actual
+boot adoption also binds the running host-code SHA and rejects an enabled but
+unavailable service. Descriptor withdrawal remains valid and retains pending
+host input. Source-only host publication does not require container recreation.
+The shared effect lease serializes recovery/manual effects with deployment.
+
+After adding a fixed installed module, verify the full installed manifest.
+If the prior lifecycle installer omitted a newly inventoried module, use the
+newly protected bootstrap's supported --install --install-tree while drained
+and stopped, then verify exact bytes before resuming. Do not execute mutable
+source as privileged service code or bypass publication/classification gates.
