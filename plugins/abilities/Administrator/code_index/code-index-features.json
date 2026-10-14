@@ -910,9 +910,10 @@
       "aliases": [
         "live engine modules",
         "component catalog",
-        "context service"
+        "context service",
+        "background dispatch"
       ],
-      "purpose": "Connects optional engine package discovery, source defaults, runtime controls, per-call host validation, model dispatch fencing and Functions UI. Config: config/engine-components.json -> disabled (initial defaults only). Installed context packages supply validated limits and runtime requirements; registered host contracts and catalog withdrawal tombstones remain authoritative when optional packages are absent.",
+      "purpose": "Connects optional engine package discovery, source defaults, runtime controls, per-call host validation, model dispatch fencing and Functions UI. Config: config/engine-components.json -> disabled (initial defaults only). Installed context/background packages supply validated limits and runtime requirements; registered host contracts and catalog withdrawal tombstones remain authoritative when optional packages are absent.",
       "locations": [
         {
           "path": "src/engine_components.rs",
@@ -952,6 +953,135 @@
         ],
         "opportunities": []
       }
+    },
+    {
+      "id": "background-dispatch",
+      "aliases": [
+        "background tasks",
+        "idle CPU",
+        "event wake",
+        "component withdrawal"
+      ],
+      "purpose": "Connects the versioned pure planner, replaceable service, host event wait and retained-input lifecycle. Config: config/engine-components.json -> disabled (source defaults initialize absent host controls); plugins/engine/background-dispatch/component.json -> limits, runtime_requirements and build.source_inputs. Execution overrides remain encrypted host records; metadata never grants authority.",
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "config/engine-components.json",
+            "pointers": [
+              "/disabled"
+            ]
+          },
+          {
+            "path": "plugins/engine/background-dispatch/component.json",
+            "pointers": [
+              "/limits/max_request_bytes",
+              "/limits/max_response_bytes",
+              "/limits/timeout_ms",
+              "/limits/max_concurrency",
+              "/runtime_requirements",
+              "/build/source_inputs"
+            ]
+          }
+        ],
+        "opportunities": []
+      },
+      "locations": [
+        {
+          "path": "src/background_tasks.rs",
+          "start_line": 157,
+          "end_line": 207,
+          "purpose": "Host broadcast wait, durable recovery and four-worker execution."
+        },
+        {
+          "path": "src/engine_components.rs",
+          "start_line": 369,
+          "end_line": 402,
+          "purpose": "Host plan validation, sealed identity and failure cooldown."
+        },
+        {
+          "path": "src/api/sessions.rs",
+          "start_line": 846,
+          "end_line": 874,
+          "purpose": "Owner/session-fenced eight-field task milestones."
+        },
+        {
+          "path": "src/api/ability_admin.rs",
+          "start_line": 216,
+          "end_line": 260,
+          "purpose": "Manager-authorized execution override CAS; null restores inheritance; fresh admission adopts preferences."
+        },
+        {
+          "path": "src/app.rs",
+          "start_line": 188,
+          "end_line": 209,
+          "purpose": "Owning Store fallback preserves bounded public component-pause markers."
+        },
+        {
+          "path": "crates/background-contracts/src/lib.rs",
+          "start_line": 1,
+          "end_line": 45,
+          "purpose": "Version-1 bounded DTOs and independent host safety validation.",
+          "configuration": {
+            "status": "not_applicable",
+            "rationale": "Versioned metadata-only contracts, confinement, authority checks, four-worker and recovery bounds are invariants rather than preference bypass settings."
+          }
+        },
+        {
+          "path": "crates/background-dispatch/src/lib.rs",
+          "start_line": 1,
+          "end_line": 22,
+          "purpose": "Pure scan-order/deadline policy without host authority.",
+          "configuration": {
+            "status": "not_applicable",
+            "rationale": "Versioned metadata-only contracts, confinement, authority checks, four-worker and recovery bounds are invariants rather than preference bypass settings."
+          }
+        },
+        {
+          "path": "crates/background-service/src/main.rs",
+          "start_line": 1,
+          "end_line": 9,
+          "purpose": "Thin reusable wrapper around the pure library.",
+          "configuration": {
+            "status": "not_applicable",
+            "rationale": "Versioned metadata-only contracts, confinement, authority checks, four-worker and recovery bounds are invariants rather than preference bypass settings."
+          }
+        },
+        {
+          "path": "crates/engine-service/src/lib.rs",
+          "start_line": 1,
+          "end_line": 59,
+          "purpose": "Reusable bounded private pipes and confinement.",
+          "configuration": {
+            "status": "not_applicable",
+            "rationale": "Versioned metadata-only contracts, confinement, authority checks, four-worker and recovery bounds are invariants rather than preference bypass settings."
+          }
+        },
+        {
+          "path": "plugins/engine/background-dispatch/component.json",
+          "start_line": 1,
+          "end_line": 34,
+          "purpose": "Independent build closure and execution limits."
+        },
+        {
+          "path": "build-service/engine_components.py",
+          "start_line": 1,
+          "end_line": 80,
+          "purpose": "Host fixed interface registration and build-closure validation."
+        },
+        {
+          "path": "build-service/engine_components.py",
+          "start_line": 76,
+          "end_line": 136,
+          "purpose": "Independent pinned component compilation and verified artifact reuse."
+        },
+        {
+          "path": "build-service/engine_components.py",
+          "start_line": 138,
+          "end_line": 178,
+          "purpose": "Artifact identity sealing and explicit catalog withdrawal/reinstallation membership."
+        }
+      ]
     }
   ]
 }
