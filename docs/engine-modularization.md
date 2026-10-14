@@ -1,6 +1,6 @@
 # Engine modularization plan and ledger
 
-Status: implementation and verification in progress. Development v3 only; production and v2 are excluded.
+Status: the catalog foundation and first context extraction pilot are implemented, deployed and verified in development v3. Production and v2 are excluded. Later extractions remain gradual, assessed work.
 
 ## Decisions and boundaries
 Use gradual extraction when substantial work benefits from a clean boundary. The broad organizational groups are engine-loop, module-host and shared-contracts. Group membership does not imply another process or a runtime dependency. Do not automatically turn every edited function into a plugin.
@@ -12,9 +12,9 @@ An implementation may run behind an isolated live wrapper or link into a stable 
 ## Current component ledger
 | Component | Group | Boundary | Reason | State |
 | --- | --- | --- | --- | --- |
-| Context input/accounting/compaction safety and DTOs | shared-contracts | webagent-context-contracts library | Stable shared policy and host validation; changes rebuild actual consumers | Extracted; integrated check and pure unit tests passed; release verification pending |
-| Context assembly algorithm | engine-loop | webagent-context-assembly library | Replaceable implementation; live core excludes this dependency | Extracted; process/library equivalence checks passed; deployed live verification pending |
-| Context service | engine-loop | webagent-context-service executable, one supervised process per execution descriptor generation | Independent live updates over inherited private pipes | Standalone real service and host probes passed; combined release verification pending |
+| Context input/accounting/compaction safety and DTOs | shared-contracts | webagent-context-contracts library | Stable shared policy and host validation; changes rebuild actual consumers | Extracted; full workspace suite and optimized foundation linked/live release verified |
+| Context assembly algorithm | engine-loop | webagent-context-assembly library | Replaceable implementation; live core excludes this dependency | Extracted; baseline linked/live equivalence verified; compatible live 0.1.1 independently published |
+| Context service | engine-loop | webagent-context-service executable, one supervised process per execution descriptor generation | Independent live updates over inherited private pipes | Real confinement, host integration, replacement, withdrawal and restored retained work verified |
 | API, loop scheduling, authority, storage and recovery | engine-loop | Existing main application | Keep run ownership, credentials, persistence and permission checks authoritative | Remain embedded |
 | Existing abilities and module hosts | module-host | Existing supported native/isolated paths | Preserve tool identities, grants and publication behavior | Unchanged by extraction |
 
@@ -47,7 +47,7 @@ Engine descriptors are under plugins/engine, separate from plugins/abilities. Th
 ## Measurements and completion evidence
 Record cold and incremental compile/link/test duration, cache reuse, rebuild fan-out, startup/IPC latency, throughput and memory for representative concurrent calls. Compare actual main binary/image/container identities before and after one compatible service-only edit. Do not promise a predetermined speedup or certify a hot lane from metadata alone.
 
-Completion entry: pending. Bind the final tests, deployment/adoption, behavioral acceptance, exact promoted paths, commit and ownership completion receipts here.
+Completion entry: the first pilot and agreed runtime acceptance are complete. Exact release/commit evidence and remaining measurement limits are recorded below. Historical investigation notes retain their status at the time; the completion evidence supersedes earlier pending notes.
 
 ## Maintenance rule for subsequent work
 Before substantial engine changes, consult this ledger and assess whether extraction helps the concrete change. Record the component hierarchy, crate/process boundary, build/runtime requirements, rationale, rejected alternatives, progress, measurements, release evidence and next step. Keep the ledger and affected repository/publication guidance current. Complete affected Code Index/documentation review while the broker task is open. A future extraction is an assessed opportunity, not mandatory adjacent cleanup.
@@ -86,3 +86,27 @@ Before substantial engine changes, consult this ledger and assess whether extrac
 - Normal authenticated runtime acceptance passed access denial 401, CSRF denial 403, stale revision 409, accepted-input retention while disabled, selective component restoration with one exact bounded assistant reply, and preservation of manual pause/cancel. Fixtures were recycled; enabled state restored and content-free aggregate of 66 tenant databases showed no active/unresolved run or unacknowledged command. Historical terminal publication records are inert and do not dispatch work.
 - Functional Functions controls and API/loop adoption were verified. Dark-theme button contrast failed visual acceptance; this scoped asset correction gives engine controls their own theme-aware readable button styling. Visual dark/light verification remains pending publication.
 - The compatible 0.1.1 assembly pilot reserves the exact selected UTF-8 instruction capacity once, preserving order, payload, selection and accounting. It changes no host/shared contract or Cargo manifest. Independent build, unchanged core identities, live adoption, deliberate withdrawal/reinstallation, retained-work behavior and measured process overhead remain pending actual publication evidence.
+
+### Completed release and acceptance ledger
+
+| Release | Outcome and verified commit | Evidence |
+| --- | --- | --- |
+| Foundation bd4180fd-ed7a-442c-a576-fc00bc2a5d77 | Healthy live API/loop, optimized linked artifact retained; d361a442684fba66cbf277038fa757b688713b28 | Fresh workspace 866 passed, zero failed, five existing ignored; optimized prepared results equal; complete test manifest and debug support sealed |
+| Broker routing 9ce4a271-9e00-4b99-9408-a87d2c79c85d | Protected source publication, no application replacement; 7a72b6d6330690318f7dabb2488098b3503d57ba | 148 focused guard regressions; ordinary ledger notes need known compiler exclusion, embedded docs/contracts/core and missing attestation stay on the core lane |
+| Independent implementation/UI 66905164-09f7-4ba8-bd2b-952d2850cab5 | Live 0.1.1 and readable controls published; bdead89416a7b4ea38864ec3d6712a790eb1bf21 | Actual plugin_deploy, 10 scoped context tests passed, new service SHA 0a78af0ff27721b26d350fff10fd11903f57c6f3169ac28d0c058f16adf1bbc1, both consumers adopted, actual running child executable matched |
+| Registered withdrawal 49be9837-b197-4116-a122-1dafb48b6cb3 | Descriptor removed and tombstone published; cb98f2d639e6244ce4574c4a8b7db06bb8052f01 | Actual catalog components empty/withdrawn context-assembly, both consumers adopted, old idle service retired without another prepare, accepted input paused with one user and zero assistant replies |
+| Restoration 271423e1-26dd-4935-bed2-cb5e0e1b7c64 | Same verified component reinstalled; a3ab07dbcfb7c970501d3b73518ca3a07f649e78 | Supported immutable artifact reuse, matching tombstone cleared, retained input automatically completed with exactly one bounded reply, stable repeat and fixture cleanup |
+
+Each successful release above promoted only its exact reviewed paths, received a verified receipt-bound commit, and completed its ownership transaction. No push occurred. Unrelated viewport and v2 reference edits were preserved. API, loop and gate container IDs/images, and API/loop main binary hashes, remained exactly unchanged across the broker-only, implementation/UI, withdrawal and restoration publications.
+
+The runtime controls passed normal authenticated 401/403/409 checks, retained-work pause and selective restoration. Manual pause and cancellation did not resume. Functions buttons passed actual dark/light visual checks and keyboard focus; the original theme was restored. After restoration the component is enabled, installed, available in live mode, implementation 0.1.1, with zero affected work and current API/loop adoption. Test conversations were recoverably recycled. A bounded read-only aggregate of 66 tenant databases found no queued/running/recovery/waiting-external work, unacknowledged commands or unknown statuses. Historical terminal publication ledgers are inert; no private payloads or keys were read or changed for this audit.
+
+### Measurements and limits
+
+- Independent 0.1.1 service plus UI publication took 60.22 seconds, including the actual contracts/assembly/service tests and service-only compilation. Its new immutable build key was 8a188dee5acb73a12d7a0bc6595e4532ddc81f0b2051ddb978e5b91dc7a2fe36. Reinstallation reused that already verified artifact rather than recompiling unchanged code. This demonstrates the boundary and cache reuse; it does not establish an overall application build-speed multiplier.
+- The saved standalone published-service measurement used twelve synthetic public history items and a 2,106-byte request. One process was reused: process startup plus first call 1.024 ms; twelve warm calls median 60 microseconds, maximum 92.16 microseconds and total 0.792 ms; twelve pipelined frames total 0.689 ms. Every prepared reply matched, accounting was released and the process drained; observed peak RSS was 2,428,928 bytes. A preceding repeat had first-call 2.89 ms and warm median 80 microseconds, illustrating variation. These measure pure standalone pipe protocol/computation, excluding host admission, scheduler behavior, model/network latency, real user workload and cold OS cache. This twelve-call measurement does not establish full application overhead or overall build speed. Twelve calls do not require twelve processes.
+- The actual hosted loop service process executable matched the new published artifact after a normal accepted fixture; observed RSS was 2,813,952 bytes and peak 3,088,384 bytes. Public APIs do not expose per-call implementation provenance, so the proof combines current adoption, accepted behavior and safe running-executable hash.
+- Complete-tests-v4 retains and validates the exact Cargo test closure including the official debug service and integration executable. No existing supported foreground lane replays that certified closure without a coordinated application release, so a complete retained-test replay is not claimed. Missing historical unsealed outputs were never retro-certified.
+- Live non-administrator and live permission-revocation fixtures were unavailable and are not claimed. Existing fresh unit coverage passed access revocation, both credential-await removal fences, manual/uncertain pause preservation, invalid/forged candidate rejection, generation pinning, safe cancellation and confinement. The live runtime fixtures used authorized administrator access.
+
+Evidence lives under build-jobs/coordination/checks/engine-catalog: settled inventories and index-review records; parent-workspace-test-proof-bd4180.json; live-proof-identities-before.json and live-proof-identities-after.json; live-service-process-proof.json; service-overhead-results.json; withdrawal-runtime-proof.json and restoration-runtime-proof.json; api-acceptance results. Durable release receipts are build-jobs/<release-id>.json. No runtime data, credentials or inspection snapshots entered a commit or image.
