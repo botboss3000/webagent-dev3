@@ -73,3 +73,65 @@ class PackagingEvidenceTests(unittest.TestCase):
                 self.assertNotIn("package_cap_outcomes",job)
                 self.assertIsNone(cleanup[0][1])
                 self.assertFalse(cleanup[0][2])
+
+class CompilerIdentityTests(unittest.TestCase):
+    """Keep compiler creation identity at the existing protected host authority boundary."""
+    def run_case(self, reply=None):
+        """Model mixed Docker output with independently authenticated helper identity."""
+        identity="a"*64
+        class Resources:
+            enabled=True
+            lock=threading.RLock()
+            rows={}
+            def enter(self,name,*args,**kwargs):
+                """Admit only the fixture's attributable phase."""
+                self.rows[name]={}
+            def attached(self,*args):
+                """Retain the same successful-attachment seam as the real controller."""
+                pass
+        class Runner:
+            job_context=types.SimpleNamespace()
+            commands=[]
+            def command(self,args,**kwargs):
+                """Return a warning-bearing create stream without any Docker effect."""
+                self.commands.append(args[:2])
+                return "WARNING: disposable stderr fixture\n"+identity if args[1]=="create" else "fixture check passed"
+            def resource_request(self,args):
+                """Keep creation identity independent of kernel counter reads."""
+                if args["operation"]=="identity":
+                    return reply if reply is not None else {"container_id":identity,"state":"created","phase":"compile_test"}
+                return {"container_id":identity,"memory_max":4026531840,"swap_max":0,"oom_events":0,"oom_kills":0,"peak_memory":123}
+        runner=Runner();executor=module.Executor(runner,Resources(),{"instance":"development","service_uid":1000,"service_gid":1000})
+        cleanup=[];executor.finish_phase=lambda *args:cleanup.append(args)
+        job={"job_id":str(uuid.uuid4()),"compiler_memory_cap":4026531840}
+        import tempfile
+        with tempfile.TemporaryDirectory() as temporary:
+            folder=Path(temporary)
+            try:
+                executor.phase(job,"compile_test","engine",folder,folder,["cargo","check","--locked"],"fixture",30)
+            except Exception as error:
+                return error,job,runner.commands,cleanup
+        return None,job,runner.commands,cleanup
+    def test_compiler_diagnostics_do_not_replace_protected_identity(self):
+        """Warnings cannot replace canonical authenticated identity or successful cap proof."""
+        error,job,commands,cleanup=self.run_case()
+        self.assertIsNone(error)
+        self.assertIn(["docker","start"],commands)
+        self.assertIn(["docker","exec"],commands)
+        self.assertEqual(job["compiler_cap_outcomes"][0]["container_id"],"a"*64)
+        self.assertEqual(job["compiler_cap_outcomes"][0]["outcome"],"completed")
+        self.assertEqual(job["compiler_cap_outcomes"][0]["oom_kills"],0)
+        self.assertTrue(cleanup[0][2])
+    def test_invalid_compiler_identity_never_starts(self):
+        """Missing, malformed and wrong-state/phase identities forbid execution."""
+        for reply in ({"missing":True},{"container_id":"invalid","state":"created","phase":"compile_test"},
+                      {"container_id":"a"*64,"state":"running","phase":"compile_test"},
+                      {"container_id":"a"*64,"state":"created","phase":"package"}):
+            with self.subTest(reply=reply):
+                error,job,commands,cleanup=self.run_case(reply)
+                self.assertIsInstance(error,ValueError)
+                self.assertNotIn(["docker","start"],commands)
+                self.assertNotIn(["docker","exec"],commands)
+                self.assertNotIn("compiler_cap_outcomes",job)
+                self.assertIsNone(cleanup[0][1])
+                self.assertFalse(cleanup[0][2])

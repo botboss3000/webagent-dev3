@@ -179,3 +179,20 @@ Human index maintenance was explicitly deferred through deployment and lifecycle
 
 
 Final descriptor-review binding: index publication 74dfea21-8b3e-4ab5-a75a-6f643b082ee6 / commit a2c8d52ed57c75c97bd9545f50fefb4f08f73dd7 was healthy, but final published review checks exposed expected sealing-byte differences: raw descriptor dependencies became sealed descriptors with broker-added artifact_sha256. Private completion alone did not certify that projection or its rename bindings. Both source descriptors now use exact already-verified sealed bytes, supported by the existing descriptor contract and independently checked by seal against attested artifacts. Background SHA 8a731a466b948a6a4f9583745952fab23f37c934ff416a5ae70a9fd8578c45b5 and context SHA 0a78af0ff27721b26d350fff10fd11903f57c6f3169ac28d0c058f16adf1bbc1 remain unchanged. Closure/recipe/build cache keys, host authority, artifact guards and compilation/testing policy are unchanged. Future implementation publications must update their pins to the newly verified artifact. Refresh affected source/dependency reviews and require the final published projection to remain complete before closing ownership.
+
+Final inherited-deletion closure: descriptor publication bbc30fe0-b5dd-414a-8980-a0302276b40f / commit 84d199ac1b1895be6dad7fb7c51c2b54a803d1e6 preserved both verified artifacts and all core identities. Its served audit found one dependency-invalidated historical removed UI feedback record absent from the private inventory. Code Index sync skipped stored completed tombstones before comparing current source/dependencies. The protected host-owned Code Index maintenance ledger now skips only unchanged evidence; changed tombstones enter its existing explicit deleted/renamed review path. This correction stays at the host persistence/review-ownership boundary; versioned Code Index requests and independently replaceable engine interfaces are unchanged. The host still owns ledger persistence, claims and publication authority; freshness, claim/record guards, broker testing/cache policy and engine candidate bytes remain unchanged. A focused regression covers dependency/source changes, valid unchanged and absent-file deletion evidence; final served reviews must be current before ownership completion.
+
+Boot recovery's authorized index-release reconciliation found compiler creation
+still parsing merged Docker stdout/stderr as a canonical ID. Job
+8ad0874e-df1a-4bd6-b052-cdeca8ab8797 failed before compiler execution, with no image
+or deployment effects; its actual diagnostic text was not retained. A fixed
+warning-bearing regression reproduced the identity failure before correction.
+Compiler startup now uses the same existing protected identity operation as
+packaging, which independently binds exact name, instance/job/phase labels and
+cgroup parent. Canonical ID, created state and matching phase remain mandatory;
+missing or changed identity cannot start a compiler. This is host-owned execution
+authority, not a new replaceable algorithm: interfaces, permissions, resource
+caps, kernel proofs, compiler recipes and verified-artifact cache policy remain
+unchanged. The pure engine implementations retain their existing Rust drop-in
+boundaries. Scoped verification and the installed broker/release receipt are
+required before claiming this recovery complete.

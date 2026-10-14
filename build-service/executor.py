@@ -43,8 +43,13 @@ class Executor:
             "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",RUST,"sleep","infinity"]
         if cap is not None:create[create.index(RUST):create.index(RUST)]=["--memory",str(cap),"--memory-swap",str(cap)]
         try:
-            identity=self.runner.command(create,timeout=30,private_raw=True).strip()
-            if len(identity)!=64 or any(c not in"0123456789abcdef"for c in identity):raise ValueError("Compiler container identity invalid")
+            self.runner.command(create,timeout=30,private_raw=True)
+            # Only the protected helper binds exact name, labels and cgroup parent;
+            # Docker's merged diagnostic stream is not a machine identity channel.
+            created=self.runner.resource_request({"operation":"identity","container":name})
+            candidate=created.get("container_id")
+            if not isinstance(candidate,str)or not re.fullmatch(r"[a-f0-9]{64}",candidate)or created.get("state")!="created"or created.get("phase")!=phase:raise ValueError("Compiler container identity invalid")
+            identity=candidate
             with self.resources.lock:self.resources.rows[name]["container_id"]=identity
             self.runner.command(["docker","start",name],timeout=30)
             self.resources.attached(name,identity)

@@ -192,8 +192,9 @@ class Ledger:
                 # Unfinished published deletions must be claimable in a fresh task.
                 for k,prior in published.items():
                     if k in seen or k in existing or(scope and not(k[0]==scope or k[0].startswith(scope.rstrip("/")+"/"))):continue
-                    if prior.get("removed")and prior["status"]=="complete":continue
                     matching=next((f for f in files if f["path"]==k[0]),None)
+                    # Completed deletions remain valid only for unchanged evidence.
+                    if prior.get("removed")and prior["status"]=="complete"and prior["source_hash"]==(matching["sha256"]if matching else None)and prior.get("dependencies",[])==(matching["dependencies"]if matching else []):continue
                     unchanged=matching and not prior.get("removed")and matching["sha256"]==prior["source_hash"]and matching["dependencies"]==prior.get("dependencies",[])
                     row=dict(prior);row.update(entry_id=digest([task_key,*k]),task_key=task_key,task_id=task_id,revision=0,claim=None,scan=scan)
                     if not unchanged:

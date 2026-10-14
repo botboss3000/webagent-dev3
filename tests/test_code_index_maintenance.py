@@ -163,6 +163,25 @@ class MaintenanceTests(unittest.TestCase):
   done=self.db.mutate({"action":"record","entry_id":r["entry_id"],"expected_revision":claim["revision"],"claim_id":claim["claim"]["id"],"source_hash":None,"status":"complete","checks":{k:"verified"for k in ledger.CHECKS},"configuration_assessment":{"status":"not_applicable","rationale":"Deleted fixture"},"reconciliation":{"kind":"deleted"},"request_id":"resume-review"},actor,"next-key","next-task",self.root)["record"]
   self.assertEqual(done["status"],"complete");self.assertEqual(done["reviewer"],actor)
 
+ def test_completed_published_deletion_resumes_when_evidence_changes(self):
+  self.call("sync");old=self.child();(self.root/"one.py").write_text("def renamed(): pass\n");self.call("sync")
+  row=next(r for r in self.rows()if r["entry_id"]==old["entry_id"]);claim=self.call("claim",entry_id=row["entry_id"],expected_revision=row["revision"])["record"]
+  done=self.call("record",entry_id=row["entry_id"],expected_revision=claim["revision"],claim_id=claim["claim"]["id"],source_hash=row["source_hash"],status="complete",checks={k:"verified"for k in ledger.CHECKS},configuration_assessment={"status":"not_applicable","rationale":"Deleted fixture"},reconciliation={"kind":"deleted"})["record"]
+  self.db.activate("completed-deletion",[done])
+  def sync(key):
+   self.db.mutate({"action":"sync","scope":"one.py","request_id":"sync-"+key},self.actor,key,key,self.root)
+   return self.db.list({"task_key":key})["results"]
+  self.assertFalse(any(r["unit_id"]==old["unit_id"]for r in sync("unchanged")))
+  changed=dict(done);changed["dependencies"]=[{"path":"one.py","sha256":"a"*64}];self.db.activate("changed-dependency",[changed])
+  resumed=next(r for r in sync("dependency")if r["unit_id"]==old["unit_id"])
+  self.assertTrue(resumed["removed"]);self.assertEqual(resumed["status"],"needs_review");self.assertEqual(resumed["dependencies"],[])
+  (self.root/"one.py").write_text("# shifted\ndef renamed(): pass\n")
+  resumed=next(r for r in sync("source")if r["unit_id"]==old["unit_id"]);self.assertEqual(resumed["status"],"needs_review")
+  (self.root/"one.py").unlink()
+  resumed=next(r for r in sync("absent")if r["unit_id"]==old["unit_id"]);self.assertIsNone(resumed["source_hash"]);self.assertEqual(resumed["status"],"needs_review")
+  absent=dict(done,source_hash=None,dependencies=[]);self.db.activate("unchanged-absent",[absent])
+  self.assertFalse(any(r["unit_id"]==old["unit_id"]for r in sync("absent-valid")))
+
 if __name__=="__main__":unittest.main()
 
 class LedgerCapacityTests(unittest.TestCase):
