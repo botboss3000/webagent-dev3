@@ -150,3 +150,26 @@ test('configured two-second fade-out and fade-in complete without losing editor 
  await p.waitForFunction(()=>getComputedStyle(document.querySelector('#chat-input-row')).opacity==='1'&&document.querySelector('#chat-input-row').getAnimations().length===0);
  const state=await stable(p);assert.equal(state.focused,true);assert.equal(state.blur,0);assert.equal(state.focus,0);assert.equal(state.value,'retained draft');
 });
+
+
+test('composer fades at the old app height, applies the latest height while transparent, then reveals',async t=>{
+ const p=await fadeFixture(t,{enabled:true,fade_out_ms:150,fade_in_ms:60,settle_ms:80});
+ await p.evaluate(()=>{window.heightWrites=[];const style=document.documentElement.style,write=style.setProperty.bind(style);style.setProperty=function(key,value,...rest){if(key==='--app-height')heightWrites.push({height:value,opacity:Number(getComputedStyle(document.querySelector('#chat-input-row')).opacity)});return write(key,value,...rest);};});
+ for(const [intermediate,target,held] of [[500,460,'844px'],[800,844,'460px']]){
+  const before=await p.evaluate(({intermediate,target})=>{fadeVh=intermediate;visualViewport.dispatchEvent(new Event('resize'));fadeVh=target;visualViewport.dispatchEvent(new Event('resize'));return document.documentElement.style.getPropertyValue('--app-height');},{intermediate,target});assert.equal(before,held,'layout stays at the old height throughout fade-out');
+  await p.waitForFunction(()=>document.querySelector('#chat-input-row').getAnimations().length===0);
+  const writes=await p.evaluate(()=>heightWrites.splice(0));assert(writes.some(w=>w.height===target+'px'&&w.opacity===0),'latest viewport height is applied while controls are transparent');assert(!writes.some(w=>w.height!==held&&w.opacity>0),'visible controls never jump to the new height');
+  assert.equal(await p.evaluate(()=>document.documentElement.style.getPropertyValue('--app-height')),target+'px');assert.equal((await stable(p)).focused,true);
+ }
+});
+test('reduced motion flushes a held viewport resize and restores the composer immediately',async t=>{
+ const p=await fadeFixture(t,{enabled:true,fade_out_ms:2000,fade_in_ms:2000,settle_ms:80});await fadeHeight(p,500);
+ assert.equal(await p.evaluate(()=>document.documentElement.style.getPropertyValue('--app-height')),'844px');await p.emulateMedia({reducedMotion:'reduce'});
+ await p.waitForFunction(()=>document.documentElement.style.getPropertyValue('--app-height')==='500px');assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);assert.equal((await stable(p)).focused,true);
+});
+
+
+test('removing the composer during fade-out releases the held viewport height',async t=>{
+ const p=await fadeFixture(t,{enabled:true,fade_out_ms:150,fade_in_ms:60,settle_ms:80});await fadeHeight(p,500);await p.locator('#chat-input-area').evaluate(e=>e.remove());
+ await p.waitForFunction(()=>document.documentElement.style.getPropertyValue('--app-height')==='500px');
+});

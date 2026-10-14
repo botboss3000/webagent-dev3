@@ -17,7 +17,7 @@
     function apply() {
       var h = (vv ? vv.height : window.innerHeight);
       updateComposerFade(h);
-      root.style.setProperty('--app-height', h + 'px');
+      if (!fadeActive) root.style.setProperty('--app-height', h + 'px'); // Hold layout until fade-out completes.
     }
     var keyboardWasOpen = false;
     var keyboardDismissed = false;
@@ -83,7 +83,7 @@
         || target.isContentEditable;
     }
     document.addEventListener('focusin', function (event) {
-      apply();       // update --app-height NOW so iOS Safari's auto-scroll
+      apply();       // stage viewport height without disturbing focus during a fade
       applyKb();     // doesn't overshoot before the rAF loop kicks in
       // This lock exists only for a mobile soft keyboard. Running it for every
       // desktop button focus starts a 400 ms scroll loop between mousedown and
@@ -102,7 +102,7 @@
     document.addEventListener('input', engageEditor, true);
     document.addEventListener('focusout', function () { setTimeout(applyKb, 0); });
 
-    // @code-index {"version":1,"feature":"composer-keyboard-fade","aliases":["composer fade","keyboard fade"],"purpose":"Fades only composer/footer controls during mobile keyboard-sized viewport changes. Config: data/config/chat.json -> chat_common.composer.keyboard_fade, with desktop/mobile/widget profile overrides; saved settings are adopted on UI config reload.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/composer/keyboard_fade/enabled","/chat_common/composer/keyboard_fade/fade_out_ms","/chat_common/composer/keyboard_fade/fade_in_ms","/chat_common/composer/keyboard_fade/settle_ms"],"profile_overrides":true}],"opportunities":[]}}
+    // @code-index {"version":1,"feature":"composer-keyboard-fade","aliases":["composer fade","keyboard fade"],"purpose":"Fades composer/footer controls before applying keyboard-sized app viewport changes, then reveals the settled layout. Config: data/config/chat.json -> chat_common.composer.keyboard_fade, with desktop/mobile/widget profile overrides; saved settings are adopted on UI config reload.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/composer/keyboard_fade/enabled","/chat_common/composer/keyboard_fade/fade_out_ms","/chat_common/composer/keyboard_fade/fade_in_ms","/chat_common/composer/keyboard_fade/settle_ms"],"profile_overrides":true}],"opportunities":[]}}
     var fadeSettings = {enabled: false, fade_out_ms: 2000, fade_in_ms: 2000, settle_ms: 80};
     var fadeSignature = '', fadeAnimations = [], fadeArea = null;
     var fadeActive = false, fadeCooling = false, fadeSettleTimer = null, fadeDeadline = null;
@@ -111,9 +111,9 @@
     var fadeStarted = 0, composerBlurredAt = -Infinity;
     var fadeReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
-    /** Cancels owned opacity effects; never hides, disconnects, blurs or refocuses the editor. */
+    /** Commits any held viewport and cancels opacity effects; never hides, disconnects, blurs or refocuses the editor. */
     function cancelComposerFade() {
-      clearTimeout(fadeSettleTimer); clearTimeout(fadeDeadline);
+      clearTimeout(fadeSettleTimer); clearTimeout(fadeDeadline); if (fadeActive) root.style.setProperty('--app-height', fadeHeight + 'px');
       for (var animation of fadeAnimations) animation.cancel();
       fadeAnimations = []; fadeArea?.removeAttribute('data-keyboard-fading');
       fadeArea = null; fadeActive = false; fadeCooling = false;
@@ -126,10 +126,10 @@
     }
     /** Ends a motion burst and restores each control's current CSS opacity with the configured fade-in. */
     function revealComposerFade(watchdog) {
-      clearTimeout(fadeDeadline); fadeActive = false;
+      clearTimeout(fadeDeadline);
       fadeCooling = watchdog === true; fadeStableHeight = fadeHeight;
       if (!fadeArea?.isConnected) { cancelComposerFade(); return; }
-      var controls = composerFadeControls(fadeArea);
+      fadeActive = false; var controls = composerFadeControls(fadeArea); for (var animation of fadeAnimations) animation.finish(); root.style.setProperty('--app-height', fadeHeight + 'px'); // Resize only while fully transparent.
       var current = controls.map(function (node) { return getComputedStyle(node).opacity; });
       for (var animation of fadeAnimations) animation.cancel();
       fadeAnimations = []; fadeArea.removeAttribute('data-keyboard-fading');
