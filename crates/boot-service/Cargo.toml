@@ -1,0 +1,11 @@
+[package]
+name="webagent-boot-service"
+version="0.1.0"
+edition="2021"
+
+[dependencies]
+webagent-boot-contracts={path="../boot-contracts"}
+webagent-boot-supervisor={path="../boot-supervisor"}
+webagent-engine-service={path="../engine-service"}
+serde_json="1"
+anyhow="1"

@@ -9,7 +9,7 @@ ID="context-assembly"
 BINARY="webagent-context-service"
 SOURCE_INPUTS=["crates/context-service","crates/context-assembly","crates/context-contracts","Cargo.toml","Cargo.lock","config/context-compaction.json"]
 
-REGISTRY={ID:{"binary":BINARY,"inputs":SOURCE_INPUTS,"operation":"context.prepare","limit":16777216,"timeout":30000},
+REGISTRY={"boot-supervisor":{"binary":"webagent-boot-service","inputs":["crates/boot-service","crates/boot-supervisor","crates/boot-contracts","crates/engine-service","Cargo.toml","Cargo.lock"],"operation":"boot.plan","limit":65536,"timeout":1000},ID:{"binary":BINARY,"inputs":SOURCE_INPUTS,"operation":"context.prepare","limit":16777216,"timeout":30000},
  "background-dispatch":{"binary":"webagent-background-service","inputs":["crates/background-service","crates/background-dispatch","crates/background-contracts","crates/engine-service","Cargo.toml","Cargo.lock"],"operation":"background.plan","limit":65536,"timeout":1000}}
 
 def descriptor(path):

@@ -4,16 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service"]
-default-members = [".", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service"]
+members = ["crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service"]
+default-members = [".", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service"]
 resolver = "2"
 
 [features]
 default = ["linked-context"]
-linked-context = ["dep:webagent-context-assembly", "dep:webagent-background-dispatch"]
+linked-context = ["dep:webagent-context-assembly", "dep:webagent-background-dispatch", "dep:webagent-boot-supervisor"]
 live-context = []
 
 [dependencies]
+webagent-boot-contracts={path="crates/boot-contracts"}
+webagent-boot-supervisor={path="crates/boot-supervisor",optional=true}
 webagent-background-contracts={path="crates/background-contracts"}
 webagent-background-dispatch={path="crates/background-dispatch",optional=true}
 webagent-context-contracts = {path="crates/context-contracts"}
@@ -48,6 +50,10 @@ tempfile = "3"
 webagent-background-dispatch={path="crates/background-dispatch"}
 webagent-context-assembly = {path="crates/context-assembly"}
 http-body-util = "0.1"
+
+[[bin]]
+name = "webagent-boot-host"
+path = "src/boot_host_main.rs"
 
 [[bin]]
 name = "webagent-mcp"

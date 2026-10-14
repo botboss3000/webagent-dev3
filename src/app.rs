@@ -852,6 +852,20 @@ impl App {
 }
 // Exit fixed offline smoke before state initialization; otherwise initialize the selected role at the shared v3 root.
 async fn run_process() -> Result<()> {
+    if std::env::args().any(|argument|argument=="--boot-plan") {
+        #[cfg(feature="linked-context")]
+        {
+            // Stable host CLI calls the library directly, before state or credentials initialize.
+            use std::io::Read;
+            let mut bytes=Vec::new();std::io::stdin().take(65537).read_to_end(&mut bytes)?;
+            if bytes.len()>65536 {anyhow::bail!("Boot input bounds");}
+            let input:webagent_boot_contracts::Request=serde_json::from_slice(&bytes)?;
+            println!("{}",serde_json::to_string(&webagent_boot_supervisor::plan(&input)?)?);
+            return Ok(());
+        }
+        #[cfg(feature="live-context")]
+        anyhow::bail!("Linked boot planner unavailable in live core");
+    }
     if std::env::args().any(|argument|argument=="--context-smoke") {println!("{}",crate::engine_components::context_smoke().await?);return Ok(());}
     tracing_subscriber::fmt()
         .with_env_filter(

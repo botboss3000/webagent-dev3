@@ -4,7 +4,7 @@ from pathlib import Path
 RUST="rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f"
 BUILDKIT="moby/buildkit:v0.25.1@sha256:79cc6476ab1a3371c9afd8b44e7c55610057c43e18d9b39b68e2b0c2475cc1b6"
 COMPILER_STAGE_SHA256="474b034d7a843ebf324b654a785b5a5b23135804ef39c662f92fcb3e160dfeaf"
-BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-automation","webagent-outbound-notifications","webagent-context-service","webagent-background-service"]
+BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-automation","webagent-outbound-notifications","webagent-context-service","webagent-background-service","webagent-boot-service","webagent-boot-host"]
 # @code-index {"version":1,"feature":"build-artifact-execution","aliases":["task fencing","verified builds"],"purpose":"Pinned attributable compiler/test/packaging recipes and verified content-addressed artifact reuse.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Identity, exact input verification and completion rules cannot be disabled by model or preference configuration."}}
 COMPILER_MEMORY_CAP=4026531840
 def compiler_cap(value):
@@ -252,6 +252,7 @@ class Executor:
         value=json.loads(text)
         if value.get("mode")!=mode or value.get("equivalence")is not True or value.get("interface_version")!=1 or not isinstance(value.get("prepared"),list)or len(value["prepared"])!=2:raise ValueError("Optimized context smoke failed")
         if not isinstance(value.get("background_prepared"),list)or len(value["background_prepared"])!=2:raise ValueError("Optimized background smoke failed")
+        if not isinstance(value.get("boot_prepared"),list)or len(value["boot_prepared"])!=2:raise ValueError("Optimized boot smoke failed")
         if mode=="linked"and value.get("service_started")is not False:raise ValueError("Linked smoke started external service")
         if mode=="live"and(value.get("service_reused")is not True or value.get("service_drained")is not True):raise ValueError("Live smoke lifecycle failed")
         return value
@@ -263,7 +264,7 @@ class Executor:
     def live_smoke(text,linked):
         """Require actual host service reuse/drain and exact prepared-result equivalence across modes."""
         value=Executor.smoke_result(text,"live")
-        if value["prepared"]!=linked["prepared"]or value["background_prepared"]!=linked["background_prepared"]:raise ValueError("Optimized linked/live results differ")
+        if value["prepared"]!=linked["prepared"]or value["background_prepared"]!=linked["background_prepared"]or value["boot_prepared"]!=linked["boot_prepared"]:raise ValueError("Optimized linked/live results differ")
         return value
     @staticmethod
     def linked_recipe():

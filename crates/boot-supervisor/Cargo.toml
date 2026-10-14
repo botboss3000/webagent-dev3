@@ -1,0 +1,8 @@
+[package]
+name="webagent-boot-supervisor"
+version="0.1.0"
+edition="2021"
+
+[dependencies]
+webagent-boot-contracts={path="../boot-contracts"}
+anyhow="1"

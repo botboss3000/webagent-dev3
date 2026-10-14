@@ -995,8 +995,8 @@
         },
         {
           "path": "src/engine_components.rs",
-          "start_line": 369,
-          "end_line": 402,
+          "start_line": 406,
+          "end_line": 439,
           "purpose": "Host plan validation, sealed identity and failure cooldown."
         },
         {
@@ -1080,6 +1080,81 @@
           "start_line": 138,
           "end_line": 178,
           "purpose": "Artifact identity sealing and explicit catalog withdrawal/reinstallation membership."
+        }
+      ]
+    },
+    {
+      "id": "boot-supervisor",
+      "aliases": [
+        "black console",
+        "keyboard wake",
+        "unattended recovery",
+        "idle CPU"
+      ],
+      "purpose": "Versioned Rust recovery policy and replaceable service with host-owned Docker effects, event waits and persisted manual/uncertain fences. Config: config/engine-components.json -> disabled; plugins/engine/boot-supervisor/component.json -> limits and build.source_inputs. Console presentation lives outside this checkout.",
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "config/engine-components.json",
+            "pointers": [
+              "/disabled"
+            ]
+          },
+          {
+            "path": "plugins/engine/boot-supervisor/component.json",
+            "pointers": [
+              "/limits/max_request_bytes",
+              "/limits/max_response_bytes",
+              "/limits/timeout_ms",
+              "/limits/max_concurrency",
+              "/build/source_inputs",
+              "/runtime_requirements"
+            ]
+          }
+        ],
+        "opportunities": []
+      },
+      "locations": [
+        {
+          "path": "crates/boot-contracts/src/lib.rs",
+          "start_line": 1,
+          "end_line": 67,
+          "purpose": "Bounded version-1 metadata and independent validation."
+        },
+        {
+          "path": "crates/boot-supervisor/src/lib.rs",
+          "start_line": 1,
+          "end_line": 44,
+          "purpose": "Pure recovery/deadline selection; healthy idle has no timer."
+        },
+        {
+          "path": "crates/boot-service/src/main.rs",
+          "start_line": 1,
+          "end_line": 9,
+          "purpose": "Reusable confined private-pipe wrapper."
+        },
+        {
+          "path": "plugins/engine/boot-supervisor/component.json",
+          "start_line": 1,
+          "end_line": 34,
+          "purpose": "Declared build closure, modes and execution bounds."
+        },
+        {
+          "path": "build-service/boot_host.py",
+          "start_line": 1,
+          "end_line": 80,
+          "purpose": "Trusted event transport, persisted desired/uncertain state and Docker authority."
+        },
+        {
+          "path": "src/boot_host_main.rs",
+          "start_line": 1,
+          "end_line": 40,
+          "purpose": "Trusted artifact admission and existing pre-exec confinement, before replaceable code executes.",
+          "configuration": {
+            "status": "not_applicable",
+            "rationale": "Immutable host launch authority, filesystem confinement and artifact identity are invariants."
+          }
         }
       ]
     }

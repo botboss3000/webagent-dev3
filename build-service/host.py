@@ -1120,7 +1120,7 @@ class Runner:
                 "--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["worker_gid"]),"--pids-limit","64","--memory","256m",
                 "--tmpfs","/tmp:rw,size=64m,mode=1777","--mount","type=bind,src="+str(root / DIAGNOSTICS_ROOT)+",dst=/package,readonly",
                 "--entrypoint","python3",image,"-I","-B","/package/test_runner.py"],timeout=60)
-        if any(name.startswith(ABILITY_ROOT) or name.startswith(engine_components.ROOT) or name.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/")) or name.startswith("v3/config/") or name=="v3/src/agent_loop/tools/administrator-schemas.json" for name in changed):
+        if any(name.startswith(ABILITY_ROOT) or name.startswith(engine_components.ROOT) or name.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/","v3/crates/boot-service/","v3/crates/boot-supervisor/","v3/crates/boot-contracts/")) or name.startswith("v3/config/") or name=="v3/src/agent_loop/tools/administrator-schemas.json" for name in changed):
             # A foundation release introduces the validator itself. Validate with
             # its already-tested candidate API image; hot updates use the retained consumer.
             image=(active["images"]["api"] if active is not None
@@ -1218,6 +1218,28 @@ class Runner:
             return reply.get("status")=="success" and reply.get("output")=={"protocol":1,"catalog":1,"dispatch":1}
         except (OSError,RuntimeError,ValueError):return False
 
+    def boot_adoption(self):
+        """Read the protected local boot host over its authenticated bounded Unix socket."""
+        path=Path(CONFIG["install_root"]).parent/"boot-supervisor/ui.sock"
+        if not path.exists():return None
+        with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as peer:
+            peer.settimeout(2);peer.connect(str(path))
+            _,uid,_=struct.unpack("3i",peer.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
+            if uid!=0:raise ValueError("Boot authority peer changed")
+            peer.sendall(b'{"operation":"status"}\n')
+            raw=peer.makefile("rb").readline(65537)
+        if len(raw)>65536 or not raw.endswith(b"\n"):raise ValueError("Boot adoption bounds")
+        reply=json.loads(raw)
+        if reply.get("status")!="success":raise ValueError("Boot adoption unavailable")
+        value=reply["output"]
+        if value.get("version")!=1 or value.get("mode")!="live":raise ValueError("Boot mode unavailable")
+        expected=hashlib.sha256((Path(CONFIG["service_dir"])/"boot_host.py").read_bytes()).hexdigest()
+        if value.get("host_sha256")!=expected or type(value.get("required"))is not bool:
+            raise ValueError("Boot host adoption identity")
+        if value["required"] and value.get("component_paused"):
+            raise ValueError("Required boot service unavailable")
+        return value
+
     def engine_execution_modes(self,expected_revision=None):
         """Read actual compiled execution modes from both protected engine adoption receipts."""
         program=("import json,pathlib; root=pathlib.Path('/state/publication'); "
@@ -1225,7 +1247,12 @@ class Runner:
         value=json.loads(self.command(["docker","exec","--user",str(CONFIG["app_uid"]),TARGETS[0],"python3","-I","-B","-c",program],timeout=10,private_raw=True))
         if any(value.get(role,{}).get("mode")not in {"live","linked"}or(expected_revision is not None and value[role].get("revision")!=expected_revision)for role in ("api","loop")):
             raise ValueError("Actual engine execution mode or adoption unavailable")
-        return {role:value[role]["mode"]for role in ("api","loop")}
+        modes={role:value[role]["mode"]for role in ("api","loop")}
+        boot=self.boot_adoption()
+        if boot is not None:
+            if expected_revision is not None and boot["revision"]!=expected_revision:raise ValueError("Boot adoption stale")
+            modes["boot"]=boot["mode"]
+        return modes
     def engine_hot_swappable(self):
         """Linked, missing or unknown modes require a coordinated core release, never service substitution."""
         try:return all(mode=="live"for mode in self.engine_execution_modes(self.current_asset_id()).values())
@@ -1244,7 +1271,11 @@ class Runner:
                 connection.request("GET","/health/ready");response=connection.getresponse();ready=json.loads(response.read(4096))
                 receipt=json.loads(self.command(["docker","exec","--user",str(CONFIG["app_uid"]),TARGETS[0],"python3","-I","-B","-c",program],timeout=10,private_raw=True))
                 if response.status==200 and all(receipt[r]["revision"]==job_id and receipt[r]["catalog_version"]==ready["catalog_version"] and receipt[r].get("engine_revision")==job_id for r in ("api","loop")):
-                    return {r:{"revision":job_id,"catalog_version":ready["catalog_version"],"engine_revision":job_id}for r in ("api","loop")}
+                    boot=self.boot_adoption()
+                    if boot is not None and boot["revision"]!=job_id:continue
+                    result={r:{"revision":job_id,"catalog_version":ready["catalog_version"],"engine_revision":job_id}for r in ("api","loop")}
+                    if boot is not None:result["boot"]={"revision":job_id,"engine_revision":job_id,"mode":boot["mode"],"component_paused":boot["component_paused"]}
+                    return result
             except (OSError,RuntimeError,ValueError,KeyError):pass
             finally:connection.close()
             time.sleep(.25)
@@ -2599,10 +2630,12 @@ class Broker:
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
         allowed={"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
-                 "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py"}
+                 "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py",
+                 "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
+                 "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
         if not trusted.get("local_caller") or not changed or not set(changed)<=allowed:return False
         files=release.entries(blob,context_digest)
-        selected=["host.py"]+(["ownership.py"]if "v3/build-service/ownership.py"in changed else [])
+        selected=["host.py"]+[name for name in ("ownership.py","boot_host.py")if "v3/build-service/"+name in changed]
         for name in selected:
             path=Path(CONFIG["service_dir"])/name
             fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
@@ -3506,9 +3539,9 @@ class Broker:
                         docs_attested and path.startswith("v3/docs/")and path.endswith(".md")) or (
                         (generic_package_path(path,candidate) or generic_package_path(path,base_blob))
                         and not native_package_migration(path,base_blob)))
-                        and path not in core_inputs and not path.startswith(("v3/crates/context-contracts/","v3/crates/background-contracts/"))for path in changed)
+                        and path not in core_inputs and not path.startswith(("v3/crates/context-contracts/","v3/crates/background-contracts/","v3/crates/boot-contracts/"))for path in changed)
                     if (package_changed or docs_changed)and not docs_attested:ui_only=False
-                    engine_changed=any(path.startswith("v3/plugins/engine/")or path.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/"))for path in changed)
+                    engine_changed=any(path.startswith("v3/plugins/engine/")or path.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/","v3/crates/boot-service/","v3/crates/boot-supervisor/","v3/crates/boot-contracts/"))for path in changed)
                     if engine_changed and not self.runner.engine_hot_swappable():ui_only=False
                     index_only=ui_only and(not changed or any(path in INDEX_METADATA_FILES for path in changed))
                     package_cap=executor_module.compiler_cap(args.get("package_memory_cap"))
@@ -3706,15 +3739,30 @@ class Broker:
         self._save(job)
         return merged
 
+    @contextlib.contextmanager
+    def boot_effect_lease(self):
+        """Serialize publication/container replacement against the trusted boot host."""
+        path=Path(CONFIG["install_root"]).parent/"boot-supervisor/effects.lock"
+        if not path.exists():
+            if path.with_name("ui.sock").exists():raise ValueError("Boot effect lease missing")
+            yield;return
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+        try:
+            info=os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode)or info.st_uid!=0 or info.st_nlink!=1 or info.st_mode&0o022:raise ValueError("Boot effect lease identity")
+            fcntl.flock(fd,fcntl.LOCK_EX)
+            yield
+        finally:os.close(fd)
+
     def _run_ui_hot(self, job, blob):
         """Compile independent packages outside publication, then rebase and revalidate under its short lock."""
-        if any(path.startswith("v3/plugins/engine/")or path.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/"))for path in job.get("changed_paths",[]))and not self.runner.engine_hot_swappable():
+        if any(path.startswith("v3/plugins/engine/")or path.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/","v3/crates/boot-service/","v3/crates/boot-supervisor/","v3/crates/boot-contracts/"))for path in job.get("changed_paths",[]))and not self.runner.engine_hot_swappable():
             raise ValueError("Independent engine replacement requires live mode; publish a coordinated core release")
         if self.scheduler.mode=="enforce"and job["operation"]=="plugin_deploy":
             self._phase(job,"compiling_plugins")
             job["plugin_artifacts"]=self.runner.build_ability_artifacts(job["job_id"],source_root=Path(job["release_root"]))
             job["engine_artifacts"]=self.runner.build_engine_artifacts(job["job_id"],source_root=Path(job["release_root"]))
-        with self.deploy_lock:
+        with self.deploy_lock,self.boot_effect_lease():
             self._run_ui_hot_locked(job, blob)
 
     def _run_ui_hot_locked(self, job, blob):
@@ -3783,6 +3831,7 @@ class Broker:
             self.runner.job_context.event = event
         mutated = False
         deploy_locked = False
+        boot_guard = None
         try:
             with self.lock:
                 self._batch_lease(job)
@@ -3834,6 +3883,7 @@ class Broker:
             if job["operation"] in ("deploy", "build_deploy", "ui_deploy", "index_deploy", "plugin_deploy"):
                 self.deploy_lock.acquire()
                 deploy_locked = True
+                boot_guard=self.boot_effect_lease();boot_guard.__enter__()
                 if self._has_unresolved_release(job["job_id"]):
                     raise ValueError("uncertain release must be reconciled before deployment")
                 if job.get("isolated") and job["operation"] == "build_deploy":
@@ -3953,6 +4003,7 @@ class Broker:
             if hasattr(self.runner, "job_context"):
                 self.runner.job_context.job = None
                 self.runner.job_context.event = None
+            if boot_guard is not None:boot_guard.__exit__(None,None,None)
             if deploy_locked:
                 self.deploy_lock.release()
             with self.lock:

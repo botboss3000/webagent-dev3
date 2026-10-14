@@ -9,6 +9,16 @@ Abilities and engine components share immutable broker publications but occupy s
 
 An implementation may run behind an isolated live wrapper or link into a stable executable. Cargo crates create compilation boundaries; process boundaries provide independent replacement and isolation. Select one root build mode: default linked-context, or --no-default-features --features live-context. Reject mixed or missing modes.
 
+## Boot supervisor extraction in progress
+The boot.plan version-1 bounded metadata contract, Rust recovery-selection library
+and confined reusable service wrapper separate supporting policy from host-owned
+Docker authority, persistence, desired state and uncertainty fencing. Stable root
+builds call the library directly via --boot-plan. Healthy idle selection has no
+deadline. The real host/console integration, catalog adoption, behavior equivalence,
+replacement, withdrawal retained-input pause and selective restoration remain pending.
+The snapshot listener measured blocked waits and approximately 0.15% CPU; no listener
+backend change is warranted by the reported busy-loop hypothesis.
+
 ## Current component ledger
 | Component | Group | Boundary | Reason | State |
 | --- | --- | --- | --- | --- |
@@ -196,3 +206,17 @@ caps, kernel proofs, compiler recipes and verified-artifact cache policy remain
 unchanged. The pure engine implementations retain their existing Rust drop-in
 boundaries. Scoped verification and the installed broker/release receipt are
 required before claiming this recovery complete.
+
+Boot foundation 097d0a9c-f256-4eea-8c59-0f20abc6e98c passed 882 Rust cases
+(zero failed, five existing ignored), optimized linked/live equality and all
+compiler/package cap proofs with zero OOM. Attested native launch authority
+reuses the existing pre-exec sandbox; real metadata fixtures proved stable/live
+equality, reuse and drain. Black console activation left v3 container identities
+unchanged. Final broker adoption revealed an escaped newline delimiter; correct
+its exact frame and require actual host-code hash plus enabled-service readiness.
+Host-owned event filtering retains release-blocked faults while ignoring healthy
+compiler-log churn. Boot shared-contract paths always require coordinated core
+publication; fixed installed boot authority/docs/tests use the existing verified
+host-source lane. These are host authority boundaries around the pure Rust
+policy, not permission-bearing live implementations. Initial source is promoted
+but remains uncommitted pending the corrected publication and acceptance.

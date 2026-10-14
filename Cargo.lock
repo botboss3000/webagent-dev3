@@ -2163,6 +2163,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-boot-contracts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+]
+
+[[package]]
+name = "webagent-boot-supervisor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "webagent-boot-contracts",
+]
+
+[[package]]
+name = "webagent-boot-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "webagent-boot-contracts",
+ "webagent-boot-supervisor",
+ "webagent-engine-service",
+]
+
+[[package]]
 name = "webagent-background-contracts"
 version = "0.1.0"
 dependencies = [
@@ -2263,6 +2290,8 @@ dependencies = [
  "uuid",
  "webagent-background-contracts",
  "webagent-background-dispatch",
+ "webagent-boot-contracts",
+ "webagent-boot-supervisor",
  "webagent-context-assembly",
  "webagent-context-contracts",
 ]
