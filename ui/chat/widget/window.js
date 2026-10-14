@@ -194,9 +194,12 @@ function elementsIn(path) {
 }
 
 /** Finds the nearest action target without promoting edits, links, or form controls to a row action. */
-function findControl(path) {
+function findControl(path, selector) {
   for (const node of elementsIn(path)) {
-    if (node.matches(CONTROL_SELECTOR)) return node;
+    if (node.matches(selector)) {
+      // Scoped page owners may opt native toggle labels into the same action identity.
+      return node.matches('label') && node.control ? node.control : node;
+    }
     if (node.matches(STOP_SELECTOR)) return null;
   }
   return null;
@@ -215,14 +218,14 @@ function isUnavailable(path, control) {
 
 /** Resolves the nearest enabled control and its owning synchronous callback, or null outside registered surfaces. */
 function resolveControl(state, path) {
-  const control = findControl(path);
-  if (!control || isUnavailable(path, control)) return null;
   for (const registration of state.registrations) {
-    if (!registration.root.isConnected) continue;
+    if (!registration.root.isConnected || !registration.isActive()) continue;
     const inRoot = path.includes(registration.root);
     const inPortal = registration.portals && elementsIn(path).some(node => node.matches(PORTAL_SELECTOR));
     const inShell = registration.shell && elementsIn(path).some(node => node.matches(SHELL_SELECTOR));
-    if (inRoot || inPortal || inShell) return {control, vibrate: registration.vibrate};
+    if (!inRoot && !inPortal && !inShell) continue;
+    const control = findControl(path, registration.controlSelector);
+    if (control && !isUnavailable(path, control)) return {control, vibrate: registration.vibrate};
   }
   return null;
 }
@@ -337,8 +340,9 @@ function createRegistry(doc) {
 /** Registers one owned surface with a synchronous feedback callback; the disposer releases its capture listeners.
  * Shared document capture handles dynamic children, open-shadow controls, and declared body portals once per click.
  * Only completed touch gestures qualify; drags, scrolling, edits, disabled and inert actions remain quiet.
+ * Page owners may opt custom action selectors in and gate reused portals with isActive; defaults stay unchanged.
  */
-export function mountControlFeedback(root, {portals = false, shell = false, vibrate} = {}) {
+export function mountControlFeedback(root, {portals = false, shell = false, vibrate, controlSelector = CONTROL_SELECTOR, isActive = () => true} = {}) {
   const doc = root?.ownerDocument;
   if (!doc || typeof vibrate !== 'function') return () => {};
   let state = registries.get(doc);
@@ -346,7 +350,7 @@ export function mountControlFeedback(root, {portals = false, shell = false, vibr
     state = createRegistry(doc);
     registries.set(doc, state);
   }
-  const registration = {root, portals, shell, vibrate};
+  const registration = {root, portals, shell, vibrate, controlSelector, isActive};
   state.registrations.add(registration);
   let disposed = false;
   return () => {

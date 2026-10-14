@@ -39,3 +39,6 @@ export function mountHeaderFeedback(doc = document) {
 let dispose = mountHeaderFeedback();
 window.addEventListener('pagehide', () => { dispose(); dispose = () => {}; });
 window.addEventListener('pageshow', event => { if (event.persisted) dispose = mountHeaderFeedback(); });
+
+// The shell interaction entry also discovers the independently mounted Agents surface.
+import './agents-feedback.js';

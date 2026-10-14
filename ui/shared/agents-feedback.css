@@ -1,0 +1,6 @@
+/* Owned Agents roots and portals suppress native tap wash, preserving existing borders/states. */
+[data-agents-feedback] { -webkit-tap-highlight-color: transparent; }
+[data-agents-feedback] :is(button, [role="button"], [role="switch"], [role="checkbox"], [role="radio"], [role="menuitem"], summary, a[href]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
