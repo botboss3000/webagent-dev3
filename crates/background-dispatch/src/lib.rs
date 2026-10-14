@@ -1,7 +1,7 @@
 //! Replaceable scheduling policy over bounded lifecycle metadata only.
 use anyhow::Result;
 use webagent_background_contracts::{Request,Plan,State,validate_request,INTERFACE_VERSION,RECOVERY_MS};
-pub const IMPLEMENTATION_VERSION: &str = "0.1.0";
+pub const IMPLEMENTATION_VERSION: &str = "0.1.1";
 /// Preserve scan order and the four-worker ceiling; reclaim only expired unowned reads.
 pub fn plan(input: &Request) -> Result<Plan> {
  validate_request(input)?;
