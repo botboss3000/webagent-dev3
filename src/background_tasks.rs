@@ -1,15 +1,22 @@
 use crate::*;
 use crate::tool_execution::Settings;
 
+/// Expose only caller-owned status, bounded wait and cancellation controls.
 pub(crate) fn schemas() -> Vec<Value> {
     ["task_status","task_wait","task_cancel"].into_iter().map(|name|json!({
         "type":"function","name":name,"description":"Inspect, wait for, or cancel a caller-owned background read task",
         "parameters":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false}
     })).collect()
 }
+/// Recognize the fixed task-control interface without granting task ownership.
 pub(crate) fn owns(name:&str)->bool {matches!(name,"task_status"|"task_wait"|"task_cancel")}
+/// Record content-free wall-clock milestones in encrypted host storage.
+fn timestamp_ms()->u64 {std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis().min(u64::MAX as u128) as u64}
+/// Bind idempotent task identity to the origin run and stable provider call.
 fn identity(rid:&str,call_id:&str)->String {format!("bg_{}",digest(&json!([rid,call_id])))}
+/// Identify terminal lifecycle states without interpreting tool output.
 fn finished(task:&Value)->bool {matches!(task["status"].as_str(),Some("completed"|"cancelled"|"failed"))}
+/// Recheck tenant, participation, origin-run and current tool authority before execution or delivery.
 pub(crate) async fn permitted(app:&App,task:&Value)->Result<bool> {
     if app.stop.is_cancelled() || app.shutoff().await? || task["user_id"]!=app.store.current_user_id() {return Ok(false);}
     let sid=task["session_id"].as_str().ok_or_else(||anyhow!("Missing task session"))?;
@@ -19,7 +26,8 @@ pub(crate) async fn permitted(app:&App,task:&Value)->Result<bool> {
     if task["agent_id"]!=agent {return Ok(false);}
     let origin=app.run(task["run_id"].as_str().unwrap_or("")).await?;
     if origin["session_id"]!=sid || origin["agent_id"]!=agent
-        || !matches!(status(&origin),"running"|"waiting_approval"|"waiting_external"|"queued"|"completed")
+        || !(matches!(status(&origin),"running"|"waiting_approval"|"waiting_external"|"queued"|"completed")
+            || task["status"]=="running" && crate::engine_components::retained_pause(&origin))
         || origin["post_run_followup"]==true || !app.run_model_authorized(&origin).await {return Ok(false);}
     if !app.store.participation_allows_run(&origin).await? {return Ok(false);}
     let access=crate::shared_chat::live_access(&app.store,origin["requester_user_id"].as_str().unwrap_or(app.store.current_user_id()),task["session_id"].as_str().unwrap_or(""),&agent).await?;
@@ -51,6 +59,7 @@ pub(crate) async fn permitted(app:&App,task:&Value)->Result<bool> {
     }
     Ok(decision.permission==access::Permission::Auto)
 }
+/// Validate the renewable claim and exact authorized arguments against current host authority.
 pub(crate) async fn dispatch_authorized(app:&App,sid:&str,rid:&str,generation:&str,pending_id:&str,name:&str,args:&Value)->Result<Option<bool>> {
     let Some(task)=app.store.background_get(pending_id).await? else {return Ok(None);};
     let matches=!generation.is_empty() && task["claim_id"]==generation
@@ -60,9 +69,11 @@ pub(crate) async fn dispatch_authorized(app:&App,sid:&str,rid:&str,generation:&s
     if !matches {return Ok(Some(false));}
     let origin=app.run(rid).await?;
     let allowed=if status(&origin)=="completed" {task["on_run_end"]!="stop"}
-        else {matches!(status(&origin),"running"|"waiting_approval"|"waiting_external"|"queued")};
+        else {matches!(status(&origin),"running"|"waiting_approval"|"waiting_external"|"queued")
+            || crate::engine_components::retained_pause(&origin)};
     Ok(Some(allowed && permitted(app,&task).await?))
 }
+/// Persist an idempotent encrypted task only from a currently executing authorized call; wake after commit.
 pub(crate) async fn submit(app:&App,sid:&str,rid:&str,generation:&str,name:&str,args:&Value,pending_id:&str,policy_version:u64,settings:&Settings)->Result<Value> {
     settings.validate(name)?;
     if !tool_execution::background_capable(name) {return Err(anyhow!("Background tool unavailable"));}
@@ -84,7 +95,7 @@ pub(crate) async fn submit(app:&App,sid:&str,rid:&str,generation:&str,name:&str,
         "session_id":sid,"run_id":rid,"call_id":call_id,"name":name,"arguments":args,
         "loaded_abilities":run["loaded_abilities"],"policy_version":policy_version,
         "origin_generation":generation,"authorization":pending,
-        "on_run_end":settings.on_run_end,"status":"queued","revision":0,"created_at":now(),"lease_until":0});
+        "on_run_end":settings.on_run_end,"status":"queued","revision":0,"created_at":now(),"created_at_ms":timestamp_ms(),"lease_until":0});
     if !permitted(app,&task).await? {return Err(anyhow!("Background dispatch authorization changed"));}
     let visibility=session_agent_abilities(app,sid).await?;
     if tool_execution::resolve(&visibility,name)?!=*settings {return Err(anyhow!("Background execution settings changed"));}
@@ -94,8 +105,10 @@ pub(crate) async fn submit(app:&App,sid:&str,rid:&str,generation:&str,name:&str,
             if old[field]!=task[field] {return Err(anyhow!("Conflicting background identity"));}
         }
     }
+    crate::wake::notify(app).await;
     Ok(json!({"status":"task_start","task_id":id}))
 }
+/// Scope status/wait/cancel to the owning session; cancellation wakes the durable service.
 pub(crate) async fn control(app:&App,sid:&str,_rid:&str,name:&str,args:&Value,cancel:CancellationToken)->Result<Value> {
     if !owns(name) {return Err(anyhow!("Unknown task control"));}
     let id=args["task_id"].as_str().ok_or_else(||anyhow!("Missing task ID"))?;
@@ -107,6 +120,7 @@ pub(crate) async fn control(app:&App,sid:&str,_rid:&str,name:&str,args:&Value,ca
             let revision=task["revision"].as_u64().unwrap_or(0);
             task["status"]=json!("cancelled");
             if !app.store.background_cas(&task,Some(revision)).await? {continue;}
+            crate::wake::notify(app).await;
         }
         if name!="task_wait" || finished(&task) || tokio::time::Instant::now()>=deadline {
             return Ok(json!({"task_id":id,"status":task["status"]}));
@@ -115,6 +129,7 @@ pub(crate) async fn control(app:&App,sid:&str,_rid:&str,name:&str,args:&Value,ca
             _=tokio::time::sleep(Duration::from_millis(100))=>{} }
     }
 }
+/// Claim completed results in the run-save transaction and append them only as untrusted evidence.
 pub(crate) async fn collect(app:&App,run:&mut Value)->Result<bool> {
     let sid=run["session_id"].as_str().ok_or_else(||anyhow!("Missing run session"))?.to_owned();
     let mut updated=run.clone();
@@ -137,49 +152,73 @@ pub(crate) async fn collect(app:&App,run:&mut Value)->Result<bool> {
     if changed {updated["background_delivered"]=json!(delivered);app.save(&mut updated).await?;*run=updated;}
     Ok(changed)
 }
+// @code-index {"version":1,"feature":"background-dispatch","aliases":["background task service","idle CPU"],"purpose":"Host-owned encrypted task execution with metadata-only drop-in planning; broadcast wake plus bounded recovery. Config: plugins/engine/background-dispatch/component.json -> limits; data-root config/engine-components.json -> disabled (source defaults only initialize absent controls).","span_lines":80,"configuration":{"status":"configured","references":[{"path":"plugins/engine/background-dispatch/component.json","pointers":["/limits/max_request_bytes","/limits/max_response_bytes","/limits/timeout_ms"]},{"path":"config/engine-components.json","pointers":["/disabled"]}],"opportunities":[]}}
+/// Listen independently of the scheduler; durable task records recover missed hints and restarts.
 pub(crate) async fn service(app:App) {
-    let mut active=std::collections::HashSet::new();
-    let mut workers=tokio::task::JoinSet::new();
-    loop {
-        if app.stop.is_cancelled() {break;}
-        while let Some(result)=workers.try_join_next() {
-            if let Ok(id)=result {active.remove(&id);}
-        }
-        if let Ok(users)=agent_loop::user_apps(&app).await {
-            for user in users {
-                if let Ok(tasks)=user.store.background_scan(None).await {
-                    for task in tasks {
-                        if finished(&task) {
-                            if let Err(_error)=crate::background_followup::process(&user,&task).await {
-                                tracing::warn!("Background followup deferred");
-                            }
-                            continue;
-                        }
-                        let id=format!("{}:{}",user.store.current_user_id(),task["id"].as_str().unwrap_or(""));
-                        if active.contains(&id) || workers.len()>=4 {continue;}
-                        active.insert(id.clone());
-                        let worker_app=user.clone();
-                        workers.spawn(async move {
-                            if let Err(_error)=run_task(&worker_app,task).await {tracing::warn!("Background read deferred");}
-                            id
-                        });
-                    }
-                }
-            }
-        }
-        tokio::select! {_=app.stop.cancelled()=>break,_=tokio::time::sleep(Duration::from_millis(250))=>{}}
+ use webagent_background_contracts::{Request,Task,State,RECOVERY_MS};
+ let mut active=std::collections::HashSet::new();
+ let mut workers=tokio::task::JoinSet::new();
+ // Subscribe before scanning so a commit during a scan cannot lose its wake.
+ let mut hints=crate::wake::subscribe();
+ loop {
+  if app.stop.is_cancelled(){break;}
+  while let Some(result)=workers.try_join_next(){if let Ok(id)=result{active.remove(&id);}}
+  let mut retry_ms=RECOVERY_MS;
+  if crate::engine_components::component_available(&app.store.root,crate::engine_components::BACKGROUND) {
+   if let Ok(users)=agent_loop::user_apps(&app).await {
+    for user in users {
+     if let Ok(tasks)=user.store.background_scan(None).await {
+      if tasks.is_empty(){continue;}
+      let identities=tasks.iter().map(|task|format!("{}:{}",user.store.current_user_id(),task["id"].as_str().unwrap_or(""))).collect::<Vec<_>>();
+      let mut held=std::collections::HashSet::new();
+      for (task,id) in tasks.iter().zip(&identities) {
+       if matches!(task["status"].as_str(),Some("queued"|"running"))
+        && user.run(task["run_id"].as_str().unwrap_or("")).await.is_ok_and(|run|crate::engine_components::retained_pause(&run)){held.insert(id.clone());}
+      }
+      let projection=tasks.iter().zip(&identities).map(|(task,id)|Task{
+       state:match task["status"].as_str(){Some("queued")=>State::Queued,Some("running")=>State::Running,Some("completed")=>State::Completed,Some("failed")=>State::Failed,_=>State::Cancelled},
+       active:active.contains(id)||held.contains(id),lease_until:task["lease_until"].as_u64().unwrap_or(0)}).collect();
+      let request=Request{version:1,now:now(),slots:4usize.saturating_sub(workers.len()),tasks:projection};
+      let plan=match crate::engine_components::background_plan(&user,&request).await {Ok(plan)=>plan,Err(_)=>{tracing::warn!("Background planning deferred");continue;}};
+      retry_ms=retry_ms.min(plan.retry_ms);
+      for index in plan.followup {
+       if !crate::engine_components::component_available(&app.store.root,crate::engine_components::BACKGROUND){break;}
+       if let Err(_)=crate::background_followup::process(&user,&tasks[index]).await {tracing::warn!("Background followup deferred");}
+      }
+      for index in plan.dispatch {
+       if workers.len()>=4||!crate::engine_components::component_available(&app.store.root,crate::engine_components::BACKGROUND){break;}
+       let id=identities[index].clone();if !active.insert(id.clone()){continue;}
+       let worker_app=user.clone();let task=tasks[index].clone();
+       workers.spawn(async move {
+        if let Err(_)=run_task(&worker_app,task).await {tracing::warn!("Background read deferred");}
+        id
+       });
+      }
+     }
     }
-    workers.abort_all();
-    while workers.join_next().await.is_some() {}
+   }
+  }
+  // Polling foundation deliberately preserves the deployed cadence for paired task measurements.
+  // The following coordinated release replaces this wait with independent wake/worker/recovery selection.
+  let _=(&mut hints,retry_ms);
+  tokio::select! {_=app.stop.cancelled()=>break,
+   _=tokio::time::sleep(Duration::from_millis(250))=>{}}
+
+ }
+ workers.abort_all();while workers.join_next().await.is_some(){}
 }
 
+/// Own authorization, lease renewal, cancellation and encrypted completion; the planner never executes tools.
 async fn run_task(app:&App,mut task:Value)->Result<()> {
     if finished(&task) {return Ok(());}
+    if !crate::engine_components::component_available(&app.store.root,crate::engine_components::BACKGROUND){return Ok(());}
     if task["status"]=="running" && task["lease_until"].as_u64().unwrap_or(0)>now() {return Ok(());}
     let sid=task["session_id"].as_str().unwrap_or("").to_owned();
     let rid=task["run_id"].as_str().unwrap_or("").to_owned();
     let id=task["id"].as_str().unwrap_or("").to_owned();
     let origin=app.run(&rid).await?;
+    // Restoration can race this scan; retain work before cancellation or a new claim.
+    if crate::engine_components::retained_pause(&origin){return Ok(());}
     let mut scoped=app.clone();scoped.chat_actor=origin["requester_user_id"].as_str().map(str::to_owned);let app=&scoped;
     let revision=task["revision"].as_u64().unwrap_or(0);
     if !permitted(app,&task).await.unwrap_or(false) || !matches!(status(&origin),"running"|"queued"|"waiting_approval"|"waiting_external"|"completed")
@@ -188,7 +227,7 @@ async fn run_task(app:&App,mut task:Value)->Result<()> {
     }
     let claim_id=uuid();
     task["claim_id"]=json!(claim_id);
-    task["status"]=json!("running");task["lease_until"]=json!(now()+30);
+    task["status"]=json!("running");task["lease_until"]=json!(now()+30);task["claimed_at_ms"]=json!(timestamp_ms());
     if !app.store.background_cas(&task,Some(revision)).await? {return Ok(());}
     let mut current_revision=revision+1;
     let mut renewed=now();
@@ -218,8 +257,9 @@ async fn run_task(app:&App,mut task:Value)->Result<()> {
     cancel.cancel();
     task["status"]=json!(if result.is_ok(){"completed"}else{"cancelled"});
     task["result"]=result.unwrap_or_else(|_|json!({"status":"cancelled"}));
-    task["completed_at"]=json!(now());task["lease_until"]=json!(0);
+    task["completed_at"]=json!(now());task["completed_at_ms"]=json!(timestamp_ms());task["lease_until"]=json!(0);
     app.store.background_cas(&task,Some(current_revision)).await?;
+    crate::wake::notify(app).await;
     Ok(())
 }
 #[cfg(test)] mod tests {
@@ -240,4 +280,83 @@ async fn run_task(app:&App,mut task:Value)->Result<()> {
         let reopened=Store::open(root.path()).await.unwrap();
         assert_eq!(reopened.background_get("test").await.unwrap().unwrap()["status"],"cancelled");
     }
+
+/// The foundation intentionally retains the old scan cadence until paired measurements are captured.
+#[tokio::test]
+async fn background_dispatch_polling_baseline_preserves_cadence() {
+ use crate::runtime_tests::fixture;
+ let (_root,app)=fixture().await;
+ let service=tokio::spawn(background_tasks::service(app.clone()));
+ let exists=||async {
+  sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM sqlite_master WHERE name='background_task_index'")
+   .fetch_one(&app.store.pool).await.unwrap()>0
+ };
+ tokio::time::timeout(Duration::from_secs(2),async {while !exists().await{tokio::time::sleep(Duration::from_millis(10)).await;}}).await.unwrap();
+ sqlx::query("DROP TABLE background_task_index").execute(&app.store.pool).await.unwrap();
+ tokio::time::sleep(Duration::from_millis(600)).await;
+ assert!(exists().await,"polling foundation changed the baseline scan cadence");
+ crate::wake::notify(&app).await;
+ tokio::time::timeout(Duration::from_secs(1),async {while !exists().await{tokio::time::sleep(Duration::from_millis(10)).await;}}).await.unwrap();
+ app.stop.cancel();tokio::time::timeout(Duration::from_secs(1),service).await.unwrap().unwrap();
+}
+
+/// Withdrawal holds accepted input; restoration resumes only host-marked, still-authorized work.
+#[tokio::test]
+async fn background_dispatch_withdrawal_selective_restoration() {
+ use crate::runtime_tests::{fixture,conversation,queued};
+ let (_root,app)=fixture().await;let sid=conversation(&app).await;
+ let id=queued(&app,&sid).await;let mut run=app.run(&id).await.unwrap();let input=run["input"].clone();
+ let controls=engine_components::Controls{revision:1,disabled:vec![engine_components::BACKGROUND.into()]};
+ engine_components::save_controls(&app.store.root,&controls).unwrap();
+ assert!(!engine_components::available(&app.store.root));engine_components::pause(&app,&mut run).await.unwrap();
+ assert_eq!(run["component_pause"]["component"],engine_components::BACKGROUND);
+ engine_components::restore(&app,&id).await.unwrap();assert_eq!(app.run(&id).await.unwrap()["status"],"paused");
+ engine_components::save_controls(&app.store.root,&Default::default()).unwrap();
+ engine_components::restore(&app,&id).await.unwrap();let restored=app.run(&id).await.unwrap();assert_eq!(restored["status"],"queued");assert_eq!(restored["input"],input);
+ for (uncertain,marker) in [(false,Value::Null),(true,json!({"version":1,"component":engine_components::BACKGROUND}))] {
+  let mut manual=app.run(&id).await.unwrap();manual["status"]=json!("paused");manual["uncertain"]=json!(uncertain);manual["component_pause"]=marker;app.save(&mut manual).await.unwrap();
+  engine_components::restore(&app,&id).await.unwrap();assert_eq!(app.run(&id).await.unwrap()["status"],"paused");
+ }
+}
+/// Retained queued reads survive restoration races; only already-admitted fresh claims may drain.
+#[tokio::test]
+async fn background_dispatch_retained_queue_and_claim_authority() {
+ use crate::runtime_tests::{fixture,conversation,queued,activate_codebase};
+ let (_root,app)=fixture().await;let sid=conversation(&app).await;
+ activate_codebase(&app,&sid).await;let rid=queued(&app,&sid).await;
+ let mut run=app.run(&rid).await.unwrap();
+ assert!(app.store.claim_run(&mut run,"fixture-loop","background-generation").await.unwrap());
+ run["loaded_abilities"]=json!(["codebase_admin"]);let args=json!({"path":"fixture"});
+ let (policy,mode_revision,visibility,state)=ability_controls(&app,&sid).await.unwrap();
+ let access=app.store.live_access(app.store.current_user_id(),"shared_default").await.unwrap();
+ run["pending"]=json!({"id":"background-pending","name":"file_read","call_id":"background-call",
+  "arguments":args,"digest":digest(&args),"policy_version":policy["version"],"mode_revision":mode_revision,
+  "visibility_revision":visibility["revision"],"ability_state_revision":state["revision"],
+  "access_revision":access.revision,"state":"executing","decision":"consumed","human_approved":false});
+ app.save(&mut run).await.unwrap();let settings=tool_execution::resolve(&visibility,"file_read").unwrap();
+ let handle=submit(&app,&sid,&rid,"background-generation","file_read",&args,"background-pending",
+  policy["version"].as_u64().unwrap_or(0),&settings).await.unwrap();
+ let id=handle["task_id"].as_str().unwrap();
+ run=app.run(&rid).await.unwrap();run["pending"]=Value::Null;app.save(&mut run).await.unwrap();
+ crate::engine_components::pause(&app,&mut run).await.unwrap();
+ let original=app.store.background_get(id).await.unwrap().unwrap();
+ run_task(&app,original.clone()).await.unwrap();
+ assert_eq!(app.store.background_get(id).await.unwrap().unwrap(),original);
+ let mut claimed=original;claimed["status"]=json!("running");claimed["claim_id"]=json!("read-claim");claimed["lease_until"]=json!(now()+30);
+ assert!(app.store.background_cas(&claimed,Some(0)).await.unwrap());
+ assert_eq!(dispatch_authorized(&app,&sid,&rid,"read-claim",id,"file_read",&args).await.unwrap(),Some(true));
+ for invalid in [json!({"uncertain":true}),json!({"component_pause":null}),
+   json!({"pending":{"state":"executing"}}),json!({"batch":[{"state":"executing"}]}),
+   json!({"batch":[{"pending":{"external_job":"external"}}]})] {
+  let mut current=app.run(&rid).await.unwrap();let preserved=current.clone();
+  for (key,value) in invalid.as_object().unwrap(){current[key]=value.clone();}
+  app.save(&mut current).await.unwrap();
+  assert_eq!(dispatch_authorized(&app,&sid,&rid,"read-claim",id,"file_read",&args).await.unwrap(),Some(false));
+  let mut reset=app.run(&rid).await.unwrap();
+  for key in ["uncertain","component_pause","pending","batch"]{reset[key]=preserved[key].clone();}
+  app.save(&mut reset).await.unwrap();
+ }
+ assert_eq!(dispatch_authorized(&app,&sid,&rid,"other-claim",id,"file_read",&args).await.unwrap(),Some(false));
+}
+
 }

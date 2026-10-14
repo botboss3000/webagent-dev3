@@ -1,0 +1,8 @@
+[package]
+name="webagent-background-dispatch"
+version="0.1.0"
+edition="2021"
+
+[dependencies]
+webagent-background-contracts={path="../background-contracts"}
+anyhow="1"

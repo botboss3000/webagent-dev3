@@ -53,7 +53,7 @@ class PackageTests(unittest.TestCase):
         def enter(name,*args,**kwargs):resources.rows[name]={};entries.append(kwargs)
         resources.enter=enter
         def command(argv,**kwargs):calls.append(argv);return identity if argv[1]=="create"else""
-        runner=types.SimpleNamespace(command=command,resource_request=lambda _:next(stats),job_context=types.SimpleNamespace(),resource_progress=lambda _:None)
+        runner=types.SimpleNamespace(command=command,resource_request=lambda request:{"container_id":identity,"state":"created","phase":"package"}if request["operation"]=="identity"else next(stats),job_context=types.SimpleNamespace(),resource_progress=lambda _:None)
         worker=module.Executor(runner,resources,{"instance":"dev","state_root":"/tmp"});worker.finish_phase=lambda *args:finished.append(args)
         job={"job_id":str(uuid.uuid4()),"package_memory_cap":cap}
         with patch.object(module.subprocess,"run"):

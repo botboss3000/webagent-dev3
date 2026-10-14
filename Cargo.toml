@@ -4,16 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["crates/context-contracts", "crates/context-assembly", "crates/context-service"]
-default-members = [".", "crates/context-contracts", "crates/context-assembly", "crates/context-service"]
+members = ["crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service"]
+default-members = [".", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service"]
 resolver = "2"
 
 [features]
 default = ["linked-context"]
-linked-context = ["dep:webagent-context-assembly"]
+linked-context = ["dep:webagent-context-assembly", "dep:webagent-background-dispatch"]
 live-context = []
 
 [dependencies]
+webagent-background-contracts={path="crates/background-contracts"}
+webagent-background-dispatch={path="crates/background-dispatch",optional=true}
 webagent-context-contracts = {path="crates/context-contracts"}
 webagent-context-assembly = {path="crates/context-assembly",optional=true}
 anyhow = "1"
@@ -43,6 +45,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
 
 [dev-dependencies]
+webagent-background-dispatch={path="crates/background-dispatch"}
 webagent-context-assembly = {path="crates/context-assembly"}
 http-body-util = "0.1"
 

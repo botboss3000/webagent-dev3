@@ -143,6 +143,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/agents/{id}/abilities/{ability}/skills/{skill}/visibility",put(ability_admin::skill_named_set))
         .route("/agents/{id}/abilities/{ability}/tools/{tool}/skill-content",get(ability_admin::tool_skill_content))
         .route("/agents/{id}/abilities/{ability}/tools/{tool}/mode",put(ability_admin::tool_set))
+        .route("/agents/{id}/abilities/{ability}/tools/{tool}/execution",put(ability_admin::execution_set))
         .route("/user/agent-page-favorites",get(agent_pages::read).put(agent_pages::save))
         .route("/user/app-page-favorites",get(app_pages::read).put(app_pages::save))
         .route("/agents/{id}/embed",get(embed::config_get).put(embed::config_put))

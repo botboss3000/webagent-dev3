@@ -4,11 +4,13 @@ use super::*;
 pub(crate) async fn read(State(app):State<App>)->Api {
  let catalog=crate::engine_components::catalog()?;
  let controls=crate::engine_components::controls(&app.store.root)?;
- let mut affected=0usize;
+ let mut affected=0usize;let mut active_runs=0usize;let mut active_tasks=0usize;
  for user in crate::agent_loop::user_apps(&app).await? {
+  for task in user.store.background_scan(None).await? {if matches!(task["status"].as_str(),Some("queued"|"running")){active_tasks+=1;}}
   for run in user.store.active_runs().await? {
+   if matches!(run["status"].as_str(),Some("queued"|"running"|"waiting_approval"|"waiting_external")){active_runs+=1;}
    if run["status"]=="paused" {let id=run["id"].as_str().unwrap_or("");let full=user.run(id).await?;
-    if full["component_pause"]["component"]==crate::engine_components::CONTEXT {affected+=1;}
+    if matches!(full["component_pause"]["component"].as_str(),Some(crate::engine_components::CONTEXT|crate::engine_components::BACKGROUND)) {affected+=1;}
    }
   }
  }
@@ -26,7 +28,7 @@ pub(crate) async fn read(State(app):State<App>)->Api {
  if entries.is_empty(){entries.push(json!({"id":crate::engine_components::CONTEXT,"group":"engine-loop","available":false,"enabled":!controls.disabled.iter().any(|id|id==crate::engine_components::CONTEXT),"installed":false}));}
  let adoption=|role:&str|std::fs::read(app.store.root.join("publication").join(format!("engine-{role}.json"))).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok());
  Ok(Json(json!({"namespace":"engine","revision":controls.revision,"catalog_revision":catalog.revision,"components":entries,
- "affected_work":affected,"adoption":{"api":adoption("api"),"loop":adoption("loop")}})))
+ "affected_work":affected,"active_work":{"runs":active_runs,"tasks":active_tasks},"adoption":{"api":adoption("api"),"loop":adoption("loop")}})))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -55,10 +57,10 @@ pub(crate) async fn update(State(app):State<App>,Path(id):Path<String>,Json(body
   let (_root,app)=crate::runtime_tests::fixture().await;let before=read(State(app.clone())).await.unwrap().0;
   let body=Update{expected_revision:before["revision"].as_u64().unwrap(),expected_catalog_revision:before["catalog_revision"].as_str().unwrap().into(),enabled:false};
   let after=update(State(app.clone()),Path(crate::engine_components::CONTEXT.into()),Json(body)).await.unwrap().0;
-  assert_eq!(after["components"][0]["available"],false);assert_eq!(after["revision"],1);
+  assert_eq!(after["components"].as_array().unwrap().iter().find(|item|item["id"]==crate::engine_components::CONTEXT).unwrap()["available"],false);assert_eq!(after["revision"],1);
   let stale=Update{expected_revision:0,expected_catalog_revision:before["catalog_revision"].as_str().unwrap().into(),enabled:true};
   assert!(update(State(app.clone()),Path(crate::engine_components::CONTEXT.into()),Json(stale)).await.is_err());
   let enabled=Update{expected_revision:1,expected_catalog_revision:before["catalog_revision"].as_str().unwrap().into(),enabled:true};
-  let restored=update(State(app.clone()),Path(crate::engine_components::CONTEXT.into()),Json(enabled)).await.unwrap().0;assert_eq!(restored["components"][0]["available"],true);
+  let restored=update(State(app.clone()),Path(crate::engine_components::CONTEXT.into()),Json(enabled)).await.unwrap().0;assert_eq!(restored["components"].as_array().unwrap().iter().find(|item|item["id"]==crate::engine_components::CONTEXT).unwrap()["available"],true);
  }
 }

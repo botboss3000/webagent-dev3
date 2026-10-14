@@ -59,8 +59,9 @@ class Components:
                 elif not manifest.exists()and not manifest.is_symlink():
                     isolated=self.deleted_isolated(path,parts)
                 if path in self.compile_inputs or(path.endswith(".rs")and not isolated):output.add("module:engine")
-            elif path.startswith("plugins/engine/")or path.startswith("crates/context-service/")or path.startswith("crates/context-assembly/"):
-                output.add("module:engine-component:context-assembly")
+            elif path.startswith("plugins/engine/")or path.startswith(("crates/context-service/","crates/context-assembly/","crates/background-service/","crates/background-dispatch/","crates/engine-service/")):
+                component="background-dispatch"if path.startswith(("plugins/engine/background-dispatch/","crates/background-service/","crates/background-dispatch/","crates/engine-service/"))else"context-assembly"
+                output.add("module:engine-component:"+component)
                 if path in self.compile_inputs:output.add("module:engine")
             elif path.startswith("build-service/")or path.startswith("tests/test_build")or path.startswith("tests/test_scheduler"):
                 output.add("module:broker")

@@ -66,6 +66,7 @@ COPY v3/build-service /opt/v3/build-service
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/engine /opt/v3/plugins/engine
 COPY --from=tested_builder /out/webagent-context-service /usr/local/lib/webagent/engine/context-assembly/webagent-context-service
+COPY --from=tested_builder /out/webagent-background-service /usr/local/lib/webagent/engine/background-dispatch/webagent-background-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
 # Git invokes this fixed helper directly as the unprivileged tool worker.
 RUN chmod 0555 /opt/v3/plugins/abilities/Administrator/git_control/askpass.py
@@ -94,6 +95,7 @@ COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inp
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/engine /opt/v3/plugins/engine
 COPY --from=tested_builder /out/webagent-context-service /usr/local/lib/webagent/engine/context-assembly/webagent-context-service
+COPY --from=tested_builder /out/webagent-background-service /usr/local/lib/webagent/engine/background-dispatch/webagent-background-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
 ENV V3_PROCESS_ROLE=loop V3_STATE_ROOT=/state V3_WORKSPACE_ROOT=/workspaces
 WORKDIR /state

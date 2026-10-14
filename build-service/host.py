@@ -108,6 +108,7 @@ def ability_asset_path(path):
     # Rust adapters and legacy Python helpers still have core/image consumers.
     return path.endswith((".json",".md")) or codebase_source_path(path) or diagnostics_source_path(path)
 def generic_package_path(path,blob):
+    """Classify registered engine and isolated ability inputs; authority and actual core dependencies still fence publication."""
     if engine_components.package_path(path,release.entries(blob,context_digest)):return True
     if not path.startswith(ABILITY_ROOT):return False
     parts=path[len(ABILITY_ROOT):].split("/")
@@ -661,6 +662,7 @@ def pinned_directory(parent,name,owner=None):
         os.close(parent_fd)
 
 class Runner:
+    """Own fixed host recipes, confined snapshots, measured execution and verified publication effects."""
     def __init__(self, source=SOURCE, snapshot_helper=None, snapshot_socket=None):
         self.source, self.snapshot_helper = Path(source), snapshot_helper
         self.source_config=CONFIG
@@ -1091,6 +1093,7 @@ class Runner:
         return outputs
 
     def validate_ui(self, job_id, changed):
+        """Validate complete candidate assets and registered packages against the owning runtime before activation."""
         root = ASSET_ROOT / "releases" / job_id
         (ASSET_ROOT/"artifacts").mkdir(parents=True,exist_ok=True)
         artifacts=self.build_ability_artifacts(job_id)
@@ -1117,7 +1120,7 @@ class Runner:
                 "--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["worker_gid"]),"--pids-limit","64","--memory","256m",
                 "--tmpfs","/tmp:rw,size=64m,mode=1777","--mount","type=bind,src="+str(root / DIAGNOSTICS_ROOT)+",dst=/package,readonly",
                 "--entrypoint","python3",image,"-I","-B","/package/test_runner.py"],timeout=60)
-        if any(name.startswith(ABILITY_ROOT) or name.startswith(engine_components.ROOT) or name.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/")) or name.startswith("v3/config/") or name=="v3/src/agent_loop/tools/administrator-schemas.json" for name in changed):
+        if any(name.startswith(ABILITY_ROOT) or name.startswith(engine_components.ROOT) or name.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/")) or name.startswith("v3/config/") or name=="v3/src/agent_loop/tools/administrator-schemas.json" for name in changed):
             # A foundation release introduces the validator itself. Validate with
             # its already-tested candidate API image; hot updates use the retained consumer.
             image=(active["images"]["api"] if active is not None
@@ -1467,6 +1470,7 @@ class Runner:
 
 
 class Broker:
+    """Authenticate callers and durably coordinate isolated source, releases, recovery and ownership."""
     def __init__(self, state=STATE, runner=None, recover=True):
         self.state = Path(state)
         if self.state.is_symlink():
@@ -2216,7 +2220,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures") if key in job}
         if "reason" in job:
             # Compiler failures are at the end of a bounded build transcript.
             view["reason"] = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
@@ -2810,6 +2814,7 @@ class Broker:
         return job["check_result"]
 
     def handle(self, request):
+        """Authorize broker operations and classify actual compiler consumers before a frozen release is admitted."""
         if not isinstance(request, dict) or set(request) - {"id", "name", "arguments", "workspace", "timeout_seconds", "trusted"}:
             raise ValueError("invalid broker request")
         trusted, workspace, args = request.get("trusted"), request.get("workspace"), request.get("arguments", {})
@@ -3501,9 +3506,9 @@ class Broker:
                         docs_attested and path.startswith("v3/docs/")and path.endswith(".md")) or (
                         (generic_package_path(path,candidate) or generic_package_path(path,base_blob))
                         and not native_package_migration(path,base_blob)))
-                        and path not in core_inputs and not path.startswith("v3/crates/context-contracts/")for path in changed)
+                        and path not in core_inputs and not path.startswith(("v3/crates/context-contracts/","v3/crates/background-contracts/"))for path in changed)
                     if (package_changed or docs_changed)and not docs_attested:ui_only=False
-                    engine_changed=any(path.startswith("v3/plugins/engine/")or path.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/"))for path in changed)
+                    engine_changed=any(path.startswith("v3/plugins/engine/")or path.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/"))for path in changed)
                     if engine_changed and not self.runner.engine_hot_swappable():ui_only=False
                     index_only=ui_only and(not changed or any(path in INDEX_METADATA_FILES for path in changed))
                     package_cap=executor_module.compiler_cap(args.get("package_memory_cap"))
@@ -3703,7 +3708,7 @@ class Broker:
 
     def _run_ui_hot(self, job, blob):
         """Compile independent packages outside publication, then rebase and revalidate under its short lock."""
-        if any(path.startswith("v3/plugins/engine/")or path.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/"))for path in job.get("changed_paths",[]))and not self.runner.engine_hot_swappable():
+        if any(path.startswith("v3/plugins/engine/")or path.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/"))for path in job.get("changed_paths",[]))and not self.runner.engine_hot_swappable():
             raise ValueError("Independent engine replacement requires live mode; publish a coordinated core release")
         if self.scheduler.mode=="enforce"and job["operation"]=="plugin_deploy":
             self._phase(job,"compiling_plugins")
@@ -3823,8 +3828,9 @@ class Broker:
                 self.runner.check_space(MIN_DEPLOY_FREE)
                 if self.scheduler.mode=="enforce":
                     self._phase(job,"preparing_plugins")
-                    self.runner.stage_assets(blob,job["job_id"])
-                    self.runner.build_ability_artifacts(job["job_id"])
+                    # Prepare confined artifacts first; freeze assets only after the final locked rebase.
+                    job["engine_artifacts"]=self.runner.build_engine_artifacts(job["job_id"],source_root=Path(job["release_root"]))
+                    job["plugin_artifacts"]=self.runner.build_ability_artifacts(job["job_id"],source_root=Path(job["release_root"]))
             if job["operation"] in ("deploy", "build_deploy", "ui_deploy", "index_deploy", "plugin_deploy"):
                 self.deploy_lock.acquire()
                 deploy_locked = True

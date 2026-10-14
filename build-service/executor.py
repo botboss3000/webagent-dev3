@@ -4,7 +4,7 @@ from pathlib import Path
 RUST="rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f"
 BUILDKIT="moby/buildkit:v0.25.1@sha256:79cc6476ab1a3371c9afd8b44e7c55610057c43e18d9b39b68e2b0c2475cc1b6"
 COMPILER_STAGE_SHA256="474b034d7a843ebf324b654a785b5a5b23135804ef39c662f92fcb3e160dfeaf"
-BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-automation","webagent-outbound-notifications","webagent-context-service"]
+BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-automation","webagent-outbound-notifications","webagent-context-service","webagent-background-service"]
 # @code-index {"version":1,"feature":"build-artifact-execution","aliases":["task fencing","verified builds"],"purpose":"Pinned attributable compiler/test/packaging recipes and verified content-addressed artifact reuse.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Identity, exact input verification and completion rules cannot be disabled by model or preference configuration."}}
 COMPILER_MEMORY_CAP=4026531840
 def compiler_cap(value):
@@ -77,7 +77,7 @@ class Executor:
         """Bound only this dedicated BuildKit ancestor, preserving reserve and measured role profiles."""
         name="webagent-build-"+self.config["instance"]+"-"+uuid.UUID(job["job_id"]).hex+"-package-"+uuid.uuid4().hex[:8]
         if role not in {"api","loop","generic"}:raise ValueError("Fixed packaging role required")
-        cap=compiler_cap(job.get("package_memory_cap"));identity=None;success=False;oom=False;proof_error=None
+        cap=compiler_cap(job.get("package_memory_cap"));identity=None;success=False;oom=False;proof_error=None;primary=False;stage="container_create";cap_outcome=None
         if cap is not None and not self.resources.enabled:raise ValueError("Package cap requires enforced admission")
         self.resources.enter(name,job,"package","buildkit:v0.25.1:role-context-v2:"+role,"package",timeout=600,hard_cap=cap)
         try:
@@ -85,18 +85,28 @@ class Executor:
                 "--label","webagent.scheduler.instance="+self.config["instance"],"--label","webagent.scheduler.job="+uuid.UUID(job["job_id"]).hex,"--label","webagent.scheduler.phase=package","--pids-limit","512"]
             if cap is not None:create +=["--memory",str(cap),"--memory-swap",str(cap)]
             create +=[BUILDKIT,"--addr","unix:///run/buildkit/buildkitd.sock"]
-            identity=self.runner.command(create,timeout=30,private_raw=True).strip()
-            if not re.fullmatch(r"[a-f0-9]{64}",identity):raise ValueError("Packaging container identity invalid")
+            self.runner.command(create,timeout=30,private_raw=True)
+            # Docker diagnostics share the command stream; only the protected helper identifies this exact container.
+            stage="container_identity";created=self.runner.resource_request({"operation":"identity","container":name})
+            candidate=created.get("container_id")
+            if not isinstance(candidate,str)or not re.fullmatch(r"[a-f0-9]{64}",candidate)or created.get("state")!="created"or created.get("phase")!="package":raise ValueError("Packaging container identity invalid")
+            identity=candidate
             with self.resources.lock:self.resources.rows[name]["container_id"]=identity
-            self.runner.command(["docker","start",name],timeout=30);self.resources.attached(name,identity)
+            stage="container_start";self.runner.command(["docker","start",name],timeout=30);self.resources.attached(name,identity)
+            stage="initial_attestation"
             if cap is not None:
                 observed=self.runner.resource_request({"operation":"stats","container":name})
                 if observed.get("container_id")!=identity or observed.get("memory_max")!=cap or observed.get("swap_max")!=0 or (observed.get("oom_kills",0)>0 or observed.get("oom_events",0)>0):raise ValueError("Dedicated BuildKit ancestor memory cap not enforced")
-                job.setdefault("package_cap_outcomes",[]).append({"role":role,"requested_bytes":cap,"observed_memory_max":observed["memory_max"],"observed_swap_max":observed["swap_max"],"container_id":identity,"initial_oom_events":observed.get("oom_events",0),"initial_oom_kills":observed.get("oom_kills",0),"outcome":"running"})
+                cap_outcome={"role":role,"requested_bytes":cap,"observed_memory_max":observed["memory_max"],"observed_swap_max":observed["swap_max"],"container_id":identity,"initial_oom_events":observed.get("oom_events",0),"initial_oom_kills":observed.get("oom_kills",0),"outcome":"running"}
+                job.setdefault("package_cap_outcomes",[]).append(cap_outcome)
                 getattr(self.runner,"resource_progress",lambda _:None)(job)
+            stage="builder_create"
             self.runner.command(["docker","buildx","create","--name",name,"--driver","remote","docker-container://"+name],timeout=30)
-            self.runner.command(["docker","buildx","inspect",name,"--bootstrap"],timeout=60)
-            self.runner.job_context.phase_container=name;yield name;success=True
+            stage="builder_bootstrap";self.runner.command(["docker","buildx","inspect",name,"--bootstrap"],timeout=60)
+            stage="workload";self.runner.job_context.phase_container=name;yield name;success=True
+        except BaseException as error:
+            primary=True;job.setdefault("package_failures",[]).append({"role":role,"stage":stage,"exception_type":type(error).__name__})
+            getattr(self.runner,"resource_progress",lambda _:None)(job);raise
         finally:
             self.runner.job_context.phase_container=None
             try:
@@ -106,8 +116,10 @@ class Executor:
                         if observed.get("container_id")!=identity or observed.get("memory_max")!=cap or observed.get("swap_max")!=0:proof_error=ValueError("BuildKit ancestor cap changed during packaging")
                     except (OSError,ValueError,RuntimeError,TimeoutError,PermissionError):
                         observed={};success=False;proof_error=ValueError("BuildKit cap completion evidence unavailable")
-                    if job.get("package_cap_outcomes"):
-                        job["package_cap_outcomes"][-1].update(oom_events=observed.get("oom_events"),oom_kills=observed.get("oom_kills"),peak_memory=observed.get("peak_memory"),outcome="oom"if oom else("completed"if success and proof_error is None else"failed"))
+                        job.setdefault("package_failures",[]).append({"role":role,"stage":"completion_attestation","exception_type":"EvidenceUnavailable"})
+                        getattr(self.runner,"resource_progress",lambda _:None)(job)
+                    if cap_outcome is not None:
+                        cap_outcome.update(oom_events=observed.get("oom_events"),oom_kills=observed.get("oom_kills"),peak_memory=observed.get("peak_memory"),outcome="oom"if oom else("completed"if success and proof_error is None else"failed"))
                         getattr(self.runner,"resource_progress",lambda _:None)(job)
             finally:
                 try:
@@ -115,7 +127,7 @@ class Executor:
                     subprocess.run(["docker","buildx","rm",name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30,env=environment)
                 finally:self.finish_phase(name,identity,success and not oom and proof_error is None)
             if oom:raise RuntimeError("Package memory cap exceeded (OOM); publication failed")
-            if proof_error is not None:raise proof_error
+            if proof_error is not None and not primary:raise proof_error
     def finish_phase(self,name,identity,success,diagnostic_complete=False):
         """Record a terminal phase only after exact-container cleanup is confirmed."""
         if identity is not None:
@@ -179,7 +191,7 @@ class Executor:
         for path in sorted(cache.glob("*.json"),key=lambda p:p.stat().st_mtime,reverse=True)[:64]:
             if path.is_symlink():raise ValueError("Engine cache receipt symlink")
             value=json.loads(path.read_text())
-            if value["recipe"]!=RUST+":single-job:debug0:complete-tests-v4"or value["rust_inputs"]!=rust:continue
+            if value["recipe"]!=RUST+":single-job:debug0:complete-tests-v5"or value["rust_inputs"]!=rust:continue
             if any(name not in files or hashlib.sha256(files[name][1]).hexdigest()!=sha for name,sha in value["compiled_inputs"].items()):continue
             if not re.fullmatch(r"[a-f0-9-]{36}",value["job_id"]):raise ValueError("Engine cache job identity invalid")
             source=Path(self.config["state_root"])/"execution"/value["job_id"]/"output/artifacts"
@@ -230,22 +242,23 @@ class Executor:
 
     @staticmethod
     def smoke_result(text,mode):
-        """Validate bounded optimized-mode proofs containing the two deterministic prepared cases."""
+        """Validate both context and background planning proofs for the two optimized deterministic cases."""
         if len(text)>65536:raise ValueError("Context smoke result exceeds bound")
         value=json.loads(text)
         if value.get("mode")!=mode or value.get("equivalence")is not True or value.get("interface_version")!=1 or not isinstance(value.get("prepared"),list)or len(value["prepared"])!=2:raise ValueError("Optimized context smoke failed")
+        if not isinstance(value.get("background_prepared"),list)or len(value["background_prepared"])!=2:raise ValueError("Optimized background smoke failed")
         if mode=="linked"and value.get("service_started")is not False:raise ValueError("Linked smoke started external service")
         if mode=="live"and(value.get("service_reused")is not True or value.get("service_drained")is not True):raise ValueError("Live smoke lifecycle failed")
         return value
     @staticmethod
     def linked_smoke(text):
-        """Require optimized linked assembly/equivalence proof before retaining the stable executable."""
+        """Require optimized linked context/planner equivalence before retaining the stable executable."""
         return Executor.smoke_result(text,"linked")
     @staticmethod
     def live_smoke(text,linked):
         """Require actual host service reuse/drain and exact prepared-result equivalence across modes."""
         value=Executor.smoke_result(text,"live")
-        if value["prepared"]!=linked["prepared"]:raise ValueError("Optimized linked/live results differ")
+        if value["prepared"]!=linked["prepared"]or value["background_prepared"]!=linked["background_prepared"]:raise ValueError("Optimized linked/live results differ")
         return value
     @staticmethod
     def linked_recipe():
@@ -332,7 +345,7 @@ class Executor:
             if relative is not None:
                 if relative not in files:raise ValueError("Compiled local input absent from captured source")
                 inputs[relative]=hashlib.sha256(files[relative][1]).hexdigest()
-        value={"recipe":RUST+":single-job:debug0:complete-tests-v4","rust_inputs":self.rust_inputs(files),"compiled_inputs":inputs,
+        value={"recipe":RUST+":single-job:debug0:complete-tests-v5","rust_inputs":self.rust_inputs(files),"compiled_inputs":inputs,
             "artifacts":hashes,"job_id":job["job_id"]}
         if not inputs:raise ValueError("Compiled input closure missing")
         key=hashlib.sha256(json.dumps({k:v for k,v in value.items()if k not in {"job_id","artifacts"}},sort_keys=True).encode()).hexdigest()
@@ -349,14 +362,14 @@ class Executor:
         """Retain Cargo-attested tests and exact debug support; never substitute optimized binaries."""
         metadata=output/"test-artifacts.json"
         if metadata.is_symlink()or not metadata.is_file()or metadata.stat().st_size>32*1024*1024:raise ValueError("Cargo test metadata identity")
-        tests=[];support=None;folder=artifacts/"tests";folder.mkdir()
+        tests=[];support=None;additional_support=[];folder=artifacts/"tests";folder.mkdir()
         for line in metadata.read_text().splitlines():
             if len(line)>1024*1024:raise ValueError("Cargo test metadata line bound")
             value=json.loads(line)
             if value.get("reason")!="compiler-artifact"or not value.get("executable"):continue
             target=value["target"];executable=value["executable"]
             test=value.get("profile",{}).get("test")is True
-            official=target.get("name")=="webagent-context-service"and target.get("src_path")=="/build/crates/context-service/src/main.rs"and not test
+            official=not test and (target.get("name"),target.get("src_path"))in {("webagent-context-service","/build/crates/context-service/src/main.rs"),("webagent-background-service","/build/crates/background-service/src/main.rs")}
             if not test and not official:continue
             expected="/output/target/debug/"
             if not executable.startswith(expected)or ".."in Path(executable).parts:raise ValueError("Cargo test executable escaped fixed target")
@@ -369,11 +382,13 @@ class Executor:
                 if not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",name):raise ValueError("Cargo test executable name")
                 destination=folder/name;record={"file":"tests/"+name,"package_id":value["package_id"],"target_name":target["name"],"source_path":target["src_path"],"kind":target["kind"]};tests.append(record)
             else:
-                destination=artifacts/"test-support/debug/webagent-context-service";destination.parent.mkdir(parents=True,exist_ok=True)
-                support={"file":"test-support/debug/webagent-context-service","destination":"target/debug/webagent-context-service","package_id":value["package_id"],"source_path":target["src_path"],"profile":"debug"};record=support
+                binary=target["name"];destination=artifacts/"test-support/debug"/binary;destination.parent.mkdir(parents=True,exist_ok=True)
+                record={"file":"test-support/debug/"+binary,"destination":"target/debug/"+binary,"package_id":value["package_id"],"source_path":target["src_path"],"profile":"debug"}
+                if binary=="webagent-context-service":support=record
+                else:additional_support.append(record)
             shutil.copyfile(source,destination);destination.chmod(0o555);record["sha256"]=self.artifact_hashes(destination.parent)[destination.name]
         if not support or not any(item["target_name"]=="service"and item["kind"]==["test"]and item["source_path"]=="/build/crates/context-service/tests/service.rs"and item["package_id"]==support["package_id"]for item in tests):raise ValueError("Official service integration/support provenance missing")
-        manifest={"schema_version":1,"tests":sorted(tests,key=lambda item:item["file"]),"support":support}
+        manifest={"schema_version":1,"tests":sorted(tests,key=lambda item:item["file"]),"support":support,"additional_support":additional_support}
         (artifacts/"test-manifest.json").write_text(json.dumps(manifest,sort_keys=True)+"\n")
         return manifest
     def test_manifest(self,artifacts):
@@ -383,10 +398,16 @@ class Executor:
         support=value["support"]
         if support.get("file")!="test-support/debug/webagent-context-service"or support.get("destination")!="target/debug/webagent-context-service"or support.get("profile")!="debug"or support.get("source_path")!="/build/crates/context-service/src/main.rs":raise ValueError("Retained support provenance invalid")
         if not any(item.get("target_name")=="service"and item.get("kind")==["test"]and item.get("source_path")=="/build/crates/context-service/tests/service.rs"and item.get("package_id")==support.get("package_id")for item in value["tests"]):raise ValueError("Retained integration provenance missing")
+        extra=value.get("additional_support",[])
+        integration=[item for item in value["tests"]if item.get("source_path")=="/build/crates/background-service/tests/service.rs"]
+        if len(extra)>1 or bool(integration)!=bool(extra):raise ValueError("Background support inventory incomplete")
+        for item in extra:
+            if item.get("file")!="test-support/debug/webagent-background-service"or item.get("destination")!="target/debug/webagent-background-service"or item.get("profile")!="debug"or item.get("source_path")!="/build/crates/background-service/src/main.rs"or not any(test.get("package_id")==item.get("package_id")for test in integration):raise ValueError("Background support provenance invalid")
+        support_files={item["file"]for item in [support,*extra]}
         names=[]
-        for item in [*value["tests"],support]:
+        for item in [*value["tests"],support,*extra]:
             name=item.get("file","")
-            if name in names or not(name==support["file"]or re.fullmatch(r"tests/[a-z0-9_]+-[a-f0-9]{16}",name)):raise ValueError("Retained test path invalid")
+            if name in names or not(name in support_files or re.fullmatch(r"tests/[a-z0-9_]+-[a-f0-9]{16}",name)):raise ValueError("Retained test path invalid")
             names.append(name);path=artifacts/name
             if path.is_symlink()or not path.is_file()or path.stat().st_nlink!=1 or self.artifact_hashes(path.parent)[path.name]!=item.get("sha256"):raise ValueError("Retained test output changed")
         if {p.relative_to(artifacts).as_posix()for p in (artifacts/"tests").iterdir()}!={item["file"]for item in value["tests"]}:raise ValueError("Retained test manifest inventory mismatch")
@@ -395,7 +416,8 @@ class Executor:
     def restore_test_support(output,artifacts,manifest):
         """Restore only attested debug support at Cargo's fixed integration-test executable path."""
         debug=output/"target/debug";debug.mkdir(parents=True,exist_ok=True)
-        shutil.copyfile(artifacts/manifest["support"]["file"],debug/"webagent-context-service");(debug/"webagent-context-service").chmod(0o555)
+        for item in [manifest["support"],*manifest.get("additional_support",[])]:
+            target=output/item["destination"];shutil.copyfile(artifacts/item["file"],target);target.chmod(0o555)
     def engine(self,job,blob,extract,digest):
         """Compile/test once, retain input attestations and produce the complete existing image artifact set."""
         job["artifact_component"]="engine"

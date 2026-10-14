@@ -6303,10 +6303,10 @@ async fn background_execution_journey(behavior: &str) {
     let (release_sender,release_receiver)=tokio::sync::oneshot::channel::<()>();
     let wake=behavior=="wake";
     let worker=tokio::spawn(async move {
-        tokio::time::timeout(Duration::from_secs(5),async {
-            let (stream,_)=listener.accept().await.unwrap();
+        // Bound each socket stage; the driver explicitly releases the held read between stages.
+            let (stream,_)=tokio::time::timeout(Duration::from_secs(5),listener.accept()).await.unwrap().unwrap();
             let mut reader=BufReader::new(stream);
-            let mut line=String::new();reader.read_line(&mut line).await.unwrap();
+            let mut line=String::new();tokio::time::timeout(Duration::from_secs(5),reader.read_line(&mut line)).await.unwrap().unwrap();
             let request:Value=serde_json::from_str(&line).unwrap();
             assert_eq!(request["arguments"]["path"],"background-evidence");
             assert!(request["arguments"].get("_execution_mode").is_none());
@@ -6320,21 +6320,20 @@ async fn background_execution_journey(behavior: &str) {
                 },
             }
             let reply=json!({"id":request["id"],"status":"success","output":"BACKGROUND_JOURNEY_EVIDENCE"});
-            reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5),reader.get_mut().write_all(format!("{reply}\n").as_bytes())).await.unwrap().unwrap();
             drop(reader);
             if wake {
-                let (stream,_)=listener.accept().await.unwrap();
+                let (stream,_)=tokio::time::timeout(Duration::from_secs(5),listener.accept()).await.unwrap().unwrap();
                 let mut reader=BufReader::new(stream);
-                let mut line=String::new();reader.read_line(&mut line).await.unwrap();
+                let mut line=String::new();tokio::time::timeout(Duration::from_secs(5),reader.read_line(&mut line)).await.unwrap().unwrap();
                 let request:Value=serde_json::from_str(&line).unwrap();
                 assert_eq!(request["arguments"]["path"],"followup-read");
                 assert!(request["arguments"].get("_execution_mode").is_none());
                 let reply=json!({"id":request["id"],"status":"success","output":"FOLLOWUP_READ_EVIDENCE"});
-                reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(5),reader.get_mut().write_all(format!("{reply}\n").as_bytes())).await.unwrap().unwrap();
                 return (false,2);
             }
             (false,1)
-        }).await.unwrap()
     });
     let service=tokio::spawn(background_tasks::service(app.clone()));
     let loop_app=app.clone();let loop_rid=rid.clone();
@@ -6377,7 +6376,7 @@ async fn background_execution_journey(behavior: &str) {
         assert_eq!(envelopes[0]["untrusted_tool_result"]["output"],"BACKGROUND_JOURNEY_EVIDENCE");
         reply.send(background_journey_final("Overlap completed.")).unwrap();
         tokio::time::timeout(Duration::from_secs(5),origin).await.unwrap().unwrap();
-        assert_eq!(worker.await.unwrap(),(false,1));
+        assert_eq!(tokio::time::timeout(Duration::from_secs(5),worker).await.unwrap().unwrap(),(false,1));
         let mut finished=app.run(&rid).await.unwrap();
         assert_eq!(finished["status"],"completed");
         assert!(!background_tasks::collect(&app,&mut finished).await.unwrap());
@@ -6404,7 +6403,7 @@ async fn background_execution_journey(behavior: &str) {
                 assert!(task["wake_run_id"].is_null());
                 assert!(task["delivery_run_id"].is_null());
                 assert!(requests.try_recv().is_err(),"silent completion must not call the provider");
-                assert_eq!(worker.await.unwrap(),(false,1));
+                assert_eq!(tokio::time::timeout(Duration::from_secs(5),worker).await.unwrap().unwrap(),(false,1));
                 let next=queued(&app,&sid).await;
                 running(&app,&next,"silent-next-turn").await;
                 let next_app=app.clone();let next_id=next.clone();
@@ -6468,7 +6467,7 @@ async fn background_execution_journey(behavior: &str) {
                 assert_eq!(task_count,1,"follow-up must not create any additional task");
                 reply.send(background_journey_final("Wake result acknowledged.")).unwrap();
                 tokio::time::timeout(Duration::from_secs(5),follow_run).await.unwrap().unwrap();
-                assert_eq!(worker.await.unwrap(),(false,2));
+                assert_eq!(tokio::time::timeout(Duration::from_secs(5),worker).await.unwrap().unwrap(),(false,2));
                 assert_eq!(app.run(&follow_id).await.unwrap()["status"],"completed");
                 let task=app.store.background_get(&task_id).await.unwrap().unwrap();
                 background_followup::process(&app,&task).await.unwrap();

@@ -100,6 +100,7 @@ async fn catalog(app:&App,identity:&Value,id:&str,params:&HashMap<String,String>
             for tool in tools {
                 let name=tool["name"].as_str().unwrap_or("").to_owned();
                 tool["call_count"]=json!(call_counts.get(&name).copied().unwrap_or(0));
+                tool["execution_override"]=if rights["can_manage"]==true {visibility["tool_execution"][&name].clone()}else{Value::Null};
                 tool["execution"]=serde_json::to_value(crate::tool_execution::resolve(&visibility,&name)?).map_err(anyhow::Error::from)?;
                 tool["advanced_policies"]=crate::tool_execution::advanced_policies(&name);
                 tool["duplicate_protection_capable"]=json!(crate::actions::supported(&name));
@@ -223,6 +224,7 @@ pub(crate) async fn execution_set(State(app):State<App>,Extension(identity):Exte
     if !app.abilities.known(&ability) || !app.abilities.has_tool(&ability,&tool) {
         return Err(bad("Unknown ability or tool"));
     }
+    if !body.settings.is_null() {
     let fields=body.settings.as_object().ok_or_else(||bad("Execution settings required"))?;
     if !(3..=4).contains(&fields.len()) || fields.keys().any(|key|!matches!(key.as_str(),"mode"|"max_concurrency"|"on_run_end"|"duplicate_protection")) || !fields.contains_key("mode") || !fields.contains_key("max_concurrency") || !fields.contains_key("on_run_end") {
         return Err(bad("Expected execution settings with optional duplicate_protection"));
@@ -233,6 +235,7 @@ pub(crate) async fn execution_set(State(app):State<App>,Extension(identity):Exte
         || (body.settings["mode"]!="foreground" && !crate::tool_execution::background_capable(&tool)) {
         return Err(bad("Invalid or unsupported tool execution settings"));
     }
+    }
     let mut scoped=admin_agent_view(&app,&id).await?;
     scoped.store=scoped.store.for_user(identity["_user_id"].as_str().ok_or_else(denied)?).await?;
     let mut value=agent_abilities(&scoped).await?;
@@ -240,13 +243,16 @@ pub(crate) async fn execution_set(State(app):State<App>,Extension(identity):Exte
     let revision=body.expected_revision.checked_add(1).ok_or_else(||bad("Agent ability revision overflow"))?;
     let before=value.clone();
     if !value["tool_execution"].is_object() {value["tool_execution"]=json!({});}
-    value["tool_execution"][&tool]=body.settings;
+    if body.settings.is_null(){value["tool_execution"].as_object_mut().unwrap().remove(&tool);}
+    else {value["tool_execution"][&tool]=body.settings;}
     let settings=crate::tool_execution::resolve(&value,&tool).map_err(|_|bad("Invalid or unsupported tool execution settings"))?;
     let settings=serde_json::to_value(settings).map_err(anyhow::Error::from)?;
-    if before["tool_execution"][&tool]==settings {return Ok(Json(before));}
-    value["tool_execution"][&tool]=settings;value["revision"]=json!(revision);
+    if !value["tool_execution"][&tool].is_null(){value["tool_execution"][&tool]=settings;}
+    if before["tool_execution"]==value["tool_execution"] {return Ok(Json(before));}
+    value["revision"]=json!(revision);
     scoped.store.save_agent_abilities(&value,body.expected_revision).await.map_err(update_error)?;
-    phase3_api::quiesce_agent(&app,&id).await?;Ok(Json(value))
+    // Scheduling preferences apply at fresh admission; current authority fences still revoke stale grants.
+    crate::wake::notify(&app).await;Ok(Json(value))
 }
 pub(crate) async fn skill_named_content(State(app):State<App>,Extension(identity):Extension<Value>,Path((id,ability,skill)):Path<(String,String,String)>)->Api {
     authority(&app,&identity,&id,true).await?;
@@ -383,6 +389,26 @@ mod tests {
         assert!(execution_set(State(app.clone()),Extension(identity),Path(path),
             Json(ExecutionBody{expected_revision:revision+1,settings})).await.is_err());
         assert_eq!(app.store.agent_abilities().await.unwrap()["revision"],revision+2);
+    }
+    /// Preference changes preserve admitted work and exact inherited defaults can be restored.
+    #[tokio::test]
+    async fn execution_preference_preserves_runs_and_clears_override() {
+      let (_root,app)=crate::runtime_tests::fixture().await;
+      let sid=crate::runtime_tests::conversation(&app).await;
+      let rid=crate::runtime_tests::queued(&app,&sid).await;
+      let before_run=app.run(&rid).await.unwrap();
+      let before=app.store.agent_abilities().await.unwrap();let revision=before["revision"].as_u64().unwrap();
+      let path=("shared_default".into(),"codebase_admin".into(),"file_list".into());
+      let identity=json!({"_user_id":app.store.current_user_id()});
+      execution_set(State(app.clone()),Extension(identity.clone()),Path(path.clone()),
+        Json(ExecutionBody{expected_revision:revision,settings:json!({"mode":"background","max_concurrency":1,"on_run_end":"stop"})})).await.unwrap();
+      assert_eq!(app.run(&rid).await.unwrap(),before_run);
+      execution_set(State(app.clone()),Extension(identity),Path(path),
+        Json(ExecutionBody{expected_revision:revision+1,settings:Value::Null})).await.unwrap();
+      let after=app.store.agent_abilities().await.unwrap();
+      assert!(after["tool_execution"]["file_list"].is_null());
+      assert_eq!(after["visibility"],before["visibility"]);
+      assert_eq!(app.run(&rid).await.unwrap(),before_run);
     }
     #[tokio::test]
     async fn named_skill_save_is_independent_and_authorized() {

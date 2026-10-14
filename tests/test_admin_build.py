@@ -1126,6 +1126,73 @@ class BuildTests(unittest.TestCase):
         self.assertIn("v3/ui/parallel.css", combined)
         self.assertIn("v3/src/runtime.rs", combined)
 
+    def test_full_release_freezes_assets_once_after_concurrent_rebase(self):
+        """Concurrent asset publication must survive one final immutable freeze."""
+        self.runner.blob=context(extra={"v3/ui/index.html":"<html>fixture</html>"})
+        bootstrap = self.call("v3_build_work", {"action": "begin", "task_id": "bootstrap-ui",
+            "summary": "Migrate asset mount", "mode": "isolated"})
+        first_file = Path(bootstrap["workspace_path"], "src/bootstrap.rs")
+        first_file.parent.mkdir(exist_ok=True)
+        first_file.write_text("bootstrap")
+        digest = self.call("v3_build_work", {"action": "status", "task_id": "bootstrap-ui"})["own"][0]["workspace_inputs_sha256"]
+        first = self.call("v3_build_work", {"action": "finish", "task_id": "bootstrap-ui",
+            "expected_inputs_sha256": digest})
+        self.assertEqual("completed", self.wait(first)["status"])
+
+        runtime = self.call("v3_build_work", {"action": "begin", "task_id": "running-runtime",
+            "summary": "Runtime work", "mode": "isolated"})
+        ui = self.call("v3_build_work", {"action": "begin", "task_id": "parallel-ui",
+            "summary": "UI work", "mode": "isolated"})
+        runtime_file = Path(runtime["workspace_path"], "src/runtime.rs")
+        runtime_file.parent.mkdir(exist_ok=True)
+        runtime_file.write_text("runtime")
+        ui_file = Path(ui["workspace_path"], "ui/parallel.css")
+        ui_file.parent.mkdir(exist_ok=True)
+        ui_file.write_text("body {}")
+        digests = {item["task_id"]: item["workspace_inputs_sha256"]
+                   for item in self.call("v3_build_work", {"action": "status"})["own"]}
+        self.runner.block = threading.Event()
+        full = self.call("v3_build_work", {"action": "finish", "task_id": "running-runtime",
+            "expected_inputs_sha256": digests["running-runtime"]})
+        for _ in range(100):
+            if self.broker.jobs[full["job_id"]]["phase"] == "building_api":
+                break
+            time.sleep(.01)
+        self.assertEqual("building_api", self.broker.jobs[full["job_id"]]["phase"])
+        fast = self.call("v3_build_work", {"action": "finish", "task_id": "parallel-ui",
+            "expected_inputs_sha256": digests["parallel-ui"]})
+        self.assertEqual("running", self.broker.jobs[full["job_id"]]["status"])
+        self.assertTrue(self.broker.jobs[fast["job_id"]].get("parallel_ui"))
+        for _ in range(100):
+            if self.call("v3_worker_job", {"job_id": fast["job_id"]})["status"] == "completed":
+                break
+            time.sleep(.01)
+        self.assertEqual("completed", self.call("v3_worker_job", {"job_id": fast["job_id"]})["status"])
+        self.assertEqual("running", self.call("v3_worker_job", {"job_id": full["job_id"]})["status"])
+        self.assertEqual(fast["job_id"], self.runner.asset_id)
+        prepared=[];frozen=[];original_stage=self.runner.stage_assets
+        compiler_source=Path(self.broker.jobs[full["job_id"]]["release_root"])
+        def prepare(job_id,source_root=None):
+            prepared.append((job_id,source_root));return []
+        def freeze(blob,job_id):
+            host.release.stage_assets(Path(self.temp.name)/"immutable-assets",job_id,blob,host.context_digest)
+            frozen.append((job_id,host.context_digest(blob)[0]));return original_stage(blob,job_id)
+        self.runner.build_engine_artifacts=prepare;self.runner.build_ability_artifacts=prepare
+        # This legacy runner models prior admission; ownership fences have separate enforced fixtures.
+        self.broker.scheduler.assert_job=lambda job:None
+        self.runner.stage_assets=freeze;self.broker.scheduler.mode="enforce"
+        self.runner.block.set()
+        final = self.wait(full)
+        self.assertEqual("completed", final["status"])
+        self.assertIn("built_inputs_sha256", self.broker.jobs[full["job_id"]])
+        combined = host.release.entries(
+            (self.state / full["job_id"] / "candidate.tar").read_bytes(), host.context_digest)
+        self.assertIn("v3/ui/parallel.css", combined)
+        self.assertIn("v3/src/runtime.rs", combined)
+
+        self.assertEqual([(full["job_id"],compiler_source)]*2,prepared)
+        self.assertEqual([(full["job_id"],self.broker.jobs[full["job_id"]]["inputs_sha256"])],frozen)
+
     def test_mixed_index_switches_during_build_and_runtime_inherits_metadata(self):
         bootstrap = self.call("v3_build_work", {"action": "begin", "task_id": "bootstrap-ui",
             "summary": "Migrate asset mount", "mode": "isolated"})

@@ -1,11 +1,12 @@
 //! Host-owned engine discovery, activation and disposable process generations.
 //! Catalog entries never grant tools or authority; only registered contracts run.
-// @code-index {"version":1,"feature":"engine-components","aliases":["live engine modules","context service","component catalog"],"purpose":"Engine catalog, control fencing and generation lifecycle. Config: config/engine-components.json -> disabled (initial defaults only); data-root config/engine-components.json owns live revision/disabled. plugins/engine/context-assembly/component.json -> limits and runtime_requirements.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled"]},{"path":"plugins/engine/context-assembly/component.json","pointers":["/limits/max_request_bytes","/limits/max_response_bytes","/limits/timeout_ms","/runtime_requirements"]}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"engine-components","aliases":["live engine modules","context service","component catalog"],"purpose":"Engine catalog, control fencing and generation lifecycle. Config: config/engine-components.json -> disabled (initial defaults only); data-root config/engine-components.json owns live revision/disabled. plugins/engine/context-assembly/component.json -> limits and runtime_requirements. plugins/engine/background-dispatch/component.json -> metadata-only planning limits and runtime_requirements.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled"]},{"path":"plugins/engine/context-assembly/component.json","pointers":["/limits/max_request_bytes","/limits/max_response_bytes","/limits/timeout_ms","/runtime_requirements"]},{"path":"plugins/engine/background-dispatch/component.json","pointers":["/limits/max_request_bytes","/limits/max_response_bytes","/limits/timeout_ms","/runtime_requirements"]}],"opportunities":[]}}
 use crate::*;
 use serde::{Deserialize,Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Mutex as StdMutex,OnceLock};
 pub(crate) const CONTEXT:&str="context-assembly";
+pub(crate) const BACKGROUND:&str="background-dispatch";
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Limits {pub max_request_bytes:usize,pub max_response_bytes:usize,pub timeout_ms:u64,pub max_concurrency:usize}
@@ -23,17 +24,22 @@ pub(crate) struct Descriptor {
 /// Keep catalog and control identities bounded and safe as organizational labels.
 fn valid_id(id:&str)->bool {!id.is_empty()&&id.len()<=64&&id.bytes().all(|c|c.is_ascii_lowercase()||c.is_ascii_digit()||c==b'-')}
 impl Descriptor {
- /// Only this compiled contract and confined build recipe are supported in the pilot.
+ /// Only reviewed fixed interfaces and confined build recipes may enter the engine catalog.
  pub(crate) fn validate(&self)->Result<()> {
-  if self.schema_version!=1||!valid_id(&self.id)||self.interface_version!=1||self.operation!="context.prepare"
+  if self.schema_version!=1||!valid_id(&self.id)||self.interface_version!=1||!matches!(self.operation.as_str(),"context.prepare"|"background.plan")
    ||!valid_id(&self.group)||self.implementation_version.is_empty()||self.implementation_version.len()>64
    ||self.modes!=["live","linked"]||self.runtime_requirements.len()>16||self.runtime_requirements.iter().any(|id|!valid_id(id))
-   ||self.executable!="artifact/webagent-context-service"||self.build.package!="webagent-context-service"
-   ||self.build.toolchain!="1.90.0"||self.build.source_inputs!=["crates/context-service","crates/context-assembly","crates/context-contracts","Cargo.toml","Cargo.lock","config/context-compaction.json"]
+   ||self.executable!=format!("artifact/{}",self.build.package)
+   ||match self.operation.as_str() {
+    "context.prepare"=>self.build.package!="webagent-context-service",
+    "background.plan"=>self.id!=BACKGROUND||self.build.package!="webagent-background-service",_=>true
+   }
+   ||self.build.toolchain!="1.90.0"||self.build.source_inputs!=if self.operation=="context.prepare" {vec!["crates/context-service","crates/context-assembly","crates/context-contracts","Cargo.toml","Cargo.lock","config/context-compaction.json"]}else{vec!["crates/background-service","crates/background-dispatch","crates/background-contracts","crates/engine-service","Cargo.toml","Cargo.lock"]}
    ||!self.build.features.is_empty()||!self.build.runtime_assets.is_empty()
    ||self.limits.max_request_bytes==0||self.limits.max_request_bytes>16*1024*1024
    ||self.limits.max_response_bytes==0||self.limits.max_response_bytes>16*1024*1024
    ||self.limits.timeout_ms==0||self.limits.timeout_ms>30000||self.limits.max_concurrency!=1
+   ||self.operation=="background.plan"&&(self.limits.max_request_bytes>65536||self.limits.max_response_bytes>65536||self.limits.timeout_ms>1000)
    ||self.artifact_sha256.as_ref().is_some_and(|s|s.len()!=64||!s.bytes().all(|c|c.is_ascii_hexdigit())) {
     anyhow::bail!("Engine contract rejected");
   }Ok(())
@@ -90,7 +96,7 @@ pub(crate) fn catalog()->Result<Arc<Catalog>>{
  let Some(root)=live_assets::published_root() else {
   let descriptor:Descriptor=serde_json::from_value(json!({"schema_version":1,"id":"context-assembly","group":"engine-loop","interface_version":1,"implementation_version":"0.1.0","operation":"context.prepare","modes":["live","linked"],"runtime_requirements":[],"build":{"package":"webagent-context-service","source_inputs":["crates/context-service","crates/context-assembly","crates/context-contracts","Cargo.toml","Cargo.lock","config/context-compaction.json"],"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/webagent-context-service","limits":{"max_request_bytes":16777216,"max_response_bytes":16777216,"timeout_ms":30000,"max_concurrency":1}}))?;
   descriptor.validate()?;
-  return Ok(Arc::new(Catalog{revision:"embedded".into(),root:None,entries:BTreeMap::from([(CONTEXT.into(),descriptor)]),withdrawn:Default::default()}));
+  return Ok(Arc::new(Catalog{revision:"embedded".into(),root:None,entries:BTreeMap::from([(CONTEXT.into(),descriptor),(BACKGROUND.into(),serde_json::from_value(json!({"schema_version":1,"id":"background-dispatch","group":"engine-loop","interface_version":1,"implementation_version":"0.1.0","operation":"background.plan","modes":["live","linked"],"runtime_requirements":[],"build":{"package":"webagent-background-service","source_inputs":["crates/background-service","crates/background-dispatch","crates/background-contracts","crates/engine-service","Cargo.toml","Cargo.lock"],"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/webagent-background-service","limits":{"max_request_bytes":65536,"max_response_bytes":65536,"timeout_ms":1000,"max_concurrency":1}}))?)]),withdrawn:Default::default()}));
  };
  static CACHE:OnceLock<StdMutex<(Option<PathBuf>,Option<Arc<Catalog>>) >>=OnceLock::new();
  let mut cache=CACHE.get_or_init(||StdMutex::new((None,None))).lock().unwrap_or_else(|e|e.into_inner());
@@ -149,13 +155,16 @@ pub(crate) fn controls(root:&std::path::Path)->Result<Controls>{
  Err(e)if e.kind()==std::io::ErrorKind::NotFound=>Ok(Controls::default()),Err(e)=>Err(e.into())}
 }
 /// Admission and dispatch both read current controls; there is no built-in fallback on removal.
+static BACKGROUND_FAILURE_UNTIL:OnceLock<StdMutex<Option<std::time::Instant>>>=OnceLock::new();
 static FAILURE_UNTIL:OnceLock<StdMutex<Option<std::time::Instant>>>=OnceLock::new();
 pub(crate) fn available(root:&std::path::Path)->bool {
  if FAILURE_UNTIL.get_or_init(||StdMutex::new(None)).lock().unwrap_or_else(|e|e.into_inner()).is_some_and(|deadline|deadline>std::time::Instant::now()){return false;}
- component_available(root,CONTEXT)
+ component_available(root,CONTEXT)&&component_available(root,BACKGROUND)
 }
 /// Resolve one installed component and its runtime requirements against live controls.
 pub(crate) fn component_available(root:&std::path::Path,id:&str)->bool {
+ if id==CONTEXT&&FAILURE_UNTIL.get_or_init(||StdMutex::new(None)).lock().unwrap_or_else(|e|e.into_inner()).is_some_and(|deadline|deadline>std::time::Instant::now()){return false;}
+ if id==BACKGROUND&&BACKGROUND_FAILURE_UNTIL.get_or_init(||StdMutex::new(None)).lock().unwrap_or_else(|e|e.into_inner()).is_some_and(|deadline|deadline>std::time::Instant::now()){return false;}
  match (controls(root),catalog()) {(Ok(controls),Ok(catalog))=>requirement_available(&catalog,&controls,id),_=>false}
 }
 /// Persist only validated administrator controls through an atomic owning-host write.
@@ -166,21 +175,31 @@ pub(crate) fn save_controls(root:&std::path::Path,current:&Controls)->Result<()>
 }
 /// Save a host-marked pause while preserving accepted input and run revision fencing.
 pub(crate) async fn pause(app:&App,run:&mut Value)->Result<()> {
- run["status"]=json!("paused");run["component_pause"]=json!({"component":CONTEXT,"version":1});
- run["error"]=json!("Context assembly unavailable; work resumes when the component is restored");
+ let component=if component_available(&app.store.root,CONTEXT)&&!component_available(&app.store.root,BACKGROUND){BACKGROUND}else{CONTEXT};
+ run["status"]=json!("paused");run["component_pause"]=json!({"component":component,"version":1});
+ run["error"]=json!("Required engine component unavailable; work resumes when the component is restored");
  app.save(run).await
+}
+/// Recognize safe host-retained pauses; manual controls and uncertain effects stay fenced.
+pub(crate) fn retained_pause(run:&Value)->bool {
+ status(run)=="paused" && run["component_pause"]["version"]==1
+ && matches!(run["component_pause"]["component"].as_str(),Some(CONTEXT|BACKGROUND))
+ && run["uncertain"]!=true && run["pending"]["state"]!="executing"
+ && run["pending"]["external_job"].is_null()
+ && !run["batch"].as_array().into_iter().flatten().any(|item|item["state"]=="executing"
+   || item["pending"]["state"]=="executing" || !item["pending"]["external_job"].is_null())
 }
 /// Resume only host-marked component pauses, with current participation and model authority.
 pub(crate) async fn restore(app:&App,id:&str)->Result<()> {
  if !available(&app.store.root)||app.shutoff().await?||app.active.lock().await.contains_key(id){return Ok(());}
  let mut run=app.run(id).await?;
- if run["uncertain"]==true||run["pending"]["state"]=="executing"||!run["pending"]["external_job"].is_null()||status(&run)!="paused"||run["component_pause"]["version"]!=1||run["component_pause"]["component"]!=CONTEXT{return Ok(());}
+ if !retained_pause(&run){return Ok(());}
  if !app.store.participation_allows_run(&run).await?||!app.run_model_authorized(&run).await {
   run["status"]=json!("stopped");run["component_pause"]=Value::Null;run["error"]=json!("Access changed while engine component was unavailable");
  }else{
   run["status"]=json!("queued");run["component_pause"]=Value::Null;run["error"]=Value::Null;
  }
- app.save(&mut run).await
+ app.save(&mut run).await?;crate::wake::notify(app).await;Ok(())
 }
 /// Adoption attests the catalog held by the consumer, not an arbitrary filesystem pointer.
 pub(crate) fn adoption(root:&std::path::Path,role:&str)->Result<()>{
@@ -199,7 +218,37 @@ pub(crate) fn execution_identity(descriptor:&Descriptor)->(String,String) {
  #[cfg(feature="linked-context")]
  { let _=descriptor;static GENERATION:OnceLock<String>=OnceLock::new();
    let generation=GENERATION.get_or_init(||std::env::current_exe().ok().and_then(|path|std::fs::read(path).ok()).map(|bytes|hex::encode(sha2::Sha256::digest(bytes))).unwrap_or_else(||"linked-build-unavailable".into()));
-   (webagent_context_assembly::IMPLEMENTATION_VERSION.into(),generation.clone()) }
+   (if descriptor.id==BACKGROUND {webagent_background_dispatch::IMPLEMENTATION_VERSION}else{webagent_context_assembly::IMPLEMENTATION_VERSION}.into(),generation.clone()) }
+}
+/// Compare public metadata cases in both optimized modes, requiring live reuse and drain.
+async fn background_smoke()->Result<Vec<Value>> {
+ use webagent_background_contracts::{Request,Task,State,Plan};
+ #[cfg(feature="live-context")]
+ let process=Service{connection:tokio::sync::Mutex::new(None),admission:Arc::new(tokio::sync::Semaphore::new(1)),
+  executable:StdMutex::new(std::env::current_exe()?.with_file_name("webagent-background-service")),
+  limits:Limits{max_request_bytes:65536,max_response_bytes:65536,timeout_ms:1000,max_concurrency:1}};
+ #[cfg(feature="live-context")]let mut pid=None;
+ let mut cases=Vec::new();
+ for time in [100,101] {
+  let input=Request{version:1,now:time,slots:2,tasks:vec![Task{state:State::Queued,active:false,lease_until:0},Task{state:State::Running,active:false,lease_until:101},Task{state:State::Completed,active:false,lease_until:0}]};
+  #[cfg(feature="linked-context")]let plan=webagent_background_dispatch::plan(&input)?;
+  #[cfg(feature="live-context")]let plan:Plan={
+   let reply=process.call("offline-background-smoke",&input,&CancellationToken::new()).await?;
+   if reply["status"]!="success"{anyhow::bail!("Background smoke response");}
+   let current=process.connection.lock().await.as_ref().and_then(|value|value.0.id()).ok_or_else(||anyhow!("Background smoke exited"))?;
+   if pid.is_some_and(|previous|previous!=current){anyhow::bail!("Background smoke reuse");}pid=Some(current);
+   serde_json::from_value(reply["plan"].clone())?
+  };
+  webagent_background_contracts::validate_plan(&input,&plan)?;
+  let expected=Plan{version:1,dispatch:if time==100{vec![0]}else{vec![0,1]},followup:vec![2],retry_ms:if time==100{1000}else{5000}};
+  if plan!=expected{anyhow::bail!("Background smoke policy mismatch");}
+  cases.push(serde_json::to_value(plan)?);
+ }
+ #[cfg(feature="live-context")] {
+  process.release("offline-background-smoke").await?;
+  if let Some((mut child,writer,reader))=process.connection.lock().await.take(){drop(writer);drop(reader);let outcome=tokio::time::timeout(Duration::from_secs(1),child.wait()).await.map_err(|_|anyhow!("Background smoke drain"))??;if !outcome.success(){anyhow::bail!("Background smoke exit");}}
+ }
+ Ok(cases)
 }
 /// Exercise only public deterministic inputs offline; this CLI never opens application state or credentials.
 pub(crate) async fn context_smoke()->Result<Value> {
@@ -245,7 +294,7 @@ pub(crate) async fn context_smoke()->Result<Value> {
   process.release("offline-context-smoke").await?;
   if let Some((mut child,writer,reader))=process.connection.lock().await.take(){drop(writer);drop(reader);tokio::time::timeout(Duration::from_secs(1),child.wait()).await.map_err(|_|anyhow!("Offline service drain timeout"))??;}
  }
- let mut result=json!({"mode":if cfg!(feature="live-context"){"live"}else{"linked"},"equivalence":true,"prepared":cases,"elapsed_us":started.elapsed().as_micros(),"interface_version":1});
+ let mut result=json!({"mode":if cfg!(feature="live-context"){"live"}else{"linked"},"equivalence":true,"prepared":cases,"background_prepared":background_smoke().await?,"elapsed_us":started.elapsed().as_micros(),"interface_version":1});
  #[cfg(feature="linked-context")] {result["implementation_version"]=json!(webagent_context_assembly::IMPLEMENTATION_VERSION);result["service_started"]=json!(false);}
  #[cfg(feature="live-context")] {result["service_reused"]=json!(true);result["service_drained"]=json!(true);}
  Ok(result)
@@ -261,9 +310,9 @@ static SERVICES:OnceLock<StdMutex<Services>>=OnceLock::new();
 fn service(c:&Catalog,d:&Descriptor)->Result<Arc<Service>>{
  let key=crate::digest(&serde_json::to_value(d)?);
  let mut map=SERVICES.get_or_init(||StdMutex::new(BTreeMap::new())).lock().unwrap_or_else(|e|e.into_inner());
- map.retain(|hash,value|hash==&key||Arc::strong_count(value)>1);
- let executable=if let Some(root)=&c.root {root.join("plugins/engine").join(CONTEXT).join(&d.executable)}
- else{PathBuf::from("/usr/local/lib/webagent/engine/context-assembly/webagent-context-service")};
+ map.retain(|hash,value|hash==&key||Arc::strong_count(value)>1||c.entries.values().any(|entry|serde_json::to_value(entry).is_ok_and(|v|crate::digest(&v)==*hash)));
+ let executable=if let Some(root)=&c.root {root.join("plugins/engine").join(&d.id).join(&d.executable)}
+ else{PathBuf::from("/usr/local/lib/webagent/engine").join(&d.id).join(&d.build.package)};
  if let Some(value)=map.get(&key){*value.executable.lock().unwrap_or_else(|e|e.into_inner())=executable;return Ok(value.clone());}
  let value=Arc::new(Service{connection:tokio::sync::Mutex::new(None),admission:Arc::new(tokio::sync::Semaphore::new(16)),executable:StdMutex::new(executable),limits:d.limits.clone()});
  map.insert(key,value.clone());Ok(value)
@@ -288,7 +337,7 @@ impl Service {
   if result.is_err(){*guard=None;}result
  }
  /// Private inherited pipes authenticate the peer; requests cannot select sockets or executables.
- async fn call(&self,run_key:&str,input:&webagent_context_contracts::protocol::PrepareRequest,cancel:&tokio_util::sync::CancellationToken)->Result<Value>{
+ async fn call<T:serde::Serialize>(&self,run_key:&str,input:&T,cancel:&tokio_util::sync::CancellationToken)->Result<Value>{
   use tokio::io::{AsyncBufReadExt,AsyncReadExt,AsyncWriteExt};
   let deadline=tokio::time::Instant::now()+Duration::from_millis(self.limits.timeout_ms);
   let _permit=self.admission.clone().try_acquire_owned().map_err(|_|anyhow!("Engine service saturated"))?;
@@ -319,6 +368,34 @@ impl Service {
   if result.is_err(){*connection=None;}result
  }
 }
+/// Invoke the registered planner and verify its safety contract before host-owned effects.
+pub(crate) async fn background_plan(app:&App,input:&webagent_background_contracts::Request)->Result<webagent_background_contracts::Plan> {
+ webagent_background_contracts::validate_request(input)?;
+ if !component_available(&app.store.root,BACKGROUND){anyhow::bail!("Background component unavailable");}
+ #[cfg(feature="linked-context")]
+ let plan=webagent_background_dispatch::plan(input)?;
+ #[cfg(feature="live-context")]
+ let plan={
+  let catalog=catalog()?;let descriptor=catalog.entries.get(BACKGROUND).ok_or_else(||anyhow!("Background component unavailable"))?;
+  let service=service(&catalog,descriptor)?;
+  let result=async {
+   let response=service.call("background-dispatch",input,&app.stop).await?;
+   if response["status"]!="success"||response["implementation_version"]!=descriptor.implementation_version{anyhow::bail!("Background component response identity");}
+   let plan:webagent_background_contracts::Plan=serde_json::from_value(response["plan"].clone())?;
+   webagent_background_contracts::validate_plan(input,&plan)?;
+   Ok::<_,anyhow::Error>(plan)
+  }.await;
+  match result {Ok(plan)=>plan,Err(error)=>{
+   *service.connection.lock().await=None;
+   *BACKGROUND_FAILURE_UNTIL.get_or_init(||StdMutex::new(None)).lock().unwrap_or_else(|e|e.into_inner())=Some(std::time::Instant::now()+Duration::from_secs(5));
+   return Err(error);
+  }}
+ };
+ webagent_background_contracts::validate_plan(input,&plan)?;
+ if !component_available(&app.store.root,BACKGROUND){anyhow::bail!("Background component withdrawn");}
+ Ok(plan)
+}
+
 /// Cleanup every admitted generation when an executing run yields or terminates.
 pub(crate) async fn release_run(run_key:&str) {
  let services=SERVICES.get().map(|map|map.lock().unwrap_or_else(|e|e.into_inner()).values().cloned().collect::<Vec<_>>()).unwrap_or_default();

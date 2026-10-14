@@ -60,7 +60,7 @@ macro_rules! path_arg {
             let app = match session_app(app, path.session_id()).await {
                 Ok(app) => app, Err(error) => return error.into_response(),
             };
-            let private=matches!(stringify!($inner),"state_inspect_api"|"source_review"|"promotions"|"promotion_review"|"promotion_receipt"|"memory_list"|"memory_delete"|"upload_delete"|"upload_describe"|"promotion_reject");
+            let private=matches!(stringify!($inner),"background_task_metadata_api"|"state_inspect_api"|"source_review"|"promotions"|"promotion_review"|"promotion_receipt"|"memory_list"|"memory_delete"|"upload_delete"|"upload_describe"|"promotion_reject");
             if let Err(error)=guard_access(&app,matches!(stringify!($inner),"memory_delete"|"upload_delete"|"upload_describe"|"promotion_reject"),private){return error.into_response();}
             crate::$inner(State(app), Path(path)).await.into_response()
         }
@@ -119,6 +119,7 @@ async fn direct_message(Extension(app):Extension<App>,Json(body):Json<Value>)->R
     crate::api::direct_messages::send(State(app),Json(body)).await.into_response()
 }
 path_arg!(snapshot => snapshot, String);
+path_arg!(background_task_metadata => background_task_metadata_api, (String,String));
 async fn session_read(Extension(app):Extension<App>,Path(id):Path<String>,Json(body):Json<crate::SessionReadBody>)->Response {
     let app=match session_app(app,&id).await{Ok(app)=>app,Err(error)=>return error.into_response()};
     if let Err(error)=guard_access(&app,true,false){return error.into_response();}
@@ -339,6 +340,7 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{sid}/runs/{rid}/diagnostics/context/{attempt_id}", get(context_snapshot))
         .route("/sessions/{sid}/runs/{rid}/progress", get(progress))
         .route("/sessions/{sid}/runs/{rid}/logs", get(run_logs))
+        .route("/sessions/{sid}/background-tasks/{task_id}", get(background_task_metadata))
         .route("/sessions/{id}", get(snapshot).patch(session_patch).delete(session_recycle))
         .route("/sessions/{id}/purge", post(session_purge))
         .route("/sessions/{id}/restore", post(session_restore))

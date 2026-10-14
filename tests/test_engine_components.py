@@ -11,7 +11,7 @@ class EngineTests(unittest.TestCase):
         return {"schema_version":1,"id":"context-assembly","group":"engine-loop","interface_version":1,"implementation_version":"0.1.0","operation":"context.prepare","modes":["live","linked"],"runtime_requirements":[],"build":{"package":engine.BINARY,"source_inputs":engine.SOURCE_INPUTS,"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/"+engine.BINARY,"limits":{"max_request_bytes":16777216,"max_response_bytes":16777216,"timeout_ms":30000,"max_concurrency":1}}
     def test_structured_smoke_artifact_survives_true_environment_redaction(self):
         import test_admin_build as fixtures
-        proof={"mode":"linked","equivalence":True,"interface_version":1,"prepared":[{},{}],"service_started":False};raw=json.dumps(proof)
+        proof={"mode":"linked","equivalence":True,"interface_version":1,"prepared":[{},{}],"background_prepared":[{},{}],"service_started":False};raw=json.dumps(proof)
         self.assertIn("[redacted]",fixtures.host.scrub(raw,["true"]))
         with tempfile.TemporaryDirectory()as temporary:
             path=Path(temporary)/"linked-smoke-result.json";path.write_text(raw)
@@ -48,13 +48,13 @@ class EngineTests(unittest.TestCase):
         worker.compiler_dependencies.return_value={"src/main.rs"}
         with self.assertRaisesRegex(ValueError,"attestation"):worker.linked_dependencies(Path("linked-target"),files)
     def test_live_optimized_smoke_requires_lifecycle_and_equal_prepared_cases(self):
-        linked={"mode":"linked","equivalence":True,"interface_version":1,"prepared":[{"envelope":"fixture1"},{"envelope":"fixture2"}],"service_started":False}
+        linked={"mode":"linked","equivalence":True,"interface_version":1,"prepared":[{"envelope":"fixture1"},{"envelope":"fixture2"}],"background_prepared":[{},{}],"service_started":False}
         live={**linked,"mode":"live","service_reused":True,"service_drained":True}
         self.assertEqual(executor.Executor.live_smoke(json.dumps(live),linked)["mode"],"live")
         for changed in ({**live,"service_reused":False},{**live,"service_drained":False},{**live,"prepared":[{},{}]}):
             with self.assertRaises(ValueError):executor.Executor.live_smoke(json.dumps(changed),linked)
     def test_optimized_linked_proof_rejects_live_mode_and_failed_equivalence(self):
-        self.assertEqual(executor.Executor.linked_smoke('{"mode":"linked","equivalence":true,"interface_version":1,"prepared":[{},{}],"service_started":false}')["mode"],"linked")
+        self.assertEqual(executor.Executor.linked_smoke('{"mode":"linked","equivalence":true,"interface_version":1,"prepared":[{},{}],"background_prepared":[{},{}],"service_started":false}')["mode"],"linked")
         for value in ({"mode":"live","equivalence":True},{"mode":"linked","equivalence":False},{"mode":"linked"}):
             with self.assertRaisesRegex(ValueError,"smoke"):executor.Executor.linked_smoke(json.dumps(value))
     def test_command_timeout_keeps_scrubbed_output_and_private_inspect_stays_empty(self):
@@ -167,7 +167,7 @@ class EngineTests(unittest.TestCase):
     def test_sealed_binary_is_generation_local_and_tampering_rejected(self):
         with tempfile.TemporaryDirectory()as temporary:
             root=Path(temporary);generation=root/"releases/one";folder=generation/engine.ROOT/engine.ID;folder.mkdir(parents=True);(folder/"component.json").write_text(json.dumps(self.descriptor()))
-            artifact=root/"artifacts/key";artifact.mkdir(parents=True);binary=artifact/engine.BINARY;binary.write_bytes(b'fixture artifact');sha=hashlib.sha256(binary.read_bytes()).hexdigest();output={"build_key":"key","artifact_sha256":sha}
+            artifact=root/"artifacts/key";artifact.mkdir(parents=True);binary=artifact/engine.BINARY;binary.write_bytes(b'fixture artifact');sha=hashlib.sha256(binary.read_bytes()).hexdigest();output={"package":engine.ID,"build_key":"key","artifact_sha256":sha}
             engine.seal(generation,[output],root);engine.seal(generation,[output],root)
             self.assertEqual((folder/'artifact'/engine.BINARY).read_bytes(),b'fixture artifact');self.assertEqual(json.loads((folder/'component.json').read_bytes())["artifact_sha256"],sha)
             binary.write_bytes(b'tampered')
@@ -180,7 +180,7 @@ class EngineTests(unittest.TestCase):
             root=Path(temporary);job=str(uuid.uuid4());manifest=engine.ROOT+engine.ID+"/component.json"
             files={"v3/ui/index.html":(0o644,b"fixture"),manifest:(0o644,json.dumps(self.descriptor()).encode())};blob=release.archive(files,lambda _:None)
             generation=release.stage_assets(root,job,blob,lambda _:None);artifact=root/"artifacts/key";artifact.mkdir(parents=True);binary=artifact/engine.BINARY;binary.write_bytes(b"fixture")
-            output={"build_key":"key","artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest()};engine.seal(generation,[output],root)
+            output={"package":engine.ID,"build_key":"key","artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest()};engine.seal(generation,[output],root)
             self.assertEqual(release.stage_assets(root,job,blob,lambda _:None),generation)
             changed=dict(files);value=self.descriptor();value["implementation_version"]="0.2.0";changed[manifest]=(0o644,json.dumps(value).encode())
             with self.assertRaisesRegex(ValueError,"changed"):release.stage_assets(root,job,release.archive(changed,lambda _:None),lambda _:None)
