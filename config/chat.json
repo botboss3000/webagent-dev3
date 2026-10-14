@@ -3,8 +3,22 @@
     "execution_mode": {
       "default_mode": "auto",
       "confirm_auto_mode": false
+    },
+    "composer": {
+      "keyboard_fade": {
+        "enabled": false,
+        "fade_out_ms": 60,
+        "fade_in_ms": 120,
+        "settle_ms": 80
+      }
     }
   },
   "chat_desktop": {},
-  "chat_mobile": {}
+  "chat_mobile": {
+    "composer": {
+      "keyboard_fade": {
+        "enabled": true
+      }
+    }
+  }
 }

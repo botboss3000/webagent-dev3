@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"Applies the V3 chat surface profile from data/config/chat.json (runtime /state/config/chat.json, or V3_CHAT_UI_CONFIG_PATH), including chat_common, desktop/mobile/widget overlays, and chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"Applies the V3 chat surface profile from data/config/chat.json (runtime /state/config/chat.json, or V3_CHAT_UI_CONFIG_PATH), including chat_common, desktop/mobile/widget overlays, and chat_display.default. Config: chat_common.composer.keyboard_fade controls keyboard opacity transitions through viewport.js; profile overlays apply.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget","/chat_common/composer/keyboard_fade"],"profile_overrides":true}],"opportunities":[]}}
 import { applyBubblePaint } from '../core/bubble-paint.js';
 import { applyChatPillLayout, disposeChatPillLayout } from './chat-pill-config.js';
 import { initFooterHandle } from './footer-handle.js';
@@ -260,7 +260,7 @@ function applyFooter(profile, mode) {
 /** Selects the current profile and updates bubble, transcript, header, and footer presentation. */
 export function applyChatConfig() {
   const profile = currentChatProfile();
-  if (!profile) return;
+  if (!profile) return; window.__chatKeyboardFadeConfigure?.(profile.composer?.keyboard_fade);
   const surface = surfaceName();
   const focused = document.activeElement;
   const inComposer = byId('chat-input-area')?.contains(focused) || focused?.closest('.v3-context-panel:not([hidden]), .v3-chat-model-list:not([hidden])');

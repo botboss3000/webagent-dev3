@@ -95,3 +95,49 @@ test('empty-editor active/idle transitions retain DOM across themes and width ch
   await p.setViewportSize({width:390,height:844});await settle(p);
  }
 });
+
+/** Loads the actual viewport owner with controlled geometry and the public merged-profile settings. */
+async function fadeFixture(t,settings={enabled:true,fade_out_ms:30,fade_in_ms:50,settle_ms:100}) {
+ const p=await fixture(t);await p.evaluate(async()=>{window.fadeVh=844;window.fadeScale=1;Object.defineProperty(visualViewport,'height',{configurable:true,get:()=>fadeVh});Object.defineProperty(visualViewport,'scale',{configurable:true,get:()=>fadeScale});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});});
+ const cfg=config(layout());cfg.chat_common.composer={keyboard_fade:settings};await p.evaluate(async cfg=>api.initChatConfig({config:cfg}),cfg);await focusDraft(p);return p;
+}
+/** Emits a keyboard-like visual-viewport change without changing focus or dispatching native input. */
+async function fadeHeight(p,height){await p.evaluate(h=>{fadeVh=h;visualViewport.dispatchEvent(new Event('resize'));},height);}
+test('keyboard opening/closing fades composer controls while notices, draft and focus survive',async t=>{
+ const p=await fadeFixture(t);await p.evaluate(()=>{const note=document.createElement('button');note.id='approval-probe';note.textContent='Approve';document.querySelector('#chat-above-pill').append(note);});
+ for(const h of [500,844]){
+  await fadeHeight(p,h);assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.hasAttribute('data-keyboard-fading')),true);await p.waitForTimeout(55);
+  assert(Number(await p.locator('#chat-input-row').evaluate(e=>getComputedStyle(e).opacity))<.2);
+  assert.equal(await p.locator('#approval-probe').evaluate(e=>getComputedStyle(e).opacity),'1');
+  const state=await stable(p);assert.equal(state.focused,true);assert.equal(state.parent,true);assert.equal(state.blur,0);assert.equal(state.focus,0);assert.equal(state.value,'retained draft');assert.equal(state.start,2);assert.equal(state.end,7);
+  await p.waitForTimeout(150);assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.hasAttribute('data-keyboard-fading')),false);assert.equal(await p.locator('#chat-input-row').evaluate(e=>getComputedStyle(e).opacity),'1');
+ }
+});
+test('fade configuration disables effects and adopts alternate durations without reparenting',async t=>{
+ const p=await fadeFixture(t,{enabled:false});await fadeHeight(p,500);assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);
+ const cfg=config(layout());cfg.chat_common.composer={keyboard_fade:{enabled:true,fade_out_ms:40,fade_in_ms:90,settle_ms:140}};await p.evaluate(async cfg=>api.initChatConfig({config:cfg}),cfg);await p.waitForTimeout(90);await fadeHeight(p,844);
+ assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations()[0]?.effect.getTiming().duration),40);
+ await p.waitForTimeout(165);assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations()[0]?.effect.getTiming().duration),90);
+ await p.waitForTimeout(120);assert.equal((await stable(p)).blur,0);
+});
+test('reduced motion, desktop, zoom and height jitter bypass keyboard fades',async t=>{
+ const p=await fadeFixture(t);await p.emulateMedia({reducedMotion:'reduce'});await fadeHeight(p,500);assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);
+ await p.emulateMedia({reducedMotion:'no-preference'});await fadeHeight(p,540);assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);
+ await p.evaluate(()=>{fadeScale=1.5;});await fadeHeight(p,300);assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);
+ await p.setViewportSize({width:1200,height:844});await p.evaluate(()=>{fadeScale=1;});await fadeHeight(p,844);assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);
+});
+test('gradual height changes produce one bounded fade and preserve focused OS dismissal',async t=>{
+ const p=await fadeFixture(t);
+ for(const h of [810,760,700,640,560]){await fadeHeight(p,h);await p.waitForTimeout(20);}
+ assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.hasAttribute('data-keyboard-fading')),true);
+ await p.waitForTimeout(180);await fadeHeight(p,844);await p.waitForTimeout(180);assert.equal((await stable(p)).blur,0);assert.equal(await p.locator('#chat-input-row').evaluate(e=>getComputedStyle(e).opacity),'1');
+});
+test('noisy viewport changes cannot keep composer faded beyond the fixed recovery deadline',async t=>{
+ const p=await fadeFixture(t,{enabled:true,fade_out_ms:30,fade_in_ms:50,settle_ms:250});await fadeHeight(p,500);
+ for(let i=0;i<9;i++){await p.waitForTimeout(90);await fadeHeight(p,i%2?520:500);}
+ assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.hasAttribute('data-keyboard-fading')),false);assert.equal(await p.locator('#chat-input-row').evaluate(e=>getComputedStyle(e).opacity),'1');assert.equal((await stable(p)).focused,true);
+});
+test('disabling fade during an animation cancels effects immediately',async t=>{
+ const p=await fadeFixture(t);await fadeHeight(p,500);await p.waitForTimeout(40);const cfg=config(layout());cfg.chat_common.composer={keyboard_fade:{enabled:false}};await p.evaluate(async cfg=>api.initChatConfig({config:cfg}),cfg);
+ assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);assert.equal(await p.locator('#chat-input-row').evaluate(e=>getComputedStyle(e).opacity),'1');assert.equal((await stable(p)).focused,true);
+});

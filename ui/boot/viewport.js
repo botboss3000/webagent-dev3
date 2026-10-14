@@ -16,6 +16,7 @@
     var vv = window.visualViewport;
     function apply() {
       var h = (vv ? vv.height : window.innerHeight);
+      updateComposerFade(h);
       root.style.setProperty('--app-height', h + 'px');
     }
     var keyboardWasOpen = false;
@@ -50,7 +51,6 @@
     }
     function applyAll() { apply(); applyKb(); }
     window.__appHeightApply = apply;
-    applyAll();
     if (vv) {
       vv.addEventListener('resize', applyAll);
       vv.addEventListener('scroll', applyAll);
@@ -101,4 +101,97 @@
     document.addEventListener('beforeinput', engageEditor, true);
     document.addEventListener('input', engageEditor, true);
     document.addEventListener('focusout', function () { setTimeout(applyKb, 0); });
+
+    // @code-index {"version":1,"feature":"composer-keyboard-fade","aliases":["composer fade","keyboard fade"],"purpose":"Fades only composer/footer controls during mobile keyboard-sized viewport changes. Config: data/config/chat.json -> chat_common.composer.keyboard_fade, with desktop/mobile/widget profile overrides; saved settings are adopted on UI config reload.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/composer/keyboard_fade/enabled","/chat_common/composer/keyboard_fade/fade_out_ms","/chat_common/composer/keyboard_fade/fade_in_ms","/chat_common/composer/keyboard_fade/settle_ms"],"profile_overrides":true}],"opportunities":[]}}
+    var fadeSettings = {enabled: false, fade_out_ms: 60, fade_in_ms: 120, settle_ms: 80};
+    var fadeSignature = '', fadeAnimations = [], fadeArea = null;
+    var fadeActive = false, fadeCooling = false, fadeSettleTimer = null, fadeDeadline = null;
+    var fadeHeight = vv ? vv.height : window.innerHeight, fadeStableHeight = fadeHeight;
+    var fadeWidth = window.innerWidth, fadeScale = vv ? vv.scale : 1;
+    var fadeStarted = 0, composerBlurredAt = -Infinity;
+    var fadeReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+    /** Cancels owned opacity effects; never hides, disconnects, blurs or refocuses the editor. */
+    function cancelComposerFade() {
+      clearTimeout(fadeSettleTimer); clearTimeout(fadeDeadline);
+      for (var animation of fadeAnimations) animation.cancel();
+      fadeAnimations = []; fadeArea?.removeAttribute('data-keyboard-fading');
+      fadeArea = null; fadeActive = false; fadeCooling = false;
+      fadeStableHeight = fadeHeight;
+    }
+    /** Returns only pill/footer nodes; notices and the transcript never receive opacity effects. */
+    function composerFadeControls(area) {
+      return ['#chat-input-row', '#chat-footer-row', '#chat-footer-handle']
+        .map(function (selector) { return area.querySelector(selector); }).filter(Boolean);
+    }
+    /** Ends a motion burst and restores each control's current CSS opacity with a short fade-in. */
+    function revealComposerFade(watchdog) {
+      clearTimeout(fadeDeadline); fadeActive = false;
+      fadeCooling = watchdog === true; fadeStableHeight = fadeHeight;
+      if (!fadeArea?.isConnected) { cancelComposerFade(); return; }
+      var controls = composerFadeControls(fadeArea);
+      var current = controls.map(function (node) { return getComputedStyle(node).opacity; });
+      for (var animation of fadeAnimations) animation.cancel();
+      fadeAnimations = []; fadeArea.removeAttribute('data-keyboard-fading');
+      controls.forEach(function (node, index) {
+        var target = getComputedStyle(node).opacity;
+        if (!fadeSettings.fade_in_ms || current[index] === target) return;
+        var effect = node.animate([{opacity: current[index]}, {opacity: target}], {duration: fadeSettings.fade_in_ms, easing: 'ease-out'});
+        effect.onfinish = function () { effect.cancel(); };
+        fadeAnimations.push(effect);
+      });
+    }
+    /** Holds one fade across resize bursts, with a fixed watchdog so noisy events cannot leave controls faded. */
+    function beginComposerFade(area) {
+      var controls = composerFadeControls(area);
+      if (!controls.length || controls.some(function (node) { return typeof node.animate !== 'function'; })) return;
+      var current = controls.map(function (node) { return getComputedStyle(node).opacity; });
+      cancelComposerFade(); fadeArea = area; fadeActive = true; fadeStarted = performance.now();
+      area.setAttribute('data-keyboard-fading', '');
+      controls.forEach(function (node, index) {
+        fadeAnimations.push(node.animate([{opacity: current[index]}, {opacity: 0}], {duration: fadeSettings.fade_out_ms, easing: 'ease-in', fill: 'forwards'}));
+      });
+      // This recovery bound is an invariant, not a user-tunable delay.
+      fadeDeadline = setTimeout(function () { revealComposerFade(true); }, 700);
+    }
+    /** Detects cumulative height changes; rotation, zoom, desktop and browser-chrome jitter bypass the fade. */
+    function updateComposerFade(height) {
+      var width = window.innerWidth, scale = vv ? vv.scale : 1;
+      var input = document.getElementById('chat-input');
+      var area = input?.closest('#chat-input-area');
+      var eligible = fadeSettings.enabled && !fadeReducedMotion.matches && width <= 800
+        && width === fadeWidth && scale === 1 && fadeScale === 1
+        && area?.isConnected && !area.closest('.wa-chat-window');
+      if (!eligible || fadeArea && fadeArea !== area) {
+        cancelComposerFade(); fadeStableHeight = height;
+      } else if (height !== fadeHeight) {
+        var composerEngaged = document.activeElement === input || performance.now() - composerBlurredAt < 700;
+        if (!fadeCooling && !fadeActive && composerEngaged && Math.abs(height - fadeStableHeight) > 120) beginComposerFade(area);
+        clearTimeout(fadeSettleTimer);
+        var remainingOut = fadeActive ? Math.max(0, fadeSettings.fade_out_ms - (performance.now() - fadeStarted)) : 0;
+        fadeSettleTimer = setTimeout(function () {
+          if (fadeActive) revealComposerFade(false);
+          fadeStableHeight = fadeHeight; fadeCooling = false;
+        }, Math.max(fadeSettings.settle_ms, remainingOut));
+      }
+      fadeHeight = height; fadeWidth = width; fadeScale = scale;
+    }
+    /** Receives the merged chat profile from chat-config; invalid durations fall back within bounded ranges. */
+    window.__chatKeyboardFadeConfigure = function (raw) {
+      raw = raw && typeof raw === 'object' ? raw : {};
+      function duration(key, fallback, maximum) {
+        return typeof raw[key] === 'number' && Number.isFinite(raw[key]) && raw[key] >= 0 && raw[key] <= maximum ? raw[key] : fallback;
+      }
+      var next = {enabled: raw.enabled === true, fade_out_ms: duration('fade_out_ms', 60, 300),
+        fade_in_ms: duration('fade_in_ms', 120, 400), settle_ms: duration('settle_ms', 80, 250)};
+      var signature = JSON.stringify(next);
+      if (signature === fadeSignature) return;
+      cancelComposerFade(); fadeSettings = next; fadeSignature = signature;
+    };
+    document.addEventListener('focusout', function (event) {
+      if (event.target.id === 'chat-input') composerBlurredAt = performance.now();
+    });
+    fadeReducedMotion.addEventListener('change', cancelComposerFade);
+    window.addEventListener('pagehide', cancelComposerFade);
+    applyAll();
   })();
