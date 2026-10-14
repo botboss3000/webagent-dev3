@@ -7275,3 +7275,23 @@ async fn worker_control_restores_saved_state_after_launcher_reset() {
                    if shutoff { b"1" } else { b"0" });
     }
 }
+
+/// Exercise normal encrypted run-view storage before bounded public pause projection.
+/// Modern views omit private markers; both component kinds and manual pauses stay distinct.
+#[tokio::test]
+async fn background_component_pause_survives_modern_persisted_view() {
+ let (_root,app)=fixture().await;let sid=conversation(&app).await;let id=queued(&app,&sid).await;
+ for component in [Some(engine_components::BACKGROUND),Some(engine_components::CONTEXT),None] {
+  let mut run=app.run(&id).await.unwrap();run["status"]=json!("paused");
+  run["component_pause"]=component.map(|id|json!({"version":1,"component":id,"private_field":"must-not-project"})).unwrap_or(Value::Null);
+  run["code_index_retrieval_attempted"]=json!(false);run["code_index_retrieval_status"]=json!("not_attempted");run["code_index_retrieval_stage"]=json!("not_started");
+  app.save(&mut run).await.unwrap();
+  let views=app.store.recent_runs(Some(&sid)).await.unwrap();assert_eq!(views.len(),1);
+  assert!(views[0]["model"].is_object());assert!(views[0]["code_index_retrieval_attempted"].is_boolean());
+  assert!(views[0]["code_index_retrieval_status"].is_string());assert!(views[0]["code_index_retrieval_stage"].is_string());
+  assert!(views[0]["component_pause"].is_null(),"fixture must traverse a modern stored view without its private marker");
+  let projected=public_runs(&app,views).await.unwrap();assert_eq!(projected.len(),1);
+  let expected=component.map(|id|json!({"version":1,"component":id,"reason":"component_unavailable"})).unwrap_or(Value::Null);
+  assert_eq!(projected[0]["component_pause"],expected);assert_eq!(projected[0]["status"],"paused");
+ }
+}

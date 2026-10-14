@@ -188,12 +188,12 @@ fn public_run_model(run: &Value) -> Value {
 async fn public_runs(app:&App,views:Vec<Value>)->Result<Vec<Value>>{
     let mut result=Vec::with_capacity(views.len());
     for view in views{
-        // Old encrypted views may lack a model projection; read the owning run
-        // through Store, then project only safe fields without rewriting its state.
+        // Paused views need the owning record's private component marker; old
+        // views need its model fields. Read through Store and project only safe fields.
         let has_retrieval_marker = view["code_index_retrieval_attempted"].is_boolean()
             && view["code_index_retrieval_status"].as_str().is_some()
             && view["code_index_retrieval_stage"].as_str().is_some();
-        if view["model"].is_null() || !has_retrieval_marker{
+        if view["status"]=="paused" || view["model"].is_null() || !has_retrieval_marker{
             let run=app.run(view["id"].as_str().ok_or_else(||anyhow!("Run id missing"))?).await?;
             result.push(public_run(&run));
         }else{result.push(public_run(&view));}
