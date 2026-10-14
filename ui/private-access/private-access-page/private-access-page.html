@@ -16,7 +16,9 @@
 <div id="login-title">Sign in</div>
 <div id="register-name-row" hidden><input id="register-name" name="display_name" placeholder="Display name" aria-label="Display name" maxlength="128" autocomplete="name" disabled></div>
 <input id="login-username" name="username" placeholder="Username" aria-label="Username" autocomplete="username" required>
-<input id="login-password" name="password" placeholder="Password" aria-label="Password" type="password" autocomplete="current-password" required>
+<input id="login-password" name="password" placeholder="Password" aria-label="Password" type="password" autocomplete="current-password" aria-describedby="login-password-error" required>
+<!-- app.js owns credential feedback; keep it directly below the password field. -->
+<p id="login-password-error" class="password-error" role="status" aria-live="polite" hidden></p>
 <button id="login-submit" type="submit">Sign in</button>
 <button id="register-toggle" type="button">Create an account</button>
 <button id="guest-login" type="button" hidden>Continue as guest</button>

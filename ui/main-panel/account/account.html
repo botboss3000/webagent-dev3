@@ -9,7 +9,9 @@
           </form>
           <form id="account-password-form" class="account-section">
             <h2 class="account-section-title">Password</h2>
-            <div class="account-field"><label for="account-current-password">Current password</label><input id="account-current-password" type="password" autocomplete="current-password" required></div>
+            <div class="account-field"><label for="account-current-password">Current password</label><input id="account-current-password" type="password" autocomplete="current-password" aria-describedby="account-current-password-error" required>
+              <!-- app.js reports rejected current passwords here without signing out. -->
+              <p id="account-current-password-error" class="password-error" role="status" aria-live="polite" hidden></p></div>
             <div class="account-field"><label for="account-new-password">New password</label><input id="account-new-password" type="password" autocomplete="new-password" minlength="6" required></div>
             <div class="account-field"><label for="account-confirm-password">Confirm new password</label><input id="account-confirm-password" type="password" autocomplete="new-password" minlength="6" required></div>
             <div class="account-row"><button class="account-btn account-btn-primary">Change password</button><span id="account-password-status" class="account-status" role="status">Changing your password signs out all sessions.</span></div>

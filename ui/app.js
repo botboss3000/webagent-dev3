@@ -212,7 +212,7 @@ const note=(text,source='')=>{
   noticeSource=visibleText?source:'';
 };
 const clearNoticeFrom=source=>{if(noticeSource===source)note('');};
-async function api(path,method='GET',body){const response=await fetch('/api/v3'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...(method==='GET'?{}:{'x-csrf-token':csrf})},...(body===undefined?{}:{body:JSON.stringify(body)})});const data=await response.json().catch(()=>({}));if(!response.ok){if(response.status===401)out();const error=Error(data.error||data.message||'Request failed ('+response.status+')');error.status=response.status;throw error;}return data;}
+async function api(path,method='GET',body){const response=await fetch('/api/v3'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...(method==='GET'?{}:{'x-csrf-token':csrf})},...(body===undefined?{}:{body:JSON.stringify(body)})});const data=await response.json().catch(()=>({}));if(!response.ok){if(response.status===401&&path!=='/auth/login')out();const error=Error(data.error||data.message||'Request failed ('+response.status+')');error.status=response.status;throw error;}return data;}
 const guard=fn=>async event=>{event?.preventDefault();try{await fn(event);note('');}catch(error){note(error.message);}};
 const chat = await mountChatPanel({request:api, guard, note, clearNoticeFrom, keyId, forgetKey:key=>ids.delete(key), refresh, getState:()=>state, getAgentId:()=>agentId, getIdentity:()=>accountMe});
 await loadMainPages();
@@ -409,10 +409,32 @@ async function mountAgentModels(){
     }
   }
 }
+// A rejected sign-in is a credential error, not expiry of an authenticated session.
+// @code-index {"version":1,"feature":"password-error-feedback","aliases":["incorrect password","sign-in error"],"purpose":"Keep credential forms open and report errors below their password fields; error feedback is an accessibility invariant.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Credential rejection must remain visible and cannot be hidden by a preference."}}
+/** Set an inline password error and its accessible invalid/description state. */
+function passwordError(fieldId,errorId,message=''){
+  const field=$(fieldId);
+  let error=$(errorId);
+  // An older cached form partial can coexist with the newly published script.
+  if(!error){
+    error=document.createElement('p');error.id=errorId;error.className='password-error';
+    error.setAttribute('role','status');error.setAttribute('aria-live','polite');field.after(error);
+  }
+  const descriptions=new Set((field.getAttribute('aria-describedby')||'').split(/\s+/).filter(Boolean));
+  descriptions.add(errorId);field.setAttribute('aria-describedby',[...descriptions].join(' '));
+  error.textContent=message;error.hidden=!message;
+  if(message)field.setAttribute('aria-invalid','true');else field.removeAttribute('aria-invalid');
+}
+for(const [field,error]of [['login-password','login-password-error'],['account-current-password','account-current-password-error']]){
+  $(field).addEventListener('input',()=>passwordError(field,error));
+}
+$('login-username').addEventListener('input',()=>passwordError('login-password','login-password-error'));
 // Registration mirrors V2's mode switch; V3 retains independent cookie authentication.
 let registerMode=false;
 $('register-toggle').onclick=()=>{
   registerMode=!registerMode;
+  passwordError('login-password','login-password-error');
+  $('registration-status').classList.remove('is-error');
   $('login-title').textContent=registerMode?'Create account':'Sign in';
   $('login-submit').textContent=registerMode?'Create account':'Sign in';
   $('register-toggle').textContent=registerMode?'Back to sign in':'Create an account';
@@ -426,6 +448,8 @@ $('register-toggle').onclick=()=>{
 $('login-form').onsubmit=async event=>{
   event.preventDefault();
   const submit=$('login-submit');submit.disabled=true;
+  passwordError('login-password','login-password-error');
+  $('registration-status').classList.remove('is-error');
   $('registration-status').textContent=registerMode?'Creating account…':'Signing in…';
   try{
     const data=new FormData($('login-form'));
@@ -439,7 +463,15 @@ $('login-form').onsubmit=async event=>{
     }
     csrf=result.csrf_token;$('login-form').reset();await boot();
     $('registration-status').textContent='';
-  }catch(error){$('registration-status').textContent=error.message;}
+  }catch(error){
+    if(!registerMode&&error.status===401){
+      $('registration-status').textContent='';
+      passwordError('login-password','login-password-error','Incorrect username or password. Please try again.');
+    }else{
+      $('registration-status').classList.add('is-error');
+      $('registration-status').textContent=error.message;
+    }
+  }
   finally{submit.disabled=false;}
 };
 const accountMenu=$('user-dropdown-menu');
@@ -551,9 +583,12 @@ $('account-session-policy-form').onsubmit=async event=>{
 $('account-password-form').onsubmit=async event=>{
   event.preventDefault();
   const status=$('account-password-status');
+  passwordError('account-current-password','account-current-password-error');
+  status.classList.remove('is-error');status.textContent='';
   const current_password=$('account-current-password').value;
   const new_password=$('account-new-password').value;
   if(new_password!==$('account-confirm-password').value){
+    status.classList.add('is-error');
     status.textContent='New passwords do not match.';
     return;
   }
@@ -562,7 +597,11 @@ $('account-password-form').onsubmit=async event=>{
     $('account-password-form').reset();
     out();
     note('Password changed. Sign in again.');
-  }catch(error){status.textContent=error.message;}
+  }catch(error){
+    if(error.status===403&&error.message==='Current password is incorrect'){
+      passwordError('account-current-password','account-current-password-error','Current password is incorrect. Please try again.');
+    }else{status.classList.add('is-error');status.textContent=error.message;}
+  }
 };
 const mobileLayout=matchMedia('(max-width:800px)');
 let mobileView=initialTab==='account'?'main':new URL(location.href).searchParams.has('session_id')?'chat':'main';

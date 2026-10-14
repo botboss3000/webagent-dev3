@@ -197,5 +197,8 @@ body.app-restricted #session-new-header-btn { display: none !important; }
 .private-access-sign-in #register-toggle {background:transparent;color:var(--accent);font-size:12px;}
 #login-title {color:var(--fg-2);font-weight:600;font-size:13px;}
 #registration-status {color:var(--fg-3);font-size:12px;margin:0;}
+/* app.js toggles error state without collapsing the sign-in host. */
+#registration-status.is-error, .private-access-sign-in .password-error {color:var(--danger);font-size:12px;margin:0;}
+.private-access-sign-in .password-error[hidden] {display:none;}
 body.app-restricted #app {display:none!important;}
 .private-access-glow {max-width:100%;}
