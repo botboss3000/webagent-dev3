@@ -17,6 +17,8 @@
       var h = (vv ? vv.height : window.innerHeight);
       root.style.setProperty('--app-height', h + 'px');
     }
+    var keyboardWasOpen = false;
+    var keyboardDismissed = false;
     function applyKb() {
       if (!document.body) return;
       var isMobile = window.innerWidth <= 800;       // mirrors __isMobileChatLayout / the CSS breakpoint
@@ -25,6 +27,12 @@
       var editable = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
       // Keyboards are ~250px+; a 120px floor clears browser-chrome jitter.
       var open = isMobile && editable && (window.innerHeight - vvh) > 120;
+      // The OS keyboard-dismiss control can leave the composer focused. Some
+      // mobile browsers briefly report a shrunken viewport again during the
+      // hide animation; latch that dismissal until the user re-engages an editor.
+      if (keyboardWasOpen && !open && editable) keyboardDismissed = true;
+      keyboardWasOpen = open;
+      open = open && !keyboardDismissed;
       document.body.classList.toggle('kb-open', open);
       // hide-header-on-keyboard threshold check. When the toggle is ON and
       // threshold=0 we always show the hidden state; with a positive threshold
@@ -74,6 +82,7 @@
         || target.isContentEditable;
     }
     document.addEventListener('focusin', function (event) {
+      if (needsMobileKeyboardLock(event.target)) keyboardDismissed = false;
       apply();       // update --app-height NOW so iOS Safari's auto-scroll
       applyKb();     // doesn't overshoot before the rAF loop kicks in
       // This lock exists only for a mobile soft keyboard. Running it for every
