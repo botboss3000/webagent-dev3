@@ -117,6 +117,7 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
         }
         let snapshot=live_assets::catalog(&app.abilities);
         let _=live_assets::record_adoption(&app.store.root,"loop",&snapshot);
+        let _=crate::engine_components::adoption(&app.store.root,"loop");
         progress.at(Stage::Heartbeat);
         if now().saturating_sub(last_heartbeat)>=2 {
             if let Err(error)=app.store.write_loop_heartbeat(&owner).await {
@@ -161,6 +162,10 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
                         }
                         continue;
                     }
+                    if status(&view) == "paused" {
+                        if let Err(_)=crate::engine_components::restore(&user_app,&id).await {tracing::warn!("Engine component restoration deferred");}
+                        continue;
+                    }
                     if status(&view) == "waiting_approval" {
                         if let Err(error)=requeue_auto_approval(&user_app,&id).await {
                             tracing::warn!(run_id=%id,"Auto approval reconciliation deferred: {error}");
@@ -168,6 +173,10 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
                         continue;
                     }
                     if status(&view) != "queued" {continue;}
+                    if !crate::engine_components::available(&user_app.store.root) {
+                        if let Ok(mut run)=user_app.run(&id).await {let _=crate::engine_components::pause(&user_app,&mut run).await;}
+                        continue;
+                    }
                     progress.at(Stage::Claim);
                     let mut run = match user_app.run(&id).await {
                         Ok(r) => r,

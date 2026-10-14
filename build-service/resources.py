@@ -3,9 +3,9 @@
 Config: protected build-service.json -> scheduler. Estimates govern admission,
 not per-task hard memory limits. Insufficient reclaim waits for intervention.
 """
-import copy,json,math,os,threading,time
+import copy,json,math,os,threading,time,re
 from pathlib import Path
-PARKABLE={"compile_test","compile_release","plugin_compile"}
+PARKABLE={"compile_test","compile_release","compile_linked","plugin_compile"}
 ESTIMATES={"engine":4*1024**3,"plugin":2*1024**3,"test":512*1024**2,"package":512*1024**2,"dependency":512*1024**2}
 def host_sample():
     """Observe host headroom and pressure without reading any application state."""
@@ -26,20 +26,54 @@ class Resources:
         """Restore measured history and fence unfinished phases for explicit recovery."""
         self.runner=runner;self.policy=policy or{};self.enabled=self.policy.get("mode")=="enforce"
         self.clock=clock;self.sampler=sampler;self.lock=threading.RLock();self.condition=threading.Condition(self.lock)
-        self.stop=threading.Event();self.rows={};self.profiles={};self.controls={};self.host=sampler()
+        self.stop=threading.Event();self.rows={};self.profiles={};self.controls={};self.profile_migrations={};self.host=sampler()
         self.folder=Path(state)/"scheduler";self.folder.mkdir(mode=0o700,exist_ok=True)
         self.path=self.folder/"resources.json"
         if self.path.is_symlink():raise PermissionError("Resource metadata symlink")
         if self.path.exists():
-            value=json.loads(self.path.read_bytes());self.profiles=value.get("profiles",{});self.controls=value.get("controls",{})
+            value=json.loads(self.path.read_bytes());self.profiles=value.get("profiles",{});self.controls=value.get("controls",{});self.profile_migrations=value.get("profile_migrations",{})
             # Recovery never automatically thaws or reruns an unclassified process.
             for name,row in value.get("phases",{}).items():
                 if row["state"]not in {"finished","failed"}:
                     row["state"]="recovery_required";row["revision"]=row.get("revision",0)+1
                     row["paused_at"]=None;row["pause_timing_unconfirmed"]=True
                 self.rows[name]=row
+        self.migrate_test_profiles()
+        self.restore_diagnostic_profiles(state)
         self.initialized=False;self.last_save=0.;self.pressure_since=None;self.stable_since=None;self.cpu_budget=max(1,(os.cpu_count()or 1)-1);self.last_cpu_adjust=0.;self.last_cpu_recovery=0.
         self.thread=None
+    def migrate_test_profiles(self):
+        """Split old mixed test history by actual terminal phase, preserving original samples and rows."""
+        if self.profile_migrations.get("test-phase-split-v1"):return
+        old=self.profiles.get("engine:rust1.90:test",[])
+        if old:self.profiles["legacy:engine:rust1.90:test:mixed"]=list(old)
+        runtime=[];compilation=list(self.profiles.get("engine:rust1.90:compile_test",[]))
+        for row in self.rows.values():
+            if row.get("profile")!="engine:rust1.90:test":continue
+            if row.get("phase")=="compile_test":
+                row["original_profile"]=row["profile"];row["profile"]="engine:rust1.90:compile_test"
+                if row.get("state")=="finished"and row.get("metrics",{}).get("peak_memory",0)>0:compilation.append(row["metrics"]["peak_memory"])
+            elif row.get("phase")=="test"and row.get("state")=="finished"and row.get("metrics",{}).get("peak_memory",0)>0:runtime.append(row["metrics"]["peak_memory"])
+        self.profiles["engine:rust1.90:test"]=runtime[-20:]
+        self.profiles["engine:rust1.90:compile_test"]=compilation[-20:]
+        self.profile_migrations["test-phase-split-v1"]=True
+
+    @staticmethod
+    def diagnostic_check(text):
+        """Recognize completed Rust diagnostics, never killed, OOM, timeout or interrupted phases."""
+        lowered=text.lower()
+        return "could not compile"in lowered and ("error["in lowered or "error:"in lowered)and not any(word in lowered for word in ("sigkill","signal: 9","killed","out of memory","oom","timed out","timeout","cancelled","interrupted"))
+    def restore_diagnostic_profiles(self,state):
+        """Recover matching measured check peaks from durable failed-check receipts without changing claims."""
+        for row in self.rows.values():
+            if row.get("state")!="failed"or row.get("phase")!="compile_test"or row.get("profile")!="engine:rust1.90:check"or not re.fullmatch(r"[a-f0-9-]{36}",row.get("job_id","")):continue
+            path=Path(state)/(row["job_id"]+".json")
+            if path.is_symlink()or not path.is_file()or path.stat().st_size>2*1024*1024:continue
+            value=json.loads(path.read_bytes());peak=row.get("metrics",{}).get("peak_memory",0)
+            if value.get("status")=="failed"and self.diagnostic_check(value.get("log",""))and peak>0:
+                values=self.profiles.setdefault(row["profile"],[])
+                if peak not in values:values.append(peak)
+
     def start(self):
         """Run monitoring independently of broker request locks and frozen compiler groups."""
         if self.thread is None:
@@ -51,7 +85,7 @@ class Resources:
         if self.thread is not None:self.thread.join(timeout=2)
     def persist(self):
         """Atomically retain bounded resource profiles and phase identities outside application storage."""
-        value={"version":1,"profiles":self.profiles,"phases":self.rows,"controls":self.controls}
+        value={"version":1,"profiles":self.profiles,"phases":self.rows,"controls":self.controls,"profile_migrations":self.profile_migrations}
         temporary=self.path.with_suffix(".new")
         if temporary.is_symlink():raise PermissionError("Resource metadata replaced")
         fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
@@ -71,10 +105,18 @@ class Resources:
         if len(active)>=self.policy.get("max_phases",4):return False
         remaining=sum(max(0,r["estimate"]-r.get("metrics",{}).get("memory",0))for r in active if r["state"]in {"admitted","running"})
         return self.host["available"]-self.reserve()>=estimate+remaining and not any(r["state"]in {"recovery_required","waiting_intervention"}for r in self.rows.values())
-    def enter(self,name,job,phase,profile,kind):
+    def enter(self,name,job,phase,profile,kind,timeout=None,hard_cap=None):
         """Wait for measured admission outside the broker lock; revocation still interrupts waiting."""
-        estimate=self.estimate(profile,kind)
+        if hard_cap is not None and (type(hard_cap)is not int or hard_cap!=4026531840 or not((phase in {"compile_test","compile_release","compile_linked"}and kind=="engine")or(phase=="package"and kind=="package"))):raise ValueError("Unsupported enforced phase memory cap")
+        estimate=min(self.estimate(profile,kind),hard_cap)if hard_cap is not None else self.estimate(profile,kind);deadline=time.monotonic()+timeout if timeout is not None else None
+        deadline_at=time.time()+timeout if timeout is not None else None
+        progress=getattr(self.runner,"resource_progress",lambda _:None)
         with self.condition:
+            def report():
+                """Persist progress outside the resource lock to preserve broker/resource lock ordering."""
+                self.condition.release()
+                try:progress(job)
+                finally:self.condition.acquire()
             if job.get("revoked")or job.get("lease_until",float("inf"))<=time.time():raise PermissionError("Build authority expired")
             component=job.get("artifact_component","engine"if kind=="engine"else profile)
             def eligible():
@@ -82,15 +124,20 @@ class Resources:
                 conflict=any(r.get("component")==component and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
                 return not conflict and self.can_admit(estimate)
             while self.enabled and not eligible():
-                if self.stop.is_set()or job.get("revoked")or job.get("lease_until",float("inf"))<=time.time():raise PermissionError("Build admission cancelled or authorization expired")
-                job["resource_waiting"]="headroom";self.condition.wait(.5)
+                if deadline is not None and time.monotonic()>=deadline:
+                    job.pop("resource_waiting",None);report();raise TimeoutError("Resource admission exceeded remaining check timeout")
+                if self.stop.is_set()or job.get("revoked")or job.get("lease_until",float("inf"))<=time.time():
+                    job.pop("resource_waiting",None);report();raise PermissionError("Build admission cancelled or authorization expired")
+                waiting={"phase":phase,"reason":"headroom","estimate_bytes":estimate,"available_bytes":self.host["available"],"reserve_bytes":self.reserve(),"deadline_at":deadline_at}
+                if job.get("resource_waiting")!=waiting:job["resource_waiting"]=waiting;report()
+                self.condition.wait(min(.5,max(0,deadline-time.monotonic()))if deadline is not None else .5)
             if self.stop.is_set():raise PermissionError("Scheduler stopping")
             if not self.initialized and self.enabled:
                 self.runner.resource_request({"operation":"initialize"});self.initialized=True
             job.pop("resource_waiting",None)
             now=self.clock()
-            self.rows[name]={"job_id":job["job_id"],"phase":phase,"profile":profile,"kind":kind,"component":component,"estimate":estimate,"priority":job.get("priority",0),"state":"admitted","revision":0,"started_at":time.time(),"started":now,"paused_seconds":0.,"paused_at":None,"metrics":{},"container_id":None}
-            self.persist()
+            self.rows[name]={"job_id":job["job_id"],"phase":phase,"profile":profile,"kind":kind,"component":component,"estimate":estimate,"hard_cap":hard_cap,"priority":job.get("priority",0),"state":"admitted","revision":0,"started_at":time.time(),"started":now,"paused_seconds":0.,"paused_at":None,"metrics":{},"container_id":None}
+            self.persist();report()
     def attached(self,name,identity):
         """Bind the new phase to its exact container identity before the monitor controls it."""
         with self.condition:
@@ -100,14 +147,15 @@ class Resources:
         with self.lock:
             row=self.rows.get(name,{})
             return row.get("paused_seconds",0.)+(self.clock()-row["paused_at"]if row.get("paused_at")is not None else 0.)
-    def finish(self,name,success):
+    def finish(self,name,success,diagnostic_complete=False):
         """Retain a measured phase peak and wake eligible unrelated work."""
         with self.condition:
             row=self.rows[name]
             if row.get("paused_at")is not None:row["paused_seconds"]+=self.clock()-row["paused_at"];row["paused_at"]=None
             row["state"]="finished"if success else"failed";row["finished"]=self.clock()
             peak=row.get("metrics",{}).get("peak_memory",0)
-            if peak>0 and success:self.profiles[row["profile"]]=(self.profiles.get(row["profile"],[])+[peak])[-20:]
+            row["diagnostic_complete"]=diagnostic_complete
+            if peak>0 and (success or diagnostic_complete):self.profiles[row["profile"]]=(self.profiles.get(row["profile"],[])+[peak])[-20:]
             completed=sorted((n for n,r in self.rows.items()if r["state"]in {"finished","failed"}),key=lambda n:self.rows[n].get("finished",0))
             for old in completed[:-64]:del self.rows[old]
             if len(self.profiles)>512:self.profiles={k:self.profiles[k]for k in sorted(self.profiles)[-512:]}

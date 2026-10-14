@@ -16,6 +16,13 @@ class CacheTests(unittest.TestCase):
         (self.artifacts/"webagent-v3").write_bytes(b"verified compiler output")
         registry=self.artifacts/"optimization-cargo/registry";registry.mkdir(parents=True);(registry/"cache").write_bytes(b"verified registry")
         tests=self.artifacts/"tests";tests.mkdir();(tests/"webagent_v3-0123456789abcdef").write_bytes(b"verified test output")
+        support=self.artifacts/"test-support/debug/webagent-context-service";support.parent.mkdir(parents=True);support.write_bytes(b"debug official service")
+        service=tests/"service-0123456789abcdef";service.write_bytes(b"integration service")
+        def entry(path,target,source,kind):
+            return {"file":path.relative_to(self.artifacts).as_posix(),"sha256":hashlib.sha256(path.read_bytes()).hexdigest(),"package_id":"official","target_name":target,"source_path":source,"kind":kind}
+        import json
+        manifest={"schema_version":1,"tests":[entry(tests/"webagent_v3-0123456789abcdef","webagent-v3","/build/src/main.rs",["bin"]),entry(service,"service","/build/crates/context-service/tests/service.rs",["test"])],"support":{**entry(support,"webagent-context-service","/build/crates/context-service/src/main.rs",["bin"]),"destination":"target/debug/webagent-context-service","profile":"debug"}}
+        (self.artifacts/"test-manifest.json").write_text(json.dumps(manifest))
         self.worker.retain_engine(self.job,self.blob,{"/build/src/main.rs","/build/config/embedded.json"},self.worker.artifact_hashes(self.artifacts))
     def tearDown(self):
         """Remove only this test's private artifact/state directory."""
@@ -100,7 +107,7 @@ class CacheTests(unittest.TestCase):
         import tarfile
         dockerfile=(Path(__file__).parents[1]/"Dockerfile").read_text()
         blob=fixtures.context(extra={**self.extra,"v3/Dockerfile":dockerfile})
-        for name in ("core-inputs.txt","webagent-mcp","webagent-diagnostics","webagent-optimization"):
+        for name in ("core-inputs.txt","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-context-service"):
             (self.artifacts/name).write_bytes(b"verified output")
         folder=self.artifacts/"modules";folder.mkdir();(folder/"descriptor.json").write_bytes(b"verified module")
         for role in ("api","loop"):
@@ -111,7 +118,7 @@ class CacheTests(unittest.TestCase):
                 recipe=archive.extractfile("v3/Dockerfile").read().decode()
                 self.assertIn("FROM scratch AS tested_builder"if role=="loop"else"FROM "+module.RUST+" AS tested_builder",recipe)
             self.assertNotIn("tests/webagent_v3-0123456789abcdef",names)
-            if role=="loop":self.assertEqual(names,{"webagent-v3","core-inputs.txt"})
+            if role=="loop":self.assertEqual(names,{"webagent-v3","core-inputs.txt","webagent-context-service"})
             else:
                 self.assertIn("optimization-cargo/registry/cache",names);self.assertIn("modules/descriptor.json",names)
     def test_registry_or_test_tampering_is_rejected(self):

@@ -1,6 +1,10 @@
 //! The v3 executable has three roles: API (accepts work), loop (executes it),
 //! and health (checks that the loop is alive). Start with docs/code-tour.md
 //! for a plain-language path from a message to its single published reply.
+#[cfg(all(feature="linked-context",feature="live-context"))]
+compile_error!("Choose exactly one engine mode: linked-context or live-context");
+#[cfg(not(any(feature="linked-context",feature="live-context")))]
+compile_error!("Choose an engine mode: linked-context or live-context");
 #[path = "access/mod.rs"] mod access;
 #[path = "access/policy.rs"] mod access_policy;
 #[path = "access/capabilities.rs"] mod capabilities;
@@ -25,6 +29,8 @@ mod background_followup;
 mod followup_queue;
 mod abilities;
 mod live_assets;
+mod engine_components;
+mod engine_sandbox;
 mod ability_plugins;
 mod optimization;
 mod mcp;

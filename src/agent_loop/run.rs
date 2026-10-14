@@ -275,13 +275,17 @@ pub(crate) async fn settle_followup_interrupt(app: &App, run: &mut Value) -> Res
     crate::followup_queue::finish_interrupt(app, run).await
 }
 
+/// Release disposable component accounting whenever an execution yields or terminates.
 pub(crate) async fn execute_run(
     app: App,
     id: String,
     generation: String,
     cancel: CancellationToken,
 ) -> Result<()> {
-    Box::pin(execute_run_inner(app,id,generation,cancel)).await
+    let run_key=format!("{id}:{generation}");
+    let result=Box::pin(execute_run_inner(app,id,generation,cancel)).await;
+    crate::engine_components::release_run(&run_key).await;
+    result
 }
 async fn execute_run_inner(app:App,id:String,generation:String,cancel:CancellationToken)->Result<()> {
     // Bind actor authority from the sealed run even when recovery/direct callers
@@ -740,12 +744,18 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                 selection: &selection, max_bytes: model_ceiling,
                 compaction: &compaction_config,
             };
-            let prepared = context_assembly::prepare_incremental(assembly_request, &mut context_accounting);
+            if !crate::engine_components::available(&app.store.root) {
+                crate::engine_components::pause(&app,&mut run).await?;return Ok(());
+            }
+            let prepared = crate::engine_components::prepare(&app,&run,assembly_request,&mut context_accounting,&cancel).await;
             let assembly_diagnostic=diagnostics::assembly(&app.store,&run,&assembly_request,&prepared);
             let assembled = match prepared {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     if let Some(report)=assembly_diagnostic {run["latest_context_assembly"]=report;}
+                    if error.downcast_ref::<context_assembly::Failure>().is_none() {
+                        crate::engine_components::pause(&app,&mut run).await?;return Ok(());
+                    }
                     let (code,stage)=context_assembly::failure_code(&error);
                     run["status"] = json!("paused");
                     run["error"] = json!(format!("Context assembly paused: {stage}/{code}; review this run"));
@@ -810,6 +820,8 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                     run["status"]=json!("paused");run["error"]=json!("System summary input exceeds its context budget; review this run");
                     app.save(&mut run).await?;return Ok(());
                 }
+                run["engine_component_prepared"]=json!({"version":1,"component":crate::engine_components::CONTEXT,"kind":"compaction","call":call_number});
+                app.save(&mut run).await?;
                 drop(_guard);
                 let tokens = match app.tokens_for(&selection, &system_run).await {
                     Ok(value) => value,
@@ -837,6 +849,10 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                     drop(dispatch_guard);
                     let _ = drain.await;
                     return Ok(());
+                }
+                if !crate::engine_components::available(&app.store.root) {
+                    crate::engine_components::pause(&app,&mut current).await?;
+                    drop(sender);drop(dispatch_guard);let _=drain.await;return Ok(());
                 }
                 if !app.run_model_authorized(&system_dispatch_run(&current)?).await {
                     current["status"]=json!("stopped");
@@ -866,7 +882,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                     return Ok(());
                 }
                 app.run_candidate(&system_dispatch_run(&current)?).await?;
-                let mut completion = Box::pin(async {
+            let mut completion = Box::pin(async {
                     let default_instructions = crate::provider::Provider::configured_base_instructions();
                     let selection = &selection;
                     let tokens = &tokens;
@@ -1033,6 +1049,10 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                 drop(dispatch_guard);
                 let _ = collector.await;
                 return Ok(());
+            }
+            if !crate::engine_components::available(&app.store.root) {
+                crate::engine_components::pause(&app,&mut current).await?;
+                drop(sender);drop(dispatch_guard);let _=collector.await;return Ok(());
             }
             if !app.run_model_authorized(&current).await {
                 current["status"]=json!("stopped");
@@ -1656,12 +1676,19 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             }
             app.save(&mut run).await?;
             drop(_guard);
-            let result = tools::call(
+            // The loop's debug poll frame exceeds 1 MiB. Poll this already-authorized
+            // call on its own ordinary executor stack; the one-child scope aborts on drop.
+            let mut tool_task=tokio::task::JoinSet::new();
+            tool_task.spawn(tools::call(
                 app.clone(), sid.clone(), id.clone(), generation.clone(), name.clone(), args.clone(),
                 run["pending"]["id"].as_str().unwrap().to_owned(),
                 run["pending"]["policy_version"].as_u64().unwrap_or(0),
                 cancel.clone(),
-            ).await;
+            ));
+            let result=match tool_task.join_next().await {
+                Some(Ok(result))=>result,
+                Some(Err(_))|None=>Err(anyhow!("Tool execution task terminated")),
+            };
             let _guard = app.gate.lock().await;
             let mut run = app.run(&id).await?;
             if run["generation"] != generation {

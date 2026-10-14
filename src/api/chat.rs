@@ -487,6 +487,7 @@ pub(crate) async fn command(
     }
     match action.as_str() {
         "cancel" | "pause" => {
+            run["component_pause"]=Value::Null;
             if let Some(token) = app.active.lock().await.get(&id) {
                 token.cancel();
             }
@@ -538,6 +539,7 @@ pub(crate) async fn command(
                 run["provider_recovery"] = Value::Null;
             }
             run["provider_retry_at"] = Value::Null;
+            run["component_pause"]=Value::Null;
             let external=run["pending"]["external_job"]["kind"]=="v3_build";
             run["status"] = json!(if external {"waiting_external"}else{"queued"});
             run["error"] = Value::Null;

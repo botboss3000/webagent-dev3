@@ -1,0 +1,80 @@
+# Engine modularization plan and ledger
+
+Status: implementation and verification in progress. Development v3 only; production and v2 are excluded.
+
+## Decisions and boundaries
+Use gradual extraction when substantial work benefits from a clean boundary. The broad organizational groups are engine-loop, module-host and shared-contracts. Group membership does not imply another process or a runtime dependency. Do not automatically turn every edited function into a plugin.
+
+Abilities and engine components share immutable broker publications but occupy separate namespaces. Engine descriptors never grant model-callable tools, tenant authority, credentials, filesystem access, or arbitrary host operations. The first registered operation is context.prepare. Additional engine interfaces require a reviewed host contract and registration.
+
+An implementation may run behind an isolated live wrapper or link into a stable executable. Cargo crates create compilation boundaries; process boundaries provide independent replacement and isolation. Select one root build mode: default linked-context, or --no-default-features --features live-context. Reject mixed or missing modes.
+
+## Current component ledger
+| Component | Group | Boundary | Reason | State |
+| --- | --- | --- | --- | --- |
+| Context input/accounting/compaction safety and DTOs | shared-contracts | webagent-context-contracts library | Stable shared policy and host validation; changes rebuild actual consumers | Extracted; integrated check and pure unit tests passed; release verification pending |
+| Context assembly algorithm | engine-loop | webagent-context-assembly library | Replaceable implementation; live core excludes this dependency | Extracted; process/library equivalence checks passed; deployed live verification pending |
+| Context service | engine-loop | webagent-context-service executable, one supervised process per execution descriptor generation | Independent live updates over inherited private pipes | Standalone real service and host probes passed; combined release verification pending |
+| API, loop scheduling, authority, storage and recovery | engine-loop | Existing main application | Keep run ownership, credentials, persistence and permission checks authoritative | Remain embedded |
+| Existing abilities and module hosts | module-host | Existing supported native/isolated paths | Preserve tool identities, grants and publication behavior | Unchanged by extraction |
+
+Context selection preserves input order and temporary contribution lifetimes. Linked mode borrows original history and schemas and retains incremental accounting. Live requests serialize selected host inputs; Ready replies do not return a replacement history. The core verifies instructions, every report field, request budgets, identities and safe compaction plans before using them.
+
+The service receives no environment credentials or state paths. Private inherited pipes identify the peer. A Linux x86_64 minimal syscall allowlist permits pure computation and pipe IO; alternate syscall conventions and ambient filesystem/network/process creation are denied. Requests, replies, admission, cache count, address space and deadlines are bounded. Cache prefix digests detect same-length history replacement. Run-yield cleanup releases accounting, and adoption retires idle unselected processes.
+
+## Lifecycle and failure rules
+Compatible replacement pins admitted work to its descriptor and artifact. Later calls adopt the replacement; old generations drain. Invalid catalogs retain the last valid revision and fail adoption rather than partially switching. Deliberate removal is a valid empty component catalog, not an invalid update.
+
+Disable/removal pauses affected queued/running work at a component boundary, rechecks before both normal and System model dispatch, and preserves accepted messages. Restoration requeues only host-marked component pauses after fresh participation/model authorization and run-revision fencing. Manual pause, stop, uncertainty and external effects cannot be automatically resumed. Missing/unhealthy services never silently fall back to linked code; supervised retry is bounded.
+
+Runtime controls live under the data root in config/engine-components.json, independently of package metadata. Source defaults initialize only an absent control file. Administrator edits fence both runtime revision and catalog revision; package installation/removal remains broker-owned.
+
+## Build and publication contract
+The broker discovers workspace source closures and actual Cargo dependency/dep-info inputs. Contract changes require coordinated core release. Compatible service/assembly-only edits use independent compilation and immutable artifact sealing without replacing API/loop/gate. Build cache keys bind source, lockfile, toolchain, flags, recipe and runtime assets; artifact hashes are checked before reuse and activation.
+
+Engine descriptors are under plugins/engine, separate from plugins/abilities. They declare interface/implementation identity, organizational group, runtime requirements, build inputs, modes, limits and sealed executable identity. Validate duplicates, missing/cyclic runtime requirements and supported invocation contracts before activation. Store source and index with the final sealed immutable revision; verify API and loop adoption.
+
+## Verification and progress
+- Existing assembly/compaction characterization retained. New contracts tests cover Unicode, ordering, cache reconstruction, ephemeral budgets, stale/forged plans and owned transport equivalence.
+- Real service tests cover process reuse, same-length history replacement, invalid invocation, filesystem/socket/network/exec/fork denial, and alternate syscall convention denial.
+- New host tests cover dependency graphs, sealed artifact tampering/removal, selective pause/restoration/access changes and revision-fenced controls.
+- Broker Python regressions passed during foundation work; exact counts and final receipts belong in the completion entry below.
+- First supported root Cargo check on unchanged inputs reached all extracted crates and failed only API IO/serde error conversion. Persistence moved behind an anyhow boundary. Corrected all-workspace check `b2a0b7fa-b8ec-40aa-99ed-8cb6676f2835` completed on unchanged inputs (compiler 1m18s; measured peak 1,899,069,440 bytes). All workspace tests remain pending.
+- Historical unacquired orphan FIFO requests blocked the first check. Corrected waiting-only FIFO semantics with three real SQLite regressions; actual held orphan scopes still block. No historical task source or rows were discarded.
+- The waiting draft was preserved and fenced through supported handoff into engine-catalog-modularization-final-20261013, then its exact reviewed patch was reapplied.
+- Installed broker foundation admits new crate inputs. Application release, linked/live tests, load measurements, live removal/replacement/restoration, source promotion and release commit remain pending.
+
+## Measurements and completion evidence
+Record cold and incremental compile/link/test duration, cache reuse, rebuild fan-out, startup/IPC latency, throughput and memory for representative concurrent calls. Compare actual main binary/image/container identities before and after one compatible service-only edit. Do not promise a predetermined speedup or certify a hot lane from metadata alone.
+
+Completion entry: pending. Bind the final tests, deployment/adoption, behavioral acceptance, exact promoted paths, commit and ownership completion receipts here.
+
+## Maintenance rule for subsequent work
+Before substantial engine changes, consult this ledger and assess whether extraction helps the concrete change. Record the component hierarchy, crate/process boundary, build/runtime requirements, rationale, rejected alternatives, progress, measurements, release evidence and next step. Keep the ledger and affected repository/publication guidance current. Complete affected Code Index/documentation review while the broker task is open. A future extraction is an assessed opportunity, not mandatory adjacent cleanup.
+
+### Verification notes, 2026-10-13
+
+- Broker-owned immutable engine membership pins descriptor/artifact hashes and explicit withdrawal tombstones. Known withdrawn dependencies are unavailable; unknown dependency names remain invalid. Reinstallation clears only the matching tombstone.
+- Linked status reports its compiled library version and executable generation separately from installed live package metadata. Independent implementation publication requires current live adoption receipts; linked consumers require coordinated release.
+- A same-identity service keeps its running process and refreshes its validated respawn path when a new publication replaces the old immutable root.
+- Workspace test job `77217b86-a0ef-4646-8ece-86709a78a639` compiled successfully (measured peak 3,592,650,752 bytes), then was cancelled during runtime-test resource admission. No tests ran, and this is not a passing test receipt. Compilation and runtime accidentally shared a resource profile; the broker correction separates recipes using recorded phase evidence without reducing protected reserves.
+- Host confinement denies application state contents and filesystem effects; loader-required metadata calls may still observe filesystem metadata. It is not a private mount namespace. Real standalone service and host confinement probes passed in job 17151f20-7497-4b03-83ad-07545041eebe; combined host/service integration and deployed live startup remain pending.
+
+### Continued verification and bounded repairs
+
+- Compiler phases now support an explicit local operator hard cap of 4,026,531,840 bytes. Admission uses that enforced allocation without changing the protected host reserve. Docker/cgroup readback proved `memory.max` equal to the requested cap and swap maximum zero. Completed compiler receipts recorded zero OOM events/kills. OOM is a failed check and cannot provide successful estimate learning.
+- Focused diagnostic `8d39dc4b-2243-468f-a4fc-76d633ccb121` passed ten engine/host cases and identified two fixture errors: tampering with a 0555 file without granting owner-write, and a compaction trigger smaller than request overhead. Fixtures now deliberately grant owner-write before tampering and use valid bounded multi-message history to reach System credential dispatch.
+- The ordinary-stack proposal regression was reproduced inside native promotion tool dispatch. ELF poll prologues showed the loop's debug poll frame using about 1.2 MiB, despite its retained future being only 23,136 bytes. A scoped one-child Tokio task now polls the already-authorized tool on its own ordinary executor stack. It preserves arguments, cancellation, pending identity and generation; scope drop aborts the child. Join failure enters existing transport-failure handling, including write uncertainty and broker-finish reconciliation. Temporary diagnostics were removed.
+- An integration case now launches the official context service through host pre-exec confinement, compares replies with the linked algorithm, reuses the process after history replacement at the same item count, releases accounting, and requires disable/adoption to reap it without another preparation call. Its full-release result is still pending.
+- Full workspace check `4540f665-eb0c-4c20-a241-7d5c44dc8317` compiled successfully with unchanged inputs and zero OOM (peak 3,857,559,552 bytes), then reached the fixed 600-second foreground bound during the complete runtime suite. The runtime outcome is unknown, not a passing receipt. The separately bounded release workflow must run the full suite successfully before packaging or deployment.
+- A read-only baseline diagnostic task could not reserve engine scopes held by this implementation. It was abandoned immediately without submitting a job, transferring ownership, or changing source.
+
+- Optimized stable and live builds now have explicit fixed release phases with separate output/dependency attestations. An offline --context-smoke path uses only deterministic public fixtures, compares linked direct/owned preparation, and checks live host validation, child reuse and bounded drain. The broker compares normalized prepared results across modes; identities and timings remain mode-specific. These phases and deployment are pending verification.
+
+- Gated release 11bdfd8a-4125-478a-a20d-6cbe3229792a was cancelled during compiler resource admission, before compiler or deployment effects. Retained inspection archives and snapshot-helper buffers consumed necessary headroom despite a 12MiB source candidate. Supported handoff preserved all 57 reviewed source hashes in engine-catalog-retention-release-20261014; bounded streaming inspection identity and buffer release are implemented before retry. 139 regressions and an additional digest-compatibility check passed; a synthetic 16MiB inspection used 3,282,215 bytes of temporary memory. Installed/live headroom and full release gates remain pending. Durable snapshots, compiler hard cap and host reserve remain unchanged.
+
+- Release a151b4e5-efa5-46eb-8bb7-f741655dff74 admitted actual full-capture compilation, completed test compilation at peak 3,778,969,600 bytes with zero OOM, passed the complete ordinary-stack workspace test command and unchanged-source gate, then completed optimized linked compilation at peak 2,994,311,168 bytes with zero OOM. No images or deployment resulted: diagnostic redaction of a configured JSON true literal corrupted stdout proof parsing. A bounded offline replay confirmed valid linked proof with two prepared cases and no service launch. The fresh proof-release handoff preserves all 58 reviewed files while correcting fixed structured-artifact parsing and durable scrubbed phase logs; exact test totals, live mode proof and release acceptance remain pending.
+
+- Release e1c3e444-924d-4218-9491-70c9528c6684 passed the complete ordinary-stack workspace suite: 866 passed, zero failed and five existing ignored cases. Both credential-removal dispatch races, real confined host/service startup and retirement, forged-report rejection, selective restoration, same-length service-cache reset and proposal dispatch passed. Optimized linked and live artifacts passed fixed typed smoke proofs with identical two-case prepared results. Linked launched no service (288 microseconds); live reused and drained its child (1,692 microseconds). These are small offline fixtures, not production throughput measurements. Linked dependency attestation includes assembly; the live core's 182 compiler inputs exclude the assembly implementation and service.
+- That release was cancelled without image or deployment effects while API packaging waited for sufficient headroom. Its valid matching BuildKit recipe estimated 4,578,135,245 bytes from a measured 3,815,112,704-byte peak; the protected host reserve remains unchanged. The continuation preserves all source and sealed verification evidence while adding an explicit kernel-enforced packaging cap and bounded admission deadline.
+- The prior certified cache manifest omitted the service integration test executable and official debug service support binary. Future cache certification must retain and hash both, restore the support path expected by host tests, and reject incomplete older manifests. Missing unsealed outputs from the cancelled job are not retroactively certified. Application deployment, actual live publication/removal/restoration, production-like measurements and verified commits remain pending.

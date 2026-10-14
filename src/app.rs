@@ -231,8 +231,10 @@ fn public_code_index_retrieval(run: &Value) -> Value {
     };
     json!({"status":status,"stage":stage})
 }
+// Project existing public run fields and fixed host component-pause metadata without private context.
 fn public_run(run: &Value) -> Value {
     json!({"id":run["id"],"session_id":run["session_id"],"status":run["status"],"error":run["error"],
+        "component_pause":if run["status"]=="paused"&&run["component_pause"]["version"]==1&&run["component_pause"]["component"]==crate::engine_components::CONTEXT {json!({"version":1,"component":crate::engine_components::CONTEXT,"reason":"component_unavailable"})}else{Value::Null},
         "code_index_retrieval":public_code_index_retrieval(run),
         "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],
         "attachments":run["attachments"].as_array().cloned().unwrap_or_default(),
@@ -848,8 +850,9 @@ impl App {
         Ok(tokens)
     }
 }
-// Initialize the selected process role against the shared v3 state root.
+// Exit fixed offline smoke before state initialization; otherwise initialize the selected role at the shared v3 root.
 async fn run_process() -> Result<()> {
+    if std::env::args().any(|argument|argument=="--context-smoke") {println!("{}",crate::engine_components::context_smoke().await?);return Ok(());}
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -858,13 +861,14 @@ async fn run_process() -> Result<()> {
         .init();
     if let Some(path)=std::env::args().skip(1).find_map(|arg|arg.strip_prefix("--validate-assets=").map(PathBuf::from)) {
         let catalog=abilities::Catalog::load_snapshot(&path.join("plugins/abilities"))?;
+        let engine=crate::engine_components::load(&path,"candidate")?;
         let prompts:Value=serde_json::from_slice(&std::fs::read(path.join("config/prompts.json"))?)?;
         crate::api::live_configuration::validate_prompts(&prompts)?;
         for (file,id)in [("app-settings.json","app_settings"),("chat.json","chat"),("context-compaction.json","context_compaction"),("tool-output-retention.json","tool_output_retention"),("access-policy.json","access_policy")] {
             let value:Value=serde_json::from_slice(&std::fs::read(path.join("config").join(file))?)?;
             crate::api::live_configuration::validate(id,&value)?;
         }
-        println!("{}",json!({"catalog_version":catalog.version(),"abilities":catalog.ids().len()}));
+        println!("{}",json!({"catalog_version":catalog.version(),"abilities":catalog.ids().len(),"engine_components":engine.entries.len()}));
         return Ok(());
     }
     let root = PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
@@ -915,6 +919,7 @@ async fn run_process() -> Result<()> {
     // One data-root authority, reread at call boundaries. Legacy JSON is only
     // a first-start migration source; existing invalid data is never overwritten.
     let compaction_config_path = context_compaction::Config::initialize(&root)?;
+    crate::engine_components::initialize(&root)?;
     store.configure_cache(runtime.cache.document_budget_bytes, runtime.cache.context_budget_bytes);
     // The temporary development bootstrap credential had no generation. Retire it
     // once so this installation follows the same first-run setup flow as v2.

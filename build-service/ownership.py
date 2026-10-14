@@ -59,6 +59,9 @@ class Components:
                 elif not manifest.exists()and not manifest.is_symlink():
                     isolated=self.deleted_isolated(path,parts)
                 if path in self.compile_inputs or(path.endswith(".rs")and not isolated):output.add("module:engine")
+            elif path.startswith("plugins/engine/")or path.startswith("crates/context-service/")or path.startswith("crates/context-assembly/"):
+                output.add("module:engine-component:context-assembly")
+                if path in self.compile_inputs:output.add("module:engine")
             elif path.startswith("build-service/")or path.startswith("tests/test_build")or path.startswith("tests/test_scheduler"):
                 output.add("module:broker")
             elif path.startswith("ui/"):
@@ -159,12 +162,12 @@ class Ownership:
             return self.get(task,db)
         return self.mutate(request,["begin",task,owner,label],operation)
     def blockers(self,task,scopes,db):
-        """Honor active claims and older conflicting waiting requests; unrelated work can bypass."""
+        """Honor retained claims and live waiting FIFO requests; orphan requests without claims cannot block."""
         result=[]
         for other in self.list(db):
             if other["id"]==task["id"]or other["state"]in {"complete","abandoned"}:continue
             candidates=other["scopes"]if other["state"]in ACTIVE else []
-            if (other["created"],other["id"])<(task["created"],task["id"]):
+            if other["state"]=="waiting" and (other["created"],other["id"])<(task["created"],task["id"]):
                 new=[s for s in scopes if s not in task["scopes"]]
                 modules=[s for s in new if s.startswith("module:")]
                 queued=other["requested"]

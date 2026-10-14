@@ -24,6 +24,44 @@ class ResourceTests(unittest.TestCase):
     def phase(self,name="one",phase="compile_release"):
         self.scheduler.enter(name,{"job_id":"job","lease_until":time.time()+60},phase,"engine-release","plugin")
         self.scheduler.attached(name,"container")
+    def test_enforced_cap_bounds_admission_without_changing_reserve(self):
+        cap=4026531840;self.scheduler.host["available"]=cap+self.scheduler.reserve()+1024
+        reserve=self.scheduler.reserve();self.scheduler.enter("capped",{"job_id":"job"},"compile_test","cold-profile","engine",timeout=.01,hard_cap=cap)
+        self.assertEqual(self.scheduler.rows["capped"]["estimate"],cap);self.assertEqual(self.scheduler.reserve(),reserve)
+        with self.assertRaisesRegex(ValueError,"cap"):self.scheduler.enter("bad",{"job_id":"job"},"test","runtime","test",hard_cap=cap)
+        self.scheduler.rows["capped"]["state"]="finished"
+    def test_package_cap_keeps_measured_profile_and_reserve(self):
+        cap=4026531840;profile="buildkit:v0.25.1:role-context-v2:api";self.scheduler.profiles[profile]=[3815112704]
+        reserve=self.scheduler.reserve();self.scheduler.host["available"]=cap+reserve+1024
+        self.scheduler.enter("package",{"job_id":"job"},"package",profile,"package",timeout=.01,hard_cap=cap)
+        self.assertEqual(self.scheduler.rows["package"]["estimate"],cap);self.assertEqual(self.scheduler.profiles[profile],[3815112704]);self.assertEqual(self.scheduler.reserve(),reserve)
+        self.scheduler.rows["package"]["state"]="finished"
+    def test_test_profiles_migrate_by_phase_without_losing_history(self):
+        self.scheduler.profile_migrations={};self.scheduler.profiles={"engine:rust1.90:test":[3*G,G]}
+        self.scheduler.rows={"compiler":{"profile":"engine:rust1.90:test","phase":"compile_test","state":"finished","metrics":{"peak_memory":3*G}},"runtime":{"profile":"engine:rust1.90:test","phase":"test","state":"finished","metrics":{"peak_memory":G}},"cancelled":{"profile":"engine:rust1.90:test","phase":"test","state":"failed","metrics":{"peak_memory":4*G}}}
+        self.scheduler.migrate_test_profiles();self.scheduler.persist()
+        self.assertEqual(self.scheduler.profiles["engine:rust1.90:test"],[G]);self.assertEqual(self.scheduler.profiles["engine:rust1.90:compile_test"],[3*G]);self.assertEqual(self.scheduler.profiles["legacy:engine:rust1.90:test:mixed"],[3*G,G]);self.assertEqual(self.scheduler.rows["compiler"]["original_profile"],"engine:rust1.90:test")
+        self.scheduler.migrate_test_profiles();self.assertEqual(self.scheduler.profiles["engine:rust1.90:compile_test"],[3*G])
+    def test_waiting_progress_is_durable_and_admission_has_deadline(self):
+        import json
+        self.scheduler.host["available"]=G;job={"job_id":"job","lease_until":time.time()+60};path=Path(self.root.name)/"job.json";samples=[]
+        def progress(value):
+            samples.append(dict(value));path.write_text(json.dumps(value))
+        self.runner.resource_progress=progress
+        with self.assertRaisesRegex(TimeoutError,"admission"):self.scheduler.enter("one",job,"compile_test","engine:rust1.90:check","engine",timeout=.02)
+        self.assertEqual(samples[0]["resource_waiting"]["phase"],"compile_test");self.assertNotIn("resource_waiting",json.loads(path.read_bytes()));self.assertEqual(self.scheduler.rows,{})
+    def test_diagnostic_check_peak_calibrates_only_completed_recipe(self):
+        self.phase(phase="compile_test");self.scheduler.tick();self.scheduler.finish("one",False,diagnostic_complete=True)
+        self.assertEqual(self.scheduler.estimate("engine-release","engine"),math.ceil(G*1.2))
+        for text in ["error: could not compile SIGKILL","error: could not compile out of memory","error: could not compile timeout","partial error:"]:
+            self.assertFalse(self.scheduler.diagnostic_check(text))
+        self.assertTrue(self.scheduler.diagnostic_check("error[E0308]: type mismatch; could not compile package"))
+    def test_matching_durable_failed_diagnostic_receipt_restores_estimate(self):
+        import json,uuid
+        identity=str(uuid.uuid4());row={"job_id":identity,"phase":"compile_test","profile":"engine:rust1.90:check","state":"failed","metrics":{"peak_memory":2*G}}
+        self.scheduler.rows["failed"]=row;self.scheduler.persist();(Path(self.root.name)/(identity+".json")).write_text(json.dumps({"status":"failed","log":"error[E0308]: mismatch; could not compile package"}))
+        reopened=m.Resources(self.root.name,self.runner,{"mode":"enforce"},lambda:self.time,lambda:dict(self.sample))
+        self.assertEqual(reopened.estimate("engine:rust1.90:check","engine"),math.ceil(2*G*1.2));reopened.close()
     def test_manual_pause_retries_and_waits_for_explicit_resume(self):
         """An operator pause stays parked despite spare headroom and survives exact-request retries."""
         self.phase();job={"job_id":"job","status":"running","lease_until":time.time()+60}

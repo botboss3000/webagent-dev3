@@ -39,6 +39,14 @@ def context(version="one", extra=None):
 
 
 class FakeRunner:
+    def engine_execution_modes(self,expected_revision=None):
+        """Legacy publication fixtures model live execution in both consumers."""
+        return {"api":"live","loop":"live"}
+    def engine_hot_swappable(self):
+        return True
+    def build_engine_artifacts(self,job_id,source_root=None):
+        """Legacy publication fixtures have no engine component descriptor."""
+        return []
     def __init__(self):
         self.blob = context()
         self.source_config=host.CONFIG

@@ -29,6 +29,7 @@ mod build_dashboard;
 mod app_settings;
 pub(crate) mod live_configuration;
 mod loop_settings;
+mod engine_components;
 pub(crate) mod notifications;
 pub(crate) mod repository;
 pub(crate) use auth::*;
@@ -85,6 +86,8 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/configuration/{id}",get(live_configuration::get_config).put(live_configuration::put_config))
         .route("/admin/publication/status",get(live_configuration::publication))
         .route("/admin/app-settings/encryption", get(app_settings::read).put(app_settings::update))
+        .route("/admin/engine-components",get(engine_components::read))
+        .route("/admin/engine-components/{id}",put(engine_components::update))
         .route("/admin/loop-runtime", get(loop_settings::read).put(loop_settings::update))
         .route("/admin/context-compaction", get(context_config_get).put(context_config_put))
         .nest("/admin/access", phase3_api::router())

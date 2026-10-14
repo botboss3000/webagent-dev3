@@ -1,8 +1,8 @@
 """Narrow root helper for attributable build containers, never arbitrary host processes."""
 import http.client,json,os,re,socket,struct,subprocess,time
 from pathlib import Path
-PHASES={"compile_test","compile_release","plugin_compile","test","dependency","package"}
-PARKABLE={"compile_test","compile_release","plugin_compile"}
+PHASES={"compile_test","compile_release","compile_linked","plugin_compile","test","dependency","package","engine_metadata","linked_smoke","live_smoke"}
+PARKABLE={"compile_test","compile_release","compile_linked","plugin_compile"}
 class Docker(http.client.HTTPConnection):
     """Use the local engine API without shell arguments or returning private container configuration."""
     def connect(self):
@@ -85,7 +85,9 @@ class Control:
         for line in(group/"io.stat").read_text().splitlines():
             for item in line.split()[1:]:
                 key,amount=item.split("=",1);io_values[key]=io_values.get(key,0)+int(amount)
-        return {"io_read_bytes":io_values.get("rbytes",0),"io_write_bytes":io_values.get("wbytes",0),"memory":number("memory.current"),"peak_memory":number("memory.peak"),"swap":number("memory.swap.current"),"cpu_usec":cpu.get("usage_usec",0),"pids":number("pids.current"),"frozen":bool(events.get("frozen"))}
+        memory_events=dict(line.split()for line in (group/"memory.events").read_text().splitlines())
+        memory_limit=(group/"memory.max").read_text().strip();swap_limit=(group/"memory.swap.max").read_text().strip()
+        return {"memory_max":None if memory_limit=="max"else int(memory_limit),"swap_max":None if swap_limit=="max"else int(swap_limit),"oom_events":int(memory_events.get("oom",0)),"oom_kills":int(memory_events.get("oom_kill",0)),"io_read_bytes":io_values.get("rbytes",0),"io_write_bytes":io_values.get("wbytes",0),"memory":number("memory.current"),"peak_memory":number("memory.peak"),"swap":number("memory.swap.current"),"cpu_usec":cpu.get("usage_usec",0),"pids":number("pids.current"),"frozen":bool(events.get("frozen"))}
     def handle(self,args):
         """Operations are bounded and caller-independent; only the authenticated broker can reach them."""
         if os.geteuid()!=0:raise PermissionError("Protected root helper required")

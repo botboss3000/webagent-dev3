@@ -86,3 +86,7 @@ Declare each configuration setting's adoption point: immediately, next request/m
 Verify relevant additions, updates, removals, invalid candidates, compatibility rejection, rollback, active runs, recovery and permission revocation. Check actual API and loop consumers; metadata or a host-file hash alone does not establish new model context. For a no-compile release, verify the broker lane and unchanged application images/container identities as appropriate.
 
 Report separately what was edited, published, adopted, compiled/restarted and behaviorally verified. Use the checkout AGENTS.md and Codebase Admin task workflow; this skill adds no per-release approval requirement and never expands the requested scope.
+
+## Engine component extraction ledger
+
+Before substantial engine work, read docs/engine-modularization.md and update its component hierarchy, crate/process boundary, build/runtime dependencies, rationale, rejected alternatives, measurements and verified release progress. Context assembly is the first pilot; do not proactively split all remaining engine code. Engine packages use plugins/engine separately from model-callable abilities. Shared contracts and incompatible interfaces require a coordinated core release; compatible registered implementations use the independent broker lane. Deliberate removal pauses affected work with no silent linked fallback. Maintain both linked stable and isolated live behavior checks, generation pinning, authority validation and Code Index review.

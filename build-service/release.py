@@ -90,15 +90,30 @@ def snapshot(root, allowlist, validate):
     return archive(files, validate)
 
 
+def candidate_entries(blob,validate):
+    """Validate every member while retaining source bytes and only streamed inspection attestations."""
+    validate(blob);source={};inspection={};seen=set()
+    with tarfile.open(fileobj=io.BytesIO(blob),mode="r:")as archive:
+        for member in archive:
+            if not member.isfile():continue
+            name=member.name.removeprefix("./")
+            if name in seen:raise ValueError("Duplicate candidate input")
+            seen.add(name)
+            with archive.extractfile(member)as body:
+                if inspection_path(name):
+                    if member.size>MAX_INSPECTION_FILE:raise ValueError("Inspection input exceeds bound")
+                    digest=hashlib.sha256();size=0
+                    while chunk:=body.read(1024*1024):digest.update(chunk);size+=len(chunk)
+                    if size!=member.size:raise ValueError("Incomplete inspection input")
+                    inspection[name]=(member.mode&0o777,size,digest.hexdigest())
+                else:source[name]=(member.mode&0o777,body.read())
+    return source,inspection
+
+
 def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False):
-    base, task, live = (entries(value, validate) for value in
-                        (base_blob, task_blob, live_blob))
-    # Inspection bytes attest the task, but cannot enter release merging.
-    if any(base.get(name) != task.get(name) for name in set(base) | set(task)
-           if inspection_path(name)):
-        raise ValueError("read-only inspection snapshot changed")
-    base, task, live = ({name: value for name, value in files.items()
-                         if not inspection_path(name)} for files in (base, task, live))
+    (base,base_inspection),(task,task_inspection),(live,_) = (candidate_entries(value,validate)for value in (base_blob,task_blob,live_blob))
+    # Same attested identity without holding private inspection bodies in memory.
+    if base_inspection!=task_inspection:raise ValueError("read-only inspection snapshot changed")
     changed = [name for name in sorted(set(base) | set(task))
                if base.get(name) != task.get(name)]
     if (not changed and not allow_empty) or len(changed) > 256 or any(
@@ -263,6 +278,15 @@ def stage_assets(root, job_id, blob, validate):
         existing = {name:item for name,item in entries(
             snapshot(destination, ("v3", "ui"), lambda _: None), lambda _: None).items()
             if not name.startswith("v3/.code-index/")}
+        for name in list(existing):
+            if name=="v3/plugins/engine/catalog.json":
+                if name in files:existing[name]=files[name]
+                else:existing.pop(name)
+            elif name.startswith("v3/plugins/engine/")and "/artifact/"in name:existing.pop(name)
+            elif name.startswith("v3/plugins/engine/")and name.endswith("/component.json")and name in files:
+                value=json.loads(existing[name][1]);value.pop("artifact_sha256",None)
+                wanted=json.loads(files[name][1]);wanted.pop("artifact_sha256",None)
+                if value==wanted:existing[name]=files[name]
         if existing != files:
             raise ValueError("frozen UI asset release changed")
     else:

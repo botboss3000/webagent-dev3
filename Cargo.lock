@@ -2163,6 +2163,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-context-assembly"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "webagent-context-contracts",
+]
+
+[[package]]
+name = "webagent-context-contracts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "webagent-context-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "webagent-context-assembly",
+ "webagent-context-contracts",
+]
+
+[[package]]
 name = "webagent-v3"
 version = "0.1.0"
 dependencies = [
@@ -2191,6 +2225,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "webagent-context-assembly",
+ "webagent-context-contracts",
 ]
 
 [[package]]

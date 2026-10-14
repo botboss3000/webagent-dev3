@@ -192,7 +192,7 @@ def install(tree=None):
         publish(service, "index-scanner.py", scanner, 0o644)
         publish(service,"index-maintenance.py",maintenance,0o644)
         extra={"index-maintenance.py":hashlib.sha256(maintenance).hexdigest()}
-        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","resources.py","resource_control.py","executor.py","scheduler-defaults.json"):
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","resources.py","resource_control.py","executor.py","engine_components.py","scheduler-defaults.json"):
             body=read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
             if name.endswith(".py"):compile(body,name,"exec")
             else:json.loads(body)
@@ -422,7 +422,7 @@ def snapshot_context(context):
                 inspection = name in INSPECTION_CONTEXT
                 source = V3 / name.removeprefix("v3/") if name.startswith("v3/") else SHARED_SOURCE / name
                 if name.startswith("v3/data/config/gates/") and not source.exists():source=V3/"config/gates"/source.name
-                if name=="v3/build-service" and not source.exists():continue
+                if name in {"v3/build-service","v3/crates","v3/plugins/engine"} and not source.exists()and not source.is_symlink():continue
                 parent_path, leaf = source.parent, source.name
                 try:
                     parent = directory(parent_path)
@@ -516,6 +516,7 @@ def snapshot_server(listener, context, stopping):
             return
         with conn:
             conn.settimeout(60)
+            blob=None
             try:
                 _, uid, _ = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
                 if uid != CONFIG["service_uid"]:
@@ -539,6 +540,9 @@ def snapshot_server(listener, context, stopping):
                     conn.sendall(struct.pack("!Q", 0))
                 except OSError:
                     pass
+            finally:
+                # Never retain the last inspection archive while waiting for another request.
+                blob=None
 
 
 def _drop_and_exec(host_fd, listener_fd, bridge_fd):

@@ -128,6 +128,8 @@ def main():
     begin.add_argument("--shared", action="store_true", help="legacy shared checkout coordination")
     finish = commands.add_parser("finish")
     finish.add_argument("task_id")
+    finish.add_argument("--package-memory-cap",type=int,help="Explicit enforced dedicated BuildKit ceiling in bytes")
+    finish.add_argument("--compiler-memory-cap",type=int,help="Explicit enforced compiler ceiling in bytes")
     finish.add_argument("--expected", required=True, help="inputs_sha256 obtained from inputs")
     finish.add_argument("--sync-decision", choices=("synchronize", "proceed", "cancel"))
     finish.add_argument("--sync-digest", help="exact digest returned by preflight")
@@ -210,6 +212,8 @@ def main():
                 arguments["mode"] = "isolated"
         if args.command == "finish":
             arguments["expected_inputs_sha256"] = args.expected
+            if args.package_memory_cap is not None:arguments["package_memory_cap"]=args.package_memory_cap
+            if args.compiler_memory_cap is not None:arguments["compiler_memory_cap"]=args.compiler_memory_cap
             if args.sync_decision:
                 arguments["sync_decision"] = args.sync_decision
                 arguments["expected_sync_digest"] = args.sync_digest

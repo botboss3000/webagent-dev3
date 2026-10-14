@@ -1,11 +1,24 @@
 """Attributable compilation/testing and artifact-fed packaging in the pinned toolchain."""
-import contextlib,hashlib,io,json,os,posixpath,re,shlex,shutil,subprocess,tarfile,time,uuid
+import contextlib,hashlib,io,json,os,posixpath,re,shlex,shutil,stat,subprocess,tarfile,time,uuid
 from pathlib import Path
 RUST="rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f"
 BUILDKIT="moby/buildkit:v0.25.1@sha256:79cc6476ab1a3371c9afd8b44e7c55610057c43e18d9b39b68e2b0c2475cc1b6"
-COMPILER_STAGE_SHA256="696af9712c1bf8f3a1d24f86e1aeeaf2c23c6aa67b3796d95e3b0553683501f2"
-BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-automation","webagent-outbound-notifications"]
+COMPILER_STAGE_SHA256="474b034d7a843ebf324b654a785b5a5b23135804ef39c662f92fcb3e160dfeaf"
+BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-automation","webagent-outbound-notifications","webagent-context-service"]
 # @code-index {"version":1,"feature":"build-artifact-execution","aliases":["task fencing","verified builds"],"purpose":"Pinned attributable compiler/test/packaging recipes and verified content-addressed artifact reuse.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Identity, exact input verification and completion rules cannot be disabled by model or preference configuration."}}
+COMPILER_MEMORY_CAP=4026531840
+def compiler_cap(value):
+    """Accept only the explicit reviewed compiler ceiling; omission preserves normal admission."""
+    if value is None:return None
+    if type(value)is not int or value!=COMPILER_MEMORY_CAP:raise ValueError("Unsupported compiler memory cap")
+    return value
+
+def test_filter(value):
+    """Allow a bounded Rust unit-name substring, never command options or arbitrary arguments."""
+    if value is None:return None
+    if not isinstance(value,str)or not re.fullmatch(r"[A-Za-z0-9_:]{1,160}",value):raise ValueError("Invalid bounded Rust test filter")
+    return value
+
 class Executor:
     """Fixed phase recipes; model arguments never become host commands or mount paths."""
     def __init__(self,runner,resources,config):
@@ -16,7 +29,11 @@ class Executor:
         jobhex=uuid.UUID(job["job_id"]).hex
         name="webagent-build-"+self.config["instance"]+"-"+jobhex+"-"+phase+"-"+uuid.uuid4().hex[:8]
         output.mkdir(parents=True,exist_ok=True)
-        self.resources.enter(name,job,phase,profile,kind);identity=None;success=False
+        cap=compiler_cap(job.get("compiler_memory_cap"))if phase in {"compile_test","compile_release","compile_linked"}and kind=="engine"else None
+        if cap is not None and not self.resources.enabled:raise ValueError("Compiler cap requires enforced resource admission")
+        admission_started=time.monotonic()
+        self.resources.enter(name,job,phase,profile,kind,timeout=timeout,hard_cap=cap)
+        timeout=max(1,timeout-(time.monotonic()-admission_started));identity=None;success=False;diagnostic_complete=False
         parent="webagent-build-"+self.config["instance"]+".slice"
         create=["docker","create","--name",name,"--cgroup-parent",parent,"--label","webagent.scheduler.instance="+self.config["instance"],"--label","webagent.scheduler.job="+jobhex,"--label","webagent.scheduler.phase="+phase,
             "--cap-drop","ALL","--security-opt","no-new-privileges","--pids-limit","256","--user",str(self.config["service_uid"])+":"+str(self.config["service_gid"]),
@@ -24,6 +41,7 @@ class Executor:
             "--mount","type=bind,src="+str(output)+",dst=/output","-w","/build",
             "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=1","-e","CARGO_INCREMENTAL=0",
             "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",RUST,"sleep","infinity"]
+        if cap is not None:create[create.index(RUST):create.index(RUST)]=["--memory",str(cap),"--memory-swap",str(cap)]
         try:
             identity=self.runner.command(create,timeout=30,private_raw=True).strip()
             if len(identity)!=64 or any(c not in"0123456789abcdef"for c in identity):raise ValueError("Compiler container identity invalid")
@@ -31,40 +49,74 @@ class Executor:
             self.runner.command(["docker","start",name],timeout=30)
             self.resources.attached(name,identity)
             self.runner.job_context.phase_container=name
+            if cap is not None:
+                observed=self.runner.resource_request({"operation":"stats","container":name})
+                if observed.get("memory_max")!=cap or observed.get("swap_max")!=0:raise ValueError("Compiler memory cap was not enforced by the kernel")
+                job.setdefault("compiler_cap_outcomes",[]).append({"phase":phase,"recipe":profile,"requested_bytes":cap,"observed_memory_max":observed["memory_max"],"observed_swap_max":observed["swap_max"],"container_id":identity,"outcome":"running"})
+                getattr(self.runner,"resource_progress",lambda _:None)(job)
             # Docker wait reports exit status as data. Logs and counters remain available afterward.
             logs=self.runner.command(["docker","exec",name,*argv],timeout=timeout)
+            self.persist_phase_log(job,logs)
             success=True;return logs
+        except RuntimeError as error:
+            diagnostic_complete=(cap is None and argv[:2]==["cargo","check"] and getattr(error,"exit_code",None)==1 and self.resources.diagnostic_check(str(error)))
+            raise
         finally:
             self.runner.job_context.phase_container=None
-            self.finish_phase(name,identity,success)
+            oom=False
+            if cap is not None and identity is not None:
+                observed=self.runner.resource_request({"operation":"stats","container":name})
+                oom=observed.get("oom_kills",0)>0
+                if job.get("compiler_cap_outcomes"):
+                    result=job["compiler_cap_outcomes"][-1];result.update(oom_events=observed.get("oom_events",0),oom_kills=observed.get("oom_kills",0),peak_memory=observed.get("peak_memory",0),outcome="oom"if oom else("completed"if success else"failed"))
+                    getattr(self.runner,"resource_progress",lambda _:None)(job)
+            self.finish_phase(name,identity,success and not oom,diagnostic_complete and not oom)
+            if oom:raise RuntimeError("Compiler memory cap exceeded (OOM); check failed")
     @contextlib.contextmanager
     def packager(self,job,role="generic"):
-        """Attribute a dedicated BuildKit daemon and keep measured profiles separate for each runtime role."""
+        """Bound only this dedicated BuildKit ancestor, preserving reserve and measured role profiles."""
         name="webagent-build-"+self.config["instance"]+"-"+uuid.UUID(job["job_id"]).hex+"-package-"+uuid.uuid4().hex[:8]
         if role not in {"api","loop","generic"}:raise ValueError("Fixed packaging role required")
-        identity=None;success=False;self.resources.enter(name,job,"package","buildkit:v0.25.1:role-context-v2:"+role,"package")
+        cap=compiler_cap(job.get("package_memory_cap"));identity=None;success=False;oom=False;proof_error=None
+        if cap is not None and not self.resources.enabled:raise ValueError("Package cap requires enforced admission")
+        self.resources.enter(name,job,"package","buildkit:v0.25.1:role-context-v2:"+role,"package",timeout=600,hard_cap=cap)
         try:
-            identity=self.runner.command(["docker","create","--name",name,"--privileged",
-                "--cgroup-parent","webagent-build-"+self.config["instance"]+".slice",
-                "--label","webagent.scheduler.instance="+self.config["instance"],
-                "--label","webagent.scheduler.job="+uuid.UUID(job["job_id"]).hex,
-                "--label","webagent.scheduler.phase=package","--pids-limit","512",
-                BUILDKIT,"--addr","unix:///run/buildkit/buildkitd.sock"],timeout=30,private_raw=True).strip()
+            create=["docker","create","--name",name,"--privileged","--cgroup-parent","webagent-build-"+self.config["instance"]+".slice",
+                "--label","webagent.scheduler.instance="+self.config["instance"],"--label","webagent.scheduler.job="+uuid.UUID(job["job_id"]).hex,"--label","webagent.scheduler.phase=package","--pids-limit","512"]
+            if cap is not None:create +=["--memory",str(cap),"--memory-swap",str(cap)]
+            create +=[BUILDKIT,"--addr","unix:///run/buildkit/buildkitd.sock"]
+            identity=self.runner.command(create,timeout=30,private_raw=True).strip()
             if not re.fullmatch(r"[a-f0-9]{64}",identity):raise ValueError("Packaging container identity invalid")
             with self.resources.lock:self.resources.rows[name]["container_id"]=identity
             self.runner.command(["docker","start",name],timeout=30);self.resources.attached(name,identity)
+            if cap is not None:
+                observed=self.runner.resource_request({"operation":"stats","container":name})
+                if observed.get("container_id")!=identity or observed.get("memory_max")!=cap or observed.get("swap_max")!=0 or (observed.get("oom_kills",0)>0 or observed.get("oom_events",0)>0):raise ValueError("Dedicated BuildKit ancestor memory cap not enforced")
+                job.setdefault("package_cap_outcomes",[]).append({"role":role,"requested_bytes":cap,"observed_memory_max":observed["memory_max"],"observed_swap_max":observed["swap_max"],"container_id":identity,"initial_oom_events":observed.get("oom_events",0),"initial_oom_kills":observed.get("oom_kills",0),"outcome":"running"})
+                getattr(self.runner,"resource_progress",lambda _:None)(job)
             self.runner.command(["docker","buildx","create","--name",name,"--driver","remote","docker-container://"+name],timeout=30)
             self.runner.command(["docker","buildx","inspect",name,"--bootstrap"],timeout=60)
-            self.runner.job_context.phase_container=name
-            yield name
-            success=True
+            self.runner.job_context.phase_container=name;yield name;success=True
         finally:
             self.runner.job_context.phase_container=None
             try:
-                environment={"PATH":"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin","LANG":"C.UTF-8","HOME":self.config.get("service_home",os.path.expanduser("~"))}
-                subprocess.run(["docker","buildx","rm",name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30,env=environment)
-            finally:self.finish_phase(name,identity,success)
-    def finish_phase(self,name,identity,success):
+                if cap is not None and identity is not None:
+                    try:
+                        observed=self.runner.resource_request({"operation":"stats","container":name});oom=observed.get("oom_kills",0)>0 or observed.get("oom_events",0)>0
+                        if observed.get("container_id")!=identity or observed.get("memory_max")!=cap or observed.get("swap_max")!=0:proof_error=ValueError("BuildKit ancestor cap changed during packaging")
+                    except (OSError,ValueError,RuntimeError,TimeoutError,PermissionError):
+                        observed={};success=False;proof_error=ValueError("BuildKit cap completion evidence unavailable")
+                    if job.get("package_cap_outcomes"):
+                        job["package_cap_outcomes"][-1].update(oom_events=observed.get("oom_events"),oom_kills=observed.get("oom_kills"),peak_memory=observed.get("peak_memory"),outcome="oom"if oom else("completed"if success and proof_error is None else"failed"))
+                        getattr(self.runner,"resource_progress",lambda _:None)(job)
+            finally:
+                try:
+                    environment={"PATH":"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin","LANG":"C.UTF-8","HOME":self.config.get("service_home",os.path.expanduser("~"))}
+                    subprocess.run(["docker","buildx","rm",name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30,env=environment)
+                finally:self.finish_phase(name,identity,success and not oom and proof_error is None)
+            if oom:raise RuntimeError("Package memory cap exceeded (OOM); publication failed")
+            if proof_error is not None:raise proof_error
+    def finish_phase(self,name,identity,success,diagnostic_complete=False):
         """Record a terminal phase only after exact-container cleanup is confirmed."""
         if identity is not None:
             try:
@@ -83,7 +135,7 @@ class Executor:
                 self.resources.rows[name].update(state="recovery_required",reason="Container cleanup needs explicit reconciliation")
                 self.resources.persist();self.resources.condition.notify_all()
             raise
-        self.resources.finish(name,success)
+        self.resources.finish(name,success,diagnostic_complete=diagnostic_complete)
 
     def check(self,job,blob,task,timeout,extract):
         """Use the same attributable recipes for bounded foreground checks and release compilation."""
@@ -94,9 +146,11 @@ class Executor:
         log=self.phase(job,"dependency","dependency",application,output,["cargo","fetch","--locked"],"engine:rust1.90:dependency",min(timeout,600),network=True)
         remaining=max(1,timeout-int(time.monotonic()-start))
         argv=["cargo","check","--locked","--offline"]if task=="check"else["cargo","test","--locked","--offline","--no-run"]
-        log+=self.phase(job,"compile_test","engine",application,output,argv,"engine:rust1.90:"+task,remaining)
+        log+=self.phase(job,"compile_test","engine",application,output,argv,"engine:rust1.90:"+("check"if task=="check"else"compile_test"),remaining)
         if task=="test":
-            log+=self.phase(job,"test","test",application,output,["cargo","test","--locked","--offline","--","--test-threads=1"],"engine:rust1.90:test",max(1,timeout-int(time.monotonic()-start)))
+            selected=test_filter(job.get("test_filter"))
+            runtime=["cargo","test","--locked","--offline"]+([selected]if selected is not None else[])+["--","--test-threads=1"]+(["--nocapture"]if selected is not None else[])
+            log+=self.phase(job,"test","test",application,output,runtime,"engine:rust1.90:test",max(1,timeout-int(time.monotonic()-start)))
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Check changed its captured application inputs")
         return log
 
@@ -117,7 +171,7 @@ class Executor:
     def rust_inputs(files):
         """Detect all core Rust/Cargo source changes and added files, independent of old compiler dependencies."""
         return {name:hashlib.sha256(body).hexdigest()for name,(_,body)in files.items()
-            if name in {"v3/Cargo.toml","v3/Cargo.lock","v3/build.rs"}or(name.startswith("v3/src/")and(name.endswith(".rs")or name.startswith("v3/src/plugin_packages/")))}
+            if name in {"v3/Cargo.toml","v3/Cargo.lock","v3/build.rs"}or(name.startswith("v3/crates/")or name.startswith("v3/src/")and(name.endswith(".rs")or name.startswith("v3/src/plugin_packages/")))}
     def cached_engine(self,blob,output):
         """Reuse only artifacts whose pinned recipe and complete compiled inputs still match the candidate."""
         cache=Path(self.config["state_root"])/"engine-artifacts";cache.mkdir(mode=0o700,exist_ok=True)
@@ -125,11 +179,12 @@ class Executor:
         for path in sorted(cache.glob("*.json"),key=lambda p:p.stat().st_mtime,reverse=True)[:64]:
             if path.is_symlink():raise ValueError("Engine cache receipt symlink")
             value=json.loads(path.read_text())
-            if value["recipe"]!=RUST+":single-job:debug0:v1"or value["rust_inputs"]!=rust:continue
+            if value["recipe"]!=RUST+":single-job:debug0:complete-tests-v4"or value["rust_inputs"]!=rust:continue
             if any(name not in files or hashlib.sha256(files[name][1]).hexdigest()!=sha for name,sha in value["compiled_inputs"].items()):continue
             if not re.fullmatch(r"[a-f0-9-]{36}",value["job_id"]):raise ValueError("Engine cache job identity invalid")
             source=Path(self.config["state_root"])/"execution"/value["job_id"]/"output/artifacts"
             if self.artifact_hashes(source)!=value["artifacts"]:raise ValueError("Cached compiler output changed")
+            self.test_manifest(source)
             destination=output/"artifacts";shutil.copytree(source,destination)
             return destination,value
         return None
@@ -151,6 +206,89 @@ class Executor:
                     if not line.lstrip().startswith("#")and ":"in line:
                         dependencies.update(shlex.split(line.split(":",1)[1]))
         return dependencies
+    @staticmethod
+    def smoke_recipe(mode):
+        """Write only fixed mode-proof artifacts; structured JSON never enters public log scrubbing."""
+        if mode=="linked":return ["sh","-c","set -e\ntest ! -L /output/stable/linked-smoke-result.json\n/output/stable/webagent-v3 --context-smoke > /output/stable/linked-smoke-result.json"]
+        if mode=="live":return ["sh","-c","set -e\ntest ! -L /output/stable/live-smoke-result.json\n/output/target/release/webagent-v3 --context-smoke > /output/stable/live-smoke-result.json"]
+        raise ValueError("Fixed context smoke mode required")
+    @staticmethod
+    def smoke_artifact(path):
+        """Read a bounded single-link regular proof file without redacting its typed JSON values."""
+        try:fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        except OSError:raise ValueError("Context smoke artifact identity invalid")from None
+        with os.fdopen(fd,"rb")as stream:
+            info=os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode)or info.st_nlink!=1 or info.st_size>65536:raise ValueError("Context smoke artifact identity or bound invalid")
+            body=stream.read(65537)
+            if len(body)>65536:raise ValueError("Context smoke artifact exceeds bound")
+            return body.decode("utf-8")
+    def persist_phase_log(self,job,logs):
+        """Retain already-scrubbed successful phase output before later recipe validation can fail."""
+        job["log"]=(job.get("log","")+logs).encode("utf-8")[-1024*1024:].decode("utf-8","ignore")
+        getattr(self.runner,"resource_progress",lambda _:None)(job)
+
+    @staticmethod
+    def smoke_result(text,mode):
+        """Validate bounded optimized-mode proofs containing the two deterministic prepared cases."""
+        if len(text)>65536:raise ValueError("Context smoke result exceeds bound")
+        value=json.loads(text)
+        if value.get("mode")!=mode or value.get("equivalence")is not True or value.get("interface_version")!=1 or not isinstance(value.get("prepared"),list)or len(value["prepared"])!=2:raise ValueError("Optimized context smoke failed")
+        if mode=="linked"and value.get("service_started")is not False:raise ValueError("Linked smoke started external service")
+        if mode=="live"and(value.get("service_reused")is not True or value.get("service_drained")is not True):raise ValueError("Live smoke lifecycle failed")
+        return value
+    @staticmethod
+    def linked_smoke(text):
+        """Require optimized linked assembly/equivalence proof before retaining the stable executable."""
+        return Executor.smoke_result(text,"linked")
+    @staticmethod
+    def live_smoke(text,linked):
+        """Require actual host service reuse/drain and exact prepared-result equivalence across modes."""
+        value=Executor.smoke_result(text,"live")
+        if value["prepared"]!=linked["prepared"]:raise ValueError("Optimized linked/live results differ")
+        return value
+    @staticmethod
+    def linked_recipe():
+        """Keep linked outputs and dep-info in their fixed separate compiler target directory."""
+        return ["cargo","build","--release","--locked","--offline","--bin","webagent-v3","--target-dir","/output/linked-target"]
+    def linked_dependencies(self,target,files):
+        """Attest linked implementation inputs separately from the deployed live dependency closure."""
+        captured={}
+        for name in self.compiler_dependencies(target):
+            relative=self.local_dependency(name)
+            if relative is None:continue
+            if relative not in files:raise ValueError("Linked compiler input absent from captured source")
+            captured[relative]=hashlib.sha256(files[relative][1]).hexdigest()
+        if "v3/crates/context-assembly/src/lib.rs"not in captured:raise ValueError("Linked implementation dependency attestation missing")
+        return captured
+
+    @staticmethod
+    def metadata_receipt(path):
+        """Read bounded compiler metadata from its output artifact rather than truncated public logs."""
+        if path.is_symlink()or not path.is_file()or path.stat().st_nlink!=1 or path.stat().st_size>16*1024*1024:raise ValueError("Compiler metadata artifact identity")
+        return json.loads(path.read_bytes())
+
+    @staticmethod
+    def core_dependencies(metadata,target):
+        """Attest only the live root's resolved local dependency closure, excluding service-only crates."""
+        packages={p["id"]:p for p in metadata["packages"]};nodes={n["id"]:n for n in metadata["resolve"]["nodes"]}
+        roots=[p["id"]for p in metadata["packages"]if p["name"]=="webagent-v3"]
+        if len(roots)!=1:raise ValueError("Main package metadata missing")
+        pending=roots[:];seen=set();dependencies=set()
+        while pending:
+            identity=pending.pop()
+            if identity in seen:continue
+            seen.add(identity);package=packages[identity]
+            pending.extend(d["pkg"]for d in nodes[identity].get("deps",[])if any(k["kind"]in (None,"normal","build")for k in d.get("dep_kinds",[])))
+            if package.get("source")is not None:continue
+            for item in package["targets"]:
+                if not any(kind in {"bin","lib","rlib","proc-macro"}for kind in item["kind"]):continue
+                for path in(target/"release/deps").glob(item["name"].replace("-","_")+"-*.d"):
+                    for line in path.read_text().replace(chr(92)+chr(10)," ").splitlines():
+                        if not line.lstrip().startswith("#")and ":"in line:dependencies.update(shlex.split(line.split(":",1)[1]))
+        if not any(name in {"src/main.rs","/build/src/main.rs"}for name in dependencies):raise ValueError("Live root dependency attestation missing")
+        return dependencies
+
     def seed_cargo_cache(self,job,blob,output):
         """Reuse compatible dependency objects, then rebuild the root package and rerun current tests."""
         files=self.runner.execution_entries(blob);folder=Path(self.config["state_root"])/"execution"
@@ -194,7 +332,7 @@ class Executor:
             if relative is not None:
                 if relative not in files:raise ValueError("Compiled local input absent from captured source")
                 inputs[relative]=hashlib.sha256(files[relative][1]).hexdigest()
-        value={"recipe":RUST+":single-job:debug0:v1","rust_inputs":self.rust_inputs(files),"compiled_inputs":inputs,
+        value={"recipe":RUST+":single-job:debug0:complete-tests-v4","rust_inputs":self.rust_inputs(files),"compiled_inputs":inputs,
             "artifacts":hashes,"job_id":job["job_id"]}
         if not inputs:raise ValueError("Compiled input closure missing")
         key=hashlib.sha256(json.dumps({k:v for k,v in value.items()if k not in {"job_id","artifacts"}},sort_keys=True).encode()).hexdigest()
@@ -207,6 +345,57 @@ class Executor:
         start=text.index("FROM rust:");end=text.index("FROM debian:",start)
         if hashlib.sha256(text[start:end].encode()).hexdigest()!=COMPILER_STAGE_SHA256:
             raise ValueError("Compiler Dockerfile recipe changed; migrate the reviewed attributable engine recipe")
+    def retain_test_manifest(self,output,artifacts):
+        """Retain Cargo-attested tests and exact debug support; never substitute optimized binaries."""
+        metadata=output/"test-artifacts.json"
+        if metadata.is_symlink()or not metadata.is_file()or metadata.stat().st_size>32*1024*1024:raise ValueError("Cargo test metadata identity")
+        tests=[];support=None;folder=artifacts/"tests";folder.mkdir()
+        for line in metadata.read_text().splitlines():
+            if len(line)>1024*1024:raise ValueError("Cargo test metadata line bound")
+            value=json.loads(line)
+            if value.get("reason")!="compiler-artifact"or not value.get("executable"):continue
+            target=value["target"];executable=value["executable"]
+            test=value.get("profile",{}).get("test")is True
+            official=target.get("name")=="webagent-context-service"and target.get("src_path")=="/build/crates/context-service/src/main.rs"and not test
+            if not test and not official:continue
+            expected="/output/target/debug/"
+            if not executable.startswith(expected)or ".."in Path(executable).parts:raise ValueError("Cargo test executable escaped fixed target")
+            source=output/"target/debug"/executable.removeprefix(expected)
+            if source.is_symlink()or not source.is_file():raise ValueError("Cargo test executable identity")
+            with source.open("rb")as stream:
+                if stream.read(4)!=b"\x7fELF":raise ValueError("Cargo test executable identity")
+            if test:
+                name=source.name
+                if not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",name):raise ValueError("Cargo test executable name")
+                destination=folder/name;record={"file":"tests/"+name,"package_id":value["package_id"],"target_name":target["name"],"source_path":target["src_path"],"kind":target["kind"]};tests.append(record)
+            else:
+                destination=artifacts/"test-support/debug/webagent-context-service";destination.parent.mkdir(parents=True,exist_ok=True)
+                support={"file":"test-support/debug/webagent-context-service","destination":"target/debug/webagent-context-service","package_id":value["package_id"],"source_path":target["src_path"],"profile":"debug"};record=support
+            shutil.copyfile(source,destination);destination.chmod(0o555);record["sha256"]=self.artifact_hashes(destination.parent)[destination.name]
+        if not support or not any(item["target_name"]=="service"and item["kind"]==["test"]and item["source_path"]=="/build/crates/context-service/tests/service.rs"and item["package_id"]==support["package_id"]for item in tests):raise ValueError("Official service integration/support provenance missing")
+        manifest={"schema_version":1,"tests":sorted(tests,key=lambda item:item["file"]),"support":support}
+        (artifacts/"test-manifest.json").write_text(json.dumps(manifest,sort_keys=True)+"\n")
+        return manifest
+    def test_manifest(self,artifacts):
+        """Reject incomplete, changed or provenance-mismatched retained test closures before replay."""
+        value=self.metadata_receipt(artifacts/"test-manifest.json")
+        if value.get("schema_version")!=1 or not value.get("tests")or not isinstance(value.get("support"),dict):raise ValueError("Retained test manifest incomplete")
+        support=value["support"]
+        if support.get("file")!="test-support/debug/webagent-context-service"or support.get("destination")!="target/debug/webagent-context-service"or support.get("profile")!="debug"or support.get("source_path")!="/build/crates/context-service/src/main.rs":raise ValueError("Retained support provenance invalid")
+        if not any(item.get("target_name")=="service"and item.get("kind")==["test"]and item.get("source_path")=="/build/crates/context-service/tests/service.rs"and item.get("package_id")==support.get("package_id")for item in value["tests"]):raise ValueError("Retained integration provenance missing")
+        names=[]
+        for item in [*value["tests"],support]:
+            name=item.get("file","")
+            if name in names or not(name==support["file"]or re.fullmatch(r"tests/[a-z0-9_]+-[a-f0-9]{16}",name)):raise ValueError("Retained test path invalid")
+            names.append(name);path=artifacts/name
+            if path.is_symlink()or not path.is_file()or path.stat().st_nlink!=1 or self.artifact_hashes(path.parent)[path.name]!=item.get("sha256"):raise ValueError("Retained test output changed")
+        if {p.relative_to(artifacts).as_posix()for p in (artifacts/"tests").iterdir()}!={item["file"]for item in value["tests"]}:raise ValueError("Retained test manifest inventory mismatch")
+        return value
+    @staticmethod
+    def restore_test_support(output,artifacts,manifest):
+        """Restore only attested debug support at Cargo's fixed integration-test executable path."""
+        debug=output/"target/debug";debug.mkdir(parents=True,exist_ok=True)
+        shutil.copyfile(artifacts/manifest["support"]["file"],debug/"webagent-context-service");(debug/"webagent-context-service").chmod(0o555)
     def engine(self,job,blob,extract,digest):
         """Compile/test once, retain input attestations and produce the complete existing image artifact set."""
         job["artifact_component"]="engine"
@@ -222,6 +411,8 @@ class Executor:
         cached=self.cached_engine(blob,output)
         if cached:
             artifacts,old=cached;logs="Verified compiler artifacts reused; locked Rust tests previously passed on identical compiled inputs.\n"
+            manifest=self.test_manifest(artifacts)
+            self.restore_test_support(output,artifacts,manifest)
             for binary in sorted((artifacts/"tests").iterdir()):
                 if not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",binary.name):raise ValueError("Cached test executable name invalid")
                 logs+=self.phase(job,"test","test",application,output,["/output/artifacts/tests/"+binary.name,"--test-threads=1"],"engine:rust1.90:test")
@@ -230,6 +421,9 @@ class Executor:
             logs=logs.replace("locked Rust tests previously passed on identical compiled inputs.","current candidate ran retained tests from identical compiled inputs.")
             receipt={"inputs_sha256":digest(blob),"artifacts":old["artifacts"],"log":logs,"reused_from":old["job_id"]}
             temporary=root/"verified.new";temporary.write_text(json.dumps(receipt));os.replace(temporary,root/"verified.json")
+            if not (artifacts/"stable/smoke.json").is_file():raise ValueError("Retained optimized linked smoke proof missing")
+            job["linked_stable"]=json.loads((artifacts/"stable/smoke.json").read_text())
+            job["optimized_mode_equivalence"]=json.loads((artifacts/"stable/mode-equivalence.json").read_text())
             job["compiler_artifact_reuse"]=old["job_id"]
             return artifacts,logs
         seeded=self.seed_cargo_cache(job,blob,output)
@@ -244,23 +438,33 @@ class Executor:
         dependency=["sh","-c","set -e\ncargo clean --package webagent-v3\ncargo fetch --locked"]if seeded else["cargo","fetch","--locked"]
         logs=("Compatible Cargo dependency cache copied; root package rebuilt and current tests rerun.\n"if seeded else"")
         logs+=self.phase(job,"dependency","dependency",application,output,dependency,"engine:rust1.90:dependency",600,network=True)
-        logs+=self.phase(job,"compile_test","engine",application,output,["cargo","test","--locked","--no-run"],"engine:rust1.90:compile_test")
-        logs+=self.phase(job,"test","test",application,output,["cargo","test","--locked","--","--test-threads=1"],"engine:rust1.90:test")
+        logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","cargo test --workspace --locked --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json"],"engine:rust1.90:compile_test")
+        logs+=self.phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--","--test-threads=1"],"engine:rust1.90:test")
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Tests left changed application inputs")
-        logs+=self.phase(job,"compile_release","engine",application,output,["cargo","build","--release","--locked","--offline"],"engine:rust1.90:release")
+        logs+=self.phase(job,"compile_linked","engine",application,output,self.linked_recipe(),"engine:rust1.90:linked-release")
+        stable=output/"stable";stable.mkdir(exist_ok=True)
+        shutil.copyfile(output/"linked-target/release/webagent-v3",stable/"webagent-v3");(stable/"webagent-v3").chmod(0o555)
+        logs+=self.phase(job,"linked_smoke","test",application,output,self.smoke_recipe("linked"),"engine:rust1.90:linked-smoke",60)
+        proof=self.linked_smoke(self.smoke_artifact(stable/"linked-smoke-result.json"))
+        linked_inputs=self.linked_dependencies(output/"linked-target",self.runner.execution_entries(blob))
+        (stable/"dependencies.json").write_text(json.dumps(linked_inputs,sort_keys=True)+"\n")
+        job["linked_stable"]={"mode":"linked","target_directory":"linked-target","compiled_inputs":linked_inputs,"artifact_sha256":hashlib.sha256((stable/"webagent-v3").read_bytes()).hexdigest(),"smoke":proof,"retained_artifact":"stable/webagent-v3","deployed":False}
+        (stable/"smoke.json").write_text(json.dumps(job["linked_stable"],sort_keys=True)+"\n")
+        getattr(self.runner,"resource_progress",lambda _:None)(job)
+        logs+=self.phase(job,"compile_release","engine",application,output,["cargo","build","--workspace","--release","--locked","--offline","--no-default-features","--features","webagent-v3/live-context"],"engine:rust1.90:release")
+        logs+=self.phase(job,"live_smoke","test",application,output,self.smoke_recipe("live"),"engine:rust1.90:live-smoke",90)
+        live_proof=self.live_smoke(self.smoke_artifact(stable/"live-smoke-result.json"),proof)
+        job["optimized_mode_equivalence"]={"status":"passed","linked":proof,"live":live_proof}
+        (stable/"mode-equivalence.json").write_text(json.dumps(job["optimized_mode_equivalence"],sort_keys=True)+"\n")
+        getattr(self.runner,"resource_progress",lambda _:None)(job)
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Compilation changed application inputs")
         artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True);hashes={}
         for name in BINARIES:
             source_binary=output/"target/release"/name
             destination=artifacts/name;shutil.copyfile(source_binary,destination);destination.chmod(0o555)
             hashes[name]=hashlib.sha256(destination.read_bytes()).hexdigest()
-        tests=artifacts/"tests";tests.mkdir()
-        for binary in BINARIES:
-            for path in(output/"target/debug/deps").glob(binary.replace("-","_")+"-*"):
-                if path.is_file()and re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",path.name)and os.access(path,os.X_OK):
-                    with path.open("rb")as stream:magic=stream.read(4)
-                    if magic==b"\x7fELF":shutil.copyfile(path,tests/path.name);(tests/path.name).chmod(0o555)
-        if not any(tests.iterdir()):raise ValueError("Retained locked test executables missing")
+        shutil.copytree(stable,artifacts/"stable")
+        self.retain_test_manifest(output,artifacts)
         # Preserve packaged module descriptors and the offline optimization registry.
         for package,binary in [("automation","webagent-automation"),("outbound_notifications","webagent-outbound-notifications")]:
             folder=artifacts/"modules"/package;folder.mkdir(parents=True)
@@ -270,7 +474,10 @@ class Executor:
         registry=artifacts/"optimization-cargo/registry";registry.parent.mkdir()
         shutil.copytree(cargo/"registry",registry)
         dependencies=self.compiler_dependencies(output/"target")
-        (artifacts/"core-inputs.txt").write_text("\n".join(sorted(dependencies))+"\n")
+        self.phase(job,"engine_metadata","dependency",application,output,["sh","-c","cargo metadata --locked --offline --format-version 1 --no-default-features --features webagent-v3/live-context > /output/core-metadata.json"],"engine:rust1.90:metadata")
+        metadata=self.metadata_receipt(output/"core-metadata.json")
+        core=self.core_dependencies(metadata,output/"target")
+        (artifacts/"core-inputs.txt").write_text("\n".join(sorted(core))+"\n")
         if "v3/src/main.rs"not in {self.local_dependency(name)for name in dependencies}:raise ValueError("Compiler dependency attestation missing")
         hashes=self.artifact_hashes(artifacts);self.retain_engine(job,blob,dependencies,hashes)
         receipt={"inputs_sha256":inputs,"artifacts":hashes,"log":logs}

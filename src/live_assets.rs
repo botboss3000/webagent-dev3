@@ -38,7 +38,8 @@ pub(crate) fn record_adoption(root:&std::path::Path,role:&str,catalog:&abilities
     let Some(selected)=published_root()else{return Ok(());};
     if catalog.snapshot_root()!=selected.join("plugins/abilities"){anyhow::bail!("Catalog adoption not confirmed");}
     let revision=selected.parent().and_then(|p|p.file_name()).and_then(|s|s.to_str()).ok_or_else(||anyhow!("Invalid revision"))?;
-    let value=json!({"revision":revision,"catalog_version":catalog.version()});
+    let engine=crate::engine_components::catalog()?;
+    let value=json!({"revision":revision,"catalog_version":catalog.version(),"engine_revision":engine.revision});
     let dir=root.join("publication");std::fs::create_dir_all(&dir)?;
     let path=dir.join(format!("{role}.json"));
     if std::fs::read(&path).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok())==Some(value.clone()){return Ok(());}

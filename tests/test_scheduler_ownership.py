@@ -26,6 +26,27 @@ class OwnershipTests(unittest.TestCase):
         self.assertFalse(self.acquire(self.current(b),["module:engine"])["acquired"])
         self.store.complete(a["id"],a["owner"],a["revision"],a["epoch"],self.request())
         self.assertTrue(self.acquire(self.current(b),["module:engine"])["acquired"])
+    def completed_holder_and_waiter(self):
+        """Leave an older queued request after its actual holder has explicitly completed."""
+        holder=self.acquire(self.begin("queue-holder"),["module:engine"])["task"];self.time+=1
+        waiter=self.begin("queue-waiter");self.assertFalse(self.acquire(waiter,["module:engine"])["acquired"])
+        holder=self.store.validate(holder["id"],holder["owner"],holder["revision"],holder["epoch"],self.evidence(holder),self.request())
+        self.store.complete(holder["id"],holder["owner"],holder["revision"],holder["epoch"],self.request())
+        return self.current(waiter)
+    def test_empty_scope_orphan_does_not_keep_unacquired_fifo_reservation(self):
+        waiter=self.completed_holder_and_waiter();self.time+=301;self.store.orphan();orphan=self.current(waiter)
+        self.assertEqual(orphan["state"],"orphaned");self.assertEqual(orphan["scopes"],[]);self.assertEqual(orphan["requested"],["module:engine"])
+        self.assertTrue(self.acquire(self.begin("new-after-orphan"),["module:engine"])["acquired"])
+        self.assertEqual(self.current(waiter),orphan)
+    def test_live_waiting_request_keeps_fifo_priority(self):
+        waiter=self.completed_holder_and_waiter();self.time+=1
+        result=self.acquire(self.begin("new-after-waiter"),["module:engine"])
+        self.assertFalse(result["acquired"]);self.assertEqual(result["blockers"][0]["task_id"],waiter["id"])
+    def test_orphaned_held_scopes_still_block_new_work(self):
+        owner=self.acquire(self.begin("held-owner"),["module:engine","path:src"])["task"];self.time+=301;self.store.orphan()
+        result=self.acquire(self.begin("new-after-held-orphan"),["module:engine","path:src/main.rs"])
+        self.assertFalse(result["acquired"]);self.assertEqual(result["blockers"][0]["task_id"],owner["id"])
+        self.assertEqual(self.current(owner)["scopes"],["module:engine","path:src"])
     def test_unrelated_components_acquire_independently(self):
         for name in ["one","two"]:self.assertTrue(self.acquire(self.begin(name),["module:ability:Developer/"+name])["acquired"])
     def test_correction_invalidates_acceptance_without_releasing_scope(self):

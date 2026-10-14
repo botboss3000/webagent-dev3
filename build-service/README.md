@@ -114,3 +114,35 @@ Complete Code Index review mutations while the task is open, before finish close
 it; use a supported continuation or ledger publication for later review work.
 Between broker installation and source promotion, use the exact protected installed
 buildctl.py so its configuration parser matches the installed broker.
+
+## Engine component publication
+
+The registered context-assembly interface uses `plugins/engine/context-assembly/component.json`. The broker builds only the context-service package and local Cargo dependency closure, runs service/library checks in the pinned toolchain, and binds compiler dep-info and executable hashes to a content-addressed artifact. A complete immutable publication seals the executable under that generation’s `artifact/` directory before index construction and retained-host validation. Invalid candidates do not activate. Removing the descriptor uses the existing plugin publication lane and pauses affected work through the engine host.
+
+Development core builds select `live-context`; stable builds select `linked-context`. Published core-inputs follow the live main package’s resolved Cargo dependency graph, so changing service/assembly implementation can retain API and loop binaries, while contract changes request coordinated builds. Cargo workspace membership alone does not grant hot publication. Engine and ability adoption must acknowledge the same revision before release completion.
+
+Ownership FIFO applies only to live waiting requests. Orphaned tasks retain every held scope and historical requested scope, but requests they never acquired do not reserve components or block new work. Recovery remains explicit; this distinction neither releases held claims nor deletes old source or ownership records.
+
+Engine publication seals `plugins/engine/catalog.json` with the exact revision, descriptor/executable hashes and sorted withdrawn IDs derived only from the prior protected publication. Empty membership with an explicit withdrawal pauses dependents; unknown requirements remain invalid. Reinstall clears that ID from withdrawals. Cargo dependency caches may be reused across implementation edits only after locked manifests, pinned recipe and retained cache integrity match; artifact reuse still requires exact complete input hashes.
+
+Checks persist admission headroom status and include admission waiting in their overall deadline. Completed non-OOM Rust diagnostic checks can supply measured peak estimates for the same fixed check recipe with the existing 20 percent margin; killed, interrupted, timed-out and incomplete executions never calibrate estimates. Memory reserve and source claims remain authoritative.
+
+Independent engine replacement requires current API and loop adoption receipts both reporting live execution. Linked, unknown, missing or stale mode receipts route engine source edits to a coordinated core release; admission rechecks the mode before hot publication. Successful release receipts retain actual per-consumer engine execution modes, so a linked application never represents a newly published service as its executing implementation.
+
+Compiler checking, test compilation, test execution and release compilation use separate measured profiles. A one-time migration retains old mixed test samples under a legacy key, reassigns completed samples using actual recorded phase identities, excludes failed/incomplete runtime samples, and keeps all phase rows. Public job views expose the bounded waiting cause, memory estimate/headroom and admission deadline.
+
+Local operators may explicitly request compiler_memory_cap=4026531840 for checks or coordinated releases. Only engine compile_test/compile_release phases use it; runtime tests and publication retain their normal profiles. Admission retains the configured host reserve and requires actual kernel memory.max readback and zero swap allowance before compiler execution. Receipts record requested/observed cap, recipe, container identity, peak and OOM counters. Any OOM is a failed check and cannot calibrate successful memory history. Omission preserves normal uncapped behavior.
+
+Local operator test checks may supply test_filter as an ASCII Rust unit-name substring (letters, digits, underscore, colon; maximum 160 characters). It selects runtime tests and enables nocapture for bounded diagnosis, never arbitrary Cargo arguments. The filter is bound to the idempotency signature and public receipt; omitted filters retain full-test behavior.
+
+The coordinated engine recipe now compiles an optimized linked-context executable first, executes its fixed offline context-smoke equivalence check, and retains it under stable/webagent-v3 with its hash/mode/proof. The live workspace build runs afterward and remains the deployed artifact. Linked compilation uses its own measured recipe and the explicit compiler cap when requested; optimized smoke uses normal test admission. Cached artifacts must include the linked proof under the new recipe identity.
+
+Linked optimized compilation uses /output/linked-target and retains separate hashed dep-info inputs beside its stable executable. Live compilation and deployment use /output/target exclusively. Fixed optimized live smoke runs beside the official context service, requires reuse/drain, and compares its two prepared results exactly with linked smoke before certification; both proofs are retained.
+
+Candidate preparation stream-hashes private inspection members by mode, exact size and SHA-256; changed inspection snapshots still fail, while release candidates retain only application source. Full allowlist validation remains mandatory. Attested archives are released after durable source preparation, and the protected snapshot helper clears its last archive on both successful and failed sends. Durable inspection snapshots and source reservations remain unchanged.
+
+Fixed linked/live smoke recipes write their mode-specific JSON proofs under /output/stable. The broker verifies bounded regular single-link files before parsing; environment-value redaction applies only to public logs, preserving typed true/false proof values. Successful phase output is persisted immediately as a bounded already-scrubbed job log, so later proof validation failures retain test/compiler evidence. Failed or unsealed outputs do not receive cache certification.
+
+Local coordinated releases may request package_memory_cap=4026531840 (--package-memory-cap), bounding only their dedicated BuildKit ancestor with actual kernel memory.max/zero-swap proof and OOM-failure receipts; ordinary profiles and host reserve are unchanged. Packaging admission has a600-second deadline.
+
+The complete-tests-v4 certificate retains the exact Cargo-declared unit/integration ELFs plus official debug context-service support, hashes and package/source provenance. Replay restores that debug binary at its original /output/target/debug path and rejects missing/tampered/incomplete manifests. Older incomplete caches do not qualify; failed/unsealed output is never retro-certified.

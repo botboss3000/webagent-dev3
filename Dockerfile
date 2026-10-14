@@ -4,6 +4,7 @@ WORKDIR /build
 COPY v3/Cargo.toml v3/Cargo.lock ./
 COPY v3/build.rs ./build.rs
 COPY v3/src ./src
+COPY v3/crates ./crates
 # COMPACTION CONFIG: build-time tests read this fixture; runtime uses the single
 # host config directory mounted by deploy.sh, not an embedded configuration.
 COPY v3/config ./config
@@ -20,8 +21,13 @@ ENV CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFI
 # binary outside the cache mount so both runtime targets copy one exact build.
 RUN --mount=type=cache,id=webagent-v3-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=webagent-v3-target,target=/build/target,sharing=locked \
-    cargo test --locked -- --test-threads=1 \
-    && cargo build --release --locked \
+    cargo test --workspace --locked -- --test-threads=1 \
+    && cargo build --release --locked --offline --bin webagent-v3 --target-dir /build/linked-target \
+    && install -Dm755 /build/linked-target/release/webagent-v3 /out/stable/webagent-v3 \
+    && /out/stable/webagent-v3 --context-smoke \
+    && cargo build --workspace --release --locked --no-default-features --features webagent-v3/live-context \
+    && /build/target/release/webagent-v3 --context-smoke \
+    && install -Dm755 /build/target/release/webagent-context-service /out/webagent-context-service \
     && install -Dm755 /build/target/release/webagent-v3 /out/webagent-v3 \
     && install -Dm755 /build/target/release/webagent-mcp /out/webagent-mcp \
     && install -Dm755 /build/target/release/webagent-diagnostics /out/webagent-diagnostics \
@@ -37,7 +43,7 @@ RUN --mount=type=cache,id=webagent-v3-registry,target=/usr/local/cargo/registry,
     && cp -a /usr/local/cargo/registry /out/optimization-cargo/registry
 
 RUN --mount=type=cache,id=webagent-v3-target,target=/build/target,sharing=locked \
-    awk 'FNR==1 {sub(/^[^:]*: /,"");print}' /build/target/release/deps/webagent_v3-*.d \
+    awk 'FNR==1 {sub(/^[^:]*: /,"");print}' /build/target/release/deps/webagent_v3-*.d /build/target/release/deps/webagent_context_contracts-*.d \
       | tr ' ' '\n' | LC_ALL=C sort -u > /out/core-inputs.txt
 RUN test -s /out/core-inputs.txt
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS api
@@ -58,6 +64,8 @@ COPY --from=tested_builder /usr/local/rustup/toolchains/1.90.0-x86_64-unknown-li
 COPY v3/worker.py v3/ability_plugin_worker.py v3/sandbox.py v3/launch.py v3/promote.py /opt/v3/
 COPY v3/build-service /opt/v3/build-service
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
+COPY v3/plugins/engine /opt/v3/plugins/engine
+COPY --from=tested_builder /out/webagent-context-service /usr/local/lib/webagent/engine/context-assembly/webagent-context-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
 # Git invokes this fixed helper directly as the unprivileged tool worker.
 RUN chmod 0555 /opt/v3/plugins/abilities/Administrator/git_control/askpass.py
@@ -84,6 +92,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
 COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inputs.txt
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
+COPY v3/plugins/engine /opt/v3/plugins/engine
+COPY --from=tested_builder /out/webagent-context-service /usr/local/lib/webagent/engine/context-assembly/webagent-context-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
 ENV V3_PROCESS_ROLE=loop V3_STATE_ROOT=/state V3_WORKSPACE_ROOT=/workspaces
 WORKDIR /state

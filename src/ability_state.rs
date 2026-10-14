@@ -15,6 +15,7 @@ impl axum::extract::FromRequestParts<App> for State<App> {
             *previous=config;
         }
         let _=live_assets::record_adoption(&app.store.root,"api",&app.abilities);
+        let _=crate::engine_components::adoption(&app.store.root,"api");
         Ok(Self(app))
     }
 }

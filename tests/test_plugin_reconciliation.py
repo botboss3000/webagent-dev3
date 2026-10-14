@@ -50,7 +50,7 @@ class ReconciliationTests(unittest.TestCase):
 class AdoptionProbeTests(unittest.TestCase):
  def test_ready_response_and_both_receipts_are_required_with_bounded_timeout(self):
   from unittest.mock import patch
-  runner=fixtures.host.Runner();job=str(uuid.uuid4());receipt={r:{"revision":job,"catalog_version":"catalog"}for r in ("api","loop")}
+  runner=fixtures.host.Runner();job=str(uuid.uuid4());receipt={r:{"revision":job,"catalog_version":"catalog","engine_revision":job}for r in ("api","loop")}
   runner.command=Mock(return_value=fixtures.json.dumps(receipt))
   response=Mock(status=200);response.read.return_value=b'{"catalog_version":"catalog"}'
   connection=Mock();connection.getresponse.return_value=response
