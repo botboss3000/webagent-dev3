@@ -155,11 +155,14 @@ pub(crate) async fn collect(app:&App,run:&mut Value)->Result<bool> {
 // @code-index {"version":1,"feature":"background-dispatch","aliases":["background task service","idle CPU"],"purpose":"Host-owned encrypted task execution with metadata-only drop-in planning; broadcast wake plus bounded recovery. Config: plugins/engine/background-dispatch/component.json -> limits; data-root config/engine-components.json -> disabled (source defaults only initialize absent controls).","span_lines":80,"configuration":{"status":"configured","references":[{"path":"plugins/engine/background-dispatch/component.json","pointers":["/limits/max_request_bytes","/limits/max_response_bytes","/limits/timeout_ms"]},{"path":"config/engine-components.json","pointers":["/disabled"]}],"opportunities":[]}}
 /// Listen independently of the scheduler; durable task records recover missed hints and restarts.
 pub(crate) async fn service(app:App) {
+ // Subscribe before the first scan so a commit during that scan cannot lose its hint.
+ service_with_hints(app,crate::wake::subscribe()).await
+}
+/// Run the host loop with independent hints; explicit receivers isolate tests from global broadcasts.
+async fn service_with_hints(app:App,mut hints:tokio::sync::watch::Receiver<u64>) {
  use webagent_background_contracts::{Request,Task,State,RECOVERY_MS};
  let mut active=std::collections::HashSet::new();
  let mut workers=tokio::task::JoinSet::new();
- // Subscribe before scanning so a commit during a scan cannot lose its wake.
- let mut hints=crate::wake::subscribe();
  loop {
   if app.stop.is_cancelled(){break;}
   while let Some(result)=workers.try_join_next(){if let Ok(id)=result{active.remove(&id);}}
@@ -198,11 +201,10 @@ pub(crate) async fn service(app:App) {
     }
    }
   }
-  // Polling foundation deliberately preserves the deployed cadence for paired task measurements.
-  // The following coordinated release replaces this wait with independent wake/worker/recovery selection.
-  let _=(&mut hints,retry_ms);
   tokio::select! {_=app.stop.cancelled()=>break,
-   _=tokio::time::sleep(Duration::from_millis(250))=>{}}
+   _=hints.changed()=>{},
+   joined=workers.join_next(),if !workers.is_empty()=>{if let Some(Ok(id))=joined{active.remove(&id);}},
+   _=tokio::time::sleep(Duration::from_millis(retry_ms.min(RECOVERY_MS)))=>{}}
 
  }
  workers.abort_all();while workers.join_next().await.is_some(){}
@@ -281,12 +283,13 @@ async fn run_task(app:&App,mut task:Value)->Result<()> {
         assert_eq!(reopened.background_get("test").await.unwrap().unwrap()["status"],"cancelled");
     }
 
-/// The foundation intentionally retains the old scan cadence until paired measurements are captured.
+/// Idle storage stays untouched before recovery; a private hint triggers a fresh scan.
 #[tokio::test]
-async fn background_dispatch_polling_baseline_preserves_cadence() {
+async fn background_dispatch_idle_waits_and_wake_rescans() {
  use crate::runtime_tests::fixture;
  let (_root,app)=fixture().await;
- let service=tokio::spawn(background_tasks::service(app.clone()));
+ let (wake,hints)=tokio::sync::watch::channel(0);
+ let service=tokio::spawn(service_with_hints(app.clone(),hints));
  let exists=||async {
   sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM sqlite_master WHERE name='background_task_index'")
    .fetch_one(&app.store.pool).await.unwrap()>0
@@ -294,8 +297,8 @@ async fn background_dispatch_polling_baseline_preserves_cadence() {
  tokio::time::timeout(Duration::from_secs(2),async {while !exists().await{tokio::time::sleep(Duration::from_millis(10)).await;}}).await.unwrap();
  sqlx::query("DROP TABLE background_task_index").execute(&app.store.pool).await.unwrap();
  tokio::time::sleep(Duration::from_millis(600)).await;
- assert!(exists().await,"polling foundation changed the baseline scan cadence");
- crate::wake::notify(&app).await;
+ assert!(!exists().await,"idle service scanned before the recovery deadline");
+ wake.send_modify(|sequence|*sequence+=1);
  tokio::time::timeout(Duration::from_secs(1),async {while !exists().await{tokio::time::sleep(Duration::from_millis(10)).await;}}).await.unwrap();
  app.stop.cancel();tokio::time::timeout(Duration::from_secs(1),service).await.unwrap().unwrap();
 }
