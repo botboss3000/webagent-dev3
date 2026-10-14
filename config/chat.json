@@ -7,8 +7,8 @@
     "composer": {
       "keyboard_fade": {
         "enabled": false,
-        "fade_out_ms": 60,
-        "fade_in_ms": 120,
+        "fade_out_ms": 500,
+        "fade_in_ms": 500,
         "settle_ms": 80
       }
     }

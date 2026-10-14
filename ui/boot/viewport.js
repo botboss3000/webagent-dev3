@@ -103,7 +103,7 @@
     document.addEventListener('focusout', function () { setTimeout(applyKb, 0); });
 
     // @code-index {"version":1,"feature":"composer-keyboard-fade","aliases":["composer fade","keyboard fade"],"purpose":"Fades only composer/footer controls during mobile keyboard-sized viewport changes. Config: data/config/chat.json -> chat_common.composer.keyboard_fade, with desktop/mobile/widget profile overrides; saved settings are adopted on UI config reload.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/composer/keyboard_fade/enabled","/chat_common/composer/keyboard_fade/fade_out_ms","/chat_common/composer/keyboard_fade/fade_in_ms","/chat_common/composer/keyboard_fade/settle_ms"],"profile_overrides":true}],"opportunities":[]}}
-    var fadeSettings = {enabled: false, fade_out_ms: 60, fade_in_ms: 120, settle_ms: 80};
+    var fadeSettings = {enabled: false, fade_out_ms: 500, fade_in_ms: 500, settle_ms: 80};
     var fadeSignature = '', fadeAnimations = [], fadeArea = null;
     var fadeActive = false, fadeCooling = false, fadeSettleTimer = null, fadeDeadline = null;
     var fadeHeight = vv ? vv.height : window.innerHeight, fadeStableHeight = fadeHeight;
@@ -182,8 +182,8 @@
       function duration(key, fallback, maximum) {
         return typeof raw[key] === 'number' && Number.isFinite(raw[key]) && raw[key] >= 0 && raw[key] <= maximum ? raw[key] : fallback;
       }
-      var next = {enabled: raw.enabled === true, fade_out_ms: duration('fade_out_ms', 60, 300),
-        fade_in_ms: duration('fade_in_ms', 120, 400), settle_ms: duration('settle_ms', 80, 250)};
+      var next = {enabled: raw.enabled === true, fade_out_ms: duration('fade_out_ms', 500, 500),
+        fade_in_ms: duration('fade_in_ms', 500, 500), settle_ms: duration('settle_ms', 80, 250)};
       var signature = JSON.stringify(next);
       if (signature === fadeSignature) return;
       cancelComposerFade(); fadeSettings = next; fadeSignature = signature;

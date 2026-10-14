@@ -141,3 +141,12 @@ test('disabling fade during an animation cancels effects immediately',async t=>{
  const p=await fadeFixture(t);await fadeHeight(p,500);await p.waitForTimeout(40);const cfg=config(layout());cfg.chat_common.composer={keyboard_fade:{enabled:false}};await p.evaluate(async cfg=>api.initChatConfig({config:cfg}),cfg);
  assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);assert.equal(await p.locator('#chat-input-row').evaluate(e=>getComputedStyle(e).opacity),'1');assert.equal((await stable(p)).focused,true);
 });
+
+test('configured half-second fade-out and fade-in complete without losing editor focus',async t=>{
+ const p=await fadeFixture(t,{enabled:true,fade_out_ms:500,fade_in_ms:500,settle_ms:80});
+ const started=await p.evaluate(()=>{fadeVh=500;visualViewport.dispatchEvent(new Event('resize'));const a=document.querySelector('#chat-input-row').getAnimations()[0];return a?.effect.getTiming().duration;});assert.equal(started,500);
+ await p.waitForFunction(()=>document.querySelector('#chat-input-row').getAnimations().some(a=>a.effect.getKeyframes().at(-1).opacity==='1'));
+ assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().find(a=>a.effect.getKeyframes().at(-1).opacity==='1')?.effect.getTiming().duration),500);
+ await p.waitForFunction(()=>getComputedStyle(document.querySelector('#chat-input-row')).opacity==='1'&&document.querySelector('#chat-input-row').getAnimations().length===0);
+ const state=await stable(p);assert.equal(state.focused,true);assert.equal(state.blur,0);assert.equal(state.focus,0);assert.equal(state.value,'retained draft');
+});
