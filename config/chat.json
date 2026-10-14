@@ -3,6 +3,17 @@
     "execution_mode": {
       "default_mode": "auto",
       "confirm_auto_mode": false
+    },
+    "screen_display": {
+      "enabled": true,
+      "mobile_only": true,
+      "after_activity_ms": 120000,
+      "after_input_ms": 120000,
+      "active": "dim",
+      "inactive": "off",
+      "dim_after_ms": 30000,
+      "dim_opacity": 0.8,
+      "allow_device_overrides": false
     }
   },
   "chat_desktop": {},

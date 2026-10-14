@@ -261,6 +261,8 @@ function applyFooter(profile, mode) {
 export function applyChatConfig() {
   const profile = currentChatProfile();
   if (!profile) return;
+  // Notify display consumers even when layout is cached; adoption never counts as new chat activity.
+  document.dispatchEvent(new Event('v3:chat-config-applied'));
   const surface = surfaceName();
   const focused = document.activeElement;
   const inComposer = byId('chat-input-area')?.contains(focused) || focused?.closest('.v3-context-panel:not([hidden]), .v3-chat-model-list:not([hidden])');

@@ -1,6 +1,6 @@
 // @code-index {"version":1,"feature":"chat-panel","aliases":["chat panel","conversation panel","session transcript"],"purpose":"Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides. Touch feedback: ui/vibrate.json -> enabled, duration_ms; gestures stay client-owned.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common/composer/keyboard_focus"],"profile_overrides":true},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
 // V2-style panel/client separation; markup and message protocol remain V3.
-// @code-index {"version":1,"feature":"chat-screen-panel-routing","aliases":["conversation display lifecycle"],"purpose":"Panel feeds selected sessions, active run states and new live messages to the mobile display controller; history loading is excluded. Config: ui/screen-awake.json -> complete display policy and device preferences.","span_lines":3,"configuration":{"status":"configured","references":[{"path":"ui/screen-awake.json","pointers":["/enabled","/mobile_only","/after_chat_ms","/after_input_ms","/dim_after_ms","/dim_opacity"]}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-screen-panel-routing","aliases":["conversation display lifecycle"],"purpose":"Panel feeds selected-session runs/live messages to display policy from data/config/chat.json -> chat_common.screen_display and surface overrides; history loading is excluded.","span_lines":3,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/screen_display"],"profile_overrides":true}],"opportunities":[]}}
 import {mountScreenAwake} from '../../shared/screen-awake.js';
 import {mountChatControlFeedback} from '../controls/feedback.js';
 import {mountSharedChat} from '../controls/shared-chat.js';
@@ -62,7 +62,7 @@ async function mountChat(){
 }
 await mountChat();
 // Display activity uses authoritative selected-session run states and live publications.
-const screenAwake=await mountScreenAwake(root);
+const screenAwake=mountScreenAwake(root,{getProfile:currentChatProfile});
 const notifications=mountChatNotifications({root,guard});
 const anchor=mountTranscriptAnchor({scroller:$('chat-messages'),inner:$('chat-messages-inner'),header:$('chat-header'),getProfile:currentChatProfile});
 // Progress visibility is filtered using the current account's administrator identity.

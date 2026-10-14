@@ -1,8 +1,0 @@
-{
-  "enabled": true,
-  "mobile_only": true,
-  "after_chat_ms": 120000,
-  "after_input_ms": 120000,
-  "dim_after_ms": 30000,
-  "dim_opacity": 0.8
-}

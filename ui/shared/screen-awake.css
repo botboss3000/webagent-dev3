@@ -5,8 +5,10 @@
 .screen-awake-settings :focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .screen-awake-settings p { max-width: 260px; white-space: normal; line-height: 1.4; margin: 8px 0; }
 .screen-awake-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 0; white-space: normal; }
-.screen-awake-field input[type="number"] { width: 76px; min-width: 0; padding: 4px; border: var(--border-width, 1px) solid var(--border); border-radius: 4px; color: var(--fg-1); background: var(--bg-1); }
+.screen-awake-field select, .screen-awake-field input[type="number"] { width: 76px; min-width: 0; padding: 4px; border: var(--border-width, 1px) solid var(--border); border-radius: 4px; color: var(--fg-1); background: var(--bg-1); }
 .screen-awake-field button { padding: 4px 10px; border: var(--border-width, 1px) solid var(--border); border-radius: 4px; color: var(--fg-1); background: var(--bg-1); -webkit-tap-highlight-color: transparent; }
 .screen-awake-field button:hover, .screen-awake-field button:active { border-color: var(--border); background: var(--bg-2); }
 .screen-awake-field input[aria-invalid="true"] { border-color: var(--danger, #ef4444); }
 .screen-awake-save-status { font-size: 11px; }
+ .screen-awake-field select { width: 120px; }
+.screen-awake-field :disabled { opacity: 0.7; cursor: default; }

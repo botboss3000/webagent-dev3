@@ -2,7 +2,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
 const source = fs.readFileSync(__dirname + '/screen-awake.js', 'utf8');
 const context = vm.createContext({}); vm.runInContext(source.replace(/export /g, ''), context);
-const policy = {enabled:true, mobile_only:true, after_chat_ms:120000, after_input_ms:120000, dim_after_ms:30000, dim_opacity:0.8};
+const policy = {enabled:true, mobile_only:true, after_activity_ms:120000, after_input_ms:120000, dim_after_ms:30000, dim_opacity:0.8, active:'dim', inactive:'off', allow_device_overrides:false};
 // Drain the asynchronous request/release boundary without advancing the simulated clock.
 const settle = async () => { for (let i=0; i<12; i++) await Promise.resolve(); };
 /** Fake only browser, clock and wake-lock boundaries; assert observable requests, releases and dim state. */
@@ -38,10 +38,10 @@ test('post-chat deadline expires once despite repeated identical polling', async
   await f.advance(1);assert.equal(f.sentinels[0].released,true);assert.equal(f.dim,false);assert.equal(f.requests,1);
 });
 test('independent input and chat grace retain whichever expires later', async()=>{
-  const f=fixture({config:{...policy,after_chat_ms:60000,after_input_ms:120000}});f.api.select('one');f.doc.emit('touchstart');await settle();
+  const f=fixture({config:{...policy,after_activity_ms:60000,after_input_ms:120000}});f.api.select('one');f.doc.emit('touchstart');await settle();
   await f.advance(10000);f.api.runs([{status:'running'}]);await f.advance(10000);f.api.runs([{status:'completed'}]);
   await f.advance(60000);assert.equal(f.sentinels[0].released,false);await f.advance(40000);assert.equal(f.sentinels[0].released,true);
-  const g=fixture({config:{...policy,after_chat_ms:120000,after_input_ms:30000}});g.api.select('one');g.api.runs([{status:'running'}]);await settle();g.api.runs([{status:'completed'}]);
+  const g=fixture({config:{...policy,after_activity_ms:120000,after_input_ms:30000}});g.api.select('one');g.api.runs([{status:'running'}]);await settle();g.api.runs([{status:'completed'}]);
   await g.advance(60000);g.doc.emit('keydown');await g.advance(59999);assert.equal(g.sentinels[0].released,false);await g.advance(1);assert.equal(g.sentinels[0].released,true);
 });
 test('approval and uncertain recovery expire instead of holding forever; polling does not renew', async()=>{
@@ -87,7 +87,7 @@ test('hover and synthetic events do not renew grace; trusted contact does', asyn
   f.doc.emit('pointerdown',{pointerType:'touch'});await settle();await f.advance(60000);f.doc.emit('input',{isTrusted:false});await f.advance(60000);assert.equal(f.sentinels[0].released,true);
 });
 test('settings apply immediately using existing event times; disabling dim restores appearance', async()=>{
-  const f=fixture();f.api.select('one');f.doc.emit('touchstart');await settle();await f.advance(30000);assert.equal(f.dim,true);
+  const f=fixture({config:{...policy,inactive:'dim'}});f.api.select('one');f.doc.emit('touchstart');await settle();await f.advance(30000);assert.equal(f.dim,true);
   f.api.configure({...policy,dim_after_ms:0});assert.equal(f.dim,false);f.api.configure({...policy,after_input_ms:20000});await settle();assert.equal(f.sentinels[0].released,true);
 });
 test('BFCache and teardown withdraw locks, timers and listeners', async()=>{
@@ -95,15 +95,41 @@ test('BFCache and teardown withdraw locks, timers and listeners', async()=>{
   f.win.emit('pageshow');await settle();assert.equal(f.requests,2);f.api.destroy();await settle();assert.equal(f.doc.count(),0);assert.equal(f.win.count(),0);assert.equal(f.timerCount,0);assert.equal(f.sentinels[1].released,true);
 });
 test('device overrides validate, preserve mobile-only policy and handle storage failure',()=>{
-  const load=value=>context.deviceScreenPolicy(policy,{getItem:()=>value});
+  const load=value=>context.deviceScreenPolicy({...policy,allow_device_overrides:true},{getItem:()=>value});
   assert.equal(load(JSON.stringify({enabled:false,after_input_ms:60000})).enabled,false);
   for(const value of ['{','[]',JSON.stringify({mobile_only:false}),JSON.stringify({after_input_ms:-1}),JSON.stringify({enabled:'yes'}),JSON.stringify({dim_opacity:1})])assert.equal(load(value).enabled,true);
   assert.equal(context.deviceScreenPolicy(policy,{getItem(){throw Error('blocked')}}).after_input_ms,120000);
-  for(const value of [null,{...policy,after_chat_ms:Infinity},{...policy,after_chat_ms:0.1},{...policy,dim_opacity:-1}])assert.equal(context.screenPolicy(value),null);
+  for(const value of [null,{...policy,after_activity_ms:Infinity},{...policy,after_activity_ms:0.1},{...policy,dim_opacity:-1}])assert.equal(context.screenPolicy(value),null);
 });
 
 test('reopening the same conversation preserves its last-input deadline', async()=>{
   const f=fixture();f.api.select('one');f.doc.emit('touchstart');await settle();await f.advance(30000);
   f.api.select('one');await settle();assert.equal(f.sentinels[0].released,false);assert.equal(f.requests,1);
   await f.advance(89999);assert.equal(f.sentinels[0].released,false);await f.advance(1);assert.equal(f.sentinels[0].released,true);
+});
+
+// Central policy is authoritative unless the profile explicitly permits device overrides.
+test('chat profile policy merges defaults and ignores local preferences unless permitted',()=>{
+  assert.equal(context.profileScreenPolicy(null),null);
+  assert.equal(context.profileScreenPolicy({screen_display:{after_input_ms:60000}}).after_input_ms,60000);
+  assert.equal(context.profileScreenPolicy({screen_display:{active:'unknown'}}),null);
+  const stored={getItem:()=>JSON.stringify({enabled:false,active:'off',after_activity_ms:5})};
+  assert.equal(context.deviceScreenPolicy(policy,stored).enabled,true);
+  assert.equal(context.deviceScreenPolicy({...policy,allow_device_overrides:true},stored).enabled,false);
+  const legacy={getItem:()=>JSON.stringify({after_chat_ms:60000})};
+  assert.equal(context.deviceScreenPolicy({...policy,allow_device_overrides:true},legacy).after_activity_ms,60000);
+});
+test('active and inactive on/dim/off modes have independent wake and appearance behavior',async()=>{
+  for(const active of ['on','dim','off'])for(const inactive of ['on','dim','off']){
+    const f=fixture({config:{...policy,active,inactive}});f.api.select('one');f.api.runs([{status:'running'}]);await settle();
+    await f.advance(30000);assert.equal(f.dim,active==='dim',active+' active dim');
+    await f.advance(90000);assert.equal(f.sentinels[0].released,active==='off',active+' active hold');
+    f.api.runs([{status:'completed'}]);await settle();await f.advance(30000);assert.equal(f.dim,inactive==='dim',inactive+' inactive dim');
+    await f.advance(90000);assert.equal(f.sentinels.at(-1).released,inactive==='off',inactive+' inactive hold');
+  }
+});
+test('default inactive off stays bright during grace then releases; repeated profile adoption cannot retry revoked locks',async()=>{
+  const f=fixture();f.api.select('one');f.api.runs([{status:'running'}]);await settle();await f.advance(30000);assert.equal(f.dim,true);
+  f.api.runs([{status:'completed'}]);assert.equal(f.dim,false);await f.advance(120000);assert.equal(f.sentinels[0].released,true);
+  const g=fixture();g.api.select('one');g.api.runs([{status:'running'}]);await settle();await g.sentinels[0].release();g.api.configure({...policy});await settle();assert.equal(g.requests,1);
 });
