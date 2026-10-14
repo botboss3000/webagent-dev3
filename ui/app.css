@@ -177,3 +177,11 @@ body {
 #abilities-page .ac-group-status[data-state="off"]{color:var(--fg-3);border-color:var(--border);background:var(--bg-1)}
 .v3-tool-skill-dialog{width:min(90vw,720px);max-height:85vh;padding:18px;background:var(--bg-elev);color:var(--fg-1);border:var(--border-width) solid var(--border);border-radius:10px}
 .v3-tool-skill-dialog pre{max-height:65vh;overflow:auto;white-space:pre-wrap;color:var(--fg-2);font-size:12px}
+
+/* Header menus escape the carousel, so both roots own transparent native tap feedback.
+   Keep intentional pressed/selected backgrounds and existing theme/border tokens. */
+#main-header, #user-dropdown-menu { -webkit-tap-highlight-color: transparent; }
+#main-header button:focus-visible, #user-dropdown-menu button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

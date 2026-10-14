@@ -701,3 +701,6 @@ $('disconnect').onclick=guard(async()=>{await api('/provider/logout','POST',{});
 $('model-form').onsubmit=guard(async()=>{agentModel=(await api('/agents/'+agentId+'/model','PUT',{model:$('model').value.trim()})).model;await refresh();});
 $('policy-form').onsubmit=guard(async()=>{const rules=Object.fromEntries([...$('rules').querySelectorAll('select')].map(node=>[node.name,node.value]));await api('/policy','PUT',{rules});await refresh();});
 api('/auth/setup-status').then(status=>{if(!status.initialized){location.replace('/setup.html');return;}return boot();}).catch(error=>{if(error.status===401)out();note(error.message);window.__boot?.reveal();});
+
+// App-shell ownership includes the header account portal; chat shares its gesture registry.
+import './shared/header-feedback.js';
