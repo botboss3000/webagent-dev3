@@ -1,0 +1,12 @@
+/* @code-index {"version":1,"feature":"chat-screen-settings-style","aliases":["display preferences appearance"],"purpose":"Accessible conversation-menu display settings retain themed borders and keyboard focus.","span_lines":20,"configuration":{"status":"not_applicable","rationale":"Uses existing theme tokens and preserves native keyboard access."}} */
+.screen-awake-settings { border-top: var(--border-width, 1px) solid var(--border); margin-top: 6px; padding: 8px; font-size: 12px; color: var(--fg-1); }
+.screen-awake-settings summary { cursor: pointer; padding: 6px; border: var(--border-width, 1px) solid var(--border); border-radius: 6px; -webkit-tap-highlight-color: transparent; }
+.screen-awake-settings summary:hover, .screen-awake-settings summary:active { border-color: var(--border); background: var(--bg-2); }
+.screen-awake-settings :focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.screen-awake-settings p { max-width: 260px; white-space: normal; line-height: 1.4; margin: 8px 0; }
+.screen-awake-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 0; white-space: normal; }
+.screen-awake-field input[type="number"] { width: 76px; min-width: 0; padding: 4px; border: var(--border-width, 1px) solid var(--border); border-radius: 4px; color: var(--fg-1); background: var(--bg-1); }
+.screen-awake-field button { padding: 4px 10px; border: var(--border-width, 1px) solid var(--border); border-radius: 4px; color: var(--fg-1); background: var(--bg-1); -webkit-tap-highlight-color: transparent; }
+.screen-awake-field button:hover, .screen-awake-field button:active { border-color: var(--border); background: var(--bg-2); }
+.screen-awake-field input[aria-invalid="true"] { border-color: var(--danger, #ef4444); }
+.screen-awake-save-status { font-size: 11px; }

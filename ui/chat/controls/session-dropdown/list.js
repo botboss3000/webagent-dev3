@@ -1,7 +1,7 @@
 // V2 dropdown presentation/lifecycle, with independent Rust data authority.
 // @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector","session list"],"purpose":"Renders and manages V3 session rows, private search, and session actions Config: data/config/chat.json -> chat_common.chat_header.controls.session_dropdown (trigger and menu). Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/chat_header/controls/session_dropdown"],"profile_overrides":true}],"opportunities":[]}}
 /** Renders active/recycled sessions, private search results, and revision-fenced management actions. Controller callbacks own navigation; client writes retain retry receipts, and teardown fences pending work. */
-export function createSessionList(root, {guard, refresh, select, client, recycled = () => {}}) {
+export function createSessionList(root, {guard, refresh, select, client, recycled = () => {}, screenSettings = () => null}) {
   let items = [], selected = '', config = {}, query = '', status = 'active';
   let hits = [], continuation = null, searchInfo = '', searching = false, epoch = 0, timer = 0, destroyed = false;
   let editing = null, checkboxMode = false, batchBusy = false;
@@ -147,7 +147,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     input.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); finish(true); } if (e.key === 'Escape') { e.preventDefault(); finish(false); } });
     input.addEventListener('blur', () => finish(true));
   }
-  /** Builds the row action popup, leaving unsupported V3 actions visibly disabled. */
+  /** Builds the row action popup and optional device display preferences; session mutations stay client-owned and display edits stay browser-local. Unsupported V3 actions remain visibly disabled. */
   function actions(item, anchor) {
     const popup = document.createElement('div'); popup.className = 'session-row-actions'; popup.dataset.source = 'session-list'; popup.dataset.id = item.id;
     for (const [key, title, glyph, fn] of [
@@ -171,10 +171,21 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
       const b = button(title,'copy',() => navigator.clipboard.writeText(value),'session-row-action session-row-id');
       b.append(document.createTextNode(` ${title}: ${value}`)); popup.append(b);
     }
+    // Device display settings share the popup lifecycle; they never write session/server configuration.
+    const displaySettings = screenSettings(); if (displaySettings) popup.append(displaySettings);
+    popup.style.maxHeight = 'min(80vh, 640px)'; popup.style.overflowY = 'auto';
+    // Explicit intrinsic width prevents fixed-position shrink-to-fit width changing after placement.
+    popup.style.width = 'max-content'; popup.style.maxWidth = 'calc(100vw - 8px)'; popup.style.boxSizing = 'border-box';
     root._sessionDropdownController.setPopup(popup); document.body.append(popup);
-    const r = anchor.getBoundingClientRect(); popup.style.position = 'fixed';
-    popup.style.left = Math.max(4,Math.min(r.right-popup.offsetWidth,innerWidth-popup.offsetWidth-4)) + 'px';
-    popup.style.top = Math.max(4,Math.min(r.bottom+4,innerHeight-popup.offsetHeight-4)) + 'px'; window.lucide?.createIcons();
+    // Expanding device preferences changes height; keep the complete scrollable popup inside the viewport.
+    function positionPopup() {
+      const r = anchor.getBoundingClientRect(); popup.style.position = 'fixed';
+      const bounds = popup.getBoundingClientRect();
+      popup.style.left = Math.max(4,Math.min(r.right-bounds.width,innerWidth-bounds.width-4)) + 'px';
+      popup.style.top = Math.max(4,Math.min(r.bottom+4,innerHeight-bounds.height-4)) + 'px';
+    }
+    displaySettings?.addEventListener('toggle', positionPopup);
+    positionPopup(); window.lucide?.createIcons();
   }
   /** Runs scoped paginated private search and discards stale/destroyed responses. */
   async function search(more = false) {
