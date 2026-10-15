@@ -189,3 +189,9 @@ body {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+
+/* @code-index {"version":1,"feature":"viewport-theme-backdrop","aliases":["keyboard resize gap","viewport background"],"purpose":"Keeps the body theme behind keyboard-driven app resizing; a transparent root propagates the body background to the document canvas.","span_lines":5,"configuration":{"status":"not_applicable","rationale":"The exposed canvas must match the active body theme rather than introduce a separate color preference."}} */
+/* Override the shared root's dark background: body owns the active theme tokens.
+   Keep its painted surface at the largest viewport height while #app resizes. */
+html { background: transparent !important; }
+body { min-height: 100vh; min-height: 100lvh; }
