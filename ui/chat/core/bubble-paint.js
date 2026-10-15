@@ -10,9 +10,8 @@ export function applyBubblePaint(bubble, lane = {}) {
     else bubble.style.removeProperty(property);
   }
   // Geometry belongs to each role; no shared padding or device-local settings are consulted.
-  const user = bubble.classList.contains('user');
   const px = (value, fallback) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
-  for (const [side, fallback] of [['top',10],['right',14],['bottom',4],['left',user ? 14 : 4]]) {
+  for (const [side, fallback] of [['top',0],['right',0],['bottom',4],['left',0]]) {
     bubble.style.setProperty('padding-' + side, px(lane['padding_' + side + '_px'], fallback) + 'px');
   }
   const corners = ['top_left','top_right','bottom_right','bottom_left'];
