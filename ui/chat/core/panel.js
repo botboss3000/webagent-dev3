@@ -11,7 +11,7 @@ import {mountComposerMedia} from '../controls/composer-media.js';
 import {mountSessionControls} from '../controls/session-controls.js';
 import {mountChatNotifications} from './chat-notifications.js';
 import {mountUsageStats} from '../controls/usage-stats.js';
-import {createMessage,updateAdmission} from './message-view.js';
+import {createMessageRow as createMessage,updateAdmission} from './message-view.js';
 import {closeGutterOverlays,updateGutterTimes} from './bubble-gutters.js';
 import {mountComposerProgress} from './composer-progress.js';
 import {createActivityView} from './activity-view.js';

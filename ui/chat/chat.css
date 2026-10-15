@@ -52,6 +52,12 @@ body.light-mode #chat-notifications .chat-notification{background:var(--chat-pil
 /* Configured paint wins over the shared user/agent theme rules. No color fallback. */
 #chat-messages-inner .chat-bubble.v3-config-bubble{background:var(--message-bg-dark);border:var(--message-border)}
 body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:var(--message-bg-light)}
+/* Shared row owns alignment/width; only its bubble paints the message surface. */
+#chat-messages-inner .message-row{width:fit-content;max-width:90%;flex-shrink:0;margin:0;gap:0;align-self:flex-start}
+#chat-messages-inner .message-row.user{align-self:flex-end}
+#chat-messages-inner .message-row>.chat-bubble{box-sizing:border-box;width:fit-content;max-width:100%;margin:0}
+#chat-messages-inner .message-row>.turn-gutter{box-sizing:border-box;max-width:100%;align-self:stretch}
+#chat-messages-inner .message-row.user>.turn-gutter{justify-content:flex-end}
 #chat-messages-inner .bubble-body{white-space:pre-wrap;overflow-wrap:anywhere}
 #chat-messages-inner .turn-gutter{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
 #chat-messages-inner .turn-gutter[hidden]{display:none!important}

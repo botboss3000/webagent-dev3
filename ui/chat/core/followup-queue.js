@@ -19,6 +19,8 @@ export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId
   // Reconcile visible delivery rows from the current queue while retaining focused controls.
   function paint(){
     for(const row of root.querySelectorAll('[data-public-id]')) {
+      // Nested bubble IDs serve anchoring; only the outer transcript row owns delivery controls.
+      if(row.parentElement?.closest('[data-public-id]'))continue;
       const entry=entries.find(item=>item.message_id===row.dataset.publicId);
       let box=row.querySelector('.followup-delivery');
       if(!entry){box?.remove();continue;}

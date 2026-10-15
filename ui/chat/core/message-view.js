@@ -15,6 +15,8 @@ function linkify(body,text){let last=0;for(const match of text.matchAll(/https?:
 function markdown(body,text){if(window.marked?.parse&&window.DOMPurify?.sanitize){body.className='md-body';body.innerHTML=window.DOMPurify.sanitize(window.marked.parse(text,{gfm:true,breaks:true}),{FORBID_ATTR:['style']});body.querySelectorAll('a[href]').forEach(a=>{a.target='_blank';a.rel='noopener noreferrer';});body.querySelectorAll('pre').forEach(pre=>{const wrap=document.createElement('div');wrap.className='md-code-block';pre.replaceWith(wrap);wrap.append(pre);const copy=button('Copy code','copy',async()=>{try{await copyText(pre.textContent);copy.title='Copied';}catch{copy.title='Copy failed';}});copy.classList.add('md-code-copy');wrap.append(copy);});}else{body.className='bubble-body';linkify(body,text);}}
 /** Adds, updates, or removes the live status note that records whether admission review sent a message. */
 export function updateAdmission(bubble, admission) {
+  // Panel updates target the row; admission feedback remains part of its message surface.
+  bubble=bubble.querySelector('.chat-bubble')||bubble;
   let status=bubble.querySelector('.message-admission-status');
   if(!admission){status?.remove();delete bubble.dataset.admissionStatus;return;}
   if(!status){status=document.createElement('p');status.className='ac-hint message-admission-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');bubble.append(status);}
@@ -23,7 +25,7 @@ export function updateAdmission(bubble, admission) {
     acceptable:'Accepted by the manager',unacceptable:'Not sent to the agent: this message does not meet its acceptance criteria.',
     review_error:admission.error||'Review failed. This message was not sent to the agent.'})[admission.status]||'';
 }
-/** Builds one published transcript row; rejects malformed role/sequence/ID data and wires attachments, gutters, and user-text expansion. */
+/** Builds one published bubble; rejects malformed identity data and wires attachments, actions and user-text expansion. */
 export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSession=()=>null,note=()=>{},showContext=()=>{},historyAction=null}={}){
   if(!['user','assistant','system'].includes(item.role)||!Number.isSafeInteger(item.seq)||item.seq<=0||typeof item.id!=='string')return null;
   if(item.role==='system'){
@@ -69,4 +71,15 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
     const cfg=profile.user_message_truncation||{},maxLines=Math.max(1,Math.min(100,Number(cfg.max_lines)||3));if(cfg.enabled===false||!bubble.isConnected)return;const lineHeight=parseFloat(getComputedStyle(body).lineHeight)||20;if(body.scrollHeight<=lineHeight*maxLines+1)return;bubble.style.setProperty('--user-message-max-lines',String(maxLines));bubble.classList.add('user-message-clamped');const toggle=document.createElement('button');toggle.type='button';toggle.className='user-message-expand';toggle.textContent=cfg.expand_label||'See more';toggle.setAttribute('aria-expanded','false');toggle.onclick=()=>{const expanded=bubble.classList.toggle('user-message-expanded');toggle.textContent=expanded?(cfg.collapse_label||'Show less'):(cfg.expand_label||'See more');toggle.setAttribute('aria-expanded',String(expanded));};body.after(toggle);
   });
   return bubble;
+}
+
+/** Composes the shared transcript row; bubble identity owns actions while row metadata owns ordering/read tracking. */
+export function createMessageRow(item,options){
+  const bubble=createMessage(item,options);
+  if(!bubble||item.role==='system')return bubble;
+  const row=document.createElement('article');row.className='v3-message message-row '+(item.role==='user'?'user':'agent');
+  for(const key of ['publicId','msgId','seq','turnId'])row.dataset[key]=bubble.dataset[key];
+  // Move the configured gutter outside the painted surface for both roles without replacing its handlers.
+  row.append(bubble,bubble.querySelector('.turn-gutter'));
+  return row;
 }
