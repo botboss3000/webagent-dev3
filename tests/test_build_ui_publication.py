@@ -330,6 +330,180 @@ class ConcurrentUIEntryTests(unittest.TestCase):
         self.assertEqual((active/"v3/ui/probe/a.css").read_text(),"body { color: red; }\n")
         self.assertIn("_version=2",(active/"v3/src/main.rs").read_text());self.assertEqual(row["preparation"]["attempts"],2)
 
+    def private_review_worker(self,task,path,prepared_job_id=None):
+        """Run real host review operations and retain failures for the owning test."""
+        done=threading.Event();errors=[]
+        def review():
+            """Signal completion even when authority or freshness rejects the review."""
+            try:self.review(task,path,prepared_job_id=prepared_job_id)
+            except BaseException as error:errors.append(error)
+            finally:done.set()
+        thread=threading.Thread(target=review);thread.start()
+        return thread,done,errors
+
+    def test_private_reviews_progress_during_other_candidate_preparation(self):
+        self.change("review-private-prep","ui/probe/a.css","body {}\n","body { color: red; }\n",review=False)
+        self.change("review-other-prep","ui/probe/b.css","main {}\n","main { color: blue; }\n")
+        entered=threading.Event();proceed=threading.Event();original=self.runner.stage_assets
+        def stage(blob,job,**kwargs):
+            """Hold real private staging until independent review has completed."""
+            entered.set();self.assertTrue(proceed.wait(5));return original(blob,job,**kwargs)
+        self.runner.stage_assets=stage
+        other=self.finish("review-other-prep");self.assertTrue(entered.wait(3))
+        worker,done,errors=self.private_review_worker("review-private-prep","ui/probe/a.css")
+        try:self.assertTrue(done.wait(2),"Private review blocked behind candidate preparation")
+        finally:proceed.set();worker.join(5)
+        self.assertFalse(errors,errors);self.assertEqual(self.wait([other])[0]["status"],"completed")
+
+    def test_sealed_private_reviews_progress_during_other_activation(self):
+        self.change("review-private-sealed","ui/probe/a.css","body {}\n","body { color: red; }\n",review=False)
+        own=self.finish("review-private-sealed")
+        self.assertEqual(self.wait([own])[0]["phase"],"awaiting_prepared_reviews")
+        self.change("review-other-publish","ui/probe/b.css","main {}\n","main { color: blue; }\n")
+        entered=threading.Event();proceed=threading.Event();original=self.runner.verify_ui
+        def verify(changed=()):
+            """Hold the real post-activation publication critical section."""
+            entered.set();self.assertTrue(proceed.wait(5));return original(changed)
+        self.runner.verify_ui=verify
+        other=self.finish("review-other-publish");self.assertTrue(entered.wait(3))
+        self.assertEqual(self.runner.current_asset_id(),other)
+        worker,done,errors=self.private_review_worker("review-private-sealed","ui/probe/a.css",own)
+        try:self.assertTrue(done.wait(2),"Sealed review waited for another publication lock")
+        finally:proceed.set();worker.join(5)
+        self.assertFalse(errors,errors);self.assertEqual(self.wait([other])[0]["status"],"completed")
+        report=self.call("v3_build_work",{"action":"preflight","task_id":"review-private-sealed"})["synchronization"]
+        self.call("v3_build_work",{"action":"decide","task_id":"review-private-sealed","sync_decision":"proceed","expected_sync_digest":report["digest"]})
+        row=self.wait([own])[0];self.assertEqual(row["status"],"completed",row.get("reason"))
+        current=self.runner.assets/"releases"/own/"v3"
+        self.assertIn("red",(current/"ui/probe/a.css").read_text())
+        self.assertIn("blue",(current/"ui/probe/b.css").read_text())
+
+    def test_reconcile_matching_projection_does_not_acquire_publication(self):
+        self.broker._code_index_reconcile()
+        with self.broker.deploy_lock:
+            done=threading.Event()
+            worker=threading.Thread(target=lambda:(self.broker._code_index_reconcile(),done.set()))
+            worker.start()
+            completed=done.wait(2)
+        worker.join(3);self.assertFalse(worker.is_alive())
+        self.assertTrue(completed,"Current projection acquired publication lock")
+
+    def test_reconcile_rechecks_pointer_after_waiting_for_publication(self):
+        first=self.runner.current_asset_id();second=str(uuid.uuid4())
+        import shutil
+        shutil.copytree(self.runner.assets/"releases"/first,self.runner.assets/"releases"/second)
+        observations=[];entered=threading.Event();done=threading.Event()
+        def current():
+            """Expose the first observation before the worker waits for serialization."""
+            observations.append(self.runner.asset_id);entered.set();return self.runner.asset_id
+        self.runner.asset_id=first
+        def reconcile():
+            """Run global reconciliation across a deliberate active-pointer race."""
+            try:self.broker._code_index_reconcile()
+            finally:done.set()
+        with patch.object(self.runner,"current_asset_id",current),patch.object(self.broker,"_code_index_activated")as activated:
+            with self.broker.deploy_lock:
+                worker=threading.Thread(target=reconcile);worker.start();self.assertTrue(entered.wait(2))
+                self.runner.asset_id=second
+            self.assertTrue(done.wait(3));worker.join(3)
+            activated.assert_called_once_with(second)
+        self.assertEqual(observations,[first,second])
+
+    def test_private_scan_does_not_hold_a_ledger_write_transaction(self):
+        self.change("review-scan-boundary","ui/probe/a.css","body {}\n","body { color: red; }\n",review=False)
+        ledger=self.broker.code_index_ledger;original=ledger.inventory;observed=[]
+        def inventory(*args):
+            """A separate writer can reserve SQLite while expensive scanning runs."""
+            import sqlite3
+            conn=sqlite3.connect(ledger.path,timeout=.1)
+            try:conn.execute("BEGIN IMMEDIATE");observed.append(True);conn.rollback()
+            finally:conn.close()
+            return original(*args)
+        with patch.object(ledger,"inventory",inventory):
+            self.review("review-scan-boundary","ui/probe/a.css")
+        self.assertEqual(observed,[True])
+
+    def test_concurrent_activation_preserves_private_record_and_retry_receipt(self):
+        self.change("review-activation-race","ui/probe/a.css","body {}\n","body { color: red; }\n",review=False)
+        task="review-activation-race";path="ui/probe/a.css"
+        self.call("code_index_maintenance",{"action":"sync","task_id":task,"scope":path,"request_id":"review-race-sync"})
+        row=self.call("code_index_maintenance",{"action":"list","task_id":task,"limit":100})["results"][0]
+        args={"action":"claim","task_id":task,"entry_id":row["entry_id"],"expected_revision":row["revision"],"request_id":"review-race-claim"}
+        entered=threading.Event();proceed=threading.Event();done=threading.Event();errors=[];result=[]
+        ledger=self.broker.code_index_ledger;original=ledger._save
+        def save(conn,record,actor,event):
+            """Hold one private transaction while publication queues its independent projection."""
+            if event=="claim":entered.set();self.assertTrue(proceed.wait(3))
+            return original(conn,record,actor,event)
+        def claim():
+            """Capture the exact retry-safe mutation result."""
+            try:result.append(self.call("code_index_maintenance",args))
+            except BaseException as error:errors.append(error)
+            finally:done.set()
+        with patch.object(ledger,"_save",save):
+            worker=threading.Thread(target=claim);worker.start();self.assertTrue(entered.wait(2))
+            activated=threading.Event()
+            def activate():
+                """Import only the published namespace after the private writer commits."""
+                try:self.broker._code_index_activated(self.runner.current_asset_id())
+                except BaseException as error:errors.append(error)
+                finally:activated.set()
+            publisher=threading.Thread(target=activate);publisher.start();proceed.set()
+            self.assertTrue(done.wait(3));self.assertTrue(activated.wait(3));worker.join(3);publisher.join(3)
+        self.assertFalse(errors,errors)
+        self.assertEqual(self.call("code_index_maintenance",args),result[0])
+        row=self.call("code_index_maintenance",{"action":"get","task_id":task,"entry_id":row["entry_id"]})["results"][0]
+        self.assertEqual(row["status"],"in_progress")
+        self.assertEqual(ledger.active_release(),self.runner.current_asset_id())
+
+    def test_private_record_rejects_changed_source_without_global_reconciliation(self):
+        self.change("review-source-stale","ui/probe/a.css","body {}\n","body { color: red; }\n",review=False)
+        task="review-source-stale"
+        self.call("code_index_maintenance",{"action":"sync","task_id":task,"scope":"ui/probe/a.css","request_id":"review-stale-sync"})
+        row=self.call("code_index_maintenance",{"action":"list","task_id":task,"limit":100})["results"][0]
+        claimed=self.call("code_index_maintenance",{"action":"claim","task_id":task,"entry_id":row["entry_id"],"expected_revision":row["revision"],"request_id":"review-stale-claim"})["record"]
+        item=next(i for i in self.broker.work.values()if i["task_id"]==task)
+        source=self.broker.work_dir/"trees"/item["key"]/"v3/ui/probe/a.css";source.write_text("body { color: green; }\n")
+        with patch.object(self.broker,"_code_index_reconcile",side_effect=AssertionError("Private record reconciled")):
+            with self.assertRaisesRegex(ValueError,"Source changed"):
+                self.call("code_index_maintenance",{"action":"record","task_id":task,"entry_id":row["entry_id"],"expected_revision":claimed["revision"],"source_hash":claimed["source_hash"],"claim_id":claimed["claim"]["id"],"status":"complete","checks":{k:"verified"for k in ("documentation","connections","breadcrumbs","configuration","index_freshness")},"configuration_assessment":{"status":"not_applicable","rationale":"Test source freshness"},"request_id":"review-stale-record"})
+
+    def test_global_reads_reconcile_but_private_and_immutable_reads_do_not(self):
+        self.change("review-read-routing","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        with patch.object(self.broker,"_code_index_reconcile",wraps=self.broker._code_index_reconcile)as reconcile:
+            self.call("code_index_maintenance",{"action":"list","task_id":"review-read-routing","limit":5})
+            self.call("code_index_maintenance",{"action":"list","root":"published","limit":5})
+            reconcile.assert_not_called()
+            self.call("code_index_maintenance",{"action":"list","task_id":"published","limit":5})
+            self.assertEqual(reconcile.call_count,1)
+            self.call("code_index_maintenance",{"action":"list","limit":5})
+            self.assertEqual(reconcile.call_count,2)
+            self.call("code_index_maintenance",{"action":"list","task_key":"published","limit":5})
+            self.assertEqual(reconcile.call_count,3)
+
+    def test_private_claim_rejects_changed_metadata_dependency_during_publication(self):
+        marker={"version":1,"feature":"review-dependency","aliases":["private review dependency"],"purpose":"Fixture uses sealed artifact identity","span_lines":1,"configuration":{"status":"configured","references":[{"path":"plugins/engine/fixture/component.json","pointers":["/artifact_sha256"]}]}}
+        changed="/* @code-index "+json.dumps(marker)+" */\nbody { color: red; }\n"
+        task="review-dependency-stale"
+        self.change(task,"ui/probe/a.css","body {}\n",changed,review=False)
+        self.call("code_index_maintenance",{"action":"sync","task_id":task,"scope":"ui/probe/a.css","request_id":"review-dependency-sync"})
+        rows=self.call("code_index_maintenance",{"action":"list","task_id":task,"limit":100})["results"]
+        self.assertTrue(rows);self.assertTrue(all(row["dependencies"]for row in rows))
+        item=next(i for i in self.broker.work.values()if i["task_id"]==task)
+        dependency=self.broker.work_dir/"trees"/item["key"]/"v3/plugins/engine/fixture/component.json"
+        dependency.write_text(json.dumps({"artifact_sha256":"3"*64}))
+        done=threading.Event();errors=[]
+        def claim():
+            """Freshness rejects changed metadata without first waiting on publication."""
+            try:self.call("code_index_maintenance",{"action":"claim","task_id":task,"entry_id":rows[0]["entry_id"],"expected_revision":rows[0]["revision"],"request_id":"review-dependency-claim"})
+            except BaseException as error:errors.append(error)
+            finally:done.set()
+        with self.broker.deploy_lock:
+            worker=threading.Thread(target=claim);worker.start();completed=done.wait(2)
+        worker.join(3);self.assertTrue(completed,"Stale private claim waited for publication")
+        self.assertEqual(len(errors),1);self.assertIsInstance(errors[0],ValueError)
+        self.assertIn("Source metadata changed",str(errors[0]))
+
 
 class BackendPredecessorRecoveryTests(ConcurrentUIEntryTests):
     """Reconcile original restored backend containers without replaying deployment."""

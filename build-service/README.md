@@ -385,3 +385,20 @@ normal freshness checks still govern resumption of the same durable job.
 Unchanged manifest identity is cached for renewal; final publication retains
 the exact source/index checks. No source scan or compilation is triggered by
 the ownership heartbeat. Trusted lease controls also cover paused reviews.
+
+### Independent private review recording
+
+Task-scoped Code Index sync, claim, record, release and reads use their private
+source bindings without waiting for the deployment lock or global published
+projection reconciliation. Published snapshot reads capture one immutable active
+revision directly. Global live-ledger reads still reconcile the published
+projection; an unchanged pointer takes a fast path, and actual reconciliation
+rechecks the pointer after acquiring publication serialization.
+
+A concurrent activation replaces only published records, retaining private task
+records and retry receipts. A stale published projection may miss evidence reuse;
+inheritance still requires matching source/dependency hashes. Host authorization,
+claim/revision checks, private freshness and sealed-candidate integrity remain
+mandatory. Final publication still reconciles and verifies the exact source/index
+and completed applicable reviews. Scans stay outside ledger write transactions;
+no deployment lock is held by private review recording.

@@ -2921,7 +2921,11 @@ class Broker:
     def _code_index_reconcile(self):
         # Immutable active projection wins after restart or rollback. No task/private DB is read.
         """Restore the active immutable release projection after restart or rollback."""
+        # A matching immutable projection needs no publication serialization.
+        current=self.runner.current_asset_id()
+        if not current or current==self.code_index_ledger.active_release():return
         with self.deploy_lock:
+            # The pointer may have changed while waiting; never import the earlier one.
             current=self.runner.current_asset_id()
             if current and current!=self.code_index_ledger.active_release() and (ASSET_ROOT/"releases"/current/".code-index/index.sqlite").is_file():
                 self._code_index_activated(current)
@@ -3011,13 +3015,18 @@ class Broker:
 
     def code_index_maintenance(self,args,trusted,workspace):
         """Serve shared review reads or validated isolated-task mutations through broker authority."""
-        self._code_index_reconcile()
+        # Private task records are independently source-bound. A stale published
+        # projection can miss reuse, but matching hashes are still required to
+        # inherit evidence; final publication reconciles and verifies the exact pair.
+        # Never wait for deployment merely to record or read private task evidence.
         actor={"user_id":trusted["user_id"],"session_id":workspace,"transport":"operator"if trusted.get("local_caller")else"webagent"}
         action=args.get("action")
         if args.get("root","live")!="live":
             if args.get("root")!="published"or action not in {"list","get"}:raise ValueError("CLI snapshot reads require root published; private roots use WebAgent workspace tools")
             return self.code_index_ledger.scanner.execute_published("code_index_maintenance",args,ASSET_ROOT/"releases"/self.runner.current_asset_id())
         if action in {"list","get"}:
+            if not any(args.get(k)and args[k]!="published"for k in ("task_key","task_id")):
+                self._code_index_reconcile()
             result=self.code_index_ledger.list(args)
             result.update(source_kind="untrusted_maintenance_metadata",completion_is_review_assertion=True)
             return result
