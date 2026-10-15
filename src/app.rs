@@ -521,7 +521,7 @@ fn policy_default() -> Value {
     for schema in tools::core_mode::schemas().into_iter()
         .chain(tools::core_search::schemas()).chain(tools::core_compaction::schemas())
         .chain(tools::core_recall::schemas()).chain(tools::core_self_edit::schemas())
-        .chain(tools::core_task::schemas()).chain(tools::core_tool_search::schemas()).chain(tools::core_decision::schemas()).chain(tools::core_directory_decision::schemas()) {
+        .chain(tools::core_task::schemas()).chain(tools::core_tool_search::schemas()).chain(tools::core_decision::schemas()).chain(tools::core_directory_decision::schemas()).chain(modules::schemas()) {
         let name=schema["name"].as_str().unwrap();
         policy["rules"][name]=json!(if tools::is_read(name){"allow"}else{"require_approval"});
     }

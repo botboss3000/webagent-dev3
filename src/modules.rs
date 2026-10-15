@@ -1,6 +1,7 @@
 //! Optional administrator-installed packages. The host owns storage and admission;
 //! package reducers never receive encryption keys, raw databases or approvals.
 use crate::*;
+use axum::Extension;
 use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Component, Path as FsPath},
@@ -609,7 +610,7 @@ async fn execution_scope(
         json!({"agent_id":agent,"session_id":sid,"settings":visibility["settings"]["automation"],"interactive_user":interactive}),
     )
 }
-pub(crate) async fn admin_list(State(app): State<App>) -> Api {
+pub(crate) async fn admin_list(Extension(app): Extension<App>) -> Api {
     if !administrator(&app).await {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
@@ -628,7 +629,7 @@ pub(crate) async fn admin_list(State(app): State<App>) -> Api {
     }
     Ok(Json(json!({"modules":modules})))
 }
-pub(crate) async fn status_api(State(app): State<App>, Path(id): Path<String>) -> Api {
+pub(crate) async fn status_api(Extension(app): Extension<App>, Path(id): Path<String>) -> Api {
     if package_root(&id).is_none() {
         return Err(bad("Unknown module"));
     }
@@ -644,10 +645,16 @@ pub(crate) async fn status_api(State(app): State<App>, Path(id): Path<String>) -
     ))
 }
 pub(crate) async fn call_api(
-    State(app): State<App>,
+    Extension(app): Extension<App>,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Api {
+    if id == "outbound_notifications" && !administrator(&app).await {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Administrator required".into(),
+        ));
+    }
     let op = required(&body, "action", 64)?;
     if matches!(
         op,
@@ -1232,7 +1239,7 @@ fn copy_distribution(source: &FsPath, target: &FsPath) -> Result<()> {
     Ok(())
 }
 pub(crate) async fn lifecycle(
-    State(app): State<App>,
+    Extension(app): Extension<App>,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Api {
@@ -1551,7 +1558,7 @@ mod tests {
             "execute_delivery",
         ] {
             let error = call_api(
-                State(app.clone()),
+                Extension(app.clone()),
                 Path("automation".into()),
                 Json(json!({"action":action,"client_request_id":"internal","args":{}})),
             )
@@ -1757,5 +1764,189 @@ mod automation_evidence_privacy_tests {
         assert!(json!(app.store.context(&sid).await.unwrap())
             .to_string()
             .contains(SECRET));
+    }
+}
+
+#[cfg(test)]
+mod authenticated_caller_namespace_tests {
+    use super::*;
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    async fn request(
+        router: &Router,
+        token: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let mut builder = Request::builder()
+            .uri(path)
+            .header("cookie", format!("v3_session={token}"));
+        let bytes = if let Some(body) = body {
+            builder = builder
+                .method("POST")
+                .header("content-type", "application/json")
+                .header("x-csrf-token", "module-csrf");
+            body.to_string()
+        } else {
+            String::new()
+        };
+        let response = router
+            .clone()
+            .oneshot(builder.body(Body::from(bytes)).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+    #[tokio::test]
+    async fn real_router_binds_module_namespaces_and_admin_checks_to_authenticated_caller() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let account = app
+            .store
+            .create_user_account("modulecaller", "fixture-only-password-hash")
+            .await
+            .unwrap();
+        let uid = account["user_id"].as_str().unwrap().to_owned();
+        app.store
+            .update_account_access(
+                &uid,
+                account["access_revision"].as_u64().unwrap(),
+                crate::access::AccountStatus::Active,
+                crate::access::Role::User,
+                "basic",
+            )
+            .await
+            .unwrap();
+        app.store
+            .set_agent_membership(
+                &uid,
+                "shared_default",
+                crate::access::Relationship::Member,
+                0,
+            )
+            .await
+            .unwrap();
+        // Give this ordinary caller Automation metadata authority, while the
+        // global administrator's capability level remains denied for that ability.
+        let mut tier = app.store.entitlement_tier("basic").await.unwrap().unwrap();
+        let expected = tier.revision;
+        tier.ability_permissions
+            .insert("automation".into(), crate::access::Permission::Auto);
+        app.store
+            .save_entitlement_tier(tier, expected)
+            .await
+            .unwrap();
+        let levels = app.store.capability_levels("shared_default").await.unwrap();
+        let mut member = levels.levels["member"].clone();
+        member
+            .ability_permissions
+            .insert("automation".into(), crate::access::Permission::Auto);
+        app.store
+            .save_capability_level("shared_default", member, levels.revision)
+            .await
+            .unwrap();
+        let base = app
+            .store
+            .agent_ability_permissions("shared_default")
+            .await
+            .unwrap();
+        let mut permissions: std::collections::BTreeMap<String, crate::access::Permission> =
+            serde_json::from_value(base["ability_permissions"].clone()).unwrap();
+        permissions.insert("automation".into(), crate::access::Permission::Auto);
+        app.store
+            .set_agent_ability_permissions(
+                "shared_default",
+                base["revision"].as_u64().unwrap(),
+                permissions,
+            )
+            .await
+            .unwrap();
+        let caller = app.store.for_user(&uid).await.unwrap();
+        app.store
+            .module_cas("automation", 0, &json!({"state":{"owner":"admin"}}))
+            .await
+            .unwrap();
+        app.store
+            .module_cas("automation", 1, &json!({"state":{"owner":"admin"}}))
+            .await
+            .unwrap();
+        caller
+            .module_cas("automation", 0, &json!({"state":{"owner":"caller"}}))
+            .await
+            .unwrap();
+        app.store
+            .module_cas(
+                "outbound_notifications",
+                0,
+                &json!({"state":{"private_admin_marker":"not-for-caller"}}),
+            )
+            .await
+            .unwrap();
+        let refreshed = app.store.account_by_id(&uid).await.unwrap().unwrap();
+        let token = uuid();
+        app.store.put(&format!("auth:{}",digest(&json!(token))),&json!({"user_id":uid,"generation":refreshed["generation"],"expires":now()+3600,"csrf":"module-csrf"})).await.unwrap();
+        let router = crate::api::router(app.clone());
+        let (status, body) =
+            request(&router, &token, "/api/v3/modules/automation/status", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["revision"], 1,
+            "State(global admin) must never substitute for Extension(caller)"
+        );
+        assert!(!body.to_string().contains("not-for-caller"));
+        for (path, body) in [
+            ("/api/v3/modules/outbound_notifications/status", None),
+            (
+                "/api/v3/modules/outbound_notifications/call",
+                Some(json!({"action":"list","args":{},"client_request_id":"caller-list"})),
+            ),
+            (
+                "/api/v3/modules/outbound_notifications/assets/page.js",
+                None,
+            ),
+            ("/api/v3/admin/modules", None),
+            (
+                "/api/v3/admin/modules/automation",
+                Some(json!({"action":"disable"})),
+            ),
+        ] {
+            assert_eq!(
+                request(&router, &token, path, body).await.0,
+                StatusCode::FORBIDDEN,
+                "{path}"
+            );
+        }
+        let (status,_)=request(&router,&token,"/api/v3/modules/automation/call",Some(json!({"action":"schedule_task","agent_id":"shared_default","args":{},"client_request_id":"caller-scope"}))).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "the caller passes its own grant check before the omitted/invalid package operation"
+        );
+        let (status,_)=request(&router,&token,"/api/v3/modules/automation/call",Some(json!({"action":"schedule_task","agent_id":"unavailable_agent","args":{},"client_request_id":"forbidden-agent"}))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            caller.module_state("automation").await.unwrap()["revision"],
+            1
+        );
+        assert_eq!(
+            app.store.module_state("automation").await.unwrap()["revision"],
+            2
+        );
+        assert_eq!(
+            caller.module_state("outbound_notifications").await.unwrap()["revision"],
+            0
+        );
+        assert_eq!(
+            app.store
+                .module_state("outbound_notifications")
+                .await
+                .unwrap()["revision"],
+            1
+        );
     }
 }

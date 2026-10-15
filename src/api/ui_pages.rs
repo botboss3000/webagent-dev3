@@ -1,5 +1,4 @@
-use crate::State;
-use axum::{extract::{Request, Path as RoutePath}, http::StatusCode, middleware::Next,
+use axum::{extract::{Request, State, Path as RoutePath}, http::StatusCode, middleware::Next,
     response::Response, Json, Router};
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
@@ -117,8 +116,14 @@ pub async fn catalog(State(app): State<crate::App>) -> Result<Json<Value>, (Stat
 }
 
 /// Only validated package UI assets are public to the authenticated shell.
-pub(crate) async fn module_asset(State(_app):State<crate::App>,RoutePath((id,name)):RoutePath<(String,String)>)->Response {
+pub(crate) async fn module_asset(axum::Extension(app):axum::Extension<crate::App>,RoutePath((id,name)):RoutePath<(String,String)>)->Response {
     use axum::response::IntoResponse;
+    if id=="outbound_notifications" {
+        let allowed=app.store.account_by_id(crate::shared_chat::actor(&app)).await.ok().flatten()
+            .and_then(|account|crate::access::Principal::from_account(&account).ok())
+            .is_some_and(|principal|principal.active() && principal.administrator());
+        if !allowed {return StatusCode::FORBIDDEN.into_response();}
+    }
     let mime=match name.as_str() {"page.js"=>"text/javascript; charset=utf-8","page.css"=>"text/css; charset=utf-8","page.html"=>"text/html; charset=utf-8",_=>return StatusCode::NOT_FOUND.into_response()};
     if !crate::modules::available(&id) {return StatusCode::NOT_FOUND.into_response();}
     let Some(root)=crate::modules::package_root(&id) else {return StatusCode::NOT_FOUND.into_response();};
