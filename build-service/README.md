@@ -324,3 +324,9 @@ or uncertain request can be retried with identical arguments; no history is prun
 Retain its backup with the installation rollback material. An older broker cannot
 read compressed event history; any broker rollback must use a compatible reader
 or reconcile the saved ledger backup and subsequent writes before restoration.
+
+Rollback previews express source modes using Git's owner-execute identity
+(100644/100755), not incidental group/other ACL bits from readable snapshots.
+Equivalent Git modes emit no chmod; checked patch application preserves the
+current permissions. Receipt hashes, same-file conflict checks and normal
+publication authority still apply.

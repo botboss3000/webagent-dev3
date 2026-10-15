@@ -475,3 +475,32 @@ class UIRuntimeRetentionTests(unittest.TestCase):
   runner,calls,store,image=self.fixture();runner.retain_ui_test_runtime(image,"e"*64);runner.retain_ui_test_runtime(image,"f"*64)
   with self.assertRaisesRegex(ValueError,"third version"):runner.retain_ui_test_runtime(image,"b"*64)
   self.assertEqual(len(store),2)
+
+
+class RollbackPatchModeTests(unittest.TestCase):
+ def test_acl_modes_preserve_git_executable_identity_and_apply(self):
+  import subprocess,stat
+  raw="diff --git a/probe.css b/probe.css\nold mode 100775\nnew mode 100774\n--- a/probe.css\n+++ b/probe.css\n@@ -1,2 +1 @@\n alpha\n-beta\n"
+  patch=fixtures.host.checked_git_modes(raw)
+  self.assertNotIn("old mode",patch);self.assertNotIn("new mode",patch)
+  with tempfile.TemporaryDirectory()as temporary:
+   path=Path(temporary)/"probe.css";path.write_text("alpha\nbeta\n");path.chmod(0o775)
+   subprocess.run(["git","apply","--check","-"],input=patch.encode(),cwd=temporary,check=True,capture_output=True)
+   subprocess.run(["git","apply","-"],input=patch.encode(),cwd=temporary,check=True,capture_output=True)
+   self.assertEqual(path.read_text(),"alpha\n");self.assertEqual(stat.S_IMODE(path.stat().st_mode),0o775)
+ def test_executable_transitions_new_and_deleted_modes_are_canonical(self):
+  value=fixtures.host.checked_git_modes("old mode 100775\nnew mode 100664\nnew file mode 100664\ndeleted file mode 100775\n")
+  self.assertEqual(value,"old mode 100755\nnew mode 100644\nnew file mode 100644\ndeleted file mode 100755\n")
+ def test_invalid_or_unpaired_modes_fail_closed(self):
+  for value in ["new mode 100755\n","old mode 100755\n","new file mode 104755\n","deleted file mode 120777\n"]:
+   with self.subTest(value=value),self.assertRaises(ValueError):fixtures.host.checked_git_modes(value)
+
+class RollbackModeDispatchTests(unittest.TestCase):
+ setUp=fixtures.BuildTests.setUp
+ tearDown=fixtures.BuildTests.tearDown
+ call=fixtures.BuildTests.call
+ def test_public_operator_preview_translates_modes_without_changing_bindings(self):
+  raw={"patch":"old mode 100775\nnew mode 100774\ncontent\n","expected_inputs_sha256":"f"*64,"changed_paths":["v3/ui/probe.css"]}
+  with patch.object(self.broker.ui_publication,"rollback_preview",return_value=raw):
+   result=self.call("build_work",{"action":"ui_rollback_preview","task_id":"mode-fixture","release_job_id":str(uuid.uuid4())})
+  self.assertEqual(result,{**raw,"patch":"content\n"});self.assertTrue(raw["patch"].startswith("old mode"))

@@ -74,6 +74,26 @@ CONTEXT = (
     "ui/main-panel/agents/agents.html", "ui/main-panel/agents/agents.css",
     "ui/vendor/fonts", "ui/vendor/lucide", "ui/favicon.svg")
 UI_SOURCE_PREFIX = "v3/ui/"
+def checked_git_modes(patch):
+    """Render receipt POSIX modes as Git owner-execute modes for checked source patches."""
+    def mode(line,prefix):
+        value=line.removeprefix(prefix).strip()
+        if not re.fullmatch(r"100[0-7]{3}",value):raise ValueError("Unsupported rollback file mode")
+        return "100755"if int(value,8)&0o100 else"100644"
+    lines=patch.splitlines(keepends=True);out=[];i=0
+    while i<len(lines):
+        line=lines[i]
+        if line.startswith("old mode "):
+            if i+1>=len(lines)or not lines[i+1].startswith("new mode "):raise ValueError("Paired rollback modes required")
+            before=mode(line,"old mode ");after=mode(lines[i+1],"new mode ")
+            if before!=after:out.extend(["old mode "+before+"\n","new mode "+after+"\n"])
+            i+=2;continue
+        if line.startswith("new mode "):raise ValueError("Unpaired rollback mode")
+        if line.startswith("new file mode "):line="new file mode "+mode(line,"new file mode ")+"\n"
+        elif line.startswith("deleted file mode "):line="deleted file mode "+mode(line,"deleted file mode ")+"\n"
+        out.append(line);i+=1
+    return "".join(out)
+
 INDEX_METADATA_ROOT="v3/plugins/abilities/Administrator/code_index/"
 INDEX_METADATA_FILES={INDEX_METADATA_ROOT+"code-index-features.json",INDEX_METADATA_ROOT+"code_index.skill.md",INDEX_METADATA_ROOT+"skills/comment_maintenance.skill.md"}
 INDEX_METADATA_FILES.update(INDEX_METADATA_ROOT+"tools/"+name+".skill.md"for name in ("code_index_scan","code_index_lookup","code_index_coverage","code_index_trace","code_index_progress","code_index_maintenance"))
@@ -3151,7 +3171,10 @@ class Broker:
         if name=="build_work"and args.get("action")=="compact_index_history":return self.compact_index_history(request,args)
         if name=="build_work"and args.get("action")in self.index_coordinator.actions:return self.index_coordinator.handle(request,args)
         if name=="build_work"and args.get("action")in self.ui_publication.recovery_actions:return self.ui_publication.recover(request,args)
-        if name=="build_work"and args.get("action")=="ui_rollback_preview":return self.ui_publication.rollback_preview(request,args)
+        if name=="build_work"and args.get("action")=="ui_rollback_preview":
+            result=dict(self.ui_publication.rollback_preview(request,args))
+            result["patch"]=checked_git_modes(result["patch"])
+            return result
         if name=="build_work"and args.get("action")=="check":
             if set(args)-{"action","task_id","check","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter"}:raise ValueError("Unsupported check arguments")
             return self.cargo_request({"task_id":args.get("task_id"),"task":args.get("check","check"),"expected_inputs_sha256":args.get("expected_inputs_sha256"),"timeout_seconds":args.get("timeout_seconds",600),**({"request_id":args["request_id"]} if "request_id" in args else {}),**({"compiler_memory_cap":args["compiler_memory_cap"]}if "compiler_memory_cap"in args else{}),**({"test_filter":args["test_filter"]}if "test_filter"in args else{})},trusted,workspace)
