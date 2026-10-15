@@ -4,10 +4,15 @@ import http from 'node:http';
 import assert from 'node:assert/strict';
 const source=await fs.readFile(process.env.AGENT_NAVIGATION_SOURCE||new URL('../../app.js',import.meta.url),'utf8');
 // Run the shell's actual card, route, and remount functions; replace only backend/page collaborators.
-const slice=(start,end)=>source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start)));
+// Keep extraction bounded to its owning feature and fail directly if the source seam moves.
+const slice=(start,end)=>{
+ const first=source.indexOf(start),last=source.indexOf(end,first);
+ assert.ok(first>=0&&last>first,'Navigation fixture source boundary is unavailable: '+start);
+ return source.slice(first,last);
+};
 const shell=slice('function renderAgentCards(){','async function loadAgentRoster(){')
  +slice('function disposeSessionsPage(){',"for(const page of [configPage,...agentPages]){")
- +(source.includes('async function mountAgentModels(){')?slice('async function mountAgentModels(){','// Registration mirrors'):'');
+ +(source.includes('async function mountAgentModels(){')?slice('async function mountAgentModels(){','// A rejected sign-in'):'');
 const setup=`
 const $=id=>document.getElementById(id);
 let agentId='one',sessionsScope=true,sessionsPage=null,sessionsGeneration=0,selectionTable=null,agentSelectionQueue=Promise.resolve();

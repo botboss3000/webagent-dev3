@@ -7,9 +7,10 @@ class Node {
  querySelector(selector){if(selector.includes(':not(:empty)'))return this.children.find(n=>n.children.length)||null;return null;}
  querySelectorAll(){return [];}
 }
+// Model the document event boundary; notification listeners are outside this layout fixture.
 async function renderer(surface){
  const nodes={};const get=id=>nodes[id]||(nodes[id]=new Node());
- const context=vm.createContext({document:{getElementById:get,querySelector:()=>new Node(),querySelectorAll:()=>[],createElement:()=>new Node(),addEventListener(){}},window:{innerWidth:surface==='mobile'?390:1280,__CHAT_PORTAL__:surface==='widget',addEventListener(){}},ResizeObserver:class{observe(){}},setTimeout,Event:class{},Number,Math});
+ const context=vm.createContext({document:{getElementById:get,querySelector:()=>new Node(),querySelectorAll:()=>[],createElement:()=>new Node(),addEventListener(){},dispatchEvent(){return true;}},window:{innerWidth:surface==='mobile'?390:1280,__CHAT_PORTAL__:surface==='widget',addEventListener(){}},ResizeObserver:class{observe(){}},setTimeout,Event:class{},Number,Math});
  const module=new vm.SourceTextModule(fs.readFileSync(__dirname+'/chat-config.js','utf8'),{context});await module.link((specifier)=>{const exports=specifier.includes('bubble-paint')?['applyBubblePaint']:specifier.includes('chat-pill-config')?['applyChatPillLayout','disposeChatPillLayout']:['initFooterHandle'];return new vm.SyntheticModule(exports,function(){for(const key of exports)this.setExport(key,()=>{})},{context});});await module.evaluate();
  get('chat-panel').clientWidth=surface==='mobile'?390:1000;
  const controls={share:new Node(),request_help:new Node(),agent_active:new Node()};module.namespace.setSharedChatControls(controls);
