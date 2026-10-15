@@ -14,8 +14,20 @@
       "dim_after_ms": 30000,
       "dim_opacity": 0.8,
       "allow_device_overrides": false
+    },
+    "composer": {
+      "keyboard_motion": {
+        "enabled": false,
+        "duration_ms": 140
+      }
     }
   },
   "chat_desktop": {},
-  "chat_mobile": {}
+  "chat_mobile": {
+    "composer": {
+      "keyboard_motion": {
+        "enabled": true
+      }
+    }
+  }
 }

@@ -260,7 +260,7 @@ function applyFooter(profile, mode) {
 /** Selects the current profile and updates bubble, transcript, header, and footer presentation. */
 export function applyChatConfig() {
   const profile = currentChatProfile();
-  if (!profile) return;
+  if (!profile) return; window.__chatKeyboardMotionConfigure?.(profile.composer?.keyboard_motion);
   // Notify display consumers even when layout is cached; adoption never counts as new chat activity.
   document.dispatchEvent(new Event('v3:chat-config-applied'));
   const surface = surfaceName();

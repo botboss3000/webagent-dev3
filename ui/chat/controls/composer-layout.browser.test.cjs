@@ -95,3 +95,38 @@ test('empty-editor active/idle transitions retain DOM across themes and width ch
   await p.setViewportSize({width:390,height:844});await settle(p);
  }
 });
+
+
+/** Pin the real composer to the fixture panel bottom and load the actual viewport owner. */
+async function motionFixture(t,settings={enabled:true,duration_ms:140}) {
+ const p=await fixture(t);await p.evaluate(async()=>{document.querySelector('#chat-panel').style.position='relative';document.querySelector('#chat-input-area').style.cssText='position:absolute;bottom:0';window.motionVh=844;window.motionScale=1;Object.defineProperty(visualViewport,'height',{configurable:true,get:()=>motionVh});Object.defineProperty(visualViewport,'scale',{configurable:true,get:()=>motionScale});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});});
+ const cfg=config(layout());cfg.chat_common.composer={keyboard_motion:settings};await p.evaluate(async cfg=>api.initChatConfig({config:cfg}),cfg);await focusDraft(p);return p;
+}
+test('keyboard movement starts at the rendered position while app height changes immediately',async t=>{
+ const p=await motionFixture(t);
+ for(const height of [500,844]){
+  const state=await p.evaluate(height=>{const row=document.querySelector('#chat-input-row'),before=row.getBoundingClientRect().top;motionVh=height;visualViewport.dispatchEvent(new Event('resize'));const a=row.getAnimations()[0];a?.pause();return{before,after:row.getBoundingClientRect().top,height:document.documentElement.style.getPropertyValue('--app-height'),duration:a?.effect.getTiming().duration,opacity:getComputedStyle(row).opacity,frames:a?.effect.getKeyframes()};},height);
+  assert.equal(state.height,height+'px');assert.equal(state.duration,140);assert(Math.abs(state.before-state.after)<.5,'visible composer starts where it was');assert.equal(state.opacity,'1');assert(state.frames.every(f=>f.opacity===undefined));
+  await p.evaluate(()=>{for(const node of document.querySelectorAll('#chat-input-row,#chat-footer-row,#chat-footer-handle'))for(const a of node.getAnimations())a.finish();});await settle(p);
+ }
+ const s=await stable(p);assert.equal(s.focused,true);assert.equal(s.blur,0);assert.equal(s.focus,0);assert.equal(s.value,'retained draft');assert.equal(s.start,2);assert.equal(s.end,7);
+});
+test('interrupted keyboard motion retargets from the current position and preserves CSS transforms',async t=>{
+ const p=await motionFixture(t,{enabled:true,duration_ms:160});
+ const result=await p.evaluate(()=>{const row=document.querySelector('#chat-input-row');row.style.transform='scale(1.05)';motionVh=500;visualViewport.dispatchEvent(new Event('resize'));const first=row.getAnimations()[0];first.pause();first.currentTime=80;const before=row.getBoundingClientRect().top;motionVh=440;visualViewport.dispatchEvent(new Event('resize'));const next=row.getAnimations()[0];next?.pause();return{before,after:row.getBoundingClientRect().top,count:row.getAnimations().length,duration:next?.effect.getTiming().duration,transform:row.style.transform,height:document.documentElement.style.getPropertyValue('--app-height')};});
+ assert(Math.abs(result.before-result.after)<.5);assert.equal(result.count,1);assert.equal(result.duration,160);assert.equal(result.transform,'scale(1.05)');assert.equal(result.height,'440px');assert.equal((await stable(p)).focused,true);
+});
+test('motion completes, and reduced motion or disabling cancels translations immediately',async t=>{
+ const p=await motionFixture(t);await p.evaluate(()=>{motionVh=500;visualViewport.dispatchEvent(new Event('resize'));});await p.waitForFunction(()=>document.querySelector('#chat-input-row').getAnimations().length===0);assert.equal(await p.locator('#chat-input-row').evaluate(e=>getComputedStyle(e).translate),'none');
+ await p.evaluate(()=>{motionVh=844;visualViewport.dispatchEvent(new Event('resize'));for(const a of document.querySelector('#chat-input-row').getAnimations())a.pause();});await p.emulateMedia({reducedMotion:'reduce'});await p.waitForFunction(()=>document.querySelector('#chat-input-row').getAnimations().length===0);assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);
+ await p.emulateMedia({reducedMotion:'no-preference'});await p.evaluate(()=>{motionVh=500;visualViewport.dispatchEvent(new Event('resize'));window.__chatKeyboardMotionConfigure({enabled:false});});assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);assert.equal((await stable(p)).focused,true);
+});
+test('desktop, widget, zoom, chrome jitter and zero duration bypass keyboard motion',async t=>{
+ const p=await motionFixture(t);
+ for(const mode of ['jitter','zoom','widget','zero','desktop']){
+  const count=await p.evaluate(mode=>{window.__chatKeyboardMotionConfigure({enabled:true,duration_ms:mode==='zero'?0:140});motionScale=mode==='zoom'?1.5:1;window.__CHAT_PORTAL__=mode==='widget';motionVh=mode==='jitter'?810:500;visualViewport.dispatchEvent(new Event('resize'));return document.querySelector('#chat-input-row').getAnimations().length;},mode);
+  if(mode==='desktop'){await p.setViewportSize({width:1200,height:844});await p.evaluate(()=>{motionVh=844;visualViewport.dispatchEvent(new Event('resize'));});}
+  else assert.equal(count,0,mode);
+ }
+ assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);
+});

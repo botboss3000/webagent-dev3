@@ -16,7 +16,7 @@
     var vv = window.visualViewport;
     function apply() {
       var h = (vv ? vv.height : window.innerHeight);
-      root.style.setProperty('--app-height', h + 'px');
+      applyComposerMotion(h);
     }
     var keyboardWasOpen = false;
     var keyboardDismissed = false;
@@ -50,7 +50,6 @@
     }
     function applyAll() { apply(); applyKb(); }
     window.__appHeightApply = apply;
-    applyAll();
     if (vv) {
       vv.addEventListener('resize', applyAll);
       vv.addEventListener('scroll', applyAll);
@@ -101,4 +100,59 @@
     document.addEventListener('beforeinput', engageEditor, true);
     document.addEventListener('input', engageEditor, true);
     document.addEventListener('focusout', function () { setTimeout(applyKb, 0); });
+
+    // @code-index {"version":1,"feature":"composer-keyboard-motion","aliases":["composer movement","keyboard smoothing"],"purpose":"Keeps app viewport sizing immediate while composer/footer controls ease from their current rendered position to the new layout. Config: data/config/chat.json -> composer.keyboard_motion in merged profiles; no focus or opacity changes.","span_lines":70,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/composer/keyboard_motion/enabled","/chat_common/composer/keyboard_motion/duration_ms"],"profile_overrides":true}],"opportunities":[]}}
+    var motionSettings = {enabled: false, duration_ms: 140}, motionSignature = '';
+    var motionEffects = [], motionHeight = vv ? vv.height : window.innerHeight;
+    var motionWidth = window.innerWidth, motionScale = vv ? vv.scale : 1;
+    var motionBlurredAt = -Infinity;
+    var motionReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+    /** Cancels only our translations, exposing the already-current layout without touching focus. */
+    function cancelComposerMotion() {
+      for (var effect of motionEffects) effect.cancel();
+      motionEffects = [];
+    }
+    /** FLIP the visible controls: measure before cancellation, resize immediately, then ease to their new positions. */
+    function applyComposerMotion(height) {
+      var width = window.innerWidth, scale = vv ? vv.scale : 1;
+      var input = document.getElementById('chat-input'), area = input?.closest('#chat-input-area');
+      var eligible = motionSettings.enabled && motionSettings.duration_ms > 0 && !motionReduced.matches
+        && width <= 800 && width === motionWidth && scale === 1 && motionScale === 1
+        && area?.isConnected && !area.closest('.wa-chat-window') && !window.__CHAT_PORTAL__
+        && (document.activeElement === input || performance.now() - motionBlurredAt < 700)
+        && (Math.max(window.innerHeight - motionHeight, window.innerHeight - height) > 120 || Math.abs(height - motionHeight) > 120)
+        && CSS.supports('translate', '0px 1px');
+      if (height === motionHeight) {
+        if (!eligible) cancelComposerMotion();
+        root.style.setProperty('--app-height', height + 'px');
+      } else {
+        var controls = eligible ? ['#chat-input-row', '#chat-footer-row', '#chat-footer-handle']
+          .map(function (selector) { return area.querySelector(selector); }).filter(Boolean) : [];
+        // Read the current animated position before cancelling, so interruptions cannot jump backwards.
+        var before = controls.map(function (node) { return node.getBoundingClientRect().top; });
+        cancelComposerMotion(); root.style.setProperty('--app-height', height + 'px');
+        controls.forEach(function (node, index) {
+          var offset = before[index] - node.getBoundingClientRect().top;
+          if (Math.abs(offset) < 0.5 || typeof node.animate !== 'function') return;
+          // Add individual translation to existing CSS transforms; never overwrite drag/rotation styles.
+          var effect = node.animate([{translate: '0px ' + offset + 'px'}, {translate: '0px 0px'}],
+            {duration: motionSettings.duration_ms, easing: 'cubic-bezier(.2,.8,.2,1)', composite: 'add'});
+          motionEffects.push(effect);
+          effect.onfinish = function () { effect.cancel(); motionEffects = motionEffects.filter(function (current) { return current !== effect; }); };
+        });
+      }
+      motionHeight = height; motionWidth = width; motionScale = scale;
+    }
+    /** Adopt bounded motion preferences from the merged chat profile on UI configuration reload. */
+    window.__chatKeyboardMotionConfigure = function (raw) {
+      raw = raw && typeof raw === 'object' ? raw : {};
+      var duration = typeof raw.duration_ms === 'number' && Number.isFinite(raw.duration_ms) && raw.duration_ms >= 0 && raw.duration_ms <= 300 ? raw.duration_ms : 140;
+      var next = {enabled: raw.enabled === true, duration_ms: duration}, signature = JSON.stringify(next);
+      if (signature === motionSignature) return;
+      cancelComposerMotion(); motionSettings = next; motionSignature = signature;
+    };
+    document.addEventListener('focusout', function (event) { if (event.target.id === 'chat-input') motionBlurredAt = performance.now(); });
+    motionReduced.addEventListener('change', cancelComposerMotion);
+    window.addEventListener('pagehide', cancelComposerMotion);
+    applyAll();
   })();
