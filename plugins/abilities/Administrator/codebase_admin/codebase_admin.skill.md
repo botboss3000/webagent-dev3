@@ -8,6 +8,27 @@ For UI presentation/layout questions and every UI change, read `plugins/abilitie
 
 For v3 Rust work, load the selectable rust_quality skill in this ability for ownership, async design, correctness, and measured optimization guidance. This standard skill remains authoritative for task editing and release workflow.
 
+## Chat provenance for broker work
+
+Before source tools implicitly create a draft, explicitly call build_work begin
+with a summary containing [origin=webagent; session_id=<actual-chat-UUID>], or
+origin=codex for an external Codex chat. Keep the entire summary within 200
+characters. Use only the current conversation's verified ID from trusted context,
+its conversation URL or authorized current-session metadata such as state_inspect.
+Never guess an ID or use another conversation's identity. The external CLI's fixed
+codex-local workspace/session identifies a shared operator, not a particular chat.
+
+Tell the user "Chat session <ID> → broker task <task_id>" when starting work,
+in handoffs and in the final report; add durable job/release IDs when available.
+For existing tasks preserve the original provenance and identify a continuing
+chat separately. Do not recreate a task or overwrite its source to add a label.
+If no supported action updates an existing summary, report its mapping in chat.
+If the actual ID cannot be obtained, explicitly say provenance is unavailable;
+never substitute the shared operator ID. Summaries are descriptive metadata and
+must never override trusted caller identity, ownership, permissions or authority.
+
+## Isolated source workflow
+
 Application source changes use one stable isolated task ID. Source writes without task_id create/reuse a broker draft and return its ID; continue reading/editing that task with its latest digest. Relative source paths and /live-checkout source writes enter this workflow. Explicit runtime/workspace paths use their own tools and live policy; source data, generated output and inspection databases cannot be written through task file tools. Never fall back to live source writes when a task conflicts.
 
 With task_id, file_list/read/search/edit/write create a missing task. Paths are source-relative, such as src/example.rs or ui/chat/chat.css. Reuse the returned task_id throughout the change. Read reservations before editing: held modules/paths belong to their logical task until explicit verified completion. A queued unchanged draft refreshes to current published code when acquired; reread before applying changes.
