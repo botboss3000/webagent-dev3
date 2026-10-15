@@ -239,6 +239,22 @@ class Ownership:
             if value["state"]not in {"owned","validating"}:raise ValueError("Editing ownership required")
             return self.update(db,value,state="owned",generation=value["generation"]+1,evidence={},heartbeat=self.clock())
         return self.mutate(request,["edited",task,owner,revision,epoch],operation)
+    # @code-index {"version":1,"feature":"owner-claim-release","aliases":["release reservations","unblock engine"],"purpose":"Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.","span_lines":17,"configuration":{"status":"not_applicable","rationale":"Ownership fencing and authenticated scope release are fixed authority invariants."}}
+    def release_scopes(self,task,owner,revision,epoch,scopes,reason,request):
+        """Release explicit owner claims, fence old epochs and retain the unpublished draft."""
+        if not isinstance(scopes,list)or not 1<=len(scopes)<=256 or any(not isinstance(s,str)for s in scopes)or len(set(scopes))!=len(scopes):raise ValueError("Explicit unique held scopes required")
+        if not isinstance(reason,str)or not 1<=len(reason.encode())<=500:raise ValueError("Bounded release reason required")
+        def operation(db):
+            """Atomically audit the released set; no completion or transfer is implied."""
+            value=self.check(task,owner,revision,epoch,db)
+            if value["state"]not in {"owned","validating","orphaned"}:raise ValueError("Active ownership required")
+            if not set(scopes)<=set(value["scopes"]):raise ValueError("Only exactly held scopes can be released")
+            held=sorted(set(value["scopes"])-set(scopes))
+            result=self.update(db,value,state="owned"if held else"waiting",scopes=held,requested=[],epoch=epoch+1,evidence={},heartbeat=self.clock())
+            db.execute("INSERT INTO events(task,at,event)VALUES(?,?,?)",(task,self.clock(),canonical({"release_scopes":sorted(scopes),"reason":reason,"owner":owner})))
+            return result
+        return self.mutate(request,["release_scopes",task,owner,revision,epoch,scopes,reason],operation)
+
     def heartbeat(self,task,owner,revision,epoch,request):
         """Renew activity only; a heartbeat never releases ownership or extends tool authorization."""
         def operation(db):

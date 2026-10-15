@@ -2557,8 +2557,49 @@ class Broker:
         self._save_work()
         return result
 
+    # @code-index {"version":1,"feature":"owner-claim-release","aliases":["release reservations","unblock engine"],"purpose":"Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.","span_lines":48,"configuration":{"status":"not_applicable","rationale":"Ownership fencing and authenticated scope release are fixed authority invariants."}}
+    def release_claims(self,request,args):
+        """Owner-only explicit release; preserve drafts and fence every prior execution epoch."""
+        allowed={"action","task_id","scopes","reason","request_id","expected_revision","expected_epoch"}
+        if set(args)-allowed:raise ValueError("Unsupported release arguments")
+        trusted=request["trusted"];workspace=request["workspace"]
+        self._incoming_lease(trusted)
+        item=self.scheduler.item(args,trusted,workspace)
+        owner=self.scheduler.owner(trusted,workspace)
+        path=self.scheduler.journal_path(owner,args.get("request_id"),"release-"+item["key"])
+        digest=hashlib.sha256(canonical(args)).hexdigest()
+        if path.is_symlink():raise PermissionError("Release request symlink")
+        record=json.loads(path.read_text())if path.exists()else None
+        if record and record["digest"]!=digest:raise ValueError("Request ID reused")
+        if record and record["state"]=="rejected":raise ValueError(record["error"])
+        token="release-"+hashlib.sha256(canonical([owner,item["key"],args.get("request_id")])).hexdigest()[:56]
+        if not record:
+            if self.scheduler.pending(item["key"]):raise ValueError("Scheduler transition requires recovery")
+            value=self.scheduler.ensure(item,trusted,workspace)
+            if type(args.get("expected_revision"))is not int or type(args.get("expected_epoch"))is not int or value["revision"]!=args["expected_revision"]or value["epoch"]!=args["expected_epoch"]:raise ValueError("Stale ownership revision or epoch")
+            record={"digest":digest,"state":"pending","task_key":item["key"],"request_id":args["request_id"]}
+            self.scheduler.write_record(path,record)
+        result=self.scheduler.store.receipt(token)
+        if result is None:
+            # No queued/running work may retain a released claim or obsolete epoch.
+            if any(j.get("ownership_id")==item["key"]and j["status"]in {"queued","running","interrupted","uncertain","needs_decision"}for j in self.jobs.values()):raise ValueError("Reconcile task execution before releasing claims")
+            if self.code_index_leases:raise ValueError("Wait for active maintenance before releasing claims")
+            try:
+                result=self.scheduler.store.release_scopes(item["key"],owner,args["expected_revision"],args["expected_epoch"],args.get("scopes"),args.get("reason"),token)
+            except (ValueError,PermissionError)as error:
+                self.scheduler.write_record(path,{**record,"state":"rejected","error":str(error)[:512]})
+                raise
+        # Repair the registry after a crash between the ownership transaction and save.
+        current=self.scheduler.store.get(item["key"])
+        item.update(ownership_epoch=current["epoch"],ownership_revision=current["revision"])
+        item.pop("ownership_inputs_sha256",None);self._save_work()
+        self.scheduler.write_record(path,{**record,"state":"done","result":result})
+        self._start_next()
+        return result
+
     def unified_build(self, request, args):
         action = args.get("action")
+        if action=="release_claims":return self.release_claims(request,args)
         if action in self.scheduler.actions:return self.scheduler.handle(args,request["trusted"],request["workspace"])
         allowed = {"action", "task_id", "summary", "expected_inputs_sha256", "sync_decision",
             "expected_sync_digest", "offset", "job_id", "request_id", "check", "timeout_seconds", "compiler_memory_cap", "package_memory_cap", "test_filter"}

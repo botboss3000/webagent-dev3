@@ -407,3 +407,26 @@ class DocumentationHotRoutingTests(unittest.TestCase):
   runner=fixtures.host.Runner(source=Path(self.temp.name),snapshot_socket=None)
   runner.command=lambda *a,**kw:"/build/src/main.rs\n/build/docs/../docs/engine-modularization.md\ndocs/other.md\n"
   self.assertEqual(runner.core_compile_inputs(),{"v3/src/main.rs","v3/docs/engine-modularization.md","v3/docs/other.md"})
+
+class ReleaseClaimsBrokerTests(unittest.TestCase):
+ setUp=MaintenanceTests.setUp
+ tearDown=MaintenanceTests.tearDown
+ call=MaintenanceTests.call
+ def test_release_preserves_draft_and_retry_repairs_registry(self):
+  import hashlib
+  self.call("v3_build_work",{"action":"begin","task_id":"release-fixture","summary":"Release fixture","mode":"isolated"})
+  key=hashlib.sha256(fixtures.host.canonical([self.trusted["user_id"],self.sid,"release-fixture"])).hexdigest()
+  item=self.broker.work[key];store=self.broker.scheduler.store
+  owner=self.broker.scheduler.owner(self.trusted,self.sid);value=store.get(key)
+  a=store.acquire(key,owner,value["revision"],value["epoch"],["module:engine","module:broker"],"fixture-acquire")["task"]
+  args={"action":"release_claims","task_id":"release-fixture","scopes":["module:engine"],"reason":"Defer checks","request_id":"fixture-release","expected_revision":a["revision"],"expected_epoch":a["epoch"]}
+  self.broker.jobs["fixture-active"]={"ownership_id":key,"status":"running"}
+  with self.assertRaisesRegex(ValueError,"execution"):self.call("build_work",args)
+  self.broker.jobs.pop("fixture-active")
+  with patch.object(self.broker,"_save_work",side_effect=OSError("injected save failure")):
+   with self.assertRaises(OSError):self.call("build_work",args)
+  r=self.call("build_work",args);self.assertEqual(r["scopes"],["module:broker"])
+  self.assertEqual(self.call("build_work",args),r);self.assertEqual(item["ownership_epoch"],r["epoch"])
+  self.assertTrue(Path(item["workspace_path"]).is_dir())
+  with self.assertRaisesRegex(ValueError,"reused"):
+   self.call("build_work",{**args,"reason":"Different payload"})

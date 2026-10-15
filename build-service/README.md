@@ -179,3 +179,16 @@ If the prior lifecycle installer omitted a newly inventoried module, use the
 newly protected bootstrap's supported --install --install-tree while drained
 and stopped, then verify exact bytes before resuming. Do not execute mutable
 source as privileged service code or bypass publication/classification gates.
+
+## Explicit owner claim release
+
+Operators may use `buildctl schedule --input request.json` with action
+`release_claims`, task_id, an explicit scopes array copied from reservations,
+a bounded reason, stable request_id and current expected_revision/expected_epoch.
+The authenticated owner can release some or all exactly held claims without
+completing or deleting the draft. Active, interrupted or uncertain task execution
+must be reconciled first; active index maintenance must finish. Releasing claims
+clears acceptance and pending requests and advances the ownership epoch. Later
+writes/builds must reacquire their derived claims and pass normal merge checks.
+Exact-request retry repairs the registry after interrupted persistence. This is
+not task completion, an administrator takeover, or authorization to deploy.

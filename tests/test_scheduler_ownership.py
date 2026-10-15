@@ -128,3 +128,28 @@ class OwnershipTests(unittest.TestCase):
     def test_symlink_database_rejected(self):
         p=Path(self.root.name)/"link";p.symlink_to(self.store.path)
         with self.assertRaises(PermissionError):m.Ownership(p)
+
+class ReleaseClaimTests(unittest.TestCase):
+ setUp=OwnershipTests.setUp
+ tearDown=OwnershipTests.tearDown
+ request=OwnershipTests.request
+ begin=OwnershipTests.begin
+ acquire=OwnershipTests.acquire
+ current=OwnershipTests.current
+ def test_partial_release_fences_old_epoch_preserves_other_claims_and_unblocks(self):
+  a=self.acquire(self.begin("release-owner"),["module:engine","module:broker"])["task"]
+  args=(a["id"],a["owner"],a["revision"],a["epoch"],["module:engine"],"Defer engine checks",self.request())
+  r=self.store.release_scopes(*args);self.assertEqual(r,self.store.release_scopes(*args))
+  self.assertEqual(r["scopes"],["module:broker"]);self.assertEqual(r["evidence"],{})
+  self.assertTrue(self.acquire(self.begin("engine-writer"),["module:engine"])["acquired"])
+  with self.assertRaises(PermissionError):self.store.assert_owned(a["id"],a["owner"],a["epoch"],["module:broker"])
+ def test_release_requires_owner_exact_revision_and_held_scope(self):
+  a=self.acquire(self.begin("release-validation"),["module:broker"])["task"]
+  for who,rev,scopes in (("other",a["revision"],["module:broker"]),(a["owner"],0,["module:broker"]),(a["owner"],a["revision"],["module:engine"])):
+   with self.assertRaises((ValueError,PermissionError)):self.store.release_scopes(a["id"],who,rev,a["epoch"],scopes,"Preserve draft",self.request())
+  self.assertEqual(self.current(a),a)
+ def test_release_all_retains_task_and_allows_reacquisition(self):
+  a=self.acquire(self.begin("release-all"),["module:engine"])["task"]
+  r=self.store.release_scopes(a["id"],a["owner"],a["revision"],a["epoch"],a["scopes"],"Preserve source for later",self.request())
+  self.assertEqual(r["state"],"waiting");self.assertEqual(r["scopes"],[])
+  self.assertTrue(self.acquire(r,["module:broker"])["acquired"])
