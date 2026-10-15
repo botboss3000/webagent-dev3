@@ -20,6 +20,15 @@ def secure_dirs(path):
   if cursor.is_symlink():raise PermissionError("Symlink protected directory")
   if not cursor.exists():cursor.mkdir(mode=0o755)
   if cursor.stat().st_uid!=0 or cursor.stat().st_mode&0o022:raise PermissionError("Protected parent writable by another identity")
+def installation_entry(folder):
+ """Resolve the fixed installer filename in a source tree or protected installation."""
+ folder=Path(folder)
+ if folder.is_symlink():raise PermissionError("Installer directory symlink")
+ for name in ("install.py","bootstrap.py"):
+  candidate=folder/name
+  if candidate.is_symlink():raise PermissionError("Installer entry symlink")
+  if candidate.is_file():return candidate
+ raise FileNotFoundError("Reviewed lifecycle installer unavailable")
 def install(args):
  if os.geteuid()!=0:raise PermissionError("Installation requires root")
  source=Path(__file__).resolve().parent;checkout=Path(args.checkout_root or source.parent)
@@ -47,6 +56,7 @@ def install(args):
   if p.is_symlink():raise PermissionError("Reviewed source symlink")
   digest.update(p.name.encode()+b"\0"+p.read_bytes())
  digest.update(b"scheduler-defaults.json\0"+(reviewed/"scheduler-defaults.json").read_bytes())
+ digest.update(b"ui-test.Dockerfile\0"+(reviewed/"ui-test.Dockerfile").read_bytes())
  digest.update((reviewed.parent/"plugins/abilities/Administrator/code_index/adapter.py").read_bytes())
  digest.update((reviewed.parent/"plugins/abilities/Administrator/code_index/maintenance.py").read_bytes())
  release=digest.hexdigest();value["service_dir"]=str(install_root/"releases"/release);cfg.validate(value)
@@ -87,8 +97,9 @@ def install(args):
   if not archived.exists():atomic(archived,json.loads(previous))
   atomic(config_path.with_name("build-service.previous.json"),json.loads(previous))
  atomic(config_path,value);os.environ["WEBAGENT_BUILD_CONFIG"]=str(config_path);os.environ["WEBAGENT_BUILD_MODULE_ROOT"]=str(source)
- installer=module("reviewed_service_installer",source/"install.py")
- try:installer.install(args.install_tree)
+ try:
+  installer=module("reviewed_service_installer",installation_entry(source))
+  installer.install(args.install_tree)
  except BaseException:
   if previous:atomic(config_path,json.loads(previous))
   else:config_path.unlink(missing_ok=True)

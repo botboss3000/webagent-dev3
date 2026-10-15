@@ -718,9 +718,14 @@ def scan(conn,rootfd,args):
     conn.execute("INSERT INTO batches VALUES(?,?,'in_progress',?,0,?,NULL,'',NULL)",(batch,scope,len(paths),now()))
     conn.commit()
     try:
-        records=snapshot(rootfd,paths,deadline);scans=[];lines=0
+        records=snapshot(rootfd,paths,deadline);scans=[];lines=0;reused=0
+        recipe=sha(Path(__file__).read_bytes()+json.dumps(parser_versions(),sort_keys=True).encode())
+        conn.execute("CREATE TABLE IF NOT EXISTS file_recipes(path TEXT PRIMARY KEY,recipe TEXT NOT NULL)")
+        known={row[0]:row[1]for row in conn.execute("SELECT f.path,f.sha256 FROM files f JOIN file_recipes r ON r.path=f.path WHERE r.recipe=?",(recipe,))}
         for path,data in records:
             if time.monotonic()>deadline:raise ValueError("Parser deadline exceeded")
+            if known.get(path)==sha(data):
+                reused+=1;continue
             item=scan_data(path,data);lines+=item["line_count"]
             if lines>MAX_TOTAL_LINES:raise ValueError("Index line count exceeds limit")
             scans.append(item)
@@ -744,6 +749,8 @@ def scan(conn,rootfd,args):
         if conn.execute("SELECT COALESCE(SUM(line_count),0) FROM files").fetchone()[0]>MAX_TOTAL_LINES:
             raise ValueError("Stored index line limit exceeded")
         if conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]>MAX_FILES:raise ValueError("Stored file count exceeds limit")
+        conn.executemany("INSERT OR REPLACE INTO file_recipes VALUES(?,?)",[(path,recipe)for path,_data in records])
+        conn.execute("DELETE FROM file_recipes WHERE path NOT IN (SELECT path FROM files)")
         conn.execute("UPDATE meta SET revision=revision+1 WHERE id=1")
         conn.execute("UPDATE batches SET status='completed',indexed_files=?,completed_at=?,revision=? WHERE batch_id=?",
             (len(scans),now(),revision+1,batch))
@@ -751,7 +758,7 @@ def scan(conn,rootfd,args):
         conn.commit()
         result=page([{"path":i["path"],"lines":i["line_count"],"symbols":len(i["symbols"]),
             "edges":len(i["edges"]),"parser_status":i["parser_status"]} for i in scans],0,args["limit"])
-        result.update(batch_id=batch,indexed_files=len(scans),removed_count=len(removed),
+        result.update(batch_id=batch,indexed_files=len(scans),reused_files=reused,removed_count=len(removed),
             removed=page([{"path":p} for p in removed],0,args["limit"]),revision=revision+1)
         return result
     except Exception as exc:
@@ -1033,9 +1040,10 @@ def maintenance_units(conn,file):
 def project_maintenance(conn,reviews):
     """Project exact-source reviews; fresh scans only discover pending work."""
     if not isinstance(reviews,list)or len(reviews)>100000:raise ValueError("Maintenance snapshot exceeds bound")
-    selected={}
+    selected={};alternatives={}
     for review in reviews:
         key=(review["file_path"].removeprefix("v3/"),review["unit_id"]);old=selected.get(key)
+        alternatives.setdefault(key,[]).append(review)
         if old is None or review.get("assessment_at",review.get("reviewed_at")or 0)>=old.get("assessment_at",old.get("reviewed_at")or 0):selected[key]=review
     files=[dict(row)for row in conn.execute("SELECT * FROM files ORDER BY path")]
     virtual=any(f["path"].startswith("v3/")for f in files);seen=set();output=[];invalidated=0;invalidated_bindings=0
@@ -1044,6 +1052,8 @@ def project_maintenance(conn,reviews):
         logical=file["path"].removeprefix("v3/");deps=maintenance_dependencies(conn,file["path"])
         for unit in maintenance_units(conn,file):
             key=(logical,unit["unit_id"]);seen.add(key);old=selected.get(key)
+            matching=[r for r in alternatives.get(key,[])if r.get("source_hash")==file["sha256"]and r.get("dependencies",[])==deps and not r.get("removed")]
+            if matching:old=max(matching,key=lambda r:(r.get("status")=="complete",r.get("assessment_at",r.get("reviewed_at")or 0)))
             row=dict(old)if old else {"status":"pending","checks":{},"remaining_work":[],"reviewer":None,"reviewed_at":None,"previous_review":None,"revision":0}
             if old and(old.get("source_hash")!=file["sha256"]or old.get("dependencies",[])!=deps or old.get("removed")):
                 invalidated_bindings+=1;invalidated+=int(bool(old.get("reviewer"))or bool(old.get("checks")));row.update(status="needs_review",previous_review={"source_hash":old.get("source_hash"),"checks":old.get("checks",{}),"reviewer":old.get("reviewer")},checks={})
@@ -1174,7 +1184,43 @@ def source_digest(root):
         rows.append([rel, info.st_mode & 0o100, sha(data)])
     return sha(json.dumps(rows, separators=(",", ":")).encode())
 
-def build_published(root, output, release_id, candidate_digest, maintenance=None):
+def import_private_seed(conn, rootfd, folder):
+    """Reuse only protected scanner output matching exact final file and parser identities."""
+    folder=Path(folder)
+    if folder.is_symlink():raise ValueError("Private seed directory symlink")
+    index=folder/"index.sqlite";receipt=folder/"seed.json"
+    for path,limit in ((index,MAX_DB_BYTES),(receipt,4096)):
+        if path.is_symlink()or not path.is_file()or path.stat().st_nlink!=1 or path.stat().st_size>limit:raise ValueError("Invalid private index seed")
+    blob=index.read_bytes();binding=json.loads(receipt.read_bytes())
+    if binding.get("index_sha256")!=sha(blob):raise ValueError("Private index seed hash mismatch")
+    if binding.get("parser_sha256")!=sha(Path(__file__).read_bytes()):return 0
+    recipe=sha(Path(__file__).read_bytes()+json.dumps(parser_versions(),sort_keys=True).encode())
+    conn.execute("CREATE TABLE IF NOT EXISTS file_recipes(path TEXT PRIMARY KEY,recipe TEXT NOT NULL)")
+    source=sqlite3.connect(":memory:");count=0
+    try:
+        source.deserialize(blob);source.row_factory=sqlite3.Row;source.execute("PRAGMA trusted_schema=OFF")
+        if not source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='file_recipes'").fetchone():return 0
+        rows=source.execute("SELECT f.* FROM files f JOIN file_recipes r ON f.path=r.path WHERE r.recipe=?",(recipe,)).fetchall()
+        if len(rows)>MAX_FILES:raise ValueError("Private seed file count exceeded")
+        for file in rows:
+            relative_parts(file["path"])
+            path="v3/"+file["path"]
+            try:actual=read_source(rootfd,path)
+            except FileNotFoundError:continue
+            if sha(actual)!=file["sha256"]:continue
+            conn.execute("DELETE FROM files WHERE path=?",(path,))
+            conn.execute("INSERT INTO files VALUES(?,?,?,?,?,?,?)",(path,*tuple(file)[1:]))
+            for table in ("lines","symbols","edges"):
+                records=source.execute("SELECT * FROM "+table+" WHERE file_path=?",(file["path"],)).fetchall()
+                if len(records)>MAX_TOTAL_LINES:raise ValueError("Private seed row count exceeded")
+                if records:
+                    placeholders=",".join("?"for _ in records[0])
+                    conn.executemany("INSERT INTO "+table+" VALUES("+placeholders+")",[(path,*tuple(row)[1:])for row in records])
+            conn.execute("INSERT OR REPLACE INTO file_recipes VALUES(?,?)",(path,recipe));count+=1
+        return count
+    finally:source.close()
+
+def build_published(root, output, release_id, candidate_digest, maintenance=None, seed=None, private_seeds=None):
     """Build a complete fresh index; publish no files until coverage validates."""
     uuid.UUID(release_id)
     if not re.fullmatch("[0-9a-f]{64}", candidate_digest):
@@ -1186,8 +1232,18 @@ def build_published(root, output, release_id, candidate_digest, maintenance=None
     try:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
+        if seed is not None:
+            seed_blob,seed_manifest=read_published(seed)
+            if seed_manifest["parser_sha256"]==sha(Path(__file__).read_bytes()):
+                conn.deserialize(seed_blob)
+                conn.row_factory=sqlite3.Row
+                conn.execute("PRAGMA trusted_schema=OFF")
+                conn.execute("PRAGMA foreign_keys=ON")
         conn.executescript(DDL)
-        scan(conn, fd, {"action":"scan", "scope":"", "limit":1, "offset":0})
+        if private_seeds is not None:
+            if not isinstance(private_seeds,list)or len(private_seeds)>64:raise ValueError("Private seed limit exceeded")
+            for private in private_seeds:import_private_seed(conn,fd,private)
+        scan_result=scan(conn, fd, {"action":"scan", "scope":"", "limit":1, "offset":0})
         maintenance_report=project_maintenance(conn,maintenance or [])
         report = coverage(conn, fd, {"action":"report", "limit":1, "offset":0})
         if any(report[k] for k in ("gaps", "stale_count", "unindexed_count")):
@@ -1210,7 +1266,7 @@ def build_published(root, output, release_id, candidate_digest, maintenance=None
             raise ValueError("Published index database bound exceeded")
         limitations = [dict(row) for row in conn.execute(
             "SELECT path,parser_status,parser_notes FROM files WHERE parser_status!='ok' ORDER BY path")]
-        manifest = {"maintenance":maintenance_report,"index_version":INDEX_VERSION, "schema_version":1,
+        manifest = {"indexing":{"parsed_files":scan_result["indexed_files"],"reused_files":scan_result["reused_files"]},"maintenance":maintenance_report,"index_version":INDEX_VERSION, "schema_version":1,
             "parser_sha256":sha(Path(__file__).read_bytes()), "parser_versions":parser_versions(), "release_id":release_id,
             "candidate_sha256":candidate_digest, "source_sha256":before,
             "index_sha256":sha(blob), "file_count":report["file_count"],
@@ -1252,8 +1308,8 @@ def read_published(root, expected_release=None):
     return blob, manifest
 
 
-def seed_private_index(release, stage):
-    """Project a verified complete release into its private V3-only seed."""
+def private_index_blob(release):
+    """Project verified published rows without writing source or a shared working index."""
     blob, manifest = read_published(release, Path(release).name)
     conn = sqlite3.connect(":memory:")
     try:
@@ -1278,11 +1334,24 @@ def seed_private_index(release, stage):
                 if not row["file_path"].startswith("v3/"):continue
                 row["file_path"]=row["file_path"][3:]
                 conn.execute("INSERT INTO maintenance_records VALUES(?,?,?,?)",(row["entry_id"],row["file_path"],row["unit_id"],json.dumps(row,sort_keys=True)))
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='file_recipes'").fetchone():
+            conn.execute("DELETE FROM file_recipes WHERE path NOT LIKE 'v3/%'")
+            conn.execute("UPDATE file_recipes SET path=substr(path,4)")
         conn.execute("DELETE FROM batches")
         conn.commit()
         if conn.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Private index projection is inconsistent")
         private = conn.serialize()
+        return private,manifest
+    finally:
+        conn.close()
+
+def seed_private_index(release, stage):
+    """Write a private bootstrap from a protected verified published projection."""
+    private,manifest=private_index_blob(release)
+    conn=sqlite3.connect(":memory:")
+    try:
+        conn.deserialize(private)
         manifest = dict(manifest)
         manifest.update(source_sha256=source_digest(stage), index_sha256=sha(private),
             file_count=conn.execute("SELECT COUNT(*) FROM files").fetchone()[0],

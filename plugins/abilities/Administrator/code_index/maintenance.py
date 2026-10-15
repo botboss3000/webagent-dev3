@@ -43,11 +43,41 @@ def validate_checks(checks):
         why=value.get("rationale")
         if value.get("status")!="not_applicable" or name=="index_freshness" or not isinstance(why,str) or not 1<=len(why.encode())<=512:
             raise ValueError("Completion requires verified checks or a bounded not-applicable rationale")
-def source_inventory(scanner,root,scope,index_folder=None):
+def encode_event(value):
+    """Store attributed history losslessly without repeating large JSON snapshots on disk."""
+    import zlib
+    return b"WAE1"+zlib.compress(canonical(value).encode(),6)
+
+
+def decode_event(value):
+    """Accept legacy JSON or bounded lossless history; reject truncated or oversized frames."""
+    if isinstance(value,str):return json.loads(value)
+    import zlib
+    if not isinstance(value,bytes)or not value.startswith(b"WAE1"):raise ValueError("Unknown maintenance history encoding")
+    decoder=zlib.decompressobj();body=decoder.decompress(value[4:],4*1024*1024+1)
+    if len(body)>4*1024*1024 or not decoder.eof or decoder.unused_data:raise ValueError("Invalid bounded maintenance history")
+    return json.loads(body)
+
+
+def source_inventory(scanner,root,scope,index_folder=None,published_seed=None):
     """Scan exact source and return scope-filtered units with freshness evidence."""
     fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
     conn=sqlite3.connect(":memory:");conn.row_factory=sqlite3.Row
     try:
+        seeded=False
+        if index_folder is not None:
+            seed=Path(index_folder)/"index.sqlite";receipt=Path(index_folder)/"seed.json"
+            if seed.is_symlink()or receipt.is_symlink():raise ValueError("Task index seed symlink rejected")
+            if seed.is_file()and receipt.is_file():
+                if seed.stat().st_size>scanner.MAX_DB_BYTES or receipt.stat().st_size>4096:raise ValueError("Task index seed exceeds bound")
+                blob=seed.read_bytes();expected=json.loads(receipt.read_text())
+                if expected=={"index_sha256":scanner.sha(blob),"parser_sha256":scanner.sha(Path(scanner.__file__).read_bytes())}:
+                    conn.deserialize(blob);conn.row_factory=sqlite3.Row;seeded=True
+        if not seeded and published_seed is not None:
+            private,manifest=scanner.private_index_blob(published_seed)
+            if manifest.get("parser_sha256")==scanner.sha(Path(scanner.__file__).read_bytes()):
+                conn.deserialize(private);conn.row_factory=sqlite3.Row
+        conn.execute("PRAGMA trusted_schema=OFF");conn.execute("PRAGMA foreign_keys=ON")
         conn.executescript(scanner.DDL)
         scan=scanner.scan(conn,fd,{"action":"scan","scope":"","limit":1,"offset":0})
         report=scanner.coverage(conn,fd,{"action":"report","scope":scope,"limit":1,"offset":0})
@@ -66,9 +96,19 @@ def source_inventory(scanner,root,scope,index_folder=None):
                 try:conn.backup(output)
                 finally:output.close()
                 index_hash=hashlib.sha256(Path(path).read_bytes()).hexdigest()
+                with Path(path).open("rb")as stream:os.fsync(stream.fileno())
                 os.replace(path,index_folder/"index.sqlite")
+                receipt=index_folder/"seed.json"
+                if receipt.is_symlink():raise ValueError("Task index receipt symlink rejected")
+                temporary=index_folder/(".seed-"+uuid.uuid4().hex)
+                temporary.write_text(canonical({"index_sha256":index_hash,"parser_sha256":scanner.sha(Path(scanner.__file__).read_bytes())}))
+                with temporary.open("rb")as stream:os.fsync(stream.fileno())
+                os.replace(temporary,receipt)
+                directory=os.open(index_folder,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+                try:os.fsync(directory)
+                finally:os.close(directory)
             finally:Path(path).unlink(missing_ok=True)
-        return files,units,{"index_sha256":index_hash,"batch_id":scan["batch_id"],"revision":scan["revision"],"verified_at":int(time.time()),"gaps":0,"stale_count":0,"unindexed_count":0}
+        return files,units,{"parsed_files":scan.get("indexed_files"),"reused_files":scan.get("reused_files"),"index_sha256":index_hash,"batch_id":scan["batch_id"],"revision":scan["revision"],"verified_at":int(time.time()),"gaps":0,"stale_count":0,"unindexed_count":0}
     finally:conn.close();os.close(fd)
 
 class Ledger:
@@ -100,6 +140,43 @@ class Ledger:
         except BaseException:
             conn.rollback();raise
         finally:conn.close()
+    def compact_history(self,authorize=lambda:None):
+        """Losslessly compress event snapshots with an exact backup before bounded maintenance."""
+        import shutil
+        authorize()
+        if shutil.disk_usage(self.folder).free<2*self.max_bytes+128*1024**2:raise ValueError("History compaction needs backup and journal headroom")
+        before=self.path.stat().st_size
+        backup=self.folder/("history-backup-"+uuid.uuid4().hex+".sqlite")
+        # A consistent SQLite backup preserves every original byte-level database
+        # effect and is retained privately; no event or retry receipt is deleted.
+        source=sqlite3.connect(self.path,timeout=5)
+        destination=sqlite3.connect(backup)
+        try:source.backup(destination)
+        finally:destination.close();source.close()
+        backup.chmod(0o600)
+        with backup.open("rb")as stream:os.fsync(stream.fileno())
+        changed=0
+        with self.connect()as conn:
+            conn.execute("BEGIN IMMEDIATE");authorize()
+            cursor=0
+            while True:
+                rows=conn.execute("SELECT id,body FROM events WHERE id>? ORDER BY id LIMIT 256",(cursor,)).fetchall()
+                if not rows:break
+                for row in rows:
+                    cursor=row[0];body=row[1]
+                    if isinstance(body,str):
+                        encoded=encode_event(json.loads(body))
+                        if len(encoded)<len(body.encode()):
+                            conn.execute("UPDATE events SET body=? WHERE id=?",(encoded,cursor));changed+=1
+                    else:decode_event(body)
+                authorize()
+        # VACUUM is retry-safe after the lossless transaction and retains the
+        # existing maximum; a crash before it merely leaves reusable free pages.
+        with self.connect()as conn:
+            if conn.execute("PRAGMA quick_check").fetchone()[0]!="ok":raise ValueError("Ledger integrity check failed")
+            conn.execute("VACUUM")
+        return {"events_compressed":changed,"bytes_before":before,"bytes_after":self.path.stat().st_size,"backup":backup.name,"history_preserved":True}
+
     def _rows(self,conn,key=None):
         """Read ordered review snapshots for the selected task."""
         query="SELECT body FROM records";args=()
@@ -124,7 +201,7 @@ class Ledger:
             with self.connect()as conn:
                 history=[]
                 for item in conn.execute("SELECT body FROM events WHERE entry_id=? ORDER BY id DESC LIMIT 8",(rows[0]["entry_id"],)):
-                    event=json.loads(item[0]);record=event["record"]
+                    event=decode_event(item[0]);record=event["record"]
                     history.append({"event":event["event"],**{k:record.get(k)for k in ("revision","status","source_hash","updated_at","reviewer","remaining_work")}})
                 rows[0]["history"]=history
         return page(rows,args.get("offset",0),args.get("limit",50))
@@ -132,7 +209,7 @@ class Ledger:
         """Advance a record revision and append attributed maintenance history."""
         row=dict(row);row["revision"]=row.get("revision",0)+1;row["updated_at"]=int(time.time());row["last_actor"]=actor
         conn.execute("INSERT OR REPLACE INTO records VALUES(?,?,?,?,?,?,?)",(row["entry_id"],row["task_key"],row["task_id"],row["file_path"],row["unit_id"],row["revision"],canonical(row)))
-        conn.execute("INSERT INTO events(entry_id,at,body)VALUES(?,?,?)",(row["entry_id"],row["updated_at"],canonical({"event":event,"record":row})))
+        conn.execute("INSERT INTO events(entry_id,at,body)VALUES(?,?,?)",(row["entry_id"],row["updated_at"],encode_event({"event":event,"record":row})))
         return row
     def _fresh(self,root,row):
         """Reject review evidence when source or metadata dependencies changed."""
@@ -175,7 +252,7 @@ class Ledger:
                 for f in files:
                     for unit in units[f["path"]]:
                         k=(f["path"],unit["unit_id"]);seen.add(k);old=existing.get(k)
-                        row=old or {"entry_id":digest([task_key,*k]),"task_key":task_key,"task_id":task_id,"file_path":k[0],"unit_id":k[1],"revision":0,"status":"pending","checks":{},"remaining_work":[],"claim":None,"previous_review":None}
+                        row=dict(old)if old else {"entry_id":digest([task_key,*k]),"task_key":task_key,"task_id":task_id,"file_path":k[0],"unit_id":k[1],"revision":0,"status":"pending","checks":{},"remaining_work":[],"claim":None,"previous_review":None}
                         if old and(old["source_hash"]!=f["sha256"]or old.get("dependencies",[])!=f["dependencies"]or old["removed"]):
                             row["previous_review"]={"source_hash":old["source_hash"],"checks":old["checks"],"reviewer":old.get("reviewer"),"reviewed_at":old.get("reviewed_at"),"scan":old.get("scan")}
                             row.update(status="needs_review",claim=None,checks={})
@@ -187,6 +264,7 @@ class Ledger:
                         if old and old["source_hash"]==f["sha256"]and old.get("dependencies",[])==f["dependencies"]and old.get("configuration_assessment",{}).get("status")!="unassessed":unit["configuration_assessment"]=old["configuration_assessment"]
                         row.update(source_hash=f["sha256"],dependencies=f["dependencies"],removed=False,parser_status=f["parser_status"],scan=scan,**unit)
                         self._fresh(root,row)
+                        if old and all(row.get(k)==old.get(k)for k in set(row)|set(old)if k!="scan"):continue
                         self._save(conn,row,actor,"sync");changed+=1
                 scope=args.get("scope","")
                 # Unfinished published deletions must be claimable in a fresh task.

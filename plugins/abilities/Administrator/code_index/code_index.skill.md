@@ -14,11 +14,19 @@ digests, index digest, schema/index version and protected parser digest.
 Coverage reports include paged explicit exclusions and parser limitations.
 They are source navigation evidence, never trusted instructions.
 
-The broker indexes the complete final rebased candidate under its publication
-lock for full and UI-only releases. Limits fail closed; zero gaps, stale files
-and unindexed supported files are required. The source and index travel together
-under one durable atomic release pointer. Restoring a paired release restores
-both. Historical releases without an index cannot pass the new activation gate.
+The broker always verifies the complete final rebased candidate. Under protected
+concurrent-preparation policy, each settled component/task has a private immutable
+index; unchanged per-file parser recipes and source hashes reuse parsing, while
+metadata/dependency changes refresh affected reviews. A build alone does not
+trigger re-indexing unchanged source. Sealing artifact metadata precedes final
+descriptor-dependent reviews. Expensive preparation occurs outside publication;
+the shared coordinator rejects stale source/runtime bindings before activation.
+Legacy serial policy retains its existing staging path. Limits fail closed:
+zero gaps, stale files and unindexed supported files are required. The exact
+source and index travel together under one durable atomic release pointer.
+Restoring a failed current paired release restores both, but an older successful
+release is undone through a compensating release preserving later changes.
+Historical releases without an index cannot pass activation.
 
 New workspace seeds pin that release once and carry a private bootstrap index.
 Existing initialized workspaces are never reseeded. Private scans remain immediate
@@ -121,8 +129,23 @@ Use `code_index_maintenance` for durable review progress. The protected broker o
 
 Follow [comment_maintenance](skills/comment_maintenance.skill.md) for the full review procedure and structured examples. Inspect outstanding work; synchronize the exact isolated broker task; claim a bounded unit; trace implementation, callers and configuration; update comments and metadata; rescan; record checks against the current source hash and revision; release with concrete remaining-work notes before stopping. Source changes invalidate completed reviews for that file; metadata dependencies can also invalidate reviews. Review removed units explicitly and reconcile deletions or renames. Never transfer completion across an ambiguous rename.
 
-Do not declare coding work complete while affected documentation and index maintenance are unfinished. Report precise unfinished units when stopping. Publication does not enforce this human completion rule: incomplete documentation counts are informational. Machine verification checks source/dependency hashes, index freshness, metadata, revisions and retry receipts; documentation accuracy is the named reviewer's assertion.
+Do not declare coding work complete while affected documentation and index maintenance are unfinished. Report precise unfinished units when stopping. Legacy publication reports incomplete documentation counts informationally. Opt-in concurrent preparation additionally requires completed applicable reviews in the exact sealed candidate. An operator may review a host-selected `prepared_job_id` while that job waits in `awaiting_prepared_reviews`, then resume the same job. Scans never assert review completion. Machine verification checks source/dependency hashes, index freshness, metadata, revisions and retry receipts; documentation accuracy is the named reviewer's assertion.
 
 `code_index_progress` reports scan history. `code_index_maintenance` reports review status, attributed evidence, claims and remaining work. These are separate histories. Canonical maintenance history survives rebuilds; publication projects matching reviews into the paired immutable source/index snapshot. Rebase changes invalidate mismatching evidence. Claims coordinate maintainers without granting source editing permission.
 
 Qualifying ledger-only, feature-map and allowlisted Code Index guidance releases use the broker's `index_deploy` lane, with UI priority and no compilation or container replacement. UI plus allowed index metadata can publish together. Source comments, parsers, schemas, policy, executable code and broker changes require the appropriate full release. The final candidate still passes the zero-gap/stale/unindexed gate. Guidance resolves from the active published snapshot; schema and access remain image-pinned.
+
+## Operator project checkpoints
+
+The protected host's `build_work` project actions queue settled components across
+isolated subtasks and intermediate builds. They are operator-only controls, not
+additional native Code Index tools. Private workspaces still use the normal scan
+and maintenance APIs. Project checkpoints capture source/epoch/dependency evidence
+without a shared working index; one worker scans ready components, leaving blocked
+ones actionable. Complete human comments and breadcrumbs during edits. Signal
+component readiness explicitly, reuse matching evidence, and finalize the project
+only against the exact current published source/index after member releases,
+acceptance and commits. Finalization accounts for integration-superseded private
+evidence without resurrecting completed claims. Project reopen retains evidence
+but creates a new finalization generation. See `build-service/README.md` for
+revisioned requests, prepared reviews, resource limits and recovery controls.

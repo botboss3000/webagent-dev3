@@ -151,18 +151,20 @@ def seal(root,outputs,assets):
         value["artifact_sha256"]=output["artifact_sha256"]
         path.write_text(json.dumps(value,sort_keys=True,indent=2)+"\n");path.chmod(0o444)
 
-def seal_catalog(root,job_id,assets):
+def seal_catalog(root,job_id,assets,base_release_id=None):
     """Bind executable membership and withdrawals to the protected prior active generation."""
     import uuid
     uuid.UUID(job_id);folder=root/ROOT;folder.mkdir(parents=True,exist_ok=True)
-    previous=assets/"current"/ROOT/"catalog.json";prior_ids=set();withdrawn=set()
+    if base_release_id is not None:uuid.UUID(base_release_id)
+    base=assets/"releases"/base_release_id if base_release_id is not None else assets/"current"
+    previous=base/ROOT/"catalog.json";prior_ids=set();withdrawn=set()
     if previous.exists():
         if previous.is_symlink()or previous.stat().st_size>65536:raise ValueError("Prior engine catalog identity")
         prior=json.loads(previous.read_bytes())
         if prior.get("schema_version")!=1:raise ValueError("Prior engine catalog schema")
         prior_ids={item["id"]for item in prior["components"]};withdrawn=set(prior["withdrawn"])
     else:
-        for path in (assets/"current"/ROOT).glob("*/component.json"):
+        for path in (base/ROOT).glob("*/component.json"):
             prior_ids.add(descriptor(path)["id"])
     components=[]
     for path in sorted(folder.glob("*/component.json")):

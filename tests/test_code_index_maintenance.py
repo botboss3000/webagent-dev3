@@ -202,3 +202,55 @@ class LedgerCapacityTests(unittest.TestCase):
     with self.assertRaises(ValueError):ledger.Ledger(Path(temporary)/"invalid",max_bytes=value)
    db=ledger.Ledger(Path(temporary)/"ledger")
    self.assertEqual(db.max_bytes,256*1024*1024)
+
+class StableReviewTests(unittest.TestCase):
+ setUp=MaintenanceTests.setUp
+ tearDown=MaintenanceTests.tearDown
+ call=MaintenanceTests.call
+ child=MaintenanceTests.child
+ rows=MaintenanceTests.rows
+ complete=MaintenanceTests.complete
+ def test_unchanged_sync_keeps_claim_and_review_revision(self):
+  self.call("sync");row=self.child()
+  claimed=self.call("claim",entry_id=row["entry_id"],expected_revision=row["revision"])["record"]
+  self.call("sync");self.assertEqual(self.child()["revision"],claimed["revision"])
+  done=self.complete(row,claimed);self.call("sync")
+  self.assertEqual(self.child()["revision"],done["revision"])
+
+class LosslessHistoryTests(unittest.TestCase):
+ setUp=MaintenanceTests.setUp
+ tearDown=MaintenanceTests.tearDown
+ call=MaintenanceTests.call
+ rows=MaintenanceTests.rows
+ child=MaintenanceTests.child
+ def test_compaction_preserves_every_event_current_record_and_retry_receipt(self):
+  self.call("sync",request_id="original-sync-receipt")
+  with self.db.connect()as conn:
+   event=conn.execute("SELECT entry_id,at,body FROM events LIMIT 1").fetchone()
+   body=ledger.canonical(ledger.decode_event(event[2]))
+   conn.execute("UPDATE events SET body=?",(body,))
+   conn.executemany("INSERT INTO events(entry_id,at,body)VALUES(?,?,?)",[(event[0],event[1],body)]*300)
+   records=[tuple(r)for r in conn.execute("SELECT * FROM records ORDER BY entry_id")]
+   receipts=[tuple(r)for r in conn.execute("SELECT * FROM receipts ORDER BY actor,request_id")]
+   expected=[ledger.decode_event(r[0])for r in conn.execute("SELECT body FROM events ORDER BY id")]
+  report=self.db.compact_history()
+  self.assertTrue(report["history_preserved"]);self.assertLess(report["bytes_after"],report["bytes_before"])
+  self.assertTrue((self.folder/report["backup"]).is_file())
+  with self.db.connect()as conn:
+   self.assertEqual(records,[tuple(r)for r in conn.execute("SELECT * FROM records ORDER BY entry_id")])
+   self.assertEqual(receipts,[tuple(r)for r in conn.execute("SELECT * FROM receipts ORDER BY actor,request_id")])
+   self.assertEqual(expected,[ledger.decode_event(r[0])for r in conn.execute("SELECT body FROM events ORDER BY id")])
+  self.assertEqual(self.call("sync",request_id="original-sync-receipt")["scan"]["index_sha256"],self.call("sync",request_id="original-sync-receipt")["scan"]["index_sha256"])
+  entry=self.child();self.assertTrue(self.db.list({"action":"get","entry_id":entry["entry_id"]})["results"][0]["history"])
+ def test_history_decoder_accepts_legacy_and_rejects_trailing_or_oversized_frames(self):
+  import zlib
+  value={"event":"fixture","record":{"revision":1}}
+  packed=ledger.encode_event(value)
+  self.assertEqual(ledger.decode_event(packed),value)
+  self.assertEqual(ledger.decode_event(ledger.canonical(value)),value)
+  for invalid in [packed[:-1],packed+b"trailing",b"WAE1"+zlib.compress(b"x"*(4*1024*1024+1)),b"unknown"]:
+   with self.assertRaises((ValueError,zlib.error)):ledger.decode_event(invalid)
+ def test_history_compaction_checks_authority_before_any_backup(self):
+  def denied():raise PermissionError("revoked")
+  with self.assertRaises(PermissionError):self.db.compact_history(denied)
+  self.assertFalse(list(self.folder.glob("history-backup-*")))

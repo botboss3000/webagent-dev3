@@ -8,7 +8,7 @@ def main():
  parser.add_argument("action",choices=["list","get","sync","claim","record","release"])
  parser.add_argument("--input",type=Path,help="Bounded JSON object containing action arguments; no shell-embedded JSON required")
  parser.add_argument("--task-id");parser.add_argument("--task-key");parser.add_argument("--scope")
- parser.add_argument("--entry-id");parser.add_argument("--status");parser.add_argument("--feature")
+ parser.add_argument("--prepared-job-id");parser.add_argument("--entry-id");parser.add_argument("--status");parser.add_argument("--feature")
  parser.add_argument("--limit",type=int);parser.add_argument("--offset",type=int)
  options=parser.parse_args();args={}
  if options.input:
@@ -21,7 +21,7 @@ def main():
   args=json.loads(content)
   if not isinstance(args,dict):raise ValueError("Maintenance input must be an object")
   if "action"in args and args["action"]!=options.action:raise ValueError("Input action does not match command")
- for key in ["task_id","task_key","scope","entry_id","status","feature","limit","offset"]:
+ for key in ["task_id","task_key","scope","entry_id","status","feature","limit","offset","prepared_job_id"]:
   value=getattr(options,key)
   if value is not None:
    if key in args and args[key]!=value:raise ValueError("Conflicting CLI/input field: "+key)

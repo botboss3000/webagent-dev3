@@ -192,3 +192,130 @@ clears acceptance and pending requests and advances the ownership epoch. Later
 writes/builds must reacquire their derived claims and pass normal merge checks.
 Exact-request retry repairs the registry after interrupted persistence. This is
 not task completion, an administrator takeover, or authorization to deploy.
+
+## Concurrent preparation and settled-component indexing
+
+These features are opt-in protected installation policy. Source defaults keep
+`ui_file_reservations`, `component_indexing` and `concurrent_ui_preparation`
+false, with `max_ui_preparations=1`. Concurrent preparation requires enforced
+scheduling and measured component indexing. Enable at most two UI preparations.
+Existing held module claims remain exclusive against new file claims; no legacy
+parallel-UI flag bypasses enforcement. File reservations cover normalized paths,
+with subtree reservations, compiler-attested overlaps and same-file conflicts
+remaining conservative. A rename reserves its old and new paths.
+
+The host prepares immutable candidates and private indexes outside publication.
+Preparation captures the published base, ownership generation/epoch, source,
+metadata dependencies, protected parser recipe, runtime identity and test recipe.
+Unchanged hashes reuse parser output and completed matching reviews. Source,
+configuration, dependency and descriptor changes invalidate only matching
+bindings. Artifact sealing precedes final descriptor-dependent review binding.
+
+Publication admits one exact candidate at a time, with the same coordinator for
+UI and full backend releases. Stale bases/runtime bindings cause preparation
+outside the lock, at most three attempts before `waiting_publication_base`.
+The winning snapshot is installed on the asset filesystem only after durable
+intent. Activation, served-byte/health checks and checked promotion are serialized.
+Full backend releases incorporate intervening compatible UI changes; compiled
+inputs or Rust fixture changes invalidate backend evidence. Eligible UI jobs
+retain application images and processes.
+
+Frontend dependency policy is versioned in protected `ui_policy.py`. Unknown
+imports/dynamic loading conservatively select all frontend fixtures. The protected
+`scheduler.ui_test_image` must be an immutable `sha256:` image ID when tests are
+selected. `ui-test.Dockerfile` is the reviewed ancillary test-runtime recipe;
+its browser image and Playwright package versions agree. Provision it through operator `build_work` action `prepare_ui_test_runtime`,
+with the owning broker `task_id` and stable `request_id`, during a task-owned idle
+drain. The fixed protected recipe runs in the existing measured packaging lane
+with a 4,026,531,840-byte memory cap, zero swap and retained peak/OOM evidence.
+The durable check receipt returns its immutable image ID and recipe hash; no
+application image is built or deployed. Reconcile that exact job after a client
+timeout, and retry only the identical request to retrieve its receipt. Configure
+the verified image through supported lifecycle reconfiguration. Fixtures run
+read-only with no external network, application data, credentials or Docker
+socket; profiles and local fixture servers live only in their container. Node
+uses experimental VM modules and test concurrency one. One measured browser
+worker admits globally; index scans have measured independent admission. Tests
+are reused only when source/dependencies, runtime images and verification recipe
+match. A selection manifest alone never reports tests passed.
+
+### Project queue and sealed review continuation
+
+Use the authenticated operator channel, `buildctl schedule --input request.json`.
+Project actions are not exposed as new native model tools. Create with action
+`index_project_create`, `project_id` and `request_id`; inspect using
+`index_project_status` and the project ID. Mutations after creation also require
+the current `expected_revision` from status. Attach each isolated task through
+`index_project_attach` with `task_id`. Submit `index_checkpoint` with that task ID
+and a settled relative file/component path in `component`. Paths, immutable
+snapshots, epochs, hashes and private output locations are selected by the host.
+A build alone is not a checkpoint. Add human comments and feature breadcrumbs
+while editing; checkpoint when that component settles.
+
+One event-driven worker processes ready checkpoints. An invalid component enters
+`needs_attention` while unrelated queued components proceed. Scans populate
+review work; they never certify documentation. Review affected units with the
+existing maintenance channel. Reuse is based on exact per-file parser recipes,
+source hashes and metadata dependencies; no process merges mutable SQLite files.
+Restart preserves evidence and requires fresh authorization for unfinished work.
+
+A sealed candidate with incomplete applicable reviews enters
+`awaiting_prepared_reviews` without activation. The operator can pass
+`prepared_job_id` to maintenance sync/claim/record/release to review that exact
+host-selected snapshot; normal task-scoped list/get exposes its records. The
+maintenance CLI accepts `--prepared-job-id`. Resume the same job with normal
+preflight/decide after reviews, rather than submitting a duplicate build. Reviews
+against raw descriptors can legitimately become stale after artifact sealing.
+
+`index_project_finalize` verifies completed member publication, acceptance,
+commits and the exact current paired source/index. Pending checkpoints must
+settle; integration-superseded private evidence is reported as verified by final
+publication only after exact freshness and applicable-review checks succeed.
+Zero gaps, stale files and unindexed supported files are mandatory. An unfinished
+project returns actionable remaining work. `index_project_reopen` creates a new
+project generation while retaining reusable evidence.
+
+### Recovery and compensating rollback
+
+Operator `build_work` recovery actions require exact `task_id`, `job_id`, and a
+stable `request_id`. `discard_prepared_release` reconciles an uncertain intent
+only when the predecessor pointer, runtime identities and checkout prove no
+publication effects remain. It retains candidate/index material. For an activated
+UI-only failure, `restore_failed_ui` restores its verified predecessor only if
+the failed release is still current. It reconciles partial source promotion and
+supports exact retry. Newer active pointers or changed runtime bindings refuse
+recovery; they must not be overwritten. Revocation and ownership remain enforced.
+
+To undo an older successful UI release, begin a fresh empty isolated task and
+request `ui_rollback_preview` with its `task_id` and the original
+`release_job_id`. The host returns a checked-patch draft plus its exact source
+binding, using the receipt-bound publication predecessor. Apply it through normal
+`v3_source_apply`, acquire normal claims, review, test, publish, commit and accept.
+The preview performs no source or runtime mutation. Binary/oversized patches are
+rejected. Later independent changes survive; divergent same-file changes produce
+an explicit conflict. There is no automatic hunk merge or historical pointer
+switch.
+
+Install exact reviewed broker bytes only during a task-owned idle drain with an
+empty queue, through lifecycle installation. Publish source using the classifier's
+supported lane; parser, policy and new protected modules do not automatically
+qualify for host-only publication. Enable concurrency only after isolated and
+live acceptance. Setting `max_ui_preparations=1` restores serial preparation
+without dropping claims, evidence or recovery state. Commit receipt-bound promoted
+paths with fresh checkout/index checks, preserving unrelated staged work; do not
+push without separate authorization.
+
+### Bounded review-history maintenance
+
+If even a one-file sync cannot fit the ledger budget, inspect storage before
+changing limits or clearing records. Operator action `compact_index_history`
+accepts `task_id` and stable `request_id`. It requires an idle task-owned drain,
+no active reviews/checkpoints or queued releases, and held Code Index ownership.
+It retains a private consistent SQLite backup, losslessly compresses historical
+event snapshots and vacuums free pages without changing the configured storage
+limit. Current records, claims, every event and exact retry receipts are retained.
+The new reader accepts both legacy JSON and bounded compressed history. A failed
+or uncertain request can be retried with identical arguments; no history is pruned.
+Retain its backup with the installation rollback material. An older broker cannot
+read compressed event history; any broker rollback must use a compatible reader
+or reconcile the saved ledger backup and subsequent writes before restoration.

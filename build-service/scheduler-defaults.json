@@ -5,5 +5,10 @@
   "reserve_percent": 10,
   "max_phases": 4,
   "max_parked": 2,
-  "memory_pressure_percent": 5
+  "memory_pressure_percent": 5,
+  "ui_file_reservations": false,
+  "max_ui_preparations": 1,
+  "component_indexing": false,
+  "concurrent_ui_preparation": false,
+  "ui_test_image": null
 }

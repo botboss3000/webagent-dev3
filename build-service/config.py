@@ -1,7 +1,7 @@
 """Installation-owned paths and identities, never model arguments."""
 import json,os,pwd,re,stat
 from pathlib import Path
-# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Reviewed scheduler defaults merged with protected installation JSON. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds and resource thresholds.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent"]}],"opportunities":[]}}
+# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Reviewed scheduler defaults merged with protected installation JSON. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds and resource thresholds.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image"]}],"opportunities":[]}}
 def scheduler_defaults():
  """Load reviewed source defaults; protected installation overrides remain the operator authority."""
  path=Path(__file__).with_name("scheduler-defaults.json")
@@ -14,12 +14,18 @@ def validate(value):
  if set(value)-allowed:raise ValueError("Unknown installation field")
  v=dict(value)
  policy=v.get("scheduler",{})
- if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent"}:raise ValueError("Invalid scheduler policy")
+ if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image"}:raise ValueError("Invalid scheduler policy")
  policy={**scheduler_defaults(),**policy}
  if policy["mode"]not in {"observe","enforce"}or type(policy["orphan_after_seconds"])is not int or not 60<=policy["orphan_after_seconds"]<=86400:raise ValueError("Invalid ownership policy")
  for key,default,low,high in [("reserve_bytes",768*1024**2,256*1024**2,16*1024**3),("reserve_percent",10,5,50),("max_phases",4,1,16),("max_parked",2,0,8),("memory_pressure_percent",5,1,50)]:
   policy.setdefault(key,default)
   if type(policy[key])is not int or not low<=policy[key]<=high:raise ValueError("Invalid scheduler resource policy: "+key)
+ if type(policy.get("concurrent_ui_preparation",False))is not bool:raise ValueError("Invalid UI preparation policy")
+ if type(policy.get("component_indexing",False))is not bool:raise ValueError("Invalid component index policy")
+ if type(policy.get("ui_file_reservations",False))is not bool:raise ValueError("Invalid UI reservation policy")
+ if type(policy.get("max_ui_preparations",1))is not int or not 1<=policy.get("max_ui_preparations",1)<=2:raise ValueError("Invalid UI preparation limit")
+ if policy["concurrent_ui_preparation"]and(policy["mode"]!="enforce"or not policy["component_indexing"]):raise ValueError("Concurrent UI preparation requires enforced scheduling and measured component indexing")
+ if policy.get("ui_test_image")is not None and(not isinstance(policy["ui_test_image"],str)or not re.fullmatch(r"sha256:[a-f0-9]{64}",policy["ui_test_image"])):raise ValueError("UI test runtime requires a pinned image identity")
  v["scheduler"]=policy
  # Legacy installations retain their prior budget until an explicit operator reconfiguration.
  v.setdefault("api_pids_limit",256)

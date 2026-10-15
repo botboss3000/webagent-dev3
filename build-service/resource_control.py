@@ -1,7 +1,7 @@
 """Narrow root helper for attributable build containers, never arbitrary host processes."""
 import http.client,json,os,re,socket,struct,subprocess,time
 from pathlib import Path
-PHASES={"compile_test","compile_release","compile_linked","plugin_compile","test","dependency","package","engine_metadata","linked_smoke","live_smoke"}
+PHASES={"ui_test","index_scan","compile_test","compile_release","compile_linked","plugin_compile","test","dependency","package","engine_metadata","linked_smoke","live_smoke"}
 PARKABLE={"compile_test","compile_release","compile_linked","plugin_compile"}
 class Docker(http.client.HTTPConnection):
     """Use the local engine API without shell arguments or returning private container configuration."""

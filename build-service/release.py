@@ -131,6 +131,19 @@ def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False):
     return archive(merged, validate), changed
 
 
+def compensating_candidate(before_blob,after_blob,live_blob,owned_paths,validate):
+    """Invert only one receipt's changed source onto latest source, preserving later independent edits."""
+    before,_=candidate_entries(before_blob,validate);after,_=candidate_entries(after_blob,validate)
+    paths=sorted(set(owned_paths))
+    if not paths or len(paths)>256 or any(not path.startswith("v3/")or path.startswith("v3/data/")for path in paths):raise ValueError("Bounded receipt-owned source paths required")
+    reverse=dict(after)
+    for path in paths:
+        if path in before:reverse[path]=before[path]
+        else:reverse.pop(path,None)
+    # Reuse the normal explicit same-file conflict contract; no automatic hunk merge.
+    return candidate(archive(after,validate),archive(reverse,validate),live_blob,validate)
+
+
 def release_mounts(previous, root, asset_root=None):
     """Pin code mounts and expose the read-only active guidance snapshot to API and loop."""
     mapping = {
@@ -294,6 +307,27 @@ def stage_assets(root, job_id, blob, validate):
         destination.chmod(0o755)
     return destination
 
+
+def install_prepared_assets(root, job_id, prepared, candidate_digest):
+    """Atomically admit one verified complete snapshot only after the host wins publication."""
+    uuid.UUID(job_id);root=Path(root);prepared=Path(prepared)
+    if root.is_symlink()or prepared.is_symlink()or not prepared.is_dir():raise ValueError("Prepared asset path invalid")
+    manifest=verify_index(prepared,job_id,candidate_digest)
+    revisions=root/"releases"
+    if revisions.is_symlink():raise ValueError("Asset revisions symlink forbidden")
+    revisions.mkdir(mode=0o755,parents=True,exist_ok=True)
+    destination=revisions/job_id
+    if destination.exists():
+        existing=verify_index(destination,job_id,candidate_digest)
+        if existing["source_sha256"]!=manifest["source_sha256"]or existing["index_sha256"]!=manifest["index_sha256"]:raise ValueError("Immutable prepared release differs")
+        return destination
+    previous_parent=prepared.parent
+    os.rename(prepared,destination)
+    for parent in (revisions,previous_parent):
+        fd=os.open(parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:os.fsync(fd)
+        finally:os.close(fd)
+    return destination
 
 def current_asset_id(root):
     pointer = root / "current"

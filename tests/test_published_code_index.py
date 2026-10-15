@@ -216,3 +216,74 @@ class PublishedTests(unittest.TestCase):
   self.assertEqual(b"<div>app</div>\n",(stage/"ui/index.html").read_bytes())
   stage.rename(base/"webagent-v3")
   with self.assertRaises(ValueError):worker.workspace_support()._seed_spec(base)
+
+class IncrementalScanTests(unittest.TestCase):
+ def test_only_changed_files_are_parsed_and_deletions_removed(self):
+  import sqlite3
+  with tempfile.TemporaryDirectory()as tmp:
+   root=Path(tmp);(root/"a.py").write_text("def first(): pass\n");(root/"b.py").write_text("def second(): pass\n")
+   conn=sqlite3.connect(":memory:");conn.row_factory=sqlite3.Row;conn.execute("PRAGMA foreign_keys=ON");conn.executescript(idx.DDL)
+   fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY)
+   try:
+    args={"action":"scan","scope":"","limit":1,"offset":0};idx.scan(conn,fd,args)
+    with patch.object(idx,"scan_data",wraps=idx.scan_data)as parse:
+     result=idx.scan(conn,fd,args);self.assertEqual(parse.call_count,0);self.assertEqual(result["reused_files"],2)
+     (root/"a.py").write_text("def changed(): pass\n");idx.scan(conn,fd,args);self.assertEqual(parse.call_count,1)
+     (root/"b.py").unlink();idx.scan(conn,fd,args)
+     self.assertEqual(conn.execute("SELECT COUNT(*) FROM files").fetchone()[0],1)
+   finally:os.close(fd);conn.close()
+
+class PerFileRecipeTests(unittest.TestCase):
+ def test_narrow_scan_does_not_certify_other_files_after_parser_recipe_changes(self):
+  import sqlite3
+  with tempfile.TemporaryDirectory()as tmp:
+   root=Path(tmp)
+   for p in ("a.py","b.py"):(root/p).write_text("def fixture(): pass\n")
+   conn=sqlite3.connect(":memory:");conn.row_factory=sqlite3.Row;conn.execute("PRAGMA foreign_keys=ON");conn.executescript(idx.DDL)
+   fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY)
+   try:
+    args={"action":"scan","scope":"","limit":1,"offset":0};idx.scan(conn,fd,args)
+    conn.execute("UPDATE file_recipes SET recipe='obsolete'");conn.commit()
+    idx.scan(conn,fd,{**args,"action":"scan_file","file_path":"a.py"})
+    with patch.object(idx,"scan_data",wraps=idx.scan_data)as parse:
+     r=idx.scan(conn,fd,args);self.assertEqual(parse.call_count,1);self.assertEqual(r["reused_files"],1)
+   finally:os.close(fd);conn.close()
+
+class PrivateCheckpointSeedTests(unittest.TestCase):
+ setUp=PublishedTests.setUp
+ tearDown=PublishedTests.tearDown
+ blob=PublishedTests.blob
+ stage=PublishedTests.stage
+ def test_settled_private_source_is_not_reparsed_during_final_publication(self):
+  from test_code_index_maintenance import ledger
+  old,previous,_manifest=self.stage(self.blob())
+  source=self.root/"private";shutil.copytree(previous/"v3",source)
+  (source/"new.py").write_text("def settled(): return 1\n")
+  cache=self.root/"cache";ledger.source_inventory(idx,source,"",cache,published_seed=previous)
+  job=str(uuid.uuid4());candidate=rel.stage_assets(self.assets,job,self.blob({"v3/new.py":(420,(source/"new.py").read_bytes())}),lambda _:None)
+  with patch.object(idx,"scan_data",wraps=idx.scan_data)as parser:
+   manifest=idx.build_published(candidate,candidate/".code-index",job,"a"*64,seed=previous,private_seeds=[cache])
+   self.assertEqual(parser.call_count,0)
+  self.assertEqual(manifest["indexing"]["parsed_files"],0)
+  self.assertEqual(manifest["gaps"],0)
+ def test_integration_changes_refresh_only_the_invalidated_private_file(self):
+  from test_code_index_maintenance import ledger
+  _old,previous,_manifest=self.stage(self.blob())
+  source=self.root/"private";shutil.copytree(previous/"v3",source)
+  (source/"new.py").write_text("def settled(): return 1\n")
+  cache=self.root/"cache";ledger.source_inventory(idx,source,"",cache,published_seed=previous)
+  job=str(uuid.uuid4());candidate=rel.stage_assets(self.assets,job,self.blob({"v3/new.py":(420,b"def integrated(): return 2\n")}),lambda _:None)
+  with patch.object(idx,"scan_data",wraps=idx.scan_data)as parser:
+   manifest=idx.build_published(candidate,candidate/".code-index",job,"b"*64,seed=previous,private_seeds=[cache])
+   self.assertEqual(parser.call_count,1)
+  self.assertEqual(manifest["indexing"]["parsed_files"],1)
+ def test_tampered_seed_never_publishes(self):
+  from test_code_index_maintenance import ledger
+  _old,previous,_manifest=self.stage(self.blob())
+  source=self.root/"private";shutil.copytree(previous/"v3",source)
+  cache=self.root/"cache";ledger.source_inventory(idx,source,"",cache,published_seed=previous)
+  with(cache/"index.sqlite").open("ab")as stream:stream.write(b"changed")
+  job=str(uuid.uuid4());candidate=rel.stage_assets(self.assets,job,self.blob(),lambda _:None)
+  with self.assertRaisesRegex(ValueError,"hash"):
+   idx.build_published(candidate,candidate/".code-index",job,"c"*64,seed=previous,private_seeds=[cache])
+  self.assertFalse((candidate/".code-index").exists())

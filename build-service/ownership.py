@@ -22,11 +22,20 @@ def overlap(left,right):
     """Directory reservations conflict with every descendant, not string-prefix siblings."""
     return left==right or left.startswith(right+"/")or right.startswith(left+"/")
 
+def scope_overlap(left,right):
+    """Retain legacy UI module exclusions when a new task requests only write paths."""
+    if left.startswith("module:ui:")and right.startswith("path:ui/"):
+        return overlap("ui/"+left.removeprefix("module:ui:"),right[5:])
+    if right.startswith("module:ui:")and left.startswith("path:ui/"):
+        return scope_overlap(right,left)
+    return left==right if left.startswith("module:")or right.startswith("module:")else overlap(left[5:],right[5:])
+
 class Components:
     """Conservative actual build grouping; manifests cannot override compiled dependencies."""
-    def __init__(self,root,compile_inputs=()):
+    def __init__(self,root,compile_inputs=(),ui_file_reservations=False):
         """Bind task source declarations to compiler-attested dependency paths."""
         self.root=Path(root);self.compile_inputs={source_path(p)for p in compile_inputs}
+        self.ui_file_reservations=ui_file_reservations
     def deleted_isolated(self,path,parts):
         """Read a bounded prior manifest from the broker baseline only when executable source is deleted."""
         target=self.root/path
@@ -63,12 +72,14 @@ class Components:
                 component="background-dispatch"if path.startswith(("plugins/engine/background-dispatch/","crates/background-service/","crates/background-dispatch/","crates/engine-service/"))else"context-assembly"
                 output.add("module:engine-component:"+component)
                 if path in self.compile_inputs:output.add("module:engine")
-            elif path.startswith("build-service/")or path.startswith("tests/test_build")or path.startswith("tests/test_scheduler")or path in {"tests/test_code_index_maintenance.py","tests/test_published_code_index.py","tests/test_index_queue.py","tests/test_ui_policy.py"}:
+            elif path.startswith("build-service/")or path.startswith("tests/test_build")or path.startswith("tests/test_scheduler")or path in {"tests/test_code_index_maintenance.py","tests/test_published_code_index.py","tests/test_index_queue.py","tests/test_ui_policy.py","tests/test_admin_build_install.py"}:
                 # These Python suites validate broker/index contracts, not the Rust engine.
                 output.add("module:broker")
                 if any(overlap(path,p)for p in self.compile_inputs):output.add("module:engine")
             elif path.startswith("ui/"):
-                output.add("module:ui:"+ (parts[1]if len(parts)>1 else "shell"))
+                if not self.ui_file_reservations:output.add("module:ui:"+ (parts[1]if len(parts)>1 else "shell"))
+                # Compiler attestations override UI eligibility, including subtree claims.
+                if any(overlap(path,p)for p in self.compile_inputs):output.add("module:engine")
             elif path.startswith("docs/")or(path.startswith("config/")and path.endswith(".json")and path not in self.compile_inputs):
                 output.add("module:asset:"+path)
             else:output.add("module:engine")
@@ -178,7 +189,7 @@ class Ownership:
                     if set(modules)&set(queued):result.append({"task_id":other["id"],"label":other["label"],"state":other["state"],"scopes":other["scopes"]});continue
                 elif not any(s.startswith("module:")for s in scopes):
                     candidates+=queued
-            if any(a==b if a.startswith("module:")or b.startswith("module:")else overlap(a[5:],b[5:])for a in scopes for b in candidates):
+            if any(scope_overlap(a,b)for a in scopes for b in candidates):
                 result.append({"task_id":other["id"],"label":other["label"],"state":other["state"],"scopes":other["scopes"]})
         return result
     def check(self,task,owner,revision,epoch,db):

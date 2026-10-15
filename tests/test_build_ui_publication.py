@@ -1,0 +1,279 @@
+"""Full broker entry points exercise private staging and real immutable index activation."""
+import difflib
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import threading
+import time
+import unittest
+import uuid
+from unittest.mock import patch
+import test_admin_build as fixtures
+
+
+class PreparedRunner(fixtures.FakeRunner):
+    def __init__(self,assets):
+        super().__init__();self.assets=assets;self.hot_assets=True
+        self.blob=fixtures.context(extra={"v3/ui/index.html":"<main>fixture</main>\n","v3/plugins/engine/fixture/component.json":json.dumps({"artifact_sha256":"1"*64}),"v3/src/main.rs":"fn main() {}\n","v3/ui/probe/a.css":"body {}\n","v3/ui/probe/b.css":"main {}\n"})
+        self.seal_descriptors=False;self.barrier=None;self.prepared=[];self.once=set();self.guard=threading.Lock()
+        self.scanner=fixtures.host.maintenance_engine.load_scanner()
+        self.asset_id=str(uuid.uuid4())
+        self._stage(self.blob,self.asset_id,self.assets)
+        fixtures.host.release.activate_assets(self.assets,self.asset_id)
+
+    def build_ability_artifacts(self,job_id,source_root=None):
+        """This fixture contains no compiled ability packages."""
+        return []
+
+    def core_compile_inputs(self):return {"v3/src/main.rs"}
+
+    def _stage(self,blob,job_id,root):
+        destination=fixtures.host.release.stage_assets(root,job_id,blob,fixtures.host.context_digest)
+        descriptor=destination/"v3/plugins/engine/fixture/component.json"
+        if self.seal_descriptors:descriptor.write_text(json.dumps({"artifact_sha256":"2"*64}))
+        provider=getattr(self,"maintenance_provider",lambda _job:[])
+        self.scanner.build_published(destination,destination/".code-index",job_id,fixtures.host.context_digest(blob)[0],maintenance=provider(job_id))
+        return destination
+
+    def stage_assets(self,blob,job_id,*,asset_root=None,base_release_id=None):
+        private=Path(asset_root)if asset_root is not None else self.assets
+        with self.guard:
+            first=job_id not in self.once;self.once.add(job_id)
+            self.prepared.append((job_id,time.monotonic(),str(private)))
+        if private!=self.assets:
+            assert not(self.assets/"releases"/job_id).exists(),"Final release frozen before publication admission"
+            if self.barrier is not None and first:self.barrier.wait(5)
+        return self._stage(blob,job_id,private)
+
+    def validate_ui(self,job_id,changed,*,root=None):
+        self.calls.append(("validate_candidate",job_id,str(root)))
+        assert Path(root or self.assets/"releases"/job_id).is_dir()
+
+    def validate_selected_tests(self,job_id,root,evidence):
+        assert not evidence["tests"],"Frontend fixture tests need an explicit test runtime fake"
+        return {"status":"not_applicable","tests":[]}
+
+    def current_asset_id(self):return fixtures.host.release.current_asset_id(self.assets)
+
+    def activate_assets(self,job_id):
+        fixtures.host.release.activate_assets(self.assets,job_id);self.asset_id=job_id
+        if hasattr(self,"maintenance_activated"):self.maintenance_activated(job_id)
+
+
+class ConcurrentUIEntryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name);self.sid=str(uuid.uuid4());self.serial=0
+        self.policy=patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"scheduler":{**fixtures.host.CONFIG.get("scheduler",{}),"mode":"enforce","component_indexing":True,"max_phases":4,"ui_file_reservations":True,"max_ui_preparations":2,"concurrent_ui_preparation":True}})
+        self.asset_patch=patch.object(fixtures.host,"ASSET_ROOT",self.root/"assets")
+        self.policy.start();self.asset_patch.start()
+        self.runner=PreparedRunner(self.root/"assets");self.broker=fixtures.host.Broker(self.root/"jobs",self.runner)
+        self.trusted={"user_id":"codex-local","session_id":self.sid,"lease_until":time.time()+60,"access_fingerprint":"f"*64,"local_caller":True}
+
+    def tearDown(self):
+        self.broker.shutdown();self.asset_patch.stop();self.policy.stop();self.tmp.cleanup()
+
+    def call(self,name,args):return self.broker.handle({"name":name,"arguments":args,"workspace":self.sid,"trusted":self.trusted})
+
+    def change(self,task,path,before,after,review=True):
+        self.call("v3_build_work",{"action":"begin","task_id":task,"summary":"Concurrent UI fixture","mode":"isolated"})
+        capture=self.call("build_work",{"action":"review","task_id":task})
+        diff="diff --git a/"+path+" b/"+path+"\n"+"".join(difflib.unified_diff(before.splitlines(True),after.splitlines(True),fromfile="a/"+path,tofile="b/"+path))
+        self.call("v3_source_apply",{"task_id":task,"expected_inputs_sha256":capture["workspace_inputs_sha256"],"request_id":task+"-patch","patch":diff})
+        if review:self.review(task,path)
+
+    def review(self,task,path,prepared_job_id=None):
+        context={"prepared_job_id":prepared_job_id}if prepared_job_id else {}
+        suffix="-prepared"if prepared_job_id else""
+        self.call("code_index_maintenance",{"action":"sync",**context,"task_id":task,"scope":path,"request_id":task+"-sync"+suffix})
+        rows=self.call("code_index_maintenance",{"action":"list","task_id":task,"scope":path,"limit":100})["results"]
+        for n,row in enumerate(sorted(rows,key=lambda r:r["unit_id"]=="__file__")):
+            claimed=self.call("code_index_maintenance",{"action":"claim",**context,"task_id":task,"entry_id":row["entry_id"],"expected_revision":row["revision"],"request_id":task+"-claim-"+str(n)+suffix})["record"]
+            self.call("code_index_maintenance",{"action":"record",**context,"task_id":task,"entry_id":row["entry_id"],"expected_revision":claimed["revision"],"source_hash":claimed["source_hash"],"claim_id":claimed["claim"]["id"],"status":"complete","checks":{k:"verified"for k in ("documentation","connections","breadcrumbs","configuration","index_freshness")},"configuration_assessment":row.get("configuration_assessment")if row.get("configuration_assessment",{}).get("status")=="configured"else{"status":"not_applicable","rationale":"Fixed immutable publication fixture"},"request_id":task+"-review-"+str(n)+suffix})
+
+    def finish(self,task):
+        review=self.call("build_work",{"action":"review","task_id":task})
+        return self.call("v3_build_work",{"action":"finish","task_id":task,"expected_inputs_sha256":review["workspace_inputs_sha256"]})["job_id"]
+
+    def wait(self,jobs):
+        deadline=time.monotonic()+8
+        while time.monotonic()<deadline:
+            rows=[self.broker.jobs[job]for job in jobs]
+            if all(row["status"]not in {"queued","running"}for row in rows):return rows
+            time.sleep(.01)
+        self.fail("Bounded UI publications did not finish")
+
+    def test_disjoint_same_folder_prepares_overlap_and_both_survive_real_activation(self):
+        self.change("ui-alpha-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        self.change("ui-beta-task","ui/probe/b.css","main {}\n","main { color: blue; }\n")
+        self.runner.barrier=threading.Barrier(2)
+        jobs=[self.finish("ui-alpha-task"),self.finish("ui-beta-task")]
+        rows=self.wait(jobs)
+        self.assertEqual([row["status"]for row in rows],["completed","completed"],[(row.get("phase"),row.get("reason"))for row in rows])
+        active=self.runner.assets/"releases"/self.runner.current_asset_id()
+        self.assertEqual((active/"v3/ui/probe/a.css").read_text(),"body { color: red; }\n")
+        self.assertEqual((active/"v3/ui/probe/b.css").read_text(),"main { color: blue; }\n")
+        self.assertGreaterEqual(len(self.runner.prepared),3)
+        self.assertTrue(all("preparation-attempts"in path for _job,_at,path in self.runner.prepared))
+        self.assertFalse(any(call[0]in {"build","stop","start"}for call in self.runner.calls))
+        intervals=sorted((row["preparation"]["publication_lock_at"],row["finished_at"])for row in rows)
+        self.assertLessEqual(intervals[0][1],intervals[1][0])
+
+    def test_same_file_conflict_is_explicit_before_mutation(self):
+        self.change("ui-alpha-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        self.call("v3_build_work",{"action":"begin","task_id":"ui-conflict-task","summary":"Conflicting fixture","mode":"isolated"})
+        value=self.broker.scheduler.ensure(next(i for i in self.broker.work.values()if i["task_id"]=="ui-conflict-task"),self.trusted,self.sid)
+        result=self.call("build_work",{"action":"reserve","task_id":"ui-conflict-task","paths":["ui/probe/a.css"],"expected_revision":value["revision"],"expected_epoch":value["epoch"],"request_id":"ui-explicit-conflict"})
+        self.assertFalse(result["acquired"])
+
+    def test_missing_reviews_wait_for_sealed_candidate_then_resume_same_job(self):
+        self.change("ui-review-task","ui/probe/a.css","body {}\n","body { color: red; }\n",review=False)
+        before=self.runner.current_asset_id();job=self.finish("ui-review-task");row=self.wait([job])[0]
+        self.assertEqual(row["phase"],"awaiting_prepared_reviews",row.get("reason"))
+        self.assertEqual(self.runner.current_asset_id(),before)
+        self.assertFalse((self.runner.assets/"releases"/job).exists())
+        self.review("ui-review-task","ui/probe/a.css",prepared_job_id=job)
+        report=self.call("v3_build_work",{"action":"preflight","task_id":"ui-review-task"})["synchronization"]
+        self.call("v3_build_work",{"action":"decide","task_id":"ui-review-task","sync_decision":"proceed","expected_sync_digest":report["digest"]})
+        self.assertEqual(self.wait([job])[0]["status"],"completed")
+
+    def test_descriptor_dependency_review_binds_after_sealing(self):
+        metadata={"version":1,"feature":"sealed-fixture","aliases":["artifact metadata"],"purpose":"Render using sealed metadata","span_lines":1,"configuration":{"status":"configured","references":[{"path":"plugins/engine/fixture/component.json","pointers":["/artifact_sha256"]}],"opportunities":[]}}
+        changed="/* @code-index "+json.dumps(metadata)+" */\nbody { color: red; }\n"
+        self.change("ui-sealed-task","ui/probe/a.css","body {}\n",changed)
+        self.runner.seal_descriptors=True
+        job=self.finish("ui-sealed-task");row=self.wait([job])[0]
+        self.assertEqual(row["phase"],"awaiting_prepared_reviews",row.get("reason"))
+        self.review("ui-sealed-task","ui/probe/a.css",prepared_job_id=job)
+        report=self.call("v3_build_work",{"action":"preflight","task_id":"ui-sealed-task"})["synchronization"]
+        self.call("v3_build_work",{"action":"decide","task_id":"ui-sealed-task","sync_decision":"proceed","expected_sync_digest":report["digest"]})
+        completed=self.wait([job])[0];self.assertEqual(completed["status"],"completed",completed.get("reason"))
+        active=self.runner.assets/"releases"/job
+        blob,_manifest=self.runner.scanner.read_published(active,job)
+        import sqlite3
+        conn=sqlite3.connect(":memory:");conn.deserialize(blob)
+        rows=[json.loads(r[0])for r in conn.execute("SELECT body FROM maintenance_records WHERE file_path='v3/ui/probe/a.css'")];conn.close()
+        self.assertTrue(rows);self.assertTrue(all(r["status"]=="complete"for r in rows))
+
+    def recovery(self,task,job,action="restore_failed_ui",request="ui-recovery-exact-request"):
+        return self.call("build_work",{"action":action,"task_id":task,"job_id":job,"request_id":request})
+
+    def test_failed_activation_restores_only_its_predecessor_and_retry_is_exact(self):
+        before=self.runner.current_asset_id()
+        self.change("ui-failure-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        self.runner.fail_verify_ui=True
+        job=self.finish("ui-failure-task");row=self.wait([job])[0]
+        self.assertEqual(row["status"],"uncertain",row.get("reason"))
+        self.assertEqual(self.runner.current_asset_id(),job)
+        self.runner.fail_verify_ui=False
+        result=self.recovery("ui-failure-task",job)
+        self.assertTrue(result["effects_reconciled"])
+        self.assertEqual(self.runner.current_asset_id(),before)
+        self.assertEqual(result,self.recovery("ui-failure-task",job))
+        self.assertEqual(self.broker.jobs[job]["status"],"failed")
+        self.assertFalse(self.broker._has_unresolved_release())
+        active=self.runner.assets/"releases"/before
+        self.assertEqual((active/"v3/ui/probe/a.css").read_text(),"body {}\n")
+
+    def test_restore_refuses_to_erase_a_newer_active_release(self):
+        self.change("ui-failure-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        self.runner.fail_verify_ui=True;job=self.finish("ui-failure-task");self.wait([job]);self.runner.fail_verify_ui=False
+        newer=str(uuid.uuid4());self.runner._stage(self.runner.blob,newer,self.runner.assets)
+        self.runner.activate_assets(newer)
+        with self.assertRaisesRegex(ValueError,"pointer advanced"):self.recovery("ui-failure-task",job)
+        self.assertEqual(self.runner.current_asset_id(),newer)
+
+    def test_install_intent_before_activation_can_be_reconciled_without_publication(self):
+        before=self.runner.current_asset_id()
+        self.change("ui-install-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        original=fixtures.host.release.install_prepared_assets
+        with patch.object(fixtures.host.release,"install_prepared_assets",side_effect=RuntimeError("install outcome unknown")):
+            job=self.finish("ui-install-task");row=self.wait([job])[0]
+        self.assertEqual(row["status"],"uncertain",row.get("reason"));self.assertEqual(self.runner.current_asset_id(),before)
+        result=self.recovery("ui-install-task",job,"discard_prepared_release")
+        self.assertTrue(result["effects_reconciled"]);self.assertEqual(self.runner.current_asset_id(),before)
+        self.assertFalse((self.runner.assets/"releases"/job).exists())
+
+    def test_validation_retries_only_when_captured_runtime_changed(self):
+        self.change("ui-runtime-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        original=self.runner.validate_ui;first=True
+        def validate(job_id,changed,root=None):
+            nonlocal first
+            if first:
+                first=False
+                self.runner.containers[fixtures.host.TARGETS[0]]["Id"]+="-new"
+                raise RuntimeError("consumer transition")
+            return original(job_id,changed,root=root)
+        self.runner.validate_ui=validate
+        job=self.finish("ui-runtime-task");row=self.wait([job])[0]
+        self.assertEqual(row["status"],"completed",row.get("reason"));self.assertEqual(row["preparation"]["attempts"],2)
+
+    def test_historical_rollback_preview_preserves_later_disjoint_source(self):
+        self.change("ui-alpha-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        first=self.finish("ui-alpha-task");self.assertEqual(self.wait([first])[0]["status"],"completed")
+        self.change("ui-beta-task","ui/probe/b.css","main {}\n","main { color: blue; }\n")
+        second=self.finish("ui-beta-task");self.assertEqual(self.wait([second])[0]["status"],"completed")
+        self.call("v3_build_work",{"action":"begin","task_id":"ui-rollback-task","summary":"Compensating rollback fixture","mode":"isolated"})
+        result=self.call("build_work",{"action":"ui_rollback_preview","task_id":"ui-rollback-task","release_job_id":first})
+        self.assertEqual(result["changed_paths"],["v3/ui/probe/a.css"])
+        self.assertIn("-body { color: red; }",result["patch"]);self.assertNotIn("b.css",result["patch"])
+        self.assertEqual(self.runner.current_asset_id(),second)
+        folder=self.broker.state/first
+        merged,_=fixtures.host.release.compensating_candidate((folder/"publication-base.tar").read_bytes(),(folder/"candidate.tar").read_bytes(),self.runner.blob,["v3/ui/probe/a.css"],fixtures.host.context_digest)
+        files=fixtures.host.release.entries(merged,fixtures.host.context_digest)
+        self.assertEqual(files["v3/ui/probe/a.css"][1],b"body {}\n")
+        self.assertEqual(files["v3/ui/probe/b.css"][1],b"main { color: blue; }\n")
+
+    def test_compensating_same_file_conflict_is_explicit(self):
+        release=fixtures.host.release;validate=fixtures.host.context_digest
+        before=self.runner.blob;files=release.entries(before,validate)
+        files["v3/ui/probe/a.css"]=(420,b"body {color:red;}\n");after=release.archive(files,validate)
+        files["v3/ui/probe/a.css"]=(420,b"body {color:green;}\n");latest=release.archive(files,validate)
+        with self.assertRaisesRegex(ValueError,"source conflict"):
+            release.compensating_candidate(before,after,latest,["v3/ui/probe/a.css"],validate)
+
+    def test_compensating_rename_and_deletion_preserve_later_additions(self):
+        release=fixtures.host.release;validate=fixtures.host.context_digest;before=self.runner.blob
+        files=release.entries(before,validate);value=files.pop("v3/ui/probe/a.css");files["v3/ui/probe/renamed.css"]=value
+        files.pop("v3/ui/probe/b.css");after=release.archive(files,validate)
+        files["v3/ui/probe/later.css"]=(420,b"aside {}\n");latest=release.archive(files,validate)
+        merged,paths=release.compensating_candidate(before,after,latest,["v3/ui/probe/a.css","v3/ui/probe/b.css","v3/ui/probe/renamed.css"],validate)
+        final=release.entries(merged,validate)
+        self.assertNotIn("v3/ui/probe/renamed.css",final);self.assertEqual(final["v3/ui/probe/a.css"],value)
+        self.assertIn("v3/ui/probe/b.css",final);self.assertIn("v3/ui/probe/later.css",final)
+
+    def test_ui_publishes_during_backend_build_and_backend_keeps_new_ui(self):
+        self.change("backend-alpha-task","src/main.rs","fn main() {}\n","fn main() { let _version=2; }\n")
+        self.change("ui-alpha-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        entered=threading.Event();proceed=threading.Event();original=self.runner.build
+        def build(blob,job,role):
+            if role=="api":entered.set();self.assertTrue(proceed.wait(5))
+            return original(blob,job,role)
+        self.runner.build=build
+        backend=self.finish("backend-alpha-task");self.assertTrue(entered.wait(3))
+        ui=self.finish("ui-alpha-task")
+        try:self.assertEqual(self.wait([ui])[0]["status"],"completed")
+        finally:proceed.set()
+        row=self.wait([backend])[0];self.assertEqual(row["status"],"completed",row.get("reason"))
+        active=self.runner.assets/"releases"/self.runner.current_asset_id()
+        self.assertEqual((active/"v3/ui/probe/a.css").read_text(),"body { color: red; }\n")
+        self.assertIn("_version=2",(active/"v3/src/main.rs").read_text())
+        self.assertEqual(self.runner.current_asset_id(),backend)
+
+    def test_ui_preparation_retries_after_backend_publication_and_preserves_both(self):
+        self.change("backend-alpha-task","src/main.rs","fn main() {}\n","fn main() { let _version=2; }\n")
+        self.change("ui-alpha-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        entered=threading.Event();proceed=threading.Event();original=self.runner.stage_assets
+        def stage(blob,job,**kwargs):
+            if job==ui and not entered.is_set():entered.set();self.assertTrue(proceed.wait(5))
+            return original(blob,job,**kwargs)
+        # Finish under the broker lock so the worker cannot read the identifier before assignment.
+        with self.broker.lock:
+            self.runner.stage_assets=stage;ui=self.finish("ui-alpha-task")
+        self.assertTrue(entered.wait(3));backend=self.finish("backend-alpha-task")
+        try:self.assertEqual(self.wait([backend])[0]["status"],"completed")
+        finally:proceed.set()
+        row=self.wait([ui])[0];self.assertEqual(row["status"],"completed",row.get("reason"))
+        active=self.runner.assets/"releases"/self.runner.current_asset_id()
+        self.assertEqual((active/"v3/ui/probe/a.css").read_text(),"body { color: red; }\n")
+        self.assertIn("_version=2",(active/"v3/src/main.rs").read_text());self.assertEqual(row["preparation"]["attempts"],2)

@@ -15,7 +15,7 @@ class Conflict(ValueError):
     def __init__(self,details):
         """Preserve bounded structured blockers through the broker error transport."""
         self.details={"kind":"ownership_conflict",**details};super().__init__(ownership.canonical(self.details))
-# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Source reservations and completion. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds; protected installation overrides at broker restart.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent"]}],"opportunities":[]}}
+# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Source reservations and completion. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds; protected installation overrides at broker restart.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image"]}],"opportunities":[]}}
 class Scheduler:
     """Derive authority and scope from the broker; caller assertions never certify a release."""
     actions={"create","resources","pause","resume","priority","reconcile","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover"}
@@ -49,7 +49,7 @@ class Scheduler:
         """Use current compile attestations and the owned tree's declarations to derive conflicts."""
         root=Path(item["workspace_path"])
         compile_inputs=self.broker.runner.core_compile_inputs()if hasattr(self.broker.runner,"core_compile_inputs")else()
-        return ownership.Components(root,compile_inputs)
+        return ownership.Components(root,compile_inputs,self.config.get('scheduler',{}).get('ui_file_reservations',False))
     def refresh_waiter(self,item,value):
         """A queued writer starts from current published code while preserving its old draft for recovery."""
         pending=item.get("acquisition_refresh")
@@ -270,6 +270,13 @@ class Scheduler:
         try:
             scopes=self.job_scopes(job)
             if any(scopes&self.job_scopes(other)for other in active):return False
+            def writes(value):
+                return [s[5:]for s in self.store.get(value["ownership_id"])["scopes"]if s.startswith("path:")]if value.get("ownership_id")else []
+            paths=writes(job)
+            if any(ownership.overlap(a,b)for other in active for a in paths for b in writes(other)):return False
+            if paths and all(p.startswith("ui/")for p in paths):
+                peers=sum(bool(writes(other))and all(p.startswith("ui/")for p in writes(other))for other in active)
+                if peers>=self.config.get("scheduler",{}).get("max_ui_preparations",1):return False
             if job.get("ownership_id"):self.assert_job(job)
             return True
         except (ValueError,PermissionError):
@@ -279,12 +286,19 @@ class Scheduler:
         """Owners control their own jobs; the existing Builds administrator may inspect/control all."""
         if set(args)-{"action","job_id","phase_id","request_id","expected_revision","priority"}:raise ValueError("Unsupported resource arguments")
         admin=trusted.get("local_caller")is True or(trusted["user_id"]=="admin"and workspace=="00000000-0000-0000-0000-000000000000")
-        job=self.broker.jobs.get(args.get("job_id"))
+        def find_job(job_id):
+            """Recover only sealed index phase ownership, never a caller-supplied PID or path."""
+            job=self.broker.jobs.get(job_id)
+            if job is not None:return job
+            with self.broker.resources.lock:
+                row=next((r for r in self.broker.resources.rows.values()if r.get("job_id")==job_id and r.get("internal_index")and r.get("kind")=="index"),None)
+                return {"job_id":job_id,"user_id":row["owner_user"],"workspace":row["owner_workspace"]}if row else None
+        job=find_job(args.get("job_id"))
         if args["action"]=="resources":
             if args.get("job_id")and(not job or not(admin or self.broker._owned(job,trusted,workspace))):raise PermissionError("Resource job denied")
             if not args.get("job_id")and not admin:
                 result=self.broker.resources.snapshot()
-                result["phases"]={n:r for n,r in result["phases"].items()if (j:=self.broker.jobs.get(r["job_id"]))and self.broker._owned(j,trusted,workspace)}
+                result["phases"]={n:r for n,r in result["phases"].items()if (j:=find_job(r["job_id"]))and self.broker._owned(j,trusted,workspace)}
                 result["profiles"]={};return result
             return self.broker.resources.snapshot(args.get("job_id"))
         if not job or not(admin or self.broker._owned(job,trusted,workspace)):raise PermissionError("Resource job denied")

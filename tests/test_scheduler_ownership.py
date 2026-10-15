@@ -163,3 +163,24 @@ class BrokerTestClassificationTests(unittest.TestCase):
  def test_unrelated_tests_keep_conservative_engine_scope(self):
   with tempfile.TemporaryDirectory()as root:
    self.assertIn("module:engine",m.Components(root).scopes(["tests/test_worker.py"]))
+
+class UIPathTests(unittest.TestCase):
+ def test_ui_files_are_independent_but_legacy_remains_broad(self):
+  with tempfile.TemporaryDirectory()as root:
+   a=m.Components(root,ui_file_reservations=True).scopes(["ui/chat/a.js"])
+   b=m.Components(root,ui_file_reservations=True).scopes(["ui/chat/b.js"])
+   self.assertFalse(set(a)&set(b))
+   self.assertIn("module:ui:chat",m.Components(root).scopes(["ui/chat/a.js"]))
+ def test_compiler_attestation_dominates_file_and_directory_claims(self):
+  with tempfile.TemporaryDirectory()as root:
+   c=m.Components(root,["ui/chat/embedded.js"],ui_file_reservations=True)
+   self.assertIn("module:engine",c.scopes(["ui/chat"]))
+   self.assertIn("module:engine",c.scopes(["ui/chat/embedded.js"]))
+   self.assertNotIn("module:engine",c.scopes(["ui/chat/unrelated.js"]))
+
+class LegacyUIReservationTests(unittest.TestCase):
+ def test_legacy_module_still_excludes_new_disjoint_paths_in_that_component(self):
+  self.assertTrue(m.scope_overlap("module:ui:chat","path:ui/chat/disjoint.js"))
+  self.assertTrue(m.scope_overlap("path:ui/chat/new.js","module:ui:chat"))
+  self.assertFalse(m.scope_overlap("module:ui:chat","path:ui/chat-other/a.js"))
+  self.assertFalse(m.scope_overlap("path:ui/chat/a.js","path:ui/chat/b.js"))

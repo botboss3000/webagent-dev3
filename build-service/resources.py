@@ -6,7 +6,7 @@ not per-task hard memory limits. Insufficient reclaim waits for intervention.
 import copy,json,math,os,threading,time,re
 from pathlib import Path
 PARKABLE={"compile_test","compile_release","compile_linked","plugin_compile"}
-ESTIMATES={"engine":4*1024**3,"plugin":2*1024**3,"test":512*1024**2,"package":512*1024**2,"dependency":512*1024**2}
+ESTIMATES={"ui_test":1024**3,"index":1024**3,"engine":4*1024**3,"plugin":2*1024**3,"test":512*1024**2,"package":512*1024**2,"dependency":512*1024**2}
 def host_sample():
     """Observe host headroom and pressure without reading any application state."""
     memory={}
@@ -19,7 +19,7 @@ def host_sample():
             pressure[kind]=float(dict(p.split("=",1)for p in row.split()[1:])["avg10"])
         except (OSError,ValueError,StopIteration):pressure[kind]=0.
     return {"available":memory["MemAvailable"],"total":memory["MemTotal"],"swap_free":memory.get("SwapFree",0),"swap_total":memory.get("SwapTotal",0),"pressure":pressure}
-# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Measured admission and compiler parking. Config: build-service/scheduler-defaults.json -> reserve_bytes, reserve_percent, max_phases, max_parked, memory_pressure_percent; protected overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent"]}],"opportunities":[]}}
+# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Measured admission and compiler parking. Config: build-service/scheduler-defaults.json -> reserve_bytes, reserve_percent, max_phases, max_parked, memory_pressure_percent; protected overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image"]}],"opportunities":[]}}
 class Resources:
     """Control only broker-created container identities; ownership and execution authority remain separate."""
     def __init__(self,state,runner,policy=None,clock=time.monotonic,sampler=host_sample):
@@ -118,7 +118,7 @@ class Resources:
                 try:progress(job)
                 finally:self.condition.acquire()
             if job.get("revoked")or job.get("lease_until",float("inf"))<=time.time():raise PermissionError("Build authority expired")
-            component=job.get("artifact_component","engine"if kind=="engine"else profile)
+            component="ui-browser"if kind=="ui_test"else"index:"+job["job_id"]if kind=="index"else job.get("artifact_component","engine"if kind=="engine"else profile)
             def eligible():
                 """Require an available component and sufficient measured global headroom."""
                 conflict=any(r.get("component")==component and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
@@ -137,6 +137,8 @@ class Resources:
             job.pop("resource_waiting",None)
             now=self.clock()
             self.rows[name]={"job_id":job["job_id"],"phase":phase,"profile":profile,"kind":kind,"component":component,"estimate":estimate,"hard_cap":hard_cap,"priority":job.get("priority",0),"state":"admitted","revision":0,"started_at":time.time(),"started":now,"paused_seconds":0.,"paused_at":None,"metrics":{},"container_id":None}
+            if kind=="index"and job.get("internal_index"):
+                self.rows[name].update(internal_index=True,owner_user=job["user_id"],owner_workspace=job["workspace"])
             self.persist();report()
     def attached(self,name,identity):
         """Bind the new phase to its exact container identity before the monitor controls it."""
