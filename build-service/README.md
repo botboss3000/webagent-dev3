@@ -493,3 +493,38 @@ the preserved hashes and released scopes. A completed exact retry returns its
 original result and never releases subsequent claims. Changed inputs, ownership
 or partial refresh effects require separate reconciliation; this action neither
 refreshes the old draft nor transfers edits into a fresh task.
+
+### Task-aware Docker retention and disk admission
+
+The installed docker_retention.py replaces host-wide container/image/builder
+prune calls. The host guard keeps its 80 percent trigger and 70 percent best-effort
+target, but deletes only a bounded batch of registered expired V3 artifacts.
+Unknown/foreign images, shared builder caches, referenced images and rollback
+containers remain untouched. Root-owned exact-image/phase records share a short
+cleanup lock with registration and deletion; missing or inconsistent evidence
+defers deletion. Job receipts retain queued, running, review-waiting and unresolved
+work. Completed/cancelled jobs retain a minimum two-hour grace period.
+
+Config: scheduler-defaults.json -> task_aware_cleanup, disk_min_free_bytes,
+disk_grace_seconds, disk_cleanup_batch, merged with protected installation JSON.
+Disk admission preserves 8 GiB free plus outstanding phase reservations. Cold
+compiler/package floors are 6/8 GiB; other phases reserve 1 GiB. Recipe-bound
+measured output footprints may raise these estimates. Resource waits identify
+disk capacity and resume through existing cancellable admission, without
+duplicating builds. Root helper failure is not permission to bypass admission.
+
+Run the installed guard without --apply for a preview; --force only bypasses
+the disk-pressure trigger, never retention or age checks. --apply deletes exact
+eligible IDs without force. Last cleanup results remain in protected metadata.
+No shared Docker cache pruning is supported. Installation uses the normal idle
+broker lifecycle; the host timer remains enabled and runs the protected version.
+
+
+Cleanup defaults disabled for staged rollout. The dispatcher defers until the
+protected task_aware_cleanup flag is enabled through supported idle scheduler
+reconfiguration. Preview the installed docker_retention.py directly without
+--apply before enabling. --acceptance-probe uses two tiny disposable Docker
+imports and isolated synthetic job/ownership/retention records; only that private
+fixture clock advances. It proves expired deletion and queued-image retention,
+then removes its own images through the same eligibility checks. Real release
+metadata and application containers are not changed.

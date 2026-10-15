@@ -16,5 +16,9 @@
   "compiler_memory_default_bytes": 5368709120,
   "compiler_memory_min_bytes": 1073741824,
   "compiler_memory_max_bytes": 10737418240,
-  "allow_live_memory_increase": false
+  "allow_live_memory_increase": false,
+  "task_aware_cleanup": false,
+  "disk_min_free_bytes": 8589934592,
+  "disk_grace_seconds": 7200,
+  "disk_cleanup_batch": 4
 }

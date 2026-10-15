@@ -695,9 +695,41 @@ class Runner:
         self.cancel = threading.Event()
         self.job_context = threading.local()
 
+    def retain_image(self,image,job_id=None):
+        """Pin exact dependencies before create/run and register outputs before later phases."""
+        if getattr(self,"retention_enabled",False):
+            return self.resource_request({"operation":"retention_pin","image":image,"job_id":job_id})
+    def cleanup_status(self):
+        """Expose aggregate cleanup telemetry without other tasks' artifact identities."""
+        if not getattr(self,"retention_enabled",False):return None
+        result=self.resource_request({"operation":"retention_status"});last=result.get("last_cleanup",{})
+        return {"free_bytes":result.get("free_bytes"),"usage_percent":last.get("usage_percent"),"removed_count":len(last.get("removed",[])),"protected_count":last.get("protected_count",len(last.get("protected",[]))),"target_reached":last.get("target_reached"),"deferred":last.get("deferred")}
+    def disk_admission(self,name,job,phase,profile):
+        """Reserve disk before a phase; caller-owned waits remain cancellable and visible."""
+        if not getattr(self,"retention_enabled",False):return {"admitted":True}
+        return self.resource_request({"operation":"disk_admit","container":name,"phase":phase,"profile":profile})
+    def measure_disk_output(self,name,output):
+        """Measure only the phase output footprint; bounded traversal never touches application state."""
+        if not getattr(self,"retention_enabled",False):return
+        total=0;count=0;deadline=time.monotonic()+1
+        for parent,dirs,files in os.walk(output,followlinks=False):
+            dirs[:]=[d for d in dirs if not (Path(parent)/d).is_symlink()]
+            for entry in files:
+                count+=1
+                if count>50000 or time.monotonic()>deadline:return
+                p=Path(parent)/entry
+                if not p.is_symlink():total+=p.stat().st_blocks*512
+        self.disk_finish(name,total)
+    def disk_finish(self,name,measured_bytes=0):
+        """Release exact phase demand; output footprints conservatively calibrate the same recipe."""
+        if getattr(self,"retention_enabled",False):return self.resource_request({"operation":"disk_finish","container":name,"measured_bytes":measured_bytes})
     def command(self, argv, stdin=None, timeout=3600, output_file=None, private_raw=False):
         # Explicit arguments only; the model never supplies argv. Environment
         # has no application tokens, cookies or provider credentials.
+        if getattr(self,"retention_enabled",False)and len(argv)>2 and argv[:2]in (["docker","create"],["docker","run"]):
+            image=next((a for a in argv[2:]if isinstance(a,str)and(re.fullmatch(r"sha256:[a-f0-9]{64}",a)or "@sha256:"in a)),None)
+            if image:
+                job=getattr(self.job_context,"job",None)or{};self.retain_image(image,job.get("job_id"))
         env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": CONFIG["service_home"], "LANG": "C.UTF-8"}
         with subprocess.Popen(argv, cwd=self.source, env=env, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True) as proc:
@@ -797,12 +829,12 @@ class Runner:
     def resource_request(self,args):
         """Only the protected service peer can control an exact registered build container."""
         args=dict(args)
-        if args.get("operation") not in {"stats","initialize","identity","memory_policy"}:
+        if args.get("operation") not in {"stats","initialize","identity","memory_policy","retention_pin","disk_admit","disk_finish","retention_status"}:
             with self.resources.lock:
                 row=self.resources.rows.get(args.get("container"))
                 if not row or not row.get("container_id"):raise PermissionError("Registered compiler identity required")
                 args["expected_id"]=row["container_id"]
-        connection=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);connection.settimeout(6)
+        connection=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);connection.settimeout(15 if args.get("operation")in {"retention_pin","disk_admit","disk_finish","retention_status"}else 6)
         try:
             connection.connect(str(Path(CONFIG["runtime_root"])/"resource.sock"));connection.sendall(canonical(args)+b"\n")
             raw=bytearray()
@@ -954,7 +986,13 @@ class Runner:
         try:
             image = self.inspect(TARGETS[0])["Image"]
             active=base_release_id if base_release_id is not None else self.current_asset_id()
-            seed=ASSET_ROOT/"releases"/active if active else None
+            seed_root=ASSET_ROOT/"releases"/active if active else None
+            seed=self.verified_index_seed(seed_root)
+            if seed_root is not None and seed is None:
+                job=getattr(self.job_context,"job",None)
+                if job is not None:
+                    job.setdefault("index_seed_rejections",[]).append({"release_id":active,"reason":"Invalid optional published index seed; full candidate verification required"})
+                    getattr(self,"resource_progress",lambda _:None)(job)
             seed_mount=["-v",str(seed)+":/seed:ro"]if seed else []
             private_seeds=getattr(self,"index_seed_provider",lambda _job:[])(job_id)
             if len(private_seeds)>64:raise ValueError("Private seed mount limit exceeded")
@@ -1026,6 +1064,13 @@ class Runner:
             self.job_context.phase_container=None
             self.executor.finish_phase(name,identity,success and not oom)
 
+    def verified_index_seed(self,root):
+        """Discard an invalid optional cache; exact candidate verification remains mandatory."""
+        if root is None:return None
+        try:maintenance_engine.load_scanner().read_published(root)
+        except (OSError,ValueError,sqlite3.Error):return None
+        return root
+
     def maintenance_inventory(self,root,scope,folder):
         """Scan with the protected engine in the same API-image parser environment as publication."""
         folder=Path(folder);folder.mkdir(mode=0o700,parents=True,exist_ok=True)
@@ -1040,7 +1085,8 @@ class Runner:
         scanner=Path(CONFIG["service_dir"])/"index-scanner.py"
         engine=Path(CONFIG["service_dir"])/"index-maintenance.py"
         image=self.inspect(TARGETS[0])["Image"]
-        active=self.current_asset_id();published=ASSET_ROOT/"releases"/active if active else None
+        active=self.current_asset_id();published_root=ASSET_ROOT/"releases"/active if active else None
+        published=self.verified_index_seed(published_root)
         # The scanner binds the directory basename to the actual release ID.
         published_target="/published/"+active if published else None
         published_mount=["-v",str(published)+":"+published_target+":ro"]if published else []
@@ -1057,6 +1103,7 @@ class Runner:
             result=invocation/"inventory.json"
             if result.is_symlink()or result.stat().st_size>64*1024*1024:raise ValueError("Maintenance inventory exceeds bound")
             files,units,scan=json.loads(result.read_bytes());scan["parser_environment"]=image
+            if published_root is not None and published is None:scan["rejected_published_seed"]=active
             os.replace(invocation/"index.sqlite",folder/"index.sqlite")
             os.replace(invocation/"seed.json",folder/"seed.json")
             shutil.rmtree(invocation)
@@ -1551,6 +1598,7 @@ class Runner:
                 packaging=self.executor.package(blob,artifacts,lambda data:release.entries(data,context_digest),role=role,destination=packaging_path)
                 image,package_log=self._build_packaged(packaging,job_id,role)
             finally:packaging_path.unlink(missing_ok=True)
+            self.retain_image(image,job_id)
             return image,(compiler_log if role=="api"else"")+package_log
         tag = TARGETS[1 if role=="loop" else 0]+":job-"+job_id
         log = self.command(["docker", "buildx", "build", "--builder", "default", "--load",
@@ -1559,6 +1607,7 @@ class Runner:
         image = self.command(["docker", "image", "inspect", "--format", "{{.Id}}", tag], timeout=30).strip()
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
             raise ValueError("invalid image identity")
+        self.retain_image(image,job_id)
         return image, log
 
     def _build_packaged(self,blob,job_id,role):
@@ -1712,6 +1761,7 @@ class Broker:
         self.scheduler=scheduler_module.Scheduler(self,CONFIG)
         self.resources=resource_module.Resources(self.state,self.runner,CONFIG.get("scheduler",{}))
         self.runner.resources=self.resources
+        self.runner.retention_enabled=CONFIG.get("scheduler",{}).get("task_aware_cleanup",False)
         self.runner.resource_progress=self._resource_progress
         self.runner.executor=executor_module.Executor(self.runner,self.resources,CONFIG)
         self.resources.start()
@@ -2846,8 +2896,8 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        review_modules={"scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json"}
-        allowed={"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","install.py"}
+        allowed={"v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
@@ -2856,7 +2906,7 @@ class Broker:
         except (ValueError,tarfile.TarError):return False
         selected=sorted(n for n in review_modules if "v3/build-service/"+n in changed)+["host.py"]+[name for name in ("ownership.py","boot_host.py")if "v3/build-service/"+name in changed]
         for name in selected:
-            path=Path(CONFIG["service_dir"])/name
+            path=Path(CONFIG["service_dir"])/("bootstrap.py"if name=="install.py"else name)
             fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
             try:
                 meta=os.fstat(fd)

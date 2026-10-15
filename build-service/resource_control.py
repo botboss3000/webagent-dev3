@@ -141,9 +141,30 @@ class Control:
         memory_events=dict(line.split()for line in (group/"memory.events").read_text().splitlines())
         memory_limit=(group/"memory.max").read_text().strip();swap_limit=(group/"memory.swap.max").read_text().strip()
         return {"memory_max":None if memory_limit=="max"else int(memory_limit),"swap_max":None if swap_limit=="max"else int(swap_limit),"oom_events":int(memory_events.get("oom",0)),"oom_kills":int(memory_events.get("oom_kill",0)),"io_read_bytes":io_values.get("rbytes",0),"io_write_bytes":io_values.get("wbytes",0),"memory":number("memory.current"),"peak_memory":number("memory.peak"),"swap":number("memory.swap.current"),"cpu_usec":cpu.get("usage_usec",0),"pids":number("pids.current"),"frozen":bool(events.get("frozen"))}
+    def retention(self):
+        """Load only the installed root-owned retention implementation selected by protected config."""
+        import importlib.util
+        path=Path(self.config["service_dir"])/"docker_retention.py"
+        s=path.lstat()
+        if not path.is_file()or path.is_symlink()or s.st_uid!=0 or s.st_mode&0o022:raise PermissionError("Protected retention implementation required")
+        spec=importlib.util.spec_from_file_location("protected_docker_retention",path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+        return m.Retention(self.config)
     def handle(self,args):
         """Operations are bounded and caller-independent; only the authenticated broker can reach them."""
         if os.geteuid()!=0:raise PermissionError("Protected root helper required")
+        if isinstance(args,dict)and args.get("operation")in {"retention_pin","disk_admit","disk_finish","retention_status"}:
+            operation=args["operation"]
+            if operation=="disk_admit"and not self.config.get("scheduler",{}).get("task_aware_cleanup"):raise PermissionError("Task-aware cleanup disabled")
+            allowed={"operation","image","job_id"}if operation=="retention_pin"else {"operation"}if operation=="retention_status"else {"operation","container","phase","profile","measured_bytes"}
+            if set(args)-allowed:raise ValueError("Unsupported retention arguments")
+            retention=self.retention()
+            if operation=="retention_pin":return retention.pin(args.get("image"),args.get("job_id"))
+            if operation=="retention_status":
+                with retention.locked():return {"last_cleanup":retention.load().get("last_cleanup",{}),"free_bytes":retention.usage().free}
+            try:return retention.disk(args.get("container",""),args.get("phase"),args.get("profile"),finish=operation=="disk_finish",measured_bytes=args.get("measured_bytes",0))
+            except TimeoutError:
+                if operation=="disk_admit":return {"admitted":False,"reason":"cleanup_busy"}
+                raise
         if not isinstance(args,dict)or set(args)-{"operation","container","bytes","cpu_millis","expected_id","memory_bytes","previous_bytes","reserved_bytes","policy_sha256","required_bytes","lease_until"}:raise ValueError("Unsupported resource arguments")
         operation=args.get("operation")
         if operation=="initialize":
@@ -161,6 +182,8 @@ class Control:
             labels=value.get("Config",{}).get("Labels",{})
             if labels.get("webagent.scheduler.instance")!=self.config["instance"]or labels.get("webagent.scheduler.job")!=match[1]or labels.get("webagent.scheduler.phase")!=match[2]or value.get("HostConfig",{}).get("CgroupParent")!=self.slice:
                 raise PermissionError("Recovery container identity changed")
+            if self.config.get("scheduler",{}).get("task_aware_cleanup"):
+                self.retention().pin(value["Image"],str(__import__("uuid").UUID(match[1])),value)
             return {"container_id":value["Id"],"state":value["State"]["Status"],"phase":match[2]}
         if operation not in {"stats","freeze","thaw","reclaim","cpu","memory"}:raise ValueError("Unsupported resource operation")
         group,phase,identity=self.resolve(args.get("container",""))
@@ -213,7 +236,7 @@ def serve(listener,stopping,config):
             if len(raw)>2048:raise ValueError("Resource frame oversized")
             result=control.handle(json.loads(raw))
             connection.sendall(json.dumps({"status":"success","output":result},separators=(",",":")).encode()+b"\n")
-        except (OSError,ValueError,PermissionError,TimeoutError,subprocess.SubprocessError):
+        except (OSError,ValueError,PermissionError,RuntimeError,TimeoutError,subprocess.SubprocessError):
             try:connection.sendall(b'{"status":"failed","output":"Resource control unavailable"}\n')
             except OSError:pass
         finally:connection.close();slots.release()

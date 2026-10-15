@@ -116,6 +116,7 @@ class Resources:
         estimate=hard_cap if hard_cap is not None else self.estimate(profile,kind);deadline=time.monotonic()+timeout if timeout is not None else None
         deadline_at=time.time()+timeout if timeout is not None else None
         progress=getattr(self.runner,"resource_progress",lambda _:None)
+        disk_wait=None
         with self.condition:
             def report():
                 """Persist progress outside the resource lock to preserve broker/resource lock ordering."""
@@ -129,23 +130,30 @@ class Resources:
                 conflict=any(r.get("component")==component and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
                 task_id=job.get("task_id")
                 task_conflict=any(r.get("task_id")==task_id and task_id is not None and(ram_packaging or r.get("ram_packaging"))and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
-                if conflict or task_conflict or not self.can_admit(estimate):return False
+                nonlocal disk_wait
+                if conflict or task_conflict or not self.can_admit(estimate):disk_wait=None;return False
                 if not self.initialized or hard_cap is not None:
                     # The protected ancestor must fit the complete admitted ceilings too.
                     required=estimate+sum(max(r["estimate"],r.get("metrics",{}).get("memory",0))for r in self.rows.values()if r["state"]in {"admitted","running","parked"})
                     reply=self.runner.resource_request({"operation":"initialize","required_bytes":required})
                     if reply.get("admitted")is False:return False
                     self.initialized=True
-                return True
+                check=getattr(self.runner,"disk_admission",None)
+                disk_wait=check(name,job,phase,profile)if callable(check)else None
+                return disk_wait is None or disk_wait.get("admitted")is True
             while self.enabled and not eligible():
                 if deadline is not None and time.monotonic()>=deadline:
                     job.pop("resource_waiting",None);report();raise TimeoutError("Resource admission exceeded remaining check timeout")
                 if self.stop.is_set()or job.get("revoked")or job.get("lease_until",float("inf"))<=time.time():
                     job.pop("resource_waiting",None);report();raise PermissionError("Build admission cancelled or authorization expired")
                 waiting={"phase":phase,"reason":"headroom","estimate_bytes":estimate,"available_bytes":self.host["available"],"reserve_bytes":self.reserve(),"deadline_at":deadline_at}
+                if disk_wait and not disk_wait.get("admitted"):waiting.update(disk_wait);waiting.pop("admitted",None)
                 if job.get("resource_waiting")!=waiting:job["resource_waiting"]=waiting;report()
                 self.condition.wait(min(.5,max(0,deadline-time.monotonic()))if deadline is not None else .5)
-            if self.stop.is_set():raise PermissionError("Scheduler stopping")
+            if self.stop.is_set()or job.get("revoked")or job.get("lease_until",float("inf"))<=time.time():
+                finish=getattr(self.runner,"disk_finish",None)
+                if callable(finish):finish(name)
+                raise PermissionError("Scheduler stopping")
             job.pop("resource_waiting",None)
             now=self.clock()
             self.rows[name]={"job_id":job["job_id"],"task_id":job.get("task_id"),"ram_packaging":ram_packaging,"phase":phase,"profile":profile,"kind":kind,"component":component,"estimate":estimate,"hard_cap":hard_cap,"priority":job.get("priority",0),"state":"admitted","revision":0,"started_at":time.time(),"started":now,"paused_seconds":0.,"paused_at":None,"metrics":{},"container_id":None}
@@ -165,6 +173,8 @@ class Resources:
         """Retain a measured phase peak and wake eligible unrelated work."""
         with self.condition:
             row=self.rows[name]
+            finish=getattr(self.runner,"disk_finish",None)
+            if callable(finish):finish(name)
             if row.get("paused_at")is not None:row["paused_seconds"]+=self.clock()-row["paused_at"];row["paused_at"]=None
             if row.get("memory_change",{}).get("state")in {"intent","uncertain"}:
                 success=False
@@ -221,6 +231,8 @@ class Resources:
                 if row["state"]!="recovery_required"or job["status"]in {"queued","running"}or job.get("effects_started"):
                     raise ValueError("Only stopped pre-publication phases may be reconciled")
                 self.runner.cleanup_phase(name)
+                finish=getattr(self.runner,"disk_finish",None)
+                if callable(finish):finish(name)
                 row.update(state="failed",reason="Explicit orphan phase cleanup; no automatic restart",finished=self.clock(),paused_at=None)
             else:
                 if job["status"]!="running"or job.get("revoked")or job.get("lease_until",0)<=time.time():raise PermissionError("Live executing owner authority required")
@@ -338,6 +350,12 @@ class Resources:
     def tick(self):
         """Sample real containers, reduce contention, and park/resume with hysteresis."""
         sample=self.sampler()
+        status=getattr(self.runner,"cleanup_status",None)
+        if callable(status)and self.clock()-getattr(self,"last_disk_sample",-10)>=10:
+            try:self.disk_status=status()
+            except (OSError,ValueError,RuntimeError,TimeoutError):self.disk_status={"deferred":"Cleanup telemetry unavailable"}
+            self.last_disk_sample=self.clock()
+        if getattr(self,"disk_status",None)is not None:sample["disk"]=self.disk_status
         with self.condition:self.host=sample;names=[n for n,r in self.rows.items()if r["state"]in {"running","parked","waiting_intervention"}]
         for name in names:
             try:

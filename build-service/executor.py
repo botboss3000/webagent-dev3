@@ -97,7 +97,11 @@ class Executor:
                         result=job["compiler_cap_outcomes"][-1];result.update(final_memory_max=observed.get("memory_max"),memory_changes=timeline,oom_events=observed.get("oom_events"),oom_kills=observed.get("oom_kills"),peak_memory=observed.get("peak_memory"),outcome="oom"if oom else("completed"if success and proof_error is None else"failed"))
                         getattr(self.runner,"resource_progress",lambda _:None)(job)
             finally:
-                try:self.finish_phase(name,identity,success and not oom and proof_error is None,diagnostic_complete and not oom and proof_error is None)
+                try:
+                    try:
+                        measure=getattr(self.runner,"measure_disk_output",None)
+                        if callable(measure)and success and not oom and proof_error is None:measure(name,output)
+                    finally:self.finish_phase(name,identity,success and not oom and proof_error is None,diagnostic_complete and not oom and proof_error is None)
                 except BaseException:
                     if not primary:raise
             if not primary:
