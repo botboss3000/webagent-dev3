@@ -5,5 +5,6 @@
   "css": [
     "app-page.css"
   ],
-  "entry": "app-page.js"
+  "entry": "app-page.js",
+  "_comment": "Page assets must use sibling filenames. Nested dashboard styles are loaded by pages/dashboard/page.js."
 }
