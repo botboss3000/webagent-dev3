@@ -153,3 +153,13 @@ class ReleaseClaimTests(unittest.TestCase):
   r=self.store.release_scopes(a["id"],a["owner"],a["revision"],a["epoch"],a["scopes"],"Preserve source for later",self.request())
   self.assertEqual(r["state"],"waiting");self.assertEqual(r["scopes"],[])
   self.assertTrue(self.acquire(r,["module:broker"])["acquired"])
+
+class BrokerTestClassificationTests(unittest.TestCase):
+ def test_index_and_ui_policy_tests_do_not_reserve_engine(self):
+  with tempfile.TemporaryDirectory()as root:
+   for p in ("tests/test_code_index_maintenance.py","tests/test_published_code_index.py","tests/test_index_queue.py","tests/test_ui_policy.py"):
+    self.assertEqual(m.Components(root).scopes([p]),["module:broker","path:"+p])
+    self.assertIn("module:engine",m.Components(root,[p]).scopes([p]))
+ def test_unrelated_tests_keep_conservative_engine_scope(self):
+  with tempfile.TemporaryDirectory()as root:
+   self.assertIn("module:engine",m.Components(root).scopes(["tests/test_worker.py"]))

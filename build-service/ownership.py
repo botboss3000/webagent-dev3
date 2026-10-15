@@ -63,8 +63,10 @@ class Components:
                 component="background-dispatch"if path.startswith(("plugins/engine/background-dispatch/","crates/background-service/","crates/background-dispatch/","crates/engine-service/"))else"context-assembly"
                 output.add("module:engine-component:"+component)
                 if path in self.compile_inputs:output.add("module:engine")
-            elif path.startswith("build-service/")or path.startswith("tests/test_build")or path.startswith("tests/test_scheduler"):
+            elif path.startswith("build-service/")or path.startswith("tests/test_build")or path.startswith("tests/test_scheduler")or path in {"tests/test_code_index_maintenance.py","tests/test_published_code_index.py","tests/test_index_queue.py","tests/test_ui_policy.py"}:
+                # These Python suites validate broker/index contracts, not the Rust engine.
                 output.add("module:broker")
+                if any(overlap(path,p)for p in self.compile_inputs):output.add("module:engine")
             elif path.startswith("ui/"):
                 output.add("module:ui:"+ (parts[1]if len(parts)>1 else "shell"))
             elif path.startswith("docs/")or(path.startswith("config/")and path.endswith(".json")and path not in self.compile_inputs):
