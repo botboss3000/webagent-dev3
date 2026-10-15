@@ -26,7 +26,7 @@ backend change is warranted by the reported busy-loop hypothesis.
 | Context assembly algorithm | engine-loop | webagent-context-assembly library | Replaceable implementation; live core excludes this dependency | Extracted; baseline linked/live equivalence verified; compatible live 0.1.1 independently published |
 | Context service | engine-loop | webagent-context-service executable, one supervised process per execution descriptor generation | Independent live updates over inherited private pipes | Real confinement, host integration, replacement, withdrawal and restored retained work verified |
 | Background planning contracts | shared-contracts | webagent-background-contracts version-2 library | Bounded metadata and independent host validation | Deployed; full workspace and optimized equivalence verified |
-| Background selection policy | engine-loop | webagent-background-dispatch library | Independent implementation replacement, linked stable calls | Deployed; paired CPU/claim measurements and compatible 0.1.1 replacement verified |
+| Background selection policy | engine-loop | webagent-background-dispatch 0.2.0 library | Independent implementation replacement, linked stable calls | Deployed; configurable timing, paired idle/claim measurements, live withdrawal/restoration and process reuse verified |
 | Background service transport | engine-loop | webagent-background-service over reusable webagent-engine-service | Confined private pipes without host authority | Strict withdrawal, retained-input pause, selective restoration and process reuse verified |
 | Boot recovery DTOs | shared-contracts | webagent-boot-contracts version-1 library | Bounded metadata with independent host validation | Deployed; shared contract paths require coordinated publication |
 | Boot recovery selection | engine-loop | webagent-boot-supervisor library | Healthy idle has no deadline; stable build calls directly | Deployed; stable/live equality and independent 0.1.1 replacement verified |
@@ -381,3 +381,80 @@ and zero replies; explicit manual pause/cancel removed markers and stayed fenced
 Restoration reinstates the exact interface2/0.2.0 sealed descriptor, verified
 artifact pin and original feature map. Selective restoration and final fixture
 cleanup remain pending; ownership renewal remains active.
+
+
+### Rescan configuration completion and reliability boundaries
+
+Restoration b648826e-ed20-4e87-922e-66cc726d58af completed healthy publication
+and exact commit f3ad2560ba99cb51a96c56665e01dabdc303888f. All three
+registered engine artifacts were verified and reused. The eligible retained
+input alone resumed with exactly one persisted final reply; repeated observation
+preserved explicit manual pause/cancel states. Two additional strict background
+reads used a newly spawned process with artifact hash
+f988bf2e438d716293d67f336438bdbd508e34a553ddc73eeaf4c6aa96cfb3de,
+and reused that same PID/start identity across both reads. These two samples
+are separate from the 36 timing samples. All 39 read/preparation sessions and
+three lifecycle sessions are recycled; exact tool override, Diagnostics selection
+and executable bytes/UID/GID/mode/ACL are restored. Runtime interval is 5000 and
+other runtime settings match the initial snapshot. All three core container,
+image and executable identities survived withdrawal/restoration unchanged.
+This evidence supersedes the pending implementation/transport/lifecycle entries
+above. Final scoped human/index reconciliation and this documentation publication
+close the work without further implementation changes or cache/test policy edits.
+
+Reliability factors traced against the current implementation:
+
+- Missed wake hints: wake.rs emits an in-process watch broadcast and a bounded
+  Unix-socket hint after durable commits. Hints can coalesce; a cross-process
+  listener/socket failure can lose immediacy. background_tasks.rs rescans durable
+  state at the configured fallback. Long settings intentionally allow longer
+  missed-hint recovery. Diagnose socket/listener adoption and retain the scan;
+  do not treat a hint as authority or proof of persistence.
+- Crash or stale worker: host CAS claims and renewable leases fence execution.
+  The planner shortens a healthy wait for an earlier unowned running lease.
+  After a process restart and lease expiry, current authority is rechecked
+  before reclaim. An in-process worker panic can retain its local active identity
+  until restart; faster polling does not clear that identity. Reconcile affected
+  work and use owned recovery; panic-safe bookkeeping needs a separate reviewed
+  correction. Component-call failure has its existing independent five-second
+  health cooldown, captured
+  before availability and after scanning; this is not a healthy-interval ceiling.
+  Repair/redeploy a failed component through its supported lane.
+- Configuration: both administrator save paths validate, persist atomically,
+  reject stale digests and hint the loop. Scheduler adoption installs the new
+  value before its second hint. External invalid JSON is rejected by the
+  scheduler rather than silently accepted; use validated saves and reconcile
+  invalid files. The normal scheduler, worker supervision and task_wait timing
+  remain separate from this background fallback.
+- Expected non-delivery: stop/silent policies, manual pauses, cancellation,
+  recycled sessions and revoked permission must remain respected. A completed
+  origin with wake policy can retry when session/account capacity becomes free;
+  deterministic wake identity and transactional delivery prevent duplicates.
+  Restore eligibility/capacity through its owner rather than forcing publication.
+- Incomplete durable state: normal background_cas writes encrypted document and
+  index in one transaction, and delivery claiming is transactional with the run.
+  A missing index row, missing document, malformed encrypted payload or incorrect
+  terminal delivery marker caused by corruption/another bug is not repaired by
+  polling. background_scan enumerates its index, skips missing documents and propagates
+  read/decryption errors; a corrupt record can defer that tenant's whole scan. Diagnose through bounded
+  authorized interfaces and use a separately reviewed repair with retained
+  evidence. Faster polling neither reconstructs missing data nor grants authority.
+- Provider and capacity failures: a wake is scheduling, not successful model
+  execution or delivery. Check the owning run's bounded status/diagnostics and
+  preserve cancellation, retry and uncertain-effect rules. The timing comparison
+  records queue-to-claim separately from whole-message provider latency.
+
+No speculative repair, storage/DDL optimization, new telemetry endpoint, broker
+test change or cache-policy change is included. The maintained code tour is the
+local control-project docs/code-tour.md; the server copy remains historical.
+
+
+Final prepublication reconciliation verified all 447 applicable records across
+23 affected scopes (22 indexed files; ordinary Markdown explicitly excluded),
+including source and dependency hashes. It refreshed 255 records and retained 192
+verified unchanged records. Explicit rename/deletion reconciliation covers the
+moved shared projection and historical removed helpers. Operator evidence is
+retained under build-jobs/operator-evidence/background-rescan-config-20261015/
+manifest.json, alongside preserved original job receipts. This candidate changes
+only this ledger; implementation, contracts, saved runtime settings, testing and
+cache policies are frozen.
