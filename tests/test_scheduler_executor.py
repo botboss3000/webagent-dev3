@@ -107,7 +107,7 @@ class CacheTests(unittest.TestCase):
         import tarfile
         dockerfile=(Path(__file__).parents[1]/"Dockerfile").read_text()
         blob=fixtures.context(extra={**self.extra,"v3/Dockerfile":dockerfile})
-        for name in ("core-inputs.txt","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-context-service"):
+        for name in ("core-inputs.txt",*module.BINARIES):
             (self.artifacts/name).write_bytes(b"verified output")
         folder=self.artifacts/"modules";folder.mkdir();(folder/"descriptor.json").write_bytes(b"verified module")
         for role in ("api","loop"):
@@ -118,7 +118,7 @@ class CacheTests(unittest.TestCase):
                 recipe=archive.extractfile("v3/Dockerfile").read().decode()
                 self.assertIn("FROM scratch AS tested_builder"if role=="loop"else"FROM "+module.RUST+" AS tested_builder",recipe)
             self.assertNotIn("tests/webagent_v3-0123456789abcdef",names)
-            if role=="loop":self.assertEqual(names,{"webagent-v3","core-inputs.txt","webagent-context-service"})
+            if role=="loop":self.assertEqual(names,{"webagent-v3","core-inputs.txt","webagent-context-service","webagent-background-service"})
             else:
                 self.assertIn("optimization-cargo/registry/cache",names);self.assertIn("modules/descriptor.json",names)
     def test_registry_or_test_tampering_is_rejected(self):

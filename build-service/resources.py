@@ -19,7 +19,7 @@ def host_sample():
             pressure[kind]=float(dict(p.split("=",1)for p in row.split()[1:])["avg10"])
         except (OSError,ValueError,StopIteration):pressure[kind]=0.
     return {"available":memory["MemAvailable"],"total":memory["MemTotal"],"swap_free":memory.get("SwapFree",0),"swap_total":memory.get("SwapTotal",0),"pressure":pressure}
-# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Measured admission and compiler parking. Config: build-service/scheduler-defaults.json -> reserve_bytes, reserve_percent, max_phases, max_parked, memory_pressure_percent; protected overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image"]}],"opportunities":[]}}
+# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Measured admission and compiler parking. Config: build-service/scheduler-defaults.json -> reserve_bytes, reserve_percent, max_phases, max_parked, memory_pressure_percent; protected overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image","/package_ram_bytes","/package_tmpfs_bytes"]}],"opportunities":[]}}
 class Resources:
     """Control only broker-created container identities; ownership and execution authority remain separate."""
     def __init__(self,state,runner,policy=None,clock=time.monotonic,sampler=host_sample):
@@ -107,8 +107,12 @@ class Resources:
         return self.host["available"]-self.reserve()>=estimate+remaining and not any(r["state"]in {"recovery_required","waiting_intervention"}for r in self.rows.values())
     def enter(self,name,job,phase,profile,kind,timeout=None,hard_cap=None):
         """Wait for measured admission outside the broker lock; revocation still interrupts waiting."""
-        if hard_cap is not None and (type(hard_cap)is not int or hard_cap!=4026531840 or not((phase in {"compile_test","compile_release","compile_linked"}and kind=="engine")or(phase=="package"and kind=="package"))):raise ValueError("Unsupported enforced phase memory cap")
-        estimate=min(self.estimate(profile,kind),hard_cap)if hard_cap is not None else self.estimate(profile,kind);deadline=time.monotonic()+timeout if timeout is not None else None
+        ram_packaging=phase=="package"and kind=="package"and bool(self.policy.get("package_tmpfs_bytes",0))
+        allowed_cap=self.policy.get("package_ram_bytes")if ram_packaging else 4026531840
+        if hard_cap is not None and (type(hard_cap)is not int or hard_cap!=allowed_cap or not((phase in {"compile_test","compile_release","compile_linked"}and kind=="engine")or(phase=="package"and kind=="package"))):raise ValueError("Unsupported enforced phase memory cap")
+        if ram_packaging and(hard_cap is None or self.policy.get("reserve_percent",10)<15):raise ValueError("RAM packaging requires full budget and host reserve")
+        # tmpfs is unreclaimable without swap: reserve its full process/cache/scratch ceiling, even after small successful samples.
+        estimate=hard_cap if ram_packaging else(min(self.estimate(profile,kind),hard_cap)if hard_cap is not None else self.estimate(profile,kind));deadline=time.monotonic()+timeout if timeout is not None else None
         deadline_at=time.time()+timeout if timeout is not None else None
         progress=getattr(self.runner,"resource_progress",lambda _:None)
         with self.condition:
@@ -122,7 +126,9 @@ class Resources:
             def eligible():
                 """Require an available component and sufficient measured global headroom."""
                 conflict=any(r.get("component")==component and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
-                return not conflict and self.can_admit(estimate)
+                task_id=job.get("task_id")
+                task_conflict=any(r.get("task_id")==task_id and task_id is not None and(ram_packaging or r.get("ram_packaging"))and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
+                return not conflict and not task_conflict and self.can_admit(estimate)
             while self.enabled and not eligible():
                 if deadline is not None and time.monotonic()>=deadline:
                     job.pop("resource_waiting",None);report();raise TimeoutError("Resource admission exceeded remaining check timeout")
@@ -136,7 +142,7 @@ class Resources:
                 self.runner.resource_request({"operation":"initialize"});self.initialized=True
             job.pop("resource_waiting",None)
             now=self.clock()
-            self.rows[name]={"job_id":job["job_id"],"phase":phase,"profile":profile,"kind":kind,"component":component,"estimate":estimate,"hard_cap":hard_cap,"priority":job.get("priority",0),"state":"admitted","revision":0,"started_at":time.time(),"started":now,"paused_seconds":0.,"paused_at":None,"metrics":{},"container_id":None}
+            self.rows[name]={"job_id":job["job_id"],"task_id":job.get("task_id"),"ram_packaging":ram_packaging,"phase":phase,"profile":profile,"kind":kind,"component":component,"estimate":estimate,"hard_cap":hard_cap,"priority":job.get("priority",0),"state":"admitted","revision":0,"started_at":time.time(),"started":now,"paused_seconds":0.,"paused_at":None,"metrics":{},"container_id":None}
             if kind=="index"and job.get("internal_index"):
                 self.rows[name].update(internal_index=True,owner_user=job["user_id"],owner_workspace=job["workspace"])
             self.persist();report()

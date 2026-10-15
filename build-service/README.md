@@ -330,3 +330,25 @@ Rollback previews express source modes using Git's owner-execute identity
 Equivalent Git modes emit no chmod; checked patch application preserves the
 current permissions. Receipt hashes, same-file conflict checks and normal
 publication authority still apply.
+
+
+### Bounded RAM packaging
+
+Protected scheduler settings `package_ram_bytes` and `package_tmpfs_bytes` are
+opt-in and default to zero. Nonzero byte budgets must align to the host memory
+page size so Docker and kernel limit readback agree exactly. They select the total packaging-container ceiling
+(up to 10,000,000,000 bytes) and its disposable `/var/lib/buildkit` tmpfs (up to
+8,000,000,000 bytes, with at least 1 GiB left for process overhead). Enforced
+scheduling and at least 15 percent host reserve are mandatory. Reserve the full
+ceiling despite earlier small measured peaks; other phases belonging to the
+same task wait until packaging finishes. Kernel memory.max covers BuildKit,
+its descendants, cache and tmpfs together, with swap disabled. A separate recipe
+profile prevents RAM and disk measurements from polluting each other.
+
+The mount is verified before any build workload. Scratch exhaustion or OOM
+fails the job without automatic disk fallback or publication retry. Normal
+exact-container cleanup removes the tmpfs. Source snapshots, tested outputs,
+release receipts, imported images and rollback material remain durable. Adopt
+through idle protected lifecycle installation/reconfiguration; changing a live
+container is unsupported. Compare the same frozen recipe and inputs before
+claiming a speedup; disk import/export and network transfers still remain.

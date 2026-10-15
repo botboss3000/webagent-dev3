@@ -77,18 +77,23 @@ class Executor:
                     getattr(self.runner,"resource_progress",lambda _:None)(job)
             self.finish_phase(name,identity,success and not oom,diagnostic_complete and not oom)
             if oom:raise RuntimeError("Compiler memory cap exceeded (OOM); check failed")
+    # @code-index {"version":1,"feature":"ram-packaging","aliases":["RAM build scratch","tmpfs packaging"],"purpose":"Fixed RAM BuildKit workspace and proof. Config: build-service/scheduler-defaults.json -> package_ram_bytes, package_tmpfs_bytes, reserve_percent.","span_lines":65,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/package_ram_bytes","/package_tmpfs_bytes","/reserve_percent"]}],"opportunities":[]}}
     @contextlib.contextmanager
     def packager(self,job,role="generic"):
         """Bound only this dedicated BuildKit ancestor, preserving reserve and measured role profiles."""
         name="webagent-build-"+self.config["instance"]+"-"+uuid.UUID(job["job_id"]).hex+"-package-"+uuid.uuid4().hex[:8]
         if role not in {"api","loop","generic"}:raise ValueError("Fixed packaging role required")
         cap=compiler_cap(job.get("package_memory_cap"));identity=None;success=False;oom=False;proof_error=None;primary=False;stage="container_create";cap_outcome=None
+        policy=self.config.get("scheduler",{});scratch=policy.get("package_tmpfs_bytes",0)
+        # Installation policy alone selects this disposable RAM workspace. Model requests cannot add mounts.
+        if scratch:cap=policy["package_ram_bytes"]
         if cap is not None and not self.resources.enabled:raise ValueError("Package cap requires enforced admission")
-        self.resources.enter(name,job,"package","buildkit:v0.25.1:role-context-v2:"+role,"package",timeout=600,hard_cap=cap)
+        self.resources.enter(name,job,"package","buildkit:v0.25.1:role-context-v2:"+role+(":ram-v1"if scratch else""),"package",timeout=600,hard_cap=cap)
         try:
             create=["docker","create","--name",name,"--privileged","--cgroup-parent","webagent-build-"+self.config["instance"]+".slice",
                 "--label","webagent.scheduler.instance="+self.config["instance"],"--label","webagent.scheduler.job="+uuid.UUID(job["job_id"]).hex,"--label","webagent.scheduler.phase=package","--pids-limit","512"]
             if cap is not None:create +=["--memory",str(cap),"--memory-swap",str(cap)]
+            if scratch:create +=["--tmpfs","/var/lib/buildkit:rw,exec,nosuid,nodev,size="+str(scratch)+",mode=0700"]
             create +=[BUILDKIT,"--addr","unix:///run/buildkit/buildkitd.sock"]
             self.runner.command(create,timeout=30,private_raw=True)
             # Docker diagnostics share the command stream; only the protected helper identifies this exact container.
@@ -105,6 +110,11 @@ class Executor:
                 cap_outcome={"role":role,"requested_bytes":cap,"observed_memory_max":observed["memory_max"],"observed_swap_max":observed["swap_max"],"container_id":identity,"initial_oom_events":observed.get("oom_events",0),"initial_oom_kills":observed.get("oom_kills",0),"outcome":"running"}
                 job.setdefault("package_cap_outcomes",[]).append(cap_outcome)
                 getattr(self.runner,"resource_progress",lambda _:None)(job)
+            if scratch:
+                # Verify the actual mount before BuildKit can unpack any candidate layers.
+                actual=self.runner.command(["docker","exec",name,"stat","-f","-c","%T","/var/lib/buildkit"],timeout=10).strip()
+                if actual!="tmpfs":raise ValueError("RAM packaging scratch mount not enforced")
+                cap_outcome["scratch_bytes"]=scratch
             stage="builder_create"
             self.runner.command(["docker","buildx","create","--name",name,"--driver","remote","docker-container://"+name],timeout=30)
             stage="builder_bootstrap";self.runner.command(["docker","buildx","inspect",name,"--bootstrap"],timeout=60)
