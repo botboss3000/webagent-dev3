@@ -230,6 +230,15 @@ class IndexCoordinator:
                 connection.deserialize(_index)
                 rows=[json.loads(row[0])for row in connection.execute("SELECT body FROM maintenance_records")]
             finally:connection.close()
+            if any(job.get("deferred_documentation") for job in members):
+                current_job=self.broker.jobs.get(current)
+                if not current_job:
+                    reasons.append("Current release receipt unavailable for documentation projection")
+                else:
+                    _binding,_manifest,rows=self.broker.review_policy.projection(folder,current_job,[job["ownership_id"]for job in members])
+                for member in members:
+                    try:self.broker.review_policy.check_complete(member)
+                    except ValueError as error:reasons.append(str(error))
             for path in expected:
                 logical=path.removeprefix("v3/")
                 if Path(logical).suffix not in scanner.SUFFIXES:continue

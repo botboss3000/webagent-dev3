@@ -528,3 +528,49 @@ imports and isolated synthetic job/ownership/retention records; only that privat
 fixture clock advances. It proves expired deletion and queued-image retention,
 then removes its own images through the same eligibility checks. Real release
 metadata and application containers are not changed.
+
+
+### Task-partitioned review storage
+
+The protected host uses a per-task mutable review database and a separate
+published projection. Immutable release indexes remain complete source/index
+pairs. A small coordinator routes global retry identities and accounts for the
+existing aggregate storage limit; it does not hold scans or review bodies.
+Independent task transactions can proceed concurrently. Publication snapshots
+take a bounded consistent read barrier without holding the host authority lock.
+
+Existing installations retain the legacy layout until an operator invokes
+build_work action partition_review_storage with task_id and request_id during an
+idle task-owned drain, holding module:broker. The migration verifies every record,
+history event and exact retry receipt, persists recovery intent and retains the
+original database. A directory fences the retired ledger.sqlite pathname so an
+older installation fails closed. Do not remove that fence or restore old broker
+bytes alone: reconcile storage and protected installation together.
+
+The original aggregate byte and record limits still apply across all stores.
+Private writers acquire coordinator allocation only at commit, atomically with
+their shard transaction. A request identity remains bound to its original task
+and input digest even if validation fails; changed inputs need a new request ID.
+No background migration, history deletion or automatic task-store retirement is
+performed. Explicit lossless history compaction still requires an idle drain.
+
+
+### Explicit approval to defer documentation assertions
+
+Required functional/safety checks and complete, fresh, exact source/index binding
+remain prepublication gates. An operator may record the user's approval of a
+sealed candidate awaiting documentation review with build_work action
+approve_deferred_documentation, task_id, job_id, expected_inputs_sha256,
+approval_note and request_id. This does not resume a job automatically.
+A source rebase, sealed descriptor change or ownership/source generation change
+invalidates the approval. A build or generic resume is never approval.
+
+After normal publication, record Code Index/documentation assertions with
+code_index_maintenance deployed_job_id selecting that exact owned release.
+The host selects its immutable source; the index is never rewritten. Call
+finish_deferred_documentation with task_id, job_id and request_id after all
+applicable reviews, including removed/renamed units, are complete. The host
+projects fresh evidence in memory and persists an exact completion receipt.
+Any later review mutation invalidates that receipt. Task acceptance/completion
+and project finalization require the completed reviews. Later builds reuse only
+source/dependency-matching assertions; they cannot inherit stale approval.

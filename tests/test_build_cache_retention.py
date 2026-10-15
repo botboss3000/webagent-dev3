@@ -80,7 +80,7 @@ class CacheRetentionTests(unittest.TestCase):
         artifact=self.state/job_id; artifact.mkdir(); (artifact/"log").write_text("fixture artifact")
         job={"job_id":job_id,"status":"uncertain","created_at":time.time()-9000,"finished_at":time.time()-9000}
         self.broker.jobs[job_id]=job
-        self.broker.work[key]={"task_id":"retention-fixture","status":"closed","job_id":job_id,
+        self.broker.work[key]={"key":key,"task_id":"retention-fixture","status":"closed","job_id":job_id,
             "user_id":"admin","workspace":self.workspace,"created_at":time.time()-9000,"finished_at":time.time()-9000}
         self.broker._save_work()
         self.broker._reconcile_leftover_state()

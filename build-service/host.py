@@ -49,6 +49,8 @@ index_queue_module=scheduler_module.sibling("index_queue")
 index_coordinator_module=scheduler_module.sibling("index_coordinator")
 ui_policy_module=scheduler_module.sibling("ui_policy")
 ui_publication_module=scheduler_module.sibling("ui_publication")
+review_store_module=scheduler_module.sibling("review_store")
+review_policy_module=scheduler_module.sibling("review_policy")
 
 SOURCE = Path(CONFIG["checkout_root"])
 _maintenance_path=_module_root/"index-maintenance.py"
@@ -1753,7 +1755,8 @@ class Broker:
         self.work = json.loads(self.work_path.read_text()) if self.work_path.exists() else {}
         if not isinstance(self.work, dict) or len(self.work) > 1000:
             raise ValueError("invalid coordination registry")
-        self.code_index_ledger=maintenance_engine.Ledger(Path(CONFIG["install_root"]).parent/"code-index-maintenance"if self.state==Path(CONFIG["state_root"])else self.state/"code-index-maintenance",inventory=getattr(self.runner,"maintenance_inventory",None),max_bytes=CONFIG.get("code_index_ledger_max_bytes",768*1024**2))
+        self.code_index_ledger=review_store_module.ledger_class(maintenance_engine)(Path(CONFIG["install_root"]).parent/"code-index-maintenance"if self.state==Path(CONFIG["state_root"])else self.state/"code-index-maintenance",inventory=getattr(self.runner,"maintenance_inventory",None),max_bytes=CONFIG.get("code_index_ledger_max_bytes",768*1024**2))
+        self.review_policy=review_policy_module.ReviewPolicy(self,release,ASSET_ROOT)
         self.runner.maintenance_snapshot_folder=self.code_index_ledger.folder/"snapshots"
         self.runner.maintenance_provider=self._code_index_snapshot
         self.runner.maintenance_activated=self._code_index_activated
@@ -2477,6 +2480,11 @@ class Broker:
             review=job["review_wait"]
             view["review_wait"]={k:review[k]for k in ("state","started_at","last_activity_at","expires_at")if k in review}
             view["review_wait"]["expiring_soon"]=0<review.get("expires_at",0)-time.time()<=60
+        if job.get("deferred_documentation"):
+            approval=job["deferred_documentation"]
+            try:self.review_policy.check_complete(job);documentation_state="complete"
+            except ValueError:documentation_state="pending"
+            view["deferred_documentation"]={"state":documentation_state,"approved_at":approval["approved_at"],"pending_paths":[]if documentation_state=="complete"else approval.get("pending_paths",[])[:32],"completion":approval.get("completion")}
         if "reason" in job:
             # Compiler failures are at the end of a bounded build transcript.
             view["reason"] = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
@@ -2896,8 +2904,8 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        review_modules={"scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","install.py"}
-        allowed={"v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","install.py"}
+        allowed={"v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
@@ -2951,13 +2959,20 @@ class Broker:
         self._save(job)
 
     def _code_index_authorize(self,lease,key):
-        """Reject maintenance when its live authority or isolated task has expired."""
+        """Fence live authority for open, sealed-prepared or approved deployed review sources."""
         with self.lock:
             self._lease(lease)
             item=self.work.get(key)
             prepared=self.jobs.get(lease.get("prepared_job_id"))
+            deployed=self.jobs.get(lease.get("deployed_job_id"))
             if not item:raise PermissionError("Maintenance task unavailable")
-            if item["status"]!="open":
+            if deployed:
+                approval=deployed.get("deferred_documentation",{}).get("binding",{})
+                if deployed.get("revoked") or deployed.get("ownership_id")!=key or item.get("job_id")!=deployed["job_id"] or deployed["status"]!="completed" or any(approval.get(k)!=deployed.get(k) for k in ("job_id","inputs_sha256","source_generation","ownership_epoch")):
+                    raise PermissionError("Deferred review generation changed")
+                state=self.scheduler.store.assert_owned(key,self.scheduler.owner(lease,lease["workspace"]),deployed["ownership_epoch"],[])
+                if state["generation"]!=deployed["source_generation"]:raise PermissionError("Deferred review source generation changed")
+            elif item["status"]!="open":
                 if not prepared or prepared.get("ownership_id")!=key or prepared["status"]!="needs_decision"or prepared["phase"]!="awaiting_prepared_reviews":raise PermissionError("Maintenance task froze; select its sealed prepared review candidate")
                 self.scheduler.store.assert_owned(key,self.scheduler.owner(lease,lease["workspace"]),prepared["ownership_epoch"],[])
                 if not self.scheduler.review_wait(prepared,activity=True,authority_until=lease["lease_until"]):raise PermissionError("Prepared review delegation expired or changed")
@@ -2969,7 +2984,9 @@ class Broker:
             job=self.jobs.get(job_id,{})
             ids={job_id,*job.get("batch_members",[])}
             keys=[key for key,item in self.work.items()if item.get("job_id")in ids]
-            return self.code_index_ledger.snapshot(keys)
+        # Never wait for a consistent multi-store cut while holding host authority.
+        keys.extend(self.review_policy.task_keys())
+        return self.code_index_ledger.snapshot(list(dict.fromkeys(keys)))
     def _code_index_reconcile(self):
         # Immutable active projection wins after restart or rollback. No task/private DB is read.
         """Restore the active immutable release projection after restart or rollback."""
@@ -3037,16 +3054,24 @@ class Broker:
                     job["finished_at"]=time.time();self._save(job);self.active_jobs.discard(identity);self.active=next(iter(self.active_jobs),None);self.job_cancellations.pop(identity,None)
             return {"job_id":identity,"status":job["status"],"ui_test_runtime":job.get("ui_test_runtime")}
 
-    def compact_index_history(self,request,args):
-        """Run lossless ledger maintenance only for its owner during an idle task-owned drain."""
+    # @code-index {"version":1,"feature":"partitioned-review-storage","aliases":["review ledger migration"],"purpose":"Authorize explicit lossless partitioning during an idle task-owned maintenance drain.","span_lines":40,"configuration":{"status":"not_applicable","rationale":"Idle migration, exact ownership and lossless storage switching are fixed host integrity gates."}}
+    def maintain_review_storage(self,request,args):
+        """Run explicit lossless storage maintenance during an idle task-owned drain."""
         if set(args)!={"action","task_id","request_id"}or not request["trusted"].get("local_caller"):
             raise PermissionError("Operator history maintenance required")
+        partition=args["action"]=="partition_review_storage"
         trusted=request["trusted"];workspace=request["workspace"]
         with self.deploy_lock,self.lock:
             self._incoming_lease(trusted)
             item=self.scheduler.item(args,trusted,workspace)
             owner=self.scheduler.owner(trusted,workspace)
-            receipt=self.scheduler.journal_path(owner,args["request_id"],"index-history")
+            legacy_receipt=self.scheduler.journal_path(owner,args["request_id"],"review-partition"if partition else"index-history")
+            folder=self.work_dir/"review-storage-requests"
+            if folder.is_symlink():raise PermissionError("Storage journal directory symlink")
+            folder.mkdir(mode=0o700,exist_ok=True)
+            # Storage housekeeping is not an ownership transition. A failed copy
+            # must retain its retry receipt without fencing unrelated source edits.
+            receipt=legacy_receipt if legacy_receipt.exists()else folder/legacy_receipt.name
             digest=hashlib.sha256(canonical(args)).hexdigest()
             if receipt.exists():
                 old=json.loads(receipt.read_bytes())
@@ -3058,15 +3083,19 @@ class Broker:
             def authorize():
                 """Keep maintenance bound to live host authority and held index ownership."""
                 self._incoming_lease(trusted)
-                self.scheduler.store.assert_owned(item["key"],owner,item["ownership_epoch"],["module:ability:Administrator/code_index"])
+                self.scheduler.store.assert_owned(item["key"],owner,item["ownership_epoch"],["module:broker"if partition else"module:ability:Administrator/code_index"])
             authorize()
             self.scheduler.write_record(receipt,{"digest":digest,"task_key":item["key"],"state":"pending","request_id":args["request_id"]})
-            result=self.code_index_ledger.compact_history(authorize)
+            result=(self.code_index_ledger.partition_storage(authorize)if partition else self.code_index_ledger.compact_history(authorize))
             self.scheduler.write_record(receipt,{"digest":digest,"task_key":item["key"],"state":"done","request_id":args["request_id"],"result":result})
             return result
 
+    def compact_index_history(self,request,args):
+        """Preserve the existing bounded history-maintenance entry point."""
+        return self.maintain_review_storage(request,args)
+
     def code_index_maintenance(self,args,trusted,workspace):
-        """Serve shared review reads or validated isolated-task mutations through broker authority."""
+        """Record private or approved immutable-release assertions without a publication lock."""
         # Private task records are independently source-bound. A stale published
         # projection can miss reuse, but matching hashes are still required to
         # inherit evidence; final publication reconciles and verifies the exact pair.
@@ -3093,17 +3122,29 @@ class Broker:
         item=self.work.get(key)
         prepared_id=args.get("prepared_job_id")
         prepared=self.jobs.get(prepared_id)if prepared_id is not None else None
+        deployed_id=args.get("deployed_job_id")
+        deployed=self.jobs.get(deployed_id)if deployed_id is not None else None
+        if deployed_id is not None and(prepared_id is not None or not trusted.get("local_caller")or not deployed or not self._owned(deployed,trusted,workspace)or deployed.get("ownership_id")!=key or item is None or item.get("job_id")!=deployed_id or deployed["status"]!="completed"or deployed.get("synchronization",{}).get("status")!="synchronized"or not deployed.get("deferred_documentation")):raise PermissionError("Owned approved deployed review candidate required")
         if prepared_id is not None and(not trusted.get("local_caller")or not prepared or not self._owned(prepared,trusted,workspace)or prepared.get("ownership_id")!=key or prepared["status"]!="needs_decision"or prepared["phase"]!="awaiting_prepared_reviews"):raise PermissionError("Owned sealed review candidate required")
-        if not item or item.get("mode")!="isolated"or(item["status"]!="open"and prepared is None):raise ValueError("Open task or sealed prepared review candidate required")
+        if not item or item.get("mode")!="isolated"or(item["status"]!="open"and prepared is None and deployed is None):raise ValueError("Open task or sealed prepared review candidate required")
         if trusted.get("lease_until",0)<=time.time():raise PermissionError("Maintenance authority expired")
         source=Path(prepared["prepared_assets"])/"v3"if prepared is not None else self.work_dir/"trees"/key/"v3"
+        if deployed is not None:source=ASSET_ROOT/"releases"/deployed_id/"v3"
         if source.is_symlink()or not source.is_dir():raise ValueError("Maintenance source unavailable")
+        if deployed is not None and not self.review_policy.allows(deployed,source.parent):raise PermissionError("Deployed documentation approval changed")
         if prepared is not None:release.verify_index(source.parent,prepared_id,prepared["inputs_sha256"])
         lease={"user_id":trusted["user_id"],"workspace":workspace,"lease_until":trusted.get("lease_until",0),"access_fingerprint":trusted.get("access_fingerprint"),"revoked":False}
+        lease["task_key"]=key
+        if deployed is not None:lease["deployed_job_id"]=deployed_id
         if prepared is not None:lease["prepared_job_id"]=prepared_id
-        args={k:v for k,v in args.items()if k!="prepared_job_id"}
+        args={k:v for k,v in args.items()if k not in {"prepared_job_id","deployed_job_id"}}
         lease_key=(trusted["user_id"],workspace,args.get("request_id"),uuid.uuid4().hex)
-        with self.lock:self.code_index_leases[lease_key]=lease
+        with self.lock:
+            if deployed is not None:
+                deployed["documentation_review_revision"]=deployed.get("documentation_review_revision",0)+1
+                deployed["deferred_documentation"].pop("completion",None)
+                self._save(deployed)
+            self.code_index_leases[lease_key]=lease
         context=getattr(self.runner,"job_context",None)
         previous=getattr(context,"job",None)if context is not None else None
         if context is not None and action=="sync":
@@ -3252,7 +3293,8 @@ class Broker:
             return self.code_index_maintenance(args,trusted,workspace)
         if name=="v3_cargo_task":return self.cargo_request(args,trusted,workspace)
         if name=="build_work"and args.get("action")=="prepare_ui_test_runtime":return self.provision_ui_test_runtime(request,args)
-        if name=="build_work"and args.get("action")=="compact_index_history":return self.compact_index_history(request,args)
+        if name=="build_work"and args.get("action")in self.review_policy.actions:return self.review_policy.handle(request,args)
+        if name=="build_work"and args.get("action")in {"compact_index_history","partition_review_storage"}:return self.maintain_review_storage(request,args)
         if name=="build_work"and args.get("action")in self.index_coordinator.actions:return self.index_coordinator.handle(request,args)
         if name=="build_work"and args.get("action")in self.ui_publication.recovery_actions:return self.ui_publication.recover(request,args)
         if name=="build_work"and args.get("action")=="ui_rollback_preview":
@@ -3434,7 +3476,8 @@ class Broker:
                         updated+=1
                 for job in self.jobs.values():
                     review_waiting=job.get("status")=="needs_decision"and job.get("phase")=="awaiting_prepared_reviews"
-                    if not self._owned(job, trusted, workspace) or(job["status"]not in ("queued","running")and not review_waiting):
+                    deferred_reviewing=job.get("status")=="completed"and bool(job.get("deferred_documentation"))and not job["deferred_documentation"].get("completion")
+                    if not self._owned(job, trusted, workspace) or(job["status"]not in ("queued","running")and not review_waiting and not deferred_reviewing):
                         continue
                     if incoming:
                         deadline, fingerprint = incoming

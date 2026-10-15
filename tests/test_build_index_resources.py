@@ -116,6 +116,10 @@ class MeasuredIndexExecutionTests(unittest.TestCase):
     def test_published_seed_mount_retains_its_receipt_release_basename(self):
         import json
         active=str(uuid.uuid4());assets=self.root/"assets";published=assets/"releases"/active;published.mkdir(parents=True)
+        source=published/"v3";source.mkdir();(source/"fixture.py").write_text("value = 1\n")
+        scanner=fixtures.host.maintenance_engine.load_scanner()
+        scanner.build_published(published,published/".code-index",active,"a"*64)
+        scanner.read_published(published,active)
         self.runner.inspect=lambda name:{"Image":"sha256:"+"f"*64}
         self.runner.current_asset_id=lambda:active
         observed=[]
