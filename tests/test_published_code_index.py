@@ -287,3 +287,30 @@ class PrivateCheckpointSeedTests(unittest.TestCase):
   with self.assertRaisesRegex(ValueError,"hash"):
    idx.build_published(candidate,candidate/".code-index",job,"c"*64,seed=previous,private_seeds=[cache])
   self.assertFalse((candidate/".code-index").exists())
+
+
+class SerializedIntegrityTests(unittest.TestCase):
+ def test_seeded_freelist_rewrite_commits_before_serialization(self):
+  import sqlite3
+  seed=sqlite3.connect(":memory:");seed.execute("CREATE TABLE values_test(id INTEGER PRIMARY KEY,body TEXT)")
+  seed.executemany("INSERT INTO values_test VALUES(?,?)",[(n,"before"*200)for n in range(4000)]);seed.commit()
+  conn=sqlite3.connect(":memory:");conn.deserialize(seed.serialize());seed.close()
+  conn.execute("DELETE FROM values_test");conn.executemany("INSERT INTO values_test VALUES(?,?)",[(n,"after"*200)for n in range(2000)])
+  result=idx.serialized_index(conn);conn.close();check=sqlite3.connect(":memory:");check.deserialize(result)
+  try:
+   self.assertEqual(check.execute("PRAGMA quick_check").fetchone()[0],"ok")
+   self.assertEqual(check.execute("SELECT count(*) FROM values_test").fetchone()[0],2000)
+   self.assertEqual(check.execute("SELECT body FROM values_test WHERE id=1999").fetchone()[0],"after"*200)
+  finally:check.close()
+
+ def test_hash_matching_but_corrupt_sqlite_cannot_activate(self):
+  import hashlib
+  case=PublishedTests();case.setUp()
+  try:
+   before,previous,_=case.stage(case.blob());rel.activate_assets(case.assets,before)
+   job,failed,manifest=case.stage(case.blob({"v3/ui/index.html":(420,b"<div>later</div>\n")}))
+   path=failed/".code-index/index.sqlite";data=bytearray(path.read_bytes());data[:16]=b"invalid database";path.write_bytes(data)
+   manifest["index_sha256"]=hashlib.sha256(data).hexdigest();(failed/".code-index/manifest.json").write_text(json.dumps(manifest))
+   with self.assertRaisesRegex(ValueError,"integrity"):rel.activate_assets(case.assets,job)
+   self.assertEqual(rel.current_asset_id(case.assets),before)
+  finally:case.tearDown()

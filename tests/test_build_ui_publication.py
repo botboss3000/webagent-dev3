@@ -175,6 +175,20 @@ class ConcurrentUIEntryTests(unittest.TestCase):
         active=self.runner.assets/"releases"/before
         self.assertEqual((active/"v3/ui/probe/a.css").read_text(),"body {}\n")
 
+    def test_legacy_ui_corrupt_index_restores_exact_predecessor(self):
+        import hashlib
+        before=self.runner.current_asset_id()
+        self.change("legacy-ui-failure","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        self.broker.scheduler.config["scheduler"]["concurrent_ui_preparation"]=False
+        self.runner.fail_verify_ui=True;job=self.finish("legacy-ui-failure");row=self.wait([job])[0]
+        self.assertEqual(row["status"],"uncertain",row.get("reason"));self.runner.fail_verify_ui=False
+        self.assertNotIn("preparation",self.broker.jobs[job])
+        failed=self.runner.assets/"releases"/job;path=failed/".code-index/index.sqlite";data=bytearray(path.read_bytes());data[:16]=b"invalid database";path.write_bytes(data)
+        meta=failed/".code-index/manifest.json";manifest=json.loads(meta.read_bytes());manifest["index_sha256"]=hashlib.sha256(data).hexdigest();meta.write_text(json.dumps(manifest))
+        result=self.recovery("legacy-ui-failure",job)
+        self.assertTrue(result["effects_reconciled"]);self.assertEqual(self.runner.current_asset_id(),before)
+        self.assertEqual(result,self.recovery("legacy-ui-failure",job))
+
     def test_restore_refuses_to_erase_a_newer_active_release(self):
         self.change("ui-failure-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
         self.runner.fail_verify_ui=True;job=self.finish("ui-failure-task");self.wait([job]);self.runner.fail_verify_ui=False

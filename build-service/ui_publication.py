@@ -148,6 +148,35 @@ class UIPublication:
 
     recovery_actions={"discard_prepared_release","restore_failed_ui"}
 
+    def legacy_recovery_binding(self,job,folder):
+        """Recover old UI receipts using their recorded container IDs/images and exact predecessor."""
+        import hashlib
+        before=self.broker._current_release_blob()
+        current=self.runtime();recorded=job.get("consumer_before",{})
+        if set(recorded)!={"api","loop"}or any({k:current[role][k]for k in ("id","image")}!=recorded[role]for role in recorded):
+            raise ValueError("Legacy runtime receipt binding changed")
+        bound=job.get("legacy_recovery_runtime",current)
+        if current!=bound:raise ValueError("Legacy recovery runtime changed")
+        predecessor=job.get("asset_previous")
+        manifest=self.release.verify_index(self.assets/"releases"/predecessor,predecessor,job["base_inputs_sha256"])
+        if self.validate(before)[0]!=manifest["candidate_sha256"]:raise ValueError("Legacy predecessor source changed")
+        baseline=folder/"publication-base.tar"
+        if not baseline.exists():
+            fd=os.open(baseline,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+            with os.fdopen(fd,"wb")as stream:stream.write(before);stream.flush();os.fsync(stream.fileno())
+            fd=os.open(folder,os.O_RDONLY|os.O_DIRECTORY)
+            try:os.fsync(fd)
+            finally:os.close(fd)
+        job["legacy_recovery_runtime"]=bound;self.broker._save(job)
+        failed=self.assets/"releases"/job["job_id"];index=failed/".code-index"
+        paths=[index/"manifest.json",index/"index.sqlite"]
+        if failed.is_symlink()or index.is_symlink()or any(p.is_symlink()or not p.is_file()for p in paths):raise ValueError("Legacy failed index path invalid")
+        if paths[0].stat().st_size>2*1024**2 or paths[1].stat().st_size>self.broker.code_index_ledger.scanner.MAX_DB_BYTES:raise ValueError("Legacy failed index exceeds bounds")
+        receipt=json.loads(paths[0].read_bytes());scanner=self.broker.code_index_ledger.scanner
+        # A corrupt index is the reason for restoring; require its exact hashed source/bytes, not readable tables.
+        if receipt.get("release_id")!=job["job_id"]or receipt.get("candidate_sha256")!=job["inputs_sha256"]or receipt.get("source_sha256")!=scanner.source_digest(failed)or receipt.get("index_sha256")!=hashlib.sha256(paths[1].read_bytes()).hexdigest():raise ValueError("Legacy failed source/index receipt changed")
+        return bound
+
     def recover(self,request,args):
         """Reconcile durable intent with exact effects before admitting another publication."""
         if set(args)!={"action","task_id","job_id","request_id"}or args.get("action")not in self.recovery_actions:
@@ -171,7 +200,9 @@ class UIPublication:
                 raise ValueError("Inactive uncertain publication intent required")
             state=self.broker.scheduler.ensure(item,trusted,workspace)
             self.broker.scheduler.store.assert_owned(item["key"],state["owner"],job["ownership_epoch"],[])
-            bound=job.get("preparation",{}).get("runtime_before")
+            folder=self.broker.state/job["job_id"]
+            legacy=job.get("publication_policy_version",0)==0 and job["operation"]=="ui_deploy" and args["action"]=="restore_failed_ui"
+            bound=self.legacy_recovery_binding(job,folder)if legacy else job.get("preparation",{}).get("runtime_before")
             if not bound or self.runtime()!=bound:raise ValueError("Runtime binding changed; explicit runtime reconciliation required")
             folder=self.broker.state/job["job_id"]
             baseline=folder/"publication-base.tar"
@@ -191,7 +222,7 @@ class UIPublication:
                 if job["operation"]!="ui_deploy"or any(not path.startswith("v3/ui/")for path in job.get("changed_paths",())):raise ValueError("Only retained-runtime UI activation can be restored")
                 # A retry may observe the pointer already restored by this same durable intent.
                 if active!=job["job_id"]and not(previous and active==predecessor):raise ValueError("Active pointer advanced; use a compensating release")
-                self.release.verify_index(self.assets/"releases"/job["job_id"],job["job_id"],job["inputs_sha256"])
+                if not legacy:self.release.verify_index(self.assets/"releases"/job["job_id"],job["job_id"],job["inputs_sha256"])
             job["publication_recovery"]={"digest":digest,"request_id":args["request_id"],"action":args["action"],"done":False}
             self.broker._save(job)
             if not discard:

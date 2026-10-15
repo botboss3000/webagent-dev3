@@ -1133,8 +1133,16 @@ def dispatch(conn,rootfd,name,args):
         rows=conn.execute("SELECT * FROM batches WHERE batch_id=?",(args["batch_id"],)).fetchall()
     else:rows=conn.execute("SELECT * FROM batches ORDER BY started_at DESC LIMIT 100").fetchall()
     return page([dict(row) for row in rows],args["offset"],args["limit"])
+def serialized_index(conn):
+    """Commit updated freelist pages before serializing a reusable SQLite image."""
+    conn.commit()
+    if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+        raise ValueError("Derived index integrity check failed")
+    return conn.serialize()
+
+
 def publish(conn,indexfd,key):
-    blob=conn.serialize()
+    blob=serialized_index(conn)
     if len(blob)>MAX_DB_BYTES:raise ValueError("Derived index publication exceeds limit")
     temp=key+"."+uuid.uuid4().hex+".tmp"
     tempfd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=indexfd)
@@ -1261,7 +1269,7 @@ def build_published(root, output, release_id, candidate_digest, maintenance=None
                           else "generated_minified" if path.name.endswith((".min.js", ".min.css"))
                           else "unsupported_suffix")
                 excluded.append({"path":rel, "reason":reason})
-        blob = conn.serialize()
+        blob = serialized_index(conn)
         if len(blob) > MAX_DB_BYTES:
             raise ValueError("Published index database bound exceeded")
         limitations = [dict(row) for row in conn.execute(
@@ -1305,6 +1313,15 @@ def read_published(root, expected_release=None):
         or any(manifest.get(k)!=0 for k in ("gaps","stale_count","unindexed_count"))
         or expected_release is not None and manifest.get("release_id")!=expected_release):
         raise ValueError("Published source/index binding mismatch")
+    check = sqlite3.connect(":memory:")
+    try:
+        check.deserialize(blob)
+        if check.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise ValueError("Published index integrity check failed")
+    except sqlite3.Error as exc:
+        raise ValueError("Published index integrity check failed") from exc
+    finally:
+        check.close()
     return blob, manifest
 
 
@@ -1341,7 +1358,7 @@ def private_index_blob(release):
         conn.commit()
         if conn.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("Private index projection is inconsistent")
-        private = conn.serialize()
+        private = serialized_index(conn)
         return private,manifest
     finally:
         conn.close()
