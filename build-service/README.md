@@ -469,3 +469,27 @@ closed; retry the original recovery request after resolving its exact blocker.
 UI-template-only plugin_deploy releases (UI files plus config/chat.json) use the
 same recovery with their normal consumer-adoption and engine-mode checks.
 Executable plugin changes are excluded from this UI recovery action.
+
+### Edited-waiter acquisition reconciliation
+
+An edited task waiting for claims is rejected before a new acquisition commits.
+Preserve its implementation and replan in a fresh task; acquisition never discards
+unpublished source to refresh the task.
+
+For a legacy reserve that committed ownership and then failed before refreshing
+an edited, previously empty waiter, the authenticated local operator may use
+build_work action reconcile_acquisition. Supply task_id, reserve_request containing
+the exact original reserve JSON, expected_inputs_sha256 from the preserved task,
+fresh expected_revision and expected_epoch, and a new stable request_id.
+Save that entire request before dispatch and reuse it exactly after uncertainty.
+
+Recovery requires the original pending request and committed receipt, matching
+owner/epoch/generation/scopes, an unpublished open draft, no unsettled execution
+or active reviews, and no refresh filesystem effects. It uses the normal audited
+claim-release transition to release exactly that acquisition and advance its epoch,
+then explicitly rejects replay of the obsolete reserve. It retains all source,
+the sealed baseline, and original acquisition evidence. The returned proof binds
+the preserved hashes and released scopes. A completed exact retry returns its
+original result and never releases subsequent claims. Changed inputs, ownership
+or partial refresh effects require separate reconciliation; this action neither
+refreshes the old draft nor transfers edits into a fresh task.

@@ -18,7 +18,7 @@ class Conflict(ValueError):
 # @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Source reservations and completion. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds; protected installation overrides at broker restart.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image"]}],"opportunities":[]}}
 class Scheduler:
     """Derive authority and scope from the broker; caller assertions never certify a release."""
-    actions={"create","resources","pause","resume","priority","reconcile","increase_memory","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover"}
+    actions={"create","resources","pause","resume","priority","reconcile","increase_memory","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover","reconcile_acquisition"}
     def __init__(self,broker,config):
         """Load reviewed coordination policy and open its private durable ownership store."""
         self.broker=broker;self.config=config
@@ -50,6 +50,114 @@ class Scheduler:
         root=Path(item["workspace_path"])
         compile_inputs=self.broker.runner.core_compile_inputs()if hasattr(self.broker.runner,"core_compile_inputs")else()
         return ownership.Components(root,compile_inputs,self.config.get('scheduler',{}).get('ui_file_reservations',False))
+    def waiter_changes(self,item):
+        """Compare application source to its sealed baseline; never modify either source or inspection data."""
+        tree=Path(item["workspace_path"]).parent
+        baseline=self.broker.scheduler_entries((tree/"baseline.tar").read_bytes())
+        current=self.broker.scheduler_entries(self.broker.scheduler_task_snapshot(tree))
+        return sorted(p for p in set(baseline)|set(current)if p.startswith("v3/")and not p.startswith("v3/data/")and baseline.get(p)!=current.get(p))
+
+    def require_clean_waiter(self,item,value):
+        """Reject an edited waiting draft before acquiring claims that require a source refresh."""
+        if value["state"]=="waiting"and value["requested"]and self.waiter_changes(item):
+            raise ValueError("Waiting task contains edits; preserve and replan before acquiring current source")
+
+    # @code-index {"version":1,"feature":"edited-acquisition-recovery","aliases":["stuck reservation","edited waiter"],"purpose":"Operator recovery preserves a dirty draft and compensates its exact committed acquisition; authority, ownership and retry bindings are invariants.","span_lines":80,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Recovery authority and exact acquisition/source binding are fixed safety invariants."}}
+    def reconcile_acquisition(self,args,trusted,workspace):
+        """Compensate one committed, pre-refresh edited-waiter acquisition without changing its draft.
+
+        Operator-only recovery binds the exact original request, committed receipt,
+        current ownership CAS and source digest. It releases only that acquisition's
+        claims, fences its epoch and settles both journals through durable retry.
+        Original SQLite acquisition evidence and all source/baseline bytes remain.
+        """
+        required={"action","task_id","reserve_request","expected_inputs_sha256","expected_revision","expected_epoch","request_id"}
+        if not trusted.get("local_caller")or set(args)!=required:
+            raise PermissionError("Exact local-operator acquisition recovery required")
+        original=args["reserve_request"]
+        if not isinstance(original,dict)or set(original)!={"action","task_id","paths","expected_revision","expected_epoch","request_id"}or original["action"]!="reserve"or original["task_id"]!=args["task_id"]:
+            raise ValueError("Exact original reserve request required")
+        if type(args["expected_revision"])is not int or type(args["expected_epoch"])is not int or not isinstance(args["expected_inputs_sha256"],str)or not re.fullmatch(r"[a-f0-9]{64}",args["expected_inputs_sha256"]):
+            raise ValueError("Current source and ownership binding required")
+        with self.broker.lock:
+            self.broker._incoming_lease(trusted)
+            item=self.item(args,trusted,workspace);owner=self.owner(trusted,workspace);key=item["key"]
+            path=self.journal_path(owner,args["request_id"],"acquisition-recovery-"+key)
+            original_path=self.journal_path(owner,original["request_id"],key)
+            digest=hashlib.sha256(ownership.canonical([owner,args]).encode()).hexdigest()
+            def read_journal(p):
+                """Read bounded existing broker evidence without following a substituted journal."""
+                import stat
+                fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+                try:
+                    meta=os.fstat(fd)
+                    if not stat.S_ISREG(meta.st_mode)or meta.st_nlink!=1 or meta.st_size>1024*1024:raise ValueError("Invalid acquisition recovery journal")
+                    with os.fdopen(fd,"rb",closefd=False)as stream:return json.loads(stream.read(1024*1024+1))
+                finally:os.close(fd)
+            record=read_journal(path)if path.exists()or path.is_symlink()else None
+            if record:
+                if record["digest"]!=digest:raise ValueError("Request ID reused")
+                if record["state"]=="done":return record["result"]
+            previous=read_journal(original_path)
+            original_digest=hashlib.sha256(ownership.canonical([owner,original]).encode()).hexdigest()
+            if previous["task_key"]!=key or previous["request_id"]!=original["request_id"]or previous["digest"]!=original_digest:
+                raise ValueError("Original acquisition binding differs")
+            transition="action-"+hashlib.sha256(ownership.canonical([owner,key,original["request_id"]]).encode()).hexdigest()
+            acquisition=self.store.receipt(transition)
+            before=previous["value"]
+            if not acquisition or acquisition.get("acquired")is not True or before["state"]!="waiting"or not before["requested"]or before["scopes"]or before["owner"]!=owner:
+                raise ValueError("Committed empty-waiter acquisition required")
+            committed=acquisition["task"]
+            if committed["id"]!=key or committed["owner"]!=owner or not committed["scopes"]:
+                raise ValueError("Committed acquisition identity differs")
+            release_token="acquisition-release-"+hashlib.sha256(ownership.canonical([owner,key,args["request_id"]]).encode()).hexdigest()[:40]
+            released=self.store.receipt(release_token)
+            if previous["state"]!="pending"and not(previous["state"]=="rejected"and previous.get("reconciled_by")==args["request_id"]and released is not None):
+                raise ValueError("Matching pending acquisition required")
+            pending=self.pending(key,except_path=path)
+            if pending not in (original["request_id"],None)or(pending is None and released is None):
+                raise ValueError("Another scheduler transition requires recovery")
+            if item.get("status")!="open"or item.get("job_id"):
+                raise ValueError("Unpublished open draft required")
+            if any(j.get("ownership_id")==key and j["status"]in {"queued","running","needs_decision","uncertain","interrupted"}for j in self.broker.jobs.values())or self.broker.code_index_leases:
+                raise ValueError("Reconcile execution and active reviews before acquisition recovery")
+            refresh=item.get("acquisition_refresh")
+            if refresh!={"revision":committed["revision"]}and not(released is not None and refresh is None):
+                raise ValueError("Matching pre-refresh acquisition required")
+            folder=self.broker.work_dir/"acquisitions"/key/str(committed["revision"])
+            if folder.is_symlink()or(folder.exists()and any(folder.iterdir())):
+                raise ValueError("Acquisition filesystem effects require separate reconciliation")
+            tree=Path(item["workspace_path"]).parent
+            source=self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree))
+            binding={"source_sha256":source,"baseline_sha256":hashlib.sha256((tree/"baseline.tar").read_bytes()).hexdigest(),
+                     "original_digest":original_digest,"acquisition_sha256":hashlib.sha256(ownership.canonical(acquisition).encode()).hexdigest()}
+            if source!=args["expected_inputs_sha256"]or not self.waiter_changes(item):
+                raise ValueError("Preserved edited draft source differs")
+            if record:
+                if record["binding"]!=binding:raise ValueError("Acquisition recovery source changed")
+            else:
+                current=self.store.get(key)
+                if current["revision"]!=args["expected_revision"]or current["epoch"]!=args["expected_epoch"]or any(current[k]!=committed[k]for k in ["id","owner","epoch","generation","scopes","requested"]):
+                    raise ValueError("Stale acquisition ownership binding")
+                record={"digest":digest,"state":"pending","request_id":args["request_id"],"task_key":key,"binding":binding}
+                self.write_record(path,record)
+            if released is None:
+                self.broker._incoming_lease(trusted)
+                released=self.store.release_scopes(key,owner,args["expected_revision"],args["expected_epoch"],committed["scopes"],"Reconcile committed edited-waiter acquisition; preserve draft and original receipt",release_token)
+            current=self.store.get(key)
+            if any(current[k]!=released[k]for k in ["id","owner","epoch","generation","scopes","requested"])or current["scopes"]:
+                raise ValueError("Released acquisition changed before reconciliation")
+            item.pop("acquisition_refresh",None)
+            item.update(ownership_epoch=current["epoch"],ownership_revision=current["revision"])
+            item.pop("ownership_inputs_sha256",None);self.broker._save_work()
+            if self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree))!=source or hashlib.sha256((tree/"baseline.tar").read_bytes()).hexdigest()!=binding["baseline_sha256"]:
+                raise ValueError("Draft changed during acquisition reconciliation")
+            self.write_record(original_path,{**previous,"state":"rejected","error":"Committed acquisition explicitly reconciled and released; replan in a fresh task","reconciled_by":args["request_id"]})
+            result={"task":current,"released_scopes":committed["scopes"],"source_preserved":True,**binding,"original_request_id":original["request_id"]}
+            self.write_record(path,{**record,"state":"done","result":result})
+            self.broker._start_next()
+            return result
+
     def refresh_waiter(self,item,value):
         """A queued writer starts from current published code while preserving its old draft for recovery."""
         pending=item.get("acquisition_refresh")
@@ -96,6 +204,7 @@ class Scheduler:
     def reserve(self,item,trusted,workspace,paths,request=None,expected=None):
         """Acquire before edits; failed expansion returns concrete blockers without changing source."""
         value=self.ensure(item,trusted,workspace);self.refresh_waiter(item,value);scopes=self.components(item).scopes(paths)
+        self.require_clean_waiter(item,value)
         if value["state"]not in {"waiting","owned"}:
             self.store.assert_owned(value["id"],value["owner"],item["ownership_epoch"],scopes)
             return value
@@ -382,6 +491,7 @@ class Scheduler:
         """Journal mutations so retries survive both ownership and filesystem transition crashes."""
         self.broker._incoming_lease(trusted)
         action=args.get("action")
+        if action=="reconcile_acquisition":return self.reconcile_acquisition(args,trusted,workspace)
         if action=="create":
             if set(args)-{"action","task_id","summary"}:raise ValueError("Unsupported creation arguments")
             return self.broker.handle({"name":"v3_build_work","arguments":{"action":"begin","task_id":args.get("task_id"),"summary":args.get("summary","Scheduler followup"),"mode":"isolated"},"trusted":trusted,"workspace":workspace})
@@ -490,6 +600,7 @@ class Scheduler:
         if action=="reserve":
             paths=args.get("paths")
             if not isinstance(paths,list)or not 1<=len(paths)<=128:raise ValueError("Bounded source paths required")
+            self.require_clean_waiter(item,value)
             result=self.store.acquire(value["id"],owner,revision,epoch,self.components(item).scopes(paths),request)
             if result["acquired"]:self.mark_waiter_refresh(item,value,result["task"])
             result["workspace_inputs_sha256"]=self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(Path(item["workspace_path"]).parent))

@@ -1,5 +1,5 @@
 """Prepared review leases retain ownership only for the exact authorized frozen candidate."""
-import hashlib,importlib.util,json,tempfile,types,unittest,uuid
+import hashlib,importlib.util,json,tempfile,types,unittest,uuid,time
 from pathlib import Path
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
@@ -7,6 +7,7 @@ def load(name):
     """Load the task's paired broker implementations; tests never access runtime state."""
     spec=importlib.util.spec_from_file_location("review_"+name,ROOT/"build-service"/(name+".py"));m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 scheduler=load("scheduler")
+import test_scheduler_broker as broker_fixtures
 class ReviewLeaseTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name);self.now=1000.;self.counter=0
@@ -99,4 +100,124 @@ class ReviewLeaseTests(unittest.TestCase):
         self.assertEqual(self.store.get(self.key)["state"],"owned")
     def test_ordinary_jobs_keep_existing_renewal(self):
         self.job["status"]="running";self.now+=301;self.s.housekeeping();self.assertEqual(self.store.get(self.key)["state"],"owned")
+class AcquisitionRecoveryTests(unittest.TestCase):
+    """Only fixture state is mutated; no application container or live broker is used."""
+    def setUp(self):
+        self.scheduler_patch=patch.object(broker_fixtures.fixtures.host,"scheduler_module",scheduler);self.scheduler_patch.start()
+        broker_fixtures.SchedulerBrokerTests.setUp(self)
+    def tearDown(self):
+        broker_fixtures.SchedulerBrokerTests.tearDown(self);self.scheduler_patch.stop()
+    call=broker_fixtures.SchedulerBrokerTests.call
+    begin=broker_fixtures.SchedulerBrokerTests.begin
+    action=broker_fixtures.SchedulerBrokerTests.action
+    write=broker_fixtures.SchedulerBrokerTests.write
+    def release(self,item):
+        """Release a fixture owner's current scopes through the normal public API."""
+        value=self.broker.scheduler.store.get(item["key"]);self.counter+=1
+        return self.call("build_work",{"action":"release_claims","task_id":item["task_id"],"scopes":value["scopes"],"reason":"Fixture phased ownership","expected_revision":value["revision"],"expected_epoch":value["epoch"],"request_id":"fixture-release-"+str(self.counter)})
+    def waiting(self):
+        """Preserve an edited released draft, then let it wait behind another engine owner."""
+        blocker=self.begin("recovery-blocker")
+        item=self.begin("edited-waiter");self.write(item,"README.md","preserved unpublished edit\n");self.release(item)
+        self.action(blocker["task_id"],"reserve",paths=["src/blocked.rs"])
+        result,args=self.action(item["task_id"],"reserve",paths=["crates/pilot/src/lib.rs"])
+        self.assertFalse(result["acquired"]);self.release(blocker)
+        return item,args
+    def stuck(self):
+        """Model the installed legacy commit-before-refresh ordering through real broker requests."""
+        item,_=self.waiting()
+        with patch.object(self.broker.scheduler,"require_clean_waiter",return_value=None):
+            with self.assertRaisesRegex(ValueError,"Waiting task contains edits"):
+                _,args=self.action(item["task_id"],"reserve",paths=["crates/pilot/src/lib.rs"])
+        # action() raised before returning; retain the exact deterministic request it sent.
+        current=self.broker.scheduler.store.get(item["key"])
+        args={"task_id":item["task_id"],"action":"reserve","request_id":"broker-fixture-"+str(self.counter),"expected_revision":current["revision"]-1,"expected_epoch":current["epoch"],"paths":["crates/pilot/src/lib.rs"]}
+        self.original=args;self.item=item
+        tree=Path(item["workspace_path"]).parent;self.source=self.broker.scheduler_task_snapshot(tree);self.baseline=(tree/"baseline.tar").read_bytes()
+        return item
+    def recovery(self,**changes):
+        """Bind one exact reserve payload to the current draft and ownership generation."""
+        value=self.broker.scheduler.store.get(self.item["key"])
+        return {"action":"reconcile_acquisition","task_id":self.item["task_id"],"reserve_request":self.original,"expected_inputs_sha256":self.broker.scheduler_digest(self.source),"expected_revision":value["revision"],"expected_epoch":value["epoch"],"request_id":"edited-acquisition-fixture-recovery",**changes}
+    def assert_source(self):
+        """Verify all retained bytes and the sealed baseline, not only the edited file."""
+        tree=Path(self.item["workspace_path"]).parent
+        self.assertEqual(self.broker.scheduler_task_snapshot(tree),self.source)
+        self.assertEqual((tree/"baseline.tar").read_bytes(),self.baseline)
+    def test_new_dirty_waiter_is_rejected_before_claim_commit(self):
+        item,_=self.waiting();value=self.broker.scheduler.store.get(item["key"])
+        with self.assertRaisesRegex(ValueError,"Waiting task contains edits"):
+            self.action(item["task_id"],"reserve",paths=["crates/pilot/src/lib.rs"])
+        current=self.broker.scheduler.store.get(item["key"])
+        self.assertEqual(current["scopes"],[]);self.assertEqual(current["revision"],value["revision"])
+        self.assertIsNone(self.broker.scheduler.pending(item["key"]))
+    def test_committed_acquisition_releases_and_preserves_every_source_byte(self):
+        item=self.stuck();args=self.recovery();before=self.broker.scheduler.store.get(item["key"])
+        result=self.call("build_work",args)
+        self.assertTrue(result["source_preserved"]);self.assertEqual(result["task"]["scopes"],[])
+        self.assertEqual(result["task"]["epoch"],before["epoch"]+1);self.assert_source()
+        self.assertNotIn("acquisition_refresh",item);self.assertIsNone(self.broker.scheduler.pending(item["key"]))
+        self.assertEqual(self.call("build_work",args),result)
+        with self.assertRaisesRegex(ValueError,"explicitly reconciled"):self.call("build_work",self.original)
+    def test_orphaned_owner_can_reconcile_with_a_fresh_cas(self):
+        self.stuck()
+        with self.broker.scheduler.store.transaction()as db:
+            value=self.broker.scheduler.store.get(self.item["key"],db);self.broker.scheduler.store.update(db,value,state="orphaned")
+        result=self.call("build_work",self.recovery());self.assertEqual(result["task"]["scopes"],[]);self.assert_source()
+    def test_stale_epoch_or_revision_does_not_release(self):
+        self.stuck()
+        for changes in [{"expected_revision":0},{"expected_epoch":99}]:
+            with self.assertRaisesRegex(ValueError,"Stale acquisition"):self.call("build_work",self.recovery(**changes))
+        self.assertTrue(self.broker.scheduler.store.get(self.item["key"])["scopes"]);self.assert_source()
+    def test_modified_original_request_is_not_a_recovery_capability(self):
+        self.stuck();original={**self.original,"paths":["src/another.rs"]}
+        with self.assertRaisesRegex(ValueError,"binding differs"):self.call("build_work",self.recovery(reserve_request=original))
+        self.assertTrue(self.broker.scheduler.store.get(self.item["key"])["scopes"])
+    def test_operator_and_current_authority_are_required(self):
+        self.stuck();self.trusted["local_caller"]=False;self.trusted["lease_until"]=time.time()+30
+        with self.assertRaises(PermissionError):self.call("build_work",self.recovery())
+        self.trusted["local_caller"]=True;self.trusted["lease_until"]=0
+        with self.assertRaisesRegex(ValueError,"authorization lease required"):self.call("build_work",self.recovery())
+        self.assertTrue(self.broker.scheduler.store.get(self.item["key"])["scopes"])
+    def test_source_change_refuses_release_without_overwriting_the_draft(self):
+        self.stuck();(Path(self.item["workspace_path"])/"README.md").write_text("external fixture mutation\n")
+        with self.assertRaisesRegex(ValueError,"source differs"):self.call("build_work",self.recovery())
+        self.assertTrue(self.broker.scheduler.store.get(self.item["key"])["scopes"])
+    def test_started_filesystem_refresh_requires_separate_reconciliation(self):
+        self.stuck();current=self.broker.scheduler.store.get(self.item["key"]);folder=self.broker.work_dir/"acquisitions"/self.item["key"]/str(current["revision"])
+        (folder/"candidate.tar").write_bytes(b"fixture capture")
+        with self.assertRaisesRegex(ValueError,"filesystem effects"):self.call("build_work",self.recovery())
+        self.assertTrue(self.broker.scheduler.store.get(self.item["key"])["scopes"]);self.assert_source()
+    def test_running_or_uncertain_execution_prevents_release(self):
+        self.stuck();self.broker.jobs["fixture-job"]={"ownership_id":self.item["key"],"status":"uncertain"}
+        with self.assertRaisesRegex(ValueError,"Reconcile execution"):self.call("build_work",self.recovery())
+        self.broker.jobs.clear();self.assert_source()
+    def test_crash_after_ownership_commit_reuses_the_compensating_receipt(self):
+        self.stuck();args=self.recovery();original=self.broker._save_work
+        with patch.object(self.broker,"_save_work",side_effect=RuntimeError("fixture crash after release")):
+            with self.assertRaisesRegex(RuntimeError,"fixture crash"):self.call("build_work",args)
+        released=self.broker.scheduler.store.get(self.item["key"]);self.assertEqual(released["scopes"],[])
+        result=self.call("build_work",args);self.assertEqual(result["task"]["epoch"],released["epoch"]);self.assert_source()
+    def test_crash_after_original_settlement_finishes_the_same_recovery(self):
+        self.stuck();args=self.recovery();writer=self.broker.scheduler.write_record
+        def fail_final(path,value):
+            if value.get("state")=="done"and value.get("request_id")==args["request_id"]:raise RuntimeError("fixture final receipt crash")
+            return writer(path,value)
+        with patch.object(self.broker.scheduler,"write_record",side_effect=fail_final):
+            with self.assertRaisesRegex(RuntimeError,"final receipt crash"):self.call("build_work",args)
+        released=self.broker.scheduler.store.get(self.item["key"])
+        result=self.call("build_work",args);self.assertEqual(result["task"]["epoch"],released["epoch"]);self.assert_source()
+    def test_done_replay_never_releases_subsequent_claims(self):
+        self.stuck();args=self.recovery();result=self.call("build_work",args)
+        self.action(self.item["task_id"],"reserve",paths=["src/later.rs"])
+        self.assertEqual(self.call("build_work",args),result)
+        self.assertIn("module:engine",self.broker.scheduler.store.get(self.item["key"])["scopes"])
+    def test_new_request_payload_cannot_reuse_a_completed_recovery_id(self):
+        self.stuck();args=self.recovery();self.call("build_work",args)
+        with self.assertRaisesRegex(ValueError,"Request ID reused"):self.call("build_work",{**args,"expected_epoch":99})
+    def test_fresh_integration_task_can_acquire_after_recovery(self):
+        self.stuck();self.call("build_work",self.recovery());fresh=self.begin("fresh-integration")
+        result,_=self.action(fresh["task_id"],"reserve",paths=["crates/pilot/src/lib.rs"])
+        self.assertTrue(result["acquired"]);self.assert_source()
+
 if __name__=="__main__":unittest.main()
