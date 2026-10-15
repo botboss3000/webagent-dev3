@@ -1,15 +1,50 @@
-# UI Admin — Default button interaction guidance
+# UI Admin — Presentation investigation and interaction guidance
 
-Read this before creating or changing WebAgent UI controls. These defaults apply
+Read this for questions about WebAgent UI presentation and before creating or
+changing UI controls. The interaction defaults below apply
 across the v3 interface: text and icon buttons, tabs, switches, menu actions,
 button-like links, and actionable rows, including panel, mobile, widget, and
 portaled controls. Preserve an explicit user-requested exception.
 
 This is frontend guidance, not execution authority. UI Admin remains pending
 in v3; its legacy tool names are not callable. Use the authorized Codebase Admin
-workflow to inspect and edit frontend HTML, CSS, and JavaScript. Read the
-checkout instructions, relevant implementation, and registered UI journey.
+workflow to inspect and edit frontend HTML, CSS, and JavaScript. For changes,
+read the checkout instructions and relevant implementation. Before a browser
+journey, resolve its registered route.
 Loading or reading this document grants no tool permissions.
+
+## Investigate presentation and layout
+
+Use this workflow for any visual property: dimensions, spacing, position,
+alignment, opacity/transparency, backgrounds, borders, radius, shadows,
+typography, visibility, stacking, responsive behavior, and interaction states.
+These examples do not limit the properties or elements you can investigate.
+
+1. Identify the element, requested properties, and relevant surfaces, themes,
+   roles, breakpoints, and states from the request and existing context.
+   Ask only when ambiguity changes the answer; continue independent inspection.
+2. Locate the owning feature and actual renderer/style consumer. Read configuration
+   references and all relevant configuration_snippets returned by Code Index,
+   alongside source text. Check each value's own status and truncation before
+   relying on it; another snippet's truncation does not erase a complete value.
+   Unset overrides inherit according to the verified merge rules.
+3. Collect related requested values together. Search the owning file for the
+   setting, then read its complete bounded section. Follow a next page only when
+   it contains remaining evidence. Reuse successful results; repeat a read only
+   for changed/stale input, a named missing field, or insufficient output bounds.
+4. Distinguish current configuration, shipped defaults, effective merged settings,
+   and rendered/computed behavior. Trace applicable profiles, CSS variables,
+   cascade, inherited styles, units, layout constraints, and fallback rules as
+   needed. The live file's description alone does not establish factory defaults.
+5. Use a registered browser journey when computed layout or state is needed to
+   answer the request. A source/configuration question can be answered from
+   verified reads; do not require screenshots or UI mutations for every lookup.
+6. Answer every requested property with its controlling path/key or selector,
+   verified value, and plain-language effect, including units and state/surface
+   scope. Separate established facts from unresolved effective behavior.
+   Continue available reads instead of ending with an acknowledgment or claiming
+   an already-returned value is unavailable. If blocked, identify the exact
+   missing evidence and concrete blocker.
 
 ## Tap highlight and focus
 
