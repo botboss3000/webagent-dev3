@@ -20,6 +20,30 @@
         "enabled": false,
         "duration_ms": 140
       }
+    },
+    "message_bubbles": {
+      "user": {
+        "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing values use built-in defaults; radius_px is an optional per-role all-corners fallback.",
+        "padding_top_px": 10,
+        "padding_right_px": 14,
+        "padding_bottom_px": 4,
+        "padding_left_px": 14,
+        "radius_top_left_px": 14,
+        "radius_top_right_px": 14,
+        "radius_bottom_right_px": 14,
+        "radius_bottom_left_px": 14
+      },
+      "agent": {
+        "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing values use built-in defaults; radius_px is an optional per-role all-corners fallback.",
+        "padding_top_px": 10,
+        "padding_right_px": 14,
+        "padding_bottom_px": 4,
+        "padding_left_px": 4,
+        "radius_top_left_px": 14,
+        "radius_top_right_px": 14,
+        "radius_bottom_right_px": 14,
+        "radius_bottom_left_px": 14
+      }
     }
   },
   "chat_desktop": {},
