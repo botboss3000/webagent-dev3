@@ -121,6 +121,3 @@
 
 .chat-activity-wrapper[hidden]{display:none!important}
 @media(prefers-reduced-motion:reduce){.chat-pill.thinking .chat-activity-bar{animation:none}#chat-activity-bar{transition:none}}
-
-/* Disposable broker concurrency acceptance; no rendered style changes. */
-:root { --wa-concurrency-1: verified; }
