@@ -369,3 +369,15 @@ withdraws only the background descriptor; its exact sealed interface2/0.2.0
 artifact f988bf2e438d716293d67f336438bdbd508e34a553ddc73eeaf4c6aa96cfb3de
 is preserved for supported verified reuse. Three retained-input/manual-control
 and selective restoration checks remain pending.
+
+
+Withdrawal cb791363-67ca-47ce-bd98-996ca9bf1c1e completed through
+plugin_deploy with verified unchanged boot/context artifacts. Exact commit
+432249f0f67f4cebe1b2fb5d49d883348a64e2b1 records descriptor removal and its
+required feature-map target removal. API/loop/gate IDs, images and core hashes
+remained unchanged; both catalog adoptions matched and the old background
+process retired. Three accepted inputs retained exact public component pauses
+and zero replies; explicit manual pause/cancel removed markers and stayed fenced.
+Restoration reinstates the exact interface2/0.2.0 sealed descriptor, verified
+artifact pin and original feature map. Selective restoration and final fixture
+cleanup remain pending; ownership renewal remains active.
