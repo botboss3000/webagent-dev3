@@ -5,7 +5,15 @@ use std::{collections::BTreeMap, path::{Path, PathBuf}, io::Write};
 use crate::workflow;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Scheduler { #[serde(default)] pub max_active_runs:usize, pub max_unresolved_runs:usize, pub poll_interval_ms:u64, pub recovery_interval_ms:u64 }
+pub struct Scheduler {
+ #[serde(default)] pub max_active_runs:usize,
+ pub max_unresolved_runs:usize, pub poll_interval_ms:u64, pub recovery_interval_ms:u64,
+ /// Background fallback only; task hints and earlier lease deadlines still wake immediately.
+ #[serde(default="default_background_rescan_interval_ms")]
+ pub background_rescan_interval_ms:u64,
+}
+/// Existing runtime JSON keeps the deployed five-second default without a rewrite.
+fn default_background_rescan_interval_ms()->u64 {webagent_background_contracts::DEFAULT_RESCAN_INTERVAL_MS}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Context {
@@ -50,11 +58,12 @@ pub struct Workflow { pub max_turns:u64, pub max_attempts:u64, pub max_publicati
 #[serde(deny_unknown_fields)]
 pub struct Config { pub schema_version:u32, pub scheduler:Scheduler, pub context:Context, pub cache:Cache, #[serde(default)] pub tools:Tools, pub workflow:Workflow }
 // Bootstrap only. Once present, the validated data file is the sole authority.
-impl Default for Config { fn default()->Self { Self {schema_version:2,scheduler:Scheduler {max_active_runs:0,max_unresolved_runs:200,poll_interval_ms:300,recovery_interval_ms:10000},context:Context {max_context_bytes:262144,model_profiles:BTreeMap::new()},cache:Cache {document_budget_bytes:67108864,context_budget_bytes:16777216},tools:Tools::default(),workflow:Workflow {max_turns:50,max_attempts:3,max_publication_bytes:262144,modules:BTreeMap::new()}} } }
+impl Default for Config { fn default()->Self { Self {schema_version:2,scheduler:Scheduler {max_active_runs:0,max_unresolved_runs:200,poll_interval_ms:300,recovery_interval_ms:10000,background_rescan_interval_ms:default_background_rescan_interval_ms()},context:Context {max_context_bytes:262144,model_profiles:BTreeMap::new()},cache:Cache {document_budget_bytes:67108864,context_budget_bytes:16777216},tools:Tools::default(),workflow:Workflow {max_turns:50,max_attempts:3,max_publication_bytes:262144,modules:BTreeMap::new()}} } }
 impl Config {
  pub fn policy(&self)->Result<workflow::Policy> { workflow::Policy::resolve(Some(&serde_json::json!({"schema_version":1,"max_turns":self.workflow.max_turns,"max_attempts":self.workflow.max_attempts,"max_publication_bytes":self.workflow.max_publication_bytes,"modules":self.workflow.modules,"max_context_bytes":self.context.max_context_bytes}))) }
  pub fn apply_policy(&mut self,p:&workflow::Policy) { self.context.max_context_bytes=p.max_context_bytes;self.workflow=Workflow {max_turns:p.max_turns,max_attempts:p.max_attempts,max_publication_bytes:p.max_publication_bytes,modules:p.modules.clone()}; }
  pub fn validate(&self)->Result<()> { self.policy()?;
+ if self.scheduler.background_rescan_interval_ms==0 {bail!("Background rescan interval must be positive");}
  // MODEL-PROFILE-VALIDATION: reject invalid estimates before any provider call.
  for (key,p) in &self.context.model_profiles {
   if self.context.model_profiles.len()>128 || key.len()>256 || !key.contains('/') || p.context_tokens==0 || p.context_tokens>10_000_000 || p.output_reserve_tokens>=p.context_tokens || !(1..=8).contains(&p.bytes_per_token) {bail!("Invalid model budget profile");}
@@ -153,5 +162,34 @@ impl Config {
   assert_eq!(context.ceiling(&luna).unwrap(),18_000);
   context.max_context_bytes=4096;
   assert_eq!(context.ceiling(&luna).unwrap(),4096);
+ }
+}
+
+#[cfg(test)] mod background_rescan_tests {
+ use super::*;
+ /// Legacy schema-two files preserve their values and default only the newly absent setting.
+ #[test] fn absent_interval_defaults_without_rewriting_json() {
+  let dir=tempfile::tempdir().unwrap();let path=dir.path().join("loop-runtime.json");
+  let mut value=serde_json::to_value(Config::default()).unwrap();
+  value["scheduler"].as_object_mut().unwrap().remove("background_rescan_interval_ms");
+  value["scheduler"]["poll_interval_ms"]=serde_json::json!(700);
+  let original=serde_json::to_vec(&value).unwrap();std::fs::write(&path,&original).unwrap();
+  let config=Config::read(&path).unwrap();
+  assert_eq!(config.scheduler.background_rescan_interval_ms,5000);
+  assert_eq!(config.scheduler.poll_interval_ms,700);assert_eq!(std::fs::read(path).unwrap(),original);
+ }
+ /// Every positive u64 interval is representable by chunked host waiting.
+ #[test] fn whole_positive_milliseconds_have_no_policy_ceiling() {
+  for interval in [1,250,5000,15000,u64::MAX] {
+   let mut config=Config::default();config.scheduler.background_rescan_interval_ms=interval;
+   config.validate().unwrap();
+  }
+  let mut config=Config::default();config.scheduler.background_rescan_interval_ms=0;
+  assert!(config.validate().is_err());
+  for invalid in [serde_json::json!(-1),serde_json::json!(1.5),serde_json::json!("250"),serde_json::Value::Null] {
+   let mut value=serde_json::to_value(Config::default()).unwrap();
+   value["scheduler"]["background_rescan_interval_ms"]=invalid;
+   assert!(serde_json::from_value::<Config>(value).is_err());
+  }
  }
 }

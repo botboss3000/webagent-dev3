@@ -25,7 +25,7 @@ backend change is warranted by the reported busy-loop hypothesis.
 | Context input/accounting/compaction safety and DTOs | shared-contracts | webagent-context-contracts library | Stable shared policy and host validation; changes rebuild actual consumers | Extracted; full workspace suite and optimized foundation linked/live release verified |
 | Context assembly algorithm | engine-loop | webagent-context-assembly library | Replaceable implementation; live core excludes this dependency | Extracted; baseline linked/live equivalence verified; compatible live 0.1.1 independently published |
 | Context service | engine-loop | webagent-context-service executable, one supervised process per execution descriptor generation | Independent live updates over inherited private pipes | Real confinement, host integration, replacement, withdrawal and restored retained work verified |
-| Background planning contracts | shared-contracts | webagent-background-contracts version-1 library | Bounded metadata and independent host validation | Deployed; full workspace and optimized equivalence verified |
+| Background planning contracts | shared-contracts | webagent-background-contracts version-2 library | Bounded metadata and independent host validation | Deployed; full workspace and optimized equivalence verified |
 | Background selection policy | engine-loop | webagent-background-dispatch library | Independent implementation replacement, linked stable calls | Deployed; paired CPU/claim measurements and compatible 0.1.1 replacement verified |
 | Background service transport | engine-loop | webagent-background-service over reusable webagent-engine-service | Confined private pipes without host authority | Strict withdrawal, retained-input pause, selective restoration and process reuse verified |
 | Boot recovery DTOs | shared-contracts | webagent-boot-contracts version-1 library | Bounded metadata with independent host validation | Deployed; shared contract paths require coordinated publication |
@@ -317,3 +317,34 @@ source receipts are retained under build-jobs, operator evidence under
 The final source owner closes only after healthy publication, exact commit,
 all affected published reviews current, fixture cleanup and restored disk-guard
 timer state. Historical pending entries above are superseded by this evidence.
+
+
+### Configurable background recovery cadence, 2026-10-15
+
+The host reads scheduler.background_rescan_interval_ms from the data-root
+config/loop-runtime.json. Missing fields retain the 5000 ms bootstrap default;
+explicit values accept every positive u64 whole-millisecond interval without a
+five-second ceiling. Source publication preserves saved runtime configuration.
+Typed loop-settings and generic configuration writes emit wake hints; scheduler
+file adoption emits another hint after installing the new runtime value.
+Hints, worker completion, cancellation and nearer foreign lease deadlines retain
+priority. The existing component-failure cooldown remains a separate earlier
+retry, including expiry across an availability check.
+
+The metadata-only background contract is version 2 and carries the host's
+effective interval. The pure library implementation is 0.2.0; its reusable
+service wrapper and linked direct calls share that contract. Permissions,
+credentials, encrypted persistence, leases and run authority remain in the host.
+Individual timer chunks are bounded internally without triggering intermediate
+storage scans or imposing a configuration ceiling. A shared-contract change
+requires coordinated publication; it cannot be certified as a compatible
+service-only replacement. Cargo package versions and dependency lock are unchanged.
+
+Progress: isolated checked implementation applied. Focused Rust check
+515a79df-214f-47e0-8b30-d4388a7c0400 passed 29 selected tests on unchanged
+inputs, including timer adoption, configuration validation, failure retry and
+retained-input restoration. Eighteen broker registration/closure/retention tests
+passed. Full release verification and transported contract equivalence remain
+pending. Deployment, live adoption/lifecycle acceptance and fresh 250/5000/15000
+ms CPU/latency measurements remain pending; historical measurements above do not
+establish the performance of this revision.

@@ -107,6 +107,7 @@ pub(crate) async fn put_config(State(app):State<App>,Path(id):Path<String>,Json(
     Ok(true)
     })()?;
     if !saved{return Err(conflict("Configuration changed; reload before saving"));}
+    if id=="loop_runtime"{crate::wake::notify(&app).await;}
     Ok(Json(json!({"id":id,"digest":digest(value),"restart_required":false})))
 }
 /// Report only catalog identities and bounded API/loop adoption receipts.
@@ -130,5 +131,25 @@ pub(crate) async fn publication(State(app):State<App>)->Api{
   value["scheduler"]["max_active_runs"]=json!(999);
   assert!(put_config(State(app.clone()),Path("loop_runtime".into()),Json(json!({"expected_digest":result["digest"],"config":value}))).await.is_err());
   assert_eq!(get_config(State(app),Path("loop_runtime".into())).await.unwrap().0["digest"],result["digest"]);
+ }
+}
+
+#[cfg(test)] mod background_interval_tests {
+ use super::*;
+ /// The generic saved-file path emits the same adoption hint and rejects invalid timing.
+ #[tokio::test] async fn generic_interval_save_notifies_and_preserves_invalid_input() {
+  let (_root,app)=crate::runtime_tests::fixture().await;
+  let before=get_config(State(app.clone()),Path("loop_runtime".into())).await.unwrap().0;
+  let mut value=before["config"].clone();
+  value["scheduler"]["background_rescan_interval_ms"]=json!(15000);
+  let hints=crate::wake::subscribe();
+  let saved=put_config(State(app.clone()),Path("loop_runtime".into()),Json(json!({
+   "expected_digest":before["digest"],"config":value}))).await.unwrap().0;
+  assert!(hints.has_changed().unwrap());
+  assert_eq!(get_config(State(app.clone()),Path("loop_runtime".into())).await.unwrap().0["config"],value);
+  value["scheduler"]["background_rescan_interval_ms"]=json!(0);
+  assert!(put_config(State(app.clone()),Path("loop_runtime".into()),Json(json!({
+   "expected_digest":saved["digest"],"config":value}))).await.is_err());
+  assert_eq!(get_config(State(app),Path("loop_runtime".into())).await.unwrap().0["digest"],saved["digest"]);
  }
 }

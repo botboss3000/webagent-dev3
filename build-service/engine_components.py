@@ -19,7 +19,9 @@ def descriptor(path):
     identity=value.get("id");registered=REGISTRY.get(identity)
     if registered is None:raise ValueError("Unsupported engine identity")
     binary=registered["binary"]
-    expected={"schema_version":1,"id":identity,"group":"engine-loop","interface_version":1,"operation":registered["operation"],"modes":["live","linked"],"runtime_requirements":[],"executable":"artifact/"+binary}
+    interface=value.get("interface_version")
+    if interface not in ((1,2)if identity=="background-dispatch"else(1,)):raise ValueError("Unsupported engine interface")
+    expected={"schema_version":1,"id":identity,"group":"engine-loop","interface_version":interface,"operation":registered["operation"],"modes":["live","linked"],"runtime_requirements":[],"executable":"artifact/"+binary}
     if set(value)-set(expected)-{"implementation_version","build","limits","artifact_sha256"}or type(value.get("schema_version"))is not int or type(value.get("interface_version"))is not int:raise ValueError("Engine contract fields")
     if any(value.get(k)!=v for k,v in expected.items()):raise ValueError("Unsupported engine contract")
     if not isinstance(value.get("implementation_version"),str)or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+",value["implementation_version"]):raise ValueError("Engine implementation version")

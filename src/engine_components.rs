@@ -26,7 +26,7 @@ fn valid_id(id:&str)->bool {!id.is_empty()&&id.len()<=64&&id.bytes().all(|c|c.is
 impl Descriptor {
  /// Only reviewed fixed interfaces and confined build recipes may enter the engine catalog.
  pub(crate) fn validate(&self)->Result<()> {
-  if self.schema_version!=1||!valid_id(&self.id)||self.interface_version!=1||!matches!(self.operation.as_str(),"context.prepare"|"background.plan"|"boot.plan")
+  if self.schema_version!=1||!valid_id(&self.id)||self.interface_version!=if self.operation=="background.plan"{webagent_background_contracts::INTERFACE_VERSION}else{1}||!matches!(self.operation.as_str(),"context.prepare"|"background.plan"|"boot.plan")
    ||!valid_id(&self.group)||self.implementation_version.is_empty()||self.implementation_version.len()>64
    ||self.modes!=["live","linked"]||self.runtime_requirements.len()>16||self.runtime_requirements.iter().any(|id|!valid_id(id))
    ||self.executable!=format!("artifact/{}",self.build.package)
@@ -97,7 +97,7 @@ pub(crate) fn catalog()->Result<Arc<Catalog>>{
  let Some(root)=live_assets::published_root() else {
   let descriptor:Descriptor=serde_json::from_value(json!({"schema_version":1,"id":"context-assembly","group":"engine-loop","interface_version":1,"implementation_version":"0.1.0","operation":"context.prepare","modes":["live","linked"],"runtime_requirements":[],"build":{"package":"webagent-context-service","source_inputs":["crates/context-service","crates/context-assembly","crates/context-contracts","Cargo.toml","Cargo.lock","config/context-compaction.json"],"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/webagent-context-service","limits":{"max_request_bytes":16777216,"max_response_bytes":16777216,"timeout_ms":30000,"max_concurrency":1}}))?;
   descriptor.validate()?;
-  return Ok(Arc::new(Catalog{revision:"embedded".into(),root:None,entries:BTreeMap::from([(CONTEXT.into(),descriptor),(BACKGROUND.into(),serde_json::from_value(json!({"schema_version":1,"id":"background-dispatch","group":"engine-loop","interface_version":1,"implementation_version":"0.1.0","operation":"background.plan","modes":["live","linked"],"runtime_requirements":[],"build":{"package":"webagent-background-service","source_inputs":["crates/background-service","crates/background-dispatch","crates/background-contracts","crates/engine-service","Cargo.toml","Cargo.lock"],"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/webagent-background-service","limits":{"max_request_bytes":65536,"max_response_bytes":65536,"timeout_ms":1000,"max_concurrency":1}}))?)]),withdrawn:Default::default()}));
+  return Ok(Arc::new(Catalog{revision:"embedded".into(),root:None,entries:BTreeMap::from([(CONTEXT.into(),descriptor),(BACKGROUND.into(),serde_json::from_value(json!({"schema_version":1,"id":"background-dispatch","group":"engine-loop","interface_version":2,"implementation_version":"0.2.0","operation":"background.plan","modes":["live","linked"],"runtime_requirements":[],"build":{"package":"webagent-background-service","source_inputs":["crates/background-service","crates/background-dispatch","crates/background-contracts","crates/engine-service","Cargo.toml","Cargo.lock"],"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/webagent-background-service","limits":{"max_request_bytes":65536,"max_response_bytes":65536,"timeout_ms":1000,"max_concurrency":1}}))?)]),withdrawn:Default::default()}));
  };
  static CACHE:OnceLock<StdMutex<(Option<PathBuf>,Option<Arc<Catalog>>) >>=OnceLock::new();
  let mut cache=CACHE.get_or_init(||StdMutex::new((None,None))).lock().unwrap_or_else(|e|e.into_inner());
@@ -231,7 +231,7 @@ async fn background_smoke()->Result<Vec<Value>> {
  #[cfg(feature="live-context")]let mut pid=None;
  let mut cases=Vec::new();
  for time in [100,101] {
-  let input=Request{version:1,now:time,slots:2,tasks:vec![Task{state:State::Queued,active:false,lease_until:0},Task{state:State::Running,active:false,lease_until:101},Task{state:State::Completed,active:false,lease_until:0}]};
+  let input=Request{version:2,now:time,slots:2,rescan_interval_ms:15000,tasks:vec![Task{state:State::Queued,active:false,lease_until:0},Task{state:State::Running,active:false,lease_until:101},Task{state:State::Completed,active:false,lease_until:0}]};
   #[cfg(feature="linked-context")]let plan=webagent_background_dispatch::plan(&input)?;
   #[cfg(feature="live-context")]let plan:Plan={
    let reply=process.call("offline-background-smoke",&input,&CancellationToken::new()).await?;
@@ -241,7 +241,7 @@ async fn background_smoke()->Result<Vec<Value>> {
    serde_json::from_value(reply["plan"].clone())?
   };
   webagent_background_contracts::validate_plan(&input,&plan)?;
-  let expected=Plan{version:1,dispatch:if time==100{vec![0]}else{vec![0,1]},followup:vec![2],retry_ms:if time==100{1000}else{5000}};
+  let expected=Plan{version:2,dispatch:if time==100{vec![0]}else{vec![0,1]},followup:vec![2],retry_ms:if time==100{1000}else{15000}};
   if plan!=expected{anyhow::bail!("Background smoke policy mismatch");}
   cases.push(serde_json::to_value(plan)?);
  }
@@ -673,4 +673,30 @@ mod tests {
   }
  }
 
+}
+
+/// Preserve the existing service-health recovery deadline independently of idle configuration.
+pub(crate) fn background_failure_retry_ms()->Option<u64> {
+ let guard=BACKGROUND_FAILURE_UNTIL.get_or_init(||StdMutex::new(None)).lock().unwrap_or_else(|e|e.into_inner());
+ guard.and_then(|deadline|deadline.checked_duration_since(std::time::Instant::now()))
+  .map(|remaining|remaining.as_millis().max(1).min(u64::MAX as u128)as u64)
+}
+#[cfg(test)] mod background_retry_tests {
+ use super::*;
+ /// A silent workload still recovers after the existing cooldown when healthy rescans are infrequent.
+ #[tokio::test] async fn failure_cooldown_wakes_a_long_interval_without_a_hint() {
+  let (_root,app)=crate::runtime_tests::fixture().await;
+  app.runtime.write().await.scheduler.background_rescan_interval_ms=60000;
+  sqlx::query("DROP TABLE IF EXISTS background_task_index").execute(&app.store.pool).await.unwrap();
+  *BACKGROUND_FAILURE_UNTIL.get_or_init(||StdMutex::new(None)).lock().unwrap()=
+   Some(std::time::Instant::now()+Duration::from_millis(200));
+  let service=tokio::spawn(crate::background_tasks::service(app.clone()));
+  let exists=||async {sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM sqlite_master WHERE name='background_task_index'")
+   .fetch_one(&app.store.pool).await.unwrap()>0};
+  tokio::time::sleep(Duration::from_millis(40)).await;assert!(!exists().await);
+  tokio::time::timeout(Duration::from_secs(2),async {
+   while !exists().await {tokio::time::sleep(Duration::from_millis(10)).await;}
+  }).await.unwrap();
+  app.stop.cancel();tokio::time::timeout(Duration::from_secs(1),service).await.unwrap().unwrap();
+ }
 }

@@ -11,7 +11,7 @@ pub(crate) async fn update(State(app):State<App>,Json(body):Json<Value>)->Api{
  let expected=required(&body,"expected_digest",64)?;
  let fields=body["settings"].as_object().ok_or_else(||bad("Settings required"))?;
  if fields.is_empty() || fields.keys().any(|k|!matches!(k.as_str(),
- "max_active_runs"|"max_unresolved_runs"|"poll_interval_ms"|"recovery_interval_ms"|"max_parallel_calls")){
+ "max_active_runs"|"max_unresolved_runs"|"poll_interval_ms"|"recovery_interval_ms"|"background_rescan_interval_ms"|"max_parallel_calls")){
  return Err(bad("Unsupported runtime setting")); }
  let _guard=app.gate.lock().await;
  let mut value=snapshot(&app)?;
@@ -25,6 +25,7 @@ pub(crate) async fn update(State(app):State<App>,Json(body):Json<Value>)->Api{
  let config:loop_runtime::Config=serde_json::from_value(value).map_err(|_|bad("Invalid runtime settings"))?;
  config.validate().map_err(|_|bad("Invalid runtime settings or limits"))?;
  config.persist(&app.runtime_path)?;
+ if fields.contains_key("background_rescan_interval_ms"){crate::wake::notify(&app).await;}
  let config=snapshot(&app)?;
  Ok(Json(json!({"digest":crate::digest(&config),"config":config,"restart_required":false,"adoption":"next_scheduler_tick"})))
 }
@@ -47,5 +48,29 @@ pub(crate) async fn update(State(app):State<App>,Json(body):Json<Value>)->Api{
  assert!(update(State(app.clone()),Json(json!({"expected_digest":current["digest"],"settings":settings}))).await.is_err());
  assert_eq!(read(State(app.clone())).await.unwrap().0,current);
  }
+ }
+}
+
+#[cfg(test)] mod background_rescan_tests {
+ use super::*;
+ /// Fenced interval edits preserve unrelated settings, reject invalid values and notify live dispatch.
+ #[tokio::test] async fn configurable_interval_is_fenced_and_live() {
+  let (_root,app)=crate::runtime_tests::fixture().await;
+  for interval in [1u64,250,5000,15000,u64::MAX] {
+   let before=read(State(app.clone())).await.unwrap().0;let hints=crate::wake::subscribe();
+   let after=update(State(app.clone()),Json(json!({"expected_digest":before["digest"],
+    "settings":{"background_rescan_interval_ms":interval}}))).await.unwrap().0;
+   let mut expected=before["config"].clone();expected["scheduler"]["background_rescan_interval_ms"]=json!(interval);
+   assert_eq!(after["config"],expected);assert!(hints.has_changed().unwrap());
+   let stale=update(State(app.clone()),Json(json!({"expected_digest":before["digest"],
+    "settings":{"background_rescan_interval_ms":interval.saturating_add(1)}}))).await;
+   assert!(stale.is_err());assert_eq!(read(State(app.clone())).await.unwrap().0["config"],after["config"]);
+  }
+  for value in [json!(0),json!(-1),json!(1.5),json!("250"),Value::Null] {
+   let before=read(State(app.clone())).await.unwrap().0;
+   assert!(update(State(app.clone()),Json(json!({"expected_digest":before["digest"],
+    "settings":{"background_rescan_interval_ms":value}}))).await.is_err());
+   assert_eq!(read(State(app.clone())).await.unwrap().0,before);
+  }
  }
 }

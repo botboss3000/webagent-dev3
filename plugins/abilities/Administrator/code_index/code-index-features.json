@@ -939,6 +939,12 @@
           "path": "ui/main-panel/app/pages/functions/engine-components.js",
           "start_line": 1,
           "end_line": 54
+        },
+        {
+          "path": "src/app.rs",
+          "start_line": 188,
+          "end_line": 209,
+          "purpose": "Owning Store fallback preserves bounded public component-pause markers."
         }
       ],
       "configuration": {
@@ -962,7 +968,7 @@
         "event wake",
         "component withdrawal"
       ],
-      "purpose": "Connects the versioned pure planner, replaceable service, host event wait and retained-input lifecycle. Config: config/engine-components.json -> disabled (source defaults initialize absent host controls); plugins/engine/background-dispatch/component.json -> limits, runtime_requirements and build.source_inputs. Execution overrides remain encrypted host records; metadata never grants authority.",
+      "purpose": "Links contract-2 planning, reusable live service, host event wait and retained-input lifecycle. Config: data/config/loop-runtime.json -> scheduler.background_rescan_interval_ms; config/engine-components.json -> disabled; plugins/engine/background-dispatch/component.json -> limits, runtime_requirements, build.source_inputs. Hints and nearer leases override fallback; authority stays in the host.",
       "configuration": {
         "status": "configured",
         "references": [
@@ -982,6 +988,12 @@
               "/runtime_requirements",
               "/build/source_inputs"
             ]
+          },
+          {
+            "path": "data/config/loop-runtime.json",
+            "pointers": [
+              "/scheduler/background_rescan_interval_ms"
+            ]
           }
         ],
         "opportunities": []
@@ -990,13 +1002,13 @@
         {
           "path": "src/background_tasks.rs",
           "start_line": 157,
-          "end_line": 207,
+          "end_line": 214,
           "purpose": "Host broadcast wait, durable recovery and four-worker execution."
         },
         {
           "path": "src/engine_components.rs",
-          "start_line": 406,
-          "end_line": 439,
+          "start_line": 409,
+          "end_line": 434,
           "purpose": "Host plan validation, sealed identity and failure cooldown."
         },
         {
@@ -1012,19 +1024,21 @@
           "purpose": "Manager-authorized execution override CAS; null restores inheritance; fresh admission adopts preferences."
         },
         {
-          "path": "src/app.rs",
-          "start_line": 188,
-          "end_line": 209,
-          "purpose": "Owning Store fallback preserves bounded public component-pause markers."
-        },
-        {
           "path": "crates/background-contracts/src/lib.rs",
           "start_line": 1,
-          "end_line": 45,
-          "purpose": "Version-1 bounded DTOs and independent host safety validation.",
+          "end_line": 48,
+          "purpose": "Version-2 metadata DTOs, positive host-selected interval and independent plan/deadline validation.",
           "configuration": {
-            "status": "not_applicable",
-            "rationale": "Versioned metadata-only contracts, confinement, authority checks, four-worker and recovery bounds are invariants rather than preference bypass settings."
+            "status": "configured",
+            "references": [
+              {
+                "path": "data/config/loop-runtime.json",
+                "pointers": [
+                  "/scheduler/background_rescan_interval_ms"
+                ]
+              }
+            ],
+            "opportunities": []
           }
         },
         {
@@ -1033,8 +1047,16 @@
           "end_line": 22,
           "purpose": "Pure scan-order/deadline policy without host authority.",
           "configuration": {
-            "status": "not_applicable",
-            "rationale": "Versioned metadata-only contracts, confinement, authority checks, four-worker and recovery bounds are invariants rather than preference bypass settings."
+            "status": "configured",
+            "references": [
+              {
+                "path": "data/config/loop-runtime.json",
+                "pointers": [
+                  "/scheduler/background_rescan_interval_ms"
+                ]
+              }
+            ],
+            "opportunities": []
           }
         },
         {
@@ -1072,14 +1094,38 @@
         {
           "path": "build-service/engine_components.py",
           "start_line": 76,
-          "end_line": 136,
+          "end_line": 138,
           "purpose": "Independent pinned component compilation and verified artifact reuse."
         },
         {
           "path": "build-service/engine_components.py",
-          "start_line": 138,
-          "end_line": 178,
+          "start_line": 140,
+          "end_line": 182,
           "purpose": "Artifact identity sealing and explicit catalog withdrawal/reinstallation membership."
+        },
+        {
+          "path": "src/runtime_config.rs",
+          "start_line": 6,
+          "end_line": 77,
+          "purpose": "Scheduler schema/default and positive timing validation without a policy ceiling."
+        },
+        {
+          "path": "src/api/loop_settings.rs",
+          "start_line": 1,
+          "end_line": 33,
+          "purpose": "Revision-fenced typed interval update emits a live adoption hint."
+        },
+        {
+          "path": "src/api/live_configuration.rs",
+          "start_line": 83,
+          "end_line": 112,
+          "purpose": "Generic configuration CAS emits the runtime adoption hint."
+        },
+        {
+          "path": "src/agent_loop/scheduler.rs",
+          "start_line": 106,
+          "end_line": 120,
+          "purpose": "Install changed runtime timing before waking background dispatch."
         }
       ]
     },

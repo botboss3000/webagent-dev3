@@ -152,7 +152,7 @@ pub(crate) async fn collect(app:&App,run:&mut Value)->Result<bool> {
     if changed {updated["background_delivered"]=json!(delivered);app.save(&mut updated).await?;*run=updated;}
     Ok(changed)
 }
-// @code-index {"version":1,"feature":"background-dispatch","aliases":["background task service","idle CPU"],"purpose":"Host-owned encrypted task execution with metadata-only drop-in planning; broadcast wake plus bounded recovery. Config: plugins/engine/background-dispatch/component.json -> limits; data-root config/engine-components.json -> disabled (source defaults only initialize absent controls).","span_lines":80,"configuration":{"status":"configured","references":[{"path":"plugins/engine/background-dispatch/component.json","pointers":["/limits/max_request_bytes","/limits/max_response_bytes","/limits/timeout_ms"]},{"path":"config/engine-components.json","pointers":["/disabled"]}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"background-dispatch","aliases":["background task service","idle CPU"],"purpose":"Host-owned encrypted task execution with metadata-only drop-in planning; broadcast wake plus bounded recovery. Config: plugins/engine/background-dispatch/component.json -> limits; data-root config/engine-components.json -> disabled (source defaults only initialize absent controls). Config: data/config/loop-runtime.json -> scheduler.background_rescan_interval_ms controls fallback; event hints and earlier leases remain immediate.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"plugins/engine/background-dispatch/component.json","pointers":["/limits/max_request_bytes","/limits/max_response_bytes","/limits/timeout_ms"]},{"path":"config/engine-components.json","pointers":["/disabled"]},{"path":"data/config/loop-runtime.json","pointers":["/scheduler/background_rescan_interval_ms"]}],"opportunities":[]}}
 /// Listen independently of the scheduler; durable task records recover missed hints and restarts.
 pub(crate) async fn service(app:App) {
  // Subscribe before the first scan so a commit during that scan cannot lose its hint.
@@ -160,13 +160,15 @@ pub(crate) async fn service(app:App) {
 }
 /// Run the host loop with independent hints; explicit receivers isolate tests from global broadcasts.
 async fn service_with_hints(app:App,mut hints:tokio::sync::watch::Receiver<u64>) {
- use webagent_background_contracts::{Request,Task,State,RECOVERY_MS};
+ use webagent_background_contracts::{Request,Task,State,INTERFACE_VERSION};
  let mut active=std::collections::HashSet::new();
  let mut workers=tokio::task::JoinSet::new();
  loop {
   if app.stop.is_cancelled(){break;}
   while let Some(result)=workers.try_join_next(){if let Ok(id)=result{active.remove(&id);}}
-  let mut retry_ms=RECOVERY_MS;
+  let rescan_interval_ms=app.runtime.read().await.scheduler.background_rescan_interval_ms;
+  let mut retry_ms=rescan_interval_ms;
+  if let Some(delay)=crate::engine_components::background_failure_retry_ms(){retry_ms=retry_ms.min(delay);}
   if crate::engine_components::component_available(&app.store.root,crate::engine_components::BACKGROUND) {
    if let Ok(users)=agent_loop::user_apps(&app).await {
     for user in users {
@@ -181,7 +183,7 @@ async fn service_with_hints(app:App,mut hints:tokio::sync::watch::Receiver<u64>)
       let projection=tasks.iter().zip(&identities).map(|(task,id)|Task{
        state:match task["status"].as_str(){Some("queued")=>State::Queued,Some("running")=>State::Running,Some("completed")=>State::Completed,Some("failed")=>State::Failed,_=>State::Cancelled},
        active:active.contains(id)||held.contains(id),lease_until:task["lease_until"].as_u64().unwrap_or(0)}).collect();
-      let request=Request{version:1,now:now(),slots:4usize.saturating_sub(workers.len()),tasks:projection};
+      let request=Request{version:INTERFACE_VERSION,now:now(),slots:4usize.saturating_sub(workers.len()),rescan_interval_ms,tasks:projection};
       let plan=match crate::engine_components::background_plan(&user,&request).await {Ok(plan)=>plan,Err(_)=>{tracing::warn!("Background planning deferred");continue;}};
       retry_ms=retry_ms.min(plan.retry_ms);
       for index in plan.followup {
@@ -201,10 +203,11 @@ async fn service_with_hints(app:App,mut hints:tokio::sync::watch::Receiver<u64>)
     }
    }
   }
+  if let Some(delay)=crate::engine_components::background_failure_retry_ms(){retry_ms=retry_ms.min(delay);}
   tokio::select! {_=app.stop.cancelled()=>break,
    _=hints.changed()=>{},
    joined=workers.join_next(),if !workers.is_empty()=>{if let Some(Ok(id))=joined{active.remove(&id);}},
-   _=tokio::time::sleep(Duration::from_millis(retry_ms.min(RECOVERY_MS)))=>{}}
+   _=wait_for_background_retry(retry_ms)=>{}}
 
  }
  workers.abort_all();while workers.join_next().await.is_some(){}
@@ -362,4 +365,70 @@ async fn background_dispatch_retained_queue_and_claim_authority() {
  assert_eq!(dispatch_authorized(&app,&sid,&rid,"other-claim",id,"file_read",&args).await.unwrap(),Some(false));
 }
 
+}
+
+/// Bound individual timer allocations, never the configured rescan interval.
+/// Intermediate chunks stay inside this future and cannot trigger durable scans.
+async fn wait_for_background_retry(milliseconds:u64) {
+ let started=tokio::time::Instant::now();
+ loop {
+  let remaining=(milliseconds as u128).saturating_sub(started.elapsed().as_millis());
+  if remaining==0 {return;}
+  tokio::time::sleep(Duration::from_millis(remaining.min(86_400_000)as u64)).await;
+ }
+}
+#[cfg(test)] mod rescan_timer_tests {
+ use super::*;
+ /// Huge values must remain pending and cancellable instead of overflowing a timer deadline.
+ #[tokio::test] async fn huge_wait_does_not_overflow_or_return_early() {
+  assert!(tokio::time::timeout(Duration::from_millis(20),wait_for_background_retry(u64::MAX)).await.is_err());
+ }
+ /// Subsecond periods remain usable and complete without the old one-second planner minimum.
+ #[tokio::test] async fn subsecond_wait_reaches_its_deadline() {
+  let start=tokio::time::Instant::now();
+  tokio::time::timeout(Duration::from_secs(2),wait_for_background_retry(20)).await.unwrap();
+  assert!(start.elapsed()>=Duration::from_millis(20));
+ }
+}
+
+#[cfg(test)] mod rescan_adoption_tests {
+ use super::*;
+ /// A changed interval cancels an in-flight wait in either direction.
+ #[tokio::test] async fn running_wait_adopts_shorter_and_longer_intervals() {
+  let (_root,app)=crate::runtime_tests::fixture().await;
+  app.runtime.write().await.scheduler.background_rescan_interval_ms=60000;
+  let (wake,hints)=tokio::sync::watch::channel(0);
+  let service=tokio::spawn(service_with_hints(app.clone(),hints));
+  let exists=||async {
+   sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM sqlite_master WHERE name='background_task_index'")
+    .fetch_one(&app.store.pool).await.unwrap()>0
+  };
+  tokio::time::timeout(Duration::from_secs(2),async {
+   while !exists().await {tokio::time::sleep(Duration::from_millis(10)).await;}
+  }).await.unwrap();
+  tokio::time::sleep(Duration::from_millis(50)).await;
+  sqlx::query("DROP TABLE background_task_index").execute(&app.store.pool).await.unwrap();
+  app.runtime.write().await.scheduler.background_rescan_interval_ms=100;
+  wake.send_modify(|sequence|*sequence+=1);
+  tokio::time::timeout(Duration::from_secs(1),async {
+   while !exists().await {tokio::time::sleep(Duration::from_millis(10)).await;}
+  }).await.unwrap();
+  // Prove the new cadence independently of the hint-triggered scan.
+  tokio::time::sleep(Duration::from_millis(30)).await;
+  sqlx::query("DROP TABLE background_task_index").execute(&app.store.pool).await.unwrap();
+  tokio::time::timeout(Duration::from_secs(1),async {
+   while !exists().await {tokio::time::sleep(Duration::from_millis(10)).await;}
+  }).await.unwrap();
+  app.runtime.write().await.scheduler.background_rescan_interval_ms=60000;
+  sqlx::query("DROP TABLE background_task_index").execute(&app.store.pool).await.unwrap();
+  wake.send_modify(|sequence|*sequence+=1);
+  tokio::time::timeout(Duration::from_secs(1),async {
+   while !exists().await {tokio::time::sleep(Duration::from_millis(10)).await;}
+  }).await.unwrap();
+  tokio::time::sleep(Duration::from_millis(50)).await;
+  sqlx::query("DROP TABLE background_task_index").execute(&app.store.pool).await.unwrap();
+  tokio::time::sleep(Duration::from_millis(300)).await;
+  assert!(!exists().await,"old short timer survived interval adoption");
+  app.stop.cancel();tokio::time::timeout(Duration::from_secs(1),service).await.unwrap().unwrap();
+ }
 }

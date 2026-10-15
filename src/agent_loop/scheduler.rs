@@ -111,7 +111,10 @@ pub(crate) async fn scheduler_with_progress(app: App, progress: watchdog::Progre
                     ||previous.cache.context_budget_bytes!=config.cache.context_budget_bytes {
                     app.store.configure_cache(config.cache.document_budget_bytes,config.cache.context_budget_bytes);
                 }
+                let background_changed=previous.scheduler.background_rescan_interval_ms!=config.scheduler.background_rescan_interval_ms;
                 *previous=config;
+                drop(previous);
+                if background_changed{crate::wake::notify(&app).await;}
             },
             Err(_)=>{tracing::error!("Live runtime configuration rejected");tokio::time::sleep(Duration::from_secs(1)).await;continue;}
         }

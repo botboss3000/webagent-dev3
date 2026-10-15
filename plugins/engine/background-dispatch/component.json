@@ -1,5 +1,4 @@
 {
-  "artifact_sha256": "8a731a466b948a6a4f9583745952fab23f37c934ff416a5ae70a9fd8578c45b5",
   "build": {
     "features": [],
     "package": "webagent-background-service",
@@ -17,8 +16,8 @@
   "executable": "artifact/webagent-background-service",
   "group": "engine-loop",
   "id": "background-dispatch",
-  "implementation_version": "0.1.1",
-  "interface_version": 1,
+  "implementation_version": "0.2.0",
+  "interface_version": 2,
   "limits": {
     "max_concurrency": 1,
     "max_request_bytes": 65536,
