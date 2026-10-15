@@ -663,7 +663,7 @@ async function hardRefresh(signOut=false){
 $('header-refresh-browser').onclick=()=>{void hardRefresh();};
 function setupHeaderPullRefresh(){
   const indicator=$('ptr-indicator'),blue=$('ptr-blue'),red=$('ptr-red'),hint=$('ptr-hint');
-  const fullDash=98,normalAt=.5,hardAt=.85,pullZone=50;
+  const fullDash=98,normalAt=.5,hardAt=.85,pullZone=25;
   let dragging=false,startY=0,stage=0;
   function end(){
     if(!dragging)return;
@@ -678,15 +678,8 @@ function setupHeaderPullRefresh(){
   document.addEventListener('touchstart',event=>{
     if(!mobileLayout.matches||window.scrollY>5||indicator.classList.contains('loading')||!event.touches.length)return;
     const touch=event.touches[0];
-    const scroller=event.target.closest('#main-panel, #chat-messages');
-    const fromHeader=touch.clientY<=pullZone;
-    if(!fromHeader){
-      if(!scroller||scroller.scrollTop>4||event.target.closest('button,input,textarea,select,a,summary,[contenteditable]'))return;
-      for(let node=event.target;node&&node!==scroller;node=node.parentElement){
-        const overflow=getComputedStyle(node).overflowY;
-        if((overflow==='auto'||overflow==='scroll')&&node.scrollHeight>node.clientHeight+1)return;
-      }
-    }
+    // Only the viewport top band can arm refresh; content pulls remain scrolling.
+    if(touch.clientY<0||touch.clientY>pullZone)return;
     dragging=true;startY=touch.clientY;stage=0;
     indicator.hidden=false;indicator.style.height='0px';indicator.style.opacity='1';
     blue.setAttribute('stroke-dashoffset',String(fullDash));
