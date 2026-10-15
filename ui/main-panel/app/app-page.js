@@ -1,5 +1,6 @@
 'use strict';
 import { renderAgentDirectory } from './pages/config/page.js';
+import { mountDashboard } from './pages/dashboard/page.js';
 import { loadAppPages } from './pages/catalog.js';
 import { createPagePreferences } from './pages/preferences.js';
 import { mountUsers } from './pages/users/page.js';
@@ -33,6 +34,7 @@ export async function start(mount) {
   if (!Array.isArray(pages) || pages.some(page => !/^[a-z][a-z0-9-]*$/.test(page.id) || !page.title)) throw Error('Invalid App catalog');
   mount.innerHTML = '<div class="app-page-framework"><div class="agent-card active agent-card-tabs-only"><div class="agent-card-tabs-wrap"><div class="agent-card-tabs" role="tablist" aria-label="App pages"></div></div></div><div class="agent-detail-panel"><div class="agent-detail-content"><div id="app-config-page" class="agent-detail-body"></div><section id="app-files-page" class="agent-detail-body" hidden><h2>File Manager</h2><p role="status">Checking V3 File Manager…</p></section></div></div></div>';
   for(const page of pages) if(!mount.querySelector('#'+page.panelId)){const panel=document.createElement('section');panel.id=page.panelId;panel.className='agent-detail-body';panel.hidden=true;mount.querySelector('.agent-detail-content').append(panel);}
+  if(me?.is_admin){await mountDashboard(mount.querySelector('#app-dashboard-page'));if(!active())return;}
   if(me?.is_admin){await mountModules(mount.querySelector('#app-modules-page'));if(!active())return;mountFunctions(mount.querySelector('#app-functions-page'));mountAppSettings(mount.querySelector('#app-settings-page'));}
   if(me?.is_admin){await mountUsers(mount.querySelector('#app-users-page'));if(!active())return;await mountPolicies(mount.querySelector('#app-user-policies-page'));if(!active())return;await mountPageAccess(mount.querySelector('#app-page-access-page'));if(!active())return;const dispose=await mountAppModels(mount.querySelector('#app-models-page'));if(!active()){dispose();return;}mount._appModelsDispose=dispose;}
   const strip = mount.querySelector('[role=tablist]');
@@ -114,11 +116,16 @@ export async function start(mount) {
     for (const id of order) strip.append(tabs.get(id));
     const host=mount.querySelector('#app-config-page');
     renderAgentDirectory(host,pages,id=>show(id),order,id=>{
+      if(id==='dashboard'){status.textContent='Dashboard favorites need backend work.';return;}
       if(!preferences.ready()){status.textContent='App favorites are unavailable. Reload to retry.';return;}
       order=order.includes(id)?order.filter(item=>item!==id):[id,...order];
       if(selected===id&&!order.includes(id)) selected='config';
       save();
     });
+    // The persisted favorite API has a fixed page allowlist. Keep this new
+    // frontend-only page navigable while its unsupported save stays disabled.
+    const dashboardStar=host.querySelector('[data-favorite-page="dashboard"]');
+    if(dashboardStar){dashboardStar.disabled=true;dashboardStar.title='Backend work needed: dashboard favorites';dashboardStar.style.color='var(--danger,#ef4444)';}
     host.querySelector('.agent-config-landing').setAttribute('aria-label','App page directory');
     host.querySelector('.agent-config-settings-group-label').textContent='App pages';
     show(selected,false);

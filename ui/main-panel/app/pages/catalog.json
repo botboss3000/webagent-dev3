@@ -79,6 +79,15 @@
       "order": 50,
       "admin": true,
       "type": "app_configuration"
+    },
+    {
+      "id": "dashboard",
+      "title": "Dashboard",
+      "description": "V2 dashboard tiles; red marks pending V3 backend work.",
+      "panelId": "app-dashboard-page",
+      "admin": true,
+      "order": 2,
+      "type": "app_configuration"
     }
   ],
   "version": 2
