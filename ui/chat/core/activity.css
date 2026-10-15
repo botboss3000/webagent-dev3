@@ -109,6 +109,3 @@
   .v2-activity-group-glimmer > summary::after { animation: none; }
   .session-row-agent-icon.activity-running::after { animation: none; }
 }
-
-/* Disposable broker concurrency acceptance; no rendered style changes. */
-:root { --wa-concurrency-0: verified; }
