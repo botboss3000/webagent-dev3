@@ -2423,6 +2423,10 @@ class Broker:
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
         view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation") if key in job}
+        if job.get("review_wait"):
+            review=job["review_wait"]
+            view["review_wait"]={k:review[k]for k in ("state","started_at","last_activity_at","expires_at")if k in review}
+            view["review_wait"]["expiring_soon"]=0<review.get("expires_at",0)-time.time()<=60
         if "reason" in job:
             # Compiler failures are at the end of a bounded build transcript.
             view["reason"] = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
@@ -2841,13 +2845,14 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        allowed={"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"scheduler.py","ui_publication.py"}
+        allowed={"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
         if not trusted.get("local_caller") or not changed or not set(changed)<=allowed:return False
         files=release.entries(blob,context_digest)
-        selected=["host.py"]+[name for name in ("ownership.py","boot_host.py")if "v3/build-service/"+name in changed]
+        selected=sorted(n for n in review_modules if "v3/build-service/"+n in changed)+["host.py"]+[name for name in ("ownership.py","boot_host.py")if "v3/build-service/"+name in changed]
         for name in selected:
             path=Path(CONFIG["service_dir"])/name
             fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
@@ -2903,6 +2908,7 @@ class Broker:
             if item["status"]!="open":
                 if not prepared or prepared.get("ownership_id")!=key or prepared["status"]!="needs_decision"or prepared["phase"]!="awaiting_prepared_reviews":raise PermissionError("Maintenance task froze; select its sealed prepared review candidate")
                 self.scheduler.store.assert_owned(key,self.scheduler.owner(lease,lease["workspace"]),prepared["ownership_epoch"],[])
+                if not self.scheduler.review_wait(prepared,activity=True,authority_until=lease["lease_until"]):raise PermissionError("Prepared review delegation expired or changed")
 
     def _code_index_snapshot(self,job_id):
         """Merge eligible task evidence with the current published ledger for final projection."""
@@ -3349,7 +3355,8 @@ class Broker:
                         else:job["revoked"]=True
                         updated+=1
                 for job in self.jobs.values():
-                    if not self._owned(job, trusted, workspace) or job["status"] not in ("queued", "running"):
+                    review_waiting=job.get("status")=="needs_decision"and job.get("phase")=="awaiting_prepared_reviews"
+                    if not self._owned(job, trusted, workspace) or(job["status"]not in ("queued","running")and not review_waiting):
                         continue
                     if incoming:
                         deadline, fingerprint = incoming
@@ -3368,6 +3375,7 @@ class Broker:
                         job["lease_until"] = max(job["lease_until"], deadline) if job.get("effects_started") or job.get("isolated") else deadline
                     else:
                         job["revoked"] = True
+                    if review_waiting:self.scheduler.review_wait(job,activity=bool(incoming),authority_until=incoming[0]if incoming else None)
                     self._save(job)
                     updated += 1
                 return {"updated": updated}

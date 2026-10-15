@@ -214,12 +214,58 @@ class Scheduler:
         checks=job.get("rust_tests",{"status":"not_required"})
         if checks.get("status")not in {"passed","not_required"}:raise ValueError("Release checks incomplete")
         return {"generation":self.store.get(item["key"])["generation"],"release_id":job["job_id"],"inputs_sha256":job["inputs_sha256"],"promoted_hashes":promoted,"checks":[checks],"acceptance":acceptance,"commit":commit}
+    # @code-index {"version":1,"feature":"prepared-review-lease","aliases":["review ownership expiry","paused source review"],"purpose":"Keep exact authorized sealed-review ownership alive without execution resources. Config: build-service/scheduler-defaults.json -> orphan_after_seconds controls ordinary inactive owners; delegated authorization deadlines remain authoritative.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/orphan_after_seconds"]}]}}
+    def review_wait(self,job,*,reset=False,activity=False,authority_until=None):
+        """Keep an exact frozen review delegation alive without extending execution authority.
+
+        Calls: ownership.touch only after owner/epoch/generation and staged-index bindings match.
+        Config: scheduler.orphan_after_seconds controls ordinary inactivity, not review authorization.
+        """
+        if job.get("status")!="needs_decision"or job.get("phase")!="awaiting_prepared_reviews":return False
+        now=time.time();previous=dict(job.get("review_wait",{}));record=dict(previous)
+        state="active"
+        try:
+            value=self.store.get(job["ownership_id"]);item=self.broker.work.get(value["id"],{})
+            if value["owner"]!=self.owner({"user_id":job["user_id"]},job["workspace"])or value["epoch"]!=job["ownership_epoch"]or value["generation"]!=job["source_generation"]:raise ValueError("Review ownership binding changed")
+            if value["state"]not in {"owned","validating"}:state="ownership_recovery_required"
+            if item.get("job_id")!=job["job_id"]or item.get("status")!="closed":raise ValueError("Review task generation changed")
+            path=Path(job["prepared_assets"]);manifest_path=path/".code-index/manifest.json"
+            if path.is_symlink()or manifest_path.is_symlink()or not manifest_path.is_file()or manifest_path.stat().st_size>2*1024*1024:raise ValueError("Review index unavailable")
+            info=manifest_path.stat();identity=[info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns]
+            cached=previous.get("binding",{})
+            if previous.get("manifest_identity")==identity and cached:
+                manifest={"release_id":cached["job_id"],"candidate_sha256":cached["candidate_sha256"],"source_sha256":cached["source_sha256"],"index_sha256":cached["index_sha256"],"gaps":0,"stale_count":0,"unindexed_count":0}
+            else:manifest=json.loads(manifest_path.read_bytes())
+            if manifest.get("release_id")!=job["job_id"]or manifest.get("candidate_sha256")!=job["inputs_sha256"]or any(manifest.get(k)!=0 for k in ("gaps","stale_count","unindexed_count")):raise ValueError("Review candidate changed")
+            if any(not re.fullmatch(r"[a-f0-9]{64}",manifest.get(k,""))for k in ("source_sha256","index_sha256")):raise ValueError("Review index binding invalid")
+            binding={"task_id":job["task_id"],"job_id":job["job_id"],"ownership_id":value["id"],"epoch":value["epoch"],"generation":value["generation"],"candidate_sha256":job["inputs_sha256"],"source_sha256":manifest["source_sha256"],"index_sha256":manifest["index_sha256"],"prepared_assets":str(path)}
+            if not previous and not(reset or activity):return False
+            if previous and previous.get("binding")!=binding and not reset:raise ValueError("Review delegation binding changed")
+            if reset or not previous:record={"binding":binding,"started_at":now,"last_activity_at":now}
+            deadline=job.get("lease_until",0)
+            if authority_until is not None:deadline=min(deadline,authority_until)
+            if not(reset or activity):deadline=min(deadline,record.get("expires_at",0))
+            record["manifest_identity"]=identity
+            record["expires_at"]=deadline
+            if job.get("revoked")or deadline<=now:state="authorization_expired"
+            if activity and now-record.get("last_activity_at",0)>=1:record["last_activity_at"]=now
+            record["state"]=state
+            if state=="active":
+                self.store.touch(value["id"],value["owner"],value["epoch"])
+        except (KeyError,OSError,ValueError,TypeError):
+            record["state"]="binding_invalid";state="binding_invalid"
+        if record!=previous:
+            job["review_wait"]=record;self.broker._save(job)
+        return state=="active"
+
     def housekeeping(self):
         """Keep authorized delegated execution active; orphaned source never becomes available automatically."""
         if self.mode!="enforce":return
         for job in self.broker.jobs.values():
             if job.get("ownership_id")and job["status"]in {"queued","running"}and not job.get("revoked")and job.get("lease_until",0)>time.time():
                 self.store.touch(job["ownership_id"],self.owner({"user_id":job["user_id"]},job["workspace"]),job["ownership_epoch"])
+            elif job.get("ownership_id")and job.get("status")=="needs_decision"and job.get("phase")=="awaiting_prepared_reviews":
+                self.review_wait(job)
         self.store.orphan(self.orphan_after)
     def migrate_legacy(self):
         """Derive unfinished legacy claims at cutover; immutable historical generations stay explicitly classified."""

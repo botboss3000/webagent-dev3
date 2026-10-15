@@ -137,6 +137,44 @@ class ConcurrentUIEntryTests(unittest.TestCase):
         self.call("v3_build_work",{"action":"decide","task_id":"ui-review-task","sync_decision":"proceed","expected_sync_digest":report["digest"]})
         self.assertEqual(self.wait([job])[0]["status"],"completed")
 
+    def test_review_wait_survives_ownership_timeout_without_resubmission(self):
+        self.change("ui-review-lease","ui/probe/a.css","body {}\n","body { color: red; }\n",review=False)
+        job=self.finish("ui-review-lease");row=self.wait([job])[0]
+        self.assertEqual(row["review_wait"]["state"],"active")
+        before=self.runner.current_asset_id();key=row["ownership_id"];future=time.time()+301
+        self.trusted["lease_until"]=future+600
+        with patch.object(fixtures.host.time,"time",lambda:future):
+            self.broker.scheduler.housekeeping()
+            self.assertEqual(self.broker.scheduler.store.get(key)["state"],"owned")
+            self.review("ui-review-lease","ui/probe/a.css",prepared_job_id=job)
+        self.assertEqual(self.runner.current_asset_id(),before);self.assertEqual(row["status"],"needs_decision")
+        view=self.call("v3_worker_job",{"job_id":job})
+        self.assertIn("expires_at",view["review_wait"]);self.assertNotIn("binding",view["review_wait"])
+
+    def test_review_wait_receives_live_revocation(self):
+        self.change("ui-review-revoke","ui/probe/a.css","body {}\n","body { color: red; }\n",review=False)
+        job=self.finish("ui-review-revoke");row=self.wait([job])[0]
+        result=self.call("administrator_host_revoke",{})
+        self.assertGreaterEqual(result["updated"],1);self.assertTrue(row["revoked"])
+        self.assertEqual(row["review_wait"]["state"],"authorization_expired")
+        with self.assertRaises(PermissionError):self.review("ui-review-revoke","ui/probe/a.css",prepared_job_id=job)
+
+    def test_review_wait_receives_fingerprint_changes(self):
+        self.change("ui-review-policy","ui/probe/a.css","body {}\n","body { color: red; }\n",review=False)
+        job=self.finish("ui-review-policy");row=self.wait([job])[0]
+        self.trusted={**self.trusted,"access_fingerprint":"e"*64}
+        self.call("administrator_host_lease",{})
+        self.assertTrue(row["revoked"])
+
+    def test_review_wait_expired_authority_is_not_revived(self):
+        self.change("ui-review-expire","ui/probe/a.css","body {}\n","body { color: red; }\n",review=False)
+        job=self.finish("ui-review-expire");row=self.wait([job])[0]
+        expired=time.time()-1;row["lease_until"]=expired
+        self.call("administrator_host_lease",{})
+        self.assertEqual(row["lease_until"],expired)
+        self.broker.scheduler.housekeeping()
+        self.assertEqual(row["review_wait"]["state"],"authorization_expired")
+
     def test_descriptor_dependency_review_binds_after_sealing(self):
         metadata={"version":1,"feature":"sealed-fixture","aliases":["artifact metadata"],"purpose":"Render using sealed metadata","span_lines":1,"configuration":{"status":"configured","references":[{"path":"plugins/engine/fixture/component.json","pointers":["/artifact_sha256"]}],"opportunities":[]}}
         changed="/* @code-index "+json.dumps(metadata)+" */\nbody { color: red; }\n"
@@ -291,3 +329,98 @@ class ConcurrentUIEntryTests(unittest.TestCase):
         active=self.runner.assets/"releases"/self.runner.current_asset_id()
         self.assertEqual((active/"v3/ui/probe/a.css").read_text(),"body { color: red; }\n")
         self.assertIn("_version=2",(active/"v3/src/main.rs").read_text());self.assertEqual(row["preparation"]["attempts"],2)
+
+
+class BackendPredecessorRecoveryTests(ConcurrentUIEntryTests):
+    """Reconcile original restored backend containers without replaying deployment."""
+    def failed_backend(self):
+        """Fail after API rename, then model the original containers restored with new PIDs."""
+        self.predecessor=self.runner.current_asset_id()
+        self.change("backend-recovery-task","src/main.rs","fn main() {}\n","fn main() { let _x=1; }\n")
+        self.runner.fail_create=True
+        job=self.finish("backend-recovery-task");row=self.wait([job])[0]
+        self.assertEqual(row["status"],"uncertain",row.get("reason"));self.assertEqual(row["phase"],"creating_api")
+        self.runner.fail_create=False
+        api,loop=fixtures.host.TARGETS
+        self.runner.containers[api]=self.runner.containers.pop(row["rollback"]["api"])
+        for n,name in enumerate((api,loop)):
+            self.runner.containers[name]["State"].update(Status="running",Pid=100+n)
+        return job
+    def recover_backend(self,job):
+        return self.recovery("backend-recovery-task",job,"restore_backend_predecessor","backend-exact-recovery-request")
+    def test_backend_restored_originals_reconcile_and_exact_retry_preserves_candidate(self):
+        job=self.failed_backend();candidate=(self.broker.state/job/"candidate.tar").read_bytes();start=len(self.runner.calls)
+        result=self.recover_backend(job)
+        self.assertTrue(result["effects_reconciled"]);self.assertEqual(self.runner.current_asset_id(),self.predecessor)
+        self.assertEqual(result,self.recover_backend(job));self.assertFalse(self.broker._has_unresolved_release())
+        self.assertEqual((self.broker.state/job/"candidate.tar").read_bytes(),candidate)
+        self.assertFalse(any(c[0]in {"build","stop","start","create","rename","promote"}for c in self.runner.calls[start:]))
+        self.assertNotIn("NEVER-EXPOSE-THIS",json.dumps(result)+json.dumps(self.broker.jobs[job]["publication_recovery"]))
+    def test_backend_recovery_rejects_replacement_identity(self):
+        job=self.failed_backend();self.runner.containers[fixtures.host.TARGETS[0]]["Id"]+="-replacement"
+        with self.assertRaisesRegex(ValueError,"Original predecessor"):self.recover_backend(job)
+        self.assertEqual(self.runner.current_asset_id(),job);self.assertNotIn("publication_recovery",self.broker.jobs[job])
+    def test_backend_recovery_rejects_replacement_image(self):
+        job=self.failed_backend();self.runner.containers[fixtures.host.TARGETS[0]]["Image"]="sha256:"+"3"*64
+        with self.assertRaisesRegex(ValueError,"Original predecessor"):self.recover_backend(job)
+        self.assertEqual(self.runner.current_asset_id(),job)
+    def test_backend_recovery_rejects_configuration_without_disclosing_values(self):
+        job=self.failed_backend();self.runner.containers[fixtures.host.TARGETS[0]]["Config"]["Env"]=["TOKEN=PRIVATE-CHANGED-CONFIG"]
+        with self.assertRaisesRegex(ValueError,"configuration changed")as caught:self.recover_backend(job)
+        self.assertNotIn("PRIVATE-CHANGED-CONFIG",str(caught.exception));self.assertEqual(self.runner.current_asset_id(),job)
+    def test_backend_recovery_rejects_host_configuration_change(self):
+        job=self.failed_backend();self.runner.containers[fixtures.host.TARGETS[1]]["HostConfig"]["Memory"]+=1
+        with self.assertRaisesRegex(ValueError,"configuration changed"):self.recover_backend(job)
+        self.assertEqual(self.runner.current_asset_id(),job)
+    def test_backend_recovery_refuses_newer_pointer(self):
+        job=self.failed_backend();new=str(uuid.uuid4());self.runner._stage(self.runner.blob,new,self.runner.assets);self.runner.activate_assets(new)
+        with self.assertRaisesRegex(ValueError,"pointer advanced"):self.recover_backend(job)
+        self.assertEqual(self.runner.current_asset_id(),new)
+    def test_backend_recovery_refuses_unhealthy_original(self):
+        job=self.failed_backend();self.runner.containers[fixtures.host.TARGETS[1]]["State"]["Status"]="exited"
+        with self.assertRaisesRegex(ValueError,"unhealthy"):self.recover_backend(job)
+        self.assertEqual(self.runner.current_asset_id(),job)
+    def test_backend_recovery_interrupted_after_pointer_switch_supports_exact_retry(self):
+        job=self.failed_backend();self.runner.fail_verify_ui=True
+        with self.assertRaises(RuntimeError):self.recover_backend(job)
+        self.assertEqual(self.runner.current_asset_id(),self.predecessor);self.assertFalse(self.broker.jobs[job]["publication_recovery"]["done"])
+        self.runner.fail_verify_ui=False;self.assertTrue(self.recover_backend(job)["effects_reconciled"])
+    def test_backend_recovery_retry_rejects_changed_process_generation(self):
+        job=self.failed_backend();self.runner.fail_verify_ui=True
+        with self.assertRaises(RuntimeError):self.recover_backend(job)
+        self.runner.fail_verify_ui=False;self.runner.containers[fixtures.host.TARGETS[0]]["State"]["Pid"]+=1
+        with self.assertRaisesRegex(ValueError,"process generation changed"):self.recover_backend(job)
+        self.assertEqual(self.broker.jobs[job]["status"],"uncertain")
+    def test_backend_recovery_rejects_symlink_capture(self):
+        job=self.failed_backend();p=self.broker.state/job/"container-config.json";q=p.with_suffix(".saved");p.rename(q);p.symlink_to(q)
+        with self.assertRaises(OSError):self.recover_backend(job)
+        self.assertEqual(self.runner.current_asset_id(),job)
+
+    def test_backend_recovery_requires_operator_authority(self):
+        job=self.failed_backend();self.trusted["local_caller"]=False
+        with self.assertRaisesRegex(PermissionError,"Operator recovery"):self.recover_backend(job)
+        self.assertEqual(self.runner.current_asset_id(),job)
+    def test_backend_recovery_honors_foreign_maintenance_drain(self):
+        job=self.failed_backend()
+        with patch.object(self.broker,"_maintenance_allowed",return_value=False):
+            with self.assertRaisesRegex(PermissionError,"drained"):self.recover_backend(job)
+        self.assertEqual(self.runner.current_asset_id(),job)
+    def test_backend_recovery_refuses_unreconciled_checkout(self):
+        job=self.failed_backend()
+        with patch.object(self.runner,"checkout_matches",return_value=False):
+            with self.assertRaisesRegex(ValueError,"Checkout effects"):self.recover_backend(job)
+        self.assertEqual(self.runner.current_asset_id(),job)
+    def test_backend_recovery_refuses_revoked_job(self):
+        job=self.failed_backend();self.broker.jobs[job]["revoked"]=True
+        with self.assertRaisesRegex(ValueError,"Inactive uncertain"):self.recover_backend(job)
+        self.assertEqual(self.runner.current_asset_id(),job)
+    def test_backend_recovery_rejects_changed_retry_arguments(self):
+        job=self.failed_backend();self.runner.fail_verify_ui=True
+        with self.assertRaises(RuntimeError):self.recover_backend(job)
+        self.runner.fail_verify_ui=False
+        with self.assertRaisesRegex(ValueError,"different request"):
+            self.recovery("backend-recovery-task",job,"restore_backend_predecessor","different-backend-request")
+    def test_backend_recovery_rejects_writable_private_capture(self):
+        job=self.failed_backend();(self.broker.state/job/"container-config.json").chmod(0o666)
+        with self.assertRaisesRegex(ValueError,"Invalid private"):self.recover_backend(job)
+        self.assertEqual(self.runner.current_asset_id(),job)

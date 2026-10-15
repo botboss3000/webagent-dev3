@@ -84,7 +84,9 @@ class UIPublication:
             if pending:
                 with self.broker.lock:
                     job.update(status="needs_decision",phase="awaiting_prepared_reviews",reason="Complete applicable reviews against the sealed prepared candidate before resuming")
-                    job["preparation"]["pending_review_paths"]=pending[:32];self.broker._save(job)
+                    job["preparation"]["pending_review_paths"]=pending[:32]
+                    if not self.broker.scheduler.review_wait(job,reset=True):raise PermissionError("Prepared review delegation unavailable")
+                    self.broker._save(job)
                 return None
             wait_started=clock();self.broker.deploy_lock.acquire();guard=None;held=True
             try:
@@ -146,7 +148,7 @@ class UIPublication:
             if guard is not None:guard.__exit__(None,None,None)
         finally:self.broker.deploy_lock.release()
 
-    recovery_actions={"discard_prepared_release","restore_failed_ui"}
+    recovery_actions={"discard_prepared_release","restore_failed_ui","restore_backend_predecessor"}
 
     def legacy_recovery_binding(self,job,folder):
         """Recover old UI receipts using their recorded container IDs/images and exact predecessor."""
@@ -177,6 +179,43 @@ class UIPublication:
         if receipt.get("release_id")!=job["job_id"]or receipt.get("candidate_sha256")!=job["inputs_sha256"]or receipt.get("source_sha256")!=scanner.source_digest(failed)or receipt.get("index_sha256")!=hashlib.sha256(paths[1].read_bytes()).hexdigest():raise ValueError("Legacy failed source/index receipt changed")
         return bound
 
+    def backend_predecessor_binding(self,job,folder,recorded,previous):
+        """Certify already-restored original containers; never recreate or adopt candidate binaries.
+
+        Process IDs may change during restoration. Container IDs, immutable images,
+        Config and HostConfig must match the private pre-effect capture exactly.
+        A recovery retry additionally pins its post-restoration process generation.
+        No private configuration is returned or interpolated into errors.
+        """
+        import stat
+        if job.get("operation")!="build_deploy" or job.get("publication_policy_version")!=1:
+            raise ValueError("Reviewed backend publication required")
+        if not isinstance(recorded,dict)or set(recorded)!={"api","loop"}:
+            raise ValueError("Predecessor runtime receipt required")
+        fd=os.open(folder/"container-config.json",os.O_RDONLY|os.O_NOFOLLOW)
+        with os.fdopen(fd,"rb")as stream:
+            info=os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode)or info.st_nlink!=1 or info.st_uid!=os.geteuid()or info.st_mode&0o022 or info.st_size>8*1024**2:
+                raise ValueError("Invalid private predecessor capture")
+            raw=stream.read(8*1024**2+1)
+        if len(raw)>8*1024**2:raise ValueError("Private predecessor capture exceeds bounds")
+        captured=json.loads(raw)
+        if not isinstance(captured,dict)or set(captured)!={"api","loop"}:
+            raise ValueError("Invalid private predecessor capture")
+        current=self.runtime()
+        for role,name in zip(("api","loop"),self.broker.publication_targets):
+            old=captured[role];live=self.broker.runner.inspect(name)
+            if any(old.get(key)!=recorded[role].get(field)or live.get(key)!=old.get(key)
+                   for key,field in (("Id","id"),("Image","image"))):
+                raise ValueError("Original predecessor container required")
+            if any(key not in old or live.get(key)!=old[key]for key in ("Config","HostConfig")):
+                raise ValueError("Predecessor container configuration changed")
+            if not self.broker.runner.healthy(name,recorded[role]["image"]):
+                raise ValueError("Restored predecessor unhealthy")
+        if self.runtime()!=current or previous and previous.get("runtime")!=current:
+            raise ValueError("Restored predecessor process generation changed")
+        return current
+
     def recover(self,request,args):
         """Reconcile durable intent with exact effects before admitting another publication."""
         if set(args)!={"action","task_id","job_id","request_id"}or args.get("action")not in self.recovery_actions:
@@ -203,7 +242,9 @@ class UIPublication:
             folder=self.broker.state/job["job_id"]
             legacy=job.get("publication_policy_version",0)==0 and job["operation"]=="ui_deploy" and args["action"]=="restore_failed_ui"
             bound=self.legacy_recovery_binding(job,folder)if legacy else job.get("preparation",{}).get("runtime_before")
-            if not bound or self.runtime()!=bound:raise ValueError("Runtime binding changed; explicit runtime reconciliation required")
+            backend=args["action"]=="restore_backend_predecessor"
+            if backend:bound=self.backend_predecessor_binding(job,folder,bound,previous)
+            elif not bound or self.runtime()!=bound:raise ValueError("Runtime binding changed; explicit runtime reconciliation required")
             folder=self.broker.state/job["job_id"]
             baseline=folder/"publication-base.tar"
             if baseline.is_symlink()or not baseline.is_file():raise ValueError("Durable publication baseline required")
@@ -215,7 +256,11 @@ class UIPublication:
             self.release.verify_index(self.assets/"releases"/predecessor,predecessor)
             active=self.broker.runner.current_asset_id()
             discard=args["action"]=="discard_prepared_release"
-            if discard:
+            if backend:
+                if active not in {job["job_id"],predecessor}:raise ValueError("Active pointer advanced; use a compensating release")
+                if not self.broker.runner.checkout_matches(before,job.get("changed_paths",())):raise ValueError("Checkout effects need reconciliation")
+                self.release.verify_index(self.assets/"releases"/job["job_id"],job["job_id"],job["inputs_sha256"])
+            elif discard:
                 if active!=predecessor:raise ValueError("Prepared release is active or publication advanced")
                 if not self.broker.runner.checkout_matches(before,job.get("changed_paths",())):raise ValueError("Checkout effects need reconciliation")
             else:
@@ -224,14 +269,19 @@ class UIPublication:
                 if active!=job["job_id"]and not(previous and active==predecessor):raise ValueError("Active pointer advanced; use a compensating release")
                 if not legacy:self.release.verify_index(self.assets/"releases"/job["job_id"],job["job_id"],job["inputs_sha256"])
             job["publication_recovery"]={"digest":digest,"request_id":args["request_id"],"action":args["action"],"done":False}
+            if backend:job["publication_recovery"]["runtime"]=bound
             self.broker._save(job)
-            if not discard:
+            if backend:
+                if self.runtime()!=bound:raise ValueError("Restored predecessor process generation changed")
+                if active==job["job_id"]:self.broker.runner.activate_assets(predecessor)
+            elif not discard:
                 # Only current==failed may be replaced; the serialized coordinator fences other writers.
                 if active==job["job_id"]:self.broker.runner.activate_assets(predecessor)
                 self.broker.runner.promote_checkout(candidate,before,job.get("changed_paths",()))
             self.broker.runner.verify_ui(job.get("changed_paths",()))
             for role,name in zip(("api","loop"),self.broker.publication_targets):
                 if not self.broker.runner.healthy(name,bound[role]["image"]):raise ValueError("Recovered consumer unhealthy")
+            if backend and self.runtime()!=bound:raise ValueError("Restored predecessor process generation changed")
             if self.broker.runner.current_asset_id()!=predecessor or not self.broker.runner.checkout_matches(before,job.get("changed_paths",())):raise ValueError("Recovery effects not reconciled")
             result={"job_id":job["job_id"],"status":"failed","effects_reconciled":True,"restored_release_id":predecessor}
             job.update(status="failed",phase="publication_reconciled",effects_started=False,effects_reconciled_at=time.time(),reason="Unsuccessful release reconciled to its exact predecessor; candidate and evidence retained")

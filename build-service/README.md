@@ -291,6 +291,20 @@ the failed release is still current. It reconciles partial source promotion and
 supports exact retry. Newer active pointers or changed runtime bindings refuse
 recovery; they must not be overwritten. Revocation and ownership remain enforced.
 
+For an interrupted version-1 backend build/deploy whose original API and loop
+containers have already been restored, operator action
+`restore_backend_predecessor` reconciles that exact failed release. Both
+container IDs, immutable image IDs, Config and HostConfig must equal the private
+pre-effect capture, and both consumers must be healthy. Restored process IDs may
+initially differ; durable recovery intent pins their current generations for
+subsequent exact-request retries. The checkout must still match the predecessor,
+and only the failed asset pointer or its verified predecessor is eligible.
+Recovery restores the paired source/index pointer, retains the failed candidate
+and build evidence, and records a reconciled failed release. It does not adopt
+the candidate or replay container replacement. Revocation, task ownership,
+maintenance drains, newer-release fences and the shared lifecycle lease still
+apply. Use the original task ID, job ID and one stable recovery request ID.
+
 To undo an older successful UI release, begin a fresh empty isolated task and
 request `ui_rollback_preview` with its `task_id` and the original
 `release_job_id`. The host returns a checked-patch draft plus its exact source
@@ -352,3 +366,22 @@ release receipts, imported images and rollback material remain durable. Adopt
 through idle protected lifecycle installation/reconfiguration; changing a live
 container is unsupported. Compare the same frozen recipe and inputs before
 claiming a speedup; disk import/export and network transfers still remain.
+
+### Prepared-review ownership leases
+
+A sealed release waiting in needs_decision / awaiting_prepared_reviews retains
+broker-managed ownership while its exact review delegation is authorized.
+The durable record binds task, job, generation, epoch, prepared candidate and
+source/index hashes. Ordinary five-minute orphan detection no longer mistakes
+that authorized review wait for a lost worker. Review waits do not reserve
+compiler/browser capacity and never resume publication automatically.
+
+The authorization deadline remains authoritative. Revocation, changed policy
+fingerprints, ownership transfer and changed candidate bindings fence renewal.
+Status exposes review state, last authorized activity, deadline and an expiry
+warning without private candidate paths. An expired/orphaned owner requires
+explicit authorized recovery; source/index/review evidence is preserved and
+normal freshness checks still govern resumption of the same durable job.
+Unchanged manifest identity is cached for renewal; final publication retains
+the exact source/index checks. No source scan or compilation is triggered by
+the ownership heartbeat. Trusted lease controls also cover paused reviews.
