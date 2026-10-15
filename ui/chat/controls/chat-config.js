@@ -1,4 +1,5 @@
-// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"Applies the V3 chat surface profile from data/config/chat.json (runtime /state/config/chat.json, or V3_CHAT_UI_CONFIG_PATH), including chat_common, desktop/mobile/widget overlays, and chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"Applies the V3 chat surface profile from data/config/chat.json (runtime /state/config/chat.json, or V3_CHAT_UI_CONFIG_PATH), including live_reload, chat_common, desktop/mobile/widget overlays, and chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
+import { watchChatConfig } from './chat-config-live.js';
 import { applyBubblePaint } from '../core/bubble-paint.js';
 import { applyChatPillLayout, disposeChatPillLayout } from './chat-pill-config.js';
 import { initFooterHandle } from './footer-handle.js';
@@ -27,6 +28,7 @@ let listenersBound = false;
 let panelObserver = null;
 let observedPanel = null;
 let geometryFrame = null;
+let stopLiveConfig = null, configGeneration = 0;
 
 /** Coalesces geometry notifications; height-only changes keep the resolved layout cache. */
 function scheduleChatGeometry() {
@@ -278,6 +280,7 @@ export function applyChatConfig() {
   if (surfaceChanged) {
     for (const bubble of document.querySelectorAll('#chat-messages-inner .chat-bubble.v3-config-bubble')) {
       const role = bubble.classList.contains('user') ? 'user' : 'agent';
+      bubble.style.fontSize = (profile.message_bubbles?.font_size_px || 17) + 'px';
       applyBubblePaint(bubble, profile.message_bubbles?.[role] || {});
     }
   }
@@ -304,6 +307,7 @@ export function applyChatConfig() {
 
 /** Loads or accepts UI config, binds delegated listeners once, and reapplies on remount. */
 export async function initChatConfig({config:provided,root=null} = {}) {
+  const generation = ++configGeneration; stopLiveConfig?.(); stopLiveConfig = null;
   chatRoot=root;
   let data=provided;
   if(!data){
@@ -312,7 +316,7 @@ export async function initChatConfig({config:provided,root=null} = {}) {
   data = await response.json();
   }
   const config = data.chat_ui || data;
-  if (!config?.chat_common) return;
+  if (generation !== configGeneration || !config?.chat_common) return;
   // A remount replaces the partial; never reuse detached header/pill nodes.
   if (footerNodes && footerNodes.input !== byId('chat-input')) { disposeChatPillLayout(footerNodes.pill); headerNodes=null; footerNodes=null; footerControls=null; currentSurface=''; currentFooterMode=''; }
   documentConfig = config;
@@ -327,6 +331,11 @@ export async function initChatConfig({config:provided,root=null} = {}) {
     panelObserver = new ResizeObserver(scheduleChatGeometry);
     panelObserver.observe(panel);
   }
+  if (!provided) stopLiveConfig = watchChatConfig({
+    getConfig: () => documentConfig,
+    isMounted: () => panel.isConnected && byId('chat-panel') === panel,
+    onConfig: config => { documentConfig = config; currentSurface = ''; currentFooterMode = ''; applyChatConfig(); },
+  });
   if (!listenersBound) {
     listenersBound = true;
     window.addEventListener('resize', scheduleChatGeometry);

@@ -130,3 +130,33 @@ test('desktop, widget, zoom, chrome jitter and zero duration bypass keyboard mot
  }
  assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);
 });
+
+test('live configuration updates existing automatic bubble corners without navigation or losing drafts',async t=>{
+ const p=await fixture(t);await p.addStyleTag({path:path.join(UI,'chat/chat.css')});
+ let live=config(layout()),bad=false,requests=0;live.chat_common.live_reload={enabled:true,interval_ms:1000};
+ live.chat_common.message_bubbles={font_size_px:17,user:{radius_px:'auto',padding_top_px:8,padding_bottom_px:4,padding_left_px:14,padding_right_px:14,line_height:1.5,border:'1px solid blue'},agent:{radius_px:'auto',padding_top_px:8,padding_bottom_px:4,padding_left_px:4,padding_right_px:14,line_height:1.5}};
+ await p.route('**/api/v3/auth/ui-config',route=>{requests++;return route.fulfill(bad?{status:503,body:'unavailable'}:{json:{chat_ui:live}});});
+ await p.evaluate(()=>{
+  for(const role of ['user','agent']){
+   const row=document.createElement('div');row.className='message-row '+role;
+   const bubble=document.createElement('article');bubble.className='chat-bubble v3-config-bubble '+role;bubble.id='geometry-'+role;
+   bubble.style.cssText='display:block;width:max-content';const body=document.createElement('div');body.className='bubble-body';body.textContent='A short message';bubble.append(body);row.append(bubble);document.getElementById('chat-messages-inner').append(row);
+  }
+ });
+ await focusDraft(p);let navigations=0;p.on('framenavigated',()=>navigations++);
+ await p.evaluate(()=>api.initChatConfig());
+ await p.waitForFunction(()=>Number.parseFloat(getComputedStyle(document.getElementById('geometry-user')).borderTopLeftRadius)>19);
+ const metrics=()=>p.evaluate(()=>Object.fromEntries(['user','agent'].map(role=>{const e=document.getElementById('geometry-'+role),s=getComputedStyle(e);return [role,{height:e.getBoundingClientRect().height,radius:Number.parseFloat(s.borderTopLeftRadius),bottomLeft:s.borderBottomLeftRadius,font:s.fontSize}];})));
+ let m=await metrics();assert.ok(Math.abs(m.user.radius-m.user.height/2)<0.1);assert.ok(Math.abs(m.agent.radius-m.agent.height/2)<0.1);
+ live=JSON.parse(JSON.stringify(live));live.chat_common.message_bubbles.font_size_px=24;
+ Object.assign(live.chat_common.message_bubbles.user,{padding_top_px:10,padding_bottom_px:6,border:'2px solid blue',radius_bottom_left_px:3});
+ Object.assign(live.chat_common.message_bubbles.agent,{padding_top_px:5,padding_bottom_px:7,line_height:1.25});
+ await p.waitForFunction(()=>getComputedStyle(document.getElementById('geometry-user')).fontSize==='24px'&&Number.parseFloat(getComputedStyle(document.getElementById('geometry-user')).borderTopLeftRadius)===28);
+ m=await metrics();assert.equal(m.user.radius,28);assert.equal(m.user.bottomLeft,'3px');assert.equal(m.agent.radius,21);assert.ok(Math.abs(m.user.radius-m.user.height/2)<0.1);assert.ok(Math.abs(m.agent.radius-m.agent.height/2)<0.1);
+ const state=await stable(p);assert.equal(state.same,true);assert.equal(state.parent,true);assert.equal(state.focused,true);assert.equal(state.value,'retained draft');assert.equal(state.start,2);assert.equal(state.end,7);assert.equal(state.blur,0);assert.equal(navigations,0);
+ await p.evaluate(()=>{const e=document.getElementById('geometry-user');e.style.maxWidth='140px';e.querySelector('.bubble-body').textContent='A long wrapped message '.repeat(8);});
+ m=await metrics();assert.ok(m.user.height>56);assert.equal(m.user.radius,28);
+ const failed=p.waitForResponse(r=>r.url().includes('/api/v3/auth/ui-config')&&r.status()===503);bad=true;await failed;await settle(p);assert.equal((await metrics()).user.radius,28);
+ bad=false;live=JSON.parse(JSON.stringify(live));live.chat_common.message_bubbles.user.radius_px=6;live.chat_common.message_bubbles.user.radius_bottom_left_px=null;
+ await p.waitForFunction(()=>getComputedStyle(document.getElementById('geometry-user')).borderTopLeftRadius==='6px');assert.equal((await metrics()).user.bottomLeft,'6px');assert.equal(navigations,0);assert.ok(requests>=4);
+});

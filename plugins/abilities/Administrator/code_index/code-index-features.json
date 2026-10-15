@@ -96,20 +96,16 @@
         {
           "path": "ui/chat/core/bubble-paint.js",
           "start_line": 2,
-          "end_line": 15,
-          "purpose": "Applies message_bubbles.user/agent.bg_dark, bg_light and border from data/config/chat.json through the merged current profile.",
+          "end_line": 52,
+          "purpose": "Maps role-local paint, border/box_shadow, padding, auto or numeric corners and line_height. Config: data/config/chat.json -> chat_common.message_bubbles.user/agent and surface overrides.",
           "configuration": {
             "status": "configured",
             "references": [
               {
                 "path": "data/config/chat.json",
                 "pointers": [
-                  "/chat_common/message_bubbles/user/bg_dark",
-                  "/chat_common/message_bubbles/user/bg_light",
-                  "/chat_common/message_bubbles/user/border",
-                  "/chat_common/message_bubbles/agent/bg_dark",
-                  "/chat_common/message_bubbles/agent/bg_light",
-                  "/chat_common/message_bubbles/agent/border"
+                  "/chat_common/message_bubbles/user",
+                  "/chat_common/message_bubbles/agent"
                 ],
                 "profile_overrides": true
               }
@@ -326,14 +322,14 @@
         },
         {
           "path": "ui/chat/controls/chat-config.js",
-          "start_line": 179,
-          "end_line": 218,
+          "start_line": 181,
+          "end_line": 220,
           "purpose": "Applies footer mode, binds shell controls, and initializes the footer handle."
         },
         {
           "path": "ui/chat/controls/chat-config.js",
-          "start_line": 261,
-          "end_line": 300,
+          "start_line": 263,
+          "end_line": 306,
           "purpose": "Selects the active chat profile and updates footer presentation."
         },
         {
@@ -522,6 +518,12 @@
           "start_line": 498,
           "end_line": 577,
           "purpose": "Reconciles configured composer controls while preserving editor focus; unsupported focused moves wait for natural focus departure."
+        },
+        {
+          "path": "ui/chat/controls/chat-config-live.js",
+          "start_line": 1,
+          "end_line": 44,
+          "purpose": "Serial visible native-chat refresh. Config: data/config/chat.json -> chat_common.live_reload.enabled/interval_ms."
         }
       ],
       "configuration": {
