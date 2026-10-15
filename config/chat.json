@@ -23,7 +23,7 @@
     },
     "message_bubbles": {
       "user": {
-        "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing, null or invalid padding uses CSS initial (no padding); corner defaults remain built-in; radius_px is an optional per-role all-corners fallback. line_height is a font-size multiplier or explicit CSS length; its default is 1.5 for either role.",
+        "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing, null or invalid padding uses CSS initial (no padding); corner defaults remain built-in; radius_px is an optional per-role all-corners fallback. line_height is a font-size multiplier or explicit CSS length; its default is 1.5 for either role. border and box_shadow accept CSS values; missing or null means no effect. Both are independent by role.",
         "padding_top_px": null,
         "padding_right_px": null,
         "padding_bottom_px": null,
@@ -32,10 +32,12 @@
         "radius_top_right_px": 14,
         "radius_bottom_right_px": 14,
         "radius_bottom_left_px": 14,
-        "line_height": 1.5
+        "line_height": 1.5,
+        "border": null,
+        "box_shadow": null
       },
       "agent": {
-        "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing, null or invalid padding uses CSS initial (no padding); corner defaults remain built-in; radius_px is an optional per-role all-corners fallback. line_height is a font-size multiplier or explicit CSS length; its default is 1.5 for either role.",
+        "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing, null or invalid padding uses CSS initial (no padding); corner defaults remain built-in; radius_px is an optional per-role all-corners fallback. line_height is a font-size multiplier or explicit CSS length; its default is 1.5 for either role. border and box_shadow accept CSS values; missing or null means no effect. Both are independent by role.",
         "padding_top_px": null,
         "padding_right_px": null,
         "padding_bottom_px": null,
@@ -44,7 +46,9 @@
         "radius_top_right_px": 14,
         "radius_bottom_right_px": 14,
         "radius_bottom_left_px": 14,
-        "line_height": 1.5
+        "line_height": 1.5,
+        "border": null,
+        "box_shadow": null
       }
     }
   },

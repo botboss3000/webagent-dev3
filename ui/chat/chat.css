@@ -50,7 +50,7 @@ body.light-mode #chat-notifications .chat-notification{background:var(--chat-pil
 /* Main-view profile only; header/footer geometry remains independent. */
 #chat-messages-inner{padding-top:calc(var(--v3-chat-header-clearance,100px) + var(--v3-transcript-top,25px))!important;padding-bottom:calc(max(var(--v3-tail-min,100px), calc(var(--v3-chat-footer-clearance,180px) + var(--v3-tail-gap,24px))) + var(--v3-transcript-bottom,50px) + var(--v3-anchor-extra,0px))!important}
 /* Configured paint wins over the shared user/agent theme rules. No color fallback. */
-#chat-messages-inner .chat-bubble.v3-config-bubble{background:var(--message-bg-dark);border:var(--message-border)}
+#chat-messages-inner .chat-bubble.v3-config-bubble{background:var(--message-bg-dark)}
 body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:var(--message-bg-light)}
 /* Shared row owns alignment/width; only its bubble paints the message surface. */
 #chat-messages-inner .message-row{width:fit-content;max-width:90%;flex-shrink:0;margin:0;gap:0;align-self:flex-start}
@@ -194,5 +194,6 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
   white-space:nowrap;
 }
 
-/* @code-index {"version":1,"feature":"chat-message-bubbles","aliases":["bubble line spacing","user agent line height"],"purpose":"Make Markdown inherit the role line_height rather than the shared Markdown default. Config: data/config/chat.json -> chat_common.message_bubbles.user/agent.line_height with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":1,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles/user/line_height","/chat_common/message_bubbles/agent/line_height"],"profile_overrides":true}],"opportunities":[]}} */
+/* @code-index {"version":1,"feature":"chat-message-bubbles","aliases":["bubble line spacing","user agent line height","bubble borders","bubble shadows"],"purpose":"Apply only configured role border/box_shadow and inherited Markdown line_height, overriding shared presets. Config: data/config/chat.json -> chat_common.message_bubbles.user/agent border, box_shadow, line_height with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":2,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles/user/border","/chat_common/message_bubbles/user/box_shadow","/chat_common/message_bubbles/user/line_height","/chat_common/message_bubbles/agent/border","/chat_common/message_bubbles/agent/box_shadow","/chat_common/message_bubbles/agent/line_height"],"profile_overrides":true}],"opportunities":[]}} */
 #chat-messages-inner .chat-bubble.v3-config-bubble .md-body{line-height:inherit}
+#chat-panel #chat-messages-inner .chat-bubble.v3-config-bubble{border:var(--message-border)!important;box-shadow:var(--message-shadow)!important}
