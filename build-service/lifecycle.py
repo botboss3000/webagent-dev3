@@ -1,5 +1,5 @@
 """Operator installation and lifecycle; no agent-controlled paths or commands."""
-import argparse,hashlib,importlib.util,json,os,pwd,subprocess
+import argparse,hashlib,importlib.util,json,os,pwd,subprocess,uuid,time,fcntl
 from pathlib import Path
 def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
@@ -110,14 +110,62 @@ def install(args):
  if unit.is_symlink():raise PermissionError("Unit symlink")
  unit.write_text(text);unit.chmod(0o644);subprocess.run(["systemctl","daemon-reload"],check=True)
  print(json.dumps({"installed":True,"version":release,"config":str(config_path),"unit":unit_name}))
+def resource_policy(config_path,candidate_path,task_id,dry_run=False):
+ """Atomically change only protected memory policy; reload broker/helper without a restart."""
+ if os.geteuid()!=0:raise PermissionError("Memory policy installation requires root")
+ previous=cfg.load(config_path);candidate=cfg.load(candidate_path)
+ if {k:v for k,v in previous.items()if k!="scheduler"}!={k:v for k,v in candidate.items()if k!="scheduler"}or {k:v for k,v in previous["scheduler"].items()if k not in cfg.MEMORY_KEYS}!={k:v for k,v in candidate["scheduler"].items()if k not in cfg.MEMORY_KEYS}:raise ValueError("Only memory policy may change live")
+ desired=cfg.memory_policy_digest(candidate["scheduler"])
+ if dry_run:return {"validated":True,"policy_sha256":desired,"restart_required":False}
+ if not isinstance(task_id,str)or not __import__("re").fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id):raise ValueError("Bounded operator task ID required")
+ folder=Path(config_path).parent;secure_dirs(folder)
+ lockpath=folder/"resource-policy.lock"
+ fd=os.open(lockpath,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+ with os.fdopen(fd,"a")as lock:
+  info=os.fstat(lock.fileno())
+  if info.st_uid!=0 or info.st_nlink!=1 or info.st_mode&0o022:raise PermissionError("Protected memory-policy lock required")
+  fcntl.flock(lock,fcntl.LOCK_EX)
+  # Catch a concurrent configuration writer rather than overwrite its topology.
+  if cfg.load(config_path)!=previous:raise ValueError("Installation configuration changed")
+  def call(args):
+   command=["sudo","-n","-u",previous["service_account"],"env","WEBAGENT_BUILD_CONFIG="+str(config_path),"python3","-B",str(Path(previous["service_dir"])/"buildctl.py"),"schedule","--input","-"]
+   return json.loads(subprocess.check_output(command,input=json.dumps(args).encode(),timeout=30))
+  active=call({"action":"resources"})["memory_policy"]
+  request={"action":"reload_memory_policy","expected_policy_sha256":active["sha256"],"policy_sha256":desired}
+  history=folder/"resource-policy";secure_dirs(history)
+  unresolved=[]
+  for path in sorted(history.glob("*.json")):
+   old=json.loads(path.read_bytes())
+   if old.get("status")in {"prepared","needs_reconciliation"}:
+    if old.get("policy_sha256")!=desired:raise ValueError("Reconcile prior memory policy before changing its target")
+    unresolved.append((path,old))
+  receipt_id=str(uuid.uuid4());receipt=history/(receipt_id+".json")
+  raw={k:v for k,v in candidate.items()if k in cfg.defaults().keys()}
+  record={"id":receipt_id,"task_id":task_id,"status":"prepared","request":request,"before_sha256":active["sha256"],"policy_sha256":desired,"at":time.time()}
+  atomic(receipt,record);atomic(config_path,raw)
+  try:
+   result=call(request)
+   if result["sha256"]!=desired:raise ValueError("Memory reload acknowledgment changed")
+   record.update(status="completed",result=result);atomic(receipt,record)
+   for path,old in unresolved:
+    old.update(status="reconciled",reconciled_by=receipt_id,result=result);atomic(path,old)
+  except BaseException:
+   # The protected desired JSON remains authoritative. Never overwrite a newer writer
+   # or replay a runtime memory effect; repeat this policy command to reconcile adoption.
+   record.update(status="needs_reconciliation");atomic(receipt,record);raise
+  return {"status":"completed","receipt_id":receipt_id,"policy_sha256":desired,"restart_required":False}
+
 def main():
- parser=argparse.ArgumentParser();parser.add_argument("action",choices=("install","validate","status","start","stop","drain","resume","reconfigure"))
+ parser=argparse.ArgumentParser();parser.add_argument("action",choices=("install","validate","status","start","stop","drain","resume","reconfigure","resource-policy"))
  parser.add_argument("--config",default=os.environ.get("WEBAGENT_BUILD_CONFIG"));parser.add_argument("--instance",default="development")
  parser.add_argument("--checkout-root");parser.add_argument("--service-account",default="webagent-build")
  parser.add_argument("--api-container");parser.add_argument("--loop-container");parser.add_argument("--gate-container")
  parser.add_argument("--bind-address",default="127.0.0.1");parser.add_argument("--port",type=int,default=8081);parser.add_argument("--public-origin",default="http://127.0.0.1:8081")
  parser.add_argument("--install-tree");parser.add_argument("--task-id");parser.add_argument("--candidate-config");parser.add_argument("--dry-run",action="store_true");args=parser.parse_args()
  if args.action=="install":install(args);return
+ if args.action=="resource-policy":
+  if not args.config or not args.candidate_config or not args.task_id:parser.error("Exact current/candidate protected configs and task ID required")
+  print(json.dumps(resource_policy(args.config,args.candidate_config,args.task_id,args.dry_run)));return
  if args.action=="reconfigure":
   if not args.config or not args.candidate_config or not args.task_id:parser.error("Exact current/candidate protected configs and task ID required")
   operation=module("scoped_reconfiguration",Path(__file__).with_name("reconfigure.py"))

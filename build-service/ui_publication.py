@@ -148,7 +148,7 @@ class UIPublication:
             if guard is not None:guard.__exit__(None,None,None)
         finally:self.broker.deploy_lock.release()
 
-    recovery_actions={"discard_prepared_release","restore_failed_ui","restore_backend_predecessor"}
+    recovery_actions={"discard_prepared_release","restore_failed_ui","restore_backend_predecessor","complete_activated_release"}
 
     def legacy_recovery_binding(self,job,folder):
         """Recover old UI receipts using their recorded container IDs/images and exact predecessor."""
@@ -251,6 +251,41 @@ class UIPublication:
             before=baseline.read_bytes();candidate=(folder/"candidate.tar").read_bytes()
             if self.validate(before)[0]!=job["base_inputs_sha256"]or self.validate(candidate)[0]!=job["inputs_sha256"]:raise ValueError("Recovery source binding changed")
             if self.validate(self.broker._current_release_blob())[0]!=job["base_inputs_sha256"]:raise ValueError("A newer release receipt exists; use a compensating release")
+            if args["action"]=="complete_activated_release":
+                # Complete only the exact already-active, reviewed UI snapshot.
+                # This does not activate again, rebuild, or adopt a different runtime.
+                template_only=all(path.startswith("v3/ui/")or path=="v3/config/chat.json"for path in job.get("changed_paths",()))
+                if job["operation"]not in {"ui_deploy","plugin_deploy"}or not template_only or not job.get("hot_assets")or job.get("publication_policy_version")!=1 or job.get("phase")not in {"switching_ui","checking_ui","promoting_checkout"}:
+                    raise ValueError("Retained-runtime activated UI recovery required")
+                self.broker._lease(job)
+                self.broker.scheduler.assert_job(job)
+                if self.broker.runner.current_asset_id()!=job["job_id"]:raise ValueError("Active pointer advanced; cannot complete this activation")
+                active_root=self.assets/"releases"/job["job_id"]
+                self.release.verify_index(active_root,job["job_id"],job["inputs_sha256"])
+                self.reviews(active_root,job.get("changed_paths",()))
+                job["publication_recovery"]={"digest":digest,"request_id":args["request_id"],"action":args["action"],"done":False}
+                self.broker._save(job)
+                self.broker._code_index_activated(job["job_id"])
+                self.broker.runner.verify_ui(job.get("changed_paths",()))
+                for role,name in zip(("api","loop"),self.broker.publication_targets):
+                    if not self.broker.runner.healthy(name,bound[role]["image"]):raise ValueError("Recovered consumer unhealthy")
+                if job["operation"]=="plugin_deploy":
+                    # UI JSON templates use the plugin lane; retain its consumer
+                    # adoption and engine-mode proof even though no executable changed.
+                    job["consumer_adoption"]=self.broker.runner.verify_plugin_adoption(job["job_id"])
+                    job["engine_execution_modes"]=self.broker.runner.engine_execution_modes(job["job_id"])
+                # Checked promotion preflights all paths and tolerates exact before/after
+                # bytes after a partial promotion; unrelated checkout bytes are preserved.
+                self.broker.runner.promote_checkout(before,candidate,job.get("changed_paths",()))
+                if self.runtime()!=bound or self.broker.runner.current_asset_id()!=job["job_id"]or not self.broker.runner.checkout_matches(candidate,job.get("changed_paths",())):
+                    raise ValueError("Activated release effects need reconciliation")
+                job["synchronization"]=self.broker._sync_report(candidate,candidate,job.get("changed_paths",()))
+                if job["synchronization"]["total"]:raise ValueError("Checkout synchronization changed")
+                result={"job_id":job["job_id"],"status":"completed","effects_reconciled":True,"activation_replayed":False,"source_promoted":True}
+                job.update(status="completed",phase="finished",finished_at=time.time(),effects_reconciled_at=time.time(),reason="Exact active source/index and retained consumers verified; source promotion reconciled")
+                job["publication_recovery"].update(done=True,result=result)
+                self.broker._save(job);self.broker._start_next()
+                return result
             predecessor=job.get("asset_previous")
             if not predecessor:raise ValueError("Verified predecessor required")
             self.release.verify_index(self.assets/"releases"/predecessor,predecessor)

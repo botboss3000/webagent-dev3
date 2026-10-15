@@ -7,10 +7,17 @@ COMPILER_STAGE_SHA256="474b034d7a843ebf324b654a785b5a5b23135804ef39c662f92fcb3e1
 BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-automation","webagent-outbound-notifications","webagent-context-service","webagent-background-service","webagent-boot-service","webagent-boot-host"]
 # @code-index {"version":1,"feature":"build-artifact-execution","aliases":["task fencing","verified builds"],"purpose":"Pinned attributable compiler/test/packaging recipes and verified content-addressed artifact reuse.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Identity, exact input verification and completion rules cannot be disabled by model or preference configuration."}}
 COMPILER_MEMORY_CAP=4026531840
-def compiler_cap(value):
-    """Accept only the explicit reviewed compiler ceiling; omission preserves normal admission."""
+# @code-index {"version":1,"feature":"compiler-memory-policy","aliases":["compiler memory defaults","task memory overrides","live memory growth"],"purpose":"Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/compiler_memory_default_bytes","/compiler_memory_min_bytes","/compiler_memory_max_bytes","/allow_live_memory_increase"]}]}}
+def compiler_cap(value,policy=None):
+    """Validate a pinned compiler ceiling; protected bounds apply when admitting a new request."""
     if value is None:return None
-    if type(value)is not int or value!=COMPILER_MEMORY_CAP:raise ValueError("Unsupported compiler memory cap")
+    policy=policy or{};minimum=policy.get("compiler_memory_min_bytes",1024**3);maximum=policy.get("compiler_memory_max_bytes",10*1024**3)
+    if type(value)is not int or not minimum<=value<=maximum or value%os.sysconf("SC_PAGE_SIZE"):raise ValueError("Unsupported compiler memory cap")
+    return value
+
+def package_cap(value):
+    """Preserve the separate legacy disk-packaging ceiling; RAM packaging remains policy-owned."""
+    if value is not None and(type(value)is not int or value!=COMPILER_MEMORY_CAP):raise ValueError("Unsupported package memory cap")
     return value
 
 def test_filter(value):
@@ -29,11 +36,11 @@ class Executor:
         jobhex=uuid.UUID(job["job_id"]).hex
         name="webagent-build-"+self.config["instance"]+"-"+jobhex+"-"+phase+"-"+uuid.uuid4().hex[:8]
         output.mkdir(parents=True,exist_ok=True)
-        cap=compiler_cap(job.get("compiler_memory_cap"))if phase in {"compile_test","compile_release","compile_linked"}and kind=="engine"else None
+        cap=compiler_cap(job.get("compiler_memory_cap"))if phase in {"compile_test","compile_release","compile_linked","plugin_compile"}and kind in {"engine","plugin"}else None
         if cap is not None and not self.resources.enabled:raise ValueError("Compiler cap requires enforced resource admission")
         admission_started=time.monotonic()
         self.resources.enter(name,job,phase,profile,kind,timeout=timeout,hard_cap=cap)
-        timeout=max(1,timeout-(time.monotonic()-admission_started));identity=None;success=False;diagnostic_complete=False
+        timeout=max(1,timeout-(time.monotonic()-admission_started));identity=None;success=False;diagnostic_complete=False;primary=False
         parent="webagent-build-"+self.config["instance"]+".slice"
         create=["docker","create","--name",name,"--cgroup-parent",parent,"--label","webagent.scheduler.instance="+self.config["instance"],"--label","webagent.scheduler.job="+jobhex,"--label","webagent.scheduler.phase="+phase,
             "--cap-drop","ALL","--security-opt","no-new-privileges","--pids-limit","256","--user",str(self.config["service_uid"])+":"+str(self.config["service_gid"]),
@@ -56,34 +63,53 @@ class Executor:
             self.runner.job_context.phase_container=name
             if cap is not None:
                 observed=self.runner.resource_request({"operation":"stats","container":name})
-                if observed.get("memory_max")!=cap or observed.get("swap_max")!=0:raise ValueError("Compiler memory cap was not enforced by the kernel")
+                if observed.get("container_id")!=identity or observed.get("memory_max")!=cap or observed.get("swap_max")!=0:raise ValueError("Compiler memory cap was not enforced by the kernel")
                 job.setdefault("compiler_cap_outcomes",[]).append({"phase":phase,"recipe":profile,"requested_bytes":cap,"observed_memory_max":observed["memory_max"],"observed_swap_max":observed["swap_max"],"container_id":identity,"outcome":"running"})
                 getattr(self.runner,"resource_progress",lambda _:None)(job)
             # Docker wait reports exit status as data. Logs and counters remain available afterward.
             logs=self.runner.command(["docker","exec",name,*argv],timeout=timeout)
             self.persist_phase_log(job,logs)
             success=True;return logs
-        except RuntimeError as error:
-            diagnostic_complete=(cap is None and argv[:2]==["cargo","check"] and getattr(error,"exit_code",None)==1 and self.resources.diagnostic_check(str(error)))
+        except BaseException as error:
+            primary=True
+            diagnostic_complete=(isinstance(error,RuntimeError) and cap is None and argv[:2]==["cargo","check"] and getattr(error,"exit_code",None)==1 and self.resources.diagnostic_check(str(error)))
             raise
         finally:
             self.runner.job_context.phase_container=None
-            oom=False
-            if cap is not None and identity is not None:
-                observed=self.runner.resource_request({"operation":"stats","container":name})
-                oom=observed.get("oom_kills",0)>0
-                if job.get("compiler_cap_outcomes"):
-                    result=job["compiler_cap_outcomes"][-1];result.update(oom_events=observed.get("oom_events",0),oom_kills=observed.get("oom_kills",0),peak_memory=observed.get("peak_memory",0),outcome="oom"if oom else("completed"if success else"failed"))
-                    getattr(self.runner,"resource_progress",lambda _:None)(job)
-            self.finish_phase(name,identity,success and not oom,diagnostic_complete and not oom)
-            if oom:raise RuntimeError("Compiler memory cap exceeded (OOM); check failed")
+            oom=False;proof_error=None
+            try:
+                if cap is not None and identity is not None:
+                    try:
+                        observed=self.runner.resource_request({"operation":"stats","container":name})
+                        oom=observed.get("oom_kills",0)>0 or observed.get("oom_events",0)>0
+                        # Final kernel proof must match the durable reservation after any resize.
+                        with self.resources.lock:
+                            row=self.resources.rows[name];change=row.get("memory_change")
+                            if change and change.get("state")in {"intent","uncertain"}:
+                                self.resources.reconcile_memory(name,observed)
+                            final_cap=row.get("hard_cap",cap)
+                            if observed.get("container_id")!=identity or observed.get("memory_max")!=final_cap or observed.get("swap_max")!=0 or row.get("memory_change",{}).get("state")in {"intent","uncertain"}:
+                                raise ValueError("Compiler memory completion proof changed or needs reconciliation")
+                            timeline=list(row.get("memory_history",[]))
+                    except (OSError,ValueError,RuntimeError,TimeoutError,PermissionError)as error:
+                        proof_error=error;observed={};timeline=[];success=False
+                    if job.get("compiler_cap_outcomes"):
+                        result=job["compiler_cap_outcomes"][-1];result.update(final_memory_max=observed.get("memory_max"),memory_changes=timeline,oom_events=observed.get("oom_events"),oom_kills=observed.get("oom_kills"),peak_memory=observed.get("peak_memory"),outcome="oom"if oom else("completed"if success and proof_error is None else"failed"))
+                        getattr(self.runner,"resource_progress",lambda _:None)(job)
+            finally:
+                try:self.finish_phase(name,identity,success and not oom and proof_error is None,diagnostic_complete and not oom and proof_error is None)
+                except BaseException:
+                    if not primary:raise
+            if not primary:
+                if oom:raise RuntimeError("Compiler memory cap exceeded (OOM); check failed")
+                if proof_error is not None:raise RuntimeError("Compiler memory completion evidence unavailable or changed")from proof_error
     # @code-index {"version":1,"feature":"ram-packaging","aliases":["RAM build scratch","tmpfs packaging"],"purpose":"Fixed RAM BuildKit workspace and proof. Config: build-service/scheduler-defaults.json -> package_ram_bytes, package_tmpfs_bytes, reserve_percent.","span_lines":65,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/package_ram_bytes","/package_tmpfs_bytes","/reserve_percent"]}],"opportunities":[]}}
     @contextlib.contextmanager
     def packager(self,job,role="generic"):
         """Bound only this dedicated BuildKit ancestor, preserving reserve and measured role profiles."""
         name="webagent-build-"+self.config["instance"]+"-"+uuid.UUID(job["job_id"]).hex+"-package-"+uuid.uuid4().hex[:8]
         if role not in {"api","loop","generic"}:raise ValueError("Fixed packaging role required")
-        cap=compiler_cap(job.get("package_memory_cap"));identity=None;success=False;oom=False;proof_error=None;primary=False;stage="container_create";cap_outcome=None
+        cap=package_cap(job.get("package_memory_cap"));identity=None;success=False;oom=False;proof_error=None;primary=False;stage="container_create";cap_outcome=None
         policy=self.config.get("scheduler",{});scratch=policy.get("package_tmpfs_bytes",0)
         # Installation policy alone selects this disposable RAM workspace. Model requests cannot add mounts.
         if scratch:cap=policy["package_ram_bytes"]
@@ -163,6 +189,13 @@ class Executor:
                 self.resources.persist();self.resources.condition.notify_all()
             raise
         self.resources.finish(name,success,diagnostic_complete=diagnostic_complete)
+
+    def probe(self,job):
+        """Run a fixed networkless toolchain/limit probe with no application-source or state mounts."""
+        root=Path(self.config["state_root"])/"checks"/job["job_id"]
+        source=root/"empty-source";source.mkdir(parents=True,exist_ok=True)
+        job["artifact_component"]="resource-probe:"+job["job_id"]
+        return self.phase(job,"compile_test","engine",source,root/"output",["sh","-c","rustc --version && sleep 30"],"resource:memory-probe-v1",90)
 
     def check(self,job,blob,task,timeout,extract):
         """Use the same attributable recipes for bounded foreground checks and release compilation."""

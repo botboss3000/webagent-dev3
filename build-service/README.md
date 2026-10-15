@@ -402,3 +402,70 @@ claim/revision checks, private freshness and sealed-candidate integrity remain
 mandatory. Final publication still reconciles and verifies the exact source/index
 and completed applicable reviews. Scans stay outside ledger write transactions;
 no deployment lock is held by private review recording.
+
+### Protected compiler limits and live growth
+
+New enforced jobs pin the protected compiler_memory_default_bytes (5 GiB).
+compiler_memory_min_bytes and compiler_memory_max_bytes bound operator overrides
+through the existing compiler_memory_cap finish/check argument. All values use
+bytes and must be memory-page aligned; the absolute supported range is 1–10 GiB.
+Already durable jobs retain their recorded ceiling, including legacy uncapped
+and 3.75 GiB jobs. Compiler admission reserves the full approved ceiling, rather
+than a smaller observed estimate. The effective host reserve is at least 15%.
+
+Operator build_work action increase_memory requires job_id, phase_id,
+expected_revision, memory_bytes and request_id. It only increases an active
+capped compiler; it never shrinks a running process or changes RAM packaging
+scratch. The host validates live authority and source epoch, reserves complete
+growth, records intent, and requests the protected helper's exact Docker update.
+The helper validates current policy, identity, zero swap, authorization deadline,
+host headroom and aggregate ancestor capacity, then confirms kernel memory.max.
+Receipts and final compiler evidence retain the requested/observed limits,
+growth history, peak RAM and OOM counters. OOM fails; it does not retry a build.
+
+Insufficient growth headroom returns waiting_headroom while compilation retains
+its old ceiling. An identical request returns its original result; after capacity
+changes use a new request ID with the current phase revision. Uncertain responses
+retain the larger reservation and block admission until exact kernel evidence
+or stopped-phase cleanup reconciles the outcome. Restart never replays a resize
+or thaws an unknown phase. Existing pause/resume/reconcile controls still apply.
+Per-phase growth history is bounded; source permissions never expand.
+
+The root lifecycle resource-policy command accepts --config, --candidate-config
+and --task-id, plus optional --dry-run. The candidate must already be protected,
+root-owned JSON. Only the four memory fields may differ. It persists installation
+intent, atomically updates protected JSON, and reloads broker/helper policy with
+matching digests without restarting the broker or application. An uncertain
+adoption leaves an explicit reconciliation receipt; retry the same desired policy.
+New defaults affect new jobs; existing ceilings are never silently decreased.
+Other scheduler/topology changes retain idle lifecycle reconfiguration.
+
+For bounded operator acceptance, build_work check with check=resource_probe
+uses a fixed rustc --version plus 30-second idle command in an attributable
+compiler container. It mounts an empty private source directory, no application
+state, and has no network. It uses broker ownership rather than engine claims,
+normal full-ceiling admission and the same kernel/cleanup evidence. It builds
+or deploys no application artifact. New controls use the operator channel;
+native application tool schemas are unchanged.
+
+### Bounded review ledger capacity
+
+The root-owned installation field code_index_ledger_max_bytes bounds the shared
+review ledger on disk. It defaults to 768 MiB and accepts page-aligned values
+from 512 MiB to 1 GiB. Adoption requires broker maintenance/restart; it is not a
+live compiler-memory field or a model argument. This is a storage ceiling, not
+a RAM reservation or permission to remove history. Try supported lossless
+history compaction first and retain its backup and original retry receipts.
+Final publication still requires the exact source/index and applicable reviews.
+
+If a retained-runtime UI publication becomes uncertain after its pointer switch,
+the operator complete_activated_release recovery action binds task_id, job_id
+and request_id to that same latest owned release. It verifies current authority,
+ownership/generation, exact active source/index and applicable reviews, retained
+runtime identities, served bytes, and checked source promotion. It completes the
+existing receipt without reactivating assets, rebuilding images, or dropping
+claims. A changed pointer/runtime, expired authority, or checkout conflict fails
+closed; retry the original recovery request after resolving its exact blocker.
+UI-template-only plugin_deploy releases (UI files plus config/chat.json) use the
+same recovery with their normal consumer-adoption and engine-mode checks.
+Executable plugin changes are excluded from this UI recovery action.

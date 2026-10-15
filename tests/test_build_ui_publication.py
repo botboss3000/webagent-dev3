@@ -196,6 +196,63 @@ class ConcurrentUIEntryTests(unittest.TestCase):
     def recovery(self,task,job,action="restore_failed_ui",request="ui-recovery-exact-request"):
         return self.call("build_work",{"action":action,"task_id":task,"job_id":job,"request_id":request})
 
+    def failed_ledger_activation(self):
+        """Lose the shared projection update after the immutable pointer switched."""
+        self.change("ui-ledger-recover","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        original=self.runner.maintenance_activated
+        self.runner.maintenance_activated=lambda _:(_ for _ in ()).throw(RuntimeError("ledger storage full"))
+        try:
+            job=self.finish("ui-ledger-recover");row=self.wait([job])[0]
+        finally:self.runner.maintenance_activated=original
+        self.assertEqual(row["status"],"uncertain",row.get("reason"))
+        self.assertEqual(self.runner.current_asset_id(),job)
+        return job
+
+    def test_exact_activated_release_completes_without_reactivation_and_retry_reuses_receipt(self):
+        job=self.failed_ledger_activation();containers=json.loads(json.dumps(self.runner.containers))
+        with patch.object(self.runner,"activate_assets",wraps=self.runner.activate_assets)as activate:
+            result=self.recovery("ui-ledger-recover",job,"complete_activated_release")
+            self.assertTrue(result["source_promoted"]);self.assertFalse(result["activation_replayed"])
+            self.assertEqual(result,self.recovery("ui-ledger-recover",job,"complete_activated_release"));activate.assert_not_called()
+        self.assertEqual(self.runner.containers,containers)
+        self.assertEqual(self.broker.jobs[job]["status"],"completed")
+        self.assertEqual(self.broker.code_index_ledger.active_release(),job)
+        self.assertFalse(self.broker._has_unresolved_release())
+
+    def test_ui_template_plugin_lane_retains_adoption_and_mode_checks(self):
+        from unittest.mock import Mock
+        job=self.failed_ledger_activation();self.broker.jobs[job]["operation"]="plugin_deploy"
+        self.runner.verify_plugin_adoption=Mock(return_value={"revision":job})
+        self.runner.engine_execution_modes=Mock(return_value={"api":"live","loop":"live"})
+        result=self.recovery("ui-ledger-recover",job,"complete_activated_release")
+        self.assertEqual(result["status"],"completed")
+        self.runner.verify_plugin_adoption.assert_called_once_with(job)
+        self.runner.engine_execution_modes.assert_called_once_with(job)
+
+    def test_activated_completion_rejects_executable_plugin_inputs(self):
+        job=self.failed_ledger_activation();row=self.broker.jobs[job];row["operation"]="plugin_deploy"
+        row["changed_paths"].append("v3/plugins/abilities/fixture/runner.py")
+        with self.assertRaisesRegex(ValueError,"activated UI recovery"):self.recovery("ui-ledger-recover",job,"complete_activated_release")
+        self.assertEqual(row["status"],"uncertain")
+
+    def test_activated_completion_rejects_advanced_pointer_and_expired_authority(self):
+        job=self.failed_ledger_activation();row=self.broker.jobs[job]
+        row["lease_until"]=0
+        with self.assertRaises(PermissionError):self.recovery("ui-ledger-recover",job,"complete_activated_release")
+        row["lease_until"]=time.time()+60
+        newer=str(uuid.uuid4());self.runner._stage(self.runner.blob,newer,self.runner.assets);self.runner.activate_assets(newer)
+        with self.assertRaisesRegex(ValueError,"pointer advanced"):self.recovery("ui-ledger-recover",job,"complete_activated_release")
+        self.assertEqual(self.runner.current_asset_id(),newer);self.assertEqual(row["status"],"uncertain")
+
+    def test_activated_completion_preserves_promotion_conflicts_and_retries_exact_intent(self):
+        job=self.failed_ledger_activation();original=self.runner.promote_checkout
+        with patch.object(self.runner,"promote_checkout",side_effect=ValueError("checkout changed during release")):
+            with self.assertRaisesRegex(ValueError,"checkout changed"):self.recovery("ui-ledger-recover",job,"complete_activated_release")
+        self.assertEqual(self.broker.jobs[job]["status"],"uncertain")
+        with patch.object(self.runner,"promote_checkout",wraps=original)as promote:
+            result=self.recovery("ui-ledger-recover",job,"complete_activated_release")
+            self.assertEqual(result["status"],"completed");self.assertEqual(promote.call_count,1)
+
     def test_failed_activation_restores_only_its_predecessor_and_retry_is_exact(self):
         before=self.runner.current_asset_id()
         self.change("ui-failure-task","ui/probe/a.css","body {}\n","body { color: red; }\n")

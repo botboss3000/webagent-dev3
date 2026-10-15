@@ -2,6 +2,15 @@
 import json,os,pwd,re,stat
 from pathlib import Path
 # @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Reviewed scheduler defaults merged with protected installation JSON. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds and resource thresholds.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image","/package_ram_bytes","/package_tmpfs_bytes"]}],"opportunities":[]}}
+MEMORY_KEYS={"compiler_memory_default_bytes","compiler_memory_min_bytes","compiler_memory_max_bytes","allow_live_memory_increase"}
+# @code-index {"version":1,"feature":"compiler-memory-policy","aliases":["compiler memory defaults","task memory overrides","live memory growth"],"purpose":"Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/compiler_memory_default_bytes","/compiler_memory_min_bytes","/compiler_memory_max_bytes","/allow_live_memory_increase"]}]}}
+def memory_policy(policy):
+ """Select the protected compiler policy; existing job ceilings remain pinned."""
+ return {k:policy.get(k,{"compiler_memory_default_bytes":5*1024**3,"compiler_memory_min_bytes":1024**3,"compiler_memory_max_bytes":10*1024**3,"allow_live_memory_increase":False}[k])for k in sorted(MEMORY_KEYS)}
+def memory_policy_digest(policy):
+ """Bind broker/helper adoption to the same root-owned policy revision."""
+ import hashlib
+ return hashlib.sha256(json.dumps(memory_policy(policy),sort_keys=True,separators=(",",":")).encode()).hexdigest()
 def scheduler_defaults():
  """Load reviewed source defaults; protected installation overrides remain the operator authority."""
  path=Path(__file__).with_name("scheduler-defaults.json")
@@ -10,11 +19,15 @@ def scheduler_defaults():
 def validate(value):
  """Validate installation authority, topology and the bounded API process/thread budget."""
  if not isinstance(value,dict):raise ValueError("Configuration must be an object")
- allowed={"instance","checkout_root","service_account","source_owner","state_root","workspace_root","runtime_root","install_root","service_dir","app_uid","app_gid","worker_uid","worker_gid","api_container","loop_container","gate_container","bind_address","port","public_origin","worker_control","api_pids_limit","scheduler"}
+ allowed={"instance","checkout_root","service_account","source_owner","state_root","workspace_root","runtime_root","install_root","service_dir","app_uid","app_gid","worker_uid","worker_gid","api_container","loop_container","gate_container","bind_address","port","public_origin","worker_control","api_pids_limit","scheduler","code_index_ledger_max_bytes"}
  if set(value)-allowed:raise ValueError("Unknown installation field")
  v=dict(value)
+ # Ledger capacity is protected installation policy, never a caller override.
+ v.setdefault("code_index_ledger_max_bytes",768*1024**2)
+ ledger=v["code_index_ledger_max_bytes"]
+ if type(ledger)is not int or not 512*1024**2<=ledger<=1024**3 or ledger%4096:raise ValueError("Invalid review ledger storage budget")
  policy=v.get("scheduler",{})
- if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes"}:raise ValueError("Invalid scheduler policy")
+ if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes"}-MEMORY_KEYS:raise ValueError("Invalid scheduler policy")
  policy={**scheduler_defaults(),**policy}
  if policy["mode"]not in {"observe","enforce"}or type(policy["orphan_after_seconds"])is not int or not 60<=policy["orphan_after_seconds"]<=86400:raise ValueError("Invalid ownership policy")
  for key,default,low,high in [("reserve_bytes",768*1024**2,256*1024**2,16*1024**3),("reserve_percent",10,5,50),("max_phases",4,1,16),("max_parked",2,0,8),("memory_pressure_percent",5,1,50)]:
@@ -30,6 +43,10 @@ def validate(value):
  if type(ram)is not int or type(scratch)is not int or not 0<=ram<=10_000_000_000 or not 0<=scratch<=8_000_000_000:raise ValueError("Invalid RAM packaging budget")
  if ram%os.sysconf("SC_PAGE_SIZE")or scratch%os.sysconf("SC_PAGE_SIZE"):raise ValueError("RAM packaging budgets must be memory-page aligned")
  if bool(ram)!=bool(scratch)or(ram and(scratch<256*1024**2 or scratch>ram-1024**3 or policy["mode"]!="enforce"or policy["reserve_percent"]<15)):raise ValueError("RAM packaging requires bounded scratch, enforced admission and fifteen percent host reserve")
+ limits=memory_policy(policy);minimum=limits["compiler_memory_min_bytes"];default=limits["compiler_memory_default_bytes"];maximum=limits["compiler_memory_max_bytes"]
+ if any(type(n)is not int or n%os.sysconf("SC_PAGE_SIZE")for n in (minimum,default,maximum))or not 1024**3<=minimum<=default<=maximum<=10*1024**3:raise ValueError("Invalid compiler memory policy")
+ if type(limits["allow_live_memory_increase"])is not bool:raise ValueError("Invalid live memory policy")
+ if limits["allow_live_memory_increase"]and(policy["mode"]!="enforce"or policy["reserve_percent"]<15):raise ValueError("Live memory increases require enforced admission and fifteen percent host reserve")
  v["scheduler"]=policy
  # Legacy installations retain their prior budget until an explicit operator reconfiguration.
  v.setdefault("api_pids_limit",256)
@@ -66,7 +83,7 @@ def defaults(root=None):
  try:user=pwd.getpwuid(os.getuid()).pw_name if os.getuid()!=0 else "webagent-build"
  except KeyError:user="webagent-build"
  install=Path("/var/lib/webagent/development/build-service")
- return dict(scheduler=scheduler_defaults(),api_pids_limit=256,instance="development",checkout_root=str(root),service_account=user,source_owner=user,state_root=str(root/"build-jobs"),workspace_root=str(root/"workspaces"),runtime_root=str(root/"runtime/build"),install_root=str(install),service_dir=str(install/"releases/bootstrap"),app_uid=1100,app_gid=1100,worker_uid=1000,worker_gid=1000,api_container="webagent-dev-v3",loop_container="webagent-dev-v3-loop",gate_container="webagent-dev-v3-gate",bind_address="127.0.0.1",port=8081,public_origin="http://127.0.0.1:8081",worker_control="/var/lib/webagent-v3-build-worker/control.sock")
+ return dict(scheduler=scheduler_defaults(),api_pids_limit=256,code_index_ledger_max_bytes=768*1024**2,instance="development",checkout_root=str(root),service_account=user,source_owner=user,state_root=str(root/"build-jobs"),workspace_root=str(root/"workspaces"),runtime_root=str(root/"runtime/build"),install_root=str(install),service_dir=str(install/"releases/bootstrap"),app_uid=1100,app_gid=1100,worker_uid=1000,worker_gid=1000,api_container="webagent-dev-v3",loop_container="webagent-dev-v3-loop",gate_container="webagent-dev-v3-gate",bind_address="127.0.0.1",port=8081,public_origin="http://127.0.0.1:8081",worker_control="/var/lib/webagent-v3-build-worker/control.sock")
 def load(path=None):
  path=path or os.environ.get("WEBAGENT_BUILD_CONFIG")
  if path:

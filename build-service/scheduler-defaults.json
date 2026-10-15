@@ -12,5 +12,9 @@
   "concurrent_ui_preparation": false,
   "ui_test_image": null,
   "package_ram_bytes": 0,
-  "package_tmpfs_bytes": 0
+  "package_tmpfs_bytes": 0,
+  "compiler_memory_default_bytes": 5368709120,
+  "compiler_memory_min_bytes": 1073741824,
+  "compiler_memory_max_bytes": 10737418240,
+  "allow_live_memory_increase": false
 }

@@ -797,7 +797,7 @@ class Runner:
     def resource_request(self,args):
         """Only the protected service peer can control an exact registered build container."""
         args=dict(args)
-        if args.get("operation") not in {"stats","initialize","identity"}:
+        if args.get("operation") not in {"stats","initialize","identity","memory_policy"}:
             with self.resources.lock:
                 row=self.resources.rows.get(args.get("container"))
                 if not row or not row.get("container_id"):raise PermissionError("Registered compiler identity required")
@@ -1704,7 +1704,7 @@ class Broker:
         self.work = json.loads(self.work_path.read_text()) if self.work_path.exists() else {}
         if not isinstance(self.work, dict) or len(self.work) > 1000:
             raise ValueError("invalid coordination registry")
-        self.code_index_ledger=maintenance_engine.Ledger(Path(CONFIG["install_root"]).parent/"code-index-maintenance"if self.state==Path(CONFIG["state_root"])else self.state/"code-index-maintenance",inventory=getattr(self.runner,"maintenance_inventory",None),max_bytes=512*1024*1024)
+        self.code_index_ledger=maintenance_engine.Ledger(Path(CONFIG["install_root"]).parent/"code-index-maintenance"if self.state==Path(CONFIG["state_root"])else self.state/"code-index-maintenance",inventory=getattr(self.runner,"maintenance_inventory",None),max_bytes=CONFIG.get("code_index_ledger_max_bytes",768*1024**2))
         self.runner.maintenance_snapshot_folder=self.code_index_ledger.folder/"snapshots"
         self.runner.maintenance_provider=self._code_index_snapshot
         self.runner.maintenance_activated=self._code_index_activated
@@ -2775,6 +2775,7 @@ class Broker:
     def unified_build(self, request, args):
         action = args.get("action")
         if action=="release_claims":return self.release_claims(request,args)
+        if action=="reload_memory_policy":return self.reload_memory_policy(args,request["trusted"])
         if action in self.scheduler.actions:return self.scheduler.handle(args,request["trusted"],request["workspace"])
         allowed = {"action", "task_id", "summary", "expected_inputs_sha256", "sync_decision",
             "expected_sync_digest", "offset", "job_id", "request_id", "check", "timeout_seconds", "compiler_memory_cap", "package_memory_cap", "test_filter"}
@@ -2845,13 +2846,14 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        review_modules={"scheduler.py","ui_publication.py"}
-        allowed={"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json"}
+        allowed={"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
         if not trusted.get("local_caller") or not changed or not set(changed)<=allowed:return False
-        files=release.entries(blob,context_digest)
+        try:files=release.entries(blob,context_digest)
+        except (ValueError,tarfile.TarError):return False
         selected=sorted(n for n in review_modules if "v3/build-service/"+n in changed)+["host.py"]+[name for name in ("ownership.py","boot_host.py")if "v3/build-service/"+name in changed]
         for name in selected:
             path=Path(CONFIG["service_dir"])/name
@@ -3066,17 +3068,31 @@ class Broker:
         result.update(source_kind="untrusted_maintenance_metadata",completion_is_review_assertion=True)
         return result
 
+    def reload_memory_policy(self,args,trusted):
+        """Adopt only protected memory fields after the root helper confirms the same policy."""
+        if not trusted.get("local_caller")or set(args)!={"action","expected_policy_sha256","policy_sha256"}:raise PermissionError("Protected operator memory reload required")
+        fresh=_config_module.load()
+        if {k:v for k,v in fresh.items()if k!="scheduler"}!={k:v for k,v in CONFIG.items()if k!="scheduler"}or {k:v for k,v in fresh["scheduler"].items()if k not in _config_module.MEMORY_KEYS}!={k:v for k,v in CONFIG["scheduler"].items()if k not in _config_module.MEMORY_KEYS}:raise ValueError("Other installation changes require maintenance")
+        expected=_config_module.memory_policy_digest(fresh["scheduler"])
+        if args["policy_sha256"]!=expected:raise ValueError("Protected memory policy changed")
+        proof=self.runner.resource_request({"operation":"memory_policy"})
+        if proof["sha256"]!=expected or proof["values"]!=_config_module.memory_policy(fresh["scheduler"]):raise ValueError("Broker/helper memory policy mismatch")
+        result=self.resources.adopt_memory_policy(fresh["scheduler"],args["expected_policy_sha256"])
+        CONFIG["scheduler"].update(proof["values"])
+        return result
+
     def cargo_request(self,args,trusted,workspace):
         """Capture under the coordinator lock; compile an isolated copy outside it and attest unchanged inputs."""
         if set(args)-{"task_id","task","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter"}or not{"task_id","task","expected_inputs_sha256"}<=set(args):
             raise ValueError("Task-scoped Cargo check arguments required")
         task_id,task=args["task_id"],args["task"];expected=args["expected_inputs_sha256"];timeout=args.get("timeout_seconds",600)
-        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
+        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test","resource_probe"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
             raise ValueError("Bounded task Cargo request required")
         request_id=args.get("request_id")
         if request_id is not None and (not isinstance(request_id,str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",request_id)):
             raise ValueError("Stable check request ID required")
         request_key="check-"+hashlib.sha256(canonical([trusted["user_id"],workspace,task_id,request_id])).hexdigest() if request_id else None
+        if task=="resource_probe"and not(trusted.get("local_caller")and self.resources.enabled):raise PermissionError("Resource probe requires enforced operator channel")
         selected=executor_module.test_filter(args.get("test_filter"))
         if selected is not None and (task!="test"or trusted.get("local_caller")is not True):raise PermissionError("Filtered tests require a local operator test request")
         cap=executor_module.compiler_cap(args.get("compiler_memory_cap"))
@@ -3091,6 +3107,9 @@ class Broker:
                 if previous:
                     if previous.get("check_signature")!=request_signature:raise ValueError("Check request ID reused with different inputs")
                     return (previous.get("check_result") if previous["status"] not in {"queued","running"} else None) or {"task_id":task_id,"job_id":previous["job_id"],"task":task,"status":previous["status"],"inputs_sha256":previous["inputs_sha256"],"log_excerpt":scrub(previous.get("log",""))[-4096:]}
+            # Retry signatures describe caller input, not a subsequently changed default.
+            cap=executor_module.compiler_cap(args.get("compiler_memory_cap"),CONFIG.get("scheduler",{}))
+            if cap is None and self.resources.enabled:cap=CONFIG.get("scheduler",{}).get("compiler_memory_default_bytes",5*1024**3)
             if not self._maintenance_allowed(trusted,{"task_id":task_id}):raise PermissionError("Build service drained")
             self._incoming_lease(trusted)
             key=hashlib.sha256(canonical([trusted["user_id"],workspace,task_id])).hexdigest();item=self.work.get(key)
@@ -3101,7 +3120,7 @@ class Broker:
                 raise ValueError("This task already has pending execution")
             ownership_value=None
             if self.scheduler.mode=="enforce":
-                self.scheduler.submit(item,trusted,workspace,["src","Cargo.toml","Cargo.lock"],before)
+                self.scheduler.submit(item,trusted,workspace,["build-service/resources.py"]if task=="resource_probe"else["src","Cargo.toml","Cargo.lock"],before)
                 ownership_value=self.scheduler.store.get(key)
             job_id=str(uuid.uuid4());event=threading.Event();self.job_cancellations[job_id]=event
             job={"job_id":job_id,"request_key":request_key or "check-"+job_id,"check_signature":request_signature,"task_id":task_id,"user_id":trusted["user_id"],"workspace":workspace,
@@ -3139,7 +3158,7 @@ class Broker:
                 raise ValueError("Task changed before check execution")
             if hasattr(self.runner,"job_context"):self.runner.job_context.job=job;self.runner.job_context.event=event
             if self.resources.enabled:
-                log=self.runner.executor.check(job,blob,task,timeout,lambda p,b:release.extract(p,b,context_digest))
+                log=self.runner.executor.probe(job)if task=="resource_probe"else self.runner.executor.check(job,blob,task,timeout,lambda p,b:release.extract(p,b,context_digest))
             else:log=self.runner.cargo_task(root,self.state/"checks"/job_id,task,timeout)
             status="completed"
         except Exception as error:
@@ -3868,10 +3887,11 @@ class Broker:
                     engine_changed=any(path.startswith("v3/plugins/engine/")or path.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/","v3/crates/boot-service/","v3/crates/boot-supervisor/","v3/crates/boot-contracts/"))for path in changed)
                     if engine_changed and not self.runner.engine_hot_swappable():ui_only=False
                     index_only=ui_only and(not changed or any(path in INDEX_METADATA_FILES for path in changed))
-                    package_cap=executor_module.compiler_cap(args.get("package_memory_cap"))
+                    package_cap=executor_module.package_cap(args.get("package_memory_cap"))
                     if package_cap is not None and (trusted.get("local_caller")is not True or not self.resources.enabled):raise PermissionError("Enforced package cap requires local operator")
-                    cap=executor_module.compiler_cap(args.get("compiler_memory_cap"))
-                    if cap is not None and (trusted.get("local_caller")is not True or not self.resources.enabled):raise PermissionError("Enforced compiler cap requires local operator")
+                    cap=executor_module.compiler_cap(args.get("compiler_memory_cap"),CONFIG.get("scheduler",{}))
+                    if cap is None and self.resources.enabled:cap=CONFIG.get("scheduler",{}).get("compiler_memory_default_bytes",5*1024**3)
+                    if args.get("compiler_memory_cap")is not None and (trusted.get("local_caller")is not True or not self.resources.enabled):raise PermissionError("Enforced compiler cap requires local operator")
                     plugin_only=ui_only and any((path.startswith(ABILITY_ROOT) and path not in INDEX_METADATA_FILES) or generic_package_path(path,candidate) or generic_package_path(path,base_blob) or path.startswith("v3/config/") or path=="v3/src/agent_loop/tools/administrator-schemas.json" for path in changed)
                     host_only = self.host_source_only(current_changed,candidate,trusted)
                     lease_until, fingerprint = self._incoming_lease(trusted)

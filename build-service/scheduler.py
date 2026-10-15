@@ -18,7 +18,7 @@ class Conflict(ValueError):
 # @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Source reservations and completion. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds; protected installation overrides at broker restart.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image"]}],"opportunities":[]}}
 class Scheduler:
     """Derive authority and scope from the broker; caller assertions never certify a release."""
-    actions={"create","resources","pause","resume","priority","reconcile","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover"}
+    actions={"create","resources","pause","resume","priority","reconcile","increase_memory","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover"}
     def __init__(self,broker,config):
         """Load reviewed coordination policy and open its private durable ownership store."""
         self.broker=broker;self.config=config
@@ -330,7 +330,7 @@ class Scheduler:
 
     def resource_action(self,args,trusted,workspace):
         """Owners control their own jobs; the existing Builds administrator may inspect/control all."""
-        if set(args)-{"action","job_id","phase_id","request_id","expected_revision","priority"}:raise ValueError("Unsupported resource arguments")
+        if set(args)-{"action","job_id","phase_id","request_id","expected_revision","priority","memory_bytes"}:raise ValueError("Unsupported resource arguments")
         admin=trusted.get("local_caller")is True or(trusted["user_id"]=="admin"and workspace=="00000000-0000-0000-0000-000000000000")
         def find_job(job_id):
             """Recover only sealed index phase ownership, never a caller-supplied PID or path."""
@@ -348,6 +348,10 @@ class Scheduler:
                 result["profiles"]={};return result
             return self.broker.resources.snapshot(args.get("job_id"))
         if not job or not(admin or self.broker._owned(job,trusted,workspace)):raise PermissionError("Resource job denied")
+        if args["action"]=="increase_memory":
+            if not trusted.get("local_caller"):raise PermissionError("Memory controls require operator channel")
+            self.broker._lease(job)
+            if job.get("ownership_id"):self.assert_job(job)
         return self.broker.resources.control(job,args)
     def journal_path(self,owner,request,namespace):
         """Derive a private recovery record from the sealed caller and exact request."""
@@ -381,7 +385,7 @@ class Scheduler:
         if action=="create":
             if set(args)-{"action","task_id","summary"}:raise ValueError("Unsupported creation arguments")
             return self.broker.handle({"name":"v3_build_work","arguments":{"action":"begin","task_id":args.get("task_id"),"summary":args.get("summary","Scheduler followup"),"mode":"isolated"},"trusted":trusted,"workspace":workspace})
-        if action in {"resources","pause","resume","priority","reconcile"}:
+        if action in {"resources","pause","resume","priority","reconcile","increase_memory"}:
             return self.resource_action(args,trusted,workspace)
         allowed={"action","task_id","task_key","paths","request_id","expected_revision","expected_epoch","job_id","commit","acceptance","target_task_id","reason","offset","limit"}
         if set(args)-allowed or action not in self.actions:raise ValueError("Unsupported scheduler arguments")

@@ -1,7 +1,7 @@
 """Measured phase admission and safe compiler parking; never pause tests or publication.
 
-Config: protected build-service.json -> scheduler. Estimates govern admission,
-not per-task hard memory limits. Insufficient reclaim waits for intervention.
+Config: protected build-service.json -> scheduler. Estimates guide uncapped admission; explicit compiler ceilings reserve their full
+approved budget. Insufficient reclaim waits for intervention.
 """
 import copy,json,math,os,threading,time,re
 from pathlib import Path
@@ -98,21 +98,22 @@ class Resources:
         return max(64*1024**2,math.ceil(max(values)*1.2))
     def reserve(self):
         """Keep configurable host headroom, independent of a build's claimed requirements."""
-        return max(self.policy.get("reserve_bytes",768*1024**2),int(self.host["total"]*self.policy.get("reserve_percent",10)/100))
+        return max(self.policy.get("reserve_bytes",768*1024**2),int(self.host["total"]*max(15 if self.enabled else 0,self.policy.get("reserve_percent",10))/100))
     def can_admit(self,estimate):
         """Account for resident RAM and remaining admitted peak demand before starting another phase."""
         active=[r for r in self.rows.values()if r["state"]in {"admitted","running","parked","waiting_intervention"}]
         if len(active)>=self.policy.get("max_phases",4):return False
-        remaining=sum(max(0,r["estimate"]-r.get("metrics",{}).get("memory",0))for r in active if r["state"]in {"admitted","running"})
-        return self.host["available"]-self.reserve()>=estimate+remaining and not any(r["state"]in {"recovery_required","waiting_intervention"}for r in self.rows.values())
+        remaining=sum(max(0,r["estimate"]-r.get("metrics",{}).get("memory",0))for r in active if r["state"]in {"admitted","running","parked"})
+        return self.host["available"]-self.reserve()>=estimate+remaining and not any(r["state"]in {"recovery_required","waiting_intervention","memory_recovery_required"}for r in self.rows.values())
     def enter(self,name,job,phase,profile,kind,timeout=None,hard_cap=None):
         """Wait for measured admission outside the broker lock; revocation still interrupts waiting."""
         ram_packaging=phase=="package"and kind=="package"and bool(self.policy.get("package_tmpfs_bytes",0))
+        compiler=phase in {"compile_test","compile_release","compile_linked","plugin_compile"}and kind in {"engine","plugin"}
         allowed_cap=self.policy.get("package_ram_bytes")if ram_packaging else 4026531840
-        if hard_cap is not None and (type(hard_cap)is not int or hard_cap!=allowed_cap or not((phase in {"compile_test","compile_release","compile_linked"}and kind=="engine")or(phase=="package"and kind=="package"))):raise ValueError("Unsupported enforced phase memory cap")
+        if hard_cap is not None and(type(hard_cap)is not int or hard_cap%os.sysconf("SC_PAGE_SIZE")or not((compiler and 1024**3<=hard_cap<=10*1024**3)or(phase=="package"and kind=="package"and hard_cap==allowed_cap))):raise ValueError("Unsupported enforced phase memory cap")
         if ram_packaging and(hard_cap is None or self.policy.get("reserve_percent",10)<15):raise ValueError("RAM packaging requires full budget and host reserve")
         # tmpfs is unreclaimable without swap: reserve its full process/cache/scratch ceiling, even after small successful samples.
-        estimate=hard_cap if ram_packaging else(min(self.estimate(profile,kind),hard_cap)if hard_cap is not None else self.estimate(profile,kind));deadline=time.monotonic()+timeout if timeout is not None else None
+        estimate=hard_cap if hard_cap is not None else self.estimate(profile,kind);deadline=time.monotonic()+timeout if timeout is not None else None
         deadline_at=time.time()+timeout if timeout is not None else None
         progress=getattr(self.runner,"resource_progress",lambda _:None)
         with self.condition:
@@ -128,7 +129,14 @@ class Resources:
                 conflict=any(r.get("component")==component and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
                 task_id=job.get("task_id")
                 task_conflict=any(r.get("task_id")==task_id and task_id is not None and(ram_packaging or r.get("ram_packaging"))and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
-                return not conflict and not task_conflict and self.can_admit(estimate)
+                if conflict or task_conflict or not self.can_admit(estimate):return False
+                if not self.initialized or hard_cap is not None:
+                    # The protected ancestor must fit the complete admitted ceilings too.
+                    required=estimate+sum(max(r["estimate"],r.get("metrics",{}).get("memory",0))for r in self.rows.values()if r["state"]in {"admitted","running","parked"})
+                    reply=self.runner.resource_request({"operation":"initialize","required_bytes":required})
+                    if reply.get("admitted")is False:return False
+                    self.initialized=True
+                return True
             while self.enabled and not eligible():
                 if deadline is not None and time.monotonic()>=deadline:
                     job.pop("resource_waiting",None);report();raise TimeoutError("Resource admission exceeded remaining check timeout")
@@ -138,8 +146,6 @@ class Resources:
                 if job.get("resource_waiting")!=waiting:job["resource_waiting"]=waiting;report()
                 self.condition.wait(min(.5,max(0,deadline-time.monotonic()))if deadline is not None else .5)
             if self.stop.is_set():raise PermissionError("Scheduler stopping")
-            if not self.initialized and self.enabled:
-                self.runner.resource_request({"operation":"initialize"});self.initialized=True
             job.pop("resource_waiting",None)
             now=self.clock()
             self.rows[name]={"job_id":job["job_id"],"task_id":job.get("task_id"),"ram_packaging":ram_packaging,"phase":phase,"profile":profile,"kind":kind,"component":component,"estimate":estimate,"hard_cap":hard_cap,"priority":job.get("priority",0),"state":"admitted","revision":0,"started_at":time.time(),"started":now,"paused_seconds":0.,"paused_at":None,"metrics":{},"container_id":None}
@@ -160,6 +166,8 @@ class Resources:
         with self.condition:
             row=self.rows[name]
             if row.get("paused_at")is not None:row["paused_seconds"]+=self.clock()-row["paused_at"];row["paused_at"]=None
+            if row.get("memory_change",{}).get("state")in {"intent","uncertain"}:
+                success=False
             row["state"]="finished"if success else"failed";row["finished"]=self.clock()
             peak=row.get("metrics",{}).get("peak_memory",0)
             row["diagnostic_complete"]=diagnostic_complete
@@ -190,6 +198,7 @@ class Resources:
     def control(self,job,args):
         """Apply a bounded phase control with live owner authority, CAS and durable retry receipts."""
         import hashlib,re
+        if args["action"]=="increase_memory":return self.increase_memory(job,args)
         action=args["action"];request=args.get("request_id")
         if not isinstance(request,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",request):raise ValueError("Stable resource request ID required")
         phase_id=args.get("phase_id")
@@ -230,8 +239,101 @@ class Resources:
             row["revision"]=row.get("revision",0)+1
             result={"phase_id":phase_id,"job_id":job["job_id"],"state":row["state"],"revision":row["revision"]}
             self.controls[token]={"digest":digest,"result":result}
-            if len(self.controls)>1024:self.controls.pop(next(iter(self.controls)))
+            self.bound_controls()
             self.persist();self.condition.notify_all();return result
+
+
+    # @code-index {"version":1,"feature":"compiler-memory-policy","aliases":["compiler memory defaults","task memory overrides","live memory growth"],"purpose":"Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/compiler_memory_default_bytes","/compiler_memory_min_bytes","/compiler_memory_max_bytes","/allow_live_memory_increase"]}]}}
+    def memory_policy(self):
+        """Expose only protected scalar bounds and their canonical broker/helper binding."""
+        import hashlib
+        keys={"compiler_memory_default_bytes":5*1024**3,"compiler_memory_min_bytes":1024**3,"compiler_memory_max_bytes":10*1024**3,"allow_live_memory_increase":False}
+        values={k:self.policy.get(k,v)for k,v in sorted(keys.items())}
+        return {"values":values,"sha256":hashlib.sha256(json.dumps(values,sort_keys=True,separators=(",",":")).encode()).hexdigest()}
+
+    def adopt_memory_policy(self,policy,expected):
+        """Adopt validated root-owned bounds without changing already admitted job ceilings."""
+        with self.condition:
+            previous=self.memory_policy()
+            values={k:policy[k]for k in previous["values"]}
+            if previous["sha256"]!=expected and values!=previous["values"]:raise ValueError("Resource policy revision changed")
+            self.policy.update(values);self.persist();self.condition.notify_all()
+            return self.memory_policy()
+
+    def reconcile_memory(self,name,observed):
+        """Classify an uncertain increase from exact kernel evidence; never repeat the effect."""
+        row=self.rows[name];change=row["memory_change"];actual=observed.get("memory_max")
+        if observed.get("container_id")!=row["container_id"]or observed.get("swap_max")!=0:raise ValueError("Memory identity or swap binding changed")
+        if actual==change["new_cap"]:
+            row["hard_cap"]=actual;row["estimate"]=actual;outcome="applied"
+        elif actual==change["old_cap"]:
+            row["hard_cap"]=actual;row["estimate"]=change["old_estimate"];outcome="not_applied"
+        else:raise ValueError("Memory increase requires reconciliation")
+        change["state"]=outcome
+        if row["state"]=="memory_recovery_required":row["state"]=change["previous_state"];row.pop("reason",None)
+        row["revision"]=row.get("revision",0)+1
+        evidence={"request_id":change["request_id"],"old_bytes":change["old_cap"],"requested_bytes":change["new_cap"],"observed_memory_max":actual,"observed_swap_max":0,"outcome":outcome,"at":time.time()}
+        row.setdefault("memory_history",[]).append(evidence)
+        result={"job_id":row["job_id"],"phase_id":change["phase_id"],"revision":row["revision"],"state":outcome,"memory_bytes":actual}
+        self.controls[change["token"]]["result"]=result
+        self.persist();self.condition.notify_all()
+        return copy.deepcopy(result)
+
+    def bound_controls(self):
+        """Keep retry storage bounded while retaining every unresolved memory intent."""
+        while len(self.controls)>1024:
+            removable=next((k for k,v in self.controls.items()if v["result"].get("state")!="uncertain"),None)
+            if removable is None:raise ValueError("Unresolved resource control bound reached")
+            del self.controls[removable]
+
+    def increase_memory(self,job,args):
+        """Reserve full growth before a root-authorized increase; uncertainty keeps that reservation."""
+        import hashlib
+        request=args.get("request_id");phase_id=args.get("phase_id");revision=args.get("expected_revision")
+        if not isinstance(request,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",request):raise ValueError("Stable resource request ID required")
+        if not isinstance(phase_id,str)or not re.fullmatch(r"[a-f0-9]{64}",phase_id)or type(revision)is not int:raise ValueError("Opaque phase ID and revision required")
+        cap=args.get("memory_bytes");policy=self.memory_policy();limits=policy["values"]
+        if not self.enabled or not limits["allow_live_memory_increase"]:raise PermissionError("Live memory increases disabled")
+        if type(cap)is not int or not limits["compiler_memory_min_bytes"]<=cap<=limits["compiler_memory_max_bytes"]or cap%os.sysconf("SC_PAGE_SIZE"):raise ValueError("Compiler memory request outside policy")
+        token=hashlib.sha256((job["job_id"]+request).encode()).hexdigest();digest=hashlib.sha256(json.dumps([job["job_id"],args],sort_keys=True,separators=(",",":")).encode()).hexdigest()
+        with self.condition:
+            receipt=self.controls.get(token)
+            if receipt and receipt["digest"]!=digest:raise ValueError("Resource request ID reused")
+            if receipt and receipt["result"]["state"]!="uncertain":return copy.deepcopy(receipt["result"])
+            name=next((n for n,r in self.rows.items()if r["job_id"]==job["job_id"]and hashlib.sha256(n.encode()).hexdigest()==phase_id),None)
+            if name is None:raise ValueError("Phase unavailable")
+            row=self.rows[name]
+            if job["status"]!="running"or job.get("revoked")or job.get("lease_until",0)<=time.time():raise PermissionError("Live executing owner authority required")
+            if receipt:
+                result=self.runner.resource_request({"operation":"stats","container":name})
+                return self.reconcile_memory(name,result)
+            if row.get("revision",0)!=revision:raise ValueError("Resource phase changed")
+            if row["state"]not in {"running","parked"}or row["phase"]not in PARKABLE or row["kind"]not in {"engine","plugin"}or not row.get("hard_cap"):raise ValueError("Capped compiler phase required")
+            if cap<=row["hard_cap"]:raise ValueError("Only increasing a running compiler ceiling is supported")
+            if len(row.get("memory_history",[]))>=32:raise ValueError("Phase memory change bound reached")
+            self.host=self.sampler()
+            remaining=sum(max(0,r["estimate"]-r.get("metrics",{}).get("memory",0))for r in self.rows.values()if r["state"]in {"admitted","running","parked"})
+            available=self.host["available"]-self.reserve()-remaining
+            delta=cap-row["estimate"]
+            if available<delta or any(r["state"]in {"recovery_required","waiting_intervention","memory_recovery_required"}for r in self.rows.values()):
+                result={"job_id":job["job_id"],"phase_id":phase_id,"revision":revision,"state":"waiting_headroom","memory_bytes":row["hard_cap"],"requested_bytes":cap,"available_growth_bytes":max(0,available)}
+                self.controls[token]={"digest":digest,"result":result};self.bound_controls();self.persist()
+                return copy.deepcopy(result)
+            change={"request_id":request,"phase_id":phase_id,"token":token,"state":"intent","old_cap":row["hard_cap"],"old_estimate":row["estimate"],"new_cap":cap,"previous_state":row["state"],"at":time.time()}
+            row["memory_change"]=change;row["estimate"]=cap
+            self.controls[token]={"digest":digest,"result":{"job_id":job["job_id"],"phase_id":phase_id,"state":"uncertain","revision":revision}}
+            self.bound_controls();self.persist()
+            required=sum(max(r["estimate"],r.get("metrics",{}).get("memory",0))for r in self.rows.values()if r["state"]in {"admitted","running","parked"})
+            try:
+                observed=self.runner.resource_request({"operation":"memory","container":name,"memory_bytes":cap,"previous_bytes":change["old_cap"],"reserved_bytes":required,"policy_sha256":policy["sha256"],"lease_until":job["lease_until"]})
+                return self.reconcile_memory(name,observed)
+            except (OSError,ValueError,RuntimeError,TimeoutError):
+                try:return self.reconcile_memory(name,self.runner.resource_request({"operation":"stats","container":name}))
+                except (OSError,ValueError,RuntimeError,TimeoutError):
+                    change["state"]="uncertain";row.update(state="memory_recovery_required",reason="Memory effect outcome requires exact kernel reconciliation",revision=row.get("revision",0)+1)
+                    self.controls[token]["result"]["revision"]=row["revision"]
+                    self.persist();self.condition.notify_all()
+                    return copy.deepcopy(self.controls[token]["result"])
 
     def tick(self):
         """Sample real containers, reduce contention, and park/resume with hysteresis."""
@@ -318,4 +420,4 @@ class Resources:
             import hashlib
             rows={hashlib.sha256(n.encode()).hexdigest():{k:v for k,v in r.items()if k not in {"container_id","last_sample","paused_at","started","finished"}}|{"phase_id":hashlib.sha256(n.encode()).hexdigest(),"paused_seconds":self.elapsed_pause(n)}
                 for n,r in self.rows.items()if job_id is None or r["job_id"]==job_id}
-            return copy.deepcopy({"enabled":self.enabled,"host":self.host,"reserve":self.reserve(),"phases":rows,"profiles":self.profiles if job_id is None else{}})
+            return copy.deepcopy({"enabled":self.enabled,"host":self.host,"reserve":self.reserve(),"memory_policy":self.memory_policy(),"phases":rows,"profiles":self.profiles if job_id is None else{}})
