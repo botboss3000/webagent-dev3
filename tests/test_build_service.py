@@ -430,3 +430,48 @@ class ReleaseClaimsBrokerTests(unittest.TestCase):
   self.assertTrue(Path(item["workspace_path"]).is_dir())
   with self.assertRaisesRegex(ValueError,"reused"):
    self.call("build_work",{**args,"reason":"Different payload"})
+
+
+class UIRuntimeRetentionTests(unittest.TestCase):
+ def fixture(self):
+  """Model Docker identity and creation flags without invoking an application container."""
+  runner=fixtures.host.Runner.__new__(fixtures.host.Runner);calls=[];store={};image="sha256:"+"d"*64
+  def inspect(name):
+   if name not in store:raise RuntimeError("missing holder")
+   return json.loads(json.dumps(store[name]))
+  def command(args,**kw):
+   calls.append(args)
+   if args[:3]==["docker","image","inspect"]:return image
+   if args[:2]==["docker","inspect"]:return json.dumps([inspect(args[2])])
+   if args[:2]==["docker","ps"]:return "\n".join(v["Id"]for v in store.values())
+   if args[:2]==["docker","create"]:
+    def option(name):return args[args.index(name)+1]
+    labels=dict(args[n+1].split("=",1)for n,v in enumerate(args)if v=="--label")
+    store[option("--name")]={"Id":"a"*64,"Image":image,"Mounts":[],"State":{"Status":"created","Pid":0},"Config":{"Labels":labels,"Entrypoint":[option("--entrypoint")],"Cmd":args[-1:],"User":option("--user")},"HostConfig":{"NetworkMode":option("--network"),"ReadonlyRootfs":"--read-only"in args,"Memory":int(option("--memory")[:-1])*1024**2,"MemorySwap":int(option("--memory-swap")[:-1])*1024**2,"NanoCpus":int(float(option("--cpus"))*10**9),"PidsLimit":int(option("--pids-limit")),"CapDrop":[option("--cap-drop")],"SecurityOpt":[option("--security-opt")],"RestartPolicy":{"Name":option("--restart")}}}
+   elif args[:2]==["docker","start"]:store[args[2]]["State"]={"Status":"running","Pid":4321}
+   else:raise AssertionError("Unexpected Docker operation")
+   return ""
+  runner.command=command
+  def application_inspect(_name):raise AssertionError("Retention must not broaden the application-only inspection boundary")
+  runner.inspect=application_inspect
+  return runner,calls,store,image
+ def test_running_holder_is_bounded_isolated_and_reused(self):
+  runner,calls,store,image=self.fixture();first=runner.retain_ui_test_runtime(image,"e"*64);second=runner.retain_ui_test_runtime(image,"e"*64)
+  self.assertFalse(first["reused"]);self.assertTrue(second["reused"]);self.assertEqual(first["container_id"],second["container_id"])
+  self.assertEqual(sum(c[:2]==["docker","create"]for c in calls),1);self.assertEqual(sum(c[:2]==["docker","start"]for c in calls),1)
+  self.assertEqual(first["memory_max"],33554432);self.assertEqual(first["swap_max"],0);self.assertEqual(first["cpu_limit"],0.01)
+  self.assertEqual(store[first["container"]]["Config"]["Entrypoint"],["sleep"])
+ def test_changed_existing_holder_is_rejected_without_mutating_it(self):
+  runner,calls,store,image=self.fixture();first=runner.retain_ui_test_runtime(image,"e"*64);store[first["container"]]["HostConfig"]["Privileged"]=True
+  mutations=sum(c[1]in {"create","start"}for c in calls)
+  with self.assertRaisesRegex(ValueError,"identity or budget"):runner.retain_ui_test_runtime(image,"e"*64)
+  self.assertEqual(sum(c[1]in {"create","start"}for c in calls),mutations)
+ def test_mutable_image_reference_is_rejected_before_docker(self):
+  runner,calls,_store,_image=self.fixture()
+  with self.assertRaisesRegex(ValueError,"Pinned"):runner.retain_ui_test_runtime("node:latest","e"*64)
+  self.assertEqual(calls,[])
+
+ def test_at_most_two_runtime_versions_can_be_retained(self):
+  runner,calls,store,image=self.fixture();runner.retain_ui_test_runtime(image,"e"*64);runner.retain_ui_test_runtime(image,"f"*64)
+  with self.assertRaisesRegex(ValueError,"third version"):runner.retain_ui_test_runtime(image,"b"*64)
+  self.assertEqual(len(store),2)

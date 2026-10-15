@@ -1159,6 +1159,35 @@ class Runner:
         return outputs
 
     # @code-index {"version":1,"feature":"ui-verification-runtime","aliases":["ui verification runtime"],"purpose":"Run selected fixtures in an isolated measured browser worker; reuse exact evidence. Config: build-service/scheduler-defaults.json -> ui_test_image, component_indexing.","span_lines":70,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/ui_test_image","/component_indexing"]}],"opportunities":[]}}
+    def retain_ui_test_runtime(self,image,recipe_hash):
+        """Keep the reviewed test image available without application mounts or browser work."""
+        if not re.fullmatch(r"sha256:[a-f0-9]{64}",image)or not re.fullmatch(r"[a-f0-9]{64}",recipe_hash):raise ValueError("Pinned UI runtime identity required")
+        actual=self.command(["docker","image","inspect","--format","{{.Id}}",image],timeout=10,private_raw=True).strip()
+        if not re.fullmatch(r"sha256:[a-f0-9]{64}",actual):raise ValueError("UI runtime image unavailable")
+        name="webagent-"+CONFIG["instance"]+"-ui-test-retain-"+hashlib.sha256(canonical([actual,recipe_hash])).hexdigest()[:16]
+        labels={"webagent.retention.instance":CONFIG["instance"],"webagent.retention.kind":"ui-test-runtime","webagent.retention.image":actual,"webagent.retention.recipe":recipe_hash}
+        def inspect_holder():
+            """Inspect only this host-derived holder; application inspection stays confined."""
+            values=json.loads(self.command(["docker","inspect",name],timeout=30,private_raw=True))
+            if not isinstance(values,list)or len(values)!=1 or not isinstance(values[0],dict):raise ValueError("UI runtime holder inspection invalid")
+            return values[0]
+        reused=True
+        try:value=inspect_holder()
+        except RuntimeError:
+            pins=self.command(["docker","ps","-a","--no-trunc","--filter","label=webagent.retention.instance="+CONFIG["instance"],"--filter","label=webagent.retention.kind=ui-test-runtime","--format","{{.ID}}"],timeout=10,private_raw=True).split()
+            if len(pins)>=2 or any(not re.fullmatch(r"[a-f0-9]{64}",p)for p in pins):raise ValueError("Retire an unused prior UI runtime holder before retaining a third version")
+            reused=False
+            args=["docker","create","--name",name,"--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges","--restart","unless-stopped","--memory","32m","--memory-swap","32m","--cpus","0.01","--pids-limit","8","--user",str(CONFIG["app_uid"])+":"+str(CONFIG["app_gid"])]
+            for key,entry in labels.items():args.extend(["--label",key+"="+entry])
+            self.command([*args,"--entrypoint","sleep",actual,"infinity"],timeout=30,private_raw=True);value=inspect_holder()
+        policy=value.get("HostConfig",{});settings=value.get("Config",{})
+        if(value.get("Image")!=actual or any(settings.get("Labels",{}).get(k)!=v for k,v in labels.items())or value.get("Mounts")or settings.get("Entrypoint")!=["sleep"]or settings.get("Cmd")!=["infinity"]or settings.get("User")!=str(CONFIG["app_uid"])+":"+str(CONFIG["app_gid"])or settings.get("Healthcheck")or policy.get("NetworkMode")!="none"or not policy.get("ReadonlyRootfs")or policy.get("Privileged")or policy.get("CapAdd")or policy.get("CapDrop")!=["ALL"]or not any(s in {"no-new-privileges","no-new-privileges:true"}for s in policy.get("SecurityOpt",[]))or policy.get("PortBindings")or policy.get("PublishAllPorts")or policy.get("Memory")!=33554432 or policy.get("MemorySwap")!=33554432 or policy.get("NanoCpus")!=10000000 or policy.get("PidsLimit")!=8 or policy.get("RestartPolicy",{}).get("Name")!="unless-stopped"):
+            raise ValueError("UI runtime retention identity or budget changed")
+        if value.get("State",{}).get("Status")in {"created","exited"}:
+            self.command(["docker","start",name],timeout=30,private_raw=True);value=inspect_holder()
+        if value.get("State",{}).get("Status")!="running"or value.get("State",{}).get("Pid",0)<=0:raise ValueError("UI runtime retention lease is not running")
+        return {"container":name,"container_id":value["Id"],"image":actual,"recipe_sha256":recipe_hash,"reused":reused,"memory_max":33554432,"swap_max":0,"cpu_limit":0.01,"pids_limit":8}
+
     def prepare_ui_test_runtime(self,job):
         """Build only the fixed protected ancillary test recipe in the measured packager."""
         recipe=Path(CONFIG["service_dir"])/"ui-test.Dockerfile"
@@ -1173,7 +1202,12 @@ class Runner:
         image=image_file.read_text().strip()
         if not re.fullmatch(r"sha256:[a-f0-9]{64}",image):raise ValueError("UI test image identity invalid")
         if recipe.read_bytes()!=body:raise ValueError("Protected UI test recipe changed")
-        return {"image":image,"recipe_sha256":hashlib.sha256(body).hexdigest(),"application_images_changed":False}
+        result={"image":image,"recipe_sha256":hashlib.sha256(body).hexdigest(),"application_images_changed":False}
+        # Only the host's explicit operator job requests a durable availability lease.
+        if job.get("retain_ui_runtime"):
+            result["retention_pin"]=self.retain_ui_test_runtime(image,result["recipe_sha256"])
+            result["image"]=result["retention_pin"]["image"]
+        return result
 
     def validate_selected_tests(self,job_id,root,evidence):
         """Execute dependency-selected frontend fixtures in one isolated browser-capable worker."""
@@ -2905,7 +2939,7 @@ class Broker:
                      "operation":"check","status":"running","phase":"preparing_ui_test_runtime","created_at":time.time(),"started_at":time.time(),
                      "lease_until":deadline,"access_fingerprint":fingerprint,"ownership_id":item["key"],"ownership_epoch":state["epoch"],"source_generation":state["generation"],
                      "inputs_sha256":hashlib.sha256((Path(CONFIG["service_dir"])/"ui-test.Dockerfile").read_bytes()).hexdigest(),"images":{},"log":"","phase_history":[],
-                     "summary":"Provision isolated frontend test runtime","package_memory_cap":4026531840,"rust_tests":{"status":"not_required"}}
+                     "summary":"Provision isolated frontend test runtime","retain_ui_runtime":True,"package_memory_cap":4026531840,"rust_tests":{"status":"not_required"}}
                 self.jobs[identity]=job;self.active_jobs.add(identity);self.active=next(iter(self.active_jobs));self.job_cancellations[identity]=event;self._save(job)
             self.runner.job_context.job=job;self.runner.job_context.event=event
             try:

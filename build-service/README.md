@@ -229,7 +229,12 @@ with the owning broker `task_id` and stable `request_id`, during a task-owned id
 drain. The fixed protected recipe runs in the existing measured packaging lane
 with a 4,026,531,840-byte memory cap, zero swap and retained peak/OOM evidence.
 The durable check receipt returns its immutable image ID and recipe hash; no
-application image is built or deployed. Reconcile that exact job after a client
+application image is built or deployed. The operator receipt also retains the
+image through a fixed, networkless, read-only sleep holder with no application
+mounts, a 32 MiB memory cap, zero swap, 0.01 CPU and eight PIDs. It runs no
+browser or tests. At most two runtime versions are retained; reconcile and retire
+an unused predecessor before provisioning a third. A running holder survives the host guard's stopped-container
+and unused-image pruning; a tag or stopped holder does not. Reconcile that exact job after a client
 timeout, and retry only the identical request to retrieve its receipt. Configure
 the verified image through supported lifecycle reconfiguration. Fixtures run
 read-only with no external network, application data, credentials or Docker
