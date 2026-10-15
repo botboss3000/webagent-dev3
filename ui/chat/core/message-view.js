@@ -51,7 +51,7 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
         resolveAsset(url).then(blobUrl=>{if(!link.isConnected)return;ready=true;link.href=blobUrl;if(image)image.src=blobUrl;}).catch(error=>{link.onclick=event=>{event.preventDefault();note('Attachment unavailable: '+error.message);};});}
       files.append(link);
     }
-    bubble.append(files);
+    if(files.childElementCount)bubble.append(files); // Empty or filtered attachment lists must not reserve spacing.
   }
   const cfg=profile.message_bubbles||{},lane=cfg[role]||{};bubble.style.fontSize=(cfg.font_size_px||17)+'px';applyBubblePaint(bubble,lane);bubble.style.lineHeight=String(lane.line_height||1.5);
   const gutter=createBubbleGutter({item,body,bubble,getText:/* Supplies the current rendered text for gutter copy actions. */()=>text,getRun,showContext,historyAction,refreshMessage:/* Reload the committed row, fenced to its still-selected session. */async()=>{
