@@ -21,7 +21,7 @@ export function applyBubblePaint(bubble, lane = {}) {
     bubble.style.setProperty('padding-' + side, typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value + 'px' : 'initial');
   }
   const corners = ['top_left','top_right','bottom_right','bottom_left'];
-  const baseRadius = lane.radius_px === 'auto' ? 'auto' : px(lane.radius_px,14);
+  const baseRadius = lane.radius_px === 'auto' ? 'auto' : px(lane.radius_px, "auto");
   const radii = corners.map(corner => lane['radius_' + corner + '_px'] === 'auto' ? 'auto' : px(lane['radius_' + corner + '_px'], baseRadius));
   // The shared stylesheet consumes this token with !important; explicit corners stay independent.
   const writeRadius = auto => {
