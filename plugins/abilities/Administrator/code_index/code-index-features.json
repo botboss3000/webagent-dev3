@@ -1080,12 +1080,6 @@
           }
         },
         {
-          "path": "plugins/engine/background-dispatch/component.json",
-          "start_line": 1,
-          "end_line": 34,
-          "purpose": "Independent build closure and execution limits."
-        },
-        {
           "path": "build-service/engine_components.py",
           "start_line": 1,
           "end_line": 80,

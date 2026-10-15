@@ -348,3 +348,24 @@ passed. Full release verification and transported contract equivalence remain
 pending. Deployment, live adoption/lifecycle acceptance and fresh 250/5000/15000
 ms CPU/latency measurements remain pending; historical measurements above do not
 establish the performance of this revision.
+
+
+Configuration release eaf59d85-6398-48bf-9d93-cbc2032ab156 completed healthy
+coordinated publication and exact 14-path commit d4e5fb43059dafb79eb12ccd271a64ae0784f879.
+All 894 unique Rust cases, optimized linked/live equivalence,18 focused broker
+checks and required frontend verification passed. Live typed/generic saves
+accepted positive u64 milliseconds, rejected invalid/stale inputs and preserved
+unrelated settings. Quiet loop CPU means at250/5000/15000 ms were19.70/12.68/12.54%
+of one core (three30-second samples each). Twelve strict reads per setting
+all passed; mean queue-to-claim was31.7/31.3/33.6 ms, maxima37/37/58 ms.
+These sequential shared-host observations do not prove exact deployed timer
+cadence; delivered tasks leave the planner scan and no authenticated effective
+deadline endpoint exists. Deterministic timer/adoption tests cover that boundary.
+Preparation is excluded; all37 owned measurement sessions are recycled,
+Diagnostics selection/executable/metadata and tool overrides restored, unrelated
+runtime settings preserved and interval restored to5000. The disk-guard timer
+returned to its original active state. The next required lifecycle publication
+withdraws only the background descriptor; its exact sealed interface2/0.2.0
+artifact f988bf2e438d716293d67f336438bdbd508e34a553ddc73eeaf4c6aa96cfb3de
+is preserved for supported verified reuse. Three retained-input/manual-control
+and selective restoration checks remain pending.
