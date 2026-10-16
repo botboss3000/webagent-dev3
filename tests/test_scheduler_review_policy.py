@@ -227,3 +227,110 @@ class DefaultPostDeploymentReviewTests(unittest.TestCase):
         value["scheduler"] = {**value["scheduler"], "documentation_review_order": "skip_reviews"}
         with self.assertRaisesRegex(ValueError, "documentation review order"):
             configuration.validate(value)
+
+class RenameRecoveryTests(unittest.TestCase):
+    """Use real Git deletion preimages and both review storage layouts."""
+    def setUp(self):
+        import tempfile, subprocess
+        from types import SimpleNamespace
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);self.source=self.root/"checkout";self.source.mkdir()
+        self.git=lambda *args:subprocess.check_output(["git","-C",str(self.source),*args],stderr=subprocess.DEVNULL)
+        self.git("init","-q");self.git("config","user.email","fixture@example.invalid");self.git("config","user.name","Fixture")
+        (self.source/"old.css").write_text("body {}\n")
+        self.git("add",".");self.git("commit","-qm","before")
+        (self.source/"old.css").unlink();(self.source/"new.css").write_text("body {color:red}\n")
+        self.git("add",".");self.git("commit","-qm","move")
+        self.commit=self.git("rev-parse","HEAD").decode().strip()
+        self.job={"job_id":"rename-release","changed_paths":["v3/old.css","v3/new.css"]}
+        self.item={"key":"f"*64,"task_id":"rename-recovery"}
+        assets=self.root/"assets";self.live=assets/"releases/rename-release/v3";self.live.mkdir(parents=True)
+        (self.live/"new.css").write_bytes((self.source/"new.css").read_bytes())
+        host=fixtures.host
+        self.ledger=host.review_store_module.ledger_class(host.maintenance_engine)(self.root/"ledger",max_bytes=64*1024*1024)
+        self.actor={"user_id":"fixture","session_id":"fixture","transport":"operator"}
+        self.policy=host.review_policy_module.ReviewPolicy(SimpleNamespace(runner=SimpleNamespace(source=self.source),code_index_ledger=self.ledger),None,assets)
+        self.mutate({"action":"sync","scope":"new.css","request_id":"rename-sync-001"})
+        target=self.list("new.css")[0]
+        claimed=self.mutate({"action":"claim","entry_id":target["entry_id"],"expected_revision":target["revision"],"request_id":"rename-target-claim"})["record"]
+        self.target=self.record(claimed,"rename-target-record")["record"]
+        self.mapping=[{"removed_path":"old.css","replacement_entry_id":self.target["entry_id"]}]
+        self.historical=patch.object(self.policy,"removed_units",return_value=[])
+        self.historical.start();self.addCleanup(self.historical.stop)
+
+    def mutate(self,args):
+        return self.ledger.mutate(args,self.actor,self.item["key"],self.item["task_id"],self.live)
+    def list(self,scope):
+        return self.ledger.list({"task_key":self.item["key"],"scope":scope,"limit":100})["results"]
+    def record(self,row,request,reconciliation=None):
+        args={"action":"record","entry_id":row["entry_id"],"expected_revision":row["revision"],"source_hash":row["source_hash"],"claim_id":row["claim"]["id"],"status":"complete","checks":{k:"verified"for k in ("documentation","connections","breadcrumbs","configuration","index_freshness")},"configuration_assessment":{"status":"not_applicable","rationale":"Fixed rename fixture"},"request_id":request}
+        if reconciliation is not None:args["reconciliation"]=reconciliation
+        return self.mutate(args)
+    def rows(self):
+        return self.policy.rename_rows(self.job,self.item,self.commit,self.mapping,{"job_id":"rename-release"},{"index_sha256":"a"*64})
+    def seed(self,rows):
+        return self.ledger.seed_removed(self.item["key"],rows,self.actor,self.live)
+
+    def test_seed_is_pending_retry_safe_and_requires_normal_rename_review(self):
+        rows=self.rows();result=self.seed(rows);self.assertEqual(result,self.seed(rows))
+        row=self.list("old.css")[0]
+        self.assertEqual(row["status"],"needs_review");self.assertTrue(row["removed"])
+        self.assertEqual(row["rename_seed"]["previous_source_hash"],__import__("hashlib").sha256(b"body {}\n").hexdigest())
+        claimed=self.mutate({"action":"claim","entry_id":row["entry_id"],"expected_revision":row["revision"],"request_id":"rename-old-claim"})["record"]
+        with self.assertRaisesRegex(ValueError,"require reconciliation"):
+            self.record(claimed,"rename-old-missing")
+        self.assertEqual(self.record(claimed,"rename-old-complete",{"kind":"renamed","replacement_entry_id":self.target["entry_id"]})["record"]["status"],"complete")
+
+    def test_partitioned_seed_preserves_existing_completed_reviews(self):
+        self.ledger.partition_storage()
+        before=self.list("new.css");rows=self.rows();self.seed(rows);self.seed(rows)
+        self.assertEqual(before,self.list("new.css"));self.assertEqual(len(self.list("old.css")),1)
+
+    def test_changed_replacement_and_reappeared_source_fail_closed(self):
+        for name in ("new.css","old.css"):
+            with self.subTest(name=name):
+                path=self.live/name;prior=path.read_bytes()if path.exists()else None;path.write_text("changed")
+                with self.assertRaisesRegex(ValueError,"Source changed"):self.rows()
+                if prior is None:path.unlink()
+                else:path.write_bytes(prior)
+
+    def test_invalid_mapping_and_unreviewed_replacement_are_rejected(self):
+        valid=self.mapping
+        for mapping in ([{"removed_path":"../old.css","replacement_entry_id":self.target["entry_id"]}],
+                        [{"removed_path":"unknown.css","replacement_entry_id":self.target["entry_id"]}],valid*2):
+            self.mapping=mapping
+            with self.assertRaises(ValueError):self.rows()
+        self.mapping=valid
+        with patch.object(self.ledger,"snapshot",return_value=[{**self.target,"status":"pending"}]):
+            with self.assertRaisesRegex(ValueError,"reviewed"):self.rows()
+
+    def test_different_preimage_cannot_overwrite_existing_seed(self):
+        rows=self.rows();self.seed(rows)
+        rows[0]["rename_seed"]={**rows[0]["rename_seed"],"previous_source_hash":"b"*64}
+        with self.assertRaisesRegex(ValueError,"Existing removal evidence"):self.seed(rows)
+
+    def test_authority_failure_creates_no_obligation(self):
+        with self.assertRaises(PermissionError):
+            self.ledger.seed_removed(self.item["key"],self.rows(),self.actor,self.live,authorize=lambda:(_ for _ in ()).throw(PermissionError("expired")))
+        self.assertEqual(self.list("old.css"),[])
+
+    def test_deferred_index_digest_is_read_from_verified_index_receipt(self):
+        binding={"source_sha256":"b"*64}
+        manifest={"source_sha256":"b"*64,"index_sha256":"a"*64}
+        with patch.object(self.policy,"_binding",return_value=(binding,{"publication_mode":"post_deployment_indexing_v1"})), patch.object(self.ledger.scanner,"read_published",return_value=(b"index",manifest)):
+            self.assertEqual(self.policy.rename_index_binding(self.job,self.live.parent),(binding,manifest))
+        with patch.object(self.policy,"_binding",return_value=(binding,{})), patch.object(self.ledger.scanner,"read_published",return_value=(b"index",{**manifest,"source_sha256":"c"*64})):
+            with self.assertRaisesRegex(ValueError,"index source changed"):
+                self.policy.rename_index_binding(self.job,self.live.parent)
+
+    def test_historical_child_units_are_seeded_and_cannot_be_hidden_by_summary(self):
+        child={**self.target,"entry_id":"c"*64,"unit_id":"symbol::function:helper:1"}
+        prior={"file_path":"v3/old.css","unit_id":child["unit_id"],"removed":True,"source_hash":None,"label":"helper","start_line":1,"end_line":1}
+        with patch.object(self.policy,"removed_units",return_value=[prior]),patch.object(self.ledger,"snapshot",return_value=[self.target,child]):
+            rows=self.rows()
+        self.assertEqual(len(rows),2)
+        self.assertEqual(rows[1]["unit_id"],child["unit_id"])
+        self.assertEqual(rows[1]["rename_seed"]["replacement_entry_id"],child["entry_id"])
+        with patch.object(self.policy,"removed_units",return_value=[prior]):
+            with self.assertRaisesRegex(ValueError,"replacement requires review"):
+                self.rows()

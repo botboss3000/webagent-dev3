@@ -300,6 +300,44 @@ def ledger_class(engine):
             finally:
                 other.close()
 
+        def seed_removed(self, task_key, rows, actor, root, authorize=lambda: None):
+            """Create missing, host-verified removal obligations without asserting review.
+
+            The caller binds the preimage to a verified release commit. Existing
+            records are never overwritten; normal claims and rename checks remain.
+            """
+            authorize()
+            if not isinstance(rows, list) or not 1 <= len(rows) <= 512:
+                raise ValueError("Bounded removed-file obligations required")
+            context = self._using(task_key) if self.layout is not None else contextlib.nullcontext()
+            with context, self.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                authorize()
+                ids = []
+                for row in rows:
+                    if row["task_key"] != task_key or not isinstance(row["unit_id"], str) or not row["removed"] or row["source_hash"] is not None or row["status"] != "needs_review":
+                        raise ValueError("Invalid removed-file seed")
+                    self._fresh(root, row)
+                    target = conn.execute("SELECT body FROM records WHERE entry_id=? AND task_key=?", (row["rename_seed"]["replacement_entry_id"], task_key)).fetchone()
+                    if target is None:
+                        raise ValueError("Reviewed rename replacement unavailable")
+                    target = json.loads(target[0])
+                    if target["status"] != "complete" or target["removed"] or target["unit_id"] != row["unit_id"] or target["source_hash"] != row["rename_seed"]["replacement_source_hash"] or target.get("dependencies", []) != row["rename_seed"]["replacement_dependencies"]:
+                        raise ValueError("Reviewed rename replacement changed")
+                    self._fresh(root, target)
+                    prior = conn.execute("SELECT body FROM records WHERE entry_id=? AND task_key=?", (row["entry_id"], task_key)).fetchone()
+                    if prior:
+                        prior = json.loads(prior[0])
+                        if prior.get("rename_seed") != row["rename_seed"]:
+                            raise ValueError("Existing removal evidence differs; preserve and reconcile")
+                    else:
+                        self._save(conn, row, actor, "seed_verified_removal")
+                    ids.append(row["entry_id"])
+                if conn.execute("SELECT COUNT(*) FROM records").fetchone()[0] > engine.MAX_RECORDS:
+                    raise ValueError("Maintenance record bound exceeded")
+                authorize()
+                return {"entry_ids": ids, "completion_is_review_assertion": True}
+
         def mutate(self, args, actor, task_key, task_id, root, authorize=lambda: None):
             """Route global retry identities before independently validating and committing a task."""
             if self.layout is None:

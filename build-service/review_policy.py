@@ -2,6 +2,9 @@
 import hashlib
 import json
 import sqlite3
+import subprocess
+import re
+import uuid
 import time
 from pathlib import Path
 
@@ -9,7 +12,7 @@ from pathlib import Path
 # @code-index {"version":1,"feature":"approved-documentation-deferral","aliases":["post-deployment Code Index reviews"],"purpose":"Protected review order and exact sealed source bindings; defer only documentation assertions and require them before task completion. Config: build-service/scheduler-defaults.json -> documentation_review_order.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/documentation_review_order"]}]}}
 class ReviewPolicy:
     """Publication freshness and functional checks remain in their existing host gates."""
-    actions = {"approve_deferred_documentation", "finish_deferred_documentation"}
+    actions = {"approve_deferred_documentation", "finish_deferred_documentation", "seed_deferred_renames"}
 
     def __init__(self, broker, release, asset_root):
         self.broker = broker
@@ -154,8 +157,175 @@ class ReviewPolicy:
         except (ValueError,PermissionError):
             return False
 
+    def rename_index_binding(self, job, folder):
+        """Read the verified deferred index separately from the activation receipt."""
+        binding, _publication = self._binding(job, folder)
+        _blob, manifest = self.broker.code_index_ledger.scanner.read_published(folder, job["job_id"])
+        if manifest["source_sha256"] != binding["source_sha256"] or not manifest.get("index_sha256"):
+            raise ValueError("Deferred rename index source changed")
+        return binding, manifest
+
+    def removed_units(self, job):
+        """Read every historical removed unit from the verified immutable index."""
+        blob, _manifest = self.broker.code_index_ledger.scanner.read_published(
+            self.assets / "releases" / job["job_id"], job["job_id"])
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.deserialize(blob)
+            conn.execute("PRAGMA trusted_schema=OFF")
+            return [json.loads(row[0]) for row in conn.execute("SELECT body FROM maintenance_records")]
+        finally:
+            conn.close()
+
+    def rename_rows(self, job, item, commit, renames, binding, manifest):
+        """Bind missing removed-file summaries to a verified commit's parent.
+
+        A retired task may have no baseline archive or historical ledger rows.
+        The exact promoted commit is verified by the scheduler before this helper;
+        its parent supplies immutable deletion preimages, never mutable checkout
+        files. Replacements still require separate current completed reviews.
+        """
+        if not isinstance(renames, list) or not 1 <= len(renames) <= 32:
+            raise ValueError("Bounded rename mappings required")
+        def git(*args):
+            result = subprocess.run(["git", "-C", str(self.broker.runner.source), *args],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+            if result.returncode:
+                raise ValueError("Verified rename preimage unavailable")
+            return result.stdout
+        parents = git("rev-list", "--parents", "-n", "1", commit).decode().split()
+        if len(parents) != 2:
+            raise ValueError("Single-parent verified release required")
+        parent = parents[1]
+        rows = self.broker.code_index_ledger.snapshot([item["key"]])
+        targets = {r["entry_id"]: r for r in rows if r.get("task_key") == item["key"]}
+        source = self.assets / "releases" / job["job_id"] / "v3"
+        changed = {p.removeprefix("v3/") for p in job["changed_paths"] if p.startswith("v3/")}
+        historical = self.removed_units(job)
+        result = []
+        seen = set()
+        for mapping in renames:
+            if not isinstance(mapping, dict) or set(mapping) != {"removed_path", "replacement_entry_id"}:
+                raise ValueError("Exact rename mapping required")
+            path = mapping["removed_path"]
+            self.broker.code_index_ledger.scanner.relative_parts(path)
+            if path in seen or path not in changed or Path(path).suffix not in self.broker.code_index_ledger.scanner.SUFFIXES:
+                raise ValueError("Changed supported removed path required")
+            seen.add(path)
+            target = targets.get(mapping["replacement_entry_id"])
+            if not target or target["removed"] or target["status"] != "complete" or target["unit_id"] != "__file__" or target["file_path"] not in changed or target["file_path"] == path:
+                raise ValueError("Current reviewed changed replacement required")
+            pre = git("ls-tree", parent, "--", path).decode().split()
+            if len(pre) < 4 or pre[0] not in {"100644", "100755"} or pre[1] != "blob":
+                raise ValueError("Regular committed rename preimage required")
+            if int(git("cat-file", "-s", pre[2])) > self.broker.code_index_ledger.scanner.MAX_FILE_BYTES:
+                raise ValueError("Rename preimage exceeds source bound")
+            data = git("show", parent + ":" + path)
+            if len(data) > self.broker.code_index_ledger.scanner.MAX_FILE_BYTES:
+                raise ValueError("Rename preimage exceeds source bound")
+            if git("ls-tree", commit, "--", path):
+                raise ValueError("Rename source still exists in release commit")
+            proof = {"binding": binding, "commit": commit, "parent_commit": parent,
+                     "previous_source_hash": hashlib.sha256(data).hexdigest(),
+                     "replacement_entry_id": target["entry_id"],
+                     "replacement_source_hash": target["source_hash"],
+                     "replacement_dependencies": target.get("dependencies", [])}
+            row = {"entry_id": hashlib.sha256(json.dumps([item["key"], path, "__file__"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest(),
+                   "task_key": item["key"], "task_id": item["task_id"], "file_path": path,
+                   "unit_id": "__file__", "revision": 0, "status": "needs_review",
+                   "checks": {}, "remaining_work": ["Review the verified file move and record explicit rename reconciliation"],
+                   "claim": None, "previous_review": None, "source_hash": None,
+                   "dependencies": [], "removed": True, "parser_status": "uncertain",
+                   "label": "Removed file and verified rename preimage", "start_line": 1,
+                   "end_line": max(1, len(data.splitlines())), "features": [],
+                   "configuration_assessment": {"status": "unassessed", "references": [], "opportunities": []},
+                   "scan": {"gaps": 0, "stale_count": 0, "unindexed_count": 0,
+                            "index_sha256": manifest["index_sha256"], "verified_at": int(time.time())},
+                   "rename_seed": proof}
+            self.broker.code_index_ledger._fresh(source, row)
+            self.broker.code_index_ledger._fresh(source, target)
+            result.append(row)
+            # A file summary cannot hide historical symbol-level obligations.
+            # Recreate only units already present in this sealed release index.
+            for prior in historical:
+                if prior["file_path"].removeprefix("v3/") != path or prior["unit_id"] == "__file__":
+                    continue
+                if not prior.get("removed") or prior.get("source_hash") is not None:
+                    raise ValueError("Historical rename unit is not removed")
+                replacement = next((r for r in targets.values()
+                    if r["file_path"] == target["file_path"] and r["unit_id"] == prior["unit_id"]), None)
+                if not replacement or replacement["removed"] or replacement["status"] != "complete":
+                    raise ValueError("Historical rename unit replacement requires review")
+                self.broker.code_index_ledger._fresh(source, replacement)
+                unit = {**row, "unit_id": prior["unit_id"],
+                        "label": prior["label"], "start_line": prior["start_line"],
+                        "end_line": prior["end_line"],
+                        "entry_id": hashlib.sha256(json.dumps([item["key"], path, prior["unit_id"]], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest(),
+                        "rename_seed": {**proof, "replacement_entry_id": replacement["entry_id"],
+                            "replacement_source_hash": replacement["source_hash"],
+                            "replacement_dependencies": replacement.get("dependencies", [])}}
+                result.append(unit)
+        if len(result) > 512:
+            raise ValueError("Historical rename inventory exceeds bound")
+        return result
+
+    def seed_renames(self, request, args):
+        """Seed obligations only; normal attributed claims certify each rename later."""
+        if set(args) != {"action", "task_id", "job_id", "request_id", "commit", "renames"} or not request["trusted"].get("local_caller"):
+            raise PermissionError("Owner-scoped operator rename recovery required")
+        if not isinstance(args["request_id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", args["request_id"]):
+            raise ValueError("Stable rename recovery request required")
+        trusted = request["trusted"]; workspace = request["workspace"]
+        with self.broker.lock:
+            self.broker._incoming_lease(trusted)
+            item = self.broker.scheduler.item(args, trusted, workspace)
+            job = self.broker.jobs.get(args["job_id"])
+            if not job or not self.broker._owned(job, trusted, workspace) or job.get("ownership_id") != item["key"] or item.get("job_id") != job["job_id"] or job["status"] != "completed" or not job.get("deferred_documentation"):
+                raise PermissionError("Latest owned deferred release required")
+            owner = self.broker.scheduler.owner(trusted, workspace)
+            self.broker.scheduler.store.assert_owned(item["key"], owner, job["ownership_epoch"], [])
+            if any(l.get("task_key") == item["key"] for l in self.broker.code_index_leases.values()):
+                raise ValueError("Wait for active task maintenance")
+            journal = self.broker.scheduler.journal_path(owner, args["request_id"], "deferred-renames")
+            digest = hashlib.sha256(json.dumps(args, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            if journal.exists():
+                previous = json.loads(journal.read_bytes())
+                if previous["digest"] != digest:
+                    raise ValueError("Rename recovery request_id reused")
+                if previous.get("state") == "done":
+                    return previous["result"]
+            lease = {**trusted, "workspace": workspace, "task_key": item["key"],
+                     "deployed_job_id": job["job_id"], "revoked": False}
+            lease_key = ("rename-recovery", uuid.uuid4().hex)
+            self.broker.code_index_leases[lease_key] = lease
+            job["documentation_review_revision"] = job.get("documentation_review_revision", 0) + 1
+            job["deferred_documentation"].pop("completion", None)
+            self.broker._save(job)
+        try:
+            # Verify the exact promoted commit, sealed candidate and current health.
+            self.broker.scheduler.verified(item, {"job_id": job["job_id"], "commit": args["commit"],
+                "acceptance": [{"check": "Verified immutable release commit for rename obligations", "passed": True}]}, deployment_only=True)
+            binding, manifest = self.rename_index_binding(job, self.assets / "releases" / job["job_id"])
+            if not self.allows(job, self.assets / "releases" / job["job_id"]):
+                raise ValueError("Deferred rename source binding changed")
+            rows = self.rename_rows(job, item, args["commit"], args["renames"], binding, manifest)
+            actor = {"user_id": trusted["user_id"], "session_id": workspace, "transport": "operator"}
+            result = self.broker.code_index_ledger.seed_removed(item["key"], rows, actor,
+                self.assets / "releases" / job["job_id"] / "v3",
+                authorize=lambda: self.broker._code_index_authorize(lease, item["key"]))
+            with self.broker.lock:
+                self.broker._incoming_lease(trusted)
+                self.broker.scheduler.store.assert_owned(item["key"], owner, job["ownership_epoch"], [])
+                self.broker.scheduler.write_record(journal, {"digest": digest, "state": "done", "result": result})
+            return result
+        finally:
+            with self.broker.lock:
+                self.broker.code_index_leases.pop(lease_key, None)
+
     def handle(self, request, args):
         """Record a deliberate user approval, never infer one from a build or resume."""
+        if args.get("action") == "seed_deferred_renames":
+            return self.seed_renames(request, args)
         required = {"action", "task_id", "job_id", "request_id"}
         approve = args.get("action") == "approve_deferred_documentation"
         if approve:
