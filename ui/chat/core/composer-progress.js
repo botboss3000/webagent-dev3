@@ -2,7 +2,7 @@
 'use strict';
 // V2 centered progress control adapted to V3 snapshots. Never publishes chat.
 import {activityRows,watchActivity} from './activity.js';
-import {createTranscriptRow,patchTranscriptRow} from './activity-transcript.js';
+import {createTranscriptRow,patchTranscriptRow} from '../elements/mini-transcript/rows.js';
 // Mount the profile-positioned progress control; its activity details are read-only.
 export function mountComposerProgress({root,getProfile,isAdmin}) {
   const host=root.querySelector('#chat-above-pill');

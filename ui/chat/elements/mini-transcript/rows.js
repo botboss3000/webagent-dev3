@@ -2,9 +2,9 @@
 'use strict';
 
 // Presentation only: journal IDs are never treated as legacy interaction IDs.
-import {copyText} from '../../shared/models/clipboard.js';
-import {_refreshLucideIcons} from './presentation.js';
-import {openChatElementFullView, closeChatElementFullView} from './full-view.js';
+import {copyText} from '../../../shared/models/clipboard.js';
+import {_refreshLucideIcons} from '../../core/presentation.js';
+import {openChatElementFullView, closeChatElementFullView} from '../../core/full-view.js';
 
 // Build display elements with textContent so labels stay inert.
 function el(tag, text='', cls='') {

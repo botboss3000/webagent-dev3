@@ -14,7 +14,7 @@ import {mountUsageStats} from '../controls/usage-stats.js';
 import {createMessageRow as createMessage,updateAdmission} from './message-view.js';
 import {closeGutterOverlays,updateGutterTimes} from './bubble-gutters.js';
 import {mountComposerProgress} from './composer-progress.js';
-import {createActivityView} from './activity-view.js';
+import {createChatElements} from '../elements/index.js';
 import {closeChatElementFullView} from './full-view.js';
 import {currentChatProfile} from '../controls/chat-config.js';
 import { applyChatConfig } from '../controls/chat-config.js';
@@ -34,8 +34,8 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   // Resolves partial element IDs only within this panel root.
   const $ = id => root.querySelector('#' + id);
   let session = '';
-  // Activity receives the panel's live session getter, account admin flag, and configured UI flags.
-  const activity=createActivityView({app:{/* Reads the current selected session. */get currentSessionId(){return session;}},/* Returns the current account's admin flag. */isAdmin:()=>!!getIdentity().is_admin,/* Uses profile configuration when set, otherwise the default. */chatUiFlag:(key,fallback)=>currentChatProfile()?.[key]??fallback});
+  // Chat elements share the panel session, public runs and merged profile; private groups retain admin gating.
+  const activity=createChatElements({app:{/* Reads the current selected session. */get currentSessionId(){return session;}},/* Returns the current account's admin flag. */isAdmin:()=>!!getIdentity().is_admin,/* Uses profile configuration when set, otherwise the default. */chatUiFlag:(key,fallback)=>currentChatProfile()?.[key]??fallback});
   let activityRuns=[];
   const expandedApprovals=new Set();
   const expandedRecovery=new Set();
