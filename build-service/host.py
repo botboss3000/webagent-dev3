@@ -1752,6 +1752,9 @@ class Runner:
         finally:
             conn.close()
 
+    def remove(self, name):
+        self.command(["docker", "rm", name], timeout=30)
+
     def start(self, name):
         self.command(["docker", "start", name], timeout=30)
 

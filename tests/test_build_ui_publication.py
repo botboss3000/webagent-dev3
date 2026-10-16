@@ -669,3 +669,56 @@ class BackendPredecessorRecoveryTests(ConcurrentUIEntryTests):
         job=self.failed_backend();(self.broker.state/job/"container-config.json").chmod(0o666)
         with self.assertRaisesRegex(ValueError,"Invalid private"):self.recover_backend(job)
         self.assertEqual(self.runner.current_asset_id(),job)
+
+
+class BackendBindRecoveryTests(ConcurrentUIEntryTests):
+    """Resume only the exact candidate API after a transient host-port bind failure."""
+    def failed_bind(self):
+        api=fixtures.host.TARGETS[0]
+        ports={"8080/tcp":[{"HostIp":"100.112.23.15","HostPort":"8081"}]}
+        self.runner.containers[api]["HostConfig"]["PortBindings"]=ports
+        self.runner.containers[api]["NetworkSettings"]={"Ports":ports}
+        self.change("backend-bind-task","src/main.rs","fn main() {}\n","fn main() { let _x=2; }\n")
+        self.runner.fail_verify_ui=True
+        job=self.finish("backend-bind-task");row=self.wait([job])[0]
+        self.assertEqual((row["status"],row["phase"]),("uncertain","checking_ui"),row.get("reason"))
+        self.runner.fail_verify_ui=False
+        api=fixtures.host.TARGETS[0]
+        self.runner.containers[api]["State"]["Status"]="exited"
+        self.runner.containers[api]["NetworkSettings"]={"Ports":{}}
+        def remove(name):
+            self.runner.calls.append(("remove",name));self.runner.containers.pop(name)
+        self.runner.remove=remove
+        return job
+
+    def recover_bind(self,job):
+        return self.recovery("backend-bind-task",job,"recover_backend_api_bind","backend-bind-recovery-request")
+
+    def test_recreates_only_exact_stopped_candidate_and_promotes_source(self):
+        job=self.failed_bind();start=len(self.runner.calls)
+        result=self.recover_bind(job)
+        self.assertEqual(result["status"],"completed");self.assertTrue(result["api_recreated"])
+        calls=self.runner.calls[start:]
+        self.assertIn(("remove",fixtures.host.TARGETS[0]),calls)
+        self.assertIn(("start",fixtures.host.TARGETS[0]),calls)
+        self.assertFalse(any(call[:2]==("start",fixtures.host.TARGETS[1])for call in calls))
+        self.assertTrue(self.runner.checkout_matches((self.broker.state/job/"candidate.tar").read_bytes(),self.broker.jobs[job]["changed_paths"]))
+        self.assertEqual(result,self.recover_bind(job))
+
+
+    def test_running_candidate_without_a_port_mapping_is_recreated(self):
+        job=self.failed_bind();api=fixtures.host.TARGETS[0]
+        self.runner.containers[api]["State"]["Status"]="running"
+        start=len(self.runner.calls);self.recover_bind(job);calls=self.runner.calls[start:]
+        self.assertIn(("stop",api),calls)
+        self.assertIn(("remove",api),calls)
+
+    def test_rejects_changed_candidate_or_unhealthy_loop_before_mutation(self):
+        job=self.failed_bind();api,loop=fixtures.host.TARGETS
+        self.runner.containers[api]["Image"]="sha256:"+"4"*64
+        with self.assertRaisesRegex(ValueError,"Candidate API image changed"):self.recover_bind(job)
+        self.assertNotIn("publication_recovery",self.broker.jobs[job])
+        self.runner.containers[api]["Image"]=self.broker.jobs[job]["images"]["api"]
+        self.runner.containers[loop]["State"]["Status"]="exited"
+        with self.assertRaisesRegex(ValueError,"Candidate loop changed or unhealthy"):self.recover_bind(job)
+        self.assertNotIn("publication_recovery",self.broker.jobs[job])

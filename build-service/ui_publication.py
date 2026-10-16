@@ -159,7 +159,7 @@ class UIPublication:
             if guard is not None:guard.__exit__(None,None,None)
         finally:self.broker.deploy_lock.release()
 
-    recovery_actions={"discard_prepared_release","restore_failed_ui","restore_backend_predecessor","complete_activated_release"}
+    recovery_actions={"discard_prepared_release","restore_failed_ui","restore_backend_predecessor","recover_backend_api_bind","complete_activated_release"}
 
     def legacy_recovery_binding(self,job,folder):
         """Recover old UI receipts using their recorded container IDs/images and exact predecessor."""
@@ -190,19 +190,9 @@ class UIPublication:
         if receipt.get("release_id")!=job["job_id"]or receipt.get("candidate_sha256")!=job["inputs_sha256"]or receipt.get("source_sha256")!=scanner.source_digest(failed)or receipt.get("index_sha256")!=hashlib.sha256(paths[1].read_bytes()).hexdigest():raise ValueError("Legacy failed source/index receipt changed")
         return bound
 
-    def backend_predecessor_binding(self,job,folder,recorded,previous):
-        """Certify already-restored original containers; never recreate or adopt candidate binaries.
-
-        Process IDs may change during restoration. Container IDs, immutable images,
-        Config and HostConfig must match the private pre-effect capture exactly.
-        A recovery retry additionally pins its post-restoration process generation.
-        No private configuration is returned or interpolated into errors.
-        """
+    def backend_predecessor_capture(self,folder):
+        """Read the private pre-effect capture without exposing configuration values."""
         import stat
-        if job.get("operation")!="build_deploy" or job.get("publication_policy_version")!=1:
-            raise ValueError("Reviewed backend publication required")
-        if not isinstance(recorded,dict)or set(recorded)!={"api","loop"}:
-            raise ValueError("Predecessor runtime receipt required")
         fd=os.open(folder/"container-config.json",os.O_RDONLY|os.O_NOFOLLOW)
         with os.fdopen(fd,"rb")as stream:
             info=os.fstat(stream.fileno())
@@ -213,6 +203,21 @@ class UIPublication:
         captured=json.loads(raw)
         if not isinstance(captured,dict)or set(captured)!={"api","loop"}:
             raise ValueError("Invalid private predecessor capture")
+        return captured
+
+    def backend_predecessor_binding(self,job,folder,recorded,previous):
+        """Certify already-restored original containers; never recreate or adopt candidate binaries.
+
+        Process IDs may change during restoration. Container IDs, immutable images,
+        Config and HostConfig must match the private pre-effect capture exactly.
+        A recovery retry additionally pins its post-restoration process generation.
+        No private configuration is returned or interpolated into errors.
+        """
+        if job.get("operation")!="build_deploy" or job.get("publication_policy_version")!=1:
+            raise ValueError("Reviewed backend publication required")
+        if not isinstance(recorded,dict)or set(recorded)!={"api","loop"}:
+            raise ValueError("Predecessor runtime receipt required")
+        captured=self.backend_predecessor_capture(folder)
         current=self.runtime()
         for role,name in zip(("api","loop"),self.broker.publication_targets):
             old=captured[role];live=self.broker.runner.inspect(name)
@@ -254,8 +259,9 @@ class UIPublication:
             legacy=job.get("publication_policy_version",0)==0 and job["operation"]=="ui_deploy" and args["action"]=="restore_failed_ui"
             bound=self.legacy_recovery_binding(job,folder)if legacy else job.get("preparation",{}).get("runtime_before")
             backend=args["action"]=="restore_backend_predecessor"
+            bind_recovery=args["action"]=="recover_backend_api_bind"
             if backend:bound=self.backend_predecessor_binding(job,folder,bound,previous)
-            elif not bound or self.runtime()!=bound:raise ValueError("Runtime binding changed; explicit runtime reconciliation required")
+            elif not bind_recovery and(not bound or self.runtime()!=bound):raise ValueError("Runtime binding changed; explicit runtime reconciliation required")
             folder=self.broker.state/job["job_id"]
             baseline=folder/"publication-base.tar"
             if baseline.is_symlink()or not baseline.is_file():raise ValueError("Durable publication baseline required")
@@ -294,6 +300,59 @@ class UIPublication:
                 if job["synchronization"]["total"]:raise ValueError("Checkout synchronization changed")
                 result={"job_id":job["job_id"],"status":"completed","effects_reconciled":True,"activation_replayed":False,"source_promoted":True}
                 job.update(status="completed",phase="finished",finished_at=time.time(),effects_reconciled_at=time.time(),reason="Exact active source/index and retained consumers verified; source promotion reconciled")
+                job["publication_recovery"].update(done=True,result=result)
+                self.broker._save(job);self.broker._start_next()
+                return result
+            if args["action"]=="recover_backend_api_bind":
+                if (job.get("operation")!="build_deploy" or job.get("publication_policy_version")!=1
+                        or job.get("phase")!="checking_ui" or not isinstance(job.get("images"),dict)
+                        or set(job["images"])!={"api","loop"}):
+                    raise ValueError("Exact uncertain backend API check required")
+                if self.broker.runner.current_asset_id()!=job["job_id"]:
+                    raise ValueError("Candidate asset pointer is not active")
+                if not self.broker.runner.checkout_matches(before,job.get("changed_paths",())):
+                    raise ValueError("Checkout effects need reconciliation")
+                captured=self.backend_predecessor_capture(folder)
+                api,loop=self.broker.publication_targets
+                current_api=self.broker.runner.inspect(api)
+                current_loop=self.broker.runner.inspect(loop)
+                expected_ports=captured["api"].get("HostConfig",{}).get("PortBindings")
+                if not isinstance(expected_ports,dict) or not expected_ports:
+                    raise ValueError("Recorded API port binding required")
+                live_ports=(current_api.get("NetworkSettings") or {}).get("Ports")
+                bound=live_ports==expected_ports
+                previous_recovery=job.get("publication_recovery")
+                resumed=(previous_recovery and previous_recovery.get("action")==args["action"]
+                         and current_api.get("State",{}).get("Status")=="running" and bound)
+                if current_api.get("Image")!=job["images"]["api"]:
+                    raise ValueError("Candidate API image changed")
+                if current_loop.get("Image")!=job["images"]["loop"] or not self.broker.runner.healthy(loop,job["images"]["loop"]):
+                    raise ValueError("Candidate loop changed or unhealthy")
+                if not resumed:
+                    if current_api.get("State",{}).get("Status") not in {"exited","running"}:
+                        raise ValueError("Candidate API state cannot be recovered")
+                    job["publication_recovery"]={"digest":digest,"request_id":args["request_id"],"action":args["action"],"done":False}
+                    self.broker._save(job)
+                    if current_api.get("State",{}).get("Status")=="running":
+                        self.broker.runner.stop(api)
+                    self.broker.runner.remove(api)
+                    self.broker.runner.create(api,job["images"]["api"],captured["api"],job["release_root"])
+                    self.broker.runner.start(api)
+                recovered_api=self.broker.runner.inspect(api)
+                if (recovered_api.get("NetworkSettings") or {}).get("Ports")!=expected_ports:
+                    raise ValueError("Candidate API port binding unavailable after recovery")
+                if not self.broker.runner.healthy(api,job["images"]["api"]):
+                    raise ValueError("Candidate API remains unhealthy after exact bind recovery")
+                self.broker.runner.verify_ui(job.get("changed_paths",()))
+                self.broker.runner.promote_checkout(before,candidate,job.get("changed_paths",()))
+                if (not self.broker.runner.checkout_matches(candidate,job.get("changed_paths",()))
+                        or self.broker.runner.current_asset_id()!=job["job_id"]
+                        or not self.broker.runner.healthy(api,job["images"]["api"])):
+                    raise ValueError("Candidate recovery effects need reconciliation")
+                result={"job_id":job["job_id"],"status":"completed","effects_reconciled":True,
+                        "api_recreated":not resumed,"source_promoted":True}
+                job.update(status="completed",phase="finished",finished_at=time.time(),effects_reconciled_at=time.time(),
+                           reason="Exact candidate API recovered after transient bind failure; source promoted")
                 job["publication_recovery"].update(done=True,result=result)
                 self.broker._save(job);self.broker._start_next()
                 return result
