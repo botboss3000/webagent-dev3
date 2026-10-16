@@ -1,6 +1,7 @@
 """Offline package smoke checks for the published Git Control adapter."""
 import asyncio
 import importlib.util
+import hashlib
 import subprocess
 import tempfile
 from pathlib import Path
@@ -42,5 +43,50 @@ async def push_guard_check():
         assert "very-secret" not in str(result)
         assert subprocess.run(["git","--git-dir",str(remote),"rev-parse","--verify","main"],capture_output=True).returncode!=0
 
+async def reviewed_history_check():
+    with tempfile.TemporaryDirectory() as temporary:
+        base=Path(temporary)
+        repo=base/"webagent-v3";repo.mkdir()
+        def git(*args):
+            return subprocess.run(["git",*args],cwd=repo,capture_output=True,check=True).stdout.decode().strip()
+        git("init","-q","--initial-branch=main")
+        git("config","user.name","Fixture")
+        git("config","user.email","fixture@example.invalid")
+        (repo/"README.txt").write_text("baseline\n")
+        git("add","README.txt");git("commit","-qm","baseline")
+        baseline=git("rev-parse","HEAD")
+        git("update-ref","refs/remotes/origin/main",baseline)
+        fixture=b'assert secret(b"https://u:' + b'fixture-value@service.example/path")\n'
+        (repo/"fixture.txt").write_bytes(fixture)
+        git("add","fixture.txt");git("commit","-qm","fixture")
+        commit=git("rev-parse","HEAD")
+        digest=hashlib.sha256(b"+"+fixture).hexdigest()
+        args=["show","--format=","--no-ext-diff","--no-textconv","--no-renames","--unified=0","-p",commit,"--","fixture.txt"]
+        try:await module.command(repo,args,scan_only=True)
+        except module.Rejected as error:assert error.kind=="git_credential_guard"
+        else:raise AssertionError("unreviewed fixture passed")
+        await module.command(repo,args,scan_only=True,reviewed_lines={digest})
+        module._REVIEWED_HISTORY_LINES[(commit,"fixture.txt")]=frozenset({digest})
+        await module.scan_outgoing_history(repo,"origin",commit)
+        module._REVIEWED_HISTORY_LINES.pop((commit,"fixture.txt"))
+        try:await module.scan_outgoing_history(repo,"origin",commit)
+        except module.Rejected as error:
+            assert error.kind=="git_credential_guard"
+            assert error.diagnostics["commit"]==commit
+            assert error.diagnostics["path"]=="fixture.txt"
+            assert error.diagnostics["line"]==1
+        else:raise AssertionError("exception applied outside exact commit/path")
+        module._REVIEWED_HISTORY_LINES[(commit,"fixture.txt")]=frozenset({digest})
+        extra=b"another="+b"https://u:unreviewed-value@service.example/path\n"
+        (repo/"fixture.txt").write_bytes(fixture+extra)
+        git("add","fixture.txt");git("commit","-qm","new finding")
+        try:await module.scan_outgoing_history(repo,"origin",git("rev-parse","HEAD"))
+        except module.Rejected as error:
+            assert error.kind=="git_credential_guard"
+            assert error.diagnostics["path"]=="fixture.txt"
+        else:raise AssertionError("new credential-shaped content passed")
+        module._REVIEWED_HISTORY_LINES.pop((commit,"fixture.txt"))
+
 asyncio.run(push_guard_check())
+asyncio.run(reviewed_history_check())
 print("Git Control package checks passed")

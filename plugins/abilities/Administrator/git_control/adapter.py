@@ -144,7 +144,7 @@ def secret(data):
   value=match.group(1) or match.group(2)
   if value not in _DUMMY_CREDENTIALS:return True
  return False
-async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,scan_only=False):
+async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,scan_only=False,reviewed_lines=None):
  env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8","HOME":str(repo.parent),"GIT_CONFIG_NOSYSTEM":"1","GIT_CONFIG_GLOBAL":"/dev/null","GIT_OPTIONAL_LOCKS":"0","GIT_TERMINAL_PROMPT":"0","GIT_EDITOR":":","GIT_SEQUENCE_EDITOR":":","GIT_NO_REPLACE_OBJECTS":"1"}
  if env_extra:
   if not isinstance(env_extra,dict) or any(k not in {"GIT_ASKPASS","V3_GIT_URL","V3_GIT_USERNAME","V3_GIT_TOKEN"} or not isinstance(v,str) for k,v in env_extra.items()):raise Rejected("Invalid trusted transport")
@@ -153,25 +153,31 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,
  proc=await asyncio.create_subprocess_exec("git",*opts,*argv,cwd=repo,env=env,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT,start_new_session=True,preexec_fn=lambda:(_RESTRICT(_SANDBOX_ROOT.get() or repo.parent,read_paths=(str(Path(__file__).resolve().parent/"askpass.py"),)) if env_extra else _RESTRICT(_SANDBOX_ROOT.get() or repo.parent)))
  output=bytearray()
  async def drain():
-  line_bytes=0
+  pending=bytearray();new_line=None
+  def scan_line(line):
+   nonlocal new_line
+   if len(line)>SCAN_LINE_LIMIT:raise Rejected("Outgoing history line exceeds scan bound")
+   hunk=re.match(rb"@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)",line)
+   if hunk:new_line=int(hunk.group(1))
+   location=new_line if line.startswith(b"+") and not line.startswith(b"+++") else None
+   if reviewed_lines and location is not None and hashlib.sha256(line).hexdigest() in reviewed_lines:
+    line=b"+<reviewed synthetic assertion>\n"
+   output.extend(line)
+   if secret(bytes(output)):
+    raise Rejected("Outgoing history withheld by credential guard; inspect outgoing commits for credential-shaped content","git_credential_guard",{"line":location} if location is not None else None)
+   if re.search(rb"\s{4096}",output):raise Rejected("Outgoing history whitespace exceeds scan bound")
+   if len(output)>LIMIT:del output[:-LIMIT]
+   if new_line is not None and (line.startswith(b"+") and not line.startswith(b"+++") or line.startswith(b" ")):new_line+=1
   while chunk:=await proc.stdout.read(8192):
-   output.extend(chunk)
    if scan_only:
-    # Scan the entire stream, retaining overlap instead of returning a patch.
-    # Minified assets can exceed the response cap. Retain the complete unfinished
-    # line plus bounded completed overlap so long literals cannot hide a prefix.
-    # Line and whitespace bounds still cap memory and credential lookbehind.
-    if secret(bytes(output[:output.rfind(b"\n")+1])):raise Rejected("Outgoing history withheld by credential guard; inspect outgoing commits for credential-shaped content","git_credential_guard")
-    if re.search(rb"\s{4096}",output):raise Rejected("Outgoing history whitespace exceeds scan bound")
-    segments=chunk.split(b"\n")
-    for index,segment in enumerate(segments):
-     line_bytes+=len(segment)
-     if line_bytes>SCAN_LINE_LIMIT:raise Rejected("Outgoing history line exceeds scan bound")
-     if index<len(segments)-1:line_bytes=0
-    completed=output.rfind(b"\n")+1
-    if completed>LIMIT:del output[:completed-LIMIT]
-   elif len(output)>LIMIT:raise Rejected("Git output exceeds limit")
-  if scan_only and secret(bytes(output)):raise Rejected("Outgoing history withheld by credential guard; inspect outgoing commits for credential-shaped content","git_credential_guard")
+    pending.extend(chunk)
+    while (index:=pending.find(b"\n"))>=0:
+     line=bytes(pending[:index+1]);del pending[:index+1];scan_line(line)
+    if len(pending)>SCAN_LINE_LIMIT:raise Rejected("Outgoing history line exceeds scan bound")
+   else:
+    output.extend(chunk)
+    if len(output)>LIMIT:raise Rejected("Git output exceeds limit")
+  if scan_only and pending:scan_line(bytes(pending))
   await proc.wait()
  try:await asyncio.wait_for(drain(),timeout)
  except BaseException as error:
@@ -276,16 +282,45 @@ async def outgoing_guard_location(repo,remote,scan_head):
  except (Rejected,UnicodeError,ValueError):
   return {"status":"unavailable"}
 
+# SHA256 of full added diff lines in one reviewed, already committed smoke test.
+# The exception cannot be selected by tool arguments and never applies to another commit/path.
+_REVIEWED_HISTORY_LINES={
+ ("0aa6da670fba3fed8018af1c125eaca164f6f3a0","plugins/abilities/Administrator/git_control/test_runner.py"):frozenset({
+  "5251d40c76a281311caf4b366d595672db2b280d6c9454d50da72aa03dfc1a5c",
+  "d20e527b2b21a4eaeb67130f34d20c2884f3a6680ce6d6296822212b0c333784",
+ })
+}
+async def scan_outgoing_history(repo,remote,scan_head):
+ commits=(await command(repo,["rev-list","--max-count=257",scan_head,"--not","--remotes="+ref(remote)])).decode().splitlines()
+ if len(commits)>256:raise Rejected("Outgoing history exceeds credential scan commit bound","git_credential_guard",{"status":"unavailable","reason":"commit_bound"})
+ for sha in commits:
+  if not re.fullmatch(r"[a-f0-9]{40,64}",sha):raise Rejected("Invalid outgoing commit","git_credential_guard")
+  try:await command(repo,["show","--no-patch","--format=fuller",sha],scan_only=True)
+  except Rejected as error:
+   if error.kind=="git_credential_guard":raise Rejected(str(error),error.kind,{"status":"located","commit":sha,"match_class":"credential_pattern"}) from error
+   raise
+  paths=(await command(repo,["diff-tree","-m","--root","--no-renames","--no-commit-id","--name-only","-r","-z",sha])).split(b"\0")
+  if len(paths)>257:raise Rejected("Outgoing commit exceeds credential scan path bound","git_credential_guard",{"status":"located","commit":sha,"reason":"path_bound"})
+  for raw in filter(None,paths):
+   name=raw.decode("utf-8","surrogateescape")
+   safe=bool(re.fullmatch(r"[A-Za-z0-9._/-]{1,240}",name)) and not secret(raw)
+   try:
+    await command(repo,["show","-m","--format=","--no-ext-diff","--no-textconv","--no-renames","--unified=0","-p",sha,"--",name],scan_only=True,reviewed_lines=_REVIEWED_HISTORY_LINES.get((sha,name)),timeout=30)
+   except Rejected as error:
+    if error.kind!="git_credential_guard":raise
+    location={"status":"located","commit":sha,"match_class":"credential_pattern"}
+    if safe:location["path"]=name
+    else:location["path_sha256"]=hashlib.sha256(raw).hexdigest();location["path_withheld"]=True
+    if error.diagnostics and type(error.diagnostics.get("line"))is int:location["line"]=error.diagnostics["line"]
+    raise Rejected(str(error),error.kind,location) from error
+
 async def network(base,repo,remote,operation):
  target,env,local=await transport(base,repo,remote,operation)
  if operation=="push":
-  # Bounded outgoing-history scan; unknown/new remotes conservatively scan HEAD.
+  # Scan exact outgoing commits and paths; reviewed fixture lines are immutable identities.
   scan_head=await head(repo)
-  try:
-   await command(repo,["log","--no-ext-diff","--no-textconv","--no-show-signature","-p",scan_head,"--not","--remotes="+ref(remote),"--"],scan_only=True,timeout=120)
-  except Rejected as error:
-   if error.kind!="git_credential_guard":raise
-   raise Rejected(str(error),"git_credential_guard",await outgoing_guard_location(repo,remote,scan_head)) from error
+  await scan_outgoing_history(repo,remote,scan_head)
+  await fence(repo,scan_head)
  branch=ref((await command(repo,["symbolic-ref","--quiet","--short","HEAD"])).decode().strip()) if operation!="fetch" else ""
  argv=["fetch","--no-tags","--prune",ref(remote)] if operation=="fetch" else (["pull","--ff-only","--no-rebase",target,branch] if operation=="pull" else ["push","--no-verify",target,"HEAD:refs/heads/"+branch])
  output=await command(repo,argv,mutable=True,env_extra=env,local=local,timeout=120)
