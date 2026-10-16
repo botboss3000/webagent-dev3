@@ -26,6 +26,11 @@ class PreparedRunner(fixtures.FakeRunner):
         """This fixture contains no compiled ability packages."""
         return []
 
+    def preflight_deploy_images(self,images,job_id):
+        """Model the already-installed image-pair gate without Docker effects."""
+        if set(images)!={"api","loop"}:raise ValueError("Exact deployment pair required")
+        return dict(images)
+
     def core_compile_inputs(self):return {"v3/src/main.rs"}
 
     def _stage(self,blob,job_id,root):

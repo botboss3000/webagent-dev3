@@ -139,3 +139,117 @@ class PostDeploymentTests(unittest.TestCase):
             self.assertFalse((workspace/"source-seed/.code-index").exists())
         finally:gate.set()
         self.assertFalse(self.index_calls)
+
+
+class IndependentMaintenanceTests(unittest.TestCase):
+    setUp=PostDeploymentTests.setUp
+    tearDown=PostDeploymentTests.tearDown
+    call=PostDeploymentTests.call
+    configure=PostDeploymentTests.configure
+    change=PostDeploymentTests.change
+    finish=PostDeploymentTests.finish
+    wait=PostDeploymentTests.wait
+    def shipped(self):
+        self.configure()
+        self.change("deferred-doc-task","ui/probe/a.css","body {}\n","body { color:red; }\n",review=False)
+        identity=self.finish("deferred-doc-task")
+        self.assertEqual(self.wait([identity])[0]["status"],"completed")
+        job=self.broker.jobs[identity];key=job["ownership_id"]
+        with self.broker.scheduler.store.transaction() as db:
+            value=self.broker.scheduler.store.get(key,db)
+            self.broker.scheduler.store.update(db,value,state="complete",scopes=[],requested=[],evidence={})
+        return identity
+    def activity(self,identity):
+        return self.call("build_work",{"action":"maintenance_begin","release_id":identity})["activity_id"]
+    def submit(self,key,operation,request="maintenance-fixture-sync"):
+        return self.call("build_work",{"action":"maintenance_submit","activity_id":key,"operation":operation,"request_id":request})
+    def result(self,key,operation):
+        until=time.monotonic()+6
+        while time.monotonic()<until:
+            value=self.call("build_work",{"action":"maintenance_receipt","activity_id":key,"operation_id":operation["operation_id"]})
+            if value["status"] not in {"queued","running"}:return value
+            time.sleep(.01)
+        self.fail("Maintenance operation failed to settle")
+    def test_closed_task_sync_and_receipts_do_not_need_original_lease(self):
+        identity=self.shipped();key=self.activity(identity)
+        calls=list(self.runner.calls)
+        with self.broker.deploy_lock:
+            queued=self.submit(key,{"action":"sync"})
+            done=self.result(key,queued)
+        self.assertEqual(done["status"],"completed",done)
+        self.assertEqual(done["result"]["synced_paths"],["ui/probe/a.css"])
+        self.assertEqual(self.broker.scheduler.store.get(self.broker.jobs[identity]["ownership_id"])["state"],"complete")
+        self.assertEqual(calls,self.runner.calls)
+        self.assertEqual(self.submit(key,{"action":"sync"})["operation_id"],queued["operation_id"])
+        with self.assertRaisesRegex(ValueError,"reused"):self.submit(key,{"action":"list"})
+        read=self.result(key,self.submit(key,{"action":"list"},"maintenance-fixture-list"))
+        self.assertTrue(read["result"]["results"])
+        row=read["result"]["results"][0]
+        claim=self.result(key,self.submit(key,{"action":"claim","entry_id":row["entry_id"],"expected_revision":row["revision"]},"maintenance-fixture-claim"))
+        self.assertEqual(claim["status"],"completed",claim)
+        self.assertTrue(claim["result"]["record"]["claim"]["id"])
+        receipt=self.call("build_work",{"action":"maintenance_receipt","activity_id":key,"operation_id":claim["operation_id"]})
+        self.assertEqual(receipt["result"],claim["result"])
+    def test_index_after_task_completion_has_no_source_claims(self):
+        identity=self.shipped();key=self.activity(identity)
+        done=self.result(key,self.submit(key,{"action":"index"},"maintenance-fixture-index"))
+        self.assertEqual(done["status"],"completed",done)
+        self.assertEqual(self.broker.jobs[identity]["post_deployment"]["index_status"],"indexed")
+        value=self.broker.scheduler.store.get(self.broker.jobs[identity]["ownership_id"])
+        self.assertEqual(value["state"],"complete");self.assertEqual(value["scopes"],[])
+    def test_revocation_during_slow_sync_is_recoverable(self):
+        identity=self.shipped();key=self.activity(identity)
+        entered=threading.Event();proceed=threading.Event();original=self.broker.code_index_ledger.inventory
+        def inventory(*args):
+            entered.set();proceed.wait(3);return original(*args)
+        self.broker.code_index_ledger.inventory=inventory
+        queued=self.submit(key,{"action":"sync"})
+        self.assertTrue(entered.wait(3))
+        self.call("administrator_host_revoke",{})
+        proceed.set()
+        done=self.result(key,queued)
+        self.assertEqual(done["status"],"interrupted")
+        self.assertEqual(self.broker.scheduler.store.get(self.broker.jobs[identity]["ownership_id"])["state"],"complete")
+    def test_restart_keeps_receipt_without_automatic_replay(self):
+        identity=self.shipped();key=self.activity(identity)
+        done=self.result(key,self.submit(key,{"action":"sync"}))
+        activities=self.broker.maintenance_activities
+        activities.close()
+        replacement=fixtures.host.post_deployment_module.MaintenanceActivities(self.broker,fixtures.host.release,self.runner.assets)
+        self.broker.maintenance_activities=replacement
+        receipt=self.call("build_work",{"action":"maintenance_receipt","activity_id":key,"operation_id":done["operation_id"]})
+        self.assertEqual(receipt["result"],done["result"])
+        self.assertFalse(replacement.active)
+    def test_scope_and_owner_cannot_be_overridden(self):
+        identity=self.shipped();key=self.activity(identity)
+        bad=self.result(key,self.submit(key,{"action":"sync","scope":"src"}))
+        self.assertEqual(bad["status"],"interrupted")
+        with patch.dict(self.trusted,user_id="someone-else"):
+            with self.assertRaises(PermissionError):self.call("build_work",{"action":"maintenance_status","activity_id":key})
+
+    def test_project_finalizes_without_index_or_reviews(self):
+        identity=self.shipped()
+        self.assertFalse((self.runner.assets/"releases"/identity/".code-index/index.sqlite").exists())
+        project="maintenance-project-fixture"
+        created=self.call("build_work",{"action":"index_project_create","project_id":project,"request_id":"maintenance-project-create"})
+        attached=self.call("build_work",{"action":"index_project_attach","project_id":project,"task_id":"deferred-doc-task","request_id":"maintenance-project-attach","expected_revision":created["revision"]})
+        done=self.call("build_work",{"action":"index_project_finalize","project_id":project,"request_id":"maintenance-project-finalize","expected_revision":attached["revision"]})
+        self.assertEqual(done["state"],"finalized",done)
+        self.assertEqual(done["final_receipt"]["metadata_status"],"separate_maintenance")
+    def test_stale_source_cannot_receive_review_evidence(self):
+        identity=self.shipped();key=self.activity(identity)
+        self.assertEqual(self.result(key,self.submit(key,{"action":"sync"}))["status"],"completed")
+        source=self.runner.assets/"releases"/identity/"v3/ui/probe/a.css"
+        source.write_text("tampered source")
+        value=self.result(key,self.submit(key,{"action":"list"},"stale-source-review-read"))
+        self.assertEqual(value["status"],"interrupted")
+    def test_restart_marks_pending_operation_interrupted(self):
+        identity=self.shipped();key=self.activity(identity)
+        activities=self.broker.maintenance_activities
+        path=activities.folder/(key+".json");row=activities.read(path)
+        row["operations"]["pending-fixture"]={"operation_id":"pending-fixture","status":"running"}
+        activities.save(row);activities.close()
+        self.broker.maintenance_activities=fixtures.host.post_deployment_module.MaintenanceActivities(self.broker,fixtures.host.release,self.runner.assets)
+        receipt=self.call("build_work",{"action":"maintenance_receipt","activity_id":key,"operation_id":"pending-fixture"})
+        self.assertEqual(receipt["status"],"interrupted")
+        self.assertFalse(self.broker.maintenance_activities.active)

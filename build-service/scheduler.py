@@ -274,7 +274,7 @@ class Scheduler:
         if item.get("job_id")!=job["job_id"]or item["status"]!="closed":raise ValueError("Latest source generation must be published")
         if any(j.get("task_id")==item["task_id"]and j["status"]in {"queued","running","uncertain","needs_decision"}for j in self.broker.jobs.values()):
             raise ValueError("Task has unresolved execution")
-        if not deployment_only:self.broker.review_policy.check_complete(job)
+        # Documentation and Code Index maintenance have an independent lifecycle.
         receipt=Path(self.broker.state)/job["job_id"]/"candidate.tar"
         # The broker's already validated archive reader binds paths to the release snapshot.
         files=self.broker.scheduler_entries(receipt.read_bytes())

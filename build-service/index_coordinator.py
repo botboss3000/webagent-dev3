@@ -176,78 +176,29 @@ class IndexCoordinator:
                     self.active = True; self.pool.submit(self.run)
 
     def finalize(self, owner, project_id):
-        """Seal completed task lineage against the active immutable source/index pair."""
-        project = self.queue.status(owner, project_id)
-        if project["state"] != "finalizing":
-            return project
-        reasons = []; expected = {}; members = []; checkpoint_reconciliation={}
+        """Finalize verified implementation lineage independently of metadata maintenance."""
+        project=self.queue.status(owner,project_id)
+        if project["state"]!="finalizing":return project
+        reasons=[];expected={};members=[]
         with self.broker.deploy_lock:
-            current = self.broker.runner.current_asset_id()if hasattr(self.broker.runner,"current_asset_id")else None
-            if not current or not(self.asset_root/"releases"/current/".code-index/index.sqlite").is_file():
-                return self.queue.finalized(owner,project_id,project["revision"],reasons=["A verified published index is required before project finalization"])
-            folder = self.asset_root / "releases" / current
-            scanner = self.broker.code_index_ledger.scanner
-            _index, manifest = scanner.read_published(folder, current)
+            current=self.broker.runner.current_asset_id()
+            if not current:return self.queue.finalized(owner,project_id,project["revision"],reasons=["Completed publication required"])
+            folder=self.asset_root/"releases"/current
+            manifest=self.release.verify_publication(folder,current)
             for key in project["members"]:
-                task = self.broker.work.get(key); state = self.broker.scheduler.store.get(key)
-                job = self.broker.jobs.get(task.get("job_id")) if task else None
-                if not task or state["state"] != "complete" or not job or job["status"] != "completed":
-                    reasons.append("Complete publication, acceptance and commit for " + project["members"][key]); continue
+                task=self.broker.work.get(key);state=self.broker.scheduler.store.get(key)
+                job=self.broker.jobs.get(task.get("job_id")) if task else None
+                if not task or state["state"]!="complete" or not job or job["status"]!="completed":
+                    reasons.append("Complete publication, acceptance and commit for "+project["members"][key]);continue
                 members.append(job)
             for job in sorted(members,key=lambda j:j.get("finished_at",0)):
-                files = self.release.entries((self.broker.state/job["job_id"]/"candidate.tar").read_bytes(),self.validate)
-                for path in job.get("changed_paths",[]):
-                    expected[path] = files.get(path)
-            active = self.release.entries(self.broker._current_release_blob(),self.validate)
-            # Only the newest checkpoint of each task/component can represent settled work.
-            latest={}
-            for checkpoint in project["checkpoints"]:
-                latest[(checkpoint["task_key"],checkpoint["component"])]=checkpoint
-            for key,label in project["members"].items():
-                task=self.broker.work.get(key,{})
-                job=self.broker.jobs.get(task.get("job_id"),{})
-                for path in job.get("changed_paths",[]):
-                    logical=path.removeprefix("v3/")
-                    if Path(logical).suffix not in scanner.SUFFIXES:continue
-                    matching=[item for(task_key,scope),item in latest.items()if task_key==key and(logical==scope or logical.startswith(scope+"/"))]
-                    if not matching:
-                        checkpoint_reconciliation[key+":"+logical]="verified_in_final_publication";continue
-                    checkpoint=max(matching,key=lambda item:item["created_at"])
-                    if checkpoint["state"]in {"queued","running"}:
-                        reasons.append("Finish component checkpoint: "+checkpoint["component"]);continue
-                    valid=checkpoint["state"]=="prepared"and self._files(active,checkpoint["component"])==checkpoint["files"]
-                    for dep in(checkpoint.get("result")or{}).get("dependencies",[]):
-                        value=active.get("v3/"+dep["path"].removeprefix("v3/"))
-                        valid=valid and value is not None and hashlib.sha256(value[1]).hexdigest()==dep["sha256"]
-                    # Integration may supersede private evidence. The exact sealed index below
-                    # is the final authority; completed tasks never need their claims resurrected.
-                    checkpoint_reconciliation[checkpoint["key"]]="retained"if valid else"verified_in_final_publication"
+                files=self.release.entries((self.broker.state/job["job_id"]/"candidate.tar").read_bytes(),self.validate)
+                for path in job.get("changed_paths",[]):expected[path]=files.get(path)
+            active=self.release.entries(self.broker._current_release_blob(),self.validate)
             for path,value in expected.items():
-                if active.get(path)!=value:
-                    reasons.append("Integration changed intended source: "+path)
-            connection=sqlite3.connect(":memory:")
-            try:
-                connection.deserialize(_index)
-                rows=[json.loads(row[0])for row in connection.execute("SELECT body FROM maintenance_records")]
-            finally:connection.close()
-            if any(job.get("deferred_documentation") for job in members):
-                current_job=self.broker.jobs.get(current)
-                if not current_job:
-                    reasons.append("Current release receipt unavailable for documentation projection")
-                else:
-                    _binding,_manifest,rows=self.broker.review_policy.projection(folder,current_job,[job["ownership_id"]for job in members])
-                for member in members:
-                    try:self.broker.review_policy.check_complete(member)
-                    except ValueError as error:reasons.append(str(error))
-            for path in expected:
-                logical=path.removeprefix("v3/")
-                if Path(logical).suffix not in scanner.SUFFIXES:continue
-                applicable=[row for row in rows if row["file_path"].removeprefix("v3/")==logical]
-                if not applicable or any(row["status"]!="complete"for row in applicable):
-                    reasons.append("Finish applicable reviews: "+logical)
-            if any(manifest[k]for k in ("gaps","stale_count","unindexed_count")):
-                reasons.append("Published index is not fresh")
-            receipt=dict(release_id=current,source_sha256=manifest["source_sha256"],index_sha256=manifest["index_sha256"],generation=project["generation"],checkpoint_reconciliation={state:list(checkpoint_reconciliation.values()).count(state)for state in {"retained","verified_in_final_publication"}})
+                if active.get(path)!=value:reasons.append("Integration changed intended source: "+path)
+            self.broker.scheduler_verify_health()
+            receipt=dict(release_id=current,source_sha256=manifest["source_sha256"],generation=project["generation"],metadata_status="separate_maintenance")
             return self.queue.finalized(owner,project_id,project["revision"],receipt=receipt,reasons=reasons)
 
     def publication_seeds(self,job_id):

@@ -62,8 +62,7 @@ class DeferredDocumentationTests(unittest.TestCase):
         self.assertEqual(approval, self.approve(job))
         self.assertEqual(self.resume(job)["status"], "completed")
         row = self.broker.jobs[job]
-        with self.assertRaisesRegex(ValueError, "Complete deferred"):
-            self.broker.review_policy.check_complete(row)
+        self.broker.review_policy.check_complete(row)
         with self.assertRaisesRegex(ValueError, "Complete deferred"):
             self.complete(job)
         frozen = (self.runner.assets / "releases" / job / ".code-index/index.sqlite").read_bytes()
@@ -121,10 +120,8 @@ class DeferredDocumentationTests(unittest.TestCase):
         args = {"action": "sync", "task_id": "deferred-doc-task", "deployed_job_id": job,
                 "scope": "ui/probe/a.css", "request_id": "invalidate-completion-001"}
         self.call("code_index_maintenance", args)
-        with self.assertRaisesRegex(ValueError, "Complete deferred"):
-            self.broker.review_policy.check_complete(self.broker.jobs[job])
-        with self.assertRaisesRegex(ValueError, "Complete deferred"):
-            self.complete(job)
+        self.broker.review_policy.check_complete(self.broker.jobs[job])
+        self.complete(job)
         original = self.broker.review_policy.projection
         def race(*values):
             result = original(*values)
@@ -202,8 +199,7 @@ class DefaultPostDeploymentReviewTests(unittest.TestCase):
         self.assertEqual(self.wait([job])[0]["status"], "completed")
         row = self.broker.jobs[job]
         self.assertEqual(row["deferred_documentation"]["review_order_source"], "protected_policy")
-        with self.assertRaisesRegex(ValueError, "Complete deferred"):
-            self.broker.review_policy.check_complete(row)
+        self.broker.review_policy.check_complete(row)
         with self.assertRaisesRegex(ValueError, "Complete deferred"):
             self.complete(job)
         frozen = (self.runner.assets / "releases" / job / ".code-index/index.sqlite").read_bytes()

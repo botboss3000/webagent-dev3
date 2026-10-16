@@ -1926,6 +1926,7 @@ class Broker:
                         job["reason"] = "recovered matching healthy deployment"
                     self._save(job)
         self.post_deployment=post_deployment_module.PostDeployment(self,release,ASSET_ROOT,context_digest)
+        self.maintenance_activities=post_deployment_module.MaintenanceActivities(self,release,ASSET_ROOT)
         if recover:
             for job in self.jobs.values():
                 if job.get("batch_members") and job["status"] not in ("queued", "running"):
@@ -3092,8 +3093,8 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        review_modules={"engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
-        allowed={"v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
+        allowed={"v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
@@ -3655,6 +3656,7 @@ class Broker:
         if name=="build_work"and args.get("action")=="prepare_dependency_cache":return self.prepare_dependency_cache(request,args)
         if name=="build_work"and args.get("action")=="prepare_ui_test_runtime":return self.provision_ui_test_runtime(request,args)
         if name=="build_work"and args.get("action")in self.review_policy.actions:return self.review_policy.handle(request,args)
+        if name=="build_work" and args.get("action") in self.maintenance_activities.actions:return self.maintenance_activities.handle(request,args)
         if name=="build_work"and args.get("action")=="retry_post_deployment":return self.post_deployment.retry(request,args)
         if name=="build_work"and args.get("action")in {"compact_index_history","partition_review_storage"}:return self.maintain_review_storage(request,args)
         if name=="build_work"and args.get("action")in self.index_coordinator.actions:return self.index_coordinator.handle(request,args)
@@ -3677,7 +3679,7 @@ class Broker:
                     os.replace(temporary,self.maintenance_file)
                     if not state["drained"]:
                         self._start_next();self.post_deployment.start()
-                return {**self._maintenance(),"busy":bool(self.active or self.active_ui or self.post_deployment.active or any(j["status"]=="running"for j in self.jobs.values())),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
+                return {**self._maintenance(),"busy":bool(self.active or self.active_ui or self.post_deployment.active or self.maintenance_activities.active or any(j["status"]=="running"for j in self.jobs.values())),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
             read_actions={"heartbeat","status","review","preflight","receipt","list","get","read","search","job","artifact","reservations","resources","takeover_preview"}
             read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
             if name not in read_names and args.get("action") not in read_actions and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; new work disabled")
@@ -3827,6 +3829,7 @@ class Broker:
                 incoming = self._incoming_lease(trusted) if name == "administrator_host_lease" else None
                 updated = self.performance.leases(trusted, workspace, incoming)
                 updated+=self.index_coordinator.update_leases(trusted,workspace,incoming)
+                updated+=self.maintenance_activities.update_leases(trusted,workspace,incoming)
                 for lease in self.code_index_leases.values():
                     if lease["user_id"]==trusted["user_id"]and lease["workspace"]==workspace:
                         if incoming and not lease["revoked"]and lease["lease_until"]>time.time()and lease["access_fingerprint"]==incoming[1]:lease["lease_until"]=incoming[0]
@@ -4872,6 +4875,7 @@ class Broker:
                     self._save(job)
 
     def shutdown(self):
+        if hasattr(self,"maintenance_activities"):self.maintenance_activities.close()
         if hasattr(self,"post_deployment"):self.post_deployment.close()
         if hasattr(self,"index_coordinator"):self.index_coordinator.close()
         if hasattr(self,"resources"):self.resources.close()

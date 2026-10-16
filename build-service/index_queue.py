@@ -221,6 +221,6 @@ class IndexQueue:
             if project["revision"] != revision or project["state"] != "finalizing":
                 raise ValueError("Finalization generation changed")
             project.update(state="needs_attention" if reasons else "finalized", final_receipt=receipt if not reasons else None, remaining_work=list(reasons or [])[:32])
-            if not reasons and (not isinstance(receipt, dict) or not all(receipt.get(k) for k in ("release_id", "source_sha256", "index_sha256"))):
+            if not reasons and (not isinstance(receipt, dict) or (not all(receipt.get(k) for k in ("release_id", "source_sha256")) or (not receipt.get("index_sha256") and receipt.get("metadata_status")!="separate_maintenance"))):
                 raise ValueError("Exact published finalization receipt required")
             return self._save(db, project)

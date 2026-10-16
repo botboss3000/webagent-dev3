@@ -1,4 +1,4 @@
-"""Host-owned review ordering, exact evidence bindings and mandatory completion."""
+"""Host-owned review ordering and exact evidence; implementation completion is independent."""
 import hashlib
 import json
 import sqlite3
@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 
-# @code-index {"version":1,"feature":"approved-documentation-deferral","aliases":["post-deployment Code Index reviews"],"purpose":"Protected review order and exact sealed source bindings; defer only documentation assertions and require them before task completion. Config: build-service/scheduler-defaults.json -> documentation_review_order.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/documentation_review_order"]}]}}
+# @code-index {"version":1,"feature":"approved-documentation-deferral","aliases":["post-deployment Code Index reviews"],"purpose":"Protected review order and exact sealed source bindings; defer documentation assertions into independent maintenance. Config: build-service/scheduler-defaults.json -> documentation_review_order.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/documentation_review_order"]}]}}
 class ReviewPolicy:
     """Publication freshness and functional checks remain in their existing host gates."""
     actions = {"approve_deferred_documentation", "finish_deferred_documentation", "seed_deferred_renames"}
@@ -70,7 +70,7 @@ class ReviewPolicy:
     def task_keys(self):
         """Reuse completed assertions only through the scanner's source/dependency checks."""
         with self.broker.lock:jobs=list(self.broker.jobs.values())
-        return [job["ownership_id"] for job in jobs
+        return (getattr(self.broker,"maintenance_activities",None).evidence_keys() if getattr(self.broker,"maintenance_activities",None) else []) + [job["ownership_id"] for job in jobs
                 if job.get("deferred_documentation") and job.get("ownership_id")
                 and job.get("status") == "completed"]
 
@@ -123,18 +123,8 @@ class ReviewPolicy:
         return receipt
 
     def check_complete(self, job):
-        """Check the persisted completion cut without waiting on a ledger under host locks."""
-        if job.get("post_deployment",{}).get("index_status") in {"queued","running","failed"}:
-            raise ValueError("Complete post-deployment indexing before task completion")
-        approval = job.get("deferred_documentation")
-        if not approval:
-            return
-        receipt = approval.get("completion")
-        binding = approval["binding"]
-        if job.get("revoked") or not receipt or receipt.get("binding") != binding or receipt.get("review_revision") != job.get("documentation_review_revision", 0):
-            raise ValueError("Complete deferred Code Index/documentation reviews before acceptance")
-        if any(binding.get(name) != job.get(name) for name in ("job_id", "inputs_sha256", "source_generation", "ownership_epoch")):
-            raise ValueError("Deferred documentation completion is stale")
+        """Metadata never gates implementation acceptance or completion."""
+        return None
 
     def complete_if_ready(self, job):
         """Derive completion from existing fresh assertions; never invent a review."""
