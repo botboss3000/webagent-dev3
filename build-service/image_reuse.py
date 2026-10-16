@@ -94,6 +94,28 @@ COPIES = {
 }
 
 
+
+def failed_retry_mode(prior, merged_sha256, rebuild_if_stale):
+    """Choose image reuse or a new cached build from exact source bindings."""
+    if type(rebuild_if_stale) is not bool or not re.fullmatch(r"[a-f0-9]{64}", merged_sha256):
+        raise ValueError("Exact retry source and rebuild choice required")
+    if prior.get("status") != "failed" or prior.get("operation") != "build_deploy" or prior.get("effects_started"):
+        raise ValueError("Only failed pre-activation releases may retry")
+    inherited = prior.get("legacy_image_proof")
+    images = prior.get("images", {})
+    if inherited is not None:
+        if images or not isinstance(inherited, dict) or not re.fullmatch(r"[a-f0-9]{64}", inherited.get("source_sha256", "")):
+            raise ValueError("Inherited image evidence inconsistent")
+        bound = inherited["source_sha256"]
+    elif set(images) == set(COPIES):
+        bound = prior["inputs_sha256"]
+    else:
+        raise ValueError("Failed release has no verified image pair")
+    if merged_sha256 == bound:
+        return "reuse_inherited" if inherited is not None else "reuse"
+    return "cached_rebuild" if rebuild_if_stale else "needs_rebuild"
+
+
 def legacy_pair(runner, prior, blob):
     """Prove a failed pre-activation job's retained image pair before a new attempt uses it."""
     if (prior.get("status") != "failed" or prior.get("operation") != "build_deploy"

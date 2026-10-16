@@ -3089,8 +3089,9 @@ class Broker:
         self.code_index_ledger.activate(job_id,rows)
     def retry_verified_failed_release(self,request,args):
         """Queue a new attempt while preserving the failed job and its exact evidence."""
-        allowed={"action","task_id","job_id","request_id","expected_revision","expected_epoch","sync_decision","expected_sync_digest"}
-        if set(args)-allowed or not {"action","task_id","job_id","request_id","expected_revision","expected_epoch"}<=set(args) or not request["trusted"].get("local_caller"):
+        allowed={"action","task_id","job_id","request_id","expected_revision","expected_epoch","sync_decision","expected_sync_digest","rebuild_if_stale"}
+        if (set(args)-allowed or not {"action","task_id","job_id","request_id","expected_revision","expected_epoch"}<=set(args)
+                or type(args.get("rebuild_if_stale",False)) is not bool or not request["trusted"].get("local_caller")):
             raise PermissionError("Exact operator retry request required")
         trusted=request["trusted"];workspace=request["workspace"];owner=self.scheduler.owner(trusted,workspace)
         self.scheduler.journal_path(owner,args["request_id"],"failed-image-retry")
@@ -3127,9 +3128,26 @@ class Broker:
                 return {"status":"needs_decision","synchronization":report}
             if args.get("sync_decision") not in (None,"proceed"):
                 raise ValueError("Only an exact proceed decision may retry")
-        # Rehash the prepared OCI bases and original embedded image bytes before any job is queued.
-        self.package_cache.ready(candidate)
-        proof=image_reuse_module.legacy_pair(self.runner,prior,candidate)
+        # The merge may change source without changing this task's own files. Reuse
+        # only exact-bound images; a fresh cached build requires explicit opt-in.
+        mode=image_reuse_module.failed_retry_mode(prior,context_digest(merged)[0],args.get("rebuild_if_stale",False))
+        if mode=="needs_rebuild":
+            return {"status":"needs_rebuild","reason":"Merged source differs from retained image binding; request rebuild_if_stale to compile and package with verified cache",
+                    "merged_inputs_sha256":context_digest(merged)[0]}
+        if mode=="cached_rebuild":
+            self.package_cache.ready(merged)
+            proof=None
+        elif mode=="reuse":
+            self.package_cache.ready(candidate)
+            proof=image_reuse_module.legacy_pair(self.runner,prior,candidate)
+        else:
+            inherited=prior["legacy_image_proof"]
+            original=self.jobs.get(inherited["source_job_id"])
+            if original is None:raise ValueError("Original image job unavailable")
+            original_blob=(self.state/original["job_id"]/"candidate.tar").read_bytes()
+            self.package_cache.ready(candidate)
+            proof=image_reuse_module.legacy_pair(self.runner,original,original_blob)
+            if proof!=inherited:raise ValueError("Inherited image evidence changed")
         with self.lock:
             state=self.scheduler.store.get(item["key"])
             if item.get("job_id")!=prior["job_id"] or state["revision"]!=args["expected_revision"] or state["epoch"]!=args["expected_epoch"] or state["state"]!="owned":
@@ -3155,7 +3173,7 @@ class Broker:
                  "images":{},"log":"","tool_name":"build_work","lease_until":max(deadline,time.time()+4*3600),
                  "access_fingerprint":fingerprint,"revoked":False,
                  "ownership_id":item["key"],"ownership_epoch":state["epoch"],"source_generation":state["generation"],
-                 "synchronization":report,"legacy_image_proof":proof}
+                 "synchronization":report,"legacy_image_proof":proof,"retry_mode":mode}
             if args.get("sync_decision")=="proceed":job["sync_ack_digest"]=report["digest"]
             self.jobs[identity]=job;self.requests[request_key]=identity;self._save(job)
             item.update(job_id=identity,finished_at=time.time())

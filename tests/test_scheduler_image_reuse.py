@@ -74,5 +74,29 @@ class ImageCheckpointTests(unittest.TestCase):
             reuse.reuse(self.runner,self.job,self.blob,"api")
 
 
+class FailedRetryModeTests(unittest.TestCase):
+    def test_rebased_candidate_requires_explicit_cached_rebuild(self):
+        old="a"*64;merged="b"*64
+        failed={"status":"failed","operation":"build_deploy","inputs_sha256":old,
+                "images":{"api":"sha256:"+"1"*64,"loop":"sha256:"+"2"*64}}
+        self.assertEqual(reuse.failed_retry_mode(failed,old,False),"reuse")
+        self.assertEqual(reuse.failed_retry_mode(failed,merged,False),"needs_rebuild")
+        self.assertEqual(reuse.failed_retry_mode(failed,merged,True),"cached_rebuild")
+        failed["effects_started"]=True
+        with self.assertRaisesRegex(ValueError,"pre-activation"):
+            reuse.failed_retry_mode(failed,merged,True)
+
+    def test_failed_retry_inherits_old_binding_without_reusing_it(self):
+        old="a"*64;merged="b"*64
+        failed={"status":"failed","operation":"build_deploy","inputs_sha256":merged,
+                "images":{},"legacy_image_proof":{"source_sha256":old,"source_job_id":"old"}}
+        self.assertEqual(reuse.failed_retry_mode(failed,merged,False),"needs_rebuild")
+        self.assertEqual(reuse.failed_retry_mode(failed,merged,True),"cached_rebuild")
+        self.assertEqual(reuse.failed_retry_mode(failed,old,False),"reuse_inherited")
+        failed["legacy_image_proof"]["source_sha256"]="bad"
+        with self.assertRaisesRegex(ValueError,"inconsistent"):
+            reuse.failed_retry_mode(failed,merged,True)
+
+
 if __name__=="__main__":
     unittest.main()
