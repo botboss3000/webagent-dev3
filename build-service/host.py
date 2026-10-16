@@ -1686,6 +1686,7 @@ class Runner:
             if not job or job["job_id"]!=job_id:raise PermissionError("Bound compiler job required")
             if job.get("image_receipts",{}).get(role):
                 image=image_reuse_module.reuse(self,job,blob,role)
+                self.retain_image(image,job_id)
                 return image,"Verified existing "+role+" image reused; no packaging or package download.\n"
             if job.get("legacy_image_proof"):
                 cache=getattr(self,"package_cache",None)
@@ -1693,9 +1694,20 @@ class Runner:
                 prior=cache.broker.jobs[job["legacy_image_proof"]["source_job_id"]]
                 proof=image_reuse_module.legacy_pair(self,prior,blob)
                 if proof!=job["legacy_image_proof"]:raise ValueError("Legacy image evidence changed")
+                self.retain_image(proof["images"][role],job_id)
                 return proof["images"][role],"Verified prior "+role+" image and compiler receipt reused; no packaging or package download.\n"
-            artifacts,compiler_log=self.executor.engine(job,blob,lambda root,data:release.extract(root,data,context_digest),lambda data:context_digest(data)[0])
+            preflight=self.executor.preflight_packaging(job,blob)
+            preflight["recipe"]=image_reuse_module.recipe_receipt(self)
+            self.resource_progress(job)
+            if job.get("packaging_resume"):
+                artifacts=image_reuse_module.packaging_artifacts(self,job,blob)
+                compiler_log="Verified frozen compiler artifacts reused for packaging; compilation and tests were not repeated.\n"
+            else:
+                artifacts,compiler_log=self.executor.engine(job,blob,lambda root,data:release.extract(root,data,context_digest),lambda data:context_digest(data)[0])
+            job["compiler_checkpoint"]={"source_sha256":image_reuse_module.digest(blob),"compiler_receipt_sha256":image_reuse_module.source_receipt(self,job,blob),"recipe":image_reuse_module.recipe_receipt(self)}
+            self.resource_progress(job)
             packaging_path=Path(CONFIG["state_root"])/"execution"/job_id/("package-"+role+".tar")
+            packaging_path.parent.mkdir(parents=True,exist_ok=True)
             if packaging_path.exists():raise ValueError("Packaging context requires reconciliation")
             try:
                 cache=getattr(self,"package_cache",None)
@@ -2637,7 +2649,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint") if key in job}
         if job.get("review_wait"):
             review=job["review_wait"]
             view["review_wait"]={k:review[k]for k in ("state","started_at","last_activity_at","expires_at")if k in review}
@@ -3216,11 +3228,14 @@ class Broker:
             raise PermissionError("Exact operator retry request required")
         trusted=request["trusted"];workspace=request["workspace"];owner=self.scheduler.owner(trusted,workspace)
         self.scheduler.journal_path(owner,args["request_id"],"failed-image-retry")
-        request_key="failed-image-retry-"+hashlib.sha256(canonical([owner,args["task_id"],args["job_id"],args["request_id"]])).hexdigest()
+        packaging_only=args["action"]=="retry_packaging_release"
+        request_key=("packaging-retry-" if packaging_only else "failed-image-retry-")+hashlib.sha256(canonical([owner,args["task_id"],args["job_id"],args["request_id"]])).hexdigest()
         with self.lock:
             prior=self.jobs.get(args["job_id"])
             existing=next((row for row in self.jobs.values()if row.get("request_key")==request_key),None)
-            if existing:return self._view(existing)
+            if existing:
+                if existing["body_digest"]!=hashlib.sha256(canonical(args)).hexdigest():raise ValueError("Retry request ID reused with changed input")
+                return self._view(existing)
             item=self.scheduler.item(args,trusted,workspace)
             state=self.scheduler.ensure(item,trusted,workspace)
             if item.get("status")!="closed" or item.get("job_id")!=args["job_id"] or not prior or not self._owned(prior,trusted,workspace):
@@ -3252,8 +3267,13 @@ class Broker:
         # A disk/admission failure after a requested cached rebuild has no image
         # pair of its own. It may continue only through an explicit, verified
         # predecessor lineage; the new attempt still rebuilds its exact candidate.
-        lineage=None
-        if prior.get("retry_mode")=="cached_rebuild" and not prior.get("images") and not prior.get("legacy_image_proof"):
+        lineage=None;packaging_resume=None
+        if packaging_only:
+            if context_digest(merged)[0]!=prior["inputs_sha256"]:
+                return {"status":"needs_rebuild","reason":"Current release changes the frozen source; packaging-only retry cannot reuse this compiler certificate","merged_inputs_sha256":context_digest(merged)[0]}
+            packaging_resume=image_reuse_module.packaging_checkpoint(self.runner,prior,candidate)
+            mode="packaging_resume"
+        elif prior.get("retry_mode")=="cached_rebuild" and not prior.get("images") and not prior.get("legacy_image_proof"):
             lineage=image_reuse_module.cached_rebuild_lineage(prior,self.jobs,args.get("lineage_job_id"))
             mode="cached_rebuild"
         else:
@@ -3263,7 +3283,10 @@ class Broker:
         if mode=="needs_rebuild":
             return {"status":"needs_rebuild","reason":"Merged source differs from retained image binding; request rebuild_if_stale to compile and package with verified cache",
                     "merged_inputs_sha256":context_digest(merged)[0]}
-        if mode=="cached_rebuild":
+        if mode=="packaging_resume":
+            self.package_cache.ready(candidate)
+            proof=None
+        elif mode=="cached_rebuild":
             if lineage is not None:
                 inherited=lineage["legacy_image_proof"]
                 source=self.jobs.get(inherited["source_job_id"])
@@ -3309,7 +3332,7 @@ class Broker:
                  "images":{},"log":"","tool_name":"build_work","lease_until":max(deadline,time.time()+4*3600),
                  "access_fingerprint":fingerprint,"revoked":False,
                  "ownership_id":item["key"],"ownership_epoch":state["epoch"],"source_generation":state["generation"],
-                 "synchronization":report,"legacy_image_proof":proof,"retry_mode":mode,"cached_rebuild_lineage":lineage}
+                 "synchronization":report,"legacy_image_proof":proof,"retry_mode":mode,"cached_rebuild_lineage":lineage,"packaging_resume":packaging_resume}
             if args.get("sync_decision")=="proceed":job["sync_ack_digest"]=report["digest"]
             self.jobs[identity]=job;self.requests[request_key]=identity;self._save(job)
             item.update(job_id=identity,finished_at=time.time())
@@ -3648,7 +3671,7 @@ class Broker:
                 if args.get("action")not in {"list","get"}and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; maintenance disabled")
             return self.code_index_maintenance(args,trusted,workspace)
         if name=="v3_cargo_task":return self.cargo_request(args,trusted,workspace)
-        if name=="build_work"and args.get("action")=="retry_verified_failed_release":
+        if name=="build_work"and args.get("action") in {"retry_verified_failed_release","retry_packaging_release"}:
             return self.retry_verified_failed_release(request,args)
         if name=="build_work"and args.get("action")=="dependency_cache_status":
             if set(args)!={"action"} or not trusted.get("local_caller"):raise PermissionError("Operator dependency cache read required")
@@ -4667,7 +4690,7 @@ class Broker:
                 self._run_ui_hot(job, blob)
                 return
             if job["operation"] in ("build", "build_deploy"):
-                if job.get("isolated") and job["operation"]=="build_deploy":
+                if job.get("isolated") and job["operation"]=="build_deploy" and not job.get("packaging_resume"):
                     previous=sorted((prior for prior in self.jobs.values()
                         if prior["job_id"]!=job["job_id"] and prior.get("task_id")==job.get("task_id")
                         and prior.get("status")=="failed" and not prior.get("effects_started")

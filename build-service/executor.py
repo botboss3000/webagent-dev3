@@ -46,6 +46,37 @@ class Executor:
     def __init__(self,runner,resources,config):
         """Bind fixed build recipes to the broker resource controller and reviewed installation."""
         self.runner=runner;self.resources=resources;self.config=config
+    def preflight_packaging(self,job,blob):
+        """Pin all local execution images and verify OCI dependencies before compiler admission."""
+        references={"compiler":RUST,"packager":BUILDKIT}
+        cache=getattr(self.runner,"package_cache",None)
+        if cache is None or not cache.enabled:
+            files=self.runner.execution_entries(blob)
+            text=files["v3/Dockerfile"][1].decode()
+            for number,ref in enumerate(re.findall(r"^FROM ([^ \n]+)",text,re.M)):
+                if "@sha256:" not in ref:raise ValueError("Pinned packaging base required: "+ref)
+                references["runtime-"+str(number)]=ref
+        retained={}
+        for role,reference in references.items():
+            try:
+                result=self.runner.retain_image(reference,job["job_id"])
+                if getattr(self.runner,"retention_enabled",False):
+                    if not isinstance(result,dict) or result.get("retained") is not True:raise ValueError("Retention receipt unavailable")
+                    actual=result.get("image")
+                else:
+                    actual=self.runner.command(["docker","image","inspect","--format","{{.Id}}",reference],timeout=15).strip()
+                if not isinstance(actual,str) or not re.fullmatch(r"sha256:[a-f0-9]{64}",actual):raise ValueError("Image identity unavailable")
+                retained[role]={"reference":reference,"image_id":actual}
+            except (OSError,RuntimeError,ValueError,TimeoutError,PermissionError) as error:
+                raise ValueError("Required "+role+" dependency missing or cannot be retained: "+reference+"; provision this pinned image before retry") from error
+        if cache is not None and cache.enabled:
+            try:job["dependency_bases"]=cache.ready(blob)
+            except (KeyError,OSError,ValueError) as error:
+                raise ValueError("Verified runtime dependency bases unavailable; run supported dependency preparation before compiling") from error
+        job["packaging_preflight"]={"version":1,"source_sha256":hashlib.sha256(blob).hexdigest(),"images":retained,"verified_at":time.time()}
+        getattr(self.runner,"resource_progress",lambda _:None)(job)
+        return job["packaging_preflight"]
+
     def phase(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False):
         """Launch one identified container and preserve counters before removing a terminal container."""
         jobhex=uuid.UUID(job["job_id"]).hex

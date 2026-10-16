@@ -14,7 +14,10 @@ def digest(data):
 
 def source_receipt(runner, job, blob):
     """Rehash compiler evidence against the exact retained source and artifact files."""
-    verified = Path(runner.source_config["state_root"]) / "execution" / job["job_id"] / "verified.json"
+    compiler_id=(job.get("packaging_resume") or {}).get("source_job_id",job["job_id"])
+    if job.get("packaging_resume") and not re.fullmatch(r"[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}",compiler_id):
+        raise ValueError("Compiler source job identity invalid")
+    verified = Path(runner.source_config["state_root"]) / "execution" / compiler_id / "verified.json"
     if verified.is_symlink() or not verified.is_file():
         raise ValueError("Retained compiler receipt unavailable")
     raw = verified.read_bytes()
@@ -24,6 +27,9 @@ def source_receipt(runner, job, blob):
         raise ValueError("Retained compiler inputs changed")
     if not isinstance(row.get("artifacts"),dict) or not row["artifacts"]:
         raise ValueError("Retained compiler receipt incomplete")
+    artifacts=verified.parent/"output/artifacts"
+    if runner.executor.artifact_hashes(artifacts)!=row["artifacts"]:
+        raise ValueError("Retained compiler artifact bytes changed")
     return digest(raw)
 
 
@@ -195,3 +201,29 @@ def legacy_pair(runner, prior, blob):
         result[role] = image
     return {"source_job_id": prior["job_id"], "source_sha256": prior["inputs_sha256"],
             "compiler_receipt_sha256": receipt, "images": result}
+
+def packaging_checkpoint(runner,prior,blob):
+    """Accept only a completed compiler certificate from an exact failed pre-activation attempt."""
+    if prior.get("status")!="failed" or prior.get("effects_started") or prior.get("operation")!="build_deploy":
+        raise ValueError("Failed pre-activation packaging attempt required")
+    if prior.get("inputs_sha256")!=runner.context_digest(blob)[0]:raise ValueError("Packaging retry source changed")
+    preflight=prior.get("packaging_preflight",{})
+    if preflight.get("source_sha256")!=digest(blob) or preflight.get("recipe")!=recipe_receipt(runner):
+        raise ValueError("Exact packaging preflight recipe unavailable or changed")
+    compiler_hash=source_receipt(runner,prior,blob)
+    checkpoint=prior.get("compiler_checkpoint")
+    if checkpoint!={"source_sha256":digest(blob),"compiler_receipt_sha256":compiler_hash,"recipe":recipe_receipt(runner)}:
+        raise ValueError("Completed compiler checkpoint unavailable or changed")
+    source_id=(prior.get("packaging_resume") or {}).get("source_job_id",prior["job_id"])
+    if not re.fullmatch(r"[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}",source_id):raise ValueError("Compiler source job identity invalid")
+    return {"version":1,"source_job_id":source_id,"source_sha256":digest(blob),"compiler_receipt_sha256":compiler_hash,"recipe":recipe_receipt(runner)}
+
+
+def packaging_artifacts(runner,job,blob):
+    """Read retained artifacts without copying or invoking the compiler/test executor."""
+    proof=job["packaging_resume"]
+    if proof.get("version")!=1 or proof.get("source_sha256")!=digest(blob) or proof.get("recipe")!=recipe_receipt(runner):
+        raise ValueError("Packaging resume binding changed")
+    if proof.get("compiler_receipt_sha256")!=source_receipt(runner,job,blob):
+        raise ValueError("Packaging resume compiler certificate changed")
+    return Path(runner.source_config["state_root"])/"execution"/proof["source_job_id"]/"output/artifacts"
