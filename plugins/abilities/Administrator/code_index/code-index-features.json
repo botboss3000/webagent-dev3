@@ -197,7 +197,7 @@
         "run activity",
         "activity transcript"
       ],
-      "purpose": "Locates the private activity journal, its transcript rows, and session activity projection. Config: data/config/chat.json -> chat_common.show_activity_groups. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
+      "purpose": "Locates private activity projection, polling and reusable transcript rows. Config: data/config/chat.json -> chat_common.show_activity_groups and chat_common.chat_elements.activity_group.enabled, with desktop/mobile/widget overrides.",
       "locations": [
         {
           "path": "ui/chat/core/activity.js",
@@ -205,12 +205,12 @@
           "end_line": 80
         },
         {
-          "path": "ui/chat/core/activity-transcript.js",
+          "path": "ui/chat/elements/mini-transcript/rows.js",
           "start_line": 1,
           "end_line": 80
         },
         {
-          "path": "ui/chat/core/activity-view.js",
+          "path": "ui/chat/elements/index.js",
           "start_line": 1,
           "end_line": 80
         }
@@ -221,7 +221,8 @@
           {
             "path": "data/config/chat.json",
             "pointers": [
-              "/chat_common/show_activity_groups"
+              "/chat_common/show_activity_groups",
+              "/chat_common/chat_elements/activity_group/enabled"
             ],
             "profile_overrides": true
           }
@@ -1225,6 +1226,73 @@
           }
         }
       ]
+    },
+    {
+      "id": "chat-elements",
+      "aliases": [
+        "chat elements",
+        "activity group",
+        "mini transcript",
+        "typing ellipsis"
+      ],
+      "purpose": "Reusable chat activity header, mini transcript and active typing dots; public run state is separate from administrator-only private activity. Config: data/config/chat.json -> chat_common.chat_elements and show_activity_groups, with desktop/mobile/widget overrides.",
+      "locations": [
+        {
+          "path": "ui/chat/elements/index.js",
+          "start_line": 1,
+          "end_line": 80
+        },
+        {
+          "path": "ui/chat/elements/activity-group/index.js",
+          "start_line": 1,
+          "end_line": 33
+        },
+        {
+          "path": "ui/chat/elements/activity-group/style.css",
+          "start_line": 1,
+          "end_line": 59
+        },
+        {
+          "path": "ui/chat/elements/mini-transcript/index.js",
+          "start_line": 1,
+          "end_line": 64
+        },
+        {
+          "path": "ui/chat/elements/mini-transcript/rows.js",
+          "start_line": 1,
+          "end_line": 80
+        },
+        {
+          "path": "ui/chat/elements/mini-transcript/style.css",
+          "start_line": 1,
+          "end_line": 51
+        },
+        {
+          "path": "ui/chat/elements/typing-ellipsis/index.js",
+          "start_line": 1,
+          "end_line": 17
+        },
+        {
+          "path": "ui/chat/elements/typing-ellipsis/style.css",
+          "start_line": 1,
+          "end_line": 9
+        }
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/chat.json",
+            "pointers": [
+              "/chat_common/show_activity_groups",
+              "/chat_common/chat_elements/activity_group/enabled",
+              "/chat_common/chat_elements/typing_ellipsis/enabled"
+            ],
+            "profile_overrides": true
+          }
+        ],
+        "opportunities": []
+      }
     }
   ]
 }

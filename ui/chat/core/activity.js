@@ -62,7 +62,7 @@ export function activityRows(events) {
 /**
  * Assigns events to execution segments, retaining uncovered late events on the latest segment.
  * Counts projected rows and derives display state from the matching run snapshot.
- * Called by activity-view.paint to prepare transcript groups.
+ * Called by ui/chat/elements/index.js paint to prepare transcript groups.
  */
 export function activityGroups(activity, runs) {
   // Tests whether a sequence falls inside a segment's explicit run interval.
@@ -91,7 +91,7 @@ export function activityGroups(activity, runs) {
 /**
  * Polls private activity pages serially, following cursors until caught up and retrying after failures every two seconds.
  * Stops on 401, 403, or 404; returns a stop function that aborts the request and clears private in-memory records.
- * Called by activity-view.renderActivity with a same-origin GET request to the session activity endpoint.
+ * Called by ui/chat/elements/index.js renderActivity with a same-origin GET request to the session activity endpoint.
  * Calls mergeActivity and reports pages through onChange; onError must not throw or retry scheduling is skipped.
  */
 export function watchActivity({sessionId, request, onChange, onError, schedule=setTimeout, cancel=clearTimeout}) {

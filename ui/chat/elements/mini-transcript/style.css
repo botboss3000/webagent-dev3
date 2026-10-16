@@ -1,4 +1,4 @@
-/* V1 mini transcript presentation, scoped to the private v2 body only. */
+/* Reusable v3 mini transcript; legacy v2-prefixed selectors stay scoped to its body. */
 .v2-activity-body {
   margin: 4px 8px;
   padding: 0;
