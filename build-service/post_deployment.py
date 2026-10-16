@@ -68,7 +68,7 @@ class PostDeployment:
                     self.authorize(job)
                     folder=self.assets/"releases"/job["job_id"]
                     self.release.verify_publication(folder,job["job_id"],job["inputs_sha256"])
-                    blob=(self.broker.state/job["job_id"]/"candidate.tar").read_bytes()
+                    blob=self.broker.post_deployment_candidate(job)
                     if self.validate(blob)[0]!=job["inputs_sha256"]:raise ValueError("Post-deployment source archive changed")
                     if context is not None:context.job=job;context.event=threading.Event()
                     self.broker.runner.index_assets(folder,blob,job["job_id"],base_release_id=job.get("asset_previous"))

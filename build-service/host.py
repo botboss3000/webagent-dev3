@@ -2246,6 +2246,45 @@ class Broker:
         self._save_work()
         return job["job_id"]
 
+    def post_deployment_candidate(self, job):
+        """Return the sealed candidate, reconstructing a missing derived archive only from its retained execution source."""
+        folder = self.state / job["job_id"]
+        candidate = folder / "candidate.tar"
+        if candidate.is_symlink():
+            raise ValueError("Post-deployment candidate archive symlink")
+        if candidate.is_file():
+            blob = candidate.read_bytes()
+            if context_digest(blob)[0] != job["inputs_sha256"]:
+                raise ValueError("Post-deployment candidate archive changed")
+            return blob
+        source = self.state / "execution" / job["job_id"] / "source"
+        published = ASSET_ROOT / "releases" / job["job_id"]
+        if (source.is_symlink() or not source.is_dir() or published.is_symlink()
+                or not published.is_dir()):
+            raise ValueError("Post-deployment immutable source unavailable")
+        receipt = release.verify_publication(published, job["job_id"], job["inputs_sha256"])
+        if release.asset_source_digest(source) != receipt["source_sha256"]:
+            raise ValueError("Retained execution source differs from publication receipt")
+        blob = release.snapshot(source, CONTEXT, context_digest)
+        if context_digest(blob)[0] != job["inputs_sha256"]:
+            raise ValueError("Retained execution candidate digest differs")
+        candidate.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            blob = candidate.read_bytes()
+            if context_digest(blob)[0] != job["inputs_sha256"]:
+                raise ValueError("Concurrent post-deployment candidate recovery changed")
+            return blob
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(blob); stream.flush(); os.fsync(stream.fileno())
+        parent = os.open(candidate.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(parent)
+        finally:
+            os.close(parent)
+        return blob
+
     def _current_release_blob(self):
         completed = sorted((job for job in self.jobs.values()
                             if job.get("isolated") and (job["status"] == "completed"

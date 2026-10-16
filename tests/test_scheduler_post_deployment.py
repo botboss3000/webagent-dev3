@@ -68,6 +68,19 @@ class PostDeploymentTests(unittest.TestCase):
         self.assertEqual(result,self.call("build_work",request))
         self.post_review(job);self.complete(job)
 
+    def test_post_deployment_recovers_missing_candidate_from_attested_execution_source(self):
+        self.configure()
+        self.change("deferred-doc-task", "ui/probe/a.css", "body {}\n", "body { color: red; }\n", review=False)
+        job=self.finish("deferred-doc-task")
+        self.assertEqual(self.wait([job])[0]["status"],"completed")
+        candidate=self.broker.state/job/"candidate.tar";blob=candidate.read_bytes();candidate.unlink()
+        source=self.broker.state/"execution"/job/"source"
+        fixtures.host.release.extract(source,blob,fixtures.host.context_digest)
+        result=self.call("build_work", {"action":"retry_post_deployment","task_id":"deferred-doc-task","job_id":job,"request_id":"recover-missing-candidate-001"})
+        self.index_state(job,"indexed")
+        self.assertFalse(result["deployment_replayed"])
+        self.assertEqual(fixtures.host.context_digest(candidate.read_bytes())[0],self.broker.jobs[job]["inputs_sha256"])
+
     def test_two_deployments_finish_without_any_automatic_index(self):
         self.configure()
         for task,path,text in (("post-index-alpha","ui/probe/a.css","body {}"),("post-index-beta","ui/probe/b.css","main {}")):
