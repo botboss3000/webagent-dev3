@@ -227,3 +227,70 @@ def packaging_artifacts(runner,job,blob):
     if proof.get("compiler_receipt_sha256")!=source_receipt(runner,job,blob):
         raise ValueError("Packaging resume compiler certificate changed")
     return Path(runner.source_config["state_root"])/"execution"/proof["source_job_id"]/"output/artifacts"
+
+
+def prepare_retry_archives(state,coordination,identity,source,body_digest,write_record,*,recover_legacy=False):
+    """Durably prepare only exact retry source archives; interrupted copies never become final files."""
+    import os,stat,shutil,uuid
+    names=("base.tar","task.tar","candidate.tar","admitted_base.tar")
+    def file_binding(path):
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+        try:
+            meta=os.fstat(fd)
+            if not stat.S_ISREG(meta.st_mode)or meta.st_nlink!=1:raise ValueError("Retry archive must be a regular single-link file")
+            sha=hashlib.sha256();size=0
+            with os.fdopen(fd,"rb",closefd=False)as stream:
+                while chunk:=stream.read(1024*1024):sha.update(chunk);size+=len(chunk)
+            if size!=meta.st_size:raise ValueError("Retry archive changed while reading")
+            return {"sha256":sha.hexdigest(),"size":size}
+        finally:os.close(fd)
+    if source.is_symlink()or not source.is_dir():raise ValueError("Original retry archive directory unavailable")
+    expected={name:file_binding(source/name)for name in names if (source/name).exists()or(source/name).is_symlink()}
+    if not {"base.tar","task.tar","candidate.tar"}<=set(expected):raise ValueError("Original retry source archives incomplete")
+    root=coordination/"retry-preparations"
+    if root.is_symlink():raise ValueError("Retry preparation journal symlink")
+    root.mkdir(mode=0o700,exist_ok=True)
+    journal=root/(identity+".json");folder=state/identity
+    binding={"body_digest":body_digest,"source_job_id":source.name,"archives":expected}
+    if journal.is_symlink()or folder.is_symlink():raise ValueError("Retry preparation symlink")
+    managed=journal.exists()
+    if managed:
+        file_binding(journal);record=json.loads(journal.read_bytes())
+        if record["binding"]!=binding:raise ValueError("Retry preparation binding changed")
+    else:
+        if folder.exists()and not recover_legacy:raise ValueError("Legacy retry preparation requires recover_preparation=true")
+        record={"state":"preparing","binding":binding,"legacy_recovery":folder.exists()}
+    if folder.exists()and not folder.is_dir():raise ValueError("Retry preparation directory unavailable")
+    allowed=set(expected)|{name+".preparing"for name in expected}
+    if folder.exists()and any(p.name not in allowed for p in folder.iterdir()):raise ValueError("Unknown retry preparation contents; preserve for separate reconciliation")
+    # Validate everything before recording adoption or moving a partial file.
+    for path in folder.iterdir()if folder.exists()else():
+        actual=file_binding(path)
+        if path.name in expected and actual!=expected[path.name]and not(record["legacy_recovery"]and record["state"]=="preparing"):
+            raise ValueError("Completed retry archive changed")
+    write_record(journal,record)
+    folder.mkdir(mode=0o700,exist_ok=True)
+    def sync(directory):
+        fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(fd)
+        finally:os.close(fd)
+    def preserve(path):
+        archive=root/(identity+"-preserved")
+        if archive.is_symlink():raise ValueError("Retry preservation symlink")
+        archive.mkdir(mode=0o700,exist_ok=True)
+        target=archive/(path.name+"-"+uuid.uuid4().hex)
+        os.rename(path,target);sync(folder);sync(archive)
+    for name,wanted in expected.items():
+        destination=folder/name;temporary=folder/(name+".preparing")
+        if temporary.exists()or temporary.is_symlink():preserve(temporary)
+        if destination.exists():
+            if file_binding(destination)==wanted:continue
+            preserve(destination)
+        with (source/name).open("rb")as incoming,temporary.open("xb")as outgoing:
+            shutil.copyfileobj(incoming,outgoing,1024*1024);outgoing.flush();os.fsync(outgoing.fileno())
+        if file_binding(temporary)!=wanted:raise ValueError("Retry source changed during copy")
+        os.replace(temporary,destination);sync(folder)
+    if {name:file_binding(source/name)for name in expected}!=expected or {name:file_binding(folder/name)for name in expected}!=expected:
+        raise ValueError("Retry archives changed during preparation")
+    write_record(journal,{**record,"state":"ready"});sync(state)
+    return {"identity":identity,"binding":binding,"state":"ready"}

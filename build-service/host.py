@@ -2545,10 +2545,10 @@ class Broker:
         expected = args["expected_job_ids"]
         if not isinstance(expected, list) or not 1 <= len(expected) <= 8 or any(not isinstance(value, str) for value in expected):
             raise ValueError("bounded expected job IDs required")
-        if parent["status"] in ("queued", "running", "needs_decision") and not parent.get("cancel_request") and sorted(expected) != sorted(affected):
+        if parent["status"] in ("queued", "running", "needs_decision", "preparing_retry") and not parent.get("cancel_request") and sorted(expected) != sorted(affected):
             raise ValueError("Build batch changed; refresh affected jobs before requesting stop")
         # A merged candidate is one tested unit: cancellation stops all members.
-        if not parent.get("cancel_request") and parent["status"] in ("queued", "running", "needs_decision"):
+        if not parent.get("cancel_request") and parent["status"] in ("queued", "running", "needs_decision", "preparing_retry"):
             parent["cancel_request"] = {"request_id": args["request_id"],
                 "requested_by": trusted["user_id"], "requested_at": time.time(),
                 "affected_job_ids": affected}
@@ -3376,10 +3376,39 @@ class Broker:
             else:rows=[json.loads(row[0])for row in conn.execute("SELECT body FROM maintenance_records")]
         finally:conn.close()
         self.code_index_ledger.activate(job_id,rows)
+    def finish_retry_registration(self,request,args,job):
+        """Recover the preparation-to-queue boundary without replaying compilation or publication."""
+        trusted=request["trusted"];workspace=request["workspace"]
+        deadline,fingerprint=self._incoming_lease(trusted)
+        item=self.scheduler.item(args,trusted,workspace);state=self.scheduler.store.get(item["key"])
+        if not self._owned(job,trusted,workspace)or job.get("ownership_id")!=item["key"]or job.get("retry_of")!=args["job_id"]:
+            raise PermissionError("Retry preparation owner changed")
+        if job.get("access_fingerprint")!=fingerprint or job.get("revoked") or self._maintenance()["drained"]:
+            raise PermissionError("Retry preparation authority changed or broker drained")
+        if item.get("status")!="closed"or item.get("job_id")not in {job["retry_of"],job["job_id"]}or state["generation"]!=job["source_generation"]or state["epoch"]!=job["ownership_epoch"]or state["state"]!="owned":
+            raise ValueError("Retry preparation source ownership changed")
+        self.scheduler.store.assert_owned(item["key"],self.scheduler.owner(trusted,workspace),state["epoch"],self.scheduler.components(item).scopes(job["changed_paths"]))
+        private=release.snapshot(Path(item["workspace_path"]).parent,TASK_CONTEXT,context_digest)
+        if context_digest(private)[0]!=item.get("inputs_sha256"):raise ValueError("Frozen task changed during retry preparation")
+        prior=self.jobs.get(job["retry_of"],{})
+        if prior.get("status")!="failed"or prior.get("effects_started"):raise ValueError("Original retry outcome changed")
+        if any(j.get("ownership_id")==item["key"]and j.get("job_id")!=job["job_id"]and j.get("status")in {"queued","running","needs_decision","uncertain","interrupted"}for j in self.jobs.values()):
+            raise ValueError("Reconcile other task execution before admitting prepared retry")
+        # Revalidate copied archives on every recovery; compiler/image evidence is checked again in execution.
+        proof=image_reuse_module.prepare_retry_archives(self.state,self.work_dir,job["job_id"],self.state/job["retry_of"],
+            job["body_digest"],self.scheduler.write_record,recover_legacy=args.get("recover_preparation",False))
+        if proof!=job.get("retry_preparation"):raise ValueError("Retry preparation receipt changed")
+        item.update(job_id=job["job_id"],finished_at=time.time());self._save_work()
+        job.update(status="queued",phase="waiting",lease_until=max(deadline,time.time()+4*3600))
+        self._save(job);self.jobs[job["job_id"]]=job;self.requests[job["request_key"]]=job["job_id"]
+        self._start_next()
+        return self._view(job)
+
     def retry_verified_failed_release(self,request,args):
         """Queue a new attempt while preserving the failed job and its exact evidence."""
-        allowed={"action","task_id","job_id","request_id","expected_revision","expected_epoch","sync_decision","expected_sync_digest","rebuild_if_stale","lineage_job_id"}
+        allowed={"action","task_id","job_id","request_id","expected_revision","expected_epoch","sync_decision","expected_sync_digest","rebuild_if_stale","lineage_job_id","recover_preparation"}
         if (set(args)-allowed or not {"action","task_id","job_id","request_id","expected_revision","expected_epoch"}<=set(args)
+                or type(args.get("recover_preparation",False)) is not bool
                 or type(args.get("rebuild_if_stale",False)) is not bool
                 or ("lineage_job_id" in args and (not isinstance(args["lineage_job_id"],str) or not re.fullmatch(r"[0-9a-f-]{36}",args["lineage_job_id"])))
                 or not request["trusted"].get("local_caller")):
@@ -3391,8 +3420,18 @@ class Broker:
         with self.lock:
             prior=self.jobs.get(args["job_id"])
             existing=next((row for row in self.jobs.values()if row.get("request_key")==request_key),None)
+            identity=str(uuid.uuid5(uuid.NAMESPACE_URL,request_key))
+            durable=self.state/(identity+".json");loaded_from_disk=False
+            if existing is None and (durable.exists()or durable.is_symlink()):
+                fd=os.open(durable,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+                try:
+                    meta=os.fstat(fd)
+                    if not stat.S_ISREG(meta.st_mode)or meta.st_nlink!=1 or meta.st_size>4*1024*1024:raise ValueError("Invalid durable retry receipt")
+                    with os.fdopen(fd,"rb",closefd=False)as stream:existing=json.loads(stream.read(4*1024*1024+1));loaded_from_disk=True
+                finally:os.close(fd)
             if existing:
-                if existing["body_digest"]!=hashlib.sha256(canonical(args)).hexdigest():raise ValueError("Retry request ID reused with changed input")
+                if existing.get("request_key")!=request_key or existing.get("job_id")!=identity or existing["body_digest"]!=hashlib.sha256(canonical(args)).hexdigest():raise ValueError("Retry request ID reused with changed input")
+                if existing.get("status")=="preparing_retry"or(loaded_from_disk and existing.get("status")=="queued"and not existing.get("effects_started")):return self.finish_retry_registration(request,args,existing)
                 return self._view(existing)
             item=self.scheduler.item(args,trusted,workspace)
             state=self.scheduler.ensure(item,trusted,workspace)
@@ -3473,16 +3512,12 @@ class Broker:
             if self._maintenance()["drained"]:raise ValueError("Maintenance drain prevents release retry")
             identity=str(uuid.uuid5(uuid.NAMESPACE_URL,request_key))
             folder=self.state/identity
-            if folder.exists():raise ValueError("Interrupted retry preparation requires reconciliation")
-            folder.mkdir(mode=0o700)
-            for name in ("base.tar","task.tar","candidate.tar","admitted_base.tar"):
-                original=old_folder/name
-                if original.is_file():
-                    with original.open("rb")as source, (folder/name).open("xb")as target:
-                        shutil.copyfileobj(source,target,1024*1024);target.flush();os.fsync(target.fileno())
+            preparation=image_reuse_module.prepare_retry_archives(self.state,self.work_dir,identity,old_folder,
+                hashlib.sha256(canonical(args)).hexdigest(),self.scheduler.write_record,recover_legacy=args.get("recover_preparation",False))
             job={"job_id":identity,"request_key":request_key,"body_digest":hashlib.sha256(canonical(args)).hexdigest(),
                  "user_id":trusted["user_id"],"workspace":workspace,"task_id":item["task_id"],"operation":"build_deploy",
-                 "isolated":True,"status":"queued","phase":"waiting","created_at":time.time(),
+                 "isolated":True,"status":"preparing_retry","phase":"retry_prepared","created_at":time.time(),
+                 "retry_of":prior["job_id"],"retry_preparation":preparation,
                  "inputs_sha256":prior["inputs_sha256"],"base_inputs_sha256":prior["base_inputs_sha256"],
                  "changed_paths":prior["changed_paths"],"release_root":prior["release_root"],
                  "publication_policy_version":prior.get("publication_policy_version",0),
@@ -3492,11 +3527,9 @@ class Broker:
                  "ownership_id":item["key"],"ownership_epoch":state["epoch"],"source_generation":state["generation"],
                  "synchronization":report,"legacy_image_proof":proof,"retry_mode":mode,"cached_rebuild_lineage":lineage,"packaging_resume":packaging_resume}
             if args.get("sync_decision")=="proceed":job["sync_ack_digest"]=report["digest"]
-            self.jobs[identity]=job;self.requests[request_key]=identity;self._save(job)
-            item.update(job_id=identity,finished_at=time.time())
-            self._save_work()
-            self._start_next()
-            return self._view(job)
+            # A durable, non-executable receipt precedes the task linkage and queue admission.
+            self._save(job)
+            return self.finish_retry_registration(request,args,job)
 
     def prepare_dependency_cache(self,request,args):
         """Operator schedules pinned runtime dependency preparation before an application build."""

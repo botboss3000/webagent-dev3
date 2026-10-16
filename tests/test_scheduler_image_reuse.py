@@ -250,3 +250,159 @@ class PackagingRetryBrokerTests(unittest.TestCase):
             result=self.call("build_work",args)
         self.assertEqual(result["status"],"needs_rebuild")
         self.assertEqual(set(self.broker.jobs),before)
+
+
+class RetryPreparationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);self.state=self.root/"jobs";self.state.mkdir();self.source=self.state/"original";self.source.mkdir()
+        self.coordination=self.root/"coordination";self.coordination.mkdir()
+        self.identity="00000000-0000-4000-8000-000000000001";self.folder=self.state/self.identity
+        for name in ("base.tar","task.tar","candidate.tar"):(self.source/name).write_bytes((name+" data").encode())
+    def writer(self,path,record):
+        import json,os
+        temporary=path.with_suffix(".new");temporary.write_text(json.dumps(record));os.replace(temporary,path)
+    def prepare(self,**kw):
+        return reuse.prepare_retry_archives(self.state,self.coordination,self.identity,self.source,"a"*64,self.writer,**kw)
+    def test_interrupted_copy_resumes_and_preserves_partial(self):
+        from unittest.mock import patch
+        def fail(incoming,outgoing,*args):outgoing.write(b"partial");raise OSError("disk interruption")
+        with patch("shutil.copyfileobj",side_effect=fail):
+            with self.assertRaisesRegex(OSError,"disk interruption"):self.prepare()
+        self.assertFalse((self.folder/"base.tar").exists())
+        self.assertEqual(self.prepare()["state"],"ready")
+        for p in self.source.iterdir():self.assertEqual(p.read_bytes(),(self.folder/p.name).read_bytes())
+        saved=list((self.coordination/"retry-preparations"/(self.identity+"-preserved")).iterdir())
+        self.assertEqual([p.read_bytes()for p in saved],[b"partial"])
+        self.assertEqual(self.prepare(),self.prepare())
+    def test_legacy_recovery_is_explicit_and_preserves_incomplete_original(self):
+        self.folder.mkdir();(self.folder/"base.tar").write_bytes(b"old interrupted bytes")
+        with self.assertRaisesRegex(ValueError,"recover_preparation=true"):self.prepare()
+        self.assertEqual((self.folder/"base.tar").read_bytes(),b"old interrupted bytes")
+        self.prepare(recover_legacy=True)
+        saved=list((self.coordination/"retry-preparations"/(self.identity+"-preserved")).iterdir())
+        self.assertEqual(saved[0].read_bytes(),b"old interrupted bytes")
+        (self.folder/"base.tar").write_bytes(b"tampered after ready")
+        with self.assertRaisesRegex(ValueError,"Completed retry archive changed"):self.prepare(recover_legacy=True)
+    def test_unknown_contents_are_never_moved(self):
+        self.folder.mkdir();(self.folder/"activation.json").write_text("unknown")
+        with self.assertRaisesRegex(ValueError,"Unknown retry"):self.prepare(recover_legacy=True)
+        self.assertEqual((self.folder/"activation.json").read_text(),"unknown")
+        self.assertFalse((self.coordination/"retry-preparations"/(self.identity+".json")).exists())
+    def test_changed_source_or_request_does_not_adopt_existing_preparation(self):
+        self.prepare();(self.source/"task.tar").write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError,"binding changed"):self.prepare()
+    def test_symlink_and_hardlink_archives_are_rejected(self):
+        import os
+        self.folder.mkdir();(self.folder/"base.tar").symlink_to(self.source/"base.tar")
+        with self.assertRaises(OSError):self.prepare(recover_legacy=True)
+        (self.folder/"base.tar").unlink();os.link(self.source/"base.tar",self.folder/"base.tar")
+        with self.assertRaisesRegex(ValueError,"single-link"):self.prepare(recover_legacy=True)
+
+
+class RetryRegistrationRecoveryTests(unittest.TestCase):
+    setUp=PackagingRetryBrokerTests.setUp
+    tearDown=PackagingRetryBrokerTests.tearDown
+    call=PackagingRetryBrokerTests.call
+    prepare=PackagingRetryBrokerTests.prepare
+    def args(self,item,prior,value):
+        return {"action":"retry_packaging_release","task_id":item["task_id"],"job_id":prior["job_id"],"expected_revision":value["revision"],"expected_epoch":value["epoch"],"request_id":"interrupted-packaging-retry"}
+    def test_failure_before_task_link_reuses_durable_nonexecutable_receipt(self):
+        from unittest.mock import patch
+        import json
+        item,prior,value=self.prepare();args=self.args(item,prior,value)
+        with patch.object(self.broker,"_start_next"),patch.object(self.broker,"_sync_report",return_value={"total":0,"status":"synchronized"}):
+            with patch.object(self.broker,"_save_work",side_effect=RuntimeError("link interrupted")):
+                with self.assertRaisesRegex(RuntimeError,"link interrupted"):self.call("build_work",args)
+            receipts=[json.loads(p.read_text())for p in self.broker.state.glob("*.json")]
+            prepared=next(j for j in receipts if j.get("status")=="preparing_retry")
+            self.assertNotIn(prepared["job_id"],self.broker.jobs)
+            item["job_id"]=prior["job_id"]
+            recovered=self.call("build_work",args)
+            self.assertEqual(recovered["job_id"],prepared["job_id"])
+            self.assertEqual(self.broker.jobs[prepared["job_id"]]["status"],"queued")
+            self.assertEqual(self.call("build_work",args)["job_id"],prepared["job_id"])
+        self.assertEqual(prior["status"],"failed");self.assertFalse(self.runner.calls)
+    def test_queue_save_failure_recovers_without_duplicate_attempt(self):
+        from unittest.mock import patch
+        item,prior,value=self.prepare();args=self.args(item,prior,value);save=self.broker._save
+        def fail_queue(job):
+            if job.get("retry_of") and job["status"]=="queued":raise RuntimeError("queue interrupted")
+            return save(job)
+        with patch.object(self.broker,"_start_next"),patch.object(self.broker,"_sync_report",return_value={"total":0,"status":"synchronized"}):
+            with patch.object(self.broker,"_save",side_effect=fail_queue):
+                with self.assertRaisesRegex(RuntimeError,"queue interrupted"):self.call("build_work",args)
+            identity=item["job_id"];self.assertNotIn(identity,self.broker.jobs)
+            self.assertEqual(self.call("build_work",args)["job_id"],identity)
+            self.assertEqual(len([j for j in self.broker.jobs.values()if j.get("retry_of")]),1)
+    def test_recovery_does_not_override_ownership_or_changed_source(self):
+        from unittest.mock import patch
+        item,prior,value=self.prepare();args=self.args(item,prior,value)
+        with patch.object(self.broker,"_start_next"),patch.object(self.broker,"_sync_report",return_value={"total":0,"status":"synchronized"}):
+            with patch.object(self.broker,"_save_work",side_effect=RuntimeError("link interrupted")):
+                with self.assertRaises(RuntimeError):self.call("build_work",args)
+            (Path(item["workspace_path"])/"README.md").write_text("illegal frozen change")
+            with self.assertRaisesRegex(ValueError,"Frozen task changed"):self.call("build_work",args)
+
+    def test_durable_queued_receipt_recovers_registration_after_lost_response(self):
+        from unittest.mock import patch
+        item,prior,value=self.prepare();args=self.args(item,prior,value);save=self.broker._save
+        def saved_then_lost(job):
+            save(job)
+            if job.get("retry_of")and job["status"]=="queued":raise RuntimeError("queue persisted response lost")
+        with patch.object(self.broker,"_start_next"),patch.object(self.broker,"_sync_report",return_value={"total":0,"status":"synchronized"}):
+            with patch.object(self.broker,"_save",side_effect=saved_then_lost):
+                with self.assertRaisesRegex(RuntimeError,"response lost"):self.call("build_work",args)
+            identity=item["job_id"];self.assertNotIn(identity,self.broker.jobs)
+            self.assertEqual(self.call("build_work",args)["job_id"],identity)
+            self.assertIn(identity,self.broker.jobs)
+    def test_restart_does_not_execute_prepared_receipt_before_explicit_retry(self):
+        from unittest.mock import patch
+        item,prior,value=self.prepare();args=self.args(item,prior,value)
+        self.broker._save(prior);self.broker._save_work()
+        with patch.object(self.broker,"_start_next"),patch.object(self.broker,"_sync_report",return_value={"total":0,"status":"synchronized"}):
+            with patch.object(self.broker,"_save_work",side_effect=RuntimeError("interrupted link")):
+                with self.assertRaises(RuntimeError):self.call("build_work",args)
+        self.broker.shutdown()
+        self.broker=self.fixture.fixtures.host.Broker(self.root/"jobs",self.runner)
+        self.broker.scheduler.mode="enforce"
+        prepared=next(j for j in self.broker.jobs.values()if j.get("status")=="preparing_retry")
+        self.assertFalse(self.broker.active_jobs);self.assertFalse(self.runner.calls)
+        with patch.object(self.broker,"_start_next"):
+            self.assertEqual(self.call("build_work",args)["job_id"],prepared["job_id"])
+            self.assertEqual(prepared["status"],"queued")
+
+    def test_legacy_orphan_recovery_through_supported_retry_argument(self):
+        from unittest.mock import patch
+        import uuid
+        item,prior,value=self.prepare();args={**self.args(item,prior,value),"recover_preparation":True}
+        host=self.fixture.fixtures.host;owner=self.broker.scheduler.owner(self.trusted,self.workspace)
+        key="packaging-retry-"+hashlib.sha256(host.canonical([owner,args["task_id"],args["job_id"],args["request_id"]])).hexdigest()
+        identity=str(uuid.uuid5(uuid.NAMESPACE_URL,key));folder=self.broker.state/identity;folder.mkdir();(folder/"base.tar").write_bytes(b"legacy partial")
+        with patch.object(self.broker,"_start_next"),patch.object(self.broker,"_sync_report",return_value={"total":0,"status":"synchronized"}):
+            self.assertEqual(self.call("build_work",args)["job_id"],identity)
+        saved=list((self.broker.work_dir/"retry-preparations"/(identity+"-preserved")).iterdir())
+        self.assertEqual(saved[0].read_bytes(),b"legacy partial")
+    def test_changed_authorization_cannot_admit_saved_preparation(self):
+        from unittest.mock import patch
+        item,prior,value=self.prepare();args=self.args(item,prior,value)
+        with patch.object(self.broker,"_start_next"),patch.object(self.broker,"_sync_report",return_value={"total":0,"status":"synchronized"}):
+            with patch.object(self.broker,"_save_work",side_effect=RuntimeError("link interrupted")):
+                with self.assertRaises(RuntimeError):self.call("build_work",args)
+            self.trusted["access_fingerprint"]="e"*64
+            with self.assertRaisesRegex(PermissionError,"authority changed"):self.call("build_work",args)
+        self.assertFalse(self.broker.active_jobs)
+
+    def test_restarted_preparation_can_be_cancelled_without_execution(self):
+        from unittest.mock import patch
+        item,prior,value=self.prepare();args=self.args(item,prior,value)
+        self.broker._save(prior);self.broker._save_work()
+        with patch.object(self.broker,"_start_next"),patch.object(self.broker,"_sync_report",return_value={"total":0,"status":"synchronized"}):
+            with patch.object(self.broker,"_save_work",side_effect=RuntimeError("interrupted link")):
+                with self.assertRaises(RuntimeError):self.call("build_work",args)
+        self.broker.shutdown();self.broker=self.fixture.fixtures.host.Broker(self.root/"jobs",self.runner);self.broker.scheduler.mode="enforce"
+        prepared=next(j for j in self.broker.jobs.values()if j.get("status")=="preparing_retry")
+        result=self.call("v3_build_cancel",{"job_id":prepared["job_id"],"request_id":"cancel-unstarted-retry","expected_job_ids":[prepared["job_id"]]})
+        self.assertEqual(result["disposition"],"cancelled")
+        self.assertEqual(self.call("build_work",args)["status"],"cancelled")
+        self.assertFalse(self.runner.calls)
