@@ -27,14 +27,17 @@ def validate(value):
  ledger=v["code_index_ledger_max_bytes"]
  if type(ledger)is not int or not 512*1024**2<=ledger<=1024**3 or ledger%4096:raise ValueError("Invalid review ledger storage budget")
  policy=v.get("scheduler",{})
- if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch"}-MEMORY_KEYS:raise ValueError("Invalid scheduler policy")
+ if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","documentation_review_order","post_deployment_indexing"}-MEMORY_KEYS:raise ValueError("Invalid scheduler policy")
  policy={**scheduler_defaults(),**policy}
+ if policy.get("documentation_review_order","before_deployment")not in {"before_deployment","after_deployment"}:raise ValueError("Invalid documentation review order")
  if policy["mode"]not in {"observe","enforce"}or type(policy["orphan_after_seconds"])is not int or not 60<=policy["orphan_after_seconds"]<=86400:raise ValueError("Invalid ownership policy")
  for key,default,low,high in [("reserve_bytes",768*1024**2,256*1024**2,16*1024**3),("reserve_percent",10,5,50),("max_phases",4,1,16),("max_parked",2,0,8),("memory_pressure_percent",5,1,50)]:
   policy.setdefault(key,default)
   if type(policy[key])is not int or not low<=policy[key]<=high:raise ValueError("Invalid scheduler resource policy: "+key)
  if type(policy.get("concurrent_ui_preparation",False))is not bool:raise ValueError("Invalid UI preparation policy")
  if type(policy.get("component_indexing",False))is not bool:raise ValueError("Invalid component index policy")
+ if type(policy.get("post_deployment_indexing",False))is not bool:raise ValueError("Invalid post-deployment index policy")
+ if policy.get("post_deployment_indexing",False)and policy.get("documentation_review_order")!="after_deployment":raise ValueError("Post-deployment indexing requires post-deployment documentation review")
  if type(policy.get("ui_file_reservations",False))is not bool:raise ValueError("Invalid UI reservation policy")
  if type(policy.get("max_ui_preparations",1))is not int or not 1<=policy.get("max_ui_preparations",1)<=2:raise ValueError("Invalid UI preparation limit")
  if policy["concurrent_ui_preparation"]and(policy["mode"]!="enforce"or not policy["component_indexing"]):raise ValueError("Concurrent UI preparation requires enforced scheduling and measured component indexing")

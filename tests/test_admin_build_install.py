@@ -40,7 +40,7 @@ class InstallTests(unittest.TestCase):
         (self.source / "install.py").write_bytes(b"# fixture bootstrap\n")
         (self.source / "release.py").write_bytes(b"# fixture release\n")
         (self.source / "performance.py").write_bytes(b"# fixture protected performance\n")
-        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","boot_host.py","index_queue.py","index_coordinator.py","review_store.py","review_policy.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile"):
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","boot_host.py","index_queue.py","index_coordinator.py","review_store.py","review_policy.py","post_deployment.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile"):
             (self.source/name).write_bytes(b"# fixture module\n")
         (self.source/"scheduler-defaults.json").write_text("{}")
         index_source=self.v3/"plugins/abilities/Administrator/code_index"
@@ -74,7 +74,7 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(b"# fixture protected performance\n").hexdigest(), result["performance_sha256"])
         self.assertEqual(0o644,(service/"performance.py").stat().st_mode & 0o777)
         self.assertEqual(0,self.fake.owner((service/"performance.py").stat()))
-        for name in ("ownership.py","scheduler.py","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","boot_host.py","index_queue.py","index_coordinator.py","review_store.py","review_policy.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","scheduler-defaults.json"):
+        for name in ("ownership.py","scheduler.py","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","boot_host.py","index_queue.py","index_coordinator.py","review_store.py","review_policy.py","post_deployment.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","scheduler-defaults.json"):
             self.assertEqual(hashlib.sha256((self.source/name).read_bytes()).hexdigest(),result["modules"][name])
             self.assertEqual((self.source/name).read_bytes(),(service/name).read_bytes())
         self.assertEqual(result, installer.install())

@@ -271,9 +271,16 @@ def _seed_inner(spec):
         raise ValueError("seed baseline changed")
     index = template.parent/".code-index"
     index_digest = None
-    if spec.get("published") and not index.is_dir():
-        raise ValueError("Published source/index pair unavailable")
-    if index.is_dir() and not index.is_symlink():
+    ready_index=index.is_dir()and(index/"manifest.json").is_file()and(index/"index.sqlite").is_file()
+    if index.is_symlink():raise ValueError("Published index directory symlink")
+    if spec.get("published") and not ready_index:
+        # A source-only release is usable while its separate index job is pending.
+        receipt=template.parent/".code-index/source-release.json"
+        if receipt.is_symlink()or not receipt.is_file()or receipt.stat().st_size>4096:raise ValueError("Published source/index pair unavailable")
+        published=json.loads(receipt.read_bytes())
+        module=administrator_plugin("code_index")
+        if published.get("publication_mode")!="post_deployment_indexing_v1"or published.get("release_id")!=template.parent.name or published.get("source_sha256")!=module.source_digest(template.parent):raise ValueError("Published source receipt mismatch")
+    if ready_index:
         # Source and bootstrap index use the same already-resolved template.
         module = administrator_plugin("code_index")
         module.seed_private_index(template.parent,stage)

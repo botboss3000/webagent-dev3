@@ -308,18 +308,74 @@ def stage_assets(root, job_id, blob, validate):
     return destination
 
 
+
+def asset_source_digest(destination):
+    """Hash exact source/artifact bytes without running an index or its size-bound parser."""
+    destination=Path(destination);rows=[]
+    for path in sorted(destination.rglob("*")):
+        relative=path.relative_to(destination).as_posix()
+        if relative.split("/")[0]in {".code-index",".git"}:continue
+        info=path.lstat()
+        if stat.S_ISDIR(info.st_mode):continue
+        if not stat.S_ISREG(info.st_mode):raise ValueError("Invalid immutable source inode")
+        if len(rows)>=50000:raise ValueError("Source receipt file bound exceeded")
+        content=hashlib.sha256()
+        with path.open("rb")as stream:
+            for block in iter(lambda:stream.read(1024*1024),b""):content.update(block)
+        rows.append([relative,info.st_mode&0o100,content.hexdigest()])
+    return hashlib.sha256(json.dumps(rows,separators=(",",":")).encode()).hexdigest()
+
+
+def write_source_receipt(destination, job_id, candidate_digest):
+    """Seal exact immutable source independently of derived post-deployment metadata."""
+    destination=Path(destination);uuid.UUID(job_id)
+    value={"schema_version":1,"publication_mode":"post_deployment_indexing_v1",
+           "release_id":job_id,"candidate_sha256":candidate_digest,
+           "source_sha256":asset_source_digest(destination)}
+    metadata=destination/".code-index"
+    if metadata.is_symlink():raise ValueError("Source metadata directory symlink")
+    metadata.mkdir(mode=0o755,exist_ok=True)
+    path=metadata/"source-release.json"
+    if path.exists():
+        if path.is_symlink()or json.loads(path.read_bytes())!=value:raise ValueError("Immutable source receipt differs")
+    else:
+        temporary=metadata/(".source-release-"+uuid.uuid4().hex)
+        fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o644)
+        with os.fdopen(fd,"w")as stream:
+            json.dump(value,stream,sort_keys=True,separators=(",",":"));stream.flush();os.fsync(stream.fileno())
+        os.rename(temporary,path)
+        for parent in (metadata,destination):
+            fd=os.open(parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+            try:os.fsync(fd)
+            finally:os.close(fd)
+    return value
+
+
+def verify_publication(destination, job_id, candidate_digest=None):
+    """Validate source activation without requiring its derived index to exist."""
+    destination=Path(destination);path=destination/".code-index/source-release.json";uuid.UUID(job_id)
+    if not path.exists():return verify_index(destination,job_id,candidate_digest)
+    if destination.is_symlink()or (destination/".code-index").is_symlink()or path.is_symlink()or not path.is_file()or path.stat().st_size>4096:raise ValueError("Invalid source publication receipt")
+    value=json.loads(path.read_bytes())
+    if any(not isinstance(value.get(k),str)or len(value[k])!=64 or any(c not in "0123456789abcdef"for c in value[k])for k in ("candidate_sha256","source_sha256")):raise ValueError("Invalid source publication digest")
+    if set(value)!={"schema_version","publication_mode","release_id","candidate_sha256","source_sha256"}or value["schema_version"]!=1 or value["publication_mode"]!="post_deployment_indexing_v1"or value["release_id"]!=job_id or candidate_digest is not None and value["candidate_sha256"]!=candidate_digest:raise ValueError("Source publication receipt mismatch")
+    expected=write_source_receipt(destination,job_id,value["candidate_sha256"])
+    if value!=expected:raise ValueError("Published source bytes changed")
+    return value
+
+
 def install_prepared_assets(root, job_id, prepared, candidate_digest):
     """Atomically admit one verified complete snapshot only after the host wins publication."""
     uuid.UUID(job_id);root=Path(root);prepared=Path(prepared)
     if root.is_symlink()or prepared.is_symlink()or not prepared.is_dir():raise ValueError("Prepared asset path invalid")
-    manifest=verify_index(prepared,job_id,candidate_digest)
+    manifest=verify_publication(prepared,job_id,candidate_digest)
     revisions=root/"releases"
     if revisions.is_symlink():raise ValueError("Asset revisions symlink forbidden")
     revisions.mkdir(mode=0o755,parents=True,exist_ok=True)
     destination=revisions/job_id
     if destination.exists():
-        existing=verify_index(destination,job_id,candidate_digest)
-        if existing["source_sha256"]!=manifest["source_sha256"]or existing["index_sha256"]!=manifest["index_sha256"]:raise ValueError("Immutable prepared release differs")
+        existing=verify_publication(destination,job_id,candidate_digest)
+        if existing["source_sha256"]!=manifest["source_sha256"]or existing.get("index_sha256")!=manifest.get("index_sha256"):raise ValueError("Immutable prepared release differs")
         return destination
     previous_parent=prepared.parent
     os.rename(prepared,destination)
@@ -366,7 +422,7 @@ def activate_assets(root, job_id):
     target = root / "releases" / job_id
     if not target.is_dir() or target.is_symlink():
         raise ValueError("asset release unavailable")
-    verify_index(target, job_id)
+    verify_publication(target, job_id)
     previous = current_asset_id(root)
     temporary = root / ("current-" + uuid.uuid4().hex)
     try:

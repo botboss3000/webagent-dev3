@@ -26,6 +26,9 @@ class UIPublication:
     def reviews(self,folder,changed):
         """Require current applicable reviews in the exact sealed candidate index."""
         scanner=self.broker.code_index_ledger.scanner
+        if (folder/".code-index/source-release.json").is_file():
+            manifest=self.release.verify_publication(folder,folder.name)
+            return manifest,[path for path in changed if Path(path).suffix in scanner.SUFFIXES]
         blob,manifest=scanner.read_published(folder,folder.name)
         conn=sqlite3.connect(":memory:")
         try:
@@ -76,11 +79,14 @@ class UIPublication:
             with self.broker.lock:
                 job["ui_test_evidence"]=test_result
                 job["preparation"]["frontend_tests_seconds"]=clock()-test_started
-                job["preparation"].update(attempts=attempt,indexing_seconds=indexed,validation_seconds=validated,
+                job["preparation"].update(attempts=attempt,indexing_seconds=0 if manifest.get("publication_mode")=="post_deployment_indexing_v1"else indexed,
+                    source_preparation_seconds=indexed if manifest.get("publication_mode")=="post_deployment_indexing_v1"else 0,
+                    index_deferred=manifest.get("publication_mode")=="post_deployment_indexing_v1",validation_seconds=validated,
                     total_seconds=clock()-started,parsed_files=manifest.get("indexing",{}).get("parsed_files"),
                     reused_files=manifest.get("indexing",{}).get("reused_files"),dependency_sha256=evidence["sha256"],
                     conservative_validation=evidence["conservative"],required_tests=evidence["tests"])
                 job["prepared_assets"]=str(destination);self.broker._save(job)
+            self.broker.review_policy.defer_by_policy(job,destination,pending)
             if pending and self.broker.review_policy.allows(job,destination):
                 with self.broker.lock:
                     job["deferred_documentation"]["pending_paths"]=pending
@@ -106,7 +112,7 @@ class UIPublication:
                     self.release_locks(closing);return None
                 if self.validate(self.release.snapshot(Path(job["release_root"]),self.context,self.validate))[0]!=job["inputs_sha256"]:
                     raise ValueError("Frozen preparation source changed")
-                self.release.verify_index(destination,job["job_id"],job["inputs_sha256"])
+                self.release.verify_publication(destination,job["job_id"],job["inputs_sha256"])
                 before=self.broker.state/job["job_id"]/"publication-base.tar"
                 if before.is_symlink():raise ValueError("Publication baseline symlink")
                 if before.exists()and before.read_bytes()!=live:raise ValueError("Prepared publication intent needs reconciliation")
@@ -165,7 +171,7 @@ class UIPublication:
         bound=job.get("legacy_recovery_runtime",current)
         if current!=bound:raise ValueError("Legacy recovery runtime changed")
         predecessor=job.get("asset_previous")
-        manifest=self.release.verify_index(self.assets/"releases"/predecessor,predecessor,job["base_inputs_sha256"])
+        manifest=self.release.verify_publication(self.assets/"releases"/predecessor,predecessor,job["base_inputs_sha256"])
         if self.validate(before)[0]!=manifest["candidate_sha256"]:raise ValueError("Legacy predecessor source changed")
         baseline=folder/"publication-base.tar"
         if not baseline.exists():
@@ -266,7 +272,7 @@ class UIPublication:
                 self.broker.scheduler.assert_job(job)
                 if self.broker.runner.current_asset_id()!=job["job_id"]:raise ValueError("Active pointer advanced; cannot complete this activation")
                 active_root=self.assets/"releases"/job["job_id"]
-                self.release.verify_index(active_root,job["job_id"],job["inputs_sha256"])
+                self.release.verify_publication(active_root,job["job_id"],job["inputs_sha256"])
                 self.reviews(active_root,job.get("changed_paths",()))
                 job["publication_recovery"]={"digest":digest,"request_id":args["request_id"],"action":args["action"],"done":False}
                 self.broker._save(job)
@@ -293,21 +299,22 @@ class UIPublication:
                 return result
             predecessor=job.get("asset_previous")
             if not predecessor:raise ValueError("Verified predecessor required")
-            self.release.verify_index(self.assets/"releases"/predecessor,predecessor)
+            self.release.verify_publication(self.assets/"releases"/predecessor,predecessor)
             active=self.broker.runner.current_asset_id()
             discard=args["action"]=="discard_prepared_release"
             if backend:
                 if active not in {job["job_id"],predecessor}:raise ValueError("Active pointer advanced; use a compensating release")
                 if not self.broker.runner.checkout_matches(before,job.get("changed_paths",())):raise ValueError("Checkout effects need reconciliation")
-                self.release.verify_index(self.assets/"releases"/job["job_id"],job["job_id"],job["inputs_sha256"])
+                self.release.verify_publication(self.assets/"releases"/job["job_id"],job["job_id"],job["inputs_sha256"])
             elif discard:
                 if active!=predecessor:raise ValueError("Prepared release is active or publication advanced")
                 if not self.broker.runner.checkout_matches(before,job.get("changed_paths",())):raise ValueError("Checkout effects need reconciliation")
             else:
-                if job["operation"]!="ui_deploy"or any(not path.startswith("v3/ui/")for path in job.get("changed_paths",())):raise ValueError("Only retained-runtime UI activation can be restored")
+                host_only=job["operation"]=="host_service_deploy"and job.get("hot_assets")and job.get("publication_policy_version")==1
+                if not host_only and(job["operation"]!="ui_deploy"or any(not path.startswith("v3/ui/")for path in job.get("changed_paths",()))):raise ValueError("Only retained-runtime UI or installed-host activation can be restored")
                 # A retry may observe the pointer already restored by this same durable intent.
                 if active!=job["job_id"]and not(previous and active==predecessor):raise ValueError("Active pointer advanced; use a compensating release")
-                if not legacy:self.release.verify_index(self.assets/"releases"/job["job_id"],job["job_id"],job["inputs_sha256"])
+                if not legacy:self.release.verify_publication(self.assets/"releases"/job["job_id"],job["job_id"],job["inputs_sha256"])
             job["publication_recovery"]={"digest":digest,"request_id":args["request_id"],"action":args["action"],"done":False}
             if backend:job["publication_recovery"]["runtime"]=bound
             self.broker._save(job)

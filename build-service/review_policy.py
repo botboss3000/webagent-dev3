@@ -1,4 +1,4 @@
-"""Host-owned approval and completion gates for deferred documentation reviews."""
+"""Host-owned review ordering, exact evidence bindings and mandatory completion."""
 import hashlib
 import json
 import sqlite3
@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 
-# @code-index {"version":1,"feature":"approved-documentation-deferral","aliases":["post-deployment Code Index reviews"],"purpose":"Bind explicit operator-recorded user approval to exact sealed source; defer only documentation assertions and require them before task completion.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Exact source binding, operator authority and mandatory completion are fixed approval integrity requirements."}}
+# @code-index {"version":1,"feature":"approved-documentation-deferral","aliases":["post-deployment Code Index reviews"],"purpose":"Protected review order and exact sealed source bindings; defer only documentation assertions and require them before task completion. Config: build-service/scheduler-defaults.json -> documentation_review_order.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/documentation_review_order"]}]}}
 class ReviewPolicy:
     """Publication freshness and functional checks remain in their existing host gates."""
     actions = {"approve_deferred_documentation", "finish_deferred_documentation"}
@@ -18,8 +18,8 @@ class ReviewPolicy:
 
     def _binding(self, job, folder):
         """Verify the immutable pair before deriving approval or review bindings."""
-        manifest = self.release.verify_index(folder, job["job_id"], job["inputs_sha256"])
-        if any(manifest[name] for name in ("gaps", "stale_count", "unindexed_count")):
+        manifest = self.release.verify_publication(folder, job["job_id"], job["inputs_sha256"])
+        if manifest.get("publication_mode") != "post_deployment_indexing_v1" and any(manifest[name] for name in ("gaps", "stale_count", "unindexed_count")):
             raise ValueError("Documentation deferral requires a complete fresh index")
         return {"job_id": job["job_id"], "inputs_sha256": job["inputs_sha256"],
                 "source_sha256": manifest["source_sha256"],
@@ -37,6 +37,33 @@ class ReviewPolicy:
         state = self.broker.scheduler.store.get(job["ownership_id"])
         return state["epoch"] == binding["ownership_epoch"] and state["generation"] == binding["source_generation"] and state["state"] == "owned"
 
+    def defer_by_policy(self, job, folder, pending):
+        """Bind post-deployment review obligations to this exact validated candidate.
+
+        Config: scheduler.documentation_review_order is protected release policy.
+        Functional/safety checks and complete fresh indexing run before this call.
+        """
+        order = self.broker.scheduler.config.get("scheduler", {}).get("documentation_review_order", "before_deployment")
+        if order != "after_deployment" or not pending:
+            return False
+        binding, _manifest = self._binding(job, folder)
+        with self.broker.lock:
+            self.broker._lease(job)
+            self.broker.scheduler.assert_job(job)
+            state = self.broker.scheduler.store.get(job["ownership_id"])
+            if state["state"] != "owned" or state["epoch"] != binding["ownership_epoch"] or state["generation"] != binding["source_generation"]:
+                raise PermissionError("Post-deployment review ownership changed")
+            previous = job.get("deferred_documentation", {})
+            # Reuse an identical obligation; never carry completion across a rebase.
+            if previous.get("binding") != binding:
+                previous = {"binding": binding, "approved_at": time.time(),
+                            "review_order_source": "protected_policy",
+                            "deferred_checks": ["Code Index reviews", "documentation reviews"]}
+            previous["pending_paths"] = list(pending)
+            job["deferred_documentation"] = previous
+            self.broker._save(job)
+        return True
+
     def task_keys(self):
         """Reuse completed assertions only through the scanner's source/dependency checks."""
         with self.broker.lock:jobs=list(self.broker.jobs.values())
@@ -47,7 +74,8 @@ class ReviewPolicy:
     def projection(self, folder, job, task_keys):
         """Project current assertions onto an in-memory copy; frozen indexes never change."""
         binding, manifest = self._binding(job, folder)
-        blob, _ = self.broker.code_index_ledger.scanner.read_published(folder, job["job_id"])
+        blob, manifest = self.broker.code_index_ledger.scanner.read_published(folder, job["job_id"])
+        if manifest["source_sha256"] != binding["source_sha256"]:raise ValueError("Post-deployment index source changed")
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         try:
@@ -93,6 +121,8 @@ class ReviewPolicy:
 
     def check_complete(self, job):
         """Check the persisted completion cut without waiting on a ledger under host locks."""
+        if job.get("post_deployment",{}).get("index_status") in {"queued","running","failed"}:
+            raise ValueError("Complete post-deployment indexing before task completion")
         approval = job.get("deferred_documentation")
         if not approval:
             return
@@ -102,6 +132,27 @@ class ReviewPolicy:
             raise ValueError("Complete deferred Code Index/documentation reviews before acceptance")
         if any(binding.get(name) != job.get(name) for name in ("job_id", "inputs_sha256", "source_generation", "ownership_epoch")):
             raise ValueError("Deferred documentation completion is stale")
+
+    def complete_if_ready(self, job):
+        """Derive completion from existing fresh assertions; never invent a review."""
+        if not job.get("post_deployment")or not job.get("deferred_documentation"):return False
+        try:
+            with self.broker.lock:
+                if job.get("revoked"):return False
+                self.broker.scheduler.assert_job(job)
+                revision=job.get("documentation_review_revision",0)
+                if job["post_deployment"]["index_status"]!="indexed"or any(l.get("task_key")==job["ownership_id"]for l in self.broker.code_index_leases.values()):return False
+            result=self.require_complete(job)
+            with self.broker.lock:
+                if job.get("revoked"):return False
+                self.broker.scheduler.assert_job(job)
+                if revision!=job.get("documentation_review_revision",0)or any(l.get("task_key")==job["ownership_id"]for l in self.broker.code_index_leases.values()):return False
+                result["review_revision"]=revision
+                job["deferred_documentation"]["completion"]=result
+                self.broker._save(job)
+            return True
+        except (ValueError,PermissionError):
+            return False
 
     def handle(self, request, args):
         """Record a deliberate user approval, never infer one from a build or resume."""

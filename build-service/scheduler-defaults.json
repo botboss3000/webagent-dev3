@@ -20,5 +20,7 @@
   "task_aware_cleanup": false,
   "disk_min_free_bytes": 8589934592,
   "disk_grace_seconds": 7200,
-  "disk_cleanup_batch": 4
+  "disk_cleanup_batch": 4,
+  "documentation_review_order": "after_deployment",
+  "post_deployment_indexing": true
 }

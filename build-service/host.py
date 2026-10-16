@@ -51,6 +51,7 @@ ui_policy_module=scheduler_module.sibling("ui_policy")
 ui_publication_module=scheduler_module.sibling("ui_publication")
 review_store_module=scheduler_module.sibling("review_store")
 review_policy_module=scheduler_module.sibling("review_policy")
+post_deployment_module=scheduler_module.sibling("post_deployment")
 
 SOURCE = Path(CONFIG["checkout_root"])
 _maintenance_path=_module_root/"index-maintenance.py"
@@ -965,13 +966,33 @@ class Runner:
         if base_release_id is None:engine_components.seal_catalog(destination,job_id,ASSET_ROOT)
         else:engine_components.seal_catalog(destination,job_id,ASSET_ROOT,base_release_id=base_release_id)
         self.readable_assets(destination)
+        job=getattr(self.job_context,"job",None)or{}
+        if CONFIG.get("scheduler",{}).get("post_deployment_indexing",False)and job.get("publication_policy_version")==1:
+            release.write_source_receipt(destination,job_id,context_digest(blob)[0])
+            job.setdefault("post_deployment",{"index_status":"awaiting_deployment","attempts":0,"parser_service_dir":CONFIG["service_dir"]})
+            getattr(self,"resource_progress",lambda _job:None)(job)
+            return destination
+        return self.index_assets(destination,blob,job_id,base_release_id=base_release_id)
+
+    def index_assets(self,destination,blob,job_id,*,base_release_id=None):
+        """Attach derived metadata once, after exact deployed source has been frozen."""
+        destination=Path(destination)
+        scanner=Path(CONFIG["service_dir"])/"index-scanner.py"
+        source_receipt=release.verify_publication(destination,job_id,context_digest(blob)[0])if(destination/".code-index/source-release.json").is_file()else None
+        job=getattr(self.job_context,"job",None)or{}
+        pinned=job.get("post_deployment",{}).get("parser_service_dir")
+        if pinned:
+            package=Path(pinned)
+            if package.parent!=Path(CONFIG["install_root"])/"releases"or not re.fullmatch(r"[a-f0-9]{64}",package.name):raise ValueError("Invalid pinned protected parser package")
+            scanner=package/"index-scanner.py"
+        require_paired_index_parser(blob,scanner)
         index = destination / ".code-index"
-        for orphan in destination.glob(".index-stage-*"):
+        for orphan in [*destination.glob(".index-stage-*"),*index.glob(".index-stage-*")]:
             uuid.UUID(orphan.name.removeprefix(".index-stage-"))
             if orphan.is_symlink() or not orphan.is_dir():
                 raise ValueError("Invalid interrupted index staging directory")
             shutil.rmtree(orphan)
-        if index.exists():
+        if (index/"manifest.json").is_file():
             release.verify_index(destination, job_id, context_digest(blob)[0])
             return destination
         provider=getattr(self,"maintenance_provider",None)
@@ -983,10 +1004,10 @@ class Runner:
         fd=os.open(input_path,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
         with os.fdopen(fd,"wb")as stream:stream.write(payload);stream.flush();os.fsync(stream.fileno())
         # Candidate Python is never executed; the matched protected parser is mounted read-only.
-        temporary = destination / (".index-stage-" + str(uuid.uuid4()))
+        temporary = (index if source_receipt is not None else destination) / (".index-stage-" + str(uuid.uuid4()))
         temporary.mkdir(mode=0o755)
         try:
-            image = self.inspect(TARGETS[0])["Image"]
+            image = (getattr(self.job_context,"job",None)or{}).get("images",{}).get("api")or self.inspect(TARGETS[0])["Image"]
             active=base_release_id if base_release_id is not None else self.current_asset_id()
             seed_root=ASSET_ROOT/"releases"/active if active else None
             seed=self.verified_index_seed(seed_root)
@@ -1018,7 +1039,16 @@ class Runner:
             fd = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:os.fsync(fd)
             finally:os.close(fd)
-            os.rename(temporary, index)
+            if source_receipt is not None:release.verify_publication(destination,job_id,context_digest(blob)[0])
+            if source_receipt is not None:
+                # The existing metadata directory contains only the source receipt.
+                # Publish the immutable database first, then its manifest as commit.
+                os.replace(temporary/"index.sqlite",index/"index.sqlite")
+                os.replace(temporary/"manifest.json",index/"manifest.json")
+                fd=os.open(index,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+                try:os.fsync(fd)
+                finally:os.close(fd)
+            else:os.rename(temporary, index)
             fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:os.fsync(fd)
             finally:os.close(fd)
@@ -1806,12 +1836,14 @@ class Broker:
                         job["status"] = "completed"
                         job["reason"] = "recovered matching healthy deployment"
                     self._save(job)
+        self.post_deployment=post_deployment_module.PostDeployment(self,release,ASSET_ROOT,context_digest)
         if recover:
             for job in self.jobs.values():
                 if job.get("batch_members") and job["status"] not in ("queued", "running"):
                     self._mirror_batch(job)
             self.scheduler.migrate_legacy()
             self._start_next()
+        self.post_deployment.resume()
 
     scheduler_entries=staticmethod(lambda blob:release.entries(blob,context_digest))
     scheduler_extract=staticmethod(lambda root,blob:release.extract(root,blob,context_digest))
@@ -2485,6 +2517,8 @@ class Broker:
             try:self.review_policy.check_complete(job);documentation_state="complete"
             except ValueError:documentation_state="pending"
             view["deferred_documentation"]={"state":documentation_state,"approved_at":approval["approved_at"],"pending_paths":[]if documentation_state=="complete"else approval.get("pending_paths",[])[:32],"completion":approval.get("completion")}
+        if job.get("post_deployment"):
+            view["post_deployment"]={k:job["post_deployment"][k]for k in ("index_status","attempts","queued_at","started_at","finished_at","error")if k in job["post_deployment"]}
         if "reason" in job:
             # Compiler failures are at the end of a bounded build transcript.
             view["reason"] = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
@@ -2793,8 +2827,9 @@ class Broker:
     # @code-index {"version":1,"feature":"owner-claim-release","aliases":["release reservations","unblock engine"],"purpose":"Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.","span_lines":48,"configuration":{"status":"not_applicable","rationale":"Ownership fencing and authenticated scope release are fixed authority invariants."}}
     def release_claims(self,request,args):
         """Owner-only explicit release; preserve drafts and fence every prior execution epoch."""
-        allowed={"action","task_id","scopes","reason","request_id","expected_revision","expected_epoch"}
+        allowed={"action","task_id","scopes","reason","request_id","expected_revision","expected_epoch","commit"}
         if set(args)-allowed:raise ValueError("Unsupported release arguments")
+        if not isinstance(args.get("reason"),str)or not 1<=len(args["reason"].encode())<=500:raise ValueError("Bounded release reason required")
         trusted=request["trusted"];workspace=request["workspace"]
         self._incoming_lease(trusted)
         item=self.scheduler.item(args,trusted,workspace)
@@ -2816,14 +2851,21 @@ class Broker:
         if result is None:
             # No queued/running work may retain a released claim or obsolete epoch.
             if any(j.get("ownership_id")==item["key"]and j["status"]in {"queued","running","interrupted","uncertain","needs_decision"}for j in self.jobs.values()):raise ValueError("Reconcile task execution before releasing claims")
-            if self.code_index_leases:raise ValueError("Wait for active maintenance before releasing claims")
+            if any(lease.get("task_key")==item["key"]for lease in self.code_index_leases.values()):raise ValueError("Wait for this task maintenance before releasing claims")
             try:
-                result=self.scheduler.store.release_scopes(item["key"],owner,args["expected_revision"],args["expected_epoch"],args.get("scopes"),args.get("reason"),token)
+                deployed=self.jobs.get(item.get("job_id"),{})
+                if deployed.get("status")=="completed"and(deployed.get("post_deployment")or deployed.get("deferred_documentation")):
+                    evidence=self.scheduler.verified(item,{"job_id":deployed["job_id"],"commit":args.get("commit"),"acceptance":[{"check":"Healthy exact committed deployment; metadata follows without source write reservations","passed":True}]},deployment_only=True)
+                    result=self.scheduler.store.release_deployed_scopes(item["key"],owner,args["expected_revision"],args["expected_epoch"],args.get("scopes"),evidence,token)
+                else:
+                    result=self.scheduler.store.release_scopes(item["key"],owner,args["expected_revision"],args["expected_epoch"],args.get("scopes"),args.get("reason"),token)
             except (ValueError,PermissionError)as error:
                 self.scheduler.write_record(path,{**record,"state":"rejected","error":str(error)[:512]})
                 raise
         # Repair the registry after a crash between the ownership transaction and save.
         current=self.scheduler.store.get(item["key"])
+        if item.get("job_id") and current["evidence"].get("post_deployment_release")==item["job_id"]:
+            deployed=self.jobs[item["job_id"]];deployed["write_claim_release"]=current["evidence"]["deployment"];self._save(deployed)
         item.update(ownership_epoch=current["epoch"],ownership_revision=current["revision"])
         item.pop("ownership_inputs_sha256",None);self._save_work()
         self.scheduler.write_record(path,{**record,"state":"done","result":result})
@@ -2904,8 +2946,8 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        review_modules={"review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","install.py"}
-        allowed={"v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","install.py"}
+        allowed={"v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
@@ -3001,6 +3043,10 @@ class Broker:
     def _code_index_activated(self,job_id):
         """Import the paired release ledger; legacy indexes initialize pending reviews."""
         root=ASSET_ROOT/"releases"/job_id
+        if not(root/".code-index/index.sqlite").is_file():
+            receipt=release.verify_publication(root,job_id)
+            if receipt.get("publication_mode")=="post_deployment_indexing_v1":return
+            raise ValueError("Published index unavailable")
         conn=sqlite3.connect("file:"+str(root/".code-index/index.sqlite")+"?mode=ro",uri=True)
         try:
             if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='maintenance_records'").fetchone():
@@ -3124,7 +3170,12 @@ class Broker:
         prepared=self.jobs.get(prepared_id)if prepared_id is not None else None
         deployed_id=args.get("deployed_job_id")
         deployed=self.jobs.get(deployed_id)if deployed_id is not None else None
-        if deployed_id is not None and(prepared_id is not None or not trusted.get("local_caller")or not deployed or not self._owned(deployed,trusted,workspace)or deployed.get("ownership_id")!=key or item is None or item.get("job_id")!=deployed_id or deployed["status"]!="completed"or deployed.get("synchronization",{}).get("status")!="synchronized"or not deployed.get("deferred_documentation")):raise PermissionError("Owned approved deployed review candidate required")
+        implicit_deployed=False
+        if deployed_id is None and prepared_id is None and item and item["status"]=="closed":
+            latest=self.jobs.get(item.get("job_id"))
+            if latest and latest.get("status")=="completed"and latest.get("deferred_documentation"):
+                deployed=latest;deployed_id=latest["job_id"];implicit_deployed=True
+        if deployed_id is not None and(prepared_id is not None or not(trusted.get("local_caller")or implicit_deployed)or not deployed or not self._owned(deployed,trusted,workspace)or deployed.get("ownership_id")!=key or item is None or item.get("job_id")!=deployed_id or deployed["status"]!="completed"or deployed.get("synchronization",{}).get("status")!="synchronized"or not deployed.get("deferred_documentation")):raise PermissionError("Owned approved deployed review candidate required")
         if prepared_id is not None and(not trusted.get("local_caller")or not prepared or not self._owned(prepared,trusted,workspace)or prepared.get("ownership_id")!=key or prepared["status"]!="needs_decision"or prepared["phase"]!="awaiting_prepared_reviews"):raise PermissionError("Owned sealed review candidate required")
         if not item or item.get("mode")!="isolated"or(item["status"]!="open"and prepared is None and deployed is None):raise ValueError("Open task or sealed prepared review candidate required")
         if trusted.get("lease_until",0)<=time.time():raise PermissionError("Maintenance authority expired")
@@ -3157,6 +3208,8 @@ class Broker:
             with self.lock:self.code_index_leases.pop(lease_key,None)
         if lease.get("lease_until",0)<=time.time()or lease.get("revoked"):raise PermissionError("Maintenance authority expired; inspect the original request receipt")
         result.update(source_kind="untrusted_maintenance_metadata",completion_is_review_assertion=True)
+        if deployed is not None and action=="record"and args.get("status")=="complete"and result.get("record",result).get("unit_id")=="__file__":
+            self.review_policy.complete_if_ready(deployed)
         return result
 
     def reload_memory_policy(self,args,trusted):
@@ -3294,6 +3347,7 @@ class Broker:
         if name=="v3_cargo_task":return self.cargo_request(args,trusted,workspace)
         if name=="build_work"and args.get("action")=="prepare_ui_test_runtime":return self.provision_ui_test_runtime(request,args)
         if name=="build_work"and args.get("action")in self.review_policy.actions:return self.review_policy.handle(request,args)
+        if name=="build_work"and args.get("action")=="retry_post_deployment":return self.post_deployment.retry(request,args)
         if name=="build_work"and args.get("action")in {"compact_index_history","partition_review_storage"}:return self.maintain_review_storage(request,args)
         if name=="build_work"and args.get("action")in self.index_coordinator.actions:return self.index_coordinator.handle(request,args)
         if name=="build_work"and args.get("action")in self.ui_publication.recovery_actions:return self.ui_publication.recover(request,args)
@@ -3313,8 +3367,9 @@ class Broker:
                     fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
                     with os.fdopen(fd,"w") as stream:json.dump(state,stream);stream.flush();os.fsync(stream.fileno())
                     os.replace(temporary,self.maintenance_file)
-                    if not state["drained"]:self._start_next()
-                return {**self._maintenance(),"busy":bool(self.active or self.active_ui or any(j["status"]=="running"for j in self.jobs.values())),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
+                    if not state["drained"]:
+                        self._start_next();self.post_deployment.start()
+                return {**self._maintenance(),"busy":bool(self.active or self.active_ui or self.post_deployment.active or any(j["status"]=="running"for j in self.jobs.values())),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
             read_actions={"heartbeat","status","review","preflight","receipt","list","get","read","search","job","artifact","reservations","resources","takeover_preview"}
             read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
             if name not in read_names and args.get("action") not in read_actions and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; new work disabled")
@@ -4472,6 +4527,7 @@ class Broker:
                     self.active=next(iter(self.active_jobs),None)
                 if job["status"] not in ("uncertain", "interrupted"):
                     self._start_next()
+            if job["status"]=="completed":self.post_deployment.enqueue(job)
 
     def request_shutdown(self):
         with self.lock:
@@ -4484,6 +4540,7 @@ class Broker:
                     self._save(job)
 
     def shutdown(self):
+        if hasattr(self,"post_deployment"):self.post_deployment.close()
         if hasattr(self,"index_coordinator"):self.index_coordinator.close()
         if hasattr(self,"resources"):self.resources.close()
         self.performance.shutdown()

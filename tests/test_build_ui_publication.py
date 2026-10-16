@@ -64,7 +64,7 @@ class PreparedRunner(fixtures.FakeRunner):
 class ConcurrentUIEntryTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name);self.sid=str(uuid.uuid4());self.serial=0
-        self.policy=patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"scheduler":{**fixtures.host.CONFIG.get("scheduler",{}),"mode":"enforce","component_indexing":True,"max_phases":4,"ui_file_reservations":True,"max_ui_preparations":2,"concurrent_ui_preparation":True}})
+        self.policy=patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"scheduler":{**fixtures.host.CONFIG.get("scheduler",{}),"mode":"enforce","component_indexing":True,"max_phases":4,"ui_file_reservations":True,"max_ui_preparations":2,"concurrent_ui_preparation":True,"documentation_review_order":"before_deployment","post_deployment_indexing":False}})
         self.asset_patch=patch.object(fixtures.host,"ASSET_ROOT",self.root/"assets")
         self.policy.start();self.asset_patch.start()
         self.runner=PreparedRunner(self.root/"assets");self.broker=fixtures.host.Broker(self.root/"jobs",self.runner)
@@ -269,6 +269,20 @@ class ConcurrentUIEntryTests(unittest.TestCase):
         self.assertFalse(self.broker._has_unresolved_release())
         active=self.runner.assets/"releases"/before
         self.assertEqual((active/"v3/ui/probe/a.css").read_text(),"body {}\n")
+
+    def test_installed_host_failure_restores_predecessor_without_runtime_restart(self):
+        before=self.runner.current_asset_id()
+        self.change("host-restore-fixture","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        self.runner.fail_verify_ui=True
+        job=self.finish("host-restore-fixture");self.wait([job])
+        self.assertEqual(self.broker.jobs[job]["status"],"uncertain")
+        self.broker.jobs[job]["operation"]="host_service_deploy"
+        self.runner.fail_verify_ui=False;calls=list(self.runner.calls)
+        result=self.recovery("host-restore-fixture",job)
+        self.assertTrue(result["effects_reconciled"])
+        self.assertEqual(self.runner.current_asset_id(),before)
+        self.assertEqual(result,self.recovery("host-restore-fixture",job))
+        self.assertFalse(any(c[0]in {"build","stop","start"}for c in self.runner.calls[len(calls):]))
 
     def test_legacy_ui_corrupt_index_restores_exact_predecessor(self):
         import hashlib

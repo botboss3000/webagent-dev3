@@ -268,13 +268,29 @@ class Ownership:
             return result
         return self.mutate(request,["release_scopes",task,owner,revision,epoch,scopes,reason],operation)
 
+    def release_deployed_scopes(self,task,owner,revision,epoch,scopes,evidence,request):
+        """Drop deployed write reservations while retaining read-only completion authority."""
+        if not isinstance(scopes,list)or not scopes or len(scopes)>256 or len(scopes)!=len(set(scopes)):raise ValueError("Explicit held scopes required")
+        if not isinstance(evidence,dict)or not evidence.get("release_id")or not evidence.get("commit"):raise ValueError("Verified deployed source/commit required")
+        def operation(db):
+            """A completed publication no longer needs source exclusivity."""
+            value=self.check(task,owner,revision,epoch,db)
+            if value["state"]not in {"owned","validating"}or evidence.get("generation")!=value["generation"]:raise ValueError("Deployed generation changed")
+            if not set(scopes)<=set(value["scopes"]):raise ValueError("Only held scopes can be released")
+            held=sorted(set(value["scopes"])-set(scopes))
+            result=self.update(db,value,state="owned",scopes=held,requested=[],heartbeat=self.clock(),
+                               evidence={"post_deployment_release":evidence["release_id"],"deployment":evidence})
+            db.execute("INSERT INTO events(task,at,event)VALUES(?,?,?)",(task,self.clock(),canonical({"deployed_write_scopes_released":sorted(scopes),"release_id":evidence["release_id"],"owner":owner})))
+            return result
+        return self.mutate(request,["release_deployed_scopes",task,owner,revision,epoch,scopes,evidence],operation)
+
     def heartbeat(self,task,owner,revision,epoch,request):
         """Renew activity only; a heartbeat never releases ownership or extends tool authorization."""
         def operation(db):
             """Refresh activity while preserving validating ownership and existing reservations."""
             value=self.check(task,owner,revision,epoch,db)
             if value["state"]in {"complete","abandoned","takeover_pending"}:raise ValueError("Ownership not renewable")
-            return self.update(db,value,heartbeat=self.clock(),state=value["state"]if value["state"]=="validating"else("owned"if value["scopes"]else"waiting"))
+            return self.update(db,value,heartbeat=self.clock(),state=value["state"]if value["state"]=="validating"else("owned"if value["scopes"]or value["evidence"].get("post_deployment_release")else"waiting"))
         return self.mutate(request,["heartbeat",task,owner,revision,epoch],operation)
     def touch(self,task,owner,epoch):
         """Refresh activity for a live bounded delegated job without changing the source CAS revision."""

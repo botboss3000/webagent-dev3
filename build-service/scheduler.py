@@ -266,7 +266,7 @@ class Scheduler:
         if key not in self.broker.work:raise ValueError("Owned source task required")
         if args.get("task_key")is not None and args["task_key"]!=key:raise PermissionError("Task key is outside this caller namespace")
         return self.broker.work[key]
-    def verified(self,item,args):
+    def verified(self,item,args,*,deployment_only=False):
         """Verify terminal publication, current promoted bytes and exact Git history before acceptance."""
         job=self.broker.jobs.get(args.get("job_id"))
         if not job or job.get("task_id")!=item["task_id"]or job.get("user_id")!=item["user_id"]or job.get("workspace")!=item["workspace"]or job["status"]!="completed"or job.get("batch_parent")or job.get("synchronization",{}).get("status")!="synchronized":
@@ -274,7 +274,7 @@ class Scheduler:
         if item.get("job_id")!=job["job_id"]or item["status"]!="closed":raise ValueError("Latest source generation must be published")
         if any(j.get("task_id")==item["task_id"]and j["status"]in {"queued","running","uncertain","needs_decision"}for j in self.broker.jobs.values()):
             raise ValueError("Task has unresolved execution")
-        self.broker.review_policy.check_complete(job)
+        if not deployment_only:self.broker.review_policy.check_complete(job)
         receipt=Path(self.broker.state)/job["job_id"]/"candidate.tar"
         # The broker's already validated archive reader binds paths to the release snapshot.
         files=self.broker.scheduler_entries(receipt.read_bytes())
@@ -285,15 +285,18 @@ class Scheduler:
         def git(*command):
             """Inspect exact committed objects without changing the shared checkout."""
             result=subprocess.run(["git","-C",str(source),*command],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=10)
-            result.check_returncode();return result.stdout
+            if result.returncode:raise ValueError("Release commit verification rejected")
+            return result.stdout
         git("merge-base","--is-ancestor",commit,"HEAD")
         committed=set(git("diff-tree","--root","--no-commit-id","--name-only","-r",commit).decode().splitlines())
+        released=job.get("write_claim_release",{})
+        historical=bool(released and released.get("commit")==commit and released.get("release_id")==job["job_id"] and released.get("generation")==job.get("source_generation"))
         for archive in job.get("changed_paths",[]):
             if not archive.startswith("v3/"):raise ValueError("Read-only shared asset change")
             relative=ownership.source_path(archive);expected=files.get(archive)
             data=None if expected is None else expected[1]
             path=source/relative
-            if path.is_symlink()or(path.read_bytes()if path.exists()else None)!=data:raise ValueError("Promoted source changed after release")
+            if not historical and(path.is_symlink()or(path.read_bytes()if path.exists()else None)!=data):raise ValueError("Promoted source changed after release")
             result=subprocess.run(["git","-C",str(source),"show",commit+":"+relative],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=10)
             if(result.stdout if result.returncode==0 else None)!=data:raise ValueError("Commit bytes differ from release")
             if relative not in committed:raise ValueError("Release path absent from selected commit")
@@ -319,7 +322,7 @@ class Scheduler:
                     prefix="v3/plugins/abilities/"+scope.removeprefix("module:ability:")+"/"
                     closure.update(p for p in files if p.startswith(prefix))
         for name in closure:
-            if files.get(name)!=active.get(name):raise ValueError("Release dependency changed; revalidate a current generation")
+            if not historical and files.get(name)!=active.get(name):raise ValueError("Release dependency changed; revalidate a current generation")
         self.broker.scheduler_verify_health()
         checks=job.get("rust_tests",{"status":"not_required"})
         if checks.get("status")not in {"passed","not_required"}:raise ValueError("Release checks incomplete")

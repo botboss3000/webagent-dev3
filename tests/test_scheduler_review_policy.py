@@ -182,3 +182,48 @@ class DeferredDocumentationTests(unittest.TestCase):
         self.assertEqual(json.loads(journals[0].read_bytes())["state"],"pending")
         self.assertEqual(self.call("build_work",args)["layout"],1)
         self.assertEqual(json.loads(journals[0].read_bytes())["state"],"done")
+
+class DefaultPostDeploymentReviewTests(unittest.TestCase):
+    """Protected default records exact obligations without a per-release approval."""
+    setUp = DeferredDocumentationTests.setUp
+    tearDown = DeferredDocumentationTests.tearDown
+    call = DeferredDocumentationTests.call
+    change = DeferredDocumentationTests.change
+    finish = DeferredDocumentationTests.finish
+    wait = DeferredDocumentationTests.wait
+    post_review = DeferredDocumentationTests.post_review
+    complete = DeferredDocumentationTests.complete
+
+
+    def test_policy_default_publishes_then_requires_review_completion(self):
+        self.broker.scheduler.config["scheduler"]["documentation_review_order"] = "after_deployment"
+        self.change("deferred-doc-task", "ui/probe/a.css", "body {}\n", "body { color: red; }\n", review=False)
+        job = self.finish("deferred-doc-task")
+        self.assertEqual(self.wait([job])[0]["status"], "completed")
+        row = self.broker.jobs[job]
+        self.assertEqual(row["deferred_documentation"]["review_order_source"], "protected_policy")
+        with self.assertRaisesRegex(ValueError, "Complete deferred"):
+            self.broker.review_policy.check_complete(row)
+        with self.assertRaisesRegex(ValueError, "Complete deferred"):
+            self.complete(job)
+        frozen = (self.runner.assets / "releases" / job / ".code-index/index.sqlite").read_bytes()
+        self.post_review(job)
+        self.complete(job)
+        self.broker.review_policy.check_complete(row)
+        self.assertEqual(frozen, (self.runner.assets / "releases" / job / ".code-index/index.sqlite").read_bytes())
+
+    def test_policy_default_preserves_required_validation_failure(self):
+        self.broker.scheduler.config["scheduler"]["documentation_review_order"] = "after_deployment"
+        self.change("deferred-doc-task", "ui/probe/a.css", "body {}\n", "body { color: red; }\n", review=False)
+        before = self.runner.current_asset_id()
+        with patch.object(self.runner, "validate_ui", side_effect=ValueError("Required safety fixture failed")):
+            job = self.finish("deferred-doc-task")
+            self.assertEqual(self.wait([job])[0]["status"], "failed")
+        self.assertEqual(self.runner.current_asset_id(), before)
+
+    def test_review_order_configuration_rejects_unknown_values(self):
+        configuration = fixtures.host._config_module
+        value = configuration.defaults()
+        value["scheduler"] = {**value["scheduler"], "documentation_review_order": "skip_reviews"}
+        with self.assertRaisesRegex(ValueError, "documentation review order"):
+            configuration.validate(value)
