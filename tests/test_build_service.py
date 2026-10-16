@@ -673,3 +673,102 @@ class SuccessorRecoveryTests(unittest.TestCase):
         after["v3/docs/file.md"]=(0o644,b"binary\0")
         with self.assertRaisesRegex(ValueError,"Binary successor"):
             release.proposal_patch(release.archive(before,validate),release.archive(after,validate),validate)
+
+
+class ReleaseReconciliationTests(unittest.TestCase):
+    """Recover journal-only failures without reissuing an ownership mutation."""
+    from test_scheduler_broker import SchedulerBrokerTests as _base
+    setUp=_base.setUp
+    tearDown=_base.tearDown
+    call=_base.call
+    begin=_base.begin
+    write=_base.write
+
+    def pending_release(self,committed=False):
+        import hashlib
+        item=self.begin("release-recovery-task");self.write(item,"README.md","draft\n")
+        value=self.broker.scheduler.store.get(item["key"])
+        owner=self.broker.scheduler.owner(self.trusted,self.workspace)
+        original={"action":"release_claims","task_id":item["task_id"],"request_id":"old-release-request", "reason":"fixture yield",
+            "scopes":value["scopes"],"expected_revision":value["revision"],"expected_epoch":value["epoch"]}
+        path=self.broker.scheduler.journal_path(owner,original["request_id"],"release-"+item["key"])
+        journal={"digest":hashlib.sha256(fixtures.host.canonical(original)).hexdigest(),"state":"pending", "task_key":item["key"],"request_id":original["request_id"]}
+        self.broker.scheduler.write_record(path,journal)
+        if committed:
+            token="release-"+hashlib.sha256(fixtures.host.canonical([owner,item["key"],original["request_id"]])).hexdigest()[:56]
+            self.broker.scheduler.store.release_scopes(item["key"],owner,value["revision"],value["epoch"],value["scopes"],original["reason"],token)
+        now=self.broker.scheduler.store.get(item["key"])
+        args={"action":"reconcile_release","task_id":item["task_id"],"original_request_id":original["request_id"],
+            "request_id":"settle-release-request","expected_revision":now["revision"],"expected_epoch":now["epoch"]}
+        return item,args,path,original
+
+    def test_abort_uncommitted_retains_claims_source_and_allows_fresh_release(self):
+        item,args,path,original=self.pending_release()
+        before=self.broker.scheduler.store.get(item["key"]);source=Path(item["workspace_path"])/"README.md"
+        result=self.call("build_work",args)
+        self.assertEqual(result["status"],"aborted_uncommitted");self.assertFalse(result["scope_mutation_performed"])
+        self.assertEqual(before,self.broker.scheduler.store.get(item["key"]))
+        self.assertEqual(source.read_text(),"draft\n");self.assertIsNone(self.broker.scheduler.pending(item["key"]))
+        self.assertEqual(self.call("build_work",args),result)
+        with self.assertRaisesRegex(ValueError,"explicitly reconciled"):self.call("build_work",original)
+        fresh={**original,"request_id":"fresh-release-request"}
+        self.assertFalse(self.call("build_work",fresh)["scopes"])
+
+    def test_settle_committed_preserves_newer_claims(self):
+        item,args,path,original=self.pending_release(True)
+        store=self.broker.scheduler.store;value=store.get(item["key"])
+        result=store.acquire(value["id"],value["owner"],value["revision"],value["epoch"],["module:asset:docs/other.md","path:docs/other.md"],"new-fixture-claims")
+        value=result["task"];item["ownership_inputs_sha256"]="new-input-binding"
+        args.update(expected_revision=value["revision"],expected_epoch=value["epoch"])
+        settled=self.call("build_work",args)
+        self.assertEqual(settled["status"],"settled_committed")
+        self.assertEqual(store.get(item["key"]),value)
+        self.assertEqual(item["ownership_inputs_sha256"],"new-input-binding")
+        self.assertEqual(self.call("build_work",original),settled["release_receipt"])
+
+    def test_retry_after_journal_settlement_does_not_release_again(self):
+        item,args,path,original=self.pending_release(True);write=self.broker.scheduler.write_record
+        def fail(p,value):
+            if p!=path and value.get("state")=="done":raise RuntimeError("lost completion")
+            return write(p,value)
+        with patch.object(self.broker.scheduler,"write_record",side_effect=fail):
+            with self.assertRaisesRegex(RuntimeError,"lost completion"):self.call("build_work",args)
+        before=self.broker.scheduler.store.get(item["key"])
+        self.assertEqual(self.call("build_work",args)["status"],"settled_committed")
+        self.assertEqual(self.broker.scheduler.store.get(item["key"]),before)
+        self.assertIsNone(self.broker.scheduler.pending(item["key"]))
+
+    def test_stale_cas_wrong_request_and_changed_retry_rejected(self):
+        item,args,path,original=self.pending_release()
+        with self.assertRaisesRegex(ValueError,"Stale recovery"):
+            self.call("build_work",{**args,"expected_revision":args["expected_revision"]-1})
+        with self.assertRaises(FileNotFoundError):self.call("build_work",{**args,"original_request_id":"unknown-release-request"})
+        self.call("build_work",args)
+        with self.assertRaisesRegex(ValueError,"reused"):self.call("build_work",{**args,"expected_epoch":args["expected_epoch"]+1})
+
+    def test_symlink_and_nonoperator_rejected(self):
+        item,args,path,original=self.pending_release();other=path.with_suffix(".original");path.rename(other);path.symlink_to(other)
+        with self.assertRaises(OSError):self.call("build_work",args)
+        self.trusted.pop("local_caller")
+        with self.assertRaises(PermissionError):self.call("build_work",args)
+
+    def test_recovery_never_cancels_active_execution(self):
+        item,args,path,original=self.pending_release()
+        self.broker.jobs["fixture-active"]={"ownership_id":item["key"],"status":"running","created_at":time.time(),"operation":"build_deploy","job_id":"fixture-active"}
+        result=self.call("build_work",args)
+        self.assertEqual(result["status"],"aborted_uncommitted")
+        self.assertEqual(self.broker.jobs["fixture-active"]["status"],"running")
+        self.assertTrue(self.broker.scheduler.store.get(item["key"])["scopes"])
+
+    def test_interrupted_abort_fences_original_retry_until_reconciled(self):
+        item,args,path,original=self.pending_release();write=self.broker.scheduler.write_record
+        def fail(p,value):
+            if p==path and value.get("state")=="rejected":raise RuntimeError("interrupted settlement")
+            return write(p,value)
+        with patch.object(self.broker.scheduler,"write_record",side_effect=fail):
+            with self.assertRaisesRegex(RuntimeError,"interrupted settlement"):self.call("build_work",args)
+        before=self.broker.scheduler.store.get(item["key"])
+        with self.assertRaisesRegex(ValueError,"reconciliation in progress"):self.call("build_work",original)
+        self.assertEqual(self.call("build_work",args)["status"],"aborted_uncommitted")
+        self.assertEqual(self.broker.scheduler.store.get(item["key"]),before)
+        self.assertIsNone(self.broker.scheduler.pending(item["key"]))

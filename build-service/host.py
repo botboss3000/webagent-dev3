@@ -2967,6 +2967,75 @@ class Broker:
         return result
 
     # @code-index {"version":1,"feature":"owner-claim-release","aliases":["release reservations","unblock engine"],"purpose":"Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.","span_lines":48,"configuration":{"status":"not_applicable","rationale":"Ownership fencing and authenticated scope release are fixed authority invariants."}}
+    def reconcile_release(self,request,args):
+        """Settle one exact release journal; never execute or repeat a scope release."""
+        required={"action","task_id","original_request_id","request_id","expected_revision","expected_epoch"}
+        trusted=request["trusted"];workspace=request["workspace"]
+        if set(args)!=required or not trusted.get("local_caller"):
+            raise PermissionError("Exact operator release reconciliation required")
+        self._incoming_lease(trusted)
+        item=self.scheduler.item(args,trusted,workspace);key=item["key"]
+        owner=self.scheduler.owner(trusted,workspace)
+        path=self.scheduler.journal_path(owner,args["request_id"],"release-recovery-"+key)
+        original_path=self.scheduler.journal_path(owner,args["original_request_id"],"release-"+key)
+        digest=hashlib.sha256(canonical(args)).hexdigest()
+        def read(p):
+            fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+            try:
+                meta=os.fstat(fd)
+                if not stat.S_ISREG(meta.st_mode) or meta.st_nlink!=1 or meta.st_size>1024*1024:raise ValueError("Invalid release recovery journal")
+                with os.fdopen(fd,"rb",closefd=False)as stream:return json.loads(stream.read(1024*1024+1))
+            finally:os.close(fd)
+        record=read(path) if path.exists() or path.is_symlink() else None
+        if record:
+            if record["digest"]!=digest:raise ValueError("Recovery request ID reused")
+            if record["state"]=="done":return record["result"]
+        previous=read(original_path)
+        if previous.get("task_key")!=key or previous.get("request_id")!=args["original_request_id"]:
+            raise ValueError("Original release journal identity differs")
+        replay=previous.get("reconciled_by")==args["request_id"] and record is not None
+        if previous.get("state")!="pending" and not replay:raise ValueError("Pending release journal required")
+        current=self.scheduler.store.get(key)
+        if current["owner"]!=owner:raise PermissionError("Current task owner required")
+        token="release-"+hashlib.sha256(canonical([owner,key,args["original_request_id"]])).hexdigest()[:56]
+        committed=self.scheduler.store.receipt(token)
+        if committed is not None and (committed.get("id")!=key or committed.get("owner")!=owner):
+            raise ValueError("Release receipt identity differs")
+        receipt_hash=None if committed is None else hashlib.sha256(canonical(committed)).hexdigest()
+        if record:
+            if record["receipt_sha256"]!=receipt_hash or record["original_digest"]!=previous.get("digest"):
+                raise ValueError("Release recovery evidence changed")
+        else:
+            if type(args["expected_revision"])is not int or type(args["expected_epoch"])is not int or current["revision"]!=args["expected_revision"] or current["epoch"]!=args["expected_epoch"]:
+                raise ValueError("Stale recovery ownership binding")
+            record={"state":"pending","digest":digest,"task_key":key,"request_id":args["request_id"],
+                "receipt_sha256":receipt_hash,"original_digest":previous.get("digest"),"ownership":current}
+            self.scheduler.write_record(path,record)
+        if committed is None:
+            # No SQLite receipt means its atomic scope mutation never committed.
+            settled={**previous,"state":"rejected","error":"Uncommitted release explicitly reconciled; use a fresh request with current ownership", "reconciled_by":args["request_id"]}
+            outcome="aborted_uncommitted"
+        else:
+            evidence=committed.get("evidence",{})
+            release_id=evidence.get("post_deployment_release")
+            if release_id:
+                job=self.jobs.get(release_id)
+                if not job or job.get("ownership_id")!=key or job.get("source_generation")!=committed["generation"]:
+                    raise ValueError("Committed deployment release requires separate reconciliation")
+                job["write_claim_release"]=evidence["deployment"];self._save(job)
+            # Preserve newer source-generation and input bindings after the old release committed.
+            item.update(ownership_epoch=current["epoch"],ownership_revision=current["revision"])
+            if current["revision"]==committed["revision"]:item.pop("ownership_inputs_sha256",None)
+            self._save_work()
+            settled={**previous,"state":"done","result":committed,"reconciled_by":args["request_id"]}
+            outcome="settled_committed"
+        self.scheduler.write_record(original_path,settled)
+        result={"status":outcome,"task_id":item["task_id"],"original_request_id":args["original_request_id"],
+            "scope_mutation_performed":False,"ownership":record["ownership"],"release_receipt":committed}
+        self.scheduler.write_record(path,{**record,"state":"done","result":result})
+        self._start_next()
+        return result
+
     def release_claims(self,request,args):
         """Release explicit write scopes; sealed execution retains only a bound promotion authority."""
         allowed={"action","task_id","scopes","reason","request_id","expected_revision","expected_epoch","commit","frozen_job_id"}
@@ -2982,6 +3051,7 @@ class Broker:
         if record and record["digest"]!=digest:raise ValueError("Request ID reused")
         if record and record["state"]=="rejected":raise ValueError(record["error"])
         if record and record["state"]=="done":return record["result"]
+        if record and self.scheduler.pending(item["key"],except_path=path):raise ValueError("Release reconciliation in progress; finish its exact recovery request")
         token="release-"+hashlib.sha256(canonical([owner,item["key"],args.get("request_id")])).hexdigest()[:56]
         frozen=record.get("frozen") if record else None
         if not record:
@@ -3119,6 +3189,7 @@ class Broker:
 
     def unified_build(self, request, args):
         action = args.get("action")
+        if action=="reconcile_release":return self.reconcile_release(request,args)
         if action=="successor_task":return self.successor_task(request,args)
         if action=="release_claims":return self.release_claims(request,args)
         if action=="reload_memory_policy":return self.reload_memory_policy(args,request["trusted"])
