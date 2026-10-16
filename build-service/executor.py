@@ -140,7 +140,14 @@ class Executor:
             if scratch:create +=["--tmpfs","/var/lib/buildkit:rw,exec,nosuid,nodev,size="+str(scratch)+",mode=0700"]
             if volume:create +=["--mount","type=volume,src="+volume+",dst=/var/lib/buildkit,volume-nocopy"]
             create +=[BUILDKIT,"--addr","unix:///run/buildkit/buildkitd.sock"]
-            if volume:create +=["--oci-worker-gc=false"]
+            if volume:
+                # BuildKit owns only this v3 cache volume. Keep its GC budget tied to
+                # protected policy; Docker's unrelated caches are never pruned here.
+                budget_mb=policy["package_cache_max_bytes"]//1_000_000
+                reserved_mb=max(1,budget_mb//4)
+                free_mb=max(reserved_mb,budget_mb//2)
+                create +=["--oci-worker-gc","--oci-worker-gc-keepstorage",
+                          f"{reserved_mb},{free_mb},{budget_mb}"]
             self.runner.command(create,timeout=30,private_raw=True)
             # Docker diagnostics share the command stream; only the protected helper identifies this exact container.
             stage="container_identity";created=self.runner.resource_request({"operation":"identity","container":name})

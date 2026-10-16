@@ -8,11 +8,11 @@ def load(name):
     spec=importlib.util.spec_from_file_location("ram_"+name,Path(__file__).resolve().parents[1]/"build-service"/(name+".py"))
     value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 executor=load("executor");resources=load("resources");config=load("config")
-POLICY={"mode":"enforce","reserve_percent":15,"package_ram_bytes":9_999_998_976,"package_tmpfs_bytes":7_999_995_904}
+POLICY={"mode":"enforce","reserve_percent":15,"package_ram_bytes":9_999_998_976,"package_tmpfs_bytes":7_999_995_904,"package_cache_max_bytes":8*1024**3}
 
 class RamPackagingTests(unittest.TestCase):
     """Exercise mount and proof gates before allowing the workload to run."""
-    def run_case(self,mount="tmpfs",cap=9_999_998_976,error=None):
+    def run_case(self,mount="tmpfs",cap=9_999_998_976,error=None,cached=False):
         """Use real executor ordering and mocked fixed Docker/kernel boundaries."""
         identity="a"*64;calls=[];cleanup=[];job={"job_id":str(uuid.uuid4()),"task_id":"fixture","package_memory_cap":4026531840}
         r=types.SimpleNamespace(enabled=True,lock=threading.RLock(),rows={})
@@ -32,7 +32,7 @@ class RamPackagingTests(unittest.TestCase):
         caught=None;executed=False
         with patch.object(executor.subprocess,"run"):
             try:
-                with worker.packager(job):
+                with worker._packager(job,"generic","dedicated-test-cache" if cached else None):
                     executed=True
                     if error:raise error
             except Exception as failure:caught=failure
@@ -46,6 +46,16 @@ class RamPackagingTests(unittest.TestCase):
         self.assertEqual(create[create.index("--memory")+1],"9999998976")
         self.assertEqual(create[create.index("--memory-swap")+1],"9999998976")
         self.assertEqual(job["package_cap_outcomes"][0]["scratch_bytes"],7_999_995_904);self.assertTrue(cleanup[0][2])
+    def test_persistent_cache_has_protected_buildkit_gc_budget(self):
+        error,executed,calls,cleanup,job=self.run_case(cached=True)
+        self.assertIsNone(error);self.assertTrue(executed)
+        create=next(c[1]for c in calls if c[0]=="command"and c[1][:2]==["docker","create"])
+        self.assertIn("type=volume,src=dedicated-test-cache,dst=/var/lib/buildkit,volume-nocopy",create)
+        self.assertIn("--oci-worker-gc",create)
+        self.assertNotIn("--oci-worker-gc=false",create)
+        self.assertEqual(create[create.index("--oci-worker-gc-keepstorage")+1],"2147,4294,8589")
+        self.assertFalse(any(c[0]=="command"and c[1][:2]==["docker","exec"]for c in calls))
+
     def test_missing_mount_and_incorrect_kernel_cap_forbid_workload(self):
         """A requested RAM mount or Docker flag is not sufficient proof."""
         for kwargs in [{"mount":"overlayfs"},{"cap":4026531840}]:
