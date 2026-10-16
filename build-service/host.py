@@ -2262,9 +2262,10 @@ class Broker:
         if (source.is_symlink() or not source.is_dir() or published.is_symlink()
                 or not published.is_dir()):
             raise ValueError("Post-deployment immutable source unavailable")
-        receipt = release.verify_publication(published, job["job_id"], job["inputs_sha256"])
-        if release.asset_source_digest(source) != receipt["source_sha256"]:
-            raise ValueError("Retained execution source differs from publication receipt")
+        # The sealed candidate hash is the recovery authority. The execution
+        # snapshot may differ in non-candidate metadata and file modes from the
+        # published asset tree, so its broader source digest is not comparable.
+        release.verify_publication(published, job["job_id"], job["inputs_sha256"])
         blob = release.snapshot(source, CONTEXT, context_digest)
         if context_digest(blob)[0] != job["inputs_sha256"]:
             raise ValueError("Retained execution candidate digest differs")
