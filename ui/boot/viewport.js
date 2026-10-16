@@ -19,9 +19,7 @@
       applyComposerMotion(h);
     }
     var keyboardWasOpen = false;
-    var keyboardDismissed = false, publishedDismissal = false;
-    // Logical OS dismissal is independent of retained DOM focus.
-    window.__chatKeyboardDismissed = function () { return keyboardDismissed; };
+    var keyboardDismissed = false, keyboardWidth = window.innerWidth;
     function applyKb() {
       if (!document.body) return;
       var isMobile = window.innerWidth <= 800;       // mirrors __isMobileChatLayout / the CSS breakpoint
@@ -33,14 +31,21 @@
       // The OS keyboard-dismiss control can leave the composer focused. Some
       // mobile browsers briefly report a shrunken viewport again during the
       // hide animation; latch that dismissal until the user re-engages an editor.
-      if (keyboardWasOpen && !open && editable) keyboardDismissed = true;
+      if (keyboardWasOpen && !open && editable) {
+        keyboardDismissed = true;
+        // Match the v2 OS-dismiss flow: defer empty-editor blur until resize settles.
+        // Do not collapse on rotation/zoom, blur a replacement editor, or discard a draft.
+        if (isMobile && window.innerWidth === keyboardWidth && (!vv || vv.scale === 1)
+            && ae.id === 'chat-input' && ae.value === '') requestAnimationFrame(function () {
+          if (keyboardDismissed && document.activeElement === ae && ae.isConnected && ae.value === ''
+              && window.innerWidth === keyboardWidth && (!vv || vv.scale === 1)
+              && window.innerHeight - (vv ? vv.height : window.innerHeight) <= 120) ae.blur();
+        });
+      }
+      keyboardWidth = window.innerWidth;
       keyboardWasOpen = open;
       open = open && !keyboardDismissed;
       document.body.classList.toggle('kb-open', open);
-      if (publishedDismissal !== keyboardDismissed) {
-        publishedDismissal = keyboardDismissed;
-        document.dispatchEvent(new Event('v3:keyboard-dismissal-changed'));
-      }
       // hide-header-on-keyboard threshold check. When the toggle is ON and
       // threshold=0 we always show the hidden state; with a positive threshold
       // we only hide when the remaining viewport height is below it.

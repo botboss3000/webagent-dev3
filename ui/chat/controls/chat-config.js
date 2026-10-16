@@ -269,9 +269,7 @@ export function applyChatConfig() {
   const surface = surfaceName();
   const focused = document.activeElement;
   const inComposer = byId('chat-input-area')?.contains(focused) || focused?.closest('.v3-context-panel:not([hidden]), .v3-chat-model-list:not([hidden])');
-  // OS hide may retain focus: an empty dismissed editor uses the configured idle footer.
-  const keyboardDismissed = surface === 'chat_mobile' && window.__chatKeyboardDismissed?.() === true;
-  const mode = byId('chat-input').value || (!keyboardDismissed && (focused === byId('chat-input') || (currentFooterMode === 'active' && inComposer))) ? 'active' : 'idle';
+  const mode = byId('chat-input').value || focused === byId('chat-input') || (currentFooterMode === 'active' && inComposer) ? 'active' : 'idle';
   if (applyingFooter) return;
   if (surface === currentSurface && mode === currentFooterMode) {
     applyComposerState();
@@ -356,7 +354,6 @@ export async function initChatConfig({config:provided,root=null} = {}) {
       if (!control || !control.closest('#chat-input-area, #chat-header, .v3-context-panel, .v3-chat-model-list, .session-dropdown-menu')) return;
       event.preventDefault();
     }, true);
-    document.addEventListener('v3:keyboard-dismissal-changed', scheduleChatGeometry); // Let pointer default focus finish before changing footer layout.
     document.addEventListener('focusin', applyChatConfig);
     document.addEventListener('focusout', () => setTimeout(applyChatConfig, 0));
     document.addEventListener('input', event => { if(event.target === byId('chat-input'))applyChatConfig(); });
