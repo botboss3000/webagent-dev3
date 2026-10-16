@@ -19,7 +19,7 @@
       applyComposerMotion(h);
     }
     var keyboardWasOpen = false;
-    var keyboardDismissed = false, keyboardWidth = window.innerWidth;
+    var keyboardDismissed = false;
     function applyKb() {
       if (!document.body) return;
       var isMobile = window.innerWidth <= 800;       // mirrors __isMobileChatLayout / the CSS breakpoint
@@ -31,18 +31,7 @@
       // The OS keyboard-dismiss control can leave the composer focused. Some
       // mobile browsers briefly report a shrunken viewport again during the
       // hide animation; latch that dismissal until the user re-engages an editor.
-      if (keyboardWasOpen && !open && editable) {
-        keyboardDismissed = true;
-        // Match the v2 OS-dismiss flow: defer empty-editor blur until resize settles.
-        // Do not collapse on rotation/zoom, blur a replacement editor, or discard a draft.
-        if (isMobile && window.innerWidth === keyboardWidth && (!vv || vv.scale === 1)
-            && ae.id === 'chat-input' && ae.value === '') requestAnimationFrame(function () {
-          if (keyboardDismissed && document.activeElement === ae && ae.isConnected && ae.value === ''
-              && window.innerWidth === keyboardWidth && (!vv || vv.scale === 1)
-              && window.innerHeight - (vv ? vv.height : window.innerHeight) <= 120) ae.blur();
-        });
-      }
-      keyboardWidth = window.innerWidth;
+      if (keyboardWasOpen && !open && editable) keyboardDismissed = true;
       keyboardWasOpen = open;
       open = open && !keyboardDismissed;
       document.body.classList.toggle('kb-open', open);

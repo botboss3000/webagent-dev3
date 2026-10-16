@@ -210,18 +210,3 @@ test('JSON-only bubble backgrounds cover absent transparent solid alpha themes p
  await p.waitForFunction(()=>getComputedStyle(document.getElementById('paint-user')).backgroundColor==='rgba(0, 0, 0, 0)'&&getComputedStyle(document.getElementById('paint-agent')).backgroundColor==='rgba(0, 0, 0, 0)');
  assert.ok((await read()).every(x=>x.same));
 });
-
-
-test('OS dismissal blurs only an empty composer and normal focus selects configured idle or active',async t=>{
- const p=await fixture(t);await p.evaluate(async()=>{window.vh=844;Object.defineProperty(visualViewport,'height',{configurable:true,get:()=>vh});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});});
- for(const draft of ['', 'retained draft']){
-  await p.locator('#chat-input').fill(draft);await p.locator('#chat-input').tap();await p.evaluate(()=>{vh=500;visualViewport.dispatchEvent(new Event('resize'));events.blur=events.focus=0;});
-  assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-active')),true);
-  await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));});await settle(p);await p.waitForFunction(empty=>document.querySelector('#chat-input-area').classList.contains('footer-mode-idle')===empty,draft==='');
-  const state=await stable(p);assert.equal(state.focused,draft!=='');assert.equal(state.blur,draft===''?1:0);assert.equal(state.focus,0);assert.equal(state.value,draft);
-  await p.evaluate(()=>{vh=500;visualViewport.dispatchEvent(new Event('resize'));});await settle(p);assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),false);
-  await p.locator('#chat-input').tap();await settle(p);assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-active')),true);assert.equal(await p.locator('#chat-input').evaluate(e=>document.activeElement===e),true);
-  await p.locator('#chat-input').blur();await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));});
- }
- assert.equal(await p.evaluate(()=>typeof window.__chatKeyboardDismissed),'undefined','superseded state bridge removed');
-});
