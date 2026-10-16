@@ -77,7 +77,7 @@ async def reviewed_history_check():
             assert error.diagnostics["line"]==1
         else:raise AssertionError("exception applied outside exact commit/path")
         module._REVIEWED_HISTORY_LINES[(commit,"fixture.txt")]=frozenset({digest})
-        extra=b"another="+b"https://u:unreviewed-value@service.example/path\n"
+        extra=b"another=https://u:"+b"unreviewed-value@service.example/path\n"
         (repo/"fixture.txt").write_bytes(fixture+extra)
         git("add","fixture.txt");git("commit","-qm","new finding")
         try:await module.scan_outgoing_history(repo,"origin",git("rev-parse","HEAD"))
@@ -85,6 +85,10 @@ async def reviewed_history_check():
             assert error.kind=="git_credential_guard"
             assert error.diagnostics["path"]=="fixture.txt"
         else:raise AssertionError("new credential-shaped content passed")
+        (repo/"fixture.txt").write_bytes(fixture)
+        git("add","fixture.txt");git("commit","-qm","remove finding")
+        removal=git("rev-parse","HEAD")
+        await module.command(repo,["show","-m","--format=","--no-ext-diff","--no-textconv","--no-renames","--unified=0","-p",removal,"--","fixture.txt"],scan_only=True)
         module._REVIEWED_HISTORY_LINES.pop((commit,"fixture.txt"))
 
 asyncio.run(push_guard_check())

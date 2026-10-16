@@ -158,10 +158,16 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,
    nonlocal new_line
    if len(line)>SCAN_LINE_LIMIT:raise Rejected("Outgoing history line exceeds scan bound")
    hunk=re.match(rb"@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)",line)
-   if hunk:new_line=int(hunk.group(1))
+   if hunk:
+    new_line=int(hunk.group(1))
+    end=line.find(b"@@",2)
+    if end>=0:line=line[:end+2]+b"\n"
    location=new_line if line.startswith(b"+") and not line.startswith(b"+++") else None
    if reviewed_lines and location is not None and hashlib.sha256(line).hexdigest() in reviewed_lines:
     line=b"+<reviewed synthetic assertion>\n"
+   elif line.startswith(b"-") and not line.startswith(b"---"):
+    # Removed text is not sent in the new tree; its introducing commit is scanned separately.
+    line=b"-<removed line>\n"
    output.extend(line)
    if secret(bytes(output)):
     raise Rejected("Outgoing history withheld by credential guard; inspect outgoing commits for credential-shaped content","git_credential_guard",{"line":location} if location is not None else None)
@@ -288,6 +294,9 @@ _REVIEWED_HISTORY_LINES={
  ("0aa6da670fba3fed8018af1c125eaca164f6f3a0","plugins/abilities/Administrator/git_control/test_runner.py"):frozenset({
   "5251d40c76a281311caf4b366d595672db2b280d6c9454d50da72aa03dfc1a5c",
   "d20e527b2b21a4eaeb67130f34d20c2884f3a6680ce6d6296822212b0c333784",
+ }),
+ ("ec514257598a923a9ef6b55723e2dc1d41cf16cc","plugins/abilities/Administrator/git_control/test_runner.py"):frozenset({
+  "1cb448b9870982d4ffc892f4ade5af24c52ac6d4e60eecce42d4c65bb91a507e",
  })
 }
 async def scan_outgoing_history(repo,remote,scan_head):
