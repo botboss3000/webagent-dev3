@@ -19,7 +19,9 @@
       applyComposerMotion(h);
     }
     var keyboardWasOpen = false;
-    var keyboardDismissed = false;
+    var keyboardDismissed = false, publishedDismissal = false;
+    // Logical OS dismissal is independent of retained DOM focus.
+    window.__chatKeyboardDismissed = function () { return keyboardDismissed; };
     function applyKb() {
       if (!document.body) return;
       var isMobile = window.innerWidth <= 800;       // mirrors __isMobileChatLayout / the CSS breakpoint
@@ -35,6 +37,10 @@
       keyboardWasOpen = open;
       open = open && !keyboardDismissed;
       document.body.classList.toggle('kb-open', open);
+      if (publishedDismissal !== keyboardDismissed) {
+        publishedDismissal = keyboardDismissed;
+        document.dispatchEvent(new Event('v3:keyboard-dismissal-changed'));
+      }
       // hide-header-on-keyboard threshold check. When the toggle is ON and
       // threshold=0 we always show the hidden state; with a positive threshold
       // we only hide when the remaining viewport height is below it.

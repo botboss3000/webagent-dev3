@@ -210,3 +210,17 @@ test('JSON-only bubble backgrounds cover absent transparent solid alpha themes p
  await p.waitForFunction(()=>getComputedStyle(document.getElementById('paint-user')).backgroundColor==='rgba(0, 0, 0, 0)'&&getComputedStyle(document.getElementById('paint-agent')).backgroundColor==='rgba(0, 0, 0, 0)');
  assert.ok((await read()).every(x=>x.same));
 });
+
+
+test('OS dismissal makes empty composer idle, preserves active drafts and reactivates on trusted tap',async t=>{
+ const p=await fixture(t);await p.evaluate(async()=>{window.vh=844;Object.defineProperty(visualViewport,'height',{configurable:true,get:()=>vh});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});});
+ for(const draft of ['', 'retained draft']){
+  await p.locator('#chat-input').fill(draft);await p.locator('#chat-input').tap();await p.evaluate(()=>{vh=500;visualViewport.dispatchEvent(new Event('resize'));events.blur=events.focus=0;});
+  assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-active')),true);
+  await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));});assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-idle')),draft==='');
+  const state=await stable(p);assert.equal(state.focused,true);assert.equal(state.blur,0);assert.equal(state.focus,0);assert.equal(state.value,draft);
+  await p.evaluate(()=>{vh=500;visualViewport.dispatchEvent(new Event('resize'));input.focus();input.dispatchEvent(new FocusEvent('focusin',{bubbles:true}));});assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-idle')),draft==='');assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),false);
+  await p.locator('#chat-input').tap();assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-active')),true);
+  await p.locator('#chat-input').blur();await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));});
+ }
+});
