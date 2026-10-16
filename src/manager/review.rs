@@ -1,5 +1,8 @@
 //! One bounded tool-free System-model call. Recheck authority before admitting work.
 use super::*;
+// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Manager verdict caller prepares pure projection then rechecks participation, role and settings before network admission. Config: config/prompts.json -> manager_incoming_message; enable/revision are agent metadata.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/interface_version","/implementation_version","/limits"]},{"path":"config/prompts.json","pointers":["/manager_incoming_message"]}],"opportunities":[]}}
+/// Obtain one tool-free verdict from the pinned System role without publishing model deltas.
+/// Projection precedes the dispatch gate; current participation, settings, assignment and component revisions fence its first network poll.
 pub(super) async fn judge(app: &App, record: &mut Value) -> Result<Verdict> {
     participation_authorized(app, record).await?;
     let agent = record["agent_id"]
@@ -42,23 +45,65 @@ pub(super) async fn judge(app: &App, record: &mut Value) -> Result<Verdict> {
     let call_id = format!("manager:{}", record["id"].as_str().unwrap_or(""));
     let instructions = gates::incoming_message::instructions(&pinned.criteria);
     let call = async {
-        // Credential refresh may yield. Recheck the execution generation at the
-        // final provider boundary; inactive human conversation cannot be judged.
-        participation_authorized(app, record).await?;
-        app.run_candidate(&proxy).await?;
         let selection = &selection;
         let tokens = &tokens;
         let cancel = cancel.clone();
-        let ready = crate::provider::CallDraft::new(
+        // Complete pure projection before the final admission fence and network poll.
+        let engine_revision = crate::engine_components::catalog()?.revision.clone();
+                    let engine_controls = crate::engine_components::controls(&app.store.root)?.revision;
+        let prepared = crate::provider::CallDraft::new(
             selection,
             gates::incoming_message::input(&record["message"]),
             Vec::new(),
             &call_id,
             &instructions,
-        )
-        .validate()?
-        .bind_credentials(tokens, &cancel)?;
-        app.provider.dispatch(ready, tx, cancel).await
+        ).prepare(&app.store.root, &cancel).await?;
+        let dispatch_guard = app.gate.lock().await;
+        participation_authorized(app, record).await?;
+        let current_candidate = app.run_candidate(&proxy).await?
+            .ok_or_else(|| anyhow!("System model required"))?;
+        let current_selection = provider::ProviderSelection {
+            limits: current_candidate.limits.clone(),
+            provider: current_candidate.transport.provider_id(),
+            model: current_candidate.upstream_model.clone(),
+        };
+        let (current_settings, current_revision) = config::snapshot(&app.store, &agent).await?;
+        let current_role = app.store.model_catalog().await?
+            .resolve_role(&agent, model_selection::ModelRole::System)?;
+        if app.shutoff().await? || current_settings != pinned
+            || current_revision != settings_revision || current_selection != *selection
+            || current_candidate.entry_id != candidate.entry_id
+            || current_role.assignment_revision != live.assignment_revision
+            || current_role.candidates != live.candidates {
+            return Err(anyhow!("Manager settings or authority changed"));
+        }
+        if cancel.is_cancelled()
+                        || crate::engine_components::catalog()?.revision != engine_revision
+                        || crate::engine_components::controls(&app.store.root)?.revision != engine_controls
+                        || !crate::engine_components::component_available(
+                            &app.store.root, crate::engine_components::PROJECTION)
+                    {
+                        return Err(anyhow!("Provider component or authority changed"));
+                    }
+        // Poll the actual transport once while authority writers remain fenced.
+                    let mut completion = Box::pin(async {
+                        let ready = prepared.bind_credentials(tokens, &cancel)?;
+                        app.provider.dispatch(ready, tx, cancel).await
+                    });
+                    let mut immediate = None;
+                    futures_util::future::poll_fn(|cx| {
+                        if let std::task::Poll::Ready(result) =
+                            std::future::Future::poll(completion.as_mut(), cx)
+                        {
+                            immediate = Some(result);
+                        }
+                        std::task::Poll::Ready(())
+                    }).await;
+                    drop(dispatch_guard);
+                    match immediate {
+                        Some(result) => result,
+                        None => completion.await,
+                    }
     };
     let result = tokio::time::timeout(Duration::from_secs(40),
         app.session_operation(record["session_id"].as_str().unwrap_or(""),cancel.clone(),call)).await;

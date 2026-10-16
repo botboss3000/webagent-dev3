@@ -26,7 +26,7 @@ pub fn prepare_incremental<'a>(request: Request<'a>, state: &mut crate::context_
     instructions.push_str(request.base);
     instructions.push_str(request.guidance);
     for decision in &selected {
-        if decision.disposition == "included" { instructions.push('\n'); instructions.push_str(&decision.item.content); }
+        if decision.disposition == "included" && !state.contributions_projected { instructions.push('\n'); instructions.push_str(&decision.item.content); }
     }
     if instructions.is_empty() {
         return Err(Failure::new("instruction_limit", "instructions").into());
@@ -36,16 +36,17 @@ pub fn prepare_incremental<'a>(request: Request<'a>, state: &mut crate::context_
     let schemas_json_bytes = size(request.schemas)?;
     let framing = b"{\"instructions\":,\"tools\":,\"input\":}".len();
     // Empty history contributes two brackets. No transcript/schema copies are needed.
-    let overhead = framing + instruction_json_bytes + schemas_json_bytes + 2;
+    let overhead = framing + instruction_json_bytes + schemas_json_bytes + state.projection_extra_bytes;
     let history_budget = request.max_bytes.checked_sub(overhead).filter(|remaining| *remaining > 2)
         .ok_or_else(|| Failure::new("overhead_exceeds_budget", "budget"))?;
     // Assembly owns the envelope ceiling; only the compaction module owns folding policy.
     let reserve = request.compaction.summary_reserve_bytes;
     if history_budget <= reserve { return Err(Failure::new("summary_reserve_unavailable", "budget").into()); }
     let (sizes, characters) = state.measurements();
-    let plan = context_compaction::plan_request_cached(request.history, history_budget, request.compaction, sizes, characters, overhead - 2).map_err(compaction_error)?;
+    let plan = context_compaction::plan_request_cached(request.history, history_budget, request.compaction, sizes, characters, overhead).map_err(compaction_error)?;
     if let Some(plan) = plan { return Ok(Prepared::Compact(plan)); }
-    let history_json_bytes = state.bytes();
+    let history_json_bytes = state.bytes().checked_add(state.projection_extra_bytes)
+        .ok_or_else(|| Failure::new("overhead_exceeds_budget", "budget"))?;
     let envelope_bytes = framing + instruction_json_bytes + schemas_json_bytes + history_json_bytes;
     if envelope_bytes > request.max_bytes { return Err(Failure::new("envelope_exceeds_budget", "budget").into()); }
     let report = Report {
@@ -56,7 +57,7 @@ pub fn prepare_incremental<'a>(request: Request<'a>, state: &mut crate::context_
         max_bytes: request.max_bytes, history_budget_bytes: history_budget,
         summary_reserve_bytes: reserve, envelope_bytes,
         instruction_json_bytes, base_content_bytes: request.base.len(),
-        guidance_content_bytes: request.guidance.len(), schemas_json_bytes, history_json_bytes,
+        guidance_content_bytes: request.guidance.len(), schemas_json_bytes, history_json_bytes, projection_extra_bytes:state.projection_extra_bytes,
         framing_bytes: envelope_bytes - instruction_json_bytes - schemas_json_bytes - history_json_bytes,
         history: state.report(),
         overlays: selected.iter().map(|decision| Overlay { id: decision.item.id.clone(), source: decision.item.source.clone(), lifetime: decision.item.lifetime, disposition: decision.disposition.into(), content_bytes: decision.item.content.len() }).collect(),

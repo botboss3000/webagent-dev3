@@ -1,0 +1,11 @@
+# Thin confined executable for capability.prepare; host authority remains outside.
+[package]
+name = "webagent-capability-service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+webagent-capability-context = { path = "../capability-context" }
+webagent-capability-contracts = { path = "../capability-contracts" }
+webagent-engine-service = { path = "../engine-service" }
+serde_json = "1"

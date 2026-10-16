@@ -286,7 +286,13 @@ impl Catalog {
     }
 
     /// Validate manifest ownership and guidance before admitting any catalog revision.
-    pub fn load(root: &Path) -> Result<Self> {
+    pub fn load(root: &Path) -> Result<Self> { Self::load_mode(root,false) }
+
+    /// Local live sources may explicitly withdraw a declaration by unlinking its manifest.
+    /// Present invalid manifests and all immutable publication snapshots stay fail-closed.
+    pub(crate) fn load_current(root:&Path)->Result<Self> { Self::load_mode(root,true) }
+
+    fn load_mode(root:&Path,withdraw_missing:bool)->Result<Self> {
         let native_overrides=crate::live_assets::native_schema_overrides(root)?;
         let mut abilities = Vec::new();
         let mut ids = HashSet::new();
@@ -344,7 +350,15 @@ impl Catalog {
                 // commands and durable recovery, but are no longer catalog entries.
                 if group_id == "Administrator" && matches!(id.as_str(), "v3_build"|"v3_workspace")
                     && !ability_path.join(format!("{id}.json")).exists() { continue; }
-                let manifest_bytes = read_bytes(&ability_path.join(format!("{id}.json")), MAX_MANIFEST_BYTES)?;
+                let manifest_path=ability_path.join(format!("{id}.json"));
+                if withdraw_missing {
+                    match fs::symlink_metadata(&manifest_path) {
+                        Err(error) if error.kind()==std::io::ErrorKind::NotFound=>continue,
+                        Err(error)=>return Err(error.into()),
+                        Ok(_)=>{},
+                    }
+                }
+                let manifest_bytes = read_bytes(&manifest_path, MAX_MANIFEST_BYTES)?;
                 let manifest_digest = hex::encode(Sha256::digest(&manifest_bytes));
                 let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
                     .with_context(|| format!("Invalid ability manifest: {id}"))?;
@@ -541,8 +555,8 @@ impl Catalog {
                 .is_ok_and(|bytes| hex::encode(Sha256::digest(&bytes)) == ability.manifest_digest)
     }
 
-    // Only cached, validated bundle IDs can select an asset. Live edits withdraw
-    // old guidance instead of importing instructions without a catalog reload.
+    // Only registered, validated bundle IDs can select an asset. Each model call
+    // reads their current bodies from the pinned catalog source or published pointer.
     /// Published guidance follows the broker pointer; compatible Codebase Admin metadata is live.
     /// Tool/schema grants remain bound to the installed core interface.
     fn published_skill_path(ability:&Ability,kind:&str,name:&str,ui_root:Option<&Path>)->Option<PathBuf>{
@@ -561,69 +575,69 @@ impl Catalog {
         let root=std::env::var_os("V3_UI_ROOT").map(PathBuf::from);
         Self::published_skill_path(ability,kind,name,root.as_deref())
     }
-    /// Read current published guidance; other abilities retain cached declaration validation.
-    fn asset_text<'a>(ability:&'a Ability,kind:&str,name:&str,cached:&'a str)->Option<Cow<'a,str>>{
-        if let Some(path)=Self::published_skill(ability,kind,name){
-            return optional_skill(&path).ok().flatten().map(Cow::Owned);
+    /// Read current text only for a registered asset. Frozen catalogs retain their
+    /// revision-owned paths instead of following the mutable publication pointer.
+    fn asset_text<'a>(ability:&'a Ability,kind:&str,name:&str,cached:&'a str)->Option<Cow<'a,str>> {
+        if ability.id=="mcp" {
+            return (crate::mcp::bridge::available() && kind=="ability" && name=="mcp"
+                && cached==crate::mcp::GUIDANCE).then_some(Cow::Borrowed(cached));
         }
-        Self::skill_live(ability,kind,name,cached).then_some(Cow::Borrowed(cached))
-    }
-
-    fn skill_live(ability: &Ability, kind: &str, name: &str, text: &str) -> bool {
-        if let Some(path)=Self::published_skill(ability,kind,name){return optional_skill(&path).ok().flatten().is_some_and(|current|current==text);}
-        if ability.id=="mcp" {return crate::mcp::bridge::available()&&kind=="ability"&&name=="mcp"&&text==crate::mcp::GUIDANCE;}
-        if ability.id == "optimization" {
-            return kind == "ability" && name == "optimization"
-                && crate::optimization::guidance().is_some_and(|body| body == text);
+        if ability.id=="optimization" {
+            return (kind=="ability" && name=="optimization")
+                .then(crate::optimization::guidance).flatten().map(Cow::Owned);
         }
-        let path = match kind {
-            "ability" if name == ability.id => ability.path.join(format!("{name}.skill.md")),
-            "tool" if valid_id(name) => ability.path.join("tools").join(format!("{name}.skill.md")),
-            "selectable" if valid_id(name) => ability.path.join("skills").join(format!("{name}.skill.md")),
-            _ => return false,
+        let declared=match kind {
+            "ability"=>name==ability.id && ability.skill.is_some(),
+            "tool"=>ability.tools.iter().any(|tool|tool==name) && ability.tool_skills.contains_key(name),
+            "selectable"=>ability.selectable_skills.contains_key(name),
+            _=>false,
         };
-        path.parent().is_some_and(|parent|
-            fs::symlink_metadata(parent).is_ok_and(|m| m.file_type().is_dir()))
-            && read_bytes(&path, text.len() as u64).is_ok_and(|bytes| bytes == text.as_bytes())
+        if !declared || !valid_id(name) {return None;}
+        let path=Self::published_skill(ability,kind,name).unwrap_or_else(|| match kind {
+            "ability"=>ability.path.join(format!("{name}.skill.md")),
+            "tool"=>ability.path.join("tools").join(format!("{name}.skill.md")),
+            _=>ability.path.join("skills").join(format!("{name}.skill.md")),
+        });
+        if !path.parent().is_some_and(|parent|
+            fs::symlink_metadata(parent).is_ok_and(|m|m.file_type().is_dir())) {return None;}
+        optional_skill(&path).ok().flatten().map(Cow::Owned)
     }
 
-    /// Bounded validity fingerprint of cached manifests and skill assets only.
-    /// A changed file cannot become trusted guidance; it merely invalidates the
-    /// run-local schema/guidance cache until a validated reload adopts its bytes.
-    fn core_skill(ability: &Ability) -> Option<Cow<'_, str>> {
-        if ability.id == "optimization" {
-            return crate::optimization::guidance().map(Cow::Owned);
-        }
+    /// Reject a body that changed between the source read and its use.
+    fn skill_live(ability:&Ability,kind:&str,name:&str,text:&str)->bool {
+        Self::asset_text(ability,kind,name,text).is_some_and(|current|current==text)
+    }
+
+    /// Resolve current core guidance from its registered source.
+    fn core_skill(ability:&Ability)->Option<Cow<'_,str>> {
+        if ability.id=="optimization" {return crate::optimization::guidance().map(Cow::Owned);}
         ability.skill.as_deref().and_then(|text|Self::asset_text(ability,"ability",&ability.id,text))
     }
 
-    pub fn live_version(&self) -> String {
-        let validity = self.abilities.iter().map(|ability| {
-            let present = Self::present(ability);
-            let mut assets = Vec::new();
-            if let Some(text) = &ability.skill {
-                assets.push(json!(["ability", ability.id,
-                    present && Self::skill_live(ability, "ability", &ability.id, text)]));
+    /// Fingerprint exact current bodies, including withdrawal and reappearance.
+    /// Catalog declarations and executable grants remain independently validated.
+    pub fn live_version(&self)->String {
+        let validity=self.abilities.iter().map(|ability| {
+            let present=Self::present(ability);
+            let mut assets=Vec::new();
+            let mut add=|kind:&str,name:&str,body:Option<Cow<'_,str>>| {
+                assets.push(json!([kind,name,body.filter(|_|present)
+                    .map(|text|hex::encode(Sha256::digest(text.as_bytes())))]));
+            };
+            add("ability",&ability.id,Self::core_skill(ability));
+            for (name,text) in &ability.tool_skills {
+                add("tool",name,Self::asset_text(ability,"tool",name,text));
             }
-            for (name, text) in &ability.tool_skills {
-                assets.push(json!(["tool", name, present && Self::skill_live(ability, "tool", name, text)]));
+            for (name,text) in &ability.selectable_skills {
+                add("selectable",name,Self::asset_text(ability,"selectable",name,text));
             }
-            for (name, text) in &ability.selectable_skills {
-                assets.push(json!(["selectable", name, present && Self::skill_live(ability, "selectable", name, text)]));
-            }
-            let current_guidance=if matches!(ability.id.as_str(),"code_index"|"codebase_admin"){
-                let mut hashes=Vec::new();
-                if let Some(body)=Self::core_skill(ability){hashes.push(json!(["ability",ability.id,hex::encode(Sha256::digest(body.as_bytes()))]));}
-                for(name,text)in &ability.tool_skills{if let Some(body)=Self::asset_text(ability,"tool",name,text){hashes.push(json!(["tool",name,hex::encode(Sha256::digest(body.as_bytes()))]));}}
-                for(name,text)in &ability.selectable_skills{if let Some(body)=Self::asset_text(ability,"selectable",name,text){hashes.push(json!(["selectable",name,hex::encode(Sha256::digest(body.as_bytes()))]));}}
-                json!(hashes)
-            }else{Value::Null};
-            json!([ability.id, present, assets,current_guidance])
+            json!([ability.id,present,assets])
         }).collect::<Vec<_>>();
-        hex::encode(Sha256::digest(serde_json::to_vec(&json!([self.version, validity, crate::optimization::generation()]))
-            .expect("Cached catalog validity is serializable")))
+        hex::encode(Sha256::digest(serde_json::to_vec(&json!([self.version,validity,crate::optimization::generation()]))
+            .expect("Current catalog validity is serializable")))
     }
 
+    /// Read current registered bodies after executable, installed-tool and permission gates.
     fn bundled_candidates<'a>(
         &'a self, ability_id: &str, visibility: &Value, state: &Value,
         allow_ability: &impl Fn(&str) -> bool, allow_tool: &impl Fn(&str) -> bool,
@@ -644,16 +658,18 @@ impl Catalog {
                 if let Some(body)=Self::asset_text(ability,"tool",name,text){assets.push(("tool",name.as_str(),body));}
             }
         }
-        for (name, text) in &ability.selectable_skills {
-            if Self::selectable_metadata(name,text).is_some()
-                && Self::selectable_mode(visibility, ability_id, name, text) != "off" {
-                if let Some(body)=Self::asset_text(ability,"selectable",name,text){assets.push(("selectable",name.as_str(),body));}
+        for (name,text) in &ability.selectable_skills {
+            let Some(body)=Self::asset_text(ability,"selectable",name,text) else {continue;};
+            if Self::selectable_metadata(name,&body).is_some()
+                && Self::selectable_mode(visibility,ability_id,name,&body)!="off" {
+                assets.push(("selectable",name.as_str(),body));
             }
         }
         assets.retain(|(kind, name, text)| Self::skill_live(ability, kind, name, text));
         Ok((ability, assets))
     }
 
+    /// Project current authorized skill metadata without returning instruction text.
     pub(crate) fn bundled_skill_list(
         &self, ability_id: &str, visibility: &Value, state: &Value,
         allow_ability: impl Fn(&str) -> bool, allow_tool: impl Fn(&str) -> bool,
@@ -673,6 +689,7 @@ impl Catalog {
         }).collect())
     }
 
+    /// Resolve independent core, tool and selectable visibility from current caller configuration.
     fn asset_mode<'a>(visibility: &'a Value, ability: &Ability, kind: &str, name: &str, text: &str) -> &'a str {
         match kind {
             "ability" => Self::skill_mode(visibility,&ability.id),
@@ -681,6 +698,7 @@ impl Catalog {
         }
     }
 
+    /// Return one current body and observation metadata under the scoped catalog gates.
     pub(crate) fn bundled_skill_load(
         &self, ability_id: &str, kind: &str, skill_id: &str, visibility: &Value, state: &Value,
         allow_ability: impl Fn(&str) -> bool, allow_tool: impl Fn(&str) -> bool,
@@ -930,22 +948,23 @@ impl Catalog {
             .collect()
     }
 
-    /// Administrator viewer projection: only validated, unchanged bundle guidance.
+    /// Administrator viewer projection: current guidance for validated bundle identities.
     /// This does not activate the ability or alter model-facing visibility.
     pub fn configuration_skill(&self, id: &str) -> Option<Cow<'_ , str>> {
         let ability = self.abilities.iter().find(|ability| ability.id == id && Self::present(ability))?;
         Self::core_skill(ability)
     }
 
+    /// Read current viewer guidance and validate selectable frontmatter from current text.
     pub fn configuration_skill_asset(&self, id: &str, kind: &str, name: &str) -> Option<Cow<'_ ,str>> {
         let ability = self.abilities.iter().find(|a| a.id == id && Self::present(a))?;
         let text = match kind {
-            "skill" if valid_id(name) => ability.selectable_skills.get(name)
-                .filter(|text| Self::selectable_metadata(name,text).is_some()),
+            "skill" if valid_id(name) => ability.selectable_skills.get(name),
             "tool" if valid_id(name) && ability.tools.iter().any(|tool| tool == name) => ability.tool_skills.get(name),
             _ => None,
         }?;
-        Self::asset_text(ability,if kind=="skill"{"selectable"}else{"tool"},name,text)
+        let body=Self::asset_text(ability,if kind=="skill"{"selectable"}else{"tool"},name,text)?;
+        (kind!="skill" || Self::selectable_metadata(name,&body).is_some()).then_some(body)
     }
 
     /// Installed owners of a tool, independent of visibility or activation.
@@ -967,6 +986,9 @@ impl Catalog {
         state: &Value,
         loaded: &Value,
     ) -> (bool, bool) {
+        // Conversation selections and context use the same call-local activation.
+        // This projection preserves Off, suppression and per-tool discovery gates.
+        let state=self.selected_state(visibility,state,loaded);
         let supported = self.installed(name);
         let mut available = false;
         let mut visible = false;
@@ -982,9 +1004,9 @@ impl Catalog {
                     "discoverable" => selected,
                     _ => true,
                 }
-                && (Self::available(ability, visibility, state)
+                && (Self::available(ability, visibility, &state)
                     || (selected && !Self::is_off(visibility,&ability.id)
-                        && !Self::suppressed(state,&ability.id)));
+                        && !Self::suppressed(&state,&ability.id)));
         }
         (available, visible)
     }
@@ -1056,6 +1078,7 @@ impl Catalog {
         self.visible_guidance_authorized(policy,visibility,state,allow_ability,&allow_tool,&allow_tool)
     }
 
+    /// Retain compatibility guidance using authorized eligibility and supplied schemas.
     pub(crate) fn visible_guidance_authorized(
         &self, policy: &Value, visibility: &Value, state: &Value,
         allow_ability: impl Fn(&str)->bool,
@@ -1106,7 +1129,8 @@ impl Catalog {
             }
             for (name, cached) in &ability.selectable_skills {
                 let Some(skill)=Self::asset_text(ability,"selectable",name,cached)else{continue;};
-                if Self::selectable_mode(visibility, &ability.id, name, &skill) == "visible"
+                if Self::selectable_metadata(name,&skill).is_some()
+                    && Self::selectable_mode(visibility, &ability.id, name, &skill) == "visible"
                     && Self::skill_live(ability, "selectable", name, &skill) {
                     part.push_str("\n\nSkill ");
                     part.push_str(name);
@@ -1118,6 +1142,91 @@ impl Catalog {
             text.push_str(&part);
         }
         text
+    }
+
+    // @code-index {"version":1,"feature":"live-capability-sources","aliases":["live skill refresh","permanent selections"],"purpose":"Resolve registered current sources and conversation identities for capability composition. Caller policy and encrypted visibility remain separate authority; fixed path/source safety is not configurable.","span_lines":80,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Live encrypted policy/visibility and validated catalog state own authority. This group maps those inputs to safe selectors/current bytes; another JSON switch would duplicate or bypass those checks."}}
+    /// Project conversation-selected identities into a call-local activation view.
+    /// This never changes saved session state or overrides Off, suppression,
+    /// executable presence, tool modes, policy, or caller permission checks.
+    pub(crate) fn selected_state(&self,visibility:&Value,state:&Value,loaded:&Value)->Value {
+        let mut selected=state.clone();
+        if !selected.is_object() {selected=json!({});}
+        let mut active=state["active"].as_array().cloned().unwrap_or_default();
+        for ability in &self.abilities {
+            if !Self::contains_id(loaded,&ability.id) || !Self::executable(ability)
+                || Self::is_off(visibility,&ability.id) || Self::suppressed(state,&ability.id)
+                || !ability.tools.iter().any(|tool|self.installed(tool)
+                    && Self::tool_mode(visibility,tool)!="off") {continue;}
+            if !active.iter().any(|item|item.as_str()==Some(ability.id.as_str())) {active.push(json!(ability.id));}
+        }
+        selected["active"]=json!(active);
+        selected
+    }
+
+    /// Read source-backed guidance under the host's already-authorized catalog
+    /// and schema projections. This grants no execution authority; callers must
+    /// recheck their complete source/policy fingerprint before model dispatch.
+    pub(crate) fn capability_guidance(&self,entries:&[Value],schemas:&[Value],
+        visibility:&Value,state:&Value,loaded:&Value,loaded_skills:&Value)
+        ->Vec<webagent_capability_contracts::Guidance> {
+        use webagent_capability_contracts::{Guidance,GuidanceKind};
+        let sent=schemas.iter().filter_map(|schema|schema["name"].as_str()).collect::<HashSet<_>>();
+        let mut guidance=Vec::new();
+        for ability in &self.abilities {
+            let id=ability.id.as_str();
+            let Some(entry)=entries.iter().find(|entry|entry["id"]==id) else {continue;};
+            if !Self::executable(ability) || Self::is_off(visibility,id) || Self::suppressed(state,id) {continue;}
+            let names=entry["tools"].as_array().into_iter().flatten()
+                .filter_map(|tool|tool["name"].as_str())
+                .filter(|name|ability.tools.iter().any(|tool|tool.as_str()==*name)
+                    && self.installed(name) && Self::tool_mode(visibility,name)!="off")
+                .collect::<HashSet<_>>();
+            if names.is_empty() {continue;}
+            let selected_tool=|name:&str|sent.contains(name)
+                && Self::contains_id(loaded,&crate::tools::core_tool_search::marker(name));
+            let normal=Self::available(ability,visibility,state);
+            let extra=names.iter().any(|name|selected_tool(name));
+            let explicit=|kind:&str,name:&str|normal && sent.contains("load_skill")
+                && loaded_skills.as_array().is_some_and(|items|items.iter().any(|item|
+                    item["ability_id"]==id && item["kind"]==kind && item["skill_id"]==name));
+            // Saved caution remains mandatory independently of core-skill mode.
+            // Keeping it separate prevents it from promoting discoverable skill text.
+            let mut settings=String::new();
+            for key in ["terminal_caution","destructive_caution"] {
+                if let Some(value)=visibility["settings"][id][key].as_str()
+                    .filter(|value|matches!(*value,"cautious"|"balanced"|"trusted")) {
+                    settings.push_str(&format!("\nConfigured {key}: {value}. Live Rust policy and approval remain authoritative."));
+                }
+            }
+            if !settings.is_empty() {
+                guidance.push(Guidance {id:format!("ability:{id}:settings"),kind:GuidanceKind::Ability,
+                    body:settings,selected:false,natural:normal||extra});
+            }
+            if Self::skill_mode(visibility,id)!="off" {
+                if let Some(body)=Self::core_skill(ability) {
+                    guidance.push(Guidance {id:format!("ability:{id}"),kind:GuidanceKind::Ability,body:body.into_owned(),
+                        selected:explicit("ability",id),
+                        natural:Self::skill_mode(visibility,id)=="visible" && (normal||extra)});
+                }
+            }
+            for (name,cached) in &ability.tool_skills {
+                if !names.contains(name.as_str()) {continue;}
+                let Some(body)=Self::asset_text(ability,"tool",name,cached) else {continue;};
+                let mode=Self::tool_mode(visibility,name);
+                guidance.push(Guidance {id:format!("tool:{id}:{name}"),kind:GuidanceKind::Tool,body:body.into_owned(),
+                    selected:explicit("tool",name),
+                    natural:sent.contains(name.as_str()) && ((normal&&mode=="visible") || selected_tool(name))});
+            }
+            for (name,cached) in &ability.selectable_skills {
+                let Some(body)=Self::asset_text(ability,"selectable",name,cached) else {continue;};
+                if Self::selectable_metadata(name,&body).is_none() {continue;}
+                let mode=Self::selectable_mode(visibility,id,name,&body);
+                if mode=="off" {continue;}
+                guidance.push(Guidance {id:format!("selectable:{id}:{name}"),kind:GuidanceKind::Selectable,
+                    body:body.into_owned(),selected:explicit("selectable",name),natural:normal&&mode=="visible"});
+            }
+        }
+        guidance
     }
 
     /// Trace the same typed inclusion predicates used by guidance producers.
@@ -1137,8 +1246,7 @@ impl Catalog {
             let mut skills = Vec::new();
             let mut add = |kind: &str, name: &str, mode: &str, body: &str, natural: bool| {
                 let explicit = mode!="off" && Self::available(ability,visibility,state) && sent.contains("load_skill") && loaded_skills.as_array().is_some_and(|items|items.iter().any(|item|
-                    item["ability_id"]==id && item["kind"]==kind && item["skill_id"]==name
-                        && item["sha256"]==hex::encode(Sha256::digest(body.as_bytes()))));
+                    item["ability_id"]==id && item["kind"]==kind && item["skill_id"]==name));
                 let included = natural || explicit;
                 let reason = if included {"included"} else if mode=="off" {"off"}
                     else if mode=="discoverable" || entry["availability"]=="discoverable" {"discoverable"}
@@ -1362,7 +1470,8 @@ mod tests {
         assert_eq!(optional_skill(&tool).unwrap().unwrap(), "Next published instructions");
     }
 
-    fn fixture() -> (TempDir, Catalog) {
+    /// Share the exact isolated native fixture with focused sibling capability tests.
+    pub(super) fn fixture() -> (TempDir, Catalog) {
         let root = tempfile::tempdir().unwrap();
         let group = root.path().join("Administrator");
         let ability = group.join("codebase_admin");
@@ -1636,7 +1745,8 @@ mod tests {
             &json!({"visibility":{"codebase_admin":"visible"}}), &json!({}), |_| true, |_| true).is_err());
     }
 
-    fn policy() -> Value {
+    /// Keep focused sibling tests on the same installed-tool policy fixture.
+    pub(super) fn policy() -> Value {
         json!({"rules":{"file_list":"allow","file_read":"allow","file_search":"allow",
             "state_inspect":"allow","prompt_slot_read":"allow","prompt_slot_write":"require_approval","file_write":"require_approval","file_edit":"require_approval","workspace_seed":"require_approval","source_review":"allow","source_patch":"require_approval","promotion_propose":"allow",
             "shell":"require_approval","python":"deny"}})
@@ -1716,13 +1826,14 @@ mod tests {
     }
 
     #[test]
-    fn configuration_skill_rejects_unknown_and_changed_assets() {
+    /// Reject unknown identities while adopting current bytes from the registered source.
+    fn configuration_skill_rejects_unknown_and_reads_current_assets() {
         let (root, catalog) = fixture();
         assert_eq!(catalog.configuration_skill("codebase_admin"), Some(Cow::Borrowed("Use scoped workspace tools.")));
         assert_eq!(catalog.configuration_skill("../codebase_admin"), None);
         assert_eq!(catalog.configuration_skill("missing"), None);
         fs::write(root.path().join("Administrator/codebase_admin/codebase_admin.skill.md"), "changed").unwrap();
-        assert_eq!(catalog.configuration_skill("codebase_admin"), None);
+        assert_eq!(catalog.configuration_skill("codebase_admin").as_deref(),Some("changed"));
     }
 
     #[test]
@@ -1954,15 +2065,20 @@ mod tests {
             .visible_guidance(&policy, &Value::Null, &state)
             .contains("Use scoped workspace tools."));
         let cleared = json!({"revision":2,"active":[],"suppressed":[]});
-        assert!(!catalog.tool_available(
-            "file_edit",
-            &Value::Null,
-            &cleared,
-            &json!(["codebase_admin"])
-        ));
-        let revoked =
-            catalog.schemas_with(&policy, &json!(["codebase_admin"]), &Value::Null, &cleared);
-        assert!(!revoked.iter().any(|schema| schema["name"] == "file_edit"));
+        // A retained conversation selection survives an old activation-list reset.
+        let selected=json!(["codebase_admin"]);
+        assert!(catalog.tool_available("file_edit",&Value::Null,&cleared,&selected));
+        assert!(catalog.schemas_with(&policy,&selected,&Value::Null,&cleared)
+            .iter().any(|schema|schema["name"]=="file_edit"));
+        // Unloading the selection removes its exposure. Explicit suppression also
+        // wins while a selected identity remains in the conversation ledger.
+        assert!(!catalog.tool_available("file_edit",&Value::Null,&cleared,&json!([])));
+        assert!(!catalog.schemas_with(&policy,&json!([]),&Value::Null,&cleared)
+            .iter().any(|schema|schema["name"]=="file_edit"));
+        let suppressed=json!({"revision":3,"active":[],"suppressed":["codebase_admin"]});
+        assert!(!catalog.tool_available("file_edit",&Value::Null,&suppressed,&selected));
+        assert!(!catalog.schemas_with(&policy,&selected,&Value::Null,&suppressed)
+            .iter().any(|schema|schema["name"]=="file_edit"));
         assert!(catalog.known("codebase_admin"));
         assert!(!catalog.known("unknown"));
     }
@@ -2097,6 +2213,25 @@ mod tests {
     }
 
     #[test]
+    fn current_catalog_withdrawal_preserves_strict_snapshot_validation() {
+        use std::os::unix::fs::symlink;
+        let (root,_) = fixture();
+        let path=root.path().join("Administrator/codebase_admin/codebase_admin.json");
+        let original=fs::read(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert!(Catalog::load(root.path()).is_err());
+        let current=Catalog::load_current(root.path()).unwrap();
+        assert!(!current.abilities.iter().any(|entry|entry.id=="codebase_admin"));
+        fs::write(&path,&original).unwrap();
+        assert!(Catalog::load_current(root.path()).unwrap().abilities.iter().any(|entry|entry.id=="codebase_admin"));
+        fs::write(&path,b"invalid declaration").unwrap();
+        assert!(Catalog::load_current(root.path()).is_err());
+        fs::remove_file(&path).unwrap();
+        symlink(root.path().join("missing"),&path).unwrap();
+        assert!(Catalog::load_current(root.path()).is_err());
+    }
+
+    #[test]
     fn selected_tool_markers_preserve_off_and_suppressed_controls() {
         let catalog=crate::runtime_tests::native_catalog();
         let loaded=json!(["tool:file_read"]);
@@ -2127,6 +2262,7 @@ mod tests {
         assert!(loaded["text"].as_str().unwrap().contains("chat footer"));
     }
 
+    /// Verify native seed inventory against the tools actually registered by the current host.
     #[test]
     fn production_seed_manifest_loads() {
         let catalog = crate::runtime_tests::native_catalog();
@@ -2147,7 +2283,7 @@ mod tests {
         let base = catalog.abilities.iter().find(|entry| entry.id == "base").unwrap();
         let mut installed: Vec<_> = base.tools.iter().filter(|name| Catalog::supported(name)).map(String::as_str).collect();
         installed.sort();
-        assert_eq!(installed, ["calculate", "compact_context", "edit_own_prompt", "get_date", "get_task_checkpoint", "get_time", "list_skills", "list_tools", "load_skill", "load_tool", "present_chat_component", "present_plan", "read_attachment", "read_own_prompt", "recall_compacted", "remove_own_skill", "save_own_skill", "search_this_session", "search_tools", "session_search", "set_execution_mode", "similar_sessions", "task_cancel", "task_status", "task_wait", "update_task_checkpoint"]);
+        assert_eq!(installed, ["calculate", "compact_context", "context_assets", "edit_own_prompt", "get_date", "get_task_checkpoint", "get_time", "list_skills", "list_tools", "load_skill", "load_tool", "present_chat_component", "present_plan", "read_attachment", "read_own_prompt", "recall_compacted", "remove_own_skill", "save_own_skill", "search_this_session", "search_tools", "session_search", "set_execution_mode", "similar_sessions", "task_cancel", "task_status", "task_wait", "update_task_checkpoint"]);
         assert!(!catalog.abilities.iter().any(|ability| matches!(ability.id.as_str(), "v3_build"|"v3_workspace")));
         let coding=catalog.abilities.iter().find(|ability| ability.id=="codebase_admin").unwrap();
         assert_eq!(coding.tools, ["file_list","file_read","file_search","file_edit","file_write",
@@ -2217,6 +2353,7 @@ mod optional_module_tests {
 #[cfg(test)]
 mod optional_settings_schema_tests {
     use super::*;
+    use super::tests::{fixture,policy};
     fn catalog() -> Catalog {
         crate::runtime_tests::native_catalog()
     }
@@ -2374,4 +2511,113 @@ mod optional_settings_schema_tests {
             );
         }
     }
+
+    #[test]
+    /// Adopt selected current text while preserving source, mode, permission and schema boundaries.
+    fn capability_guidance_reads_selected_live_sources_and_withdraws_invalid_or_denied_assets() {
+        let (root,_)=fixture();
+        let folder=root.path().join("Administrator/codebase_admin");
+        fs::create_dir_all(folder.join("skills")).unwrap();
+        let skill=|body:&str|format!("---\nid: verification\ntitle: Verification\nwhen_to_use: Review implementation\ndefault_mode: discoverable\n---\n{body}");
+        let path=folder.join("skills/verification.skill.md");
+        fs::write(&path,skill("FIRST BODY")).unwrap();
+        let catalog=Catalog::load_snapshot(root.path()).unwrap();
+        let visible=json!({"visibility":{"codebase_admin":"visible"},
+            "settings":{"codebase_admin":{"terminal_caution":"cautious"}}});
+        let state=json!({"active":[],"suppressed":[]});
+        let entries=catalog.catalog_with(&policy(),&visible,&state);
+        let schemas=vec![json!({"name":"load_skill"}),json!({"name":"file_edit"})];
+        let selected=json!([{"ability_id":"codebase_admin","kind":"selectable","skill_id":"verification","sha256":"obsolete"}]);
+        let read=||catalog.capability_guidance(&entries,&schemas,&visible,&state,&Value::Null,&selected);
+        let first=read();
+        assert!(first.iter().any(|item|item.id=="ability:codebase_admin" && item.natural
+            && item.body=="Use scoped workspace tools."));
+        assert!(first.iter().any(|item|item.id=="ability:codebase_admin:settings" && item.natural
+            && item.body.contains("Configured terminal_caution: cautious")));
+        let mut hidden_core=visible.clone();hidden_core["skill_visibility"]=json!({"codebase_admin":"discoverable"});
+        let hidden=catalog.capability_guidance(&entries,&schemas,&hidden_core,&state,&Value::Null,&selected);
+        assert!(hidden.iter().any(|item|item.id=="ability:codebase_admin" && !item.natural && !item.selected));
+        assert!(hidden.iter().any(|item|item.id=="ability:codebase_admin:settings" && item.natural));
+        hidden_core["skill_visibility"]["codebase_admin"]=json!("off");
+        let off_core=catalog.capability_guidance(&entries,&schemas,&hidden_core,&state,&Value::Null,&selected);
+        assert!(!off_core.iter().any(|item|item.id=="ability:codebase_admin"));
+        assert!(off_core.iter().any(|item|item.id=="ability:codebase_admin:settings" && item.natural));
+        assert!(first.iter().any(|item|item.id=="tool:codebase_admin:file_edit" && item.natural));
+        assert!(first.iter().any(|item|item.id=="selectable:codebase_admin:verification"
+            && item.selected && !item.natural && item.body==skill("FIRST BODY")));
+        let version=catalog.live_version();
+        fs::write(&path,skill("CURRENT BODY")).unwrap();
+        assert_ne!(catalog.live_version(),version);
+        let current=read();
+        assert!(current.iter().any(|item|item.selected && item.body==skill("CURRENT BODY")));
+        assert!(!current.iter().any(|item|item.body.contains("FIRST BODY")));
+        fs::write(&path,"Missing required selectable metadata").unwrap();
+        assert!(!read().iter().any(|item|item.id.starts_with("selectable:")));
+        fs::remove_file(&path).unwrap();
+        assert!(!read().iter().any(|item|item.id.starts_with("selectable:")));
+        fs::write(&path,skill("REAPPEARED BODY")).unwrap();
+        assert!(read().iter().any(|item|item.selected && item.body==skill("REAPPEARED BODY")));
+        let mut off=visible.clone();off["skill_visibility"]=json!({"codebase_admin:verification":"off"});
+        assert!(!catalog.capability_guidance(&entries,&schemas,&off,&state,&Value::Null,&selected)
+            .iter().any(|item|item.id.starts_with("selectable:")));
+        assert!(catalog.capability_guidance(&entries,&schemas,&visible,
+            &json!({"suppressed":["codebase_admin"]}),&Value::Null,&selected).is_empty());
+        assert!(catalog.capability_guidance(&[],&schemas,&visible,&state,&Value::Null,&selected).is_empty());
+        let without_load=catalog.capability_guidance(&entries,&[json!({"name":"file_edit"})],
+            &visible,&state,&Value::Null,&selected);
+        assert!(without_load.iter().filter(|item|item.id.starts_with("selectable:"))
+            .all(|item|!item.selected && !item.natural));
+        let no_tools=catalog.capability_guidance(&entries,&[],&visible,&state,&Value::Null,&selected);
+        assert!(no_tools.iter().any(|item|item.id=="ability:codebase_admin" && item.natural));
+        assert!(no_tools.iter().filter(|item|item.id.starts_with("tool:")).all(|item|!item.natural));
+    }
+
+    #[test]
+    /// Prevent retained identities from reviving denied or Off tool guidance.
+    fn capability_guidance_filters_current_authorized_tool_names_and_modes() {
+        let (_root,catalog)=fixture();
+        let visible=json!({"visibility":{"codebase_admin":"visible"},
+            "tool_modes":{"file_edit":"discoverable"}});
+        let state=json!({});
+        let mut entries=catalog.catalog_with(&policy(),&visible,&state);
+        let schemas=vec![json!({"name":"file_edit"})];
+        let selected=json!(["tool:file_edit"]);
+        let body=catalog.capability_guidance(&entries,&schemas,&visible,&state,&selected,&Value::Null);
+        assert!(body.iter().any(|item|item.id=="tool:codebase_admin:file_edit" && item.natural));
+        entries[0]["tools"]=json!([{"name":"file_read"}]);
+        assert!(!catalog.capability_guidance(&entries,&schemas,&visible,&state,&selected,&Value::Null)
+            .iter().any(|item|item.id=="tool:codebase_admin:file_edit"));
+        let mut off=visible;off["tool_modes"]["file_edit"]=json!("off");
+        let entries=catalog.catalog_with(&policy(),&off,&state);
+        assert!(!catalog.capability_guidance(&entries,&schemas,&off,&state,&selected,&Value::Null)
+            .iter().any(|item|item.id=="tool:codebase_admin:file_edit"));
+    }
+
+
+    #[test]
+    /// Project identities without changing saved state or overriding restrictions.
+    fn selected_state_is_call_local_and_preserves_off_and_suppression() {
+        let (_root,catalog)=fixture();
+        let visibility=json!({"visibility":{"codebase_admin":"discoverable"}});
+        let state=json!({"active":["another"],"suppressed":[],"revision":7});
+        let original=state.clone();
+        let loaded=json!(["codebase_admin","codebase_admin","unknown","tool:file_edit"]);
+        let projected=catalog.selected_state(&visibility,&state,&loaded);
+        assert_eq!(state,original);
+        assert_eq!(projected["active"],json!(["another","codebase_admin"]));
+        assert_eq!(projected["revision"],7);
+        assert_eq!(catalog.tool_gate("file_edit",&visibility,&state,&loaded),(true,true));
+        let tool_discoverable=json!({"visibility":{"codebase_admin":"discoverable"},"tool_modes":{"file_edit":"discoverable"}});
+        assert_eq!(catalog.tool_gate("file_edit",&tool_discoverable,&state,&json!(["codebase_admin"])),(true,false));
+        assert_eq!(catalog.selected_state(&visibility,&projected,&loaded),projected);
+        let off=json!({"visibility":{"codebase_admin":"off"}});
+        assert_eq!(catalog.selected_state(&off,&state,&loaded),state);
+        assert_eq!(catalog.tool_gate("file_edit",&off,&state,&loaded),(true,false));
+        let suppressed=json!({"active":[],"suppressed":["codebase_admin"]});
+        assert_eq!(catalog.selected_state(&visibility,&suppressed,&loaded),suppressed);
+        assert_eq!(catalog.tool_gate("file_edit",&visibility,&suppressed,&loaded),(true,false));
+        assert_eq!(catalog.selected_state(&visibility,&state,&json!(["tool:file_edit"])),state);
+        assert_eq!(catalog.selected_state(&visibility,&state,&json!(["unknown"])),state);
+    }
+
 }

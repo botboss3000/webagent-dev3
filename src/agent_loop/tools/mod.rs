@@ -17,6 +17,8 @@ pub(crate) mod core_utilities;
 pub(crate) mod core_session;
 #[path = "../../../plugins/abilities/Core/base/skills_adapter.rs"]
 pub(crate) mod core_skills;
+#[path = "../../../plugins/abilities/Core/base/context_assets_adapter.rs"]
+pub(crate) mod core_context_assets;
 #[path = "../../../plugins/abilities/Core/base/prompt_adapter.rs"]
 pub(crate) mod core_prompt;
 #[path = "../../../plugins/abilities/Core/base/search_adapter.rs"]
@@ -59,7 +61,7 @@ pub fn is_read(name: &str) -> bool {
             | "read_attachment"
             | "search_this_session"
             | "list_skills"
-            | "load_skill"
+            | "load_skill" | "context_assets"
             | "read_own_prompt"
             | "session_search"
             | "similar_sessions"
@@ -144,6 +146,7 @@ pub(crate) fn native_schemas() -> Vec<Value> {
         schemas.extend(core_utilities::schemas());
         schemas.extend(core_session::schemas());
         schemas.extend(core_skills::schemas());
+        schemas.extend(core_context_assets::schemas());
         schemas.extend(core_prompt::schemas());
         schemas.extend(core_search::schemas());
         schemas.extend(core_tool_search::schemas());

@@ -1630,6 +1630,8 @@ async fn catalog_change_revokes_loaded_ability_before_pending_tool() {
     run["phase"] = json!("tools");
     run["calls"] = json!([{"type":"function_call","call_id":"old-call",
         "name":"shell","arguments":"{\"command\":\"printf hello\"}"}]);
+    let calls=run["calls"].as_array().unwrap().clone();
+    run["input"].as_array_mut().unwrap().extend(calls);
     app.save(&mut run).await.unwrap();
     running(&app, &id, "new-catalog").await;
     execute_run(
@@ -1641,7 +1643,7 @@ async fn catalog_change_revokes_loaded_ability_before_pending_tool() {
     .await
     .unwrap();
     let finished = app.run(&id).await.unwrap();
-    assert_eq!(finished["status"], "completed");
+    assert_eq!(finished["status"], "completed", "{}", finished["error"]);
     assert_eq!(finished["loaded_abilities"], json!([]));
     assert_eq!(finished["ability_catalog_version"], app.abilities.version());
     let output = finished["input"]
@@ -1652,6 +1654,24 @@ async fn catalog_change_revokes_loaded_ability_before_pending_tool() {
         .unwrap();
     assert!(output["output"].as_str().unwrap().contains("denied"));
     server.abort();
+}
+
+/// Inspect the final call-scoped Responses developer suffix, never durable history or main instructions.
+fn native_call_suffix(request: &Value) -> &str {
+    let last = request["input"].as_array().unwrap().last().unwrap();
+    assert_eq!(last["role"], "developer");
+    let body = last["content"].as_str().unwrap();
+    assert!(body.contains("Current session capability mode:"));
+    body
+}
+
+/// Locate current ability guidance only in explicitly labelled Responses developer frames.
+fn native_ability_frames<'a>(request: &'a Value, ability: &str) -> Vec<&'a str> {
+    let header = format!("## Untrusted live guidance: ability:{ability}\n");
+    request["input"].as_array().unwrap().iter()
+        .filter(|item| item["role"] == "developer")
+        .filter_map(|item| item["content"].as_str())
+        .filter(|body| body.contains(&header)).collect()
 }
 
 #[tokio::test]
@@ -1729,7 +1749,7 @@ async fn long_run_compacts_before_model_and_keeps_full_message_history() {
     .unwrap();
 
     let finished = app.run(&id).await.unwrap();
-    assert_eq!(finished["status"], "completed");
+    assert_eq!(finished["status"], "completed", "{}", finished["error"]);
     assert_eq!(finished["compactions"], 1);
     assert!(serde_json::to_vec(&finished["input"]).unwrap().len() <= 256 * 1024);
     let (chat, _) = app.store.chat_snapshot(&sid).await.unwrap();
@@ -1765,13 +1785,16 @@ async fn long_run_compacts_before_model_and_keeps_full_message_history() {
     assert_eq!(report["transport"], "responses");
     assert_eq!(report["overlays"][0]["id"], "session_mode");
     assert_eq!(report["overlays"][0]["disposition"], "included");
-    assert!(request["instructions"].as_str().unwrap().contains("Current session capability mode:"));
+    assert!(native_call_suffix(request).contains("Current session capability mode:"));
+    assert!(!request["instructions"].as_str().unwrap().contains("Current session capability mode:"));
     assert!(!report.to_string().contains("Earlier conversation summary"));
-    assert_eq!(requests[1]["input"][0]["role"], "user");
-    assert!(requests[1]["input"][0]["content"]
-        .as_str()
-        .unwrap()
-        .contains("Earlier conversation summary"));
+    let summaries: Vec<_> = request["input"].as_array().unwrap().iter()
+        .filter(|item| item["role"] == "user" && item["content"].as_str()
+            .is_some_and(|text| text.starts_with("Earlier conversation summary"))).collect();
+    assert_eq!(summaries.len(), 1);
+    assert!(!summaries[0]["content"].as_str().unwrap().contains("Current session capability mode:"));
+    assert!(!finished["input"].to_string().contains("Current session capability mode:"));
+    assert!(!json!(context).to_string().contains("Current session capability mode:"));
     server.abort();
 }
 
@@ -3024,9 +3047,19 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
     assert_eq!(loaded["status"], "ok");
     assert_eq!(loaded["ability_id"],"codebase_admin");
     assert_eq!(loaded["context_source"],"live_ability_catalog");
-    assert!(requests[2]["instructions"].as_str().unwrap().contains("Codebase Admin"));
+    for request in &requests[..2] {
+        assert!(native_ability_frames(request, "codebase_admin").is_empty());
+    }
+    let guidance = native_ability_frames(&requests[2], "codebase_admin");
+    assert_eq!(guidance.len(), 1);
+    assert!(guidance[0].contains("Codebase Admin"));
+    assert!(!requests[2]["instructions"].as_str().unwrap().contains("## Untrusted live guidance: ability:codebase_admin\n"));
+    assert!(!app.run(&id).await.unwrap()["input"].to_string()
+        .contains("## Untrusted live guidance: ability:codebase_admin\n"));
+    assert!(!json!(app.store.context(&sid).await.unwrap()).to_string()
+        .contains("## Untrusted live guidance: ability:codebase_admin\n"));
     let inspected = result_for(&requests[3], "inspect");
-    assert_eq!(inspected["status"], "success");
+    assert_eq!(inspected["status"], "success", "{inspected}");
     let messages = inspected["output"]["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(
@@ -3048,7 +3081,7 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
 }
 
 #[tokio::test]
-async fn prompt_slot_instructions_are_pinned_when_a_message_is_accepted() {
+async fn prompt_slot_instructions_reload_after_a_message_is_accepted() {
     use axum::routing::post;
 
     let (_root, mut app) = fixture().await;
@@ -3127,8 +3160,8 @@ async fn prompt_slot_instructions_are_pinned_when_a_message_is_accepted() {
     assert_eq!(requests.len(), 2);
     let first = requests[0]["instructions"].as_str().unwrap();
     let second = requests[1]["instructions"].as_str().unwrap();
-    assert!(first.contains("Use the first instruction."));
-    assert!(!first.contains("Use the second instruction."));
+    assert!(!first.contains("Use the first instruction."));
+    assert!(first.contains("Use the second instruction."));
     assert!(second.contains("Use the second instruction."));
     server.abort();
 }
@@ -3907,6 +3940,8 @@ async fn read_only_revokes_old_approval_and_denies_write_at_execution() {
     run["phase"] = json!("tools");
     run["calls"] = json!([{"type":"function_call","call_id":"old-call",
         "name":"shell","arguments":args.to_string()}]);
+    let calls=run["calls"].as_array().unwrap().clone();
+    run["input"].as_array_mut().unwrap().extend(calls);
     run["pending"] = json!({"id":"old-approval","name":"shell","arguments":args,
         "call_id":"old-call","digest":digest(&args),"policy_version":1,
         "mode_revision":0,"state":"waiting","decision":null});
@@ -3971,7 +4006,7 @@ async fn read_only_revokes_old_approval_and_denies_write_at_execution() {
     .await
     .unwrap();
     let finished = app.run(&id).await.unwrap();
-    assert_eq!(finished["status"], "completed");
+    assert_eq!(finished["status"], "completed", "{}", finished["error"]);
     let output = finished["input"]
         .as_array()
         .unwrap()
@@ -4112,6 +4147,8 @@ async fn uncertain_write_recovery_decisions_preserve_effects_and_publish_once() 
         run["uncertain"] = json!(true);
         run["calls"] = json!([{"type":"function_call","call_id":"effect-call",
             "name":"file_write","arguments":"{\"path\":\"effect.txt\",\"content\":\"content\"}"}]);
+        let calls=run["calls"].as_array().unwrap().clone();
+    run["input"].as_array_mut().unwrap().extend(calls);
         run["pending"] = json!({"id":"effect-approval","name":"file_write",
             "call_id":"effect-call","state":"executing","decision":"consumed"});
         workflow::record(&mut run, &workflow::Policy::resolve(None).unwrap(),
@@ -4237,12 +4274,19 @@ async fn current_mode_contribution_changes_per_call_without_entering_history() {
     assert_eq!(app.run(&second).await.unwrap()["status"], "completed");
     let requests = requests.lock().await;
     assert_eq!(requests.len(), 2);
-    assert!(requests[0]["instructions"].as_str().unwrap()
-        .contains("Current session capability mode: read_only (revision 0)"));
-    assert!(requests[1]["instructions"].as_str().unwrap()
-        .contains("Current session capability mode: read_only (revision 1)"));
-    assert!(requests[0]["instructions"].as_str().unwrap().contains("Execution mode: Ask"));
-    assert!(requests[1]["instructions"].as_str().unwrap().contains("Execution mode: Plan"));
+    let first_suffix = native_call_suffix(&requests[0]);
+    let second_suffix = native_call_suffix(&requests[1]);
+    assert!(first_suffix.contains("Current session capability mode: read_only (revision 0)"));
+    assert!(!first_suffix.contains("Current session capability mode: read_only (revision 1)"));
+    assert!(second_suffix.contains("Current session capability mode: read_only (revision 1)"));
+    assert!(!second_suffix.contains("Current session capability mode: read_only (revision 0)"));
+    assert!(first_suffix.contains("Execution mode: Ask"));
+    assert!(!first_suffix.contains("Execution mode: Plan"));
+    assert!(second_suffix.contains("Execution mode: Plan"));
+    assert!(!second_suffix.contains("Execution mode: Ask"));
+    for request in requests.iter() {
+        assert!(!request["instructions"].as_str().unwrap().contains("Current session capability mode:"));
+    }
     for id in [&first, &second] {
         let durable = app.run(id).await.unwrap();
         assert!(!durable["input"].to_string().contains("Current session capability mode:"));
@@ -5723,17 +5767,22 @@ async fn removed_manifest_withdraws_cached_schemas_and_guidance_within_run() {
     assert_eq!(requests.len(),2);
     assert!(requests[0]["tools"].as_array().unwrap().iter()
         .any(|schema|schema["name"]=="state_inspect"));
-    assert!(requests[0]["instructions"].as_str().unwrap()
-        .contains("CACHE_WITHDRAWAL_GUIDANCE_SENTINEL"));
+    let first_guidance = native_ability_frames(&requests[0], "codebase_admin");
+    assert_eq!(first_guidance.len(), 1);
+    assert!(first_guidance[0].contains("CACHE_WITHDRAWAL_GUIDANCE_SENTINEL"));
     assert!(!requests[1]["tools"].as_array().unwrap().iter()
         .any(|schema|schema["name"]=="state_inspect"));
-    assert!(!requests[1]["instructions"].as_str().unwrap()
-        .contains("CACHE_WITHDRAWAL_GUIDANCE_SENTINEL"));
+    assert!(native_ability_frames(&requests[1], "codebase_admin").is_empty());
+    for request in requests.iter() {
+        assert!(!request["instructions"].as_str().unwrap().contains("CACHE_WITHDRAWAL_GUIDANCE_SENTINEL"));
+    }
+    assert!(!app.run(&id).await.unwrap()["input"].to_string().contains("CACHE_WITHDRAWAL_GUIDANCE_SENTINEL"));
+    assert!(!json!(app.store.context(&sid).await.unwrap()).to_string().contains("CACHE_WITHDRAWAL_GUIDANCE_SENTINEL"));
     server.abort();
 }
 
 #[tokio::test]
-async fn bundle_withdrawal_during_credentials_blocks_provider_dispatch() {
+async fn bundle_withdrawal_during_credentials_rebuilds_before_provider_dispatch() {
     use axum::routing::post;
     for cancelled in [false,true] {
     let (root,mut app)=fixture().await;
@@ -5790,13 +5839,18 @@ async fn bundle_withdrawal_during_credentials_blocks_provider_dispatch() {
     drop(credentials);
     tokio::time::timeout(Duration::from_secs(10),task).await.unwrap().unwrap().unwrap();
     let run=app.run(&id).await.unwrap();
-    if cancelled {assert_eq!(run["status"],"cancelled");}
-    else {
-        assert_eq!(run["status"],"stopped");
-        assert!(run["error"].as_str().unwrap().contains("bundle changed"));
+    let requests=requests.lock().await;
+    if cancelled {
+        assert_eq!(run["status"],"cancelled");
+        assert!(requests.is_empty());
+        assert!(!app.store.context(&sid).await.unwrap().iter().any(|item|item["role"]=="assistant"));
+    } else {
+        assert_eq!(run["status"],"completed","{}",run["error"]);
+        assert_eq!(requests.len(),1);
+        assert!(!requests[0]["tools"].as_array().unwrap().iter().any(|schema|schema["name"]=="state_inspect"));
+        assert!(native_ability_frames(&requests[0],"codebase_admin").is_empty());
+        assert_eq!(app.store.context(&sid).await.unwrap().iter().filter(|item|item["role"]=="assistant").count(),1);
     }
-    assert!(requests.lock().await.is_empty());
-    assert!(!app.store.context(&sid).await.unwrap().iter().any(|item|item["role"]=="assistant"));
     server.abort();
     }
 }
@@ -6612,64 +6666,123 @@ async fn background_reclaimed_submission_preserves_original_task_and_receipt() {
     }
 }
 
+/// Keep the Tokio test on its ordinary stack; production schedules each run as a task.
 #[tokio::test]
-async fn normal_dispatch_reloads_base_each_turn_and_retains_pinned_slots() {
+async fn normal_dispatch_reloads_live_prompt_slots_and_selected_skill_on_default_stack() {
+    Box::pin(live_context_default_stack_journey()).await;
+}
+
+/// Copy only native Base source into this fixture; shared repository inputs are read-only.
+fn copy_live_context_fixture(source:&std::path::Path,target:&std::path::Path) {
+    std::fs::create_dir_all(target).unwrap();
+    for entry in std::fs::read_dir(source).unwrap() {
+        let entry=entry.unwrap();let metadata=entry.file_type().unwrap();
+        assert!(!metadata.is_symlink(),"fixture source must not follow symlinks");
+        let output=target.join(entry.file_name());
+        if metadata.is_dir() {copy_live_context_fixture(&entry.path(),&output);}
+        else {assert!(metadata.is_file());std::fs::copy(entry.path(),output).unwrap();}
+    }
+}
+
+/// Valid selectable metadata stays current while only its complete body changes.
+fn live_context_fixture_skill(body:&str)->String {
+    format!("---\nid: live_refresh\ntitle: Live refresh fixture\nwhen_to_use: Verify current live context\ndefault_mode: discoverable\n---\n{body}")
+}
+
+/// Drive native load_skill and a second tool round through the actual execute_run loop.
+/// Current source prompts, saved overrides, encrypted slots and selected skill files
+/// must replace old text without copying guidance into durable history or selectors.
+async fn live_context_default_stack_journey() {
     use axum::routing::post;
-    let path = std::path::Path::new("config/prompts.json");
-    struct Restore(Vec<u8>);
-    impl Drop for Restore {
-        fn drop(&mut self) { std::fs::write("config/prompts.json", &self.0).unwrap(); }
-    }
-    let _restore = Restore(std::fs::read(path).unwrap());
-    let prompts = |marker: &str| json!({
-        "base_instructions":marker, "closing_reporting":"CLOSING", "jev_guidance":"JEV"
-    });
-    std::fs::write(path, prompts("BASE_FIRST").to_string()).unwrap();
-    let (_root, mut app) = fixture().await;
-    let slot = app.store.upsert_prompt_slot("coding", "PINNED_SLOT", None, None, None, 0).await.unwrap();
-    let sid = conversation(&app).await;
-    let rid = queued(&app, &sid).await;
-    app.store.upsert_prompt_slot("coding", "LATER_SLOT", None, None, None,
-        slot["revision"].as_i64().unwrap()).await.unwrap();
-    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
-    let captured = requests.clone();
-    let mock = Router::new().route("/responses", post(move |Json(body): Json<Value>| {
-        let captured = captured.clone();
-        async move {
-            let mut captured = captured.lock().await;
+    let (root,mut app)=Box::pin(fixture()).await;
+    Box::pin(visibility_fixture_base_access(&app)).await;
+    let source=root.path().join("live-source");
+    let abilities=source.join("plugins/abilities");
+    copy_live_context_fixture(&app.abilities.snapshot_root().join("Core/base"),&abilities.join("Core/base"));
+    let skill=abilities.join("Core/base/skills/live_refresh.skill.md");
+    std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    std::fs::write(&skill,live_context_fixture_skill("LIVE_SKILL_FIRST")).unwrap();
+    std::fs::create_dir_all(source.join("config")).unwrap();
+    let prompt=source.join("config/prompts.json");
+    std::fs::write(&prompt,json!({"base_instructions":"LIVE_MAIN_FIRST",
+        "closing_reporting":"LIVE_CLOSING","jev_guidance":"LIVE_JEV_SOURCE_FIRST"}).to_string()).unwrap();
+    // A saved sibling override must survive adoption of a changed source main prompt.
+    std::fs::create_dir_all(root.path().join("config")).unwrap();
+    std::fs::write(root.path().join("config/prompts.json"),json!({"jev_guidance":"LIVE_JEV_SAVED"}).to_string()).unwrap();
+    app.abilities=Arc::new(abilities::Catalog::load(&abilities).unwrap());
+    let slot=Box::pin(app.store.upsert_prompt_slot("live_refresh","LIVE_SLOT_FIRST",None,None,None,0)).await.unwrap();
+    let slot_revision=slot["revision"].as_i64().unwrap();
+    let sid=conversation(&app).await;
+    let rid=queued(&app,&sid).await;
+    let requests=Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured=requests.clone();let callback_store=app.store.clone();
+    let mock=Router::new().route("/responses",post(move |Json(body):Json<Value>| {
+        let captured=captured.clone();let store=callback_store.clone();let prompt=prompt.clone();let skill=skill.clone();
+        Box::pin(async move {
+            let mut captured=captured.lock().await;
             captured.push(body);
-            let output = if captured.len() == 1 {
-                std::fs::write("config/prompts.json", json!({
-                    "base_instructions":"BASE_SECOND", "closing_reporting":"CLOSING", "jev_guidance":"JEV"
-                }).to_string()).unwrap();
-                json!([{"type":"function_call","call_id":"discover","name":"list_abilities","arguments":"{}"}])
-            } else {
-                json!([{"type":"message","role":"assistant",
-                    "content":[{"type":"output_text","text":"Done."}]}])
+            let output=match captured.len() {
+                1=>json!([{"type":"function_call","call_id":"select-live-skill","name":"load_skill",
+                    "arguments":"{\"ability_id\":\"base\",\"kind\":\"selectable\",\"skill_id\":\"live_refresh\"}"}]),
+                2=>{
+                    std::fs::write(&prompt,json!({"base_instructions":"LIVE_MAIN_CURRENT",
+                        "closing_reporting":"LIVE_CLOSING","jev_guidance":"LIVE_JEV_SOURCE_CURRENT"}).to_string()).unwrap();
+                    std::fs::write(&skill,live_context_fixture_skill("LIVE_SKILL_CURRENT")).unwrap();
+                    Box::pin(store.upsert_prompt_slot("live_refresh","LIVE_SLOT_CURRENT",None,None,None,slot_revision)).await.unwrap();
+                    json!([{"type":"function_call","call_id":"refresh-native-round","name":"get_time","arguments":"{}"}])
+                },
+                3=>json!([{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}]}]),
+                count=>panic!("unexpected provider call {count}"),
             };
-            let event = json!({"type":"response.completed",
-                "response":{"status":"completed","output":output}});
-            ([("content-type","text/event-stream")], format!("data: {event}\n\n"))
-        }
+            let event=json!({"type":"response.completed","response":{"status":"completed","output":output}});
+            ([("content-type","text/event-stream")],format!("data: {event}\n\n"))
+        })
     }));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener,mock).await.unwrap(); });
-    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
-    running(&app,&rid,"prompt-reload").await;
-    execute_run(app.clone(),rid.clone(),"prompt-reload".into(),CancellationToken::new()).await.unwrap();
-    assert_eq!(app.run(&rid).await.unwrap()["status"],"completed");
-    let captured = requests.lock().await;
-    assert_eq!(captured.len(),2);
-    assert!(captured[0]["instructions"].as_str().unwrap().contains("BASE_FIRST"));
-    assert!(captured[1]["instructions"].as_str().unwrap().contains("BASE_SECOND"));
-    assert!(!captured[1]["instructions"].as_str().unwrap().contains("BASE_FIRST"));
-    for request in captured.iter() {
-        let instructions = request["instructions"].as_str().unwrap();
-        assert!(instructions.contains("PINNED_SLOT"));
-        assert!(!instructions.contains("LATER_SLOT"));
-        assert!(instructions.contains("CLOSING") && instructions.contains("JEV"));
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address=listener.local_addr().unwrap();
+    let server=tokio::spawn(async move {axum::serve(listener,mock).await.unwrap();});
+    app.provider=provider::Provider::for_test(format!("http://{address}/responses"));
+    let generation="live-context-default-stack";
+    running(&app,&rid,generation).await;
+    let task_app=app.clone();let task_id=rid.clone();
+    // Match the production scheduler boundary; never widen thread/runtime stacks.
+    let execution=tokio::spawn(async move {execute_run(task_app,task_id,generation.into(),CancellationToken::new()).await});
+    tokio::time::timeout(Duration::from_secs(30),execution).await.unwrap().unwrap().unwrap();
+    let durable=app.run(&rid).await.unwrap();
+    assert_eq!(durable["status"],"completed","{}",durable["error"]);
+    let requests=requests.lock().await;
+    assert_eq!(requests.len(),3);
+    for request in &requests[..2] {
+        let instructions=request["instructions"].as_str().unwrap();
+        assert!(instructions.contains("LIVE_MAIN_FIRST"));assert!(instructions.contains("LIVE_SLOT_FIRST"));
+        assert!(!instructions.contains("LIVE_MAIN_CURRENT"));assert!(!instructions.contains("LIVE_SLOT_CURRENT"));
     }
+    let instructions=requests[2]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("LIVE_MAIN_CURRENT"));assert!(instructions.contains("LIVE_SLOT_CURRENT"));
+    assert!(!instructions.contains("LIVE_MAIN_FIRST"));assert!(!instructions.contains("LIVE_SLOT_FIRST"));
+    for request in requests.iter() {
+        let instructions=request["instructions"].as_str().unwrap();
+        assert!(instructions.contains("LIVE_CLOSING")&&instructions.contains("LIVE_JEV_SAVED"));
+        assert!(!instructions.contains("LIVE_JEV_SOURCE_"));
+    }
+    assert!(!requests[0]["input"].to_string().contains("LIVE_SKILL_FIRST"));
+    assert!(requests[1]["input"].to_string().contains("LIVE_SKILL_FIRST"));
+    assert!(requests[2]["input"].to_string().contains("LIVE_SKILL_CURRENT"));
+    assert!(!requests[2]["input"].to_string().contains("LIVE_SKILL_FIRST"));
+    for marker in ["LIVE_SKILL_FIRST","LIVE_SKILL_CURRENT"] {
+        assert!(!durable["input"].to_string().contains(marker));
+        assert!(!durable["loaded_skills"].to_string().contains(marker));
+    }
+    assert_eq!(durable["loaded_skills"],json!([{"ability_id":"base","kind":"selectable","skill_id":"live_refresh"}]));
+    let selector=json!({"type":"skill","ability_id":"base","kind":"selectable","skill_id":"live_refresh"});
+    let ledger=app.store.context_assets(&sid,"shared_default",app.store.current_user_id()).await.unwrap();
+    assert_eq!(ledger.selectors,vec![selector]);
+    let reopened=Box::pin(Store::open(root.path())).await.unwrap();
+    let reopened=Box::pin(reopened.for_user(app.store.current_user_id())).await.unwrap();
+    let persisted=reopened.context_assets(&sid,"shared_default",app.store.current_user_id()).await.unwrap();
+    assert_eq!(persisted,ledger);
+    let (messages,_)=app.store.chat_snapshot(&sid).await.unwrap();
+    assert_eq!(messages.iter().filter(|message|message["role"]=="assistant").count(),1);
     server.abort();
 }
 
@@ -7174,7 +7287,7 @@ async fn native_skill_catalog_marks_supplied_guidance_and_rebuilds_selected_afte
     app.store.mutate_own_skill("journey_steps",None,Some("REPLACEMENT"),None,1,false,
         "visibility-edit",&id).await.unwrap();
     let guidance=tools::core_skills::active_guidance(&app,&sid,&id).await.unwrap();
-    assert!(!guidance.contains(sentinel) && !guidance.contains("REPLACEMENT"));
+    assert!(!guidance.contains(sentinel) && guidance.contains("REPLACEMENT"));
     let mut visibility=app.store.agent_abilities().await.unwrap();
     let revision=visibility["revision"].as_u64().unwrap();
     visibility["visibility"]["base"]=json!("off");

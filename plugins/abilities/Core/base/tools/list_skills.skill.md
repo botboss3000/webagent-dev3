@@ -1,9 +1,9 @@
 # List skill guidance
 
-Use `list_skills` with one exact `ability_id` to list permitted discoverable guidance needing a load. The Rust dispatcher supplies the caller, session, agent and current run. No user, session or filesystem path argument is accepted. For Base, the catalog also includes this agent's saved selectable skills with kind `own`.
+Use `list_skills` with one exact `ability_id` to list permitted discoverable guidance needing selection. Rust supplies the caller, session, agent and run. No user, session or filesystem path argument is accepted. Base also lists this agent's private saved selectable skills with kind `own` when caller authority allows that record scope.
 
-Optionally pass a short query with task words to filter skill IDs and summaries. Set `include_available=true` to include Visible and already loaded guidance; these entries need no load. Without that flag, already supplied entries are omitted.
+Optionally pass a short task-word query. Set `include_available=true` to include Visible and already selected guidance, which needs no repeated load. Without that flag, already supplied entries are omitted.
 
-The response includes exact `kind`, `skill_id`, digest and byte count, availability and whether loading is needed, plus a live `catalog_version`. Pass the selector IDs and optionally that version to `load_skill`. A load returns acknowledgment and metadata; full guidance is supplied separately in the next model context.
+The response includes exact kind and skill ID, observed digest and byte count, availability, load requirement and current catalog version. Pass the identities and optionally that version to `load_skill`. Acknowledgments omit bodies; current complete guidance is supplied separately in model context. Source hashes and own revisions are observation receipts, not persistent pins.
 
-Denied, suppressed, disabled, uninstalled or changed assets are unavailable. Listing does not activate abilities or grant execution. Choose individual discoverable guidance when needed; ability, tool and skill settings remain independent.
+Current valid edits are adopted without another selection. Missing, symlinked, invalid, denied, suppressed, Off or uninstalled sources are unavailable. Listing neither activates abilities nor grants execution. Ability, tool and individual skill settings remain independent.

@@ -1,6 +1,7 @@
 //! Bounded ephemeral specialized-model calls. No audio or quick answers enter durable chat.
 use super::*;
 use tokio::sync::mpsc;
+/// Pin the requested media role to an active session's execution epoch and agent after checking shutdown/model availability.
 pub(crate) async fn lane_run(
     app: &App,
     sid: &str,
@@ -32,6 +33,7 @@ pub(crate) async fn lane_run(
         "selection_plan":plan,"failover_state":model_selection::FailoverState::default()}),
     )
 }
+/// Recheck session/agent identity and pinned epoch, then resolve the current candidate and its authorized credentials.
 pub(crate) async fn lane_selection(
     app: &App,
     run: &Value,
@@ -58,69 +60,112 @@ pub(crate) async fn lane_selection(
         .map_err(|_| conflict("Connect the required model provider"))?;
     Ok((selection, tokens))
 }
-pub(crate) async fn lane_answer(
-    app: &App,
-    run: &Value,
+// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Ephemeral media caller prepares pure projection before session/model admission; Config: engine controls and provider descriptor fence dispatch. No media answer enters durable history.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/interface_version","/implementation_version","/limits"]}],"opportunities":[]}}
+/// Return bounded private media text under session-epoch supervision and a 90-second deadline.
+/// Calls CallDraft::prepare before admission; fences current model/component authority and the first network poll, then discards deltas.
+pub(crate) fn lane_answer<'a>(
+    app: &'a App,
+    run: &'a Value,
     input: Vec<Value>,
-    instructions: &str,
-) -> Result<String, ApiError> {
-    let (selection, tokens) = lane_selection(app, run).await?;
-    let (tx, mut rx) = mpsc::channel(16);
-    let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
-    let cancel=app.stop.child_token();
-    let result = tokio::time::timeout(
-        Duration::from_secs(90),
-        app.session_operation(run["session_id"].as_str().unwrap_or(""),cancel.clone(),async {
-            let selection = &selection;
-            let tokens = &tokens;
-            let cancel = cancel.clone();
-            let ready = crate::provider::CallDraft::new(
-                selection,
-                input,
-                vec![],
-                run["session_id"].as_str().unwrap(),
-                instructions,
-            )
-            .validate()?
-            .bind_credentials(tokens, &cancel)?;
-            app.provider.dispatch(ready, tx, cancel).await
-        }),
-    )
-    .await;
-    drain.abort();
-    let result = result
-        .map_err(|_| {
-            ApiError(
-                StatusCode::GATEWAY_TIMEOUT,
-                "Voice or image model timed out".into(),
-            )
-        })?
-        .map_err(|error| {
-            if error.downcast_ref::<crate::store::session::RecycledSession>().is_some() {return ApiError::from(error);}
-            ApiError(
+    instructions: &'a str,
+) -> impl std::future::Future<Output = Result<String, ApiError>> + Send + 'a {
+    // Keep the complete media state machine on the heap: voice/upload callers
+    // otherwise embed both credential-selection futures and their dispatch fence.
+    // Borrowing preserves session_operation cancellation without a detached task.
+    Box::pin(async move {
+        let (selection, tokens) = lane_selection(app, run).await?;
+        let (tx, mut rx) = mpsc::channel(16);
+        let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let cancel=app.stop.child_token();
+        let result = tokio::time::timeout(
+            Duration::from_secs(90),
+            app.session_operation(run["session_id"].as_str().unwrap_or(""),cancel.clone(),async {
+                let selection = &selection;
+                let tokens = &tokens;
+                let cancel = cancel.clone();
+                // Component IPC completes before the final session/model authority check.
+                let engine_revision = crate::engine_components::catalog()?.revision.clone();
+                        let engine_controls = crate::engine_components::controls(&app.store.root)?.revision;
+                let prepared = crate::provider::CallDraft::new(
+                    selection,
+                    input,
+                    vec![],
+                    run["session_id"].as_str().unwrap(),
+                    instructions,
+                ).prepare(&app.store.root, &cancel).await?;
+                let dispatch_guard = app.gate.lock().await;
+                let (current_selection, _) = lane_selection(app, run).await
+                    .map_err(|_| anyhow!("Model access changed"))?;
+                if current_selection != *selection || app.shutoff().await? {
+                    return Err(anyhow!("Model access changed"));
+                }
+                if cancel.is_cancelled()
+                            || crate::engine_components::catalog()?.revision != engine_revision
+                            || crate::engine_components::controls(&app.store.root)?.revision != engine_controls
+                            || !crate::engine_components::component_available(
+                                &app.store.root, crate::engine_components::PROJECTION)
+                        {
+                            return Err(anyhow!("Provider component or authority changed"));
+                        }
+                // Poll the actual transport once while authority writers remain fenced.
+                        let mut completion = Box::pin(async {
+                            let ready = prepared.bind_credentials(tokens, &cancel)?;
+                            app.provider.dispatch(ready, tx, cancel).await
+                        });
+                        let mut immediate = None;
+                        futures_util::future::poll_fn(|cx| {
+                            if let std::task::Poll::Ready(result) =
+                                std::future::Future::poll(completion.as_mut(), cx)
+                            {
+                                immediate = Some(result);
+                            }
+                            std::task::Poll::Ready(())
+                        }).await;
+                        drop(dispatch_guard);
+                        match immediate {
+                            Some(result) => result,
+                            None => completion.await,
+                        }
+            }),
+        )
+        .await;
+        cancel.cancel();
+        drain.abort();
+        let result = result
+            .map_err(|_| {
+                ApiError(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "Voice or image model timed out".into(),
+                )
+            })?
+            .map_err(|error| {
+                if error.downcast_ref::<crate::store::session::RecycledSession>().is_some() {return ApiError::from(error);}
+                ApiError(
+                    StatusCode::BAD_GATEWAY,
+                    "Voice or image model did not complete; check its assignment and connection".into(),
+                )
+            })?;
+        lane_selection(app, run).await?;
+        let answer = result["output"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|item| item["type"] == "message")
+            .flat_map(|item| item["content"].as_array().into_iter().flatten())
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if answer.trim().is_empty() || answer.len() > 32768 {
+            return Err(ApiError(
                 StatusCode::BAD_GATEWAY,
-                "Voice or image model did not complete; check its assignment and connection".into(),
-            )
-        })?;
-    lane_selection(app, run).await?;
-    let answer = result["output"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|item| item["type"] == "message")
-        .flat_map(|item| item["content"].as_array().into_iter().flatten())
-        .filter_map(|part| part["text"].as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    if answer.trim().is_empty() || answer.len() > 32768 {
-        return Err(ApiError(
-            StatusCode::BAD_GATEWAY,
-            "Model returned no bounded answer".into(),
-        ));
-    }
-    Ok(answer)
+                "Model returned no bounded answer".into(),
+            ));
+        }
+        Ok(answer)
+    })
 }
 
+/// Admit at most four concurrent media HTTP requests without queueing excess callers.
 pub(crate) async fn limit(request: Request, next: Next) -> Response {
     static SLOTS: std::sync::OnceLock<Semaphore> = std::sync::OnceLock::new();
     let Ok(_permit) = SLOTS.get_or_init(|| Semaphore::new(4)).try_acquire() else {
@@ -138,6 +183,7 @@ mod tests {
     use super::*;
     use axum::{routing::post, Router};
 
+    /// Capture a real local media call to verify exact input/instructions and no durable message, context or agent-run publication.
     #[tokio::test]
     async fn typed_media_call_preserves_request_and_does_not_publish_chat() {
         let (_root, mut app) = crate::runtime_tests::fixture().await;

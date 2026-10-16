@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "context-assets",
+  "group": "engine-loop",
+  "interface_version": 1,
+  "implementation_version": "0.1.0",
+  "operation": "assets.plan",
+  "modes": [
+    "live",
+    "linked"
+  ],
+  "runtime_requirements": [],
+  "build": {
+    "package": "webagent-assets-service",
+    "source_inputs": [
+      "crates/assets-service",
+      "crates/context-assets",
+      "crates/assets-contracts",
+      "crates/engine-service",
+      "Cargo.toml",
+      "Cargo.lock"
+    ],
+    "toolchain": "1.90.0",
+    "features": [],
+    "runtime_assets": []
+  },
+  "executable": "artifact/webagent-assets-service",
+  "limits": {
+    "max_request_bytes": 16777216,
+    "max_response_bytes": 16777216,
+    "timeout_ms": 30000,
+    "max_concurrency": 1
+  }
+}

@@ -9,6 +9,7 @@
     "load_ability",
     "list_skills",
     "load_skill",
+    "context_assets",
     "set_execution_mode",
     "get_time",
     "get_date",

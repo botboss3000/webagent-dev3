@@ -7,6 +7,7 @@ use crate::{context_input::{CallIdentity,Contribution,ModelMetadata},context_com
 pub struct PrepareRequest {
  pub history:Vec<Value>,pub base:String,pub guidance:String,pub schemas:Vec<Value>,pub contributions:Vec<Contribution>,pub identity:CallIdentity,
  pub model:ModelMetadata,pub max_bytes:usize,pub compaction:Config,
+ pub projection_extra_bytes:usize,pub contributions_projected:bool,
  pub system_input_budget:Option<usize>,pub summary_instructions:String,
 }
 #[derive(Debug,Clone,Serialize,Deserialize)]

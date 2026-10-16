@@ -47,7 +47,9 @@ enum ReadyTransport<'a> {
     },
 }
 
+// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Host projection preparation precedes credential binding and network dispatch. Config: config/engine-components.json -> disabled; provider descriptor -> versions and limits.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/interface_version","/implementation_version","/limits"]}],"opportunities":[]}}
 impl<'a> CallDraft<'a> {
+    /// Own the ephemeral input/schema vectors while borrowing the host-selected route and instructions.
     pub(crate) fn new(
         selection: &'a ProviderSelection,
         input: Vec<Value>,
@@ -64,87 +66,152 @@ impl<'a> CallDraft<'a> {
         }
     }
 
-    pub(crate) fn validate(mut self) -> Result<ValidatedCall<'a>> {
-        if self.instructions.is_empty() {
-            return Err(typed_failure(
-                crate::model_selection::FailureKind::MalformedRequest,
-                false,
-                "Invalid provider instructions",
-            ));
+    /// Resolve provider projection before the caller reacquires its dispatch gate.
+    /// No credentials reach the component; live authority must still be rechecked.
+    pub(crate) async fn prepare(
+        mut self,
+        root: &std::path::Path,
+        cancel: &CancellationToken,
+    ) -> Result<ValidatedCall<'a>> {
+        let request = self.projection_request()?;
+        if cancel.is_cancelled() {
+            return Err(typed_failure(crate::model_selection::FailureKind::Cancelled,
+                false, "Provider request cancelled"));
         }
-        // Durable message authorship is application metadata, never provider
-        // input. Normalize recovered histories as well as freshly admitted turns.
-        // Tool arguments/results and reasoning identifiers remain unchanged.
+        let projection = crate::engine_components::provider_project(root, &request, cancel).await
+            .map_err(|_| typed_failure(
+                if cancel.is_cancelled() { crate::model_selection::FailureKind::Cancelled }
+                else { crate::model_selection::FailureKind::Protocol },
+                false, "Provider projection unavailable or rejected"))?;
+        self.validate_prepared(request, projection)
+    }
+
+    /// Linked fixtures use the same planner and contract; live builds require the registered service.
+    #[cfg(any(feature = "linked-context", test))]
+    pub(crate) fn validate(mut self) -> Result<ValidatedCall<'a>> {
+        let request = self.projection_request()?;
+        let projection = webagent_provider_projection::project(&request)
+            .map_err(|_| typed_failure(crate::model_selection::FailureKind::MalformedRequest,
+                false, "Invalid Provider request"))?;
+        self.validate_prepared(request, projection)
+    }
+
+    /// Normalize host-only metadata and budget inputs before sending private context over the pipe.
+    fn projection_request(&mut self) -> Result<webagent_provider_contracts::RequestV1> {
+        if self.instructions.is_empty() {
+            return Err(typed_failure(crate::model_selection::FailureKind::MalformedRequest,
+                false, "Invalid provider instructions"));
+        }
         for item in &mut self.input {
-            if let Some(object)=item.as_object_mut().filter(|object|object.contains_key("role")) {
-                for key in ["author_id","author_name","run_id","context_content",
-                    "participation_generation","context_eligible","queued"] {
-                    object.remove(key);
+            if let Some(object) = item.as_object_mut() {
+                if self.selection.provider != ProviderId::Deepseek {
+                    object.remove("deepseek_reasoning");
+                    object.remove("reasoning_content");
+                }
+                if object.contains_key("role") {
+                    for key in ["author_id","author_name","run_id","context_content",
+                        "participation_generation","context_eligible","queued"] {
+                        object.remove(key);
+                    }
                 }
             }
         }
         if let Some(budget) = self.selection.input_budget_bytes()? {
             #[derive(serde::Serialize)]
-            struct Envelope<'a> { instructions:&'a str, input:&'a [Value], tools:&'a [Value] }
+            struct Envelope<'a> { instructions: &'a str, input: &'a [Value], tools: &'a [Value] }
             let bytes = crate::context_accounting::json_size(&Envelope {
-                instructions:self.instructions, input:&self.input, tools:&self.tools
+                instructions:self.instructions, input:&self.input, tools:&self.tools,
             })?;
             if bytes > budget {
                 return Err(typed_failure(crate::model_selection::FailureKind::MalformedRequest,
                     false, "Model input budget exceeded"));
             }
         }
-        let request = if self.selection.provider == ProviderId::OpenaiSubscription {
-            PreparedRequest::Subscription(SubscriptionRequest {
-                max_output_tokens: self.selection.limits.as_ref().map(|limits| limits.output_tokens),
-                model: &self.selection.model,
-                input: self.input,
-                tools: self.tools,
-                session: self.session,
-                instructions: self.instructions,
-            })
-        } else {
-            // Reuse the adapter's exact translation and validation, once.
-            let mut body = deepseek::request_body(
-                &self.selection.model,
-                self.input,
-                self.tools,
-                self.instructions,
-            )
-            .map_err(|_| {
-                typed_failure(
-                    crate::model_selection::FailureKind::MalformedRequest,
-                    false,
-                    "Invalid Provider request",
-                )
-            })?;
-            if self.selection.provider != ProviderId::Deepseek {
-                if let Some(messages) = body["messages"].as_array_mut() {
-                    for message in messages {
-                        if let Some(object) = message.as_object_mut() {
-                            object.remove("reasoning_content");
-                        }
-                    }
+        let request = webagent_provider_contracts::RequestV1::Project {
+            version:webagent_provider_contracts::CONTRACT_VERSION,
+            provider:self.selection.provider.projection_id(),
+            model:self.selection.model.clone(),
+            instructions:self.instructions.to_owned(),
+            input:std::mem::take(&mut self.input),
+            tools:std::mem::take(&mut self.tools),
+        };
+        webagent_provider_contracts::validate_request(&request)
+            .map_err(|_| typed_failure(crate::model_selection::FailureKind::MalformedRequest,
+                false, "Invalid Provider request"))?;
+        // Shape errors precede the legacy unsupported-transport error; no service
+        // or credential work is attempted for a Decision-only model.
+        if self.selection.provider != ProviderId::OpenaiSubscription
+            && self.selection.provider.chat_endpoint().is_none() {
+            return Err(anyhow!("Provider does not use API keys"));
+        }
+        Ok(request)
+    }
+
+    /// Accept references only, reconstruct original content, then add host-owned wire parameters.
+    fn validate_prepared(
+        self,
+        request: webagent_provider_contracts::RequestV1,
+        projection: webagent_provider_contracts::ResultV1,
+    ) -> Result<ValidatedCall<'a>> {
+        match &request {
+            webagent_provider_contracts::RequestV1::Project { provider, model, instructions, .. }
+                if *provider == self.selection.provider.projection_id()
+                    && model == &self.selection.model && instructions == self.instructions => {},
+            _ => return Err(typed_failure(crate::model_selection::FailureKind::Protocol,
+                false, "Provider projection request identity changed")),
+        }
+        let materialized = webagent_provider_contracts::materialize_owned(request, &projection)
+            .map_err(|_| typed_failure(crate::model_selection::FailureKind::Protocol,
+                false, "Invalid Provider projection"))?;
+        let request = match materialized {
+            webagent_provider_contracts::MaterializedV1::Responses { instructions, input, tools } => {
+                if self.selection.provider != ProviderId::OpenaiSubscription
+                    || instructions != self.instructions {
+                    return Err(typed_failure(crate::model_selection::FailureKind::Protocol,
+                        false, "Invalid Provider projection"));
                 }
-            }
-            if let Some(limits) = &self.selection.limits {
-                if self.selection.provider == ProviderId::OpenaiApi {
-                    body.as_object_mut().unwrap().remove("max_tokens");
-                    body["max_completion_tokens"] = json!(limits.output_tokens);
-                } else { body["max_tokens"] = json!(limits.output_tokens); }
-            }
-            let endpoint = self
-                .selection
-                .provider
-                .chat_endpoint()
-                .ok_or_else(|| anyhow!("Provider does not use API keys"))?;
-            PreparedRequest::Compatible { body, endpoint }
+                PreparedRequest::Subscription(SubscriptionRequest {
+                    max_output_tokens:self.selection.limits.as_ref().map(|limits|limits.output_tokens),
+                    model:&self.selection.model, input, tools, session:self.session,
+                    instructions:self.instructions,
+                })
+            },
+            webagent_provider_contracts::MaterializedV1::ChatCompletions { messages, tools } => {
+                let endpoint = self.selection.provider.chat_endpoint()
+                    .ok_or_else(|| anyhow!("Provider does not use API keys"))?;
+                PreparedRequest::Compatible {
+                    body:compatible_body(self.selection, messages, tools), endpoint,
+                }
+            },
         };
         Ok(ValidatedCall { request })
     }
+
+}
+
+/// Host-owned network framing; the projection component never chooses limits,
+/// tool choice, endpoints, streaming options, cache keys or credentials.
+pub(super) fn compatible_body(selection: &ProviderSelection, messages: Vec<Value>, tools: Vec<Value>) -> Value {
+    let mut body = json!({"model":selection.model,"messages":messages,"stream":true,
+        "stream_options":{"include_usage":true},"max_tokens":8192});
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+        body["tool_choice"] = json!("auto");
+    }
+    if let Some(limits) = &selection.limits {
+        if selection.provider == ProviderId::OpenaiApi {
+            body.as_object_mut().unwrap().remove("max_tokens");
+            body["max_completion_tokens"] = json!(limits.output_tokens);
+        } else {
+            body["max_tokens"] = json!(limits.output_tokens);
+        }
+    }
+    body
 }
 
 impl<'a> ValidatedCall<'a> {
+    /// Bind only the selected transport's credentials after the caller rechecks live authority.
+    /// This synchronous step preserves cancellation/credential error precedence; it starts no network request.
     pub(crate) fn bind_credentials(
         self,
         tokens: &'a Value,
@@ -207,10 +274,32 @@ mod tests {
     use super::*;
     use crate::model_selection::FailureKind;
 
+    /// Extract the classified failure expected by preparation and dispatch-boundary fixtures.
     fn kind(error: &anyhow::Error) -> FailureKind {
         error.downcast_ref::<ProviderFailure>().unwrap().kind
     }
 
+    /// A malformed component result is rejected before credentials or network preparation.
+    #[test]
+    fn projection_cannot_forge_transport_or_history_references() {
+        let selection = ProviderSelection { limits:None,
+            provider:ProviderId::OpenaiSubscription, model:"fixture".into() };
+        let mut draft = CallDraft::new(&selection,
+            vec![json!({"role":"user","content":"original"})], vec![], "s", "core");
+        let request = draft.projection_request().unwrap();
+        let projection = webagent_provider_contracts::ResultV1::Projected {
+            version:1, projection:webagent_provider_contracts::ProjectionV1 {
+                provider:webagent_provider_contracts::ProviderIdV1::Deepseek,
+                transport:webagent_provider_contracts::TransportV1::ChatCompletions,
+                groups:vec![webagent_provider_contracts::SourceGroupV1::Message { source_index:0 }],
+                omitted:vec![], tools:vec![],
+            },
+        };
+        let error = draft.validate_prepared(request, projection).err().unwrap();
+        assert_eq!(kind(&error), FailureKind::Protocol);
+    }
+
+    /// Verify long instruction bodies are accepted under the complete envelope budget rather than an unrelated fixed prompt cap.
     #[test]
     fn large_instructions_are_valid_when_the_complete_model_input_fits() {
         for provider in [ProviderId::OpenaiSubscription,ProviderId::Deepseek] {
@@ -220,6 +309,7 @@ mod tests {
         }
     }
 
+    /// Verify invalid instructions fail as malformed input before unsupported transport or missing credential checks.
     #[test]
     fn instruction_failure_precedes_transport_and_credentials() {
         for provider in [
@@ -247,6 +337,7 @@ mod tests {
         }
     }
 
+    /// Verify Decision-only selections retain malformed-input precedence before their unsupported chat error.
     #[test]
     fn compatible_body_failure_precedes_unsupported_transport() {
         let selection = ProviderSelection { limits:None,
@@ -271,6 +362,7 @@ mod tests {
         assert_eq!(error.to_string(), "Provider does not use API keys");
     }
 
+    /// Verify subscription cancellation and compatible missing-key errors preserve their established precedence.
     #[test]
     fn cancellation_and_missing_credentials_keep_transport_precedence() {
         let cancel = CancellationToken::new();
@@ -316,6 +408,7 @@ mod tests {
         );
     }
 
+    /// Verify subscription preparation transfers original vector allocations and ignores unrelated API-key fields.
     #[test]
     fn subscription_preparation_moves_history_and_binds_only_subscription_fields() {
         let selection = ProviderSelection { limits:None,
@@ -345,6 +438,7 @@ mod tests {
         assert_eq!(credentials.residency, Some("eu"));
     }
 
+    /// Verify exact compatible text/schema framing while retaining reasoning only for DeepSeek.
     #[test]
     fn compatible_preparation_preserves_wire_values_and_reasoning_rules() {
         for provider in [ProviderId::Deepseek, ProviderId::Openrouter] {
@@ -389,6 +483,7 @@ mod tests {
         }
     }
 
+    /// Verify malformed, unsupported, credential-less and cancelled calls cannot reach a local transport listener.
     #[tokio::test]
     async fn rejected_preparation_and_cancelled_ready_calls_never_connect() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -443,6 +538,7 @@ mod tests {
 #[cfg(test)]
 mod limit_tests {
  use super::*;
+ /// Verify configured limits bound the complete input and select the compatible output-token field.
  #[test]
  fn limits_bound_all_call_inputs_and_compatible_output() {
   let selection=ProviderSelection::parse(&json!({"provider":"deepseek","model":"fixture",
@@ -452,6 +548,7 @@ mod limit_tests {
   assert_eq!(body["max_tokens"],17);
   assert!(CallDraft::new(&selection,vec![json!({"role":"user","content":"x".repeat(500)})],vec![],"s","help").validate().is_err());
  }
+ /// Verify the subscription prepared request carries an explicitly configured output limit.
  #[test]
  fn subscription_explicit_output_limit_is_prepared_and_defaults_omit_it() {
   let selection=ProviderSelection::parse(&json!({"provider":"openai_subscription","model":"gpt-6-luna",
@@ -465,6 +562,7 @@ mod limit_tests {
 #[cfg(test)]
 mod shared_message_wire_tests {
  use super::*;
+ /// Verify first and recovered user messages omit host metadata without altering opaque reasoning or tool argument/result strings.
  #[test]
  fn subscription_first_and_recovered_user_messages_strip_internal_metadata() {
   let selection=ProviderSelection { limits:None,provider:ProviderId::OpenaiSubscription,model:"fixture".into() };

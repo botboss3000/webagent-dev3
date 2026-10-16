@@ -95,6 +95,12 @@ class FakeRunner:
             self.blob = context("changed")
         return "sha256:" + ("a" if role == "api" else "b") * 64, "TOKEN=NEVER-EXPOSE-THIS\nAuthorization: Bearer hidden\n"
 
+    def preflight_deploy_images(self,images,job_id):
+        self.calls.append(("image_preflight",dict(images)))
+        if getattr(self,"missing_deploy_role",None):
+            raise RuntimeError("Prepared deployment image unavailable")
+        return dict(images)
+
     def export(self, images, destination):
         self.calls.append(("export", images))
         if self.export_entered:
@@ -1432,6 +1438,24 @@ class BuildTests(unittest.TestCase):
             self.call("v3_worker_submit", {"operation": "shell", "command": "docker rm production"})
         self.runner.block.set()
         self.wait(submitted)
+
+    def assert_missing_candidate_preserves_consumers(self,role):
+        built=self.wait(self.build())
+        before=copy.deepcopy(self.runner.containers)
+        self.runner.missing_deploy_role=role
+        self.runner.calls.clear()
+        result=self.wait(self.deploy(built))
+        self.assertEqual(result["status"],"failed")
+        self.assertEqual(result["phase"],"checking_candidate_images")
+        self.assertEqual(self.runner.containers,before)
+        self.assertFalse(any(call[0]in {"stop","rename","create","start","activate_assets","promote"}for call in self.runner.calls))
+        self.assertTrue(any(call[0]=="image_preflight"for call in self.runner.calls))
+
+    def test_missing_candidate_api_image_keeps_both_original_consumers_running(self):
+        self.assert_missing_candidate_preserves_consumers("api")
+
+    def test_missing_candidate_loop_image_keeps_both_original_consumers_running(self):
+        self.assert_missing_candidate_preserves_consumers("loop")
 
     def test_deploy_preserves_rollback_and_private_configuration(self):
         built = self.wait(self.build())

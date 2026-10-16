@@ -1,5 +1,4 @@
 {
-  "artifact_sha256": "0a78af0ff27721b26d350fff10fd11903f57c6f3169ac28d0c058f16adf1bbc1",
   "build": {
     "features": [],
     "package": "webagent-context-service",
@@ -17,8 +16,8 @@
   "executable": "artifact/webagent-context-service",
   "group": "engine-loop",
   "id": "context-assembly",
-  "implementation_version": "0.1.1",
-  "interface_version": 1,
+  "implementation_version": "0.2.0",
+  "interface_version": 2,
   "limits": {
     "max_concurrency": 1,
     "max_request_bytes": 16777216,

@@ -1,7 +1,9 @@
 //! Optional System-role naming: no chat publication, tools or context mutation.
 use crate::*;
 pub(crate) mod config;
+/// Validate administrator naming settings with the same parser used by queued jobs.
 pub(crate) fn validate_settings(value:&Value)->Result<()> {config::Config::parse(value).map(|_|())}
+/// Build a Unicode-safe placeholder title from normalized first-message text when model naming is unavailable.
 pub(crate) fn fallback(text: &str) -> String {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let excerpt: String = normalized
@@ -18,6 +20,7 @@ pub(crate) fn fallback(text: &str) -> String {
         }
     )
 }
+/// Select the first nonempty generated title and apply word, character and byte limits before metadata publication.
 fn clean(raw: &str) -> String {
     let line = raw
         .lines()
@@ -43,6 +46,7 @@ fn clean(raw: &str) -> String {
     }
     title.trim().to_owned()
 }
+/// Build a private naming run from the pinned role plan and its independent failover cursor, preserving requester/participation identity.
 fn dispatch(session: &Value, state: &model_selection::FailoverState) -> Result<Value> {
     let plan: model_selection::SelectionPlan =
         serde_json::from_value(session["auto_naming"]["system_plan"].clone())?;
@@ -63,6 +67,7 @@ fn dispatch(session: &Value, state: &model_selection::FailoverState) -> Result<V
             provider:candidate.transport.provider_id(),model:candidate.upstream_model.clone()}.value()}),
     )
 }
+/// Recheck naming claim, participation, shared-chat access, model authorization and global shutdown before using a private title result.
 async fn permitted(app: &App, session: &Value, run: &Value) -> bool {
     !app.stop.is_cancelled()
         && app.shutoff().await.is_ok_and(|value| !value)
@@ -79,6 +84,7 @@ async fn permitted(app: &App, session: &Value, run: &Value) -> bool {
             run["session_id"].as_str().unwrap_or(""),run["agent_id"].as_str().unwrap_or("shared_default")).await.is_ok_and(|access|access.admitted())
         && app.run_model_authorized(run).await
 }
+/// Reuse the matching pinned naming role or claim-fence a freshly authorized selection plan without changing the chat run's plan.
 async fn prepare_plan(app: &App, session: &Value) -> Result<Value> {
     let settings = config::Config::for_session(session)?;
     let existing = serde_json::from_value::<model_selection::SelectionPlan>(
@@ -97,6 +103,9 @@ async fn prepare_plan(app: &App, session: &Value) -> Result<Value> {
     pinned["auto_naming"]["system_plan"] = json!(plan);
     Ok(pinned)
 }
+// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Naming caller prepares provider projection before admission. Config: config/prompts.json -> session_naming (snapshotted per job); engine controls/descriptor fence dispatch.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/interface_version","/implementation_version","/limits"]},{"path":"config/prompts.json","pointers":["/session_naming/prompt","/session_naming/model_role","/session_naming/attempts_per_job","/session_naming/retry_delay_ms","/session_naming/request_timeout_seconds","/session_naming/recovery_retry_delay_seconds","/session_naming/max_job_attempts"]}],"opportunities":[]}}
+/// Generate a private title from the job's pinned settings and safe failover plan.
+/// Calls CallDraft::prepare before dispatch admission; rechecks naming/model/component authority before the first network poll.
 async fn generate(app: &App, original: &Value) -> Result<String> {
     let pinned = prepare_plan(app, original).await?;
     let session = &pinned;
@@ -128,16 +137,47 @@ async fn generate(app: &App, original: &Value) -> Result<String> {
                     let selection = &selection;
                     let tokens = &tokens;
                     let cancel = cancel.clone();
-                    let ready = crate::provider::CallDraft::new(
+                    // Projection may use a disposable component; finish IPC before dispatch admission.
+                    let engine_revision = crate::engine_components::catalog()?.revision.clone();
+                    let engine_controls = crate::engine_components::controls(&app.store.root)?.revision;
+                    let prepared = crate::provider::CallDraft::new(
                         selection,
                         input.clone(),
                         Vec::new(),
                         &request_session,
                         &settings.prompt,
-                    )
-                    .validate()?
-                    .bind_credentials(tokens, &cancel)?;
-                    app.provider.dispatch(ready, sender, cancel).await
+                    ).prepare(&app.store.root, &cancel).await?;
+                    let dispatch_guard = app.gate.lock().await;
+                    if !permitted(app, session, &run).await {
+                        return Err(anyhow!("Naming authority unavailable"));
+                    }
+                    if cancel.is_cancelled()
+                        || crate::engine_components::catalog()?.revision != engine_revision
+                        || crate::engine_components::controls(&app.store.root)?.revision != engine_controls
+                        || !crate::engine_components::component_available(
+                            &app.store.root, crate::engine_components::PROJECTION)
+                    {
+                        return Err(anyhow!("Provider component or authority changed"));
+                    }
+                    // Poll the actual transport once while authority writers remain fenced.
+                    let mut completion = Box::pin(async {
+                        let ready = prepared.bind_credentials(tokens, &cancel)?;
+                        app.provider.dispatch(ready, sender, cancel).await
+                    });
+                    let mut immediate = None;
+                    futures_util::future::poll_fn(|cx| {
+                        if let std::task::Poll::Ready(result) =
+                            std::future::Future::poll(completion.as_mut(), cx)
+                        {
+                            immediate = Some(result);
+                        }
+                        std::task::Poll::Ready(())
+                    }).await;
+                    drop(dispatch_guard);
+                    match immediate {
+                        Some(result) => result,
+                        None => completion.await,
+                    }
                 };
                 tokio::pin!(operation);
                 let deadline = tokio::time::sleep(Duration::from_secs(settings.request_timeout_seconds));
@@ -196,6 +236,7 @@ async fn generate(app: &App, original: &Value) -> Result<String> {
     }
     Err(anyhow!("Title generation unavailable"))
 }
+/// Own and renew one naming lease under session-epoch supervision; finish only its claim and preserve failed writes for recovery.
 async fn work(app: App, sid: String, recovery: bool) -> Result<()> {
     let Some(session) = app.store.naming_claim(&sid, recovery).await? else {
         return Ok(());
@@ -228,6 +269,7 @@ async fn work(app: App, sid: String, recovery: bool) -> Result<()> {
         .await?;
     Ok(())
 }
+/// Schedule bounded per-user naming workers and periodic lease recovery, then abort/join workers on process shutdown.
 pub(crate) async fn service(app: App) {
     let mut workers = tokio::task::JoinSet::new();
     let mut active = std::collections::HashSet::new();
@@ -279,6 +321,7 @@ pub(crate) async fn service(app: App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Verify placeholder and generated-title bounds preserve complete Unicode characters and reject empty output.
     #[test]
     fn placeholders_and_cleaning_are_unicode_safe() {
         assert_eq!(fallback("  hello\n world  "), "New: hello world");
@@ -299,6 +342,7 @@ mod tests {
 #[cfg(test)]
 mod acceptance_tests {
     use super::*;
+    /// Verify the configured naming deadline exhausts a job while preserving its fallback and durable chat rows.
     #[tokio::test]
     async fn configured_call_timeout_exhausts_without_chat_publication() {
         let (root, mut app) = fixture().await;
@@ -331,11 +375,13 @@ mod acceptance_tests {
         assert_eq!(app.store.chat_snapshot(&sid).await.unwrap(), before);
         server.abort();
     }
+    /// Write a private fixture's naming configuration while preserving the required base prompt field.
     fn write_settings(root: &std::path::Path, settings: &config::Config) {
         std::fs::create_dir_all(root.join("config")).unwrap();
         std::fs::write(root.join("config/prompts.json"), serde_json::to_vec(
             &json!({"session_naming":settings, "base_instructions":"keep"})).unwrap()).unwrap();
     }
+    /// Verify queued settings stay pinned through capped retries while a later job observes new configuration.
     #[tokio::test]
     async fn settings_snapshot_retry_cap_and_next_job_reload() {
         let (root, app) = fixture().await;
@@ -375,6 +421,7 @@ mod acceptance_tests {
         assert_eq!(reopened.get(&format!("session:{sid}")).await.unwrap().unwrap()
             ["auto_naming"]["stage"], "exhausted");
     }
+    /// Verify a configured naming role has its own durable plan and stale claims cannot replace it.
     #[tokio::test]
     async fn configured_role_plan_is_independent_and_claim_fenced() {
         let (root, app) = fixture().await;
@@ -395,6 +442,7 @@ mod acceptance_tests {
         assert_eq!(dispatch(&pinned, &model_selection::FailoverState::default()).unwrap()
             ["selection_plan"]["role"], "standard");
     }
+    /// Verify legacy queued work gains a settings snapshot and an expired final lease cannot publish a late title.
     #[tokio::test]
     async fn expired_final_claim_is_exhausted_and_legacy_job_gets_snapshot() {
         let (_root, app) = fixture().await;
@@ -417,6 +465,7 @@ mod acceptance_tests {
         assert!(!app.store.naming_finish(&sid, claimed["auto_naming"]["claim"].as_str().unwrap(), Some("Late title")).await.unwrap());
     }
 
+    /// Verify a participation generation change withdraws naming authority permanently from the old claim.
     #[tokio::test]
     async fn deactivation_cancels_naming_claim_and_reactivation_cannot_publish_late_title() {
         let (_root,app)=fixture().await;
@@ -441,6 +490,7 @@ mod acceptance_tests {
     }
 
     use crate::runtime_tests::fixture;
+    /// Create a private test session through the real session API with an optional initial title.
     async fn create(app: &App, title: Option<Value>) -> String {
         let mut body = json!({"client_request_id":uuid()});
         if let Some(title) = title {
@@ -454,6 +504,7 @@ mod acceptance_tests {
             .unwrap()
             .to_owned()
     }
+    /// Admit one test message through the real API and verify an idempotent retry does not change session metadata.
     async fn accept(app: &App, sid: &str, text: &str) -> Value {
         let body = json!({"text":text,"client_message_id":uuid()});
         let (_, Json(result)) =
@@ -467,6 +518,7 @@ mod acceptance_tests {
         assert_eq!(before, app.store.session_read_summary(sid).await.unwrap());
         app.run(result["run_id"].as_str().unwrap()).await.unwrap()
     }
+    /// Persist a terminal test run so naming eligibility observes the normal completed-run checkpoint.
     async fn finish(app: &App, run: &mut Value) {
         run["status"] = json!("completed");
         run["turns"] = json!(1);
@@ -479,6 +531,7 @@ mod acceptance_tests {
             .await
             .unwrap();
     }
+    /// Read the persisted session fixture to assert durable naming state rather than local copies.
     async fn saved(app: &App, sid: &str) -> Value {
         app.store
             .get(&format!("session:{sid}"))
@@ -487,6 +540,7 @@ mod acceptance_tests {
             .unwrap()
     }
 
+    /// Verify first-message fallback/title state is atomic and explicit custom names remain protected.
     #[tokio::test]
     async fn defaults_custom_names_and_atomic_first_message() {
         let (_root, app) = fixture().await;
@@ -517,6 +571,7 @@ mod acceptance_tests {
         .await;
         assert!(invalid.is_err());
     }
+    /// Verify single-claim naming, manual-title withdrawal and missing-role fallback without durable chat or activity changes.
     #[tokio::test]
     async fn system_only_queue_claim_manual_fence_and_no_chat_side_effects() {
         let (_root, app) = fixture().await;
@@ -568,6 +623,7 @@ mod acceptance_tests {
         assert_eq!(saved(&app, &sid).await["auto_naming"]["stage"], "skipped");
         assert_eq!(saved(&app, &sid).await["title"], "New: No system");
     }
+    /// Verify stale leases cannot publish and recovered naming outcomes/cooldowns survive reopening storage.
     #[tokio::test]
     async fn lease_recovery_failure_cooldown_and_success_survive_reopen() {
         let (root, app) = fixture().await;
@@ -619,6 +675,7 @@ mod acceptance_tests {
         );
         assert!(reopened.naming_claim(&sid, true).await.unwrap().is_none());
     }
+    /// Capture naming requests to verify pinned prompts, first-message-only input and bounded blank-output retries without chat rows.
     #[tokio::test]
     async fn live_provider_uses_first_user_input_and_retries_blank_without_publishing() {
         let (root, mut app) = fixture().await;
@@ -685,6 +742,7 @@ mod acceptance_tests {
 #[cfg(test)]
 mod attachment_tests {
     use super::*;
+    /// Verify empty messages require attachments and naming uses attachment-derived context with the attachment placeholder.
     #[tokio::test]
     async fn empty_text_requires_attachments_and_uses_attachment_source() {
         let (_root, app) = crate::runtime_tests::fixture().await;
@@ -731,6 +789,7 @@ mod route_tests {
     use axum::body::Body;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+    /// Verify authenticated browser and messaging API routes produce the same durable naming admission state.
     #[tokio::test]
     async fn browser_and_machine_routes_share_the_same_persisted_flow() {
         let (_root, mut app) = crate::runtime_tests::fixture().await;
@@ -786,6 +845,7 @@ mod route_tests {
             );
         }
     }
+    /// Verify pin-only metadata edits retain automatic naming while an explicit title save withdraws it.
     #[tokio::test]
     async fn pin_edits_keep_naming_but_saving_the_same_title_locks_it() {
         let (_root, app) = crate::runtime_tests::fixture().await;
@@ -836,6 +896,7 @@ mod metadata_event_tests {
     use axum::body::Body;
     use futures_util::StreamExt;
     use tower::ServiceExt;
+    /// Verify title metadata events stream without consuming or changing the durable chat cursor.
     #[tokio::test]
     async fn metadata_events_update_names_without_setting_a_chat_cursor() {
         let (_root, app) = crate::runtime_tests::fixture().await;

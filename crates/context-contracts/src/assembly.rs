@@ -75,6 +75,9 @@ pub struct Report {
     pub guidance_content_bytes: usize,
     pub schemas_json_bytes: usize,
     pub history_json_bytes: usize,
+    /// Synthetic projection growth; durable history alone remains compactable.
+    #[serde(default)]
+    pub projection_extra_bytes: usize,
     pub framing_bytes: usize,
     pub history: HistoryReport,
     pub overlays: Vec<Overlay>,

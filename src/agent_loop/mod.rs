@@ -4,8 +4,11 @@ mod run;
 pub(crate) use run::{execute_run, settle_abandoned_interrupt, settle_followup_interrupt};
 pub(super) fn append_tool(run: &mut Value, result: &Value) -> Result<()> {
     workflow::record_tool_result(run, result)?;
+    let previous_tools=run["selected_tools"].clone();
+    let previous_skills=run["loaded_skills"].clone();
     tools::core_tool_search::apply_selection(run,result);
     tools::core_skills::apply_selection(run,result);
+    crate::context_assets::record_tool_operation(run,result,&previous_tools,&previous_skills)?;
     crate::tool_output::record(run,result)?;
     let call_id = run["pending"]["call_id"].clone();
     run["input"]

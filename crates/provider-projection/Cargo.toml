@@ -1,0 +1,9 @@
+[package]
+name="webagent-provider-projection"
+version="0.1.0"
+edition="2021"
+
+[dependencies]
+webagent-provider-contracts={path="../provider-contracts"}
+serde_json="1"
+anyhow="1"

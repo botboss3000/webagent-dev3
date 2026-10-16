@@ -4,13 +4,16 @@ use super::*;
 pub(crate) async fn read(State(app):State<App>)->Api {
  let catalog=crate::engine_components::catalog()?;
  let controls=crate::engine_components::controls(&app.store.root)?;
- let mut affected=0usize;let mut active_runs=0usize;let mut active_tasks=0usize;
+ let mut affected=0usize;let mut per_component=std::collections::BTreeMap::<String,usize>::new();let mut active_runs=0usize;let mut active_tasks=0usize;
  for user in crate::agent_loop::user_apps(&app).await? {
   for task in user.store.background_scan(None).await? {if matches!(task["status"].as_str(),Some("queued"|"running")){active_tasks+=1;}}
   for run in user.store.active_runs().await? {
    if matches!(run["status"].as_str(),Some("queued"|"running"|"waiting_approval"|"waiting_external")){active_runs+=1;}
    if run["status"]=="paused" {let id=run["id"].as_str().unwrap_or("");let full=user.run(id).await?;
-    if matches!(full["component_pause"]["component"].as_str(),Some(crate::engine_components::CONTEXT|crate::engine_components::BACKGROUND)) {affected+=1;}
+    if let Some(component)=full["component_pause"]["component"].as_str().filter(|id|
+     crate::engine_components::working_component(id)||catalog.entries.contains_key(*id)||catalog.withdrawn.contains(*id)) {
+     affected+=1;*per_component.entry(component.to_owned()).or_default()+=1;
+    }
    }
   }
  }
@@ -22,10 +25,17 @@ pub(crate) async fn read(State(app):State<App>)->Api {
    "installed_implementation_version":descriptor.implementation_version,"installed_generation":descriptor.artifact_sha256,
    "mode":if cfg!(feature="live-context"){"live"}else{"linked"},"enabled":!controls.disabled.contains(&descriptor.id),
    "available":crate::engine_components::component_available(&app.store.root,&descriptor.id),"runtime_requirements":descriptor.runtime_requirements,
-   "build_dependencies":descriptor.build.source_inputs}));
+   "build_dependencies":descriptor.build.source_inputs,"affected_work":per_component.get(&descriptor.id).copied().unwrap_or(0)}));
  }
- for id in &catalog.withdrawn {entries.push(json!({"id":id,"group":"withdrawn","mode":if cfg!(feature="live-context"){"live"}else{"linked"},"available":false,"enabled":!controls.disabled.contains(id),"installed":false,"withdrawn":true}));}
- if entries.is_empty(){entries.push(json!({"id":crate::engine_components::CONTEXT,"group":"engine-loop","available":false,"enabled":!controls.disabled.iter().any(|id|id==crate::engine_components::CONTEXT),"installed":false}));}
+ for id in &catalog.withdrawn {entries.push(json!({"id":id,"group":"withdrawn","mode":if cfg!(feature="live-context"){"live"}else{"linked"},"available":false,"enabled":!controls.disabled.contains(id),"installed":false,"withdrawn":true,"affected_work":per_component.get(id).copied().unwrap_or(0)}));}
+ // Keep controls and affected counts visible even after a required package is removed.
+ for id in crate::engine_components::WORKING_COMPONENTS {
+  if !catalog.entries.contains_key(id)&&!catalog.withdrawn.contains(id) {
+   entries.push(json!({"id":id,"group":"engine-loop","available":false,
+    "enabled":!controls.disabled.iter().any(|disabled|disabled==id),"installed":false,
+    "affected_work":per_component.get(id).copied().unwrap_or(0)}));
+  }
+ }
  let adoption=|role:&str|std::fs::read(app.store.root.join("publication").join(format!("engine-{role}.json"))).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok());
  Ok(Json(json!({"namespace":"engine","revision":controls.revision,"catalog_revision":catalog.revision,"components":entries,
  "affected_work":affected,"active_work":{"runs":active_runs,"tasks":active_tasks},"adoption":{"api":adoption("api"),"loop":adoption("loop")}})))
@@ -36,7 +46,7 @@ pub(crate) struct Update {pub expected_revision:u64,pub expected_catalog_revisio
 /// The owning API serializes controls; packages remain exclusively broker-managed.
 pub(crate) async fn update(State(app):State<App>,Path(id):Path<String>,Json(body):Json<Update>)->Api {
  let installed=crate::engine_components::catalog()?;
- if !installed.entries.contains_key(&id)&&!installed.withdrawn.contains(&id)&&id!=crate::engine_components::CONTEXT{return Err(bad("Unknown engine component"));}
+ if !installed.entries.contains_key(&id)&&!installed.withdrawn.contains(&id)&&!crate::engine_components::working_component(&id){return Err(bad("Unknown engine component"));}
  let _guard=app.gate.lock().await;
  let catalog=crate::engine_components::catalog()?;
  let mut current=crate::engine_components::controls(&app.store.root)?;
@@ -53,6 +63,7 @@ pub(crate) async fn update(State(app):State<App>,Path(id):Path<String>,Json(body
 #[cfg(test)]mod tests {
  use super::*;
  #[tokio::test]
+ /// Reject stale control revisions and verify disabling and restoring a registered package.
  async fn disable_fences_stale_saves_and_keeps_removed_package_controls(){
   let (_root,app)=crate::runtime_tests::fixture().await;let before=read(State(app.clone())).await.unwrap().0;
   let body=Update{expected_revision:before["revision"].as_u64().unwrap(),expected_catalog_revision:before["catalog_revision"].as_str().unwrap().into(),enabled:false};
@@ -63,4 +74,30 @@ pub(crate) async fn update(State(app):State<App>,Path(id):Path<String>,Json(body
   let enabled=Update{expected_revision:1,expected_catalog_revision:before["catalog_revision"].as_str().unwrap().into(),enabled:true};
   let restored=update(State(app.clone()),Path(crate::engine_components::CONTEXT.into()),Json(enabled)).await.unwrap().0;assert_eq!(restored["components"].as_array().unwrap().iter().find(|item|item["id"]==crate::engine_components::CONTEXT).unwrap()["available"],true);
  }
+ /// All newly registered modules retain independent controls and paused-work counts.
+ #[tokio::test]
+ async fn new_component_controls_and_counts_are_projected_independently() {
+  let (_root,app)=Box::pin(crate::runtime_tests::fixture()).await;
+  let sid=crate::runtime_tests::conversation(&app).await;let run_id=crate::runtime_tests::queued(&app,&sid).await;
+  let mut run=app.run(&run_id).await.unwrap();
+  for id in [crate::engine_components::ASSETS,crate::engine_components::CAPABILITY,crate::engine_components::PROJECTION] {
+   run["component_pause"]=json!({"component":id,"version":1});
+   crate::engine_components::pause(&app,&mut run).await.unwrap();
+   let before=read(State(app.clone())).await.unwrap().0;
+   assert_eq!(before["affected_work"],1);
+   let entry=before["components"].as_array().unwrap().iter().find(|entry|entry["id"]==id).unwrap();
+   assert_eq!(entry["affected_work"],1);
+   let disabled=update(State(app.clone()),Path(id.into()),Json(Update{expected_revision:before["revision"].as_u64().unwrap(),
+    expected_catalog_revision:before["catalog_revision"].as_str().unwrap().into(),enabled:false})).await.unwrap().0;
+   let entry=disabled["components"].as_array().unwrap().iter().find(|entry|entry["id"]==id).unwrap();
+   assert_eq!(entry["available"],false);assert_eq!(entry["enabled"],false);assert_eq!(entry["affected_work"],1);
+   for other in [crate::engine_components::ASSETS,crate::engine_components::CAPABILITY,crate::engine_components::PROJECTION] {
+    if other!=id {assert_eq!(disabled["components"].as_array().unwrap().iter().find(|entry|entry["id"]==other).unwrap()["enabled"],true);}
+   }
+   let restored=update(State(app.clone()),Path(id.into()),Json(Update{expected_revision:disabled["revision"].as_u64().unwrap(),
+    expected_catalog_revision:disabled["catalog_revision"].as_str().unwrap().into(),enabled:true})).await.unwrap().0;
+   assert_eq!(restored["components"].as_array().unwrap().iter().find(|entry|entry["id"]==id).unwrap()["available"],true);
+  }
+ }
+
 }

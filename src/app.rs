@@ -429,13 +429,13 @@ fn system_model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
 fn system_summary_input(context: &loop_runtime::Context, selection: &provider::ProviderSelection,
     prompt: String, max_bytes: usize) -> Result<Vec<Value>> {
     let input=vec![json!({"role":"user","content":prompt})];
-    validate_system_summary_input(context,selection,&input,max_bytes)?;
+    validate_system_summary_input(context,selection,&input,provider::DEFAULT_INSTRUCTIONS,max_bytes)?;
     Ok(input)
 }
-fn validate_system_summary_input(context:&loop_runtime::Context,selection:&provider::ProviderSelection,input:&[Value],max_bytes:usize)->Result<()> {
+fn validate_system_summary_input(context:&loop_runtime::Context,selection:&provider::ProviderSelection,input:&[Value],instructions:&str,max_bytes:usize)->Result<()> {
     #[derive(serde::Serialize)]
     struct Envelope<'a>{instructions:&'a str,tools:[Value;0],input:&'a [Value]}
-    let envelope=Envelope{instructions:provider::DEFAULT_INSTRUCTIONS,tools:[],input};
+    let envelope=Envelope{instructions,tools:[],input};
     if context_accounting::json_size(&envelope)?>context.ceiling(selection)?.min(max_bytes){
         return Err(context_assembly::Failure::new("system_summary_input_unavailable","summary_input").into());
     }
@@ -512,7 +512,7 @@ mod system_budget_tests {
     }
 }
 fn policy_default() -> Value {
-    let mut policy=json!({"version":1,"rules":{"list_abilities":"allow","load_ability":"allow","list_skills":"allow","load_skill":"allow","get_time":"allow","get_date":"allow","calculate":"allow","read_attachment":"allow","search_this_session":"allow","read_own_prompt":"allow","web_search":"allow","get_weather":"allow","maps_geocode":"allow","file_list":"allow","file_read":"allow","file_search":"allow","state_inspect":"allow","prompt_slot_read":"allow","prompt_slot_write":"require_approval","file_write":"require_approval","file_edit":"require_approval","workspace_seed":"require_approval","source_review":"allow","source_patch":"require_approval","promotion_propose":"allow","shell":"require_approval","python":"require_approval"}});
+    let mut policy=json!({"version":1,"rules":{"list_abilities":"allow","load_ability":"allow","list_skills":"allow","load_skill":"allow","context_assets":"allow","get_time":"allow","get_date":"allow","calculate":"allow","read_attachment":"allow","search_this_session":"allow","read_own_prompt":"allow","web_search":"allow","get_weather":"allow","maps_geocode":"allow","file_list":"allow","file_read":"allow","file_search":"allow","state_inspect":"allow","prompt_slot_read":"allow","prompt_slot_write":"require_approval","file_write":"require_approval","file_edit":"require_approval","workspace_seed":"require_approval","source_review":"allow","source_patch":"require_approval","promotion_propose":"allow","shell":"require_approval","python":"require_approval"}});
     for name in ["task_status","task_wait","task_cancel"] {policy["rules"][name]=json!("allow");}
     for schema in tools::administrator::schemas() {
         let name=schema["name"].as_str().unwrap();

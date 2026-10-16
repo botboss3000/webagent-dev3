@@ -215,6 +215,8 @@ async fn call_raw_inner(
         tools::core_recall::execute(&app,&sid,&run_id,&name,&args,cancel).await
     } else if tools::core_prompt::owns(&name) {
         tools::core_prompt::execute(&app,&sid,&run_id,&name,&args,cancel).await
+    } else if tools::core_context_assets::owns(&name) {
+        tools::core_context_assets::execute(&app,&sid,&run_id,&name,&args,cancel).await
     } else if tools::core_skills::owns(&name) {
         // Skill reads recheck current caller, agent and bundle validity; no activation.
         tools::core_skills::execute(&app,&sid,&run_id,&name,&args,cancel).await

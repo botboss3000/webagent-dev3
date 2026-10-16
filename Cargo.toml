@@ -4,16 +4,22 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service"]
-default-members = [".", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service"]
+members = ["crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service"]
+default-members = [".", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service"]
 resolver = "2"
 
 [features]
 default = ["linked-context"]
-linked-context = ["dep:webagent-context-assembly", "dep:webagent-background-dispatch", "dep:webagent-boot-supervisor"]
+linked-context = ["dep:webagent-context-assembly", "dep:webagent-background-dispatch", "dep:webagent-boot-supervisor", "dep:webagent-context-assets", "dep:webagent-capability-context", "dep:webagent-provider-projection"]
 live-context = []
 
 [dependencies]
+webagent-assets-contracts={path="crates/assets-contracts"}
+webagent-capability-contracts={path="crates/capability-contracts"}
+webagent-provider-contracts={path="crates/provider-contracts"}
+webagent-context-assets={path="crates/context-assets",optional=true}
+webagent-capability-context={path="crates/capability-context",optional=true}
+webagent-provider-projection={path="crates/provider-projection",optional=true}
 webagent-boot-contracts={path="crates/boot-contracts"}
 webagent-boot-supervisor={path="crates/boot-supervisor",optional=true}
 webagent-background-contracts={path="crates/background-contracts"}
@@ -47,6 +53,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
 
 [dev-dependencies]
+webagent-context-assets={path="crates/context-assets"}
+webagent-capability-context={path="crates/capability-context"}
+webagent-provider-projection={path="crates/provider-projection"}
 webagent-background-dispatch={path="crates/background-dispatch"}
 webagent-context-assembly = {path="crates/context-assembly"}
 http-body-util = "0.1"

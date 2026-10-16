@@ -136,12 +136,22 @@ fn record_interrupted_tool(run: &mut Value, name: &str) -> Result<Option<Value>>
 
 // Recheck all context authority after credential retrieval, under the dispatch gate.
 async fn dispatch_asset_key(app:&App,sid:&str,agent_id:&str,loaded:&Value,selected:&Value,skills:&Value,optimization:&Value,requester:&str)->Result<String> {
-    let access=crate::shared_chat::live_access(&app.store,requester,sid,agent_id).await?;
-    let (policy,_,visibility,state)=ability_controls(app,sid).await?;
-    let mode=session_mode(app,sid).await?;
-    let own=app.store.for_user(requester).await?.list_own_skills().await?;
-    Ok(digest(&json!([app.abilities.live_version(),own["revision"],policy,visibility,state,loaded,selected,skills,
-        mode,access.context_fingerprint(),optimization])))
+ crate::context_assets::fingerprint(app,sid,agent_id,loaded,selected,skills,optimization,requester).await
+}
+/// Invalid host input pauses for review; unavailable pure services retain accepted work.
+async fn pause_context_preparation(app:&App,run:&mut Value)->Result<()> {
+ if let Some(object)=run.as_object_mut(){object.remove("_context_assets_write");object.remove("_context_assets_operation");}
+ if !crate::engine_components::available(&app.store.root){return crate::engine_components::pause(app,run).await;}
+ run["status"]=json!("paused");run["component_pause"]=Value::Null;
+ run["error"]=json!("Current context sources or projection are invalid; review before resuming");
+ app.save(run).await
+}
+/// Bound freshness reconstruction independently of normal model/tool turn limits.
+async fn rebuild_context(app:&App,run:&mut Value)->Result<bool> {
+ let count=run["context_rebuilds"].as_u64().unwrap_or(0)+1;
+ run["context_rebuilds"]=json!(count);
+ if count>=3 {run["status"]=json!("paused");run["error"]=json!("Context changed repeatedly before dispatch; review and resume");}
+ app.save(run).await?;Ok(count<3)
 }
 // Process shutdown is not an intentional run stop. Keep the claimed checkpoint
 // recoverable; startup owns access checks, safe-read retry and uncertain writes.
@@ -298,10 +308,6 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
     if !access.can_write(){anyhow::bail!("Observer cannot execute an agent run");}
     app.chat_actor=Some(requester);app.chat_access=Some(access);
     let mut context_accounting = context_accounting::ContextAccounting::default();
-    // CONTEXT-ASSET-CACHE: one entry per executing run, never shared across callers.
-    // Fresh live access and all shaping controls below invalidate this derived data;
-    // actual tool execution still performs its own live authorization checks.
-    let mut context_assets: Option<(String, Vec<Value>, String, Vec<abilities::AbilityInclusion>)> = None;
     loop {
         let _guard = app.gate.lock().await;
         let mut run = app.run(&id).await?;
@@ -309,6 +315,10 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             return Ok(());
         }
         if !app.store.participation_allows_run(&run).await? {return Ok(());}
+        match crate::context_assets::catalog(&app) {
+            Ok(catalog)=>app.abilities=Arc::new(catalog),
+            Err(_)=>{pause_context_preparation(&app,&mut run).await?;return Ok(());}
+        }
         if settle_followup_interrupt(&app, &mut run).await? { return Ok(()); }
         if cancel.is_cancelled() {
             preserve_restart_interruption(&app, &mut run).await?;
@@ -319,7 +329,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
         if run["phase"]=="model" {
             if crate::followup_queue::apply_steering(&app, &mut run).await? {
                 context_accounting.reset();
-                context_assets = None;
+
             }
             match apply_chat_model_preference(&app,&mut run).await {
                 Ok(true)=>{context_accounting.reset();app.save(&mut run).await?;}
@@ -360,7 +370,12 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
         }
         let access=access.unwrap();
         let mut app=app.clone();
-        app.abilities=crate::live_assets::catalog(&app.abilities);
+        // Reload validated declarations and bodies each loop, including local linked builds.
+        // A rejected source pauses accepted work; it cannot reuse an earlier catalog grant.
+        app.abilities=match crate::context_assets::catalog(&app) {
+            Ok(catalog)=>Arc::new(catalog),
+            Err(_)=>{pause_context_preparation(&app,&mut run).await?;return Ok(());}
+        };
         app.store=match app.store.for_agent(&agent_id).await {
             Ok(store)=>store,
             Err(_)=>{
@@ -492,10 +507,17 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                     run["agent_id"].as_str().unwrap_or("shared_default")).await?);
                 app.save(&mut run).await?;
             }
-            let source=app.abilities.source_root();
-            let instructions = provider::Provider::instructions_for_snapshot(
-                run["instructions"].as_str().unwrap_or(provider::DEFAULT_INSTRUCTIONS),&app.store.root,source,
-            )?;
+            if !crate::engine_components::available(&app.store.root) {
+                crate::engine_components::pause(&app,&mut run).await?;return Ok(());
+            }
+            if crate::context_assets::hydrate(&app,&mut run).await.is_err() {
+                pause_context_preparation(&app,&mut run).await?;return Ok(());
+            }
+            let prepared_source_fence=match crate::context_assets::source_fence(&app) {
+                Ok(value)=>value,Err(_)=>{if rebuild_context(&app,&mut run).await? {continue;}return Ok(());}
+            };
+            let prepared_asset_key=dispatch_asset_key(&app,&sid,&agent_id,&run["loaded_abilities"],&run["selected_tools"],&run["loaded_skills"],&run["optimization_request"],
+                run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id())).await?;
             if run["turns"].as_u64().unwrap() >= if run["post_run_followup"]==true {workflow_policy.max_turns.min(3)} else {workflow_policy.max_turns} || run["attempt"].as_u64().unwrap() >= workflow_policy.max_attempts {
                 run["status"] = json!(if run["post_run_followup"]==true {"failed"} else {"paused"});
                 run["error"] = json!(if run["post_run_followup"]==true {"Read-only follow-up budget exhausted"} else {"Run limit reached; explicit continuation required"});
@@ -503,6 +525,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                 return Ok(());
             }
             let (policy, _, visibility, ability_state) = ability_controls(&app, &sid).await?;
+            let ability_state=app.abilities.selected_state(&visibility,&ability_state,&run["loaded_abilities"]);
             let mode = session_mode(&app, &sid).await?;
             let authorization_mode=if run["post_run_followup"]==true {
                 json!({"mode":"read_only","execution_mode":"ask","revision":mode["revision"]})
@@ -511,84 +534,45 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             // CONTEXT-ASSET-KEY: include full freshly resolved access (including
             // grants), live bundle validity, policy, visibility, loaded state and session mode.
             // Hash only in memory; never publish private grant data in reports.
-            let requester=run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id());
-            let own_skills=app.store.for_user(requester).await?.list_own_skills().await?;
             run["asset_revision"]=if app.abilities.published() {
                 app.abilities.source_root().and_then(|p|p.parent()).and_then(|p|p.file_name()).and_then(|s|s.to_str()).map(|s|json!(s)).unwrap_or(Value::Null)
             }else{Value::Null};
             run["plugin_bindings"]=json!(app.abilities.all_schemas().iter().filter_map(|s|s["name"].as_str().and_then(|name|app.abilities.plugin_binding(name).map(|binding|(name.to_owned(),binding)))).collect::<std::collections::BTreeMap<_,_>>());
-            let asset_key = digest(&json!([app.abilities.live_version(), own_skills["revision"], policy, visibility,
-                ability_state, run["loaded_abilities"], run["selected_tools"], run["loaded_skills"], mode, access.context_fingerprint(), run["optimization_request"]]));
-            if context_assets.as_ref().map(|entry| &entry.0) != Some(&asset_key) {
-                let schemas = app.abilities.schemas_with(&policy, &run["loaded_abilities"], &visibility, &ability_state)
-                    .into_iter().filter(|schema| {
-                        let name=schema["name"].as_str().unwrap_or("");
-                        if run["post_run_followup"]==true && !crate::tool_execution::background_capable(name) {return false;}
-                        if abilities::is_discovery(name) {
-                            let installation=access::Permission::from_policy(policy_decision(&policy,name))
-                                .unwrap_or(access::Permission::Deny);
-                            access.tool_decision(name,installation,true,true,read_only,true)
-                                .permission!=access::Permission::Deny
-                        } else {
-                            live_tool_decision(&app,&access,name,&policy,&visibility,
-                                &ability_state,&run["loaded_abilities"],read_only)
-                                .permission!=access::Permission::Deny
-                        }
-                    }).collect::<Vec<_>>();
-                // Build the model menu from the same filtered catalog and schemas
-                // used for this caller; the menu never grants execution.
-                let mut entries=app.abilities.catalog_with(&policy,&visibility,&ability_state);
-                entries.retain_mut(|entry|filter_ability_entry(&app,&access,entry,
-                    &policy,&visibility,&ability_state,&run["loaded_abilities"],read_only));
-                // Search adds tool markers; live visibility and loaded abilities
-                // continue to expose their authorized schemas and guidance.
-                let index=abilities::Catalog::model_index(&entries,&schemas);
-                let permitted_tools=entries.iter().flat_map(|entry|entry["tools"].as_array().into_iter().flatten())
-                    .filter_map(|tool|tool["name"].as_str()).collect::<std::collections::HashSet<_>>();
-                let visible=app.abilities.visible_guidance_authorized(&policy,&visibility,
-                    &ability_state,
-                    |id|access.ability_permission(id)!=access::Permission::Deny,
-                    |name|permitted_tools.contains(name),
-                    |name|live_tool_decision(&app,&access,name,&policy,&visibility,
-                        &ability_state,&run["loaded_abilities"],read_only)
-                        .permission!=access::Permission::Deny);
-                let extra=tools::core_tool_search::additional_guidance(&app,&schemas,&visibility,&run["loaded_abilities"],&visible);
-                let (loaded_guidance,included_skills)=tools::core_skills::context_guidance(&app,&sid,&id,read_only).await?;
-                let visible=format!("{visible}{extra}{loaded_guidance}");
-                let names=schemas.iter().filter_map(|schema|schema["name"].as_str().map(str::to_owned)).collect::<Vec<_>>();
-                let execution=crate::tool_execution::guidance(&visibility,&names)?;
-                let optimization = crate::optimization_prompt::guidance(&run);
-                let guidance=format!("{index}{visible}\n{execution}\n{optimization}");
-                let mut inclusion = app.abilities.context_inclusion(&entries,&schemas,&visibility,&ability_state,&run["loaded_abilities"],&json!([]));
-                if let Some(base)=inclusion.iter_mut().find(|entry|entry.id=="base") {
-                    for skill in own_skills["skills"].as_array().into_iter().flatten() {
-                        let Some(body)=skill["instructions"].as_str() else {continue;};
-                        let included=included_skills.iter().any(|item|item["ability_id"]=="base"
-                            && item["kind"]=="own" && item["skill_id"]==skill["name"]);
-                        let bytes=if included {body.len()} else {0};
-                        base.guidance_bytes+=bytes;
-                        base.skills.push(abilities::SkillInclusion {kind:"own".into(),
-                            id:skill["name"].as_str().unwrap_or("").into(),mode:"discoverable".into(),included,
-                            content_bytes:bytes,reason:if included {"included"} else {"discoverable"}.into()});
+            let assembled_asset_key=prepared_asset_key;
+            let schemas = app.abilities.schemas_with(&policy, &run["loaded_abilities"], &visibility, &ability_state)
+                .into_iter().filter(|schema| {
+                    let name=schema["name"].as_str().unwrap_or("");
+                    if run["post_run_followup"]==true && !crate::tool_execution::background_capable(name) {return false;}
+                    if abilities::is_discovery(name) {
+                        let installation=access::Permission::from_policy(policy_decision(&policy,name))
+                            .unwrap_or(access::Permission::Deny);
+                        access.tool_decision(name,installation,true,true,read_only,true)
+                            .permission!=access::Permission::Deny
+                    } else {
+                        live_tool_decision(&app,&access,name,&policy,&visibility,
+                            &ability_state,&run["loaded_abilities"],read_only)
+                            .permission!=access::Permission::Deny
                     }
-                }
-                for asset in &included_skills {
-                    if asset["kind"]=="own" {continue;}
-                    if let Some(entry)=inclusion.iter_mut().find(|entry|asset["ability_id"]==entry.id) {
-                        if let Some(skill)=entry.skills.iter_mut().find(|skill|asset["kind"]==skill.kind&&asset["skill_id"]==skill.id) {
-                            if !skill.included {
-                                skill.included=true;skill.reason="included".into();
-                                skill.content_bytes=asset["bytes"].as_u64().unwrap_or(0) as usize;
-                                entry.guidance_bytes+=skill.content_bytes;
-                            }
-                        }
-                    }
-                }
-                context_assets = Some((asset_key, schemas, guidance, inclusion));
+                }).collect::<Vec<_>>();
+            let mut entries=app.abilities.catalog_with(&policy,&visibility,&ability_state);
+            entries.retain_mut(|entry|filter_ability_entry(&app,&access,entry,&policy,&visibility,&ability_state,&run["loaded_abilities"],read_only));
+            let mut guidance_blocks=app.abilities.capability_guidance(&entries,&schemas,&visibility,&ability_state,&run["loaded_abilities"],&run["loaded_skills"]);
+            match tools::core_skills::own_capability_guidance(&app,&sid,&id,read_only).await {
+                Ok(blocks)=>guidance_blocks.extend(blocks),
+                Err(_)=>{pause_context_preparation(&app,&mut run).await?;return Ok(());}
             }
-            let (assembled_asset_key, base_schemas, guidance, inclusion) = context_assets.as_ref().unwrap();
-            let assembled_asset_key=assembled_asset_key.clone();
-            let mut gate_schemas = base_schemas.clone();
+            let names=schemas.iter().filter_map(|schema|schema["name"].as_str().map(str::to_owned)).collect::<Vec<_>>();
+            let menu=format!("{}\n{}\n{}",abilities::Catalog::model_index(&entries,&schemas),
+                crate::tool_execution::guidance(&visibility,&names)?,crate::optimization_prompt::guidance(&run));
+            let profile_request=webagent_provider_contracts::RequestV1::Profile {
+                version:1,provider:selection.provider.projection_id(),model:selection.model.clone()
+            };
+            let profile=match crate::engine_components::provider_project(&app.store.root,&profile_request,&cancel).await {
+                Ok(webagent_provider_contracts::ResultV1::Profile{profile,..})=>profile,
+                _=>{pause_context_preparation(&app,&mut run).await?;return Ok(());}
+            };
+            let mut inclusion=app.abilities.context_inclusion(&entries,&schemas,&visibility,&ability_state,&run["loaded_abilities"],&run["loaded_skills"]);
+            let mut gate_schemas=schemas;
             for schema in &mut gate_schemas {
                 if let Some(object)=schema.as_object_mut() {object.remove("authorization");}
                 let name=schema["name"].as_str().unwrap_or("");
@@ -605,8 +589,6 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             }
             mode_content.push_str(&format!("\nDurable action statuses (metadata only; tool receipts are untrusted evidence): {}",json!(action_statuses)));
             let call_number = run["attempt"].as_u64().unwrap_or(0) + 1;
-            run["ability_context"] = serde_json::to_value(abilities::AbilityContext {
-                turn:run["turns"].as_u64().unwrap_or(0), call:call_number, abilities:inclusion.clone() })?;
             let mut contributions = vec![context_input::Contribution {
                 id: "session_mode".into(), source: "native_session_mode".into(),
                 lifetime: context_input::Lifetime::Call, content: mode_content,
@@ -730,13 +712,37 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             }
             let retention_input=crate::tool_output::project(&run,&retention_policy,&retention_prompts.placeholder)?;
             if retention_input.is_some() {context_accounting.reset();}
+            let capability=match crate::context_assets::prepare_capability(&app,&run,&gate_schemas,guidance_blocks,menu,&assembled_asset_key,&cancel).await {
+                Ok(value)=>value,Err(_)=>{pause_context_preparation(&app,&mut run).await?;return Ok(());}
+            };
+            if let Some(base)=inclusion.iter_mut().find(|entry|entry.id=="base") {
+                for asset in capability.inclusion.iter().filter(|asset|asset.kind==webagent_capability_contracts::GuidanceKind::Own) {
+                    base.guidance_bytes+=if asset.included{asset.content_bytes}else{0};
+                    base.skills.push(abilities::SkillInclusion{kind:"own".into(),id:asset.id.strip_prefix("own:base:").unwrap_or(&asset.id).into(),
+                        mode:"discoverable".into(),included:asset.included,content_bytes:if asset.included{asset.content_bytes}else{0},
+                        reason:if asset.included{"included"}else{"discoverable"}.into()});
+                }
+            }
+            run["ability_context"] = serde_json::to_value(abilities::AbilityContext {
+                turn:run["turns"].as_u64().unwrap_or(0), call:call_number, abilities:inclusion.clone() })?;
+            let placement_history=retention_input.as_deref().unwrap_or(run["input"].as_array().unwrap()).to_vec();
+            let placement_identity=context_input::CallIdentity{turn:run["turns"].as_u64().unwrap_or(0),call:call_number};
+            let projection=match crate::context_assets::project(&app,&mut run,&capability,&profile,&gate_schemas,
+                &placement_history,&contributions,placement_identity,&cancel).await {
+                Ok(value)=>value,Err(_)=>{pause_context_preparation(&app,&mut run).await?;return Ok(());}
+            };
+            let crate::context_assets::Working{instructions,guidance,input:projected_input,schemas:ordered_schemas,
+                extra_json_bytes,contributions_projected}=projection;
+            gate_schemas=ordered_schemas;
+            context_accounting.projection_extra_bytes=extra_json_bytes;
+            context_accounting.contributions_projected=contributions_projected;
             // MODEL-CONTEXT-CEILING: runtime profiles bound the entire envelope;
             // compaction JSON still owns folding policy and summary reserves.
             let model_ceiling = loop_runtime::Config::read(&app.runtime_path)?
                 .context.ceiling(&selection)?.min(workflow_policy.max_context_bytes);
             let assembly_request = context_input::Request {
                 history: retention_input.as_deref().unwrap_or(run["input"].as_array().unwrap()), base: &instructions,
-                guidance, schemas: &gate_schemas, contributions: &contributions,
+                guidance:&guidance, schemas: &gate_schemas, contributions: &contributions,
                 identity: context_input::CallIdentity {
                     turn: run["turns"].as_u64().unwrap_or(0),
                     call: run["attempt"].as_u64().unwrap_or(0) + 1,
@@ -811,8 +817,9 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                 // Validate the exact summary envelope against System, including on a backup retry.
                 let summary_context=loop_runtime::Config::read(&app.runtime_path)?.context;
                 let summary_input=vec![json!({"role":"user","content":prompt})];
-                let validation=validate_system_summary_input(&summary_context,&selection,&summary_input,workflow_policy.max_context_bytes);
-                let summary_request=context_input::Request{history:&summary_input,base:provider::DEFAULT_INSTRUCTIONS,guidance:"",schemas:&[],contributions:&[],
+                let system_instructions=provider::Provider::instructions_for_snapshot(provider::DEFAULT_INSTRUCTIONS,&app.store.root,app.abilities.source_root())?;
+                let validation=validate_system_summary_input(&summary_context,&selection,&summary_input,&system_instructions,workflow_policy.max_context_bytes);
+                let summary_request=context_input::Request{history:&summary_input,base:&system_instructions,guidance:"",schemas:&[],contributions:&[],
                     identity:context_input::CallIdentity{turn:run["turns"].as_u64().unwrap_or(0),call:run["attempt"].as_u64().unwrap_or(0)+1},
                     selection:&selection,max_bytes:summary_context.ceiling(&selection)?.min(workflow_policy.max_context_bytes),compaction:&compaction_config};
                 if let Some(report)=diagnostics::summary(&app.store,&run,&summary_request,&validation){run["latest_context_assembly"]=report;app.save(&mut run).await?;}
@@ -822,6 +829,10 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                 }
                 run["engine_component_prepared"]=json!({"version":1,"component":crate::engine_components::CONTEXT,"kind":"compaction","call":call_number});
                 app.save(&mut run).await?;
+                let prepared_system=match crate::provider::CallDraft::new(&selection,summary_input,Vec::new(),&sid,&system_instructions)
+                    .prepare(&app.store.root,&cancel).await {
+                    Ok(value)=>value,Err(_)=>{pause_context_preparation(&app,&mut run).await?;return Ok(());}
+                };
                 drop(_guard);
                 let tokens = match app.tokens_for(&selection, &system_run).await {
                     Ok(value) => value,
@@ -873,29 +884,20 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             }
             if !dispatch_asset_key(&app,&sid,&agent_id,&current["loaded_abilities"],&current["selected_tools"],&current["loaded_skills"],&current["optimization_request"],current["requester_user_id"].as_str().unwrap_or(app.store.current_user_id())).await
                     .is_ok_and(|key|key==assembled_asset_key) {
-                    current["status"]=json!("stopped");
-                    current["error"]=json!("Ability access or bundle changed before model dispatch; review and resume");
-                    app.save(&mut current).await?;
-                    drop(sender);
-                    drop(dispatch_guard);
-                    let _=drain.await;
-                    return Ok(());
+                    let retry=rebuild_context(&app,&mut current).await?;
+                    drop(sender);drop(dispatch_guard);let _=drain.await;
+                    if retry {continue;}return Ok(());
                 }
                 app.run_candidate(&system_dispatch_run(&current)?).await?;
+                if !crate::context_assets::source_fence(&app).is_ok_and(|key|key==prepared_source_fence) {
+                    let retry=rebuild_context(&app,&mut current).await?;
+                    drop(sender);drop(dispatch_guard);let _=drain.await;
+                    if retry {continue;}return Ok(());
+                }
             let mut completion = Box::pin(async {
-                    let default_instructions = crate::provider::Provider::configured_base_instructions();
-                    let selection = &selection;
-                    let tokens = &tokens;
-                    let cancel = cancel.clone();
-                    let ready = crate::provider::CallDraft::new(
-                        selection,
-                        summary_input,
-                        Vec::new(),
-                        &sid,
-                        &default_instructions,
-                    )
-                    .validate()?
-                    .bind_credentials(tokens, &cancel)?;
+                    let tokens=&tokens;
+                    let cancel=cancel.clone();
+                    let ready=prepared_system.bind_credentials(tokens,&cancel)?;
                     app.provider.dispatch(ready, sender, cancel).await
                 });
                 let mut immediate = None;
@@ -996,7 +998,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             // DISPATCH-HISTORY-TRANSFER: fingerprint the borrowed history before
             // metadata mutation, then transfer its allocation only after saves.
             // Durable input remains intact; this local run is reloaded after dispatch.
-            let input_digest = digest(envelope.input);
+            let input_digest = digest(&projected_input);
             let schemas = envelope.schemas.to_vec();
             if let Some(report)=assembly_diagnostic {run["latest_context_assembly"]=report;}
             run["attempt"] = json!(run["attempt"].as_u64().unwrap() + 1);
@@ -1012,6 +1014,10 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             workflow::record(&mut run, &workflow_policy,
                 &workflow::Input::ContextAssembly(snapshot.clone()), workflow::Decision::Pass)?;
             app.save(&mut run).await?;
+            let prepared_provider=match crate::provider::CallDraft::new(&selection,projected_input,schemas,&sid,&instructions)
+                .prepare(&app.store.root,&cancel).await {
+                Ok(value)=>value,Err(_)=>{pause_context_preparation(&app,&mut run).await?;return Ok(());}
+            };
             drop(_guard);
             let tokens = match app.tokens_for(&selection, &run).await {
                 Ok(v) => v,
@@ -1029,10 +1035,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             };
             // DISPATCH-HISTORY-TRANSFER: no save may use this consumed local run.
             // Ownership/generation checks below load their own authoritative run.
-            let input = match retention_input.map(Value::Array).unwrap_or_else(||std::mem::take(&mut run["input"])) {
-                Value::Array(items) => items,
-                _ => return Err(anyhow!("Dispatch history must be an array")),
-            };
+
             let (sender, mut receiver) = tokio::sync::mpsc::channel::<String>(32);
             // Provider fragments remain private; only a final chat row is streamed.
             let collector = tokio::spawn(async move { while receiver.recv().await.is_some() {} });
@@ -1072,13 +1075,9 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             }
             if !dispatch_asset_key(&app,&sid,&agent_id,&current["loaded_abilities"],&current["selected_tools"],&current["loaded_skills"],&current["optimization_request"],current["requester_user_id"].as_str().unwrap_or(app.store.current_user_id())).await
                 .is_ok_and(|key|key==assembled_asset_key) {
-                current["status"]=json!("stopped");
-                current["error"]=json!("Ability access or bundle changed before model dispatch; review and resume");
-                app.save(&mut current).await?;
-                drop(sender);
-                drop(dispatch_guard);
-                let _=collector.await;
-                return Ok(());
+                let retry=rebuild_context(&app,&mut current).await?;
+                drop(sender);drop(dispatch_guard);let _=collector.await;
+                if retry {continue;}return Ok(());
             }
             app.run_candidate(&current).await?;
             if current_workflow_policy(&app).await?.revision()? != workflow_policy.revision()? {
@@ -1098,18 +1097,20 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             // later settings edit changes the next call, not this response.
             current["promotion_mode"]=json!(promotion_mode);
             app.save(&mut current).await?;
+            if !crate::context_assets::source_fence(&app).is_ok_and(|key|key==prepared_source_fence) {
+                let retry=rebuild_context(&app,&mut current).await?;
+                drop(sender);drop(dispatch_guard);let _=collector.await;
+                if retry {continue;}return Ok(());
+            }
             // DISPATCH-RELEASE-SNAPSHOTS: fencing is committed; do not retain its
             // reconstructed history or consumed local metadata during network waits.
             // Response handling below reloads authoritative state under the gate.
             drop(current);
             drop(run);
             let mut completion = Box::pin(async {
-                let selection = &selection;
                 let tokens = &tokens;
                 let cancel = cancel.clone();
-                let ready = crate::provider::CallDraft::new(selection, input, schemas, &sid, &instructions)
-                    .validate()?
-                    .bind_credentials(tokens, &cancel)?;
+                let ready=prepared_provider.bind_credentials(tokens,&cancel)?;
                 app.provider.dispatch(ready, sender, cancel).await
             });
             let mut immediate = None;
@@ -1152,6 +1153,9 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                 app.save(&mut run).await?;
                 return Ok(());
             }
+            // Reset the bounded freshness retries only after the provider was polled.
+            // A change detected by the final source fence must retain its prior count.
+            run["context_rebuilds"]=json!(0);
             match response {
                 Err(error) => {
                     if cancel.is_cancelled() {
@@ -1328,7 +1332,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                         if crate::followup_queue::apply_steering(&app, &mut run).await? {
                             run["phase"] = json!("model");
                             app.save(&mut run).await?;
-                            context_accounting.reset(); context_assets = None;
+                            context_accounting.reset();
                             continue;
                         }
                         match publication::terminal(&app.store, &mut run, output, &text, &publication_policy).await {
@@ -1576,25 +1580,6 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                             loaded.retain(|item|item!=&args["ability_id"]);
                         }
                         result=json!({"status":"denied","output":"Ability unavailable under current access"});
-                    }
-                }
-                if name == "load_ability" && result["status"] == "ok" {
-                    let ability_id = args["ability_id"].as_str().unwrap();
-                    if !ability_state["active"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|v| v.as_str() == Some(ability_id))
-                    {
-                        ability_state["active"]
-                            .as_array_mut()
-                            .unwrap()
-                            .push(json!(ability_id));
-                        ability_state["revision"] =
-                            json!(ability_state["revision"].as_u64().unwrap() + 1);
-                        app.store
-                            .put(&key("session_ability_state", &sid), &ability_state)
-                            .await?;
                     }
                 }
                 append_tool(&mut run, &result)?;

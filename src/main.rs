@@ -50,6 +50,7 @@ mod attachments;
 #[path = "context/memory.rs"] mod memory;
 #[path = "context/assembly.rs"] mod context_assembly;
 #[path = "context/input.rs"] mod context_input;
+#[path = "context/assets.rs"] mod context_assets;
 #[path = "context/tool_output.rs"] mod tool_output;
 #[path = "context/retained_recall.rs"] mod retained_recall;
 mod workflow;

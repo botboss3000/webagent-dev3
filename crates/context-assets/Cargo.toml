@@ -1,0 +1,9 @@
+[package]
+name="webagent-context-assets"
+version="0.1.0"
+edition="2021"
+
+[dependencies]
+webagent-assets-contracts={path="../assets-contracts"}
+anyhow="1"
+serde_json="1"

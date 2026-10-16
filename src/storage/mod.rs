@@ -21,6 +21,7 @@ mod shared_read;
 mod requester_quota;
 mod actions;
 mod module_records;
+pub(crate) mod context_assets;
 
 use crate::access;
 use crate::cache::{Cache, ContextCache};
@@ -59,10 +60,12 @@ fn recovery_digest(bytes: &[u8]) -> String {
 fn recovery_item_digest(item: &Value) -> Result<String> {
     struct HashWriter(Sha256);
     impl std::io::Write for HashWriter {
+        /// Stream canonical JSON bytes into the recovery digest without retaining a history-sized buffer.
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             self.0.update(bytes);
             Ok(bytes.len())
         }
+        /// Finish the Write contract; this digest writer has no buffered bytes to flush.
         fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
     }
     let mut writer = HashWriter(Sha256::new());
@@ -87,6 +90,7 @@ fn recovery_manifest(reference: &Value, count: usize) -> Result<Option<Vec<(Stri
     }
 }
 
+/// Project retrieval diagnostics onto fixed content-free status and stage enums.
 fn bounded_code_index_run_fields(run: &Value) -> Value {
     let attempted = run["code_index_retrieval_attempted"] == true;
     let status = if !attempted {
@@ -149,6 +153,7 @@ struct UserState {
     context_gate: Arc<RwLock<()>>,
 }
 impl UserState {
+    /// Keep one user pool and its cache invalidation gate shared across Store clones.
     fn new(pool: SqlitePool) -> Self {
         Self {pool, cache:Arc::new(Mutex::new(Cache::new(64*1024*1024))),
             context_cache:Arc::new(Mutex::new(ContextCache::new(16*1024*1024))),
@@ -156,6 +161,7 @@ impl UserState {
     }
 }
 
+/// Publish one complete private encryption key atomically; never replace a missing key for existing databases.
 fn load_or_create_key(root: &Path) -> Result<Vec<u8>> {
     let keypath = root.join("encryption.key");
     let key = match std::fs::read(&keypath) {
@@ -212,6 +218,7 @@ fn load_or_create_key(root: &Path) -> Result<Vec<u8>> {
     Ok(key)
 }
 
+/// Open a durable WAL authority with bounded connections, profile permissions and the tables its owner needs.
 pub(crate) async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePool> {
     let parent = path
         .parent()
@@ -313,6 +320,7 @@ pub(crate) fn read_app_settings(root: &Path) -> Result<Value> {
     }
 }
 
+/// Validate the optional administrator encryption switch; absence keeps encryption enabled.
 pub(crate) fn admin_encryption_enabled(settings: &Value) -> Result<bool> {
     match settings.get("admin_database_encryption") {
         None => Ok(true),
@@ -322,6 +330,7 @@ pub(crate) fn admin_encryption_enabled(settings: &Value) -> Result<bool> {
 }
 
 impl Store {
+    /// Initialize the three storage authorities, migrations and shared per-owner handles under one encryption key.
     pub async fn open(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root)?;
         admin_encryption_enabled(&read_app_settings(root)?)?;
@@ -368,6 +377,7 @@ impl Store {
         store.ensure_default_agent_directory().await?;
         Ok(store)
     }
+    /// Select an existing account database while sharing cache budgets and retaining active invalidation gates.
     pub async fn for_user(&self, user_id:&str) -> Result<Self> {
         if !access::valid_id(user_id) {return Err(anyhow!("Invalid account identity"));}
         if self.account_by_id(user_id).await?.is_none() {return Err(anyhow!("Account not found"));}
@@ -401,6 +411,7 @@ impl Store {
         handle.migrate_session_metadata().await?;
         Ok(handle)
     }
+    /// Select a registered agent database without changing the canonical conversation user authority.
     pub async fn for_agent(&self, agent_id:&str) -> Result<Self> {
         if !access::valid_agent_id(agent_id) {
             return Err(anyhow!("Invalid agent identity"));
@@ -427,8 +438,11 @@ impl Store {
             cache:self.cache.clone(),context_cache:self.context_cache.clone(),
             context_gate:self.context_gate.clone()})
     }
+    /// Expose the agent identity already bound to this storage handle.
     pub fn current_agent_id(&self)->&str {&self.agent_id}
+    /// Expose the canonical account identity already bound to this storage handle.
     pub fn current_user_id(&self)->&str {&self.user_id}
+    /// Create agent-owned tables and migrate the legacy default agent and prompt slots once.
     async fn init_agent_tables(&self) -> Result<()> {
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS agents(
             id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
@@ -493,6 +507,7 @@ impl Store {
         tx.commit().await?;
         Ok(())
     }
+    /// Seed absent ability connections without overriding saved enablement choices.
     pub async fn ensure_agent_connections(&self, ability_ids: &[String]) -> Result<()> {
         let mut tx = self.agent_pool.begin().await?;
         for id in ability_ids {
@@ -505,11 +520,13 @@ impl Store {
         tx.commit().await?;
         Ok(())
     }
+    /// Read the bound agent model assignment from its canonical agent table.
     pub async fn agent_model(&self) -> Result<Value> {
         let row = sqlx::query("SELECT provider,model FROM agents WHERE id=?")
             .bind(&self.agent_id).fetch_one(&self.agent_pool).await?;
         Ok(json!({"provider":row.get::<String,_>("provider"),"model":row.get::<String,_>("model")}))
     }
+    /// Replace the bound agent provider/model assignment and advance its table revision.
     pub async fn save_agent_model(&self, value: &Value) -> Result<()> {
         sqlx::query("UPDATE agents SET provider=?,model=?,revision=revision+1,updated_at=strftime('%s','now') WHERE id=?")
             .bind(value["provider"].as_str().ok_or_else(||anyhow!("Missing provider"))?)
@@ -518,9 +535,11 @@ impl Store {
             .execute(&self.agent_pool).await?;
         Ok(())
     }
+    /// Read ability controls for the agent already selected by this handle.
     pub async fn agent_abilities(&self) -> Result<Value> {
         self.agent_abilities_for(&self.agent_id).await
     }
+    /// Project current encrypted agent metadata and disabled connections into effective ability controls.
     pub async fn agent_abilities_for(&self, agent_id: &str) -> Result<Value> {
         if agent_id != self.agent_id {return Err(anyhow!("Agent view mismatch"));}
         let row = sqlx::query("SELECT metadata,revision FROM agents WHERE id=?")
@@ -538,6 +557,7 @@ impl Store {
             "skill_visibility":metadata["skill_modes"],"tool_modes":metadata["tool_modes"],"settings":metadata["ability_settings"],
             "tool_execution":metadata["tool_execution"].as_object().cloned().unwrap_or_default()}))
     }
+    /// CAS encrypted visibility settings, connection state and their audit receipt in one agent transaction.
     pub async fn save_agent_abilities(&self, value: &Value, expected_revision: u64) -> Result<()> {
         if expected_revision==u64::MAX {return Err(anyhow!("Agent ability revision overflow"));}
         let mut tx = self.agent_pool.begin().await?;
@@ -577,6 +597,7 @@ impl Store {
         tx.commit().await?;
         Ok(())
     }
+    /// Reject document access naming an agent other than this handle owns.
     fn validate_agent_doc_key(&self,key:&str) -> Result<()> {
         if let Some(rest)=key.strip_prefix("agent:") {
             if rest!=self.agent_id && !rest.starts_with(&format!("{}:",self.agent_id)) {
@@ -590,6 +611,7 @@ impl Store {
         }
         Ok(())
     }
+    /// Route each known namespace to its user, agent or application authority; conversation assets stay user-owned.
     fn pool_for(&self, key: &str) -> &SqlitePool {
         if key.starts_with("agent:") || key.starts_with("agent_abilities:") {
             &self.agent_pool
@@ -612,6 +634,7 @@ impl Store {
             || key.starts_with("receipt:chat_controls:")
             || key.starts_with("compaction_segment:")
             || key.starts_with("session_ability_state:")
+            || key.starts_with("session_context_assets:")
             || key.starts_with("action:")
             || key.starts_with("background_task:")
             || key.starts_with("run:")
@@ -638,6 +661,7 @@ impl Store {
             &self.app_pool
         }
     }
+    /// Reject ambiguous, reserved or oversized prompt-slot identities before agent-table access.
     fn validate_prompt_slot_name(name: &str) -> Result<()> {
         if name.is_empty()
             || name.len() > PROMPT_SLOT_NAME_MAX
@@ -649,6 +673,7 @@ impl Store {
         }
         Ok(())
     }
+    /// Decrypt one agent prompt row into the public slot shape, rejecting nontext content.
     fn prompt_slot_from_row(&self, row: &SqliteRow) -> Result<Value> {
         let content = self.unseal(&row.get::<Vec<u8>, _>("content"))?;
         let content = content
@@ -664,9 +689,11 @@ impl Store {
             "updated_at": row.get::<i64, _>("updated_at")
         }))
     }
+    /// Read ordered prompt slots for the bound agent using the canonical agent-table path.
     pub async fn list_prompt_slots(&self) -> Result<Vec<Value>> {
         self.list_agent_prompt_slots(&self.agent_id).await
     }
+    /// Read one bound agent ordered prompt snapshot and enforce count and total-content limits.
     pub async fn list_agent_prompt_slots(&self, agent_id: &str) -> Result<Vec<Value>> {
         if agent_id != self.agent_id {return Err(anyhow!("Agent view mismatch"));}
         let rows = sqlx::query(
@@ -697,6 +724,7 @@ impl Store {
         }
         Ok(slots)
     }
+    /// Read an optional named prompt slot only inside the bound agent authority.
     pub async fn get_prompt_slot(&self, name: &str) -> Result<Option<Value>> {
         Self::validate_prompt_slot_name(name)?;
         let row = sqlx::query(
@@ -710,6 +738,7 @@ impl Store {
             .map(|row| self.prompt_slot_from_row(row))
             .transpose()
     }
+    /// Create or revise a prompt slot through the shared validated transaction without an action receipt.
     pub async fn upsert_prompt_slot(
         &self,
         name: &str,
@@ -721,6 +750,7 @@ impl Store {
     ) -> Result<Value> {
         self.upsert_prompt_slot_receipted(name,content,order_index,lock,merge_mode,expected_revision,None).await
     }
+    /// Reserve the agent writer, enforce revision/capacity bounds and commit slot plus optional retry receipt atomically.
     pub(crate) async fn upsert_prompt_slot_receipted(
         &self,name:&str,content:&str,order_index:Option<i64>,lock:Option<bool>,merge_mode:Option<&str>,
         expected_revision:i64,receipt:Option<(&str,&str)>,
@@ -842,9 +872,11 @@ impl Store {
         tx.commit().await?;
         Ok(slot)
     }
+    /// Delete one prompt slot through the same revision-fenced path used by native actions.
     pub async fn delete_prompt_slot(&self, name: &str, expected_revision: i64) -> Result<bool> {
         self.delete_prompt_slot_receipted(name,expected_revision,None).await
     }
+    /// Delete only the expected slot revision and bind an optional action receipt to the same commit.
     pub(crate) async fn delete_prompt_slot_receipted(&self,name:&str,expected_revision:i64,receipt:Option<(&str,&str)>)->Result<bool> {
         Self::validate_prompt_slot_name(name)?;
         if expected_revision <= 0 {
@@ -885,6 +917,7 @@ impl Store {
         tx.commit().await?;
         Ok(true)
     }
+    /// Copy legacy public messages idempotently and reject conflicting destination identities or contents.
     async fn migrate_legacy_chat(&self, sid: &str, session: &Value) -> Result<()> {
         let Some(messages) = session["messages"].as_array() else {
             return Ok(());
@@ -925,6 +958,7 @@ impl Store {
         }
         Ok(())
     }
+    /// Preserve legacy event identity across split-storage retries without reusing another mapped sequence.
     async fn migrate_legacy_event(
         &self,
         destination: &SqlitePool,
@@ -1016,6 +1050,7 @@ impl Store {
         tx.commit().await?;
         Ok(())
     }
+    /// Copy and verify legacy documents, events and run indexes before publishing the completed split marker.
     async fn migrate_legacy(&self, root: &Path) -> Result<()> {
         let legacy_path: PathBuf = root.join("runtime.sqlite");
         let marker_version = self
@@ -1128,9 +1163,11 @@ impl Store {
             .map_err(|_| anyhow!("Storage authentication failed"))?;
         Ok(serde_json::to_vec(&json!({"format":"v3-admin-plaintext-v1","value":value,"nonce":nonce,"tag":tag}))?)
     }
+    /// Apply optional administrator plaintext policy only to user-plane records; other authorities always seal.
     fn encode_for_pool(&self, pool: &SqlitePool, value: &Value) -> Result<Vec<u8>> {
         if std::ptr::eq(pool, &self.pool) { self.encode_user_record(value) } else { self.seal(value) }
     }
+    /// Encode a JSON value with a fresh AES-GCM nonce and authenticated ciphertext.
     pub fn seal(&self, value: &Value) -> Result<Vec<u8>> {
         let mut nonce = [0; 12];
         rand::thread_rng().fill_bytes(&mut nonce);
@@ -1145,6 +1182,7 @@ impl Store {
         );
         Ok(data)
     }
+    /// Authenticate and decode either encrypted records or the explicitly versioned administrator plaintext envelope.
     pub fn unseal(&self, data: &[u8]) -> Result<Value> {
         // A nonce in the legacy binary format can begin with '{'; only a
         // parsed, explicitly versioned envelope selects the plaintext reader.
@@ -1174,9 +1212,11 @@ impl Store {
         *self.cache.lock().unwrap() = Cache::new(documents);
         *self.context_cache.lock().unwrap() = ContextCache::new(contexts);
     }
+    /// Qualify disposable context-cache entries by account so identical session IDs cannot collide.
     fn context_cache_key(&self, sid: &str) -> String {
         format!("{}:{sid}", self.user_id)
     }
+    /// Reconstruct canonical checkpoint plus eligible interactions under the context invalidation gate.
     pub async fn context(&self, sid: &str) -> Result<Vec<Value>> {
         // Checkpoint writers hold the exclusive side of this gate through commit
         // and cache invalidation, so a reader never combines two checkpoints.
@@ -1219,6 +1259,7 @@ impl Store {
             .insert(self.context_cache_key(sid), through, history_revision, cursor, input.clone());
         Ok(input)
     }
+    /// Read public messages and their maximum sequence from one consistent user transaction.
     pub async fn chat_snapshot(&self, sid: &str) -> Result<(Vec<Value>, i64)> {
         let mut tx = self.pool.begin().await?;
         let cursor = sqlx::query_scalar::<_, i64>(
@@ -1243,6 +1284,7 @@ impl Store {
             .collect::<Result<Vec<_>>>()?;
         Ok((messages, cursor))
     }
+    /// Read bounded identity and public-chat counts without exposing private recovery input.
     pub async fn session_summary(&self, sid: &str) -> Result<Value> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query("SELECT value FROM docs WHERE key=?")
@@ -1266,6 +1308,7 @@ impl Store {
             "chat_cursor": counts.get::<i64, _>("cursor"),
         }))
     }
+    /// Page a known session public messages with validated bounds and a stable sequence cursor.
     pub async fn chat_page(&self, sid: &str, after_seq: i64, limit: i64) -> Result<Value> {
         if after_seq < 0 || !(1..=50).contains(&limit) {
             return Err(anyhow!("Invalid chat page bounds"));
@@ -1294,6 +1337,7 @@ impl Store {
         }
         Ok(json!({"messages": messages, "next_seq": next_seq, "has_more": has_more}))
     }
+    /// Project bounded recent run status for one session without pending arguments or provider state.
     pub async fn run_summaries(&self, sid: &str, limit: i64) -> Result<Vec<Value>> {
         if !(1..=50).contains(&limit) {
             return Err(anyhow!("Invalid run summary limit"));
@@ -1319,6 +1363,7 @@ impl Store {
             })
             .collect()
     }
+    /// Read the next bounded public-chat delta after a caller sequence cursor.
     pub async fn chat_events(&self, sid: &str, after: i64) -> Result<Vec<Value>> {
         let rows = sqlx::query("SELECT seq,id,run_id,role,content,created_at FROM chat WHERE session_id=? AND seq>? ORDER BY seq LIMIT 200")
             .bind(sid).bind(after).fetch_all(&self.pool).await?;
@@ -1333,6 +1378,7 @@ impl Store {
             })
             .collect()
     }
+    /// Insert a private context item once and bind its public activity anchor in the caller transaction.
     pub(crate) async fn insert_interaction(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -1351,6 +1397,7 @@ impl Store {
             .bind(sid).bind(run_id).bind(step).execute(&mut **tx).await?;
         Ok(())
     }
+    /// Publish one user/final assistant bubble and its context boundary, activity and notification atomically.
     async fn insert_chat(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -1378,6 +1425,7 @@ impl Store {
         }
         Ok(())
     }
+    /// Publish a bounded nonterminal bubble once; reject reuse of its stable ID with different text.
     async fn insert_working_message(
         &self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, sid: &str,
         rid: &str, message_id: &str, text: &str,
@@ -1509,10 +1557,11 @@ impl Store {
             &metadata
         } else { value };
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-            .bind(key).bind(if key.starts_with("module_state:")||key.starts_with("receipt:module:"){self.seal(stored)?}else{self.encode_for_pool(self.pool_for(key), stored)?}).execute(&mut **tx).await?;
+            .bind(key).bind(if key.starts_with("module_state:")||key.starts_with("receipt:module:")||key.starts_with("session_context_assets:"){self.seal(stored)?}else{self.encode_for_pool(self.pool_for(key), stored)?}).execute(&mut **tx).await?;
         Ok(())
     }
 
+    /// Read and authenticate a namespace-selected document, reconstructing split recovery input in one snapshot.
     pub async fn get(&self, key: &str) -> Result<Option<Value>> {
         self.validate_agent_doc_key(key)?;
         // These documents are shared with the independent loop process.
@@ -1544,6 +1593,7 @@ impl Store {
         }
         Ok(result)
     }
+    /// Write a document through its authority and lifecycle guards, then invalidate affected disposable caches.
     pub async fn put(&self, key: &str, value: &Value) -> Result<()> {
         self.validate_agent_doc_key(key)?;
         let session_id = key.strip_prefix("session:");
@@ -1567,6 +1617,7 @@ impl Store {
         }
         Ok(())
     }
+    /// Update run lookup, redacted view and usage deltas in the same checkpoint transaction.
     async fn index_run(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -1601,6 +1652,7 @@ impl Store {
             .bind(format!("run_view:{}",run["id"].as_str().unwrap())).bind(self.encode_user_record(&view)?).execute(&mut **tx).await?;
         Ok(())
     }
+    /// List bounded nonterminal run views in admission order for scheduler recovery.
     pub async fn active_runs(&self) -> Result<Vec<Value>> {
         let rows=sqlx::query("SELECT d.value FROM run_index r JOIN docs d ON d.key='run_view:'||r.id WHERE r.status NOT IN ('completed','cancelled','failed') ORDER BY COALESCE(r.enqueue_seq,r.rowid) LIMIT 200")
             .fetch_all(&self.pool).await?;
@@ -1608,6 +1660,7 @@ impl Store {
             .map(|r| self.unseal(&r.get::<Vec<u8>, _>("value")))
             .collect()
     }
+    /// List bounded recent session runs or application-wide failures using redacted stored views.
     pub async fn recent_runs(&self, sid: Option<&str>) -> Result<Vec<Value>> {
         let rows = if let Some(sid) = sid {
             sqlx::query("SELECT d.value FROM run_index r JOIN docs d ON d.key='run_view:'||r.id WHERE r.session_id=? ORDER BY r.updated_at DESC LIMIT 100").bind(sid).fetch_all(&self.pool).await?
@@ -1618,6 +1671,7 @@ impl Store {
             .map(|r| self.unseal(&r.get::<Vec<u8>, _>("value")))
             .collect()
     }
+    /// Remove only an unclaimed upload owned by this session and decrement its quota atomically.
     pub(crate) async fn delete_pending_upload(&self,sid:&str,aid:&str)->Result<()>{
         let mut tx=self.pool.begin().await?;
         sqlx::query("UPDATE docs SET value=value WHERE key='attachment_quota'").execute(&mut *tx).await?;
@@ -1633,6 +1687,7 @@ impl Store {
         self.cache.lock().unwrap().invalidate(&[format!("attachment:{aid}"),"attachment_quota".into()]);
         Ok(())
     }
+    /// Delete a namespace document and any owned recovery rows together before invalidating caches.
     pub async fn delete(&self, key: &str) -> Result<()> {
         self.validate_agent_doc_key(key)?;
         let session_id = key.strip_prefix("session:");
@@ -1656,6 +1711,7 @@ impl Store {
         }
         Ok(())
     }
+    /// Read matching authority documents in one snapshot and reconstruct any split run inputs.
     pub async fn list(&self, prefix: &str) -> Result<Vec<Value>> {
         self.validate_agent_doc_key(prefix)?;
         let mut tx = self.pool_for(prefix).begin().await?;
@@ -1666,6 +1722,7 @@ impl Store {
         tx.commit().await?;
         Ok(values)
     }
+    /// Append an encoded event to the application or user plane selected by session identity.
     pub async fn event(&self, sid: &str, kind: &str, payload: &Value) -> Result<()> {
         let destination = if sid.is_empty() {
             &self.app_pool
@@ -1684,11 +1741,25 @@ impl Store {
     // loop execution, the live lease it read. The override below is reserved
     // for deliberate recovery or access shutdown and still checks revision.
     pub async fn save_run(&self, run: &mut Value, kind: &str, payload: &Value) -> Result<()> {
+        self.prepare_context_assets_operation(run).await?;
         self.save_run_inner(run,kind,payload,false).await
     }
+    /// Allow deliberate terminal shutdown without planner availability while preserving revision fences and failed staging.
     pub async fn save_run_override(&self, run:&mut Value, kind:&str, payload:&Value) -> Result<()> {
+        if matches!(run["status"].as_str(),Some("cancelled"|"stopped"|"failed"|"recovery")) {
+            // Stop/revocation must not wait for an unavailable pure planner.
+            // Work on a clone so a rejected run fence retains caller staging for inspection.
+            let mut closing=run.clone();
+            closing.as_object_mut().ok_or_else(||anyhow!("Invalid run document"))?.remove("_context_assets_operation");
+            closing.as_object_mut().unwrap().remove("_context_assets_write");
+            self.save_run_inner(&mut closing,kind,payload,true).await?;
+            *run=closing;
+            return Ok(());
+        }
+        self.prepare_context_assets_operation(run).await?;
         self.save_run_inner(run,kind,payload,true).await
     }
+    /// Commit run-owned effects and publication only after revision, generation, lease and participation fences pass.
     async fn save_run_inner(&self, run:&mut Value, kind:&str, payload:&Value,
         allow_expired:bool) -> Result<()> {
         let rid = run["id"].as_str().ok_or_else(||anyhow!("Run has no id"))?.to_owned();
@@ -1749,7 +1820,18 @@ impl Store {
         if run["status"]=="completed" {
             self.followup_publication_guard(&mut tx,run["session_id"].as_str().unwrap_or("")).await?;
         }
+        // Stage computation happened before writer admission. Ledger CAS and the
+        // successful result checkpoint now share every existing run ownership fence.
+        self.apply_context_assets_write(&mut tx,run).await?;
+        if kind=="context_compacted" {
+            self.reset_context_asset_layouts(&mut tx,run["session_id"].as_str().unwrap()).await?;
+        }
         let mut persisted=run.clone();
+        if let Some(revision)=run["_context_assets_write"]["state"]["revision"].as_u64() {
+            persisted["context_assets_revision"]=json!(revision);
+        }
+        persisted.as_object_mut().unwrap().remove("_context_assets_write");
+        persisted.as_object_mut().unwrap().remove("_context_assets_operation");
         persisted["run_revision"]=json!(expected+1);
         self.write_document(&mut tx,&format!("run:{rid}"),&persisted).await?;
         // Large model and tool outputs live in interactions and the run checkpoint.
@@ -1934,6 +2016,10 @@ impl Store {
         if kind == "context_compacted" {
             self.context_cache.lock().unwrap().invalidate(&self.context_cache_key(sid));
         }
+        // Retain staging after any failure; clear only after the complete transaction commits.
+        if let Some(revision)=persisted.get("context_assets_revision") {run["context_assets_revision"]=revision.clone();}
+        run.as_object_mut().unwrap().remove("_context_assets_write");
+        run.as_object_mut().unwrap().remove("_context_assets_operation");
         run["run_revision"]=json!(expected+1);
         if matches!(run["status"].as_str(),Some("completed"|"cancelled"|"failed")) {self.reconcile_requester_slots().await?;}
         Ok(())
@@ -1985,6 +2071,7 @@ impl Store {
         self.cache.lock().unwrap().invalidate(&[format!("run:{rid}")]);
         Ok(true)
     }
+    /// Reserve the SQLite writer before checking ownership so queue commits cannot stale the renewal snapshot.
     pub async fn renew_run_lease(&self, rid:&str, generation:&str, owner:&str, epoch:i64) -> Result<bool> {
         let mut tx=self.pool.begin().await?;
         // Reserve the SQLite writer before reading authority. Otherwise a queue
@@ -2004,17 +2091,20 @@ impl Store {
         tx.commit().await?;
         Ok(changed==1)
     }
+    /// Publish the current loop owner liveness using the fixed heartbeat protocol.
     pub async fn write_loop_heartbeat(&self, owner:&str) -> Result<()> {
         sqlx::query("INSERT INTO loop_heartbeat(singleton,owner,protocol_version,updated_at) VALUES(1,?,1,strftime('%s','now')) ON CONFLICT(singleton) DO UPDATE SET owner=excluded.owner,protocol_version=1,updated_at=excluded.updated_at")
             .bind(owner).execute(&self.app_pool).await?;
         Ok(())
     }
+    /// Check whether a compatible loop heartbeat is within the caller allowed age.
     pub async fn loop_fresh(&self, seconds:i64) -> Result<bool> {
         let age:Option<i64>=sqlx::query_scalar(
             "SELECT CAST(strftime('%s','now') AS INTEGER)-updated_at FROM loop_heartbeat WHERE singleton=1 AND protocol_version=1")
             .fetch_optional(&self.app_pool).await?;
         Ok(age.is_some_and(|age|age>=0 && age<=seconds))
     }
+    /// Invalidate recorded loop liveness without deleting its protocol or owner identity.
     pub async fn clear_loop_heartbeat(&self) -> Result<()> {
         sqlx::query("UPDATE loop_heartbeat SET updated_at=0 WHERE singleton=1")
             .execute(&self.app_pool).await?;
@@ -2046,6 +2136,7 @@ impl Store {
         tx.commit().await?;
         Ok(rows.len())
     }
+    /// Read a bounded authenticated session-event delta after a sequence cursor.
     pub async fn events(&self, sid: &str, after: i64) -> Result<Vec<Value>> {
         let rows=sqlx::query("SELECT seq,kind,payload FROM events WHERE session_id=? AND seq>? ORDER BY seq LIMIT 200")
             .bind(sid).bind(after).fetch_all(&self.pool).await?;
@@ -2062,6 +2153,7 @@ impl Store {
     ) -> Result<()> {
         self.atomic_admission(docs,sid,kind,payload,None).await
     }
+    /// Admit only supported first-message events with newly prepared session records in the same transaction.
     pub async fn atomic_first_message(
         &self, docs:Vec<(String,Value)>,sid:&str,kind:&str,payload:&Value,created:&Value
     )->Result<()> {
@@ -2070,6 +2162,7 @@ impl Store {
         }
         self.atomic_admission(docs,sid,kind,payload,Some(created)).await
     }
+    /// Commit related admission documents, public/private messages and loop commands without crossing authority planes.
     async fn atomic_admission(
         &self,mut docs:Vec<(String,Value)>,sid:&str,kind:&str,payload:&Value,created:Option<&Value>
     )->Result<()> {
@@ -2222,6 +2315,7 @@ impl Store {
 mod message_admission;
 #[cfg(test)]
 mod tests {
+    /// Verify only the fixed administrator profiles retain worker-readable directory and database modes after reopen.
     #[tokio::test]
     async fn only_fixed_admin_profiles_keep_worker_permissions_on_reopen() {
         use std::os::unix::fs::PermissionsExt;
@@ -2243,6 +2337,7 @@ mod tests {
         }
     }
 
+    /// Verify legacy model, disabled ability and encrypted prompt values survive the canonical-table migration.
     #[tokio::test]
     async fn legacy_agent_docs_and_prompt_slots_migrate_into_canonical_tables() {
         let root = tempfile::tempdir().unwrap();
@@ -2273,6 +2368,7 @@ mod tests {
         assert_eq!(enabled, 0);
     }
     use super::*;
+    /// Verify agent/session controls stay in separate encrypted authorities and survive reopening.
     #[tokio::test]
     async fn ability_controls_use_encrypted_authorities_and_survive_reopen() {
         let root = tempfile::tempdir().unwrap();
@@ -2332,6 +2428,7 @@ mod tests {
         );
     }
 
+    /// Verify session mode routes to encrypted user storage without contaminating application records.
     #[tokio::test]
     async fn session_mode_is_encrypted_in_user_storage_and_survives_reopen() {
         let root = tempfile::tempdir().unwrap();
@@ -2370,6 +2467,7 @@ mod tests {
         assert_eq!(reopened.list("session:").await.unwrap().len(), 1);
     }
 
+    /// Verify prompt ordering, inherited metadata, CAS rejection and encrypted durability through slot updates and deletion.
     #[tokio::test]
     async fn prompt_slots_are_ordered_revisioned_encrypted_and_durable() {
         let root = tempfile::tempdir().unwrap();
@@ -2457,6 +2555,7 @@ mod tests {
         assert!(reopened.get_prompt_slot("style").await.unwrap().is_none());
     }
 
+    /// Exercise prompt-slot identity, metadata and aggregate capacity rejection through the real Store.
     #[tokio::test]
     async fn prompt_slots_enforce_name_size_count_total_and_metadata_bounds() {
         let root = tempfile::tempdir().unwrap();
@@ -2529,6 +2628,7 @@ mod tests {
         assert_eq!(store.list_prompt_slots().await.unwrap().len(), 32);
     }
 
+    /// Verify cached context appends only interactions beyond its retained sequence cursor.
     #[tokio::test]
     async fn context_cache_appends_only_new_interactions() {
         let root = tempfile::tempdir().unwrap();
@@ -2568,6 +2668,7 @@ mod tests {
         assert!(second_cursor > first_cursor);
     }
 
+    /// Verify compaction replaces a cached checkpoint even at the same cursor and remains canonical after reopen.
     #[tokio::test]
     async fn context_cache_invalidates_same_cursor_checkpoint_and_rebuilds_after_reopen() {
         let root = tempfile::tempdir().unwrap();
@@ -2618,6 +2719,7 @@ mod tests {
         assert_eq!(rebuilt[1]["content"], "new");
     }
 
+    /// Race context readers with compaction and verify old readers cannot repopulate a discarded checkpoint.
     #[tokio::test]
     async fn concurrent_context_readers_cannot_restore_precheckpoint_cache() {
         let root = tempfile::tempdir().unwrap();
@@ -2661,6 +2763,7 @@ mod tests {
         }
     }
 
+    /// Verify version-one migration preserves newer authorities while importing legacy history and stable event mappings.
     #[tokio::test]
     async fn split_storage_preserves_legacy_history_and_retries_version_one_marker() {
         let root = tempfile::tempdir().unwrap();
@@ -2859,6 +2962,7 @@ mod tests {
         assert_eq!(reopened.events("old", 0).await.unwrap().len(), 6);
         assert!(legacy_path.exists());
     }
+    /// Verify a conflicting initial migration leaves no false completion marker.
     #[tokio::test]
     async fn split_storage_rejects_conflicting_destination_without_completion_marker() {
         let root = tempfile::tempdir().unwrap();
@@ -2898,6 +3002,7 @@ mod tests {
         .unwrap()
         .is_none());
     }
+    /// Verify conflicting run identity/status blocks migration without overwriting destination state.
     #[tokio::test]
     async fn version_one_migration_rejects_conflicting_run_index() {
         let root = tempfile::tempdir().unwrap();
@@ -2944,6 +3049,7 @@ mod tests {
                 .unwrap();
         assert_eq!(first.unseal(&marker).unwrap()["version"], 1);
     }
+    /// Verify resumed migration allocates new sequences when an older event already owns the tempting destination sequence.
     #[tokio::test]
     async fn version_one_retry_does_not_reuse_an_already_mapped_event_sequence() {
         let root = tempfile::tempdir().unwrap();
@@ -3034,6 +3140,7 @@ mod tests {
             .unwrap();
         assert_eq!(app_count, 3);
     }
+    /// Verify bounded state inspection preserves session isolation and omits pending/provider secrets.
     #[tokio::test]
     async fn typed_state_inspection_is_session_scoped_bounded_and_redacted() {
         let root = tempfile::tempdir().unwrap();
@@ -3112,6 +3219,7 @@ mod tests {
         assert!(s.run_summaries("a", 51).await.is_err());
         assert!(s.run_summaries("missing", 1).await.is_err());
     }
+    /// Verify encrypted records survive reopen and reject ciphertext tampering.
     #[tokio::test]
     async fn encrypted_records_survive_reopen_and_tampering_is_rejected() {
         let root = tempfile::tempdir().unwrap();
@@ -3134,6 +3242,7 @@ mod tests {
             "private text"
         );
     }
+    /// Verify session event replay resumes strictly after the returned sequence.
     #[tokio::test]
     async fn replay_cursor_has_no_duplicate_events() {
         let root = tempfile::tempdir().unwrap();
@@ -3150,6 +3259,7 @@ mod tests {
             .is_empty());
         assert!(s.events("b", 0).await.unwrap().is_empty());
     }
+    /// Verify reopening existing data with a missing key fails without publishing a replacement.
     #[tokio::test]
     async fn missing_key_does_not_create_unusable_replacement() {
         let root = tempfile::tempdir().unwrap();
@@ -3163,6 +3273,7 @@ mod tests {
         assert!(err.to_string().contains("encryption key is missing"));
         assert!(!root.path().join("encryption.key").exists());
     }
+    /// Race key creators and verify every caller observes the same complete published key.
     #[test]
     fn concurrent_key_creation_publishes_one_complete_key() {
         let root = tempfile::tempdir().unwrap();
@@ -3182,6 +3293,7 @@ mod tests {
             keys[0]
         );
     }
+    /// Verify progress publication is nonterminal, idempotent by stable ID and rejects conflicting text.
     #[tokio::test]
     async fn working_message_is_atomic_nonterminal_and_idempotent() {
         let root=tempfile::tempdir().unwrap();
@@ -3207,6 +3319,7 @@ mod tests {
         let conflict=json!({"id":"working:working-run:call-1","text":"Different"});
         assert!(store.save_run(&mut run,"working_message",&conflict).await.is_err());
     }
+    /// Verify automatic working bubbles retain model order and reject oversized publication without partial changes.
     #[tokio::test]
     async fn auto_promotion_is_ordered_atomic_and_idempotent() {
         let root=tempfile::tempdir().unwrap();
@@ -3239,6 +3352,7 @@ mod tests {
         let (unchanged,_)=store.chat_snapshot("auto-session").await.unwrap();
         assert_eq!(unchanged.len(),2);
     }
+    /// Create a real claimed run with substantial split input for lease ownership and writer-race tests.
     async fn renewal_fixture() -> (tempfile::TempDir, Store, Value) {
         let root=tempfile::tempdir().unwrap();
         let store=Store::open(root.path()).await.unwrap();
@@ -3252,6 +3366,7 @@ mod tests {
         (root,store,run)
     }
 
+    /// Verify renewal uses small metadata and rejects wrong generation, owner, epoch and stopped runs.
     #[tokio::test]
     async fn renewal_metadata_keeps_large_input_and_rejects_stale_ownership() {
         let (_root,store,run)=renewal_fixture().await;
@@ -3276,6 +3391,7 @@ mod tests {
         assert!(!store.renew_run_lease("renew-run","renew-generation","renew-owner",epoch).await.unwrap());
     }
 
+    /// Demonstrate the obsolete deferred renewal snapshot fails after a real queue commit, then exercise the reserved-writer path.
     #[tokio::test]
     async fn renewal_deferred_snapshot_reproduces_concurrent_queue_write_conflict() {
         let (_root,store,run)=renewal_fixture().await;
@@ -3295,6 +3411,7 @@ mod tests {
         assert_eq!(store.followup_queue("renew-session").await.unwrap()["entries"][0]["status"],"pending");
     }
 
+    /// Verify lease renewal waits behind an active writer without spuriously abandoning ownership.
     #[tokio::test]
     async fn renewal_waits_for_queue_writer_instead_of_cancelling_owned_run() {
         let (_root,store,run)=renewal_fixture().await;
@@ -3321,6 +3438,7 @@ mod tests {
         }
     }
 
+    /// Verify command acknowledgment, takeover and lease expiry preserve exactly one authorized terminal publication.
     #[tokio::test]
     async fn command_ack_and_lease_takeover_fence_terminal_publication() {
         let root=tempfile::tempdir().unwrap();
@@ -3426,6 +3544,7 @@ mod tests {
             .fetch_one(&store.pool).await.unwrap(),0);
     }
 
+    /// Verify old inline input remains readable and upgrades through the normal checkpoint writer.
     #[tokio::test]
     async fn legacy_inline_recovery_remains_readable_and_upgrades_on_save() {
         let root=tempfile::tempdir().unwrap(); let store=Store::open(root.path()).await.unwrap();
@@ -3553,11 +3672,13 @@ mod tests {
 #[cfg(test)]
 mod admin_storage_policy_tests {
     use super::*;
+    /// Write an isolated administrator encryption policy for plaintext-envelope compatibility tests.
     fn configure(root: &Path, enabled: bool) {
         std::fs::create_dir_all(root.join("config")).unwrap();
         std::fs::write(root.join("config/app-settings.json"),
             serde_json::to_vec(&json!({"admin_database_encryption":{"enabled":enabled}})).unwrap()).unwrap();
     }
+    /// Verify live administrator plaintext policy changes preserve authentication and never weaken other storage planes.
     #[tokio::test]
     async fn admin_plaintext_is_scoped_authenticated_and_backward_compatible() {
         let root = tempfile::tempdir().unwrap();
@@ -3597,6 +3718,7 @@ mod admin_storage_policy_tests {
         let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='memory:encrypted_again'").fetch_one(&reopened.pool).await.unwrap();
         assert!(serde_json::from_slice::<Value>(&raw).is_err());
     }
+    /// Verify an invalid encryption-policy type prevents storage initialization.
     #[tokio::test]
     async fn invalid_admin_storage_policy_fails_closed() {
         let root = tempfile::tempdir().unwrap();

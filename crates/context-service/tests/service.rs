@@ -8,7 +8,7 @@ fn input(history:Vec<Value>)->PrepareRequest {
  compaction.trigger_tokens=10000;compaction.tail_tokens=1000;compaction.summary_reserve_bytes=100;
  PrepareRequest{history,base:"host instructions".into(),guidance:" guidance".into(),schemas:vec![],contributions:vec![],
  identity:CallIdentity{turn:1,call:1},model:ModelMetadata{provider:"deepseek".into(),model:"test".into(),transport:"chat_completions".into()},
- max_bytes:8192,compaction,system_input_budget:None,summary_instructions:"summary instructions".into()}
+ max_bytes:8192,compaction,projection_extra_bytes:0,contributions_projected:false,system_input_budget:None,summary_instructions:"summary instructions".into()}
 }
 #[test]
 fn real_service_reuses_process_and_resets_same_length_history() {

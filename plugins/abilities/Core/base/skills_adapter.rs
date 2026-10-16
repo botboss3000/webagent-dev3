@@ -1,18 +1,21 @@
 //! Read bundled guidance by exact catalog ID under fresh caller/agent policy.
 //! Loading is evidence only: it never activates an ability or grants execution.
+// @code-index {"version":1,"feature":"live-skill-selection","aliases":["live context","source correspondence"],"purpose":"Native current-source skill reads and identity-only conversation receipts. Encrypted caller/agent policy remains authoritative input; fixed scope and correspondence checks are not bypass settings.","span_lines":80,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Private scope, live-authority fences and identity-only receipt persistence are mandatory. Skill content and mode are current caller inputs, not configurable alternatives to these safety checks."}}
 use crate::{App, ability_controls, session_agent_id, session_mode, live_tool_decision};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
+/// Route only fixed native skill discovery operations.
 pub fn owns(name:&str)->bool {matches!(name,"list_skills"|"load_skill")}
+/// Expose bounded selectors and metadata-only load acknowledgments.
 pub fn schemas()->Vec<Value> {
     let id=json!({"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z0-9_]+$"});
     vec![
         json!({"type":"function","name":"list_skills","description":"List inactive discoverable skills; include_available also shows visible and already loaded guidance",
             "parameters":{"type":"object","properties":{"ability_id":id,"query":{"type":"string","maxLength":200},"include_available":{"type":"boolean"}},"required":["ability_id"],"additionalProperties":false}}),
-        json!({"type":"function","name":"load_skill","description":"Load discoverable guidance for this run. Returns only acknowledgment and metadata; full guidance is supplied in the next model context. Does not activate abilities or tools",
+        json!({"type":"function","name":"load_skill","description":"Load discoverable guidance for this conversation. Returns only acknowledgment and metadata; full guidance is supplied in the next model context. Does not activate abilities or tools",
             "parameters":{"type":"object","properties":{"ability_id":id,"skill_id":id,
                 "kind":{"type":"string","enum":["ability","tool","selectable","own"]},
                 "expected_catalog_version":{"type":"string","minLength":64,"maxLength":64,"pattern":"^[a-f0-9]{64}$"}},
@@ -28,9 +31,11 @@ struct LoadArgs {
     ability_id:String, kind:String, skill_id:String,
     #[serde(default)] expected_catalog_version:Option<String>,
 }
+/// Reject paths and accept only bounded catalog identifiers.
 fn valid_id(id:&str)->bool {
     !id.is_empty() && id.len()<=64 && id.bytes().all(|b|b.is_ascii_lowercase()||b.is_ascii_digit()||b==b'_')
 }
+/// Match task words against current skill metadata with the catalog lexical matcher.
 fn skill_matches(skill:&Value, query:&str)->bool {
     let words=crate::abilities::search_words(query);
     if words.is_empty() {return false;}
@@ -41,6 +46,7 @@ fn skill_matches(skill:&Value, query:&str)->bool {
     words.iter().any(|word|candidates.iter().any(|candidate|
         crate::abilities::near_word(word,candidate)))
 }
+/// Constrain kind, private scope and optional catalog receipt version before lookup.
 fn validate_load(args:&LoadArgs)->Result<()> {
     if !valid_id(&args.ability_id) || !valid_id(&args.skill_id)
         || !matches!(args.kind.as_str(),"ability"|"tool"|"selectable"|"own")
@@ -56,6 +62,7 @@ struct View {
     policy:Value, visibility:Value, state:Value, loaded:Value, read_only:bool,
     own:Value, loaded_skills:Value, version:String, fingerprint:String,
 }
+/// Resolve private caller/agent scope and fingerprint current source, selectors and live authority.
 async fn view(app:&App,sid:&str,run_id:&str,name:&str)->Result<View> {
     if crate::shared_chat::actor(app)!=app.store.current_user_id() {bail!("Shared chat membership does not authorize caller-owned private records");}
 
@@ -70,6 +77,9 @@ async fn view(app:&App,sid:&str,run_id:&str,name:&str)->Result<View> {
     let loaded=run["loaded_abilities"].clone();
     let loaded_skills=run["loaded_skills"].clone();
     let (policy,mode_revision,visibility,state)=ability_controls(&scoped,sid).await?;
+    // Conversation selectors activate only this read's projection, never saved
+    // session state. Current Off, suppression and access checks still decide.
+    let state=scoped.abilities.selected_state(&visibility,&state,&loaded);
     let mode=session_mode(&scoped,sid).await?;
     let read_only=mode["mode"]=="read_only";
     let access=crate::shared_chat::live_access(&scoped.store,crate::shared_chat::actor(&scoped),sid,&agent).await?;
@@ -86,11 +96,12 @@ async fn view(app:&App,sid:&str,run_id:&str,name:&str)->Result<View> {
         loaded,loaded_skills,mode,access.context_fingerprint()]));
     Ok(View {app:scoped,access,policy,visibility,state,loaded,read_only,own,loaded_skills,version,fingerprint})
 }
+/// Compare stable identity; observational body hashes and revisions never pin later reads.
 fn same_asset(left:&Value,right:&Value)->bool {
     left["ability_id"]==right["ability_id"] && left["kind"]==right["kind"]
-        && left["skill_id"]==right["skill_id"] && left["sha256"]==right["sha256"]
-        && left["revision"]==right["revision"]
+        && left["skill_id"]==right["skill_id"]
 }
+/// Describe current exposure or retained selection after authorized source resolution.
 fn mark_availability(asset:&mut Value,loaded:&Value,tools:&Value) {
     let tool_selected=asset["kind"]=="tool" && tools.as_array().is_some_and(|items|items.iter()
         .any(|item|item.as_str()==Some(format!("tool:{}",asset["skill_id"].as_str().unwrap_or("")).as_str())));
@@ -100,6 +111,7 @@ fn mark_availability(asset:&mut Value,loaded:&Value,tools:&Value) {
     if !available {asset["availability"]=json!("discoverable");}
     asset["requires_activation"]=json!(!available);
 }
+/// Project a current selectable agent record with observation metadata and an untrusted body.
 fn own_asset(record:&Value)->Result<Value> {
     // Own-skill storage currently supports selectable mode only, never pinned text.
     if record["mode"]!="selectable" {bail!("Current-agent skill unavailable");}
@@ -111,6 +123,7 @@ fn own_asset(record:&Value)->Result<Value> {
         "sha256":hex::encode(Sha256::digest(text.as_bytes())),"text":text,
         "source_kind":"untrusted_agent_skill","activates":false}))
 }
+/// Check tool-guidance read eligibility without persisting activation or granting execution.
 fn skill_tool_allowed(current:&View,tool:&str)->bool {
     // This selector permits reading tool guidance; it grants no execution state.
     let mut loaded=current.loaded.as_array().cloned().unwrap_or_default();
@@ -119,6 +132,7 @@ fn skill_tool_allowed(current:&View,tool:&str)->bool {
         &current.visibility,&current.state,&json!(loaded),current.read_only)
         .permission!=crate::access::Permission::Deny
 }
+/// Read current bundled or own guidance through catalog and private-record authority gates.
 fn load_asset(current:&View,query:&LoadArgs)->Result<Value> {
     let allow_ability=|id:&str|current.access.ability_permission(id)!=crate::access::Permission::Deny;
     let allow_tool=|tool:&str|skill_tool_allowed(current,tool);
@@ -151,15 +165,22 @@ pub(crate) fn apply_selection(run:&mut Value,result:&Value) {
         || !(evidence.source_kind=="untrusted_bundled_guidance" && evidence.kind!="own" && evidence.revision.is_none()
             || evidence.source_kind=="untrusted_agent_skill" && evidence.kind=="own" && evidence.revision.is_some_and(|r|r>0)) {return;}
     let mut selections=run["loaded_skills"].as_array().cloned().unwrap_or_default();
-    if selections.iter().any(|item|same_asset(item,asset)) {return;}
+    if let Some(index)=selections.iter().position(|item|same_asset(item,asset)) {
+        // Older runs may carry observational receipt fields. Normalize the same
+        // identity in place so neither its order nor its future body is pinned.
+        selections[index]=json!({"ability_id":asset["ability_id"],"kind":asset["kind"],
+            "skill_id":asset["skill_id"]});
+        run["loaded_skills"]=json!(selections);
+        return;
+    }
     selections.retain(|item| !(item["ability_id"]==asset["ability_id"]
         && item["kind"]==asset["kind"] && item["skill_id"]==asset["skill_id"]));
-    let mut selected=json!({"ability_id":asset["ability_id"],"kind":asset["kind"],
-        "skill_id":asset["skill_id"],"sha256":asset["sha256"]});
-    if let Some(revision)=evidence.revision {selected["revision"]=json!(revision);}
-    selections.push(selected);
+    // Receipt hashes/revisions attest this read; they never pin future guidance.
+    selections.push(json!({"ability_id":asset["ability_id"],"kind":asset["kind"],
+        "skill_id":asset["skill_id"]}));
     run["loaded_skills"]=json!(selections);
 }
+/// Validate a lowercase digest receipt without granting future source authority.
 fn valid_hash(hash:&str)->bool {
     hash.len()==64 && hash.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))
 }
@@ -170,16 +191,17 @@ struct SelectionEvidence {
     #[serde(default)] revision:Option<i64>,
     status:String, catalog_version:String, context_source:String,
 }
+/// Return scope and observation metadata while omitting complete instruction text.
 fn skill_acknowledgment(asset:&Value,catalog_version:&str)->Value {
     let available=asset["requires_activation"]==false;
     let mut ack=json!({"status":if available {"already_available"} else {"loaded"},
         "ability_id":asset["ability_id"],"kind":asset["kind"],"skill_id":asset["skill_id"],
         "sha256":asset["sha256"],"bytes":asset["bytes"],"source_kind":asset["source_kind"],
-        "activates":false,"scope":"run","catalog_version":catalog_version,
+        "activates":false,"scope":"conversation","catalog_version":catalog_version,
         "context_source":"live_skill_catalog","requires_activation":false,
         "availability":if available {asset["availability"].as_str().unwrap_or("activated")} else {"activated"},
         "message":if available {"This guidance is already supplied to the current model context."}
-            else {"Guidance loaded for this run and supplied in the next model context."}});
+            else {"Guidance selected for this conversation and refreshed in each model context."}});
     if let Some(revision)=asset.get("revision") {ack["revision"]=revision.clone();}
     ack
 }
@@ -199,9 +221,8 @@ pub(crate) async fn context_guidance(app:&App,sid:&str,run_id:&str,read_only:boo
             "kind":selected["kind"],"skill_id":selected["skill_id"]})) else {continue;};
         if validate_load(&query).is_err() {continue;}
         let Ok(mut asset)=load_asset(&current,&query) else {continue;};
-        // Published bundles replace selected guidance at the next call.
-        // Agent-owned edits retain their explicit revision fence.
-        if !same_asset(selected,&asset) && (query.kind=="own" || !current.app.abilities.published()) {continue;}
+        // Identity survives edits; current authority, source and metadata decide inclusion.
+        if !same_asset(selected,&asset) {continue;}
         mark_availability(&mut asset,&Value::Null,&current.loaded);
         if asset["requires_activation"]==false {continue;}
         if let Some(text)=asset["text"].as_str() {
@@ -216,6 +237,36 @@ pub(crate) async fn context_guidance(app:&App,sid:&str,run_id:&str,read_only:boo
     }
     Ok((guidance,included))
 }
+/// Resolve only selected agent-owned guidance for the pure capability component.
+/// Private-record authority, current mode and own-skill revision remain host-owned;
+/// a concurrent change rejects the entire read instead of returning stale bodies.
+pub(crate) async fn own_capability_guidance(app:&App,sid:&str,run_id:&str,read_only:bool)
+    ->Result<Vec<webagent_capability_contracts::Guidance>> {
+    use webagent_capability_contracts::{Guidance,GuidanceKind};
+    let mut current=match view(app,sid,run_id,"load_skill").await {
+        Ok(view)=>view,Err(_)=>return Ok(Vec::new()),
+    };
+    current.read_only |= read_only;
+    let mut guidance=Vec::new();
+    for selected in current.loaded_skills.as_array().into_iter().flatten() {
+        if selected["kind"]!="own" {continue;}
+        let Ok(query)=serde_json::from_value::<LoadArgs>(json!({"ability_id":selected["ability_id"],
+            "kind":selected["kind"],"skill_id":selected["skill_id"]})) else {continue;};
+        if validate_load(&query).is_err() {continue;}
+        let Ok(asset)=load_asset(&current,&query) else {continue;};
+        if !same_asset(selected,&asset) {continue;}
+        let Some(body)=asset["text"].as_str() else {continue;};
+        let id=format!("own:base:{}",query.skill_id);
+        if guidance.iter().any(|item:&Guidance|item.id==id) {continue;}
+        guidance.push(Guidance {id,kind:GuidanceKind::Own,body:body.to_owned(),selected:true,natural:false});
+    }
+    if view(app,sid,run_id,"load_skill").await?.fingerprint!=current.fingerprint {
+        bail!("Own skill access changed during capability preparation");
+    }
+    Ok(guidance)
+}
+
+/// Serve one current list/load view and reject raced source or authority before returning.
 async fn work(app:&App,sid:&str,run_id:&str,name:&str,args:&Value)->Result<Value> {
     if !owns(name) {bail!("Unknown bundled skill tool");}
     let current=view(app,sid,run_id,name).await?;
@@ -263,6 +314,7 @@ async fn work(app:&App,sid:&str,run_id:&str,name:&str,args:&Value)->Result<Value
     }
     Ok(output)
 }
+/// Cancel pure skill reads promptly and return only their bounded native result.
 pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:CancellationToken)->Result<Value> {
     if cancel.is_cancelled() {bail!("tool execution cancelled");}
     let result=tokio::select! {
@@ -278,12 +330,14 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Provide a successful metadata-only receipt independent from persistence logic.
     fn ack_fixture()->Value {
         json!({"status":"loaded","ability_id":"base","kind":"ability","skill_id":"base",
             "sha256":"a".repeat(64),"bytes":9,"source_kind":"untrusted_bundled_guidance",
             "activates":false,"catalog_version":"b".repeat(64),"context_source":"live_skill_catalog"})
     }
     #[test]
+    /// Reject mismatched receipts and preserve idempotent content-free identities.
     fn loaded_skill_selectors_are_content_free_idempotent_and_bound_to_pending_call() {
         let result=json!({"status":"success","output":ack_fixture()});
         let mut run=json!({"pending":{"name":"load_skill","arguments":{
@@ -291,6 +345,7 @@ mod tests {
         apply_selection(&mut run,&result);
         assert_eq!(run["loaded_skills"].as_array().unwrap().len(),1);
         assert!(!run.to_string().contains("LOAD BODY"));
+        assert_eq!(run["loaded_skills"],json!([{"ability_id":"base","kind":"ability","skill_id":"base"}]));
         let saved=run.clone();
         apply_selection(&mut run,&result);
         assert_eq!(run,saved);
@@ -304,6 +359,7 @@ mod tests {
         assert_eq!(run,before);
     }
     #[test]
+    /// Keep instruction text outside tool acknowledgments and durable selectors.
     fn acknowledgment_only_skill_load_selects_without_recording_the_body() {
         let mut asset=ack_fixture();
         asset["text"]=json!("PRIVATE_SKILL_BODY");
@@ -331,7 +387,8 @@ mod tests {
         assert_eq!(unchanged,initial);
     }
     #[test]
-    fn availability_distinguishes_pinned_loaded_and_changed_guidance() {
+    /// Retain selected availability across edits without merging distinct identities.
+    fn availability_tracks_live_identity_across_guidance_edits() {
         let mut visible=json!({"ability_id":"base","kind":"ability","skill_id":"base",
             "sha256":"old","availability":"visible"});
         mark_availability(&mut visible,&Value::Null,&Value::Null);
@@ -346,6 +403,10 @@ mod tests {
         hidden["availability"]=json!("discoverable");
         hidden["sha256"]=json!("replacement");
         mark_availability(&mut hidden,&selected,&Value::Null);
+        assert_eq!(hidden["requires_activation"],false);
+        assert_eq!(hidden["availability"],"activated");
+        hidden["skill_id"]=json!("another_guide");hidden["availability"]=json!("discoverable");
+        mark_availability(&mut hidden,&selected,&Value::Null);
         assert_eq!(hidden["requires_activation"],true);
         let mut tool=json!({"ability_id":"files","kind":"tool","skill_id":"file_read",
             "sha256":"x","availability":"discoverable"});
@@ -357,6 +418,7 @@ mod tests {
         assert!(!serde_json::from_value::<ListArgs>(json!({"ability_id":"base"})).unwrap().include_available);
     }
     #[test]
+    /// Verify lexical metadata search including bounded near-word matching.
     fn skill_search_matches_summary_and_similar_terms() {
         let skill=json!({"skill_id":"ui_theming",
             "summary":"Use when changing WebAgent UI appearance and its palette"});
@@ -366,6 +428,7 @@ mod tests {
     }
 
     #[test]
+    /// Reject untrusted scope, paths and malformed catalog versions before source lookup.
     fn selectors_reject_paths_unknown_fields_and_unbounded_versions() {
         for skill in ["../secret","file.skill.md","/etc/passwd","","UPPER"] {
             assert!(validate_load(&LoadArgs {ability_id:"base".into(),kind:"selectable".into(),
@@ -386,6 +449,7 @@ mod tests {
         assert!(serde_json::from_value::<ListArgs>(json!({"ability_id":"base","user_id":"foreign"})).is_err());
     }
     #[tokio::test]
+    /// Prevent another caller from discovering private records through a foreign session.
     async fn caller_owned_session_is_required_even_before_skill_lookup() {
         let (_root,base)=crate::runtime_tests::fixture_uninitialized().await;
         let first=base.store.create_user_account("skill-first","fixture-password-hash").await.unwrap();
@@ -401,4 +465,40 @@ mod tests {
         let cancel=CancellationToken::new();cancel.cancel();
         assert!(execute(&owner,"private","run","list_skills",&json!({"ability_id":"base"}),cancel).await.is_err());
     }
+    #[test]
+    /// Adopt own-skill revisions while preserving Off and exact selector boundaries.
+    fn own_skill_identity_survives_revision_but_does_not_cross_selector_boundaries() {
+        let selected=json!({"ability_id":"base","kind":"own","skill_id":"review","sha256":"old","revision":1});
+        let record=json!({"name":"review","mode":"selectable","instructions":"CURRENT OWN BODY","revision":2});
+        let mut asset=own_asset(&record).unwrap();
+        assert!(same_asset(&selected,&asset));
+        mark_availability(&mut asset,&json!([selected.clone()]),&Value::Null);
+        assert_eq!(asset["requires_activation"],false);
+        assert_eq!(asset["text"],"CURRENT OWN BODY");
+        for field in ["ability_id","kind","skill_id"] {
+            let mut different=selected.clone();different[field]=json!("other");
+            assert!(!same_asset(&different,&asset));
+        }
+        let mut off=record.clone();off["mode"]=json!("off");
+        assert!(own_asset(&off).is_err());
+    }
+
+    /// Receipt metadata must not pin an existing identity or disturb stable order.
+    #[test]
+    fn existing_legacy_skill_selector_is_normalized_without_reordering() {
+        let mut run=json!({"pending":{"name":"load_skill","arguments":{
+            "ability_id":"base","kind":"ability","skill_id":"base"}},
+            "loaded_skills":[{"ability_id":"base","kind":"own","skill_id":"earlier"},
+                {"ability_id":"base","kind":"ability","skill_id":"base","sha256":"old","revision":2},
+                {"ability_id":"base","kind":"own","skill_id":"later"}]});
+        apply_selection(&mut run,&json!({"status":"success","output":ack_fixture()}));
+        assert_eq!(run["loaded_skills"],json!([
+            {"ability_id":"base","kind":"own","skill_id":"earlier"},
+            {"ability_id":"base","kind":"ability","skill_id":"base"},
+            {"ability_id":"base","kind":"own","skill_id":"later"}]));
+        let normalized=run.clone();
+        apply_selection(&mut run,&json!({"status":"success","output":ack_fixture()}));
+        assert_eq!(run,normalized);
+    }
+
 }

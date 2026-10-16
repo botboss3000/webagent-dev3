@@ -1,0 +1,12 @@
+# Pure deterministic capability composition, linked directly or hosted by the separate service.
+[package]
+name = "webagent-capability-context"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+webagent-capability-contracts = { path = "../capability-contracts" }
+anyhow = "1"
+
+[dev-dependencies]
+serde_json = "1"

@@ -8,10 +8,10 @@ spec=importlib.util.spec_from_file_location("engine_executor",ROOT/"build-servic
 executor=importlib.util.module_from_spec(spec);spec.loader.exec_module(executor)
 class EngineTests(unittest.TestCase):
     def descriptor(self):
-        return {"schema_version":1,"id":"context-assembly","group":"engine-loop","interface_version":1,"implementation_version":"0.1.0","operation":"context.prepare","modes":["live","linked"],"runtime_requirements":[],"build":{"package":engine.BINARY,"source_inputs":engine.SOURCE_INPUTS,"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/"+engine.BINARY,"limits":{"max_request_bytes":16777216,"max_response_bytes":16777216,"timeout_ms":30000,"max_concurrency":1}}
+        return {"schema_version":1,"id":"context-assembly","group":"engine-loop","interface_version":2,"implementation_version":"0.2.0","operation":"context.prepare","modes":["live","linked"],"runtime_requirements":[],"build":{"package":engine.BINARY,"source_inputs":engine.SOURCE_INPUTS,"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/"+engine.BINARY,"limits":{"max_request_bytes":16777216,"max_response_bytes":16777216,"timeout_ms":30000,"max_concurrency":1}}
     def test_structured_smoke_artifact_survives_true_environment_redaction(self):
         import test_admin_build as fixtures
-        proof={"mode":"linked","equivalence":True,"interface_version":1,"prepared":[{},{}],"background_prepared":[{},{}],"boot_prepared":[{},{}],"service_started":False};raw=json.dumps(proof)
+        proof={"mode":"linked","equivalence":True,"interface_version":2,"prepared":[{},{}],"background_prepared":[{},{}],"boot_prepared":[{},{}],"assets_prepared":[{},{}],"capability_prepared":[{},{}],"provider_prepared":[{},{}],"service_started":False};raw=json.dumps(proof)
         self.assertIn("[redacted]",fixtures.host.scrub(raw,["true"]))
         with tempfile.TemporaryDirectory()as temporary:
             path=Path(temporary)/"linked-smoke-result.json";path.write_text(raw)
@@ -48,13 +48,13 @@ class EngineTests(unittest.TestCase):
         worker.compiler_dependencies.return_value={"src/main.rs"}
         with self.assertRaisesRegex(ValueError,"attestation"):worker.linked_dependencies(Path("linked-target"),files)
     def test_live_optimized_smoke_requires_lifecycle_and_equal_prepared_cases(self):
-        linked={"mode":"linked","equivalence":True,"interface_version":1,"prepared":[{"envelope":"fixture1"},{"envelope":"fixture2"}],"background_prepared":[{},{}],"boot_prepared":[{},{}],"service_started":False}
+        linked={"mode":"linked","equivalence":True,"interface_version":2,"prepared":[{"envelope":"fixture1"},{"envelope":"fixture2"}],"background_prepared":[{},{}],"boot_prepared":[{},{}],"assets_prepared":[{},{}],"capability_prepared":[{},{}],"provider_prepared":[{},{}],"service_started":False}
         live={**linked,"mode":"live","service_reused":True,"service_drained":True}
         self.assertEqual(executor.Executor.live_smoke(json.dumps(live),linked)["mode"],"live")
         for changed in ({**live,"service_reused":False},{**live,"service_drained":False},{**live,"prepared":[{},{}]}):
             with self.assertRaises(ValueError):executor.Executor.live_smoke(json.dumps(changed),linked)
     def test_optimized_linked_proof_rejects_live_mode_and_failed_equivalence(self):
-        self.assertEqual(executor.Executor.linked_smoke('{"mode":"linked","equivalence":true,"interface_version":1,"prepared":[{},{}],"background_prepared":[{},{}],"boot_prepared":[{},{}],"service_started":false}')["mode"],"linked")
+        self.assertEqual(executor.Executor.linked_smoke('{"mode":"linked","equivalence":true,"interface_version":2,"prepared":[{},{}],"background_prepared":[{},{}],"boot_prepared":[{},{}],"assets_prepared":[{},{}],"capability_prepared":[{},{}],"provider_prepared":[{},{}],"service_started":false}')["mode"],"linked")
         for value in ({"mode":"live","equivalence":True},{"mode":"linked","equivalence":False},{"mode":"linked"}):
             with self.assertRaisesRegex(ValueError,"smoke"):executor.Executor.linked_smoke(json.dumps(value))
     def test_command_timeout_keeps_scrubbed_output_and_private_inspect_stays_empty(self):
@@ -88,7 +88,7 @@ class EngineTests(unittest.TestCase):
             with self.subTest(scenario=scenario),tempfile.TemporaryDirectory()as temporary:
                 resources=types.SimpleNamespace(enabled=True,enter=Mock(),attached=Mock(),lock=threading.RLock(),rows=defaultdict(dict),diagnostic_check=lambda _:False)
                 runner=types.SimpleNamespace(command=Mock(side_effect=["a"*64,"started","compiler succeeded"]),job_context=types.SimpleNamespace(),resource_progress=Mock())
-                observed={"memory_max":cap if scenario!="unenforced"else None,"swap_max":0,"oom_events":0,"oom_kills":0,"peak_memory":1024}
+                observed={"container_id":"a"*64,"memory_max":cap if scenario!="unenforced"else None,"swap_max":0,"oom_events":0,"oom_kills":0,"peak_memory":1024}
                 runner.resource_request=Mock(side_effect=[{"container_id":"a"*64,"state":"created","phase":"compile_test"},observed,{**observed,"oom_events":1 if scenario=="oom"else 0,"oom_kills":1 if scenario=="oom"else 0}])
                 worker=executor.Executor(runner,resources,{"instance":"development","service_uid":1000,"service_gid":1000});worker.finish_phase=Mock();job={"job_id":str(uuid.uuid4()),"compiler_memory_cap":cap}
                 args=(job,"compile_test","engine",Path(temporary),Path(temporary)/"output",["cargo","check"],"engine:rust1.90:check",10)
@@ -123,7 +123,7 @@ class EngineTests(unittest.TestCase):
     def test_actual_execution_mode_gates_hot_engine_replacement(self):
         import test_admin_build as fixtures
         from unittest.mock import Mock
-        runner=fixtures.host.Runner();runner.current_asset_id=Mock(return_value="publication")
+        runner=fixtures.host.Runner();runner.current_asset_id=Mock(return_value="publication");runner.boot_adoption=Mock(return_value=None)
         for mode in ("live","linked",None,"unknown"):
             receipt={r:{"revision":"publication","mode":mode}for r in ("api","loop")};runner.command=Mock(return_value=json.dumps(receipt))
             self.assertEqual(runner.engine_hot_swappable(),mode=="live")
@@ -182,7 +182,7 @@ class EngineTests(unittest.TestCase):
             generation=release.stage_assets(root,job,blob,lambda _:None);artifact=root/"artifacts/key";artifact.mkdir(parents=True);binary=artifact/engine.BINARY;binary.write_bytes(b"fixture")
             output={"package":engine.ID,"build_key":"key","artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest()};engine.seal(generation,[output],root)
             self.assertEqual(release.stage_assets(root,job,blob,lambda _:None),generation)
-            changed=dict(files);value=self.descriptor();value["implementation_version"]="0.2.0";changed[manifest]=(0o644,json.dumps(value).encode())
+            changed=dict(files);value=self.descriptor();value["implementation_version"]="0.2.1";changed[manifest]=(0o644,json.dumps(value).encode())
             with self.assertRaisesRegex(ValueError,"changed"):release.stage_assets(root,job,release.archive(changed,lambda _:None),lambda _:None)
     def test_metadata_artifact_preserves_large_json_and_rejects_links(self):
         with tempfile.TemporaryDirectory()as temporary:

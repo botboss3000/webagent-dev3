@@ -66,6 +66,7 @@ pub struct SessionPatch {
 }
 
 impl SessionPatch {
+    /// Reject empty patches and malformed retry identities or titles before entering a session transaction.
     pub fn validate(&self) -> std::result::Result<(), &'static str> {
         if self.client_request_id.is_empty() || self.client_request_id.len() > 128
             || self.client_request_id.trim() != self.client_request_id
@@ -93,6 +94,7 @@ pub struct SessionLifecycle {
 #[derive(Debug)]
 pub struct RecycledSession;
 impl std::fmt::Display for RecycledSession {
+    /// Hide recycled-session existence behind the same public not-found message.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("Session not found") }
 }
 impl std::error::Error for RecycledSession {}
@@ -128,6 +130,7 @@ impl Store {
         Ok(())
     }
 
+    /// Read public metadata and unread counts from one user-owned snapshot.
     pub async fn session_read_summary(&self, sid: &str) -> Result<Value> {
         let mut tx = self.pool.begin().await?;
         let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
@@ -138,6 +141,7 @@ impl Store {
         Ok(result)
     }
 
+    /// Count unread assistant bubbles against the supplied session read cursor in the caller transaction.
     pub(super) async fn read_summary_in(&self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, sid: &str, session: &Value) -> Result<Value> {
         let mut summary = public_session(session)?;
         let cursor = session["read_through_seq"].as_u64().ok_or_else(|| anyhow!("Invalid read cursor"))?;
@@ -180,10 +184,12 @@ impl Store {
         Ok(SessionPatchOutcome::Saved(result))
     }
 
+    /// List active public sessions using the canonical pin/activity ordering.
     pub async fn ordered_sessions(&self) -> Result<Vec<Value>> {
         self.ordered_sessions_status(false).await
     }
 
+    /// Project active or recycled public sessions and order pins, activity and identities deterministically.
     pub async fn ordered_sessions_status(&self, recycled: bool) -> Result<Vec<Value>> {
         let mut tx = self.pool.begin().await?;
         let rows = sqlx::query("SELECT value FROM docs WHERE key LIKE 'session:%' ORDER BY key").fetch_all(&mut *tx).await?;
@@ -312,6 +318,7 @@ impl Store {
         Ok(())
     }
 
+    /// Check the current persisted lifecycle state without trusting a cached run snapshot.
     pub(crate) async fn session_available(&self, sid: &str) -> Result<bool> {
         Ok(self.get(&format!("session:{sid}")).await?
             .is_some_and(|session| session["status"] == "active"))
@@ -547,6 +554,7 @@ impl Store {
         Ok(SessionPatchOutcome::Saved(result))
     }
 
+    /// Merge partial writes without restoring stale lifecycle, history, queue or personal-read authorities.
     pub(super) async fn prepare_session_document(
         &self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, key: &str, value: &Value,
     ) -> Result<Value> {
@@ -670,15 +678,18 @@ impl Store {
 mod tests {
     use super::*;
 
+    /// Build a typed session metadata request with an explicit retry identity and expected revision.
     fn patch(request: &str, revision: u64, title: Option<&str>, pinned: Option<bool>) -> SessionPatch {
         SessionPatch { client_request_id:request.into(), expected_revision:revision,
             title:title.map(str::to_owned), pinned }
     }
 
+    /// Build a typed recycle/restore/purge request for lifecycle assertions.
     fn lifecycle(request: &str, revision: u64) -> SessionLifecycle {
         SessionLifecycle { client_request_id: request.into(), expected_revision: revision }
     }
 
+    /// Verify statistics pagination omits private context while retaining unknown usage accounting.
     #[tokio::test]
     async fn session_statistics_are_bounded_private_and_preserve_unknown_usage() {
         let root = tempfile::tempdir().unwrap();
@@ -703,6 +714,7 @@ mod tests {
         assert!(store.session_statistics_page(true,0,100).await.unwrap().0.is_empty());
     }
 
+    /// Verify recycle/restore preserves history and metadata and old receipts cannot repeat an effect after restart.
     #[tokio::test]
     async fn lifecycle_preserves_history_metadata_retries_and_restart() {
         let root = tempfile::tempdir().unwrap();
@@ -743,6 +755,7 @@ mod tests {
     }
 
 
+    /// Verify purge removes conversation-owned private records and selections without touching another session or reviving work.
     #[tokio::test]
     async fn purge_erases_private_data_without_reviving_work_or_other_sessions() {
         let root=tempfile::tempdir().unwrap();
@@ -752,17 +765,20 @@ mod tests {
         store.put("run:r",&json!({"id":"r","session_id":"s","status":"queued","input":[{"role":"user","content":"private"}]})).await.unwrap();
         store.put("attachment:a",&json!({"id":"a","session_id":"s","bytes":3})).await.unwrap();
         store.put("attachment_quota",&json!({"bytes":8})).await.unwrap();
+        store.put("session_context_assets:s",&json!({"version":1,"session_id":"s","scopes":{}})).await.unwrap();
         let mut tx=store.pool.begin().await.unwrap();
         store.write_document(&mut tx,"receipt:base:s:r:call",&json!({"output":{"artifact":"private checkpoint"}})).await.unwrap();
         tx.commit().await.unwrap();
         assert!(matches!(store.purge_session("s",&lifecycle("purge",0)).await.unwrap(),SessionPatchOutcome::Conflict(_)));
         store.lifecycle_session("s",&lifecycle("recycle",0),false).await.unwrap();
+        assert!(store.get("session_context_assets:s").await.unwrap().is_some());
         let receipt=lifecycle("purge",1);
         assert!(matches!(store.purge_session("s",&receipt).await.unwrap(),SessionPatchOutcome::Saved(_)));
         assert!(matches!(store.purge_session("s",&receipt).await.unwrap(),SessionPatchOutcome::Saved(_)));
         assert!(matches!(store.lifecycle_session("s",&lifecycle("restore",2),true).await.unwrap(),SessionPatchOutcome::NotFound));
         assert!(store.get("run:r").await.unwrap().is_none());
         assert!(store.get("attachment:a").await.unwrap().is_none());
+        assert!(store.get("session_context_assets:s").await.unwrap().is_none());
         let base_count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key='receipt:base:s:r:call'").fetch_one(&store.pool).await.unwrap();
         assert_eq!(base_count,0);
         assert_eq!(store.get("attachment_quota").await.unwrap().unwrap()["bytes"],5);
@@ -779,6 +795,7 @@ mod tests {
         assert!(!reopened.session_available("s").await.unwrap());
     }
 
+    /// Verify recycle cancels session runs/tasks/reviews and rejects late publication even after restore.
     #[tokio::test]
     async fn recycle_cancels_owned_work_and_fences_late_writers() {
         let root = tempfile::tempdir().unwrap();
@@ -808,6 +825,7 @@ mod tests {
         assert!(!store.background_cas(&task,Some(0)).await.unwrap());
     }
 
+    /// Verify lifecycle cancellation handles unknown future nonterminal states and receipt failure rolls back all effects.
     #[tokio::test]
     async fn lifecycle_cancels_all_nonterminal_states_and_rolls_back_receipt_failure() {
         let root = tempfile::tempdir().unwrap(); let store = Store::open(root.path()).await.unwrap();
@@ -834,6 +852,7 @@ mod tests {
         assert!(store.chat_snapshot("s").await.unwrap().0.is_empty());
     }
 
+    /// Verify lifecycle no-ops produce no new revision/event and claims cannot revive recycled sessions.
     #[tokio::test]
     async fn lifecycle_noops_and_scheduler_claim_do_not_revive_recycled_sessions() {
         let root = tempfile::tempdir().unwrap(); let store = Store::open(root.path()).await.unwrap();
@@ -854,6 +873,7 @@ mod tests {
         assert_eq!(count,0);
     }
 
+    /// Race message admission against recycle and verify admitted work is cancelled or never committed.
     #[tokio::test]
     async fn lifecycle_and_admission_race_across_independent_stores() {
         let root = tempfile::tempdir().unwrap(); let a = Store::open(root.path()).await.unwrap(); let b = Store::open(root.path()).await.unwrap();
@@ -874,6 +894,7 @@ mod tests {
         }
     }
 
+    /// Verify public publication advances activity and read acknowledgments survive stale session snapshots.
     #[tokio::test]
     async fn publication_activity_read_cursor_and_checkpoint_preservation() {
         let root = tempfile::tempdir().unwrap();
@@ -915,6 +936,7 @@ mod tests {
         assert_eq!(reopened.session_read_summary("s").await.unwrap(),after);
     }
 
+    /// Race read acknowledgments across Stores and verify monotonic cursors leave later publications unread.
     #[tokio::test]
     async fn read_ack_cross_store_race_preserves_maximum_and_new_unread() {
         let root = tempfile::tempdir().unwrap();
@@ -945,6 +967,7 @@ mod tests {
         assert_eq!(patched["session"]["read_through_seq"],cursor);
     }
 
+    /// Verify publication activity and read acknowledgment roll back with their failed transactions.
     #[tokio::test]
     async fn activity_and_read_event_failures_roll_back() {
         let root = tempfile::tempdir().unwrap();
@@ -964,6 +987,7 @@ mod tests {
         assert_eq!(store.session_read_summary("s").await.unwrap()["read_through_seq"],0);
     }
 
+    /// Exercise title/identity bounds and reject model-selected authority fields in session patches.
     #[test]
     fn session_patch_validation() {
         for title in ["", "   ", "bad\nname", &"é".repeat(101)] {
@@ -977,6 +1001,7 @@ mod tests {
             "expected_revision":0,"pinned":true,"agent_id":"other"})).is_err());
     }
 
+    /// Verify metadata patch receipt replay and stale-checkpoint writes preserve newer user metadata.
     #[tokio::test]
     async fn session_patch_atomic_retry_and_stale_checkpoint() {
         let root = tempfile::tempdir().unwrap();
@@ -1021,6 +1046,7 @@ mod tests {
         assert!(matches!(reopened.patch_session("missing", &request).await.unwrap(), SessionPatchOutcome::NotFound));
     }
 
+    /// Verify session ordering, account isolation and single-winner revision CAS across independent Stores.
     #[tokio::test]
     async fn session_patch_ordering_isolation_and_cross_process_conflict() {
         let root = tempfile::tempdir().unwrap();
@@ -1051,6 +1077,7 @@ mod tests {
         assert_eq!(store.get("session:a").await.unwrap().unwrap()["metadata_revision"],1);
     }
 
+    /// Inject retry-receipt failure and verify metadata and event writes roll back before a successful retry.
     #[tokio::test]
     async fn session_patch_receipt_failure_rolls_back_everything() {
         let root = tempfile::tempdir().unwrap();
@@ -1069,6 +1096,7 @@ mod tests {
         assert!(matches!(store.patch_session("s",&request).await.unwrap(),SessionPatchOutcome::Saved(_)));
     }
 
+    /// Verify missing legacy metadata receives defaults without replacing saved fields or accepting invalid values.
     #[test]
     fn session_metadata_defaults_and_preservation() {
         let original = json!({"id":"s", "agent_id":"a", "title":"Original",
@@ -1095,6 +1123,7 @@ mod tests {
         assert!(with_session_metadata(&invalid, None).is_err());
     }
 
+    /// Verify partial checkpoint writes preserve newer lifecycle and user metadata.
     #[tokio::test]
     async fn session_metadata_partial_writes_preserve_existing_values() {
         let root = tempfile::tempdir().unwrap();
@@ -1112,6 +1141,7 @@ mod tests {
         assert_eq!(saved["checkpoint_through"], 42);
     }
 
+    /// Verify per-user metadata migration rolls back all upgrades and its marker if any document is invalid.
     #[tokio::test]
     async fn session_metadata_migration_is_user_scoped_and_rolls_back() {
         let root = tempfile::tempdir().unwrap();
@@ -1141,6 +1171,7 @@ mod tests {
         assert!(store.get("session:a").await.unwrap().is_none());
     }
 
+    /// Verify legacy metadata backfill is durable/idempotent and newly admitted sessions get canonical metadata immediately.
     #[tokio::test]
     async fn session_metadata_migration_persistence_and_atomic_creation() {
         let root = tempfile::tempdir().unwrap();

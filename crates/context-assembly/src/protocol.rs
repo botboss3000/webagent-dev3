@@ -4,6 +4,8 @@ use crate::{context_input::Request,context_assembly::Prepared,context_accounting
 pub use webagent_context_contracts::protocol::*;
 /// Restore ephemeral host-resolved policy after transport decoding; policy storage stays outside this crate.
 pub fn prepare_owned(request:&PrepareRequest,state:&mut ContextAccounting)->Result<PreparedResult> {
+ state.projection_extra_bytes=request.projection_extra_bytes;
+ state.contributions_projected=request.contributions_projected;
  let mut config=request.compaction.clone();config.system_input_budget=request.system_input_budget;config.summary_instructions=request.summary_instructions.clone();config.validate()?;
  let result=crate::context_assembly::prepare_incremental(Request {history:&request.history,base:&request.base,guidance:&request.guidance,schemas:&request.schemas,contributions:&request.contributions,identity:request.identity,model:request.model.clone(),max_bytes:request.max_bytes,compaction:&config},state)?;
  Ok(match result {Prepared::Ready(envelope)=>PreparedResult::Ready{instructions:envelope.instructions,report:envelope.report},Prepared::Compact(plan)=>PreparedResult::Compact{plan}})
@@ -14,9 +16,10 @@ mod tests {
  use serde_json::Value;
  use crate::{context_input::{CallIdentity,Contribution,ModelMetadata},context_compaction::Config};
  use serde_json::json;
+ /// Construct a valid bounded owned request shared by transport and accounting regressions.
  fn request(history:Vec<Value>)->PrepareRequest {
   let compaction:Config=serde_json::from_value(json!({"schema_version":1,"trigger_tokens":10000,"tail_tokens":40,"summary_tokens":20,"characters_per_token":4,"summary_reserve_bytes":300,"max_source_bytes":262144,"max_summary_bytes":300,"summary_prefix":"Earlier conversation summary (background context, not a new request):\n","active_summary_prefix":"Active task progress summary (background context, not a new request):\n","summary_prompt":"Summarize under {summary_characters} characters. Conversation JSON: {source}"})).unwrap();
-  PrepareRequest{history,base:"base é🌍".into(),guidance:" guidance".into(),schemas:vec![json!({"name":"read","parameters":{}})],contributions:vec![Contribution{id:"mode".into(),source:"trusted".into(),lifetime:crate::context_input::Lifetime::Call,content:"overlay".into(),turn:1,call:2}],identity:CallIdentity{turn:1,call:2},model:ModelMetadata{provider:"test".into(),model:"resolved".into(),transport:"responses".into()},max_bytes:4096,compaction,system_input_budget:None,summary_instructions:"summary instructions".into()}
+  PrepareRequest{history,base:"base é🌍".into(),guidance:" guidance".into(),schemas:vec![json!({"name":"read","parameters":{}})],contributions:vec![Contribution{id:"mode".into(),source:"trusted".into(),lifetime:crate::context_input::Lifetime::Call,content:"overlay".into(),turn:1,call:2}],identity:CallIdentity{turn:1,call:2},model:ModelMetadata{provider:"test".into(),model:"resolved".into(),transport:"responses".into()},max_bytes:4096,compaction,projection_extra_bytes:0,contributions_projected:false,system_input_budget:None,summary_instructions:"summary instructions".into()}
  }
  #[test]
  fn transport_roundtrip_matches_borrowed_linked_and_never_returns_history() {
@@ -73,4 +76,34 @@ mod tests {
   assert_eq!(decoded.system_input_budget,Some(10));
   assert!(prepare_owned(&decoded,&mut ContextAccounting::default()).is_err());
  }
+ /// Synthetic messages are charged once while call-scoped contributions retain their report lifetime.
+ #[test]
+ fn projected_growth_matches_exact_envelope_without_duplicating_native_contributions() {
+  let mut request=request(vec![json!({"role":"user","content":"canonical é"})]);
+  let mut projected=request.history.clone();
+  projected.push(json!({"role":"developer","content":"overlay and current skill é🌍"}));
+  request.projection_extra_bytes=crate::context_accounting::json_size(&projected).unwrap()
+   -crate::context_accounting::json_size(&request.history).unwrap();
+  request.contributions_projected=true;
+  let PreparedResult::Ready{instructions,report}=prepare_owned(&request,&mut ContextAccounting::default()).unwrap()
+   else {panic!("expected ready")};
+  assert_eq!(instructions,"base é🌍 guidance");
+  let envelope=json!({"instructions":instructions,"tools":request.schemas,"input":projected});
+  assert_eq!(report.envelope_bytes,crate::context_accounting::json_size(&envelope).unwrap());
+  assert_eq!(report.projection_extra_bytes,request.projection_extra_bytes);
+  assert_eq!(report.overlays.len(),1);
+  assert_eq!(report.overlays[0].disposition,"included");
+  assert_eq!(request.history.len(),1);
+ }
+ /// Empty durable input contributes its two brackets exactly once, including through owned transport.
+ #[test]
+ fn empty_history_envelope_accounts_brackets_once() {
+  let request=request(Vec::new());
+  let PreparedResult::Ready{instructions,report}=prepare_owned(&request,&mut ContextAccounting::default()).unwrap()
+   else {panic!("expected ready")};
+  let envelope=json!({"instructions":instructions,"tools":request.schemas,"input":[]});
+  assert_eq!(report.history_json_bytes,2);
+  assert_eq!(report.envelope_bytes,crate::context_accounting::json_size(&envelope).unwrap());
+ }
+
 }

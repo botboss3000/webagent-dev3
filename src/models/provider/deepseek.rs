@@ -3,60 +3,28 @@ use super::*;
 use crate::model_selection::FailureKind;
 use std::collections::BTreeMap;
 
-fn text(value: &Value) -> String {
-    if let Some(s) = value.as_str() { return s.to_owned(); }
-    value.as_array().map(|items| items.iter().filter_map(|v| v["text"].as_str()).collect::<Vec<_>>().join("")).unwrap_or_default()
-}
-fn message_content(value:&Value)->Result<Value>{
-    let Some(parts)=value.as_array() else{return Ok(json!(text(value)))};
-    if !parts.iter().any(|part|part["type"]=="input_image"){return Ok(json!(text(value)));}
-    parts.iter().map(|part|match part["type"].as_str(){
-        Some("input_text"|"text"|"output_text")=>Ok(json!({"type":"text","text":part["text"]})),
-        Some("input_image")=>Ok(json!({"type":"image_url","image_url":{"url":required(part,"image_url")?}})),
-        _=>bail!("Unsupported media part")
-    }).collect::<Result<Vec<_>>>().map(|parts|json!(parts))
-}
+// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Linked compatibility fixture delegates projection to the same planner and materializer as the registered service; the host retains compatible transport execution.","span_lines":20,"configuration":{"status":"not_applicable","rationale":"Provider identity and compatibility reconstruction are fixed protocol invariants."}}
+/// Compatibility fixture for the linked planner; production translation is a registered component.
+/// Calls provider-projection::project, shared materialize_owned and host compatible_body; starts no network request.
+#[cfg(any(feature = "linked-context", test))]
 pub(super) fn request_body(model: &str, input: Vec<Value>, tools: Vec<Value>, instructions: &str) -> Result<Value> {
-    let mut messages = vec![json!({"role":"system","content":instructions})];
-    for item in input {
-        match item["type"].as_str().unwrap_or("message") {
-            "reasoning" => {},
-            "function_call" => {
-                let call = json!({"id":required(&item,"call_id")?,"type":"function","function":{
-                    "name":required(&item,"name")?,"arguments":required(&item,"arguments")?}});
-                if messages.last().is_some_and(|v| v["role"] == "assistant") {
-                    let last = messages.last_mut().unwrap();
-                    if !last["tool_calls"].is_array() { last["tool_calls"] = json!([]); }
-                    last["tool_calls"].as_array_mut().unwrap().push(call);
-                } else {
-                    let mut message = json!({"role":"assistant","content":null,"tool_calls":[call]});
-                    if let Some(reasoning) = item.get("deepseek_reasoning") { message["reasoning_content"] = reasoning.clone(); }
-                    messages.push(message);
-                }
-            },
-            "function_call_output" => messages.push(json!({"role":"tool","tool_call_id":required(&item,"call_id")?,"content":text(&item["output"])})),
-            "message" => {
-                let role = item["role"].as_str().unwrap_or("user");
-                if !matches!(role,"user"|"assistant"|"system"|"developer") { bail!("Invalid Provider message role"); }
-                let mut message = json!({"role":if role=="developer" {"system"} else {role},"content":message_content(&item["content"])?});
-                if let Some(reasoning) = item.get("deepseek_reasoning") { message["reasoning_content"] = reasoning.clone(); }
-                messages.push(message);
-            },
-            _ => bail!("Unsupported Provider input item"),
-        }
-    }
-    let mut body = json!({"model":model,"messages":messages,"stream":true,"stream_options":{"include_usage":true},"max_tokens":8192});
-    if !tools.is_empty() {
-        body["tools"] = json!(tools.into_iter().map(|t| json!({"type":"function","function":{
-            "name":t["name"],"description":t["description"],"parameters":t["parameters"]}})).collect::<Vec<_>>());
-        body["tool_choice"] = json!("auto");
-    }
-    Ok(body)
+    let request = webagent_provider_contracts::RequestV1::Project {
+        version:webagent_provider_contracts::CONTRACT_VERSION,
+        provider:webagent_provider_contracts::ProviderIdV1::Deepseek,
+        model:model.to_owned(), instructions:instructions.to_owned(), input, tools,
+    };
+    let projection = webagent_provider_projection::project(&request)?;
+    let webagent_provider_contracts::MaterializedV1::ChatCompletions { messages, tools } =
+        webagent_provider_contracts::materialize_owned(request, &projection)?
+        else { bail!("Compatible provider fixture expected"); };
+    let selection = ProviderSelection { limits:None, provider:ProviderId::Deepseek, model:model.to_owned() };
+    Ok(super::call::compatible_body(&selection, messages, tools))
 }
 
 #[derive(Default)]
 struct Completion { content: String, reasoning: String, calls: BTreeMap<u64,Value>, usage:Value, finished:bool }
 impl Completion {
+    /// Accumulate bounded compatible text, reasoning and indexed tool fragments; retain trailing usage and reject unsuccessful finish reasons.
     fn push(&mut self, event: &Value) -> Result<(String, bool)> {
         if event["usage"].is_object(){self.usage=event["usage"].clone();}
         if event.get("error").is_some() { bail!("Provider stream reported an error"); }
@@ -85,6 +53,7 @@ impl Completion {
         self.finished |= finished;
         Ok((content,finished))
     }
+    /// Package validated tool arguments and collected reasoning into Responses-shaped output; the transport enforces successful stream completion.
     fn result(self) -> Result<Value> {
         let mut output = Vec::new();
         // Keep text on the tool-call assistant message, not a second message
@@ -145,6 +114,7 @@ impl Provider {
             result=tokio::time::timeout(Duration::from_secs(60),read)=>result.map_err(|_|typed_failure(FailureKind::Transient,false,"Provider discovery timed out"))?
         }
     }
+    /// Send only the fixed endpoint and selected API key, then consume bounded SSE with cancellation and trailing-usage retention.
     pub(super) async fn send_compatible(
         &self,
         body: Value,
@@ -204,6 +174,7 @@ impl Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Capture a local compatible call and verify text deltas use its API key without forwarding subscription account headers.
     #[tokio::test]
     async fn streams_text_with_the_deepseek_key_not_subscription_headers() {
         use axum::{extract::State,http::HeaderMap,routing::post,Json,Router};
@@ -241,6 +212,7 @@ mod tests {
         assert_eq!(headers["authorization"],"Bearer test-key");assert!(!headers.contains_key("chatgpt-account-id"));assert_eq!(body["model"],"deepseek-chat");
         server.abort();
     }
+    /// Verify empty-choice usage frames after finish_reason remain attached to the completed response.
     #[tokio::test]
     async fn usage_after_finish_reason_is_retained(){
         use axum::{routing::post,Router};
@@ -270,6 +242,7 @@ data: [DONE]
         assert_eq!(result["usage"]["prompt_tokens"],42);assert_eq!(result["usage"]["completion_tokens"],3);
         server.abort();
     }
+    /// Verify discovery deduplicates safe model identifiers, omits private metadata and keeps credentials out of query strings.
     #[tokio::test]
     async fn discovery_returns_only_validated_ids_and_never_sends_keys_in_urls() {
         use axum::{routing::get,Router};
@@ -288,6 +261,7 @@ data: [DONE]
         assert!(provider.discover_models(ProviderId::Openrouter,&json!({"api_key":"discovery-key"}),cancel).await.is_err());
         server.abort();
     }
+    /// Exercise the one-MiB compatible discovery body limit through a real local response.
     #[tokio::test]
     async fn discovery_rejects_oversized_response() {
         use axum::{routing::get,Router};
@@ -298,6 +272,7 @@ data: [DONE]
         let error=provider.discover_models(ProviderId::Openrouter,&json!({"api_key":"discovery-key"}),CancellationToken::new()).await.unwrap_err();
         assert!(error.to_string().contains("exceeded limit"));server.abort();
     }
+    /// Verify every fixed compatible route uses only its API key and excludes subscription identity and foreign reasoning.
     #[tokio::test]
     async fn fixed_providers_execute_with_isolated_api_credentials() {
         use axum::{extract::State,http::HeaderMap,routing::post,Json,Router};
@@ -337,6 +312,7 @@ data: [DONE]
         }
         server.abort();
     }
+    /// Verify redirect-disabled compatible requests cannot forward credentials to a returned location or expose it in errors.
     #[tokio::test]
     async fn fixed_provider_redirect_cannot_forward_key() {
         use axum::{routing::post,Router};
@@ -363,6 +339,7 @@ data: [DONE]
         assert!(!error.to_string().contains("private"));
         server.abort();
     }
+    /// Round-trip text plus tool calls without inserting a second assistant message before the tool result.
     #[test]
     fn text_and_tool_calls_share_one_assistant_message() {
         let mut c=Completion::default();
@@ -374,6 +351,7 @@ data: [DONE]
         assert_eq!(body["messages"][1]["content"],"checking");assert_eq!(body["messages"][1]["tool_calls"][0]["id"],"call1");
         assert_eq!(body["messages"][2]["role"],"tool");
     }
+    /// Verify linked compatible translation preserves call IDs, DeepSeek reasoning and native tool schema/result fields.
     #[test]
     fn translates_tools_and_results() {
         let body=request_body("deepseek-chat",vec![json!({"role":"user","content":"hi"}),
@@ -385,6 +363,7 @@ data: [DONE]
         assert_eq!(body["messages"][3]["role"],"tool");
         assert_eq!(body["tools"][0]["function"]["name"],"test");
     }
+    /// Verify streamed function-argument fragments and reasoning become one validated final call.
     #[test]
     fn assembles_fragmented_tool_calls() {
         let mut c=Completion::default();

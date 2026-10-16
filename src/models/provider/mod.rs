@@ -1,4 +1,5 @@
-//! Independent ChatGPT subscription transport. Never reads v2 credentials.
+//! Host provider selection, subscription OAuth and fixed-endpoint chat transports.
+//! Credentials stay in the host; no transport reads v2 credentials.
 use anyhow::{anyhow, bail, Result};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
@@ -45,6 +46,28 @@ pub enum ProviderId {
 
 
 impl ProviderId {
+    // @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Map host-selected providers into the pure projection contract without granting endpoint or credential selection.","span_lines":28,"configuration":{"status":"not_applicable","rationale":"Provider identity and compatibility reconstruction are fixed protocol invariants."}}
+    /// Bind the projection contract to the already selected installation provider.
+    /// No component result may select another provider, endpoint or credential family.
+    pub(crate) fn projection_id(self) -> webagent_provider_contracts::ProviderIdV1 {
+        use webagent_provider_contracts::ProviderIdV1 as P;
+        match self {
+            Self::OpenaiSubscription => P::OpenaiSubscription,
+            Self::Deepseek => P::Deepseek,
+            Self::OpenaiApi => P::OpenaiApi,
+            Self::Openrouter => P::Openrouter,
+            Self::Abacus => P::Abacus,
+            Self::Gemini => P::Gemini,
+            Self::Groq => P::Groq,
+            Self::Together => P::Together,
+            Self::Mistral => P::Mistral,
+            Self::Fireworks => P::Fireworks,
+            Self::Xai => P::Xai,
+            Self::Perplexity => P::Perplexity,
+            Self::Deepinfra => P::Deepinfra,
+            Self::Typesafe => P::Typesafe,
+        }
+    }
     /// Installation-owned endpoints only. Client catalog payloads cannot override these.
     pub fn chat_endpoint(self) -> Option<&'static str> {
         match self {
@@ -102,6 +125,7 @@ impl ProviderSelection {
         })
     }
 
+    /// Convert validated model input tokens to the existing four-byte estimate, rejecting overflow; this is not provider tokenization.
     pub fn input_budget_bytes(&self) -> Result<Option<usize>> {
         let input = if let Some(limits) = &self.limits {
             limits.validate_for(self.provider, &self.model)?;
@@ -113,6 +137,7 @@ impl ProviderSelection {
         input.map(|n| n.checked_mul(4).ok_or_else(|| anyhow!("Model input budget overflow"))).transpose()
     }
 
+    /// Serialize the pinned provider/model/limits identity for durable selection plans.
     pub fn value(&self) -> Value {
         serde_json::to_value(self).expect("Provider selection serialization")
     }
@@ -128,9 +153,11 @@ pub struct ProviderFailure {
     pub http_status: Option<u16>,
 }
 impl std::fmt::Display for ProviderFailure {
+    /// Expose only the sanitized failure label through the standard error display.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.detail) }
 }
 impl std::error::Error for ProviderFailure {}
+/// Construct a classified provider failure without retaining an upstream payload or transport error.
 pub(crate) fn typed_failure(kind: crate::model_selection::FailureKind, started: bool, detail: impl Into<String>) -> anyhow::Error {
     ProviderFailure { kind, response_started: started, detail: detail.into(), transport: None, http_status: None }.into()
 }
@@ -140,6 +167,7 @@ pub struct TransportDiagnostic {
     pub timeout: bool, pub connect: bool, pub body: bool, pub decode: bool,
     pub request: bool, pub status: Option<u16>, pub io_kind: Option<String>,
 }
+/// Extract allowlisted reqwest and nested I/O facts while keeping URLs and provider text out of diagnostics.
 fn transport_failure(error:reqwest::Error,started:bool,detail:&str)->anyhow::Error {
     use std::error::Error;
     let mut source=error.source(); let mut io_kind=None;
@@ -188,6 +216,7 @@ fn event_failure_kind(value: &Value) -> crate::model_selection::FailureKind {
         kind => kind,
     }
 }
+/// Map fixed sanitized provider labels to retry and authorization categories.
 fn failure_kind(value: &Value) -> crate::model_selection::FailureKind {
     use crate::model_selection::FailureKind::*;
     match failure_detail(value) {
@@ -206,6 +235,7 @@ pub struct Provider {
     responses_endpoint: Option<String>,
 }
 
+/// Read epoch seconds for authorization expirations without failing on a clock before the epoch.
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -213,6 +243,7 @@ fn now() -> u64 {
         .as_secs()
 }
 
+/// Borrow a nonempty credential field while reporting only a fixed authorization error.
 fn required<'a>(value: &'a Value, name: &str) -> Result<&'a str> {
     value
         .get(name)
@@ -254,6 +285,7 @@ fn failure_detail(value: &Value) -> &'static str {
     }
 }
 
+/// Read at most 16 KiB of an HTTP error within five seconds, honoring cancellation and returning only sanitized categories.
 async fn response_failure(response: reqwest::Response, cancel: &CancellationToken) -> anyhow::Error {
     let status = response.status().as_u16();
     // Bound time and bytes even when an error endpoint sends an endless body.
@@ -290,6 +322,7 @@ async fn response_failure(response: reqwest::Response, cancel: &CancellationToke
         transport:None,http_status:Some(status)}.into()
 }
 
+/// Require a successful authorization response containing a JSON object; withhold upstream error bodies.
 async fn checked_json(response: reqwest::Response) -> Result<Value> {
     if !response.status().is_success() {
         bail!("Provider authorization HTTP {}", response.status().as_u16());
@@ -304,6 +337,7 @@ async fn checked_json(response: reqwest::Response) -> Result<Value> {
     Ok(value)
 }
 
+/// Project visible subscription models in server order through the shared capability normalizer.
 fn subscription_model_list(value: &Value) -> Result<Value> {
     let models = value["models"].as_array()
         .ok_or_else(|| anyhow!("Invalid subscription model catalog"))?;
@@ -323,6 +357,7 @@ fn subscription_model_list(value: &Value) -> Result<Value> {
     Ok(json!({"models":visible}))
 }
 
+/// Verify hidden rows are omitted while visible order and subscription image-input fallback survive normalization.
 #[cfg(test)]
 #[test]
 fn subscription_catalog_only_lists_visible_models_in_server_order() {
@@ -366,6 +401,7 @@ fn claims(token: &str) -> Value {
     serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}))
 }
 
+/// Add expiry and account hints from unverified JWT metadata; provider validation alone authenticates the token.
 fn decorate(mut tokens: Value) -> Result<Value> {
     required(&tokens, "access_token")?;
     let mut payload = claims(tokens.get("id_token").and_then(Value::as_str).unwrap_or(""));
@@ -419,6 +455,7 @@ struct RequestBody<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'static str>,
 }
+/// Borrow the host-selected Responses input and schemas into the stateless body with the session cache key and opaque reasoning replay.
 fn request_body<'a>(model: &'a str, input: &'a [Value], tools: &'a [Value], session: &'a str, instructions: &'a str) -> RequestBody<'a> {
     RequestBody { max_output_tokens: None, model, input, instructions, stream: true, store: false,
         include: ["reasoning.encrypted_content"], prompt_cache_key: session,
@@ -433,6 +470,7 @@ struct Frames {
     done: bool,
 }
 impl Frames {
+    /// Decode bounded SSE frames across arbitrary byte/Unicode boundaries and remember the terminal marker.
     fn push(&mut self, chunk: &[u8]) -> Result<Vec<Value>> {
         self.buffer.extend_from_slice(chunk);
         if self.buffer.len() > MAX_FRAME {
@@ -476,17 +514,20 @@ impl Frames {
 }
 
 impl Default for Provider {
+    /// Create the same fixed-endpoint, redirect-disabled provider client as Provider::new.
     fn default() -> Self {
         Self::new()
     }
 }
 impl Provider {
     /// Refresh the installation base while retaining admission-pinned agent slots.
+    /// Legacy last-good compatibility helper; strict dispatch resolves instructions_for_snapshot.
     pub(crate) fn instructions_for_turn(pinned: &str) -> String {
         let slots = pinned.strip_prefix(DEFAULT_INSTRUCTIONS)
             .or_else(||pinned.strip_prefix(LEGACY_DEFAULT_INSTRUCTIONS)).unwrap_or(pinned);
         format!("{}{}", Self::configured_base_instructions(), slots)
     }
+    /// Resolve current base, closing and Jev prompts from explicit state/publication roots; reject malformed sources before appending pinned slots.
     pub(crate) fn instructions_for_snapshot(pinned:&str,root:&std::path::Path,source:Option<&std::path::Path>)->Result<String> {
         let value=crate::live_assets::resolved_prompts_at(root,source)?;
         let mut parts=Vec::new();
@@ -497,6 +538,7 @@ impl Provider {
         let slots=pinned.strip_prefix(DEFAULT_INSTRUCTIONS).or_else(||pinned.strip_prefix(LEGACY_DEFAULT_INSTRUCTIONS)).unwrap_or(pinned);
         Ok(format!("{}{}",parts.join("\n\n"),slots))
     }
+    /// Retain the last valid composed base on read/parse failure; strict dispatch uses instructions_for_snapshot instead.
     pub(crate) fn configured_base_instructions() -> String {
         static CACHE: OnceLock<Mutex<(Option<(u128, u128)>, String)>> = OnceLock::new();
         let cache = CACHE.get_or_init(|| Mutex::new((None, DEFAULT_INSTRUCTIONS.to_string())));
@@ -530,6 +572,7 @@ impl Provider {
         cache.1.clone()
     }
 
+    /// Create a redirect-disabled HTTP client with a bounded connection timeout and installation-owned routes.
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::builder()
@@ -543,6 +586,7 @@ impl Provider {
         }
     }
 
+    /// Override the Responses/compatible endpoint only in test builds so local fixtures can observe exact wire behavior.
     #[cfg(test)]
     pub fn for_test(endpoint: String) -> Self {
         let mut provider = Self::new();
@@ -550,6 +594,7 @@ impl Provider {
         provider
     }
 
+    /// Select the fixed subscription endpoint, allowing a local override only under cfg(test).
     fn responses_endpoint(&self) -> &str {
         #[cfg(test)]
         if let Some(endpoint) = self.responses_endpoint.as_deref() {
@@ -558,6 +603,7 @@ impl Provider {
         RESPONSES
     }
 
+    /// Start subscription device authorization at the fixed issuer and normalize its expiry, verification URL and polling interval.
     pub async fn device_start(&self) -> Result<Value> {
         let response = self
             .client
@@ -581,6 +627,7 @@ impl Provider {
         Ok(device)
     }
 
+    /// Poll an unexpired device grant; return None while pending, then exchange the code and decorate provider-issued tokens.
     pub async fn device_poll(&self, device: &Value) -> Result<Option<Value>> {
         if device["expires_at"].as_u64().unwrap_or(0) <= now() {
             bail!("Device authorization expired");
@@ -608,6 +655,7 @@ impl Provider {
         Ok(Some(decorate(tokens)?))
     }
 
+    /// Post OAuth grant fields only to the fixed issuer and validate the authorization response without exposing its body.
     async fn token_form(&self, fields: &[(&str, &str)]) -> Result<Value> {
         checked_json(
             self.client
@@ -621,6 +669,7 @@ impl Provider {
         .await
     }
 
+    /// Exchange the stored refresh token, preserve fields omitted by the issuer and update account/expiry metadata.
     pub async fn refresh(&self, tokens: &Value) -> Result<Value> {
         let fresh = self
             .token_form(&[
@@ -668,6 +717,7 @@ impl Provider {
         subscription_model_list(&value)
     }
 
+    /// Send the host-prepared stateless Responses call with subscription-only credentials; bound waits/output retention and honor cancellation throughout streaming.
     async fn send_subscription(
         &self,
         request: call::SubscriptionRequest<'_>,
@@ -786,6 +836,7 @@ impl Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Verify structural upstream errors select safe retry categories without replaying deterministic contract or output-limit failures.
     #[test]
     fn provider_failure_events_use_structural_contract_guards() {
         use crate::model_selection::FailureKind::*;
@@ -810,12 +861,14 @@ mod tests {
         assert_eq!(event_failure_kind(&json!({"response":{"incomplete_details":{"reason":"content_filter"}}})), PolicyRejected);
     }
 
+    /// Verify legacy prompt loading retains its last good composition across malformed/missing files and restores the shared fixture.
     #[test]
     fn configured_base_instructions_loads_and_recovers_from_file_changes() {
         let path = "config/prompts.json";
         let original = std::fs::read(path).expect("read original prompts file");
         struct RestorePrompts(Vec<u8>);
         impl Drop for RestorePrompts {
+            /// Restore the original prompt fixture even if the prompt-cache assertion unwinds.
             fn drop(&mut self) {
                 let _ = std::fs::write("config/prompts.json", &self.0);
             }
@@ -843,6 +896,7 @@ mod tests {
         Provider::configured_base_instructions();
         assert_eq!(std::fs::read(path).expect("verify restored prompts file"), original);
     }
+    /// Verify upstream account/token text cannot escape through fixed failure labels.
     #[test]
     fn provider_failures_use_fixed_labels_without_echoing_secrets() {
         assert_eq!(failure_detail(&json!({"error":{"code":"model_not_found","message":"secret account model"}})),
@@ -856,6 +910,7 @@ mod tests {
             "Provider output limit reached");
     }
 
+    /// Exercise HTTP rejection through the real transport and assert its safe status/category omit private provider text.
     #[tokio::test]
     async fn http_failure_reports_status_and_safe_category() {
         use axum::{http::StatusCode, routing::post, Json, Router};
@@ -894,6 +949,7 @@ mod tests {
     }
 
 
+    /// Exercise bytewise Unicode and CRLF framing so network chunk boundaries cannot corrupt an SSE event.
     #[test]
     fn split_unicode_and_crlf_preserve_events() {
         let bytes =
@@ -906,6 +962,7 @@ mod tests {
         assert_eq!(values.len(), 1);
         assert_eq!(values[0]["delta"], "é");
     }
+    /// Verify Responses replay and session caching remain stateless with no prior-response identifier or implicit output limit.
     #[test]
     fn stateless_request_keeps_reasoning_and_tools() {
         let reasoning = json!({"type":"reasoning","encrypted_content":"opaque"});
@@ -938,11 +995,13 @@ mod tests {
             assert_eq!(actual, expected);
         }
     }
+    /// Reject malformed JSON events and buffered frames larger than the installed stream bound.
     #[test]
     fn stream_bounds_and_invalid_events_fail() {
         assert!(Frames::default().push(b"data: broken\n\n").is_err());
         assert!(Frames::default().push(&vec![b'x'; MAX_FRAME + 1]).is_err());
     }
+    /// Verify URL-safe JWT metadata decoding and harmless fallback for malformed token text.
     #[test]
     fn jwt_metadata_decode() {
         assert_eq!(
@@ -952,6 +1011,7 @@ mod tests {
         assert_eq!(claims("malformed"), json!({}));
     }
 
+    /// Capture real local HTTP headers/body and verify subscription identity, opaque reasoning, tool calls and stateless request fields.
     #[tokio::test]
     async fn subscription_headers_and_completed_output_are_preserved() {
         use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
@@ -1013,6 +1073,7 @@ mod tests {
         server.abort();
     }
 
+    /// Verify completed item events provide fallback output when the terminal response has an empty output array.
     #[tokio::test]
     async fn streamed_output_items_fill_empty_completion() {
         use axum::{routing::post, Router};
@@ -1049,6 +1110,7 @@ mod tests {
         server.abort();
     }
 
+    /// Verify a cancelled subscription call fails before the local listener receives a connection.
     #[tokio::test]
     async fn already_cancelled_request_never_connects() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1088,6 +1150,7 @@ mod tests {
         );
     }
 
+    /// Verify only an omitted provider selects subscription compatibility; explicit unsupported values fail.
     #[test]
     fn legacy_selection_defaults_only_missing_provider() {
         let selection =
@@ -1115,6 +1178,7 @@ mod tests {
 
 #[cfg(test)]
 mod upstream_id_tests {
+    /// Accept vendor/model identifiers while rejecting whitespace, control characters and URL query syntax.
     #[test]
     fn selection_accepts_namespaced_models_without_accepting_controls() {
         use super::ProviderSelection;

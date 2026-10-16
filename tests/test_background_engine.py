@@ -23,7 +23,14 @@ class BackgroundEngineTests(unittest.TestCase):
             for identity in engine.REGISTRY:
                 declaration=ROOT/"plugins/engine"/identity/"component.json"
                 folder=root/"generation"/engine.ROOT/identity;folder.mkdir(parents=True)
-                fixture=json.loads(declaration.read_text());fixture.pop("artifact_sha256",None)
+                registered=engine.REGISTRY[identity]
+                fixture=json.loads(declaration.read_text())if declaration.exists()else {
+                    "schema_version":1,"id":identity,"group":"engine-loop","interface_version":1,
+                    "implementation_version":"0.1.0","operation":registered["operation"],"modes":["live","linked"],
+                    "runtime_requirements":[],"executable":"artifact/"+registered["binary"],
+                    "build":{"package":registered["binary"],"source_inputs":registered["inputs"],"toolchain":"1.90.0","features":[],"runtime_assets":[]},
+                    "limits":{"max_request_bytes":registered["limit"],"max_response_bytes":registered["limit"],"timeout_ms":registered["timeout"],"max_concurrency":1}}
+                fixture.pop("artifact_sha256",None)
                 (folder/"component.json").write_text(json.dumps(fixture))
                 registered=engine.REGISTRY[identity];body=("public-fixture-"+identity).encode()
                 binary=root/"artifacts"/identity/registered["binary"];binary.parent.mkdir(parents=True);binary.write_bytes(body)
@@ -41,15 +48,15 @@ class BackgroundEngineTests(unittest.TestCase):
             with self.assertRaises(ValueError):engine.descriptor(path)
 
     def test_background_interface_migration_is_operation_specific(self):
-        # Accept coordinated background versions without widening other contracts.
+        # Accept the two coordinated transitions without widening the boot contract.
         with tempfile.TemporaryDirectory() as temporary:
             path=Path(temporary)/"component.json"
-            for identity in ("background-dispatch","context-assembly"):
+            for identity in ("background-dispatch","context-assembly","boot-supervisor"):
                 value=json.loads((ROOT/"plugins/engine"/identity/"component.json").read_text())
                 for version in (1,2,3,0,True):
                     value["interface_version"]=version
                     path.write_text(json.dumps(value))
-                    if type(version) is int and (version==1 or identity=="background-dispatch" and version==2):
+                    if type(version) is int and (version==1 or identity in {"background-dispatch","context-assembly"} and version==2):
                         self.assertEqual(engine.descriptor(path)["interface_version"],version)
                     else:
                         with self.assertRaises(ValueError):engine.descriptor(path)

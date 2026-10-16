@@ -64,7 +64,7 @@ pub fn json_size<T:Serialize+?Sized>(v:&T)->Result<usize>{let mut n=Counter(0);s
 /// Per-executing-task measurement cache, not conversation storage or policy.
 /// Prefix items are assumed immutable until the caller explicitly resets it.
 #[derive(Default)]
-pub struct ContextAccounting { measured:usize, sum:usize, sizes:Vec<usize>, characters:Vec<usize>, report:Option<HistoryReport>, pub measured_items:usize }
+pub struct ContextAccounting { measured:usize, sum:usize, sizes:Vec<usize>, characters:Vec<usize>, report:Option<HistoryReport>, pub measured_items:usize, pub projection_extra_bytes:usize, pub contributions_projected:bool }
 impl ContextAccounting {
  /// Forget cached measurements after history replacement; append-only updates need no reset.
  pub fn reset(&mut self){self.measured=0;self.sum=0;self.sizes.clear();self.characters.clear();self.report=None;}
