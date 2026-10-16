@@ -81,7 +81,7 @@ async def execute(name, arguments, base, trusted=None):
     try:
         rows = connections(trusted)
     except adapter.Rejected as error:
-        return {"status": "error", "error_kind": "git_rejected", "output": str(error)}
+        return {"status": "error", "error_kind": error.kind, "output": str(error)}
     lease = _CONNECTIONS.set(rows)
     try:
         return await adapter.execute(name, arguments, base)

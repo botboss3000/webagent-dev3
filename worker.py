@@ -73,13 +73,60 @@ async def stop_workspace_operations(workspace):
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+GIT_CONTROL_TOOLS = ["repository_access", "git_tool", "resolve_conflict", "commit_and_push"]
+
+def git_control_package():
+    """Resolve one immutable, validated Git Control package per invocation."""
+    active=Path("/opt/v3/assets/current")
+    if active.parent.is_dir():
+        selected=active.resolve(strict=True)
+        if selected.parent!=Path("/opt/v3/assets/releases") or not selected.is_dir():
+            raise ValueError("Invalid Git Control release pointer")
+        uuid.UUID(selected.name)
+        folder=selected/"v3/plugins/abilities/Administrator/git_control"
+    else:
+        folder=Path(__file__).parent/"plugins/abilities/Administrator/git_control"
+    for leaf in ("plugin.json", "transport.py", "adapter.py", "file_manager.py", "askpass.py", "git_control.json"):
+        item=folder/leaf
+        if item.is_symlink() or not item.is_file() or item.stat().st_size>2*LIMIT:
+            raise ValueError("Git Control package unavailable")
+    manifest=json.loads((folder/"plugin.json").read_bytes())
+    if (manifest.get("version")!=1 or manifest.get("protocol")!=1 or manifest.get("interface")!=1
+        or manifest.get("id")!="git_control" or manifest.get("entrypoint")!="transport.py"
+        or manifest.get("tools")!=GIT_CONTROL_TOOLS or manifest.get("dispatch") is not None):
+        raise ValueError("Git Control package incompatible")
+    if json.loads((folder/"git_control.json").read_bytes()).get("tools")!=GIT_CONTROL_TOOLS:
+        raise ValueError("Git Control catalog incompatible")
+    return folder
+
+def git_file_manager():
+    """Load the File Manager Git companion from the selected package revision."""
+    folder=git_control_package()
+    cached=PLUGINS.get("file_manager")
+    if cached is not None and cached[0]==folder:
+        return cached[1]
+    spec=importlib.util.spec_from_file_location("v3_file_manager",folder/"file_manager.py")
+    module=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    PLUGINS["file_manager"]=(folder,module)
+    return module
+
 def administrator_plugin(name):
     # Static ownership, not manifest-driven imports or a model supplied path.
     if name not in ("code_index", "git_control", "terminal_control", "v3_workspace", "diagnostics", "remote_tunnel"):
         raise ValueError("unknown installed Administrator adapter")
+    if name=="git_control":
+        folder=git_control_package()
+        cached=PLUGINS.get("git_control")
+        if cached is not None and cached[0]==folder:
+            return cached[1]
+        spec=importlib.util.spec_from_file_location("v3_admin_git_control",folder/"transport.py")
+        module=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        PLUGINS["git_control"]=(folder,module)
+        return module
     if name not in PLUGINS:
-        filename="transport.py" if name=="git_control" else "adapter.py"
-        path = (Path(__file__).parent/"build-service/workspace.py" if name=="v3_workspace" else Path(__file__).parent/"plugins/abilities/Administrator"/name/filename)
+        path = (Path(__file__).parent/"build-service/workspace.py" if name=="v3_workspace" else Path(__file__).parent/"plugins/abilities/Administrator"/name/"adapter.py")
         spec = importlib.util.spec_from_file_location("v3_admin_" + name, path)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
@@ -462,23 +509,9 @@ async def execute_locked(request, lock):
     if name in ("git_tool", "resolve_conflict", "commit_and_push"):
         return await administrator_plugin("git_control").execute(name, args, base, request.get("trusted"))
     if name == "administrator_file_manager":
-        module = PLUGINS.get("file_manager")
-        if module is None:
-            path = Path(__file__).parent / "plugins/abilities/Administrator/git_control/file_manager.py"
-            spec = importlib.util.spec_from_file_location("v3_file_manager", path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            PLUGINS["file_manager"] = module
-        return await synchronous(module.execute, args)
+        return await synchronous(git_file_manager().execute, args)
     if name == "administrator_file_git":
-        module = PLUGINS.get("file_manager")
-        if module is None:
-            path = Path(__file__).parent / "plugins/abilities/Administrator/git_control/file_manager.py"
-            spec = importlib.util.spec_from_file_location("v3_file_manager", path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            PLUGINS["file_manager"] = module
-        return await module.git_action(args, request.get("trusted"), administrator_plugin("git_control"))
+        return await git_file_manager().git_action(args, request.get("trusted"), administrator_plugin("git_control"))
     if name in ("terminal_open", "terminal_read", "terminal_send", "terminal_wait", "terminal_list", "terminal_close"):
         return await administrator_plugin("terminal_control").execute(name, args, base)
     if name in ("workspace_seed","source_review","source_patch","v3_workspace_status","v3_workspace_action","v3_cargo_task") and os.environ.get("V3_BUILD_EXECUTOR")!="1":

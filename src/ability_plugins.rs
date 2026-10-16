@@ -203,7 +203,15 @@ impl Package {
             return Ok(None);
         }
         // Existing native package adapters retain their own contract.
-        if matches!(id,"codebase_admin"|"diagnostics") && manifest.get("dispatch").is_none(){
+        if matches!(id,"codebase_admin"|"diagnostics"|"git_control") && manifest.get("dispatch").is_none(){
+            if id=="git_control" {
+                let expected=json!({"version":1,"id":"git_control","protocol":1,"interface":1,"runtime":"python3","entrypoint":"transport.py",
+                    "tools":tools,"build":{"inputs":["adapter.py","transport.py","file_manager.py","askpass.py"],
+                    "dependencies":[],"toolchain":"image-python3","flags":["-I","-B"],
+                    "assets":["git_control.json","git_control.skill.md","tools"]}});
+                if manifest!=expected {anyhow::bail!("Unsupported native Git Control contract");}
+                for name in ["adapter.py","transport.py","file_manager.py","askpass.py"] {read(&root.join(name),2*1024*1024)?;}
+            }
             if id=="diagnostics" {
                 let expected=json!({"version":1,"id":"diagnostics","protocol":1,"interface":1,"runtime":"python3","entrypoint":"runner.py",
                     "tools":tools,"build":{"inputs":["runner.py","adapter.py"],"dependencies":[],"toolchain":"image-python3","flags":["-I","-B"],

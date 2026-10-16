@@ -242,7 +242,7 @@
   {
     "type": "function",
     "name": "git_tool",
-    "description": "Typed Git operations in the current workspace; mutations need approval and an exact HEAD fence",
+    "description": "Typed Git operations in a workspace repository, or administrator inspection and push of the published V3 checkout with repo=__root__; mutations need approval and an exact HEAD fence",
     "parameters": {
       "type": "object",
       "properties": {

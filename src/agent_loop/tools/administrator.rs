@@ -410,10 +410,31 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
         "v3_build_status"|"v3_build_worker_restart"|"v3_build_image"|"v3_worker_submit"|"v3_worker_job"|"v3_build_work"|"v3_source_list"|"v3_source_read"|"v3_source_prepare"|"v3_source_apply"|"v3_source_apply_prepared"|"v3_source_receipt"=>host(app,sid,run_id,name,args,cancel).await,
         "git_tool"|"resolve_conflict"|"commit_and_push"=>{
             let trusted=crate::api::repository::transport(app,sid).await?;
-            worker(app,sid,name,args,Some(trusted),cancel).await
+            if live_git_operation(name,args)? {
+                let access=crate::shared_chat::live_access(&app.store,crate::shared_chat::actor(app),sid,&agent).await?;
+                if !access.admitted() || !access.principal.administrator() {
+                    bail!("Live checkout Git requires current administrator authority");
+                }
+                let mut request=args.clone();
+                request["action"]=json!("git_tool");
+                worker(app,sid,"administrator_file_git",&request,
+                    Some(json!({"repository":trusted})),cancel).await
+            } else {
+                worker(app,sid,name,args,Some(trusted),cancel).await
+            }
         },
         _=>worker(app,sid,name,args,None,cancel).await,
     }
+}
+/// The shared checkout is published release source. Inspection and pushing an
+/// existing commit are allowed; source and index mutations remain broker owned.
+fn live_git_operation(name:&str,args:&Value)->Result<bool> {
+    if args["repo"]!="__root__" {return Ok(false);}
+    if name!="git_tool" || !matches!(args["operation"].as_str(),
+        Some("status"|"diff"|"log"|"show"|"branch_list"|"tag_list"|"push")) {
+        bail!("Live checkout Git supports inspection and push only; commit through the release broker");
+    }
+    Ok(true)
 }
 pub fn valid_development_path(path:&str,sid:&str,agent:&str)->bool {
     if path.len()>1024 || !path.starts_with('/') || path.starts_with("//") || path.contains('\\') || path.chars().any(char::is_control) {return false;}
@@ -451,6 +472,13 @@ pub fn valid_development_path(path:&str,sid:&str,agent:&str)->bool {
         assert_eq!(build_work_arguments(&decision).unwrap(),decision);
         let preflight=json!({"action":"preflight","task_id":"sync-task","offset":40});
         assert_eq!(build_work_arguments(&preflight).unwrap(),preflight);
+    }
+    #[test] fn live_git_route_is_read_or_push_only(){
+        assert!(live_git_operation("git_tool",&json!({"repo":"__root__","operation":"status"})).unwrap());
+        assert!(live_git_operation("git_tool",&json!({"repo":"__root__","operation":"push"})).unwrap());
+        assert!(!live_git_operation("git_tool",&json!({"repo":"webagent-v3","operation":"push"})).unwrap());
+        assert!(live_git_operation("git_tool",&json!({"repo":"__root__","operation":"add"})).is_err());
+        assert!(live_git_operation("commit_and_push",&json!({"repo":"__root__"})).is_err());
     }
     #[test] fn routes_are_current_session_and_fixed_origin(){
         assert!(valid_development_path("/app?session_id=own","own","agent-a"));

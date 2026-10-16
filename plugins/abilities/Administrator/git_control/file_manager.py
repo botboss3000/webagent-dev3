@@ -365,7 +365,7 @@ async def git_action(args, trusted, git_plugin):
         return {"status": "error", "uncertain": True, "error_kind": "git_effect_uncertain",
                 "output": str(error)}
     except (adapter.Rejected, Rejected, ValueError) as error:
-        return {"status": "error", "error_kind": "git_rejected", "output": str(error)}
+        return {"status": "error", "error_kind": getattr(error,"kind","git_rejected"), "output": str(error)}
     except Exception:
         return {"status": "error", "error_kind": "git_rejected", "output": "Git Control operation failed"}
     finally:

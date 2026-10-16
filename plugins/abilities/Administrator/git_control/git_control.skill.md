@@ -1,6 +1,10 @@
 # Git Control — V3
 Use the current session workspace repository, default webagent-v3. Start with
-git_tool operation status for HEAD and review_sha256. Every mutation requires
+git_tool operation status for HEAD and review_sha256. For the published V3
+checkout, select repo=__root__. Only status/diff/log/show/branch_list/tag_list
+and push are available there, and only to a current administrator. The live
+checkout contains broker-promoted releases; use the broker to change or commit
+its source before pushing an existing commit. Every mutation requires
 expected_head. No shell command, host path, credential, or remote URL arguments.
 Exact paths are required for staging, resetting and commit_and_push.
 resolve_conflict requires an unmerged path, expected_sha256 and ours/theirs/both;

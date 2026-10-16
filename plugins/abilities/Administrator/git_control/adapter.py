@@ -11,7 +11,9 @@ _SANDBOX_ROOT=contextvars.ContextVar("git_workspace_root",default=None)
 _RESTRICT=runpy.run_path(str(Path(__file__).resolve().parents[4]/"sandbox.py"))["restrict"]
 READS={"status","diff","log","show","branch_list","tag_list","stash_list"}
 OPS=READS|{"branch_create","branch_delete","tag_create","tag_delete","checkout","merge","stash_push","stash_pop","add","reset","fetch","pull","push"}
-class Rejected(ValueError):pass
+class Rejected(ValueError):
+ def __init__(self,message,kind="git_rejected"):
+  super().__init__(message);self.kind=kind
 class Uncertain(Exception):pass
 def exact(args,keys,required=()):
  if not isinstance(args,dict) or set(args)-set(keys) or any(k not in args for k in required):raise Rejected("Invalid typed Git arguments")
@@ -131,7 +133,11 @@ def secret(data):
  if re.search(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}",data,re.I):return True
  for match in re.finditer(rb"""(?:https?|ssh)://[^\s/@:"\']+:[^\s/@"\']+@[^\s/"']+""",data,re.I):
   # Reserved documentation host with deliberately trivial URL credentials.
-  if match.group().lower() not in {b"https://u:p@example.test",b"https://user:password@example.invalid"}:return True
+  if match.group().lower() not in {
+   b"https://u:p@example.test", b"https://user:password@example.invalid",
+   # Deliberately trivial credentials in the Debian URL rejection fixture.
+   b"https://user:password@deb.debian.org",
+  }:return True
  # Complete literals, not prefixes of variable names and function calls.
  pattern=rb"""(?<![A-Za-z0-9_-])(?:api[_-]?key|access[_-]?token|password|secret)["']?\s*[:=]\s*(?:["']([A-Za-z0-9_./+!=-]{12,})["']|([A-Za-z0-9_./+!=-]{12,})(?=[\t ]*(?:\r?$|["'])))"""
  for match in re.finditer(pattern,data,re.I|re.M):
@@ -155,7 +161,7 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,
     # Minified assets can exceed the response cap. Retain the complete unfinished
     # line plus bounded completed overlap so long literals cannot hide a prefix.
     # Line and whitespace bounds still cap memory and credential lookbehind.
-    if secret(bytes(output[:output.rfind(b"\n")+1])):raise Rejected("Outgoing history withheld by credential guard")
+    if secret(bytes(output[:output.rfind(b"\n")+1])):raise Rejected("Outgoing history withheld by credential guard; inspect outgoing commits for credential-shaped content","git_credential_guard")
     if re.search(rb"\s{4096}",output):raise Rejected("Outgoing history whitespace exceeds scan bound")
     segments=chunk.split(b"\n")
     for index,segment in enumerate(segments):
@@ -165,7 +171,7 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,
     completed=output.rfind(b"\n")+1
     if completed>LIMIT:del output[:completed-LIMIT]
    elif len(output)>LIMIT:raise Rejected("Git output exceeds limit")
-  if scan_only and secret(bytes(output)):raise Rejected("Outgoing history withheld by credential guard")
+  if scan_only and secret(bytes(output)):raise Rejected("Outgoing history withheld by credential guard; inspect outgoing commits for credential-shaped content","git_credential_guard")
   await proc.wait()
  try:await asyncio.wait_for(drain(),timeout)
  except BaseException as error:
@@ -192,11 +198,11 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,
   # Emit fixed guidance, never remote stderr (which may contain credentials).
   if env_extra and argv[0]=="push":
    if b"fatal: Authentication failed for " in output:
-    raise Rejected("GitHub authentication rejected the saved repository key; update it in the repository configuration or Vault")
+    raise Rejected("GitHub authentication rejected the saved repository key; update it in the repository configuration or Vault","git_auth_failed")
    if b"fatal: unable to access " in output and b"The requested URL returned error: 403" in output:
-    raise Rejected("GitHub denied push access; check the saved key's repository access and write permission")
+    raise Rejected("GitHub denied push access; check the saved key's repository access and write permission","git_push_forbidden")
    if b"remote: Repository not found." in output:
-    raise Rejected("GitHub repository unavailable; check the repository URL and the saved key's access")
+    raise Rejected("GitHub repository unavailable; check the repository URL and the saved key's access","git_repository_unavailable")
   if mutable:raise Uncertain("Git mutation did not finish cleanly; reconcile local and remote state before retry")
   raise Rejected("Git operation rejected; inspect workspace status")
  return b"" if scan_only else bytes(output)
@@ -360,5 +366,5 @@ async def execute(name,args,base):
   return {"status":"success","output":output}
  except asyncio.CancelledError:raise
  except Uncertain as error:return {"status":"error","error_kind":"git_effect_uncertain","uncertain":True,"output":str(error)}
- except Exception as error:return {"status":"error","error_kind":"git_rejected","output":str(error) if isinstance(error,Rejected) else "Workspace Git rejected"}
+ except Exception as error:return {"status":"error","error_kind":error.kind if isinstance(error,Rejected) else "git_rejected","output":str(error) if isinstance(error,Rejected) else "Workspace Git rejected"}
  finally:_SANDBOX_ROOT.reset(token)
