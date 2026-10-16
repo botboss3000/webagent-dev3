@@ -3089,9 +3089,11 @@ class Broker:
         self.code_index_ledger.activate(job_id,rows)
     def retry_verified_failed_release(self,request,args):
         """Queue a new attempt while preserving the failed job and its exact evidence."""
-        allowed={"action","task_id","job_id","request_id","expected_revision","expected_epoch","sync_decision","expected_sync_digest","rebuild_if_stale"}
+        allowed={"action","task_id","job_id","request_id","expected_revision","expected_epoch","sync_decision","expected_sync_digest","rebuild_if_stale","lineage_job_id"}
         if (set(args)-allowed or not {"action","task_id","job_id","request_id","expected_revision","expected_epoch"}<=set(args)
-                or type(args.get("rebuild_if_stale",False)) is not bool or not request["trusted"].get("local_caller")):
+                or type(args.get("rebuild_if_stale",False)) is not bool
+                or ("lineage_job_id" in args and (not isinstance(args["lineage_job_id"],str) or not re.fullmatch(r"[0-9a-f-]{36}",args["lineage_job_id"])))
+                or not request["trusted"].get("local_caller")):
             raise PermissionError("Exact operator retry request required")
         trusted=request["trusted"];workspace=request["workspace"];owner=self.scheduler.owner(trusted,workspace)
         self.scheduler.journal_path(owner,args["request_id"],"failed-image-retry")
@@ -3128,13 +3130,28 @@ class Broker:
                 return {"status":"needs_decision","synchronization":report}
             if args.get("sync_decision") not in (None,"proceed"):
                 raise ValueError("Only an exact proceed decision may retry")
-        # The merge may change source without changing this task's own files. Reuse
-        # only exact-bound images; a fresh cached build requires explicit opt-in.
-        mode=image_reuse_module.failed_retry_mode(prior,context_digest(merged)[0],args.get("rebuild_if_stale",False))
+        # A disk/admission failure after a requested cached rebuild has no image
+        # pair of its own. It may continue only through an explicit, verified
+        # predecessor lineage; the new attempt still rebuilds its exact candidate.
+        lineage=None
+        if prior.get("retry_mode")=="cached_rebuild" and not prior.get("images") and not prior.get("legacy_image_proof"):
+            lineage=image_reuse_module.cached_rebuild_lineage(prior,self.jobs,args.get("lineage_job_id"))
+            mode="cached_rebuild"
+        else:
+            # The merge may change source without changing this task's own files.
+            # Reuse only exact-bound images; a fresh cached build requires opt-in.
+            mode=image_reuse_module.failed_retry_mode(prior,context_digest(merged)[0],args.get("rebuild_if_stale",False))
         if mode=="needs_rebuild":
             return {"status":"needs_rebuild","reason":"Merged source differs from retained image binding; request rebuild_if_stale to compile and package with verified cache",
                     "merged_inputs_sha256":context_digest(merged)[0]}
         if mode=="cached_rebuild":
+            if lineage is not None:
+                inherited=lineage["legacy_image_proof"]
+                source=self.jobs.get(inherited["source_job_id"])
+                if source is None:raise ValueError("Verified lineage source unavailable")
+                source_blob=(self.state/source["job_id"]/"candidate.tar").read_bytes()
+                verified=image_reuse_module.legacy_pair(self.runner,source,source_blob)
+                if verified!=inherited:raise ValueError("Verified lineage evidence changed")
             self.package_cache.ready(merged)
             proof=None
         elif mode=="reuse":
@@ -3173,7 +3190,7 @@ class Broker:
                  "images":{},"log":"","tool_name":"build_work","lease_until":max(deadline,time.time()+4*3600),
                  "access_fingerprint":fingerprint,"revoked":False,
                  "ownership_id":item["key"],"ownership_epoch":state["epoch"],"source_generation":state["generation"],
-                 "synchronization":report,"legacy_image_proof":proof,"retry_mode":mode}
+                 "synchronization":report,"legacy_image_proof":proof,"retry_mode":mode,"cached_rebuild_lineage":lineage}
             if args.get("sync_decision")=="proceed":job["sync_ack_digest"]=report["digest"]
             self.jobs[identity]=job;self.requests[request_key]=identity;self._save(job)
             item.update(job_id=identity,finished_at=time.time())

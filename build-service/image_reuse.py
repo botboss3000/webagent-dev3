@@ -116,6 +116,39 @@ def failed_retry_mode(prior, merged_sha256, rebuild_if_stale):
     return "cached_rebuild" if rebuild_if_stale else "needs_rebuild"
 
 
+
+def cached_rebuild_lineage(prior, jobs, lineage_job_id=None):
+    """Bind a no-effect cached-build retry to a previously verified image lineage."""
+    if prior.get("retry_mode") != "cached_rebuild" or prior.get("images") or prior.get("legacy_image_proof"):
+        raise ValueError("Cached rebuild lineage requires a no-image cached retry")
+    saved = prior.get("cached_rebuild_lineage")
+    if saved is not None:
+        if not isinstance(saved, dict) or saved.get("version") != 1:
+            raise ValueError("Cached rebuild lineage changed")
+        if lineage_job_id is not None and lineage_job_id != saved.get("lineage_job_id"):
+            raise ValueError("Cached rebuild lineage request changed")
+        lineage_job_id = saved.get("lineage_job_id")
+    if not isinstance(lineage_job_id, str) or not re.fullmatch(r"[0-9a-f-]{36}", lineage_job_id):
+        raise ValueError("Verified lineage job ID required")
+    lineage = jobs.get(lineage_job_id)
+    if not isinstance(lineage, dict) or lineage.get("status") != "failed" or lineage.get("effects_started"):
+        raise ValueError("Verified lineage job unavailable")
+    if lineage.get("task_id") != prior.get("task_id") or lineage.get("source_generation") != prior.get("source_generation"):
+        raise ValueError("Cached rebuild lineage ownership changed")
+    if lineage.get("changed_paths") != prior.get("changed_paths"):
+        raise ValueError("Cached rebuild lineage scope changed")
+    proof = lineage.get("legacy_image_proof")
+    if not isinstance(proof, dict) or set(proof) != {"source_job_id", "source_sha256", "compiler_receipt_sha256", "images"}:
+        raise ValueError("Verified lineage image proof unavailable")
+    if not isinstance(proof["source_job_id"], str) or not re.fullmatch(r"[0-9a-f-]{36}", proof["source_job_id"]):
+        raise ValueError("Verified lineage source identity invalid")
+    if not re.fullmatch(r"[a-f0-9]{64}", proof["source_sha256"]) or not re.fullmatch(r"[a-f0-9]{64}", proof["compiler_receipt_sha256"]):
+        raise ValueError("Verified lineage evidence invalid")
+    if set(proof["images"]) != set(COPIES) or any(not IMAGE.fullmatch(value) for value in proof["images"].values()):
+        raise ValueError("Verified lineage images invalid")
+    return {"version": 1, "lineage_job_id": lineage_job_id, "legacy_image_proof": proof}
+
+
 def legacy_pair(runner, prior, blob):
     """Prove a failed pre-activation job's retained image pair before a new attempt uses it."""
     if (prior.get("status") != "failed" or prior.get("operation") != "build_deploy"

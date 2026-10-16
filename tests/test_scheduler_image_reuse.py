@@ -98,5 +98,35 @@ class FailedRetryModeTests(unittest.TestCase):
             reuse.failed_retry_mode(failed,merged,True)
 
 
+class CachedRebuildLineageTests(unittest.TestCase):
+    def rows(self):
+        source="11111111-1111-1111-1111-111111111111"
+        lineage="22222222-2222-2222-2222-222222222222"
+        prior={"task_id":"task","source_generation":4,"changed_paths":["v3/a.rs"],
+               "retry_mode":"cached_rebuild","images":{},"legacy_image_proof":None}
+        proof={"source_job_id":source,"source_sha256":"a"*64,"compiler_receipt_sha256":"b"*64,
+               "images":{"api":"sha256:"+"c"*64,"loop":"sha256:"+"d"*64}}
+        jobs={lineage:{"task_id":"task","source_generation":4,"changed_paths":["v3/a.rs"],
+                       "status":"failed","effects_started":False,"legacy_image_proof":proof}}
+        return prior,jobs,lineage,proof
+
+    def test_explicit_lineage_binds_no_effect_cached_rebuild(self):
+        prior,jobs,lineage,proof=self.rows()
+        self.assertEqual(reuse.cached_rebuild_lineage(prior,jobs,lineage),
+                         {"version":1,"lineage_job_id":lineage,"legacy_image_proof":proof})
+
+    def test_lineage_rejects_scope_or_effect_changes(self):
+        prior,jobs,lineage,proof=self.rows()
+        jobs[lineage]["changed_paths"]=[]
+        with self.assertRaisesRegex(ValueError,"scope"):
+            reuse.cached_rebuild_lineage(prior,jobs,lineage)
+        jobs[lineage]["changed_paths"]=["v3/a.rs"];jobs[lineage]["effects_started"]=True
+        with self.assertRaisesRegex(ValueError,"unavailable"):
+            reuse.cached_rebuild_lineage(prior,jobs,lineage)
+        jobs[lineage]["effects_started"]=False;prior["cached_rebuild_lineage"]={"version":1,"lineage_job_id":lineage,"legacy_image_proof":proof}
+        with self.assertRaisesRegex(ValueError,"request changed"):
+            reuse.cached_rebuild_lineage(prior,jobs,"33333333-3333-3333-3333-333333333333")
+
+
 if __name__=="__main__":
     unittest.main()
