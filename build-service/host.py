@@ -52,6 +52,8 @@ ui_publication_module=scheduler_module.sibling("ui_publication")
 review_store_module=scheduler_module.sibling("review_store")
 review_policy_module=scheduler_module.sibling("review_policy")
 post_deployment_module=scheduler_module.sibling("post_deployment")
+packaging_cache_module=scheduler_module.sibling("packaging_cache")
+image_reuse_module=scheduler_module.sibling("image_reuse")
 
 SOURCE = Path(CONFIG["checkout_root"])
 _maintenance_path=_module_root/"index-maintenance.py"
@@ -693,6 +695,7 @@ class Runner:
     def __init__(self, source=SOURCE, snapshot_helper=None, snapshot_socket=None):
         self.source, self.snapshot_helper = Path(source), snapshot_helper
         self.source_config=CONFIG
+        self.context_digest=context_digest
         self.secrets = []
         self.snapshot_socket = snapshot_socket or str(Path(CONFIG["runtime_root"])/"snapshot.sock")
         self.cancel = threading.Event()
@@ -1607,7 +1610,7 @@ class Runner:
         with self.workspace_volumes(base,selected) as (base_mount,selected_mount):
             container="webagent-workspace-"+uuid.uuid4().hex
             spec=json.dumps({"name":name,"arguments":args,"workspace":base.name})
-            argv=["docker","run","--rm","--name",container,"--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges","--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["app_gid"]),"--pids-limit","128","--memory","1g","--cpus","1","--tmpfs","/tmp:rw,size=64m,mode=1777","--tmpfs","/run:rw,size=16m,mode=1777","--mount","type=volume,src="+base_mount+",dst=/workspaces/"+base.name+",volume-nocopy","--mount","type=volume,src="+selected_mount+",dst=/opt/v3/assets/releases/"+selected.name+",readonly,volume-nocopy","--env","V3_CODE_TEMPLATE=/opt/v3/assets/releases/"+selected.name+"/v3","--env","V3_BUILD_EXECUTOR=1","--entrypoint","python3",image,"-I","/opt/v3/build-service/workspace_executor.py",spec]
+            argv=["docker","run","--rm","--name",container,"--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges","--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["app_gid"]),"--pids-limit","128","--memory","1g","--cpus","1","--tmpfs","/tmp:rw,size=64m,mode=1777","--tmpfs","/run:rw,size=16m,mode=1777","--mount","type=volume,src="+base_mount+",dst=/workspaces/"+base.name+",volume-nocopy","--mount","type=volume,src="+selected_mount+",dst=/opt/v3/assets/releases/"+selected.name+",readonly,volume-nocopy","--mount","type=bind,src="+str(self.source_config["service_dir"])+",dst=/opt/v3/build-service,readonly","--env","V3_CODE_TEMPLATE=/opt/v3/assets/releases/"+selected.name+"/v3","--env","V3_BUILD_EXECUTOR=1","--entrypoint","python3",image,"-I","/opt/v3/build-service/workspace_executor.py",spec]
             finished=threading.Event()
             def guard():
                 while not finished.wait(.5):
@@ -1623,14 +1626,35 @@ class Runner:
         if hasattr(self,"resources")and self.resources.enabled:
             job=getattr(self.job_context,"job",None)
             if not job or job["job_id"]!=job_id:raise PermissionError("Bound compiler job required")
+            if job.get("image_receipts",{}).get(role):
+                image=image_reuse_module.reuse(self,job,blob,role)
+                return image,"Verified existing "+role+" image reused; no packaging or package download.\n"
+            if job.get("legacy_image_proof"):
+                cache=getattr(self,"package_cache",None)
+                if cache is None or not cache.enabled:raise ValueError("Verified dependency cache required before legacy image recovery")
+                prior=cache.broker.jobs[job["legacy_image_proof"]["source_job_id"]]
+                proof=image_reuse_module.legacy_pair(self,prior,blob)
+                if proof!=job["legacy_image_proof"]:raise ValueError("Legacy image evidence changed")
+                return proof["images"][role],"Verified prior "+role+" image and compiler receipt reused; no packaging or package download.\n"
             artifacts,compiler_log=self.executor.engine(job,blob,lambda root,data:release.extract(root,data,context_digest),lambda data:context_digest(data)[0])
             packaging_path=Path(CONFIG["state_root"])/"execution"/job_id/("package-"+role+".tar")
             if packaging_path.exists():raise ValueError("Packaging context requires reconciliation")
             try:
-                packaging=self.executor.package(blob,artifacts,lambda data:release.entries(data,context_digest),role=role,destination=packaging_path)
+                cache=getattr(self,"package_cache",None)
+                if cache is not None and cache.enabled:
+                    cache.ready(blob)
+                    self.job_context.source_blob=blob
+                transform=packaging_cache_module.package_dockerfile if cache is not None and cache.enabled else None
+                packaging=self.executor.package(blob,artifacts,lambda data:release.entries(data,context_digest),role=role,destination=packaging_path,recipe_transform=transform)
                 image,package_log=self._build_packaged(packaging,job_id,role)
+                with packaging_path.open("rb") as stream:
+                    context_sha256=hashlib.file_digest(stream,"sha256").hexdigest()
             finally:packaging_path.unlink(missing_ok=True)
             self.retain_image(image,job_id)
+            checkpoint=image_reuse_module.record(self,job,blob,role,image,context_sha256)
+            job.setdefault("image_receipts",{})[role]=checkpoint
+            job.setdefault("images",{})[role]=image
+            self.resource_progress(job)
             return image,(compiler_log if role=="api"else"")+package_log
         tag = TARGETS[1 if role=="loop" else 0]+":job-"+job_id
         log = self.command(["docker", "buildx", "build", "--builder", "default", "--load",
@@ -1647,9 +1671,11 @@ class Runner:
         tag="webagent-v3-"+role+"-"+job_id
         job=getattr(self.job_context,"job",None)
         if job is None or job["job_id"]!=job_id:raise ValueError("Owned packaging job required")
+        cache=getattr(self,"package_cache",None)
+        inputs=cache.package_inputs(job,self.job_context.source_blob) if cache is not None and cache.enabled else []
         with self.executor.packager(job,role=role)as builder:
             with Path(blob).open("rb")as stream:
-                log=self.command(["docker","buildx","build","--builder",builder,"--load","--progress=plain","--target",role,"-f","v3/Dockerfile","-t",tag,"-"],stdin=stream,timeout=3600)
+                log=self.command(["docker","buildx","build","--builder",builder,"--load","--progress=plain","--target",role,"-f","v3/Dockerfile","-t",tag,*inputs,"-"],stdin=stream,timeout=3600)
         image=self.command(["docker","image","inspect","--format","{{.Id}}",tag],timeout=30).strip()
         if not re.fullmatch(r"sha256:[0-9a-f]{64}",image):raise ValueError("Image identity unavailable")
         return image,log
@@ -1797,6 +1823,8 @@ class Broker:
         self.runner.retention_enabled=CONFIG.get("scheduler",{}).get("task_aware_cleanup",False)
         self.runner.resource_progress=self._resource_progress
         self.runner.executor=executor_module.Executor(self.runner,self.resources,CONFIG)
+        self.package_cache=packaging_cache_module.PackagingCache(self,CONFIG,release.entries,context_digest)
+        self.runner.package_cache=self.package_cache
         self.resources.start()
         self.index_coordinator=index_coordinator_module.IndexCoordinator(self,index_queue_module,release,context_digest,TASK_CONTEXT,ASSET_ROOT,scheduler_module.ownership.source_path)
         self.runner.index_seed_provider=self.index_coordinator.publication_seeds
@@ -2507,7 +2535,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh") if key in job}
         if job.get("review_wait"):
             review=job["review_wait"]
             view["review_wait"]={k:review[k]for k in ("state","started_at","last_activity_at","expires_at")if k in review}
@@ -2946,8 +2974,8 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        review_modules={"post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","install.py"}
-        allowed={"v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
+        allowed={"v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
@@ -3059,6 +3087,127 @@ class Broker:
             else:rows=[json.loads(row[0])for row in conn.execute("SELECT body FROM maintenance_records")]
         finally:conn.close()
         self.code_index_ledger.activate(job_id,rows)
+    def retry_verified_failed_release(self,request,args):
+        """Queue a new attempt while preserving the failed job and its exact evidence."""
+        allowed={"action","task_id","job_id","request_id","expected_revision","expected_epoch","sync_decision","expected_sync_digest"}
+        if set(args)-allowed or not {"action","task_id","job_id","request_id","expected_revision","expected_epoch"}<=set(args) or not request["trusted"].get("local_caller"):
+            raise PermissionError("Exact operator retry request required")
+        trusted=request["trusted"];workspace=request["workspace"];owner=self.scheduler.owner(trusted,workspace)
+        self.scheduler.journal_path(owner,args["request_id"],"failed-image-retry")
+        request_key="failed-image-retry-"+hashlib.sha256(canonical([owner,args["task_id"],args["job_id"],args["request_id"]])).hexdigest()
+        with self.lock:
+            prior=self.jobs.get(args["job_id"])
+            existing=next((row for row in self.jobs.values()if row.get("request_key")==request_key),None)
+            if existing:return self._view(existing)
+            item=self.scheduler.item(args,trusted,workspace)
+            state=self.scheduler.ensure(item,trusted,workspace)
+            if item.get("status")!="closed" or item.get("job_id")!=args["job_id"] or not prior or not self._owned(prior,trusted,workspace):
+                raise ValueError("Owned failed release and closed task required")
+            if state["revision"]!=args["expected_revision"] or state["epoch"]!=args["expected_epoch"] or state["state"]!="owned":
+                raise ValueError("Recover and reserve the current task generation first")
+            if state["generation"]!=prior.get("source_generation"):
+                raise ValueError("Task source generation changed after image build")
+            scopes=self.scheduler.components(item).scopes(prior.get("changed_paths",()))
+            self.scheduler.store.assert_owned(item["key"],owner,state["epoch"],scopes)
+            if prior.get("status")!="failed" or prior.get("effects_started") or prior.get("operation")!="build_deploy":
+                raise ValueError("Only failed pre-activation image jobs may be retried")
+            if not self.package_cache.enabled:raise ValueError("Verified dependency cache is not enabled")
+            deadline,fingerprint=self._incoming_lease(trusted)
+            old_folder=self.state/prior["job_id"]
+            candidate=(old_folder/"candidate.tar").read_bytes()
+            if context_digest(candidate)[0]!=prior["inputs_sha256"]:
+                raise ValueError("Failed candidate changed")
+            private_source=release.snapshot(Path(item["workspace_path"]).parent,TASK_CONTEXT,context_digest)
+            if context_digest(private_source)[0]!=item["inputs_sha256"]:
+                raise ValueError("Original task snapshot changed")
+            live=self._current_release_blob()
+            merged,changed=release.candidate((old_folder/"base.tar").read_bytes(),(old_folder/"task.tar").read_bytes(),live,context_digest)
+            report=self._sync_report(live,merged,changed)
+            if report["total"] and (args.get("sync_decision")!="proceed" or args.get("expected_sync_digest")!=report["digest"]):
+                return {"status":"needs_decision","synchronization":report}
+            if args.get("sync_decision") not in (None,"proceed"):
+                raise ValueError("Only an exact proceed decision may retry")
+        # Rehash the prepared OCI bases and original embedded image bytes before any job is queued.
+        self.package_cache.ready(candidate)
+        proof=image_reuse_module.legacy_pair(self.runner,prior,candidate)
+        with self.lock:
+            state=self.scheduler.store.get(item["key"])
+            if item.get("job_id")!=prior["job_id"] or state["revision"]!=args["expected_revision"] or state["epoch"]!=args["expected_epoch"] or state["state"]!="owned":
+                raise ValueError("Ownership changed during image verification")
+            self.scheduler.store.assert_owned(item["key"],owner,state["epoch"],scopes)
+            if self._maintenance()["drained"]:raise ValueError("Maintenance drain prevents release retry")
+            identity=str(uuid.uuid5(uuid.NAMESPACE_URL,request_key))
+            folder=self.state/identity
+            if folder.exists():raise ValueError("Interrupted retry preparation requires reconciliation")
+            folder.mkdir(mode=0o700)
+            for name in ("base.tar","task.tar","candidate.tar","admitted_base.tar"):
+                original=old_folder/name
+                if original.is_file():
+                    with original.open("rb")as source, (folder/name).open("xb")as target:
+                        shutil.copyfileobj(source,target,1024*1024);target.flush();os.fsync(target.fileno())
+            job={"job_id":identity,"request_key":request_key,"body_digest":hashlib.sha256(canonical(args)).hexdigest(),
+                 "user_id":trusted["user_id"],"workspace":workspace,"task_id":item["task_id"],"operation":"build_deploy",
+                 "isolated":True,"status":"queued","phase":"waiting","created_at":time.time(),
+                 "inputs_sha256":prior["inputs_sha256"],"base_inputs_sha256":prior["base_inputs_sha256"],
+                 "changed_paths":prior["changed_paths"],"release_root":prior["release_root"],
+                 "publication_policy_version":prior.get("publication_policy_version",0),
+                 "compiler_memory_cap":prior.get("compiler_memory_cap"),"package_memory_cap":prior.get("package_memory_cap"),
+                 "images":{},"log":"","tool_name":"build_work","lease_until":max(deadline,time.time()+4*3600),
+                 "access_fingerprint":fingerprint,"revoked":False,
+                 "ownership_id":item["key"],"ownership_epoch":state["epoch"],"source_generation":state["generation"],
+                 "synchronization":report,"legacy_image_proof":proof}
+            if args.get("sync_decision")=="proceed":job["sync_ack_digest"]=report["digest"]
+            self.jobs[identity]=job;self.requests[request_key]=identity;self._save(job)
+            item.update(job_id=identity,finished_at=time.time())
+            self._save_work()
+            self._start_next()
+            return self._view(job)
+
+    def prepare_dependency_cache(self,request,args):
+        """Operator schedules pinned runtime dependency preparation before an application build."""
+        if set(args)-{"action","task_id","request_id","refresh"} or not {"action","task_id","request_id"}<=set(args) or not request["trusted"].get("local_caller") or type(args.get("refresh",False))is not bool:
+            raise PermissionError("Bounded operator cache preparation required")
+        trusted=request["trusted"];workspace=request["workspace"];owner=self.scheduler.owner(trusted,workspace)
+        self.scheduler.journal_path(owner,args["request_id"],"dependency-cache")
+        request_key="dependency-cache-"+hashlib.sha256(canonical([owner,args["task_id"],args["request_id"],args.get("refresh",False)])).hexdigest()
+        with self.lock:
+            deadline,fingerprint=self._incoming_lease(trusted)
+            item=self.scheduler.item(args,trusted,workspace)
+            previous=next((j for j in self.jobs.values()if j.get("request_key")==request_key),None)
+            if previous:return self._view(previous)
+            if item["status"]!="open" or not self.resources.enabled:raise ValueError("Open owned task and enforced resource admission required")
+            state=self.scheduler.ensure(item,trusted,workspace)
+            self.scheduler.store.assert_owned(item["key"],owner,item["ownership_epoch"],["module:broker"])
+            if self._maintenance()["drained"]:raise ValueError("Broker maintenance drain prevents cache preparation")
+            blob=self._current_release_blob()
+            identity=str(uuid.uuid4());event=threading.Event()
+            job={"job_id":identity,"task_id":item["task_id"],"request_key":request_key,"user_id":trusted["user_id"],"workspace":workspace,
+                 "operation":"check","status":"running","phase":"preparing_dependency_cache","created_at":time.time(),"started_at":time.time(),
+                 "lease_until":deadline,"access_fingerprint":fingerprint,"ownership_id":item["key"],"ownership_epoch":state["epoch"],"source_generation":state["generation"],
+                 "inputs_sha256":context_digest(blob)[0],"images":{},"log":"","phase_history":[],"summary":"Prepare pinned runtime dependencies",
+                 "rust_tests":{"status":"not_required"},"dependency_refresh":args.get("refresh",False)}
+            self.jobs[identity]=job;self.active_jobs.add(identity);self.active=next(iter(self.active_jobs))
+            self.job_cancellations[identity]=event;self._save(job)
+            self.pool.submit(self._prepare_dependency_cache_job,job,blob,event)
+            return self._view(job)
+
+    def _prepare_dependency_cache_job(self,job,blob,event):
+        self.runner.job_context.job=job;self.runner.job_context.event=event
+        try:
+            self._lease(job)
+            job["dependency_bases"]=self.package_cache.prewarm(job,blob,refresh=job["dependency_refresh"])
+            self._lease(job)
+            job["log"] = scrub(job.get("log", "") + self.package_cache.verify_consumption(job,blob), self.runner.secrets)
+            self._lease(job)
+            job.update(status="completed",phase="finished",reason="Pinned runtime bases and offline packaging consumption verified; application containers unchanged")
+        except BaseException as error:
+            job.update(status="cancelled"if isinstance(error,PermissionError)else"failed",phase="finished",reason=scrub(str(error),self.runner.secrets))
+        finally:
+            self.runner.job_context.job=None;self.runner.job_context.event=None
+            with self.lock:
+                job["finished_at"]=time.time();self._save(job);self.active_jobs.discard(job["job_id"])
+                self.active=next(iter(self.active_jobs),None);self.job_cancellations.pop(job["job_id"],None)
+
     def provision_ui_test_runtime(self,request,args):
         """Create a durable operator check for the fixed ancillary browser runtime, never deploy it."""
         if set(args)!={"action","task_id","request_id"}or not request["trusted"].get("local_caller"):raise PermissionError("Operator UI test provisioning required")
@@ -3345,6 +3494,12 @@ class Broker:
                 if args.get("action")not in {"list","get"}and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; maintenance disabled")
             return self.code_index_maintenance(args,trusted,workspace)
         if name=="v3_cargo_task":return self.cargo_request(args,trusted,workspace)
+        if name=="build_work"and args.get("action")=="retry_verified_failed_release":
+            return self.retry_verified_failed_release(request,args)
+        if name=="build_work"and args.get("action")=="dependency_cache_status":
+            if set(args)!={"action"} or not trusted.get("local_caller"):raise PermissionError("Operator dependency cache read required")
+            return self.package_cache.status()
+        if name=="build_work"and args.get("action")=="prepare_dependency_cache":return self.prepare_dependency_cache(request,args)
         if name=="build_work"and args.get("action")=="prepare_ui_test_runtime":return self.provision_ui_test_runtime(request,args)
         if name=="build_work"and args.get("action")in self.review_policy.actions:return self.review_policy.handle(request,args)
         if name=="build_work"and args.get("action")=="retry_post_deployment":return self.post_deployment.retry(request,args)
@@ -4202,7 +4357,11 @@ class Broker:
             after = {name: item for name, item in release.entries(merged, context_digest).items()
                      if not hot_source_path(name)and not generic_package_path(name,merged)}
             if before != after:
-                raise ValueError("runtime build inputs changed during UI release")
+                delta={name for name in set(before)|set(after) if before.get(name)!=after.get(name)}
+                # Only a fully installed host-only broker source release may rebase
+                # a tested application image without rebuilding that image.
+                if not self.host_source_only(delta,merged,{"local_caller":True}):
+                    raise ValueError("runtime build inputs changed during UI release")
             old_ui = release.entries(blob, context_digest)
             new_ui = release.entries(merged, context_digest)
             if hasattr(self.runner,"core_compile_inputs")and any(old_ui.get(name)!=new_ui.get(name)for name in self.runner.core_compile_inputs()):
@@ -4350,7 +4509,21 @@ class Broker:
                 self._run_ui_hot(job, blob)
                 return
             if job["operation"] in ("build", "build_deploy"):
-                self.runner.prepare_build_space()
+                if job.get("isolated") and job["operation"]=="build_deploy":
+                    previous=sorted((prior for prior in self.jobs.values()
+                        if prior["job_id"]!=job["job_id"] and prior.get("task_id")==job.get("task_id")
+                        and prior.get("status")=="failed" and not prior.get("effects_started")
+                        and prior.get("inputs_sha256")==context_digest(blob)[0] and set(prior.get("images",{}))=={"api","loop"}),
+                        key=lambda prior:prior.get("finished_at",0),reverse=True)
+                    if previous:
+                        if not self.package_cache.enabled:raise ValueError("Persistent dependency cache required before failed image recovery")
+                        self.package_cache.ready(blob)
+                        proof=image_reuse_module.legacy_pair(self.runner,previous[0],blob)
+                        with self.lock:
+                            job["legacy_image_proof"]=proof
+                            self._save(job)
+                if job.get("legacy_image_proof"):self.runner.check_space(MIN_DEPLOY_FREE)
+                else:self.runner.prepare_build_space()
                 # Capture current environment values privately solely to scrub
                 # any accidental occurrence in compiler output.
                 for target in TARGETS:

@@ -141,7 +141,11 @@ class Retention:
                 self.save(d);return {"released":True}
             if not isinstance(profile,str)or not 1<=len(profile)<=256:raise ValueError("Disk recipe required")
             free=self.usage().free;floor=self.config["scheduler"].get("disk_min_free_bytes",8*1024**3)
-            need=max(1024**3 if profile=="resource:memory-probe-v1"else FLOORS.get(phase,1024**3),profiles.get(profile,0))
+            # Runtime bases and retained-image packaging have distinct bounded
+            # measured demand; do not reserve two cold image builds for either.
+            cache_floor=(3*1024**3 if profile in {"buildkit:v0.25.1:runtime-base-v1:api","buildkit:v0.25.1:role-context-v2:api:disk-cache-v1"} else
+                         512*1024**2 if profile in {"buildkit:v0.25.1:runtime-base-v1:loop","buildkit:v0.25.1:role-context-v2:loop:disk-cache-v1"} else None)
+            need=max(cache_floor if cache_floor is not None else 1024**3 if profile=="resource:memory-probe-v1" else FLOORS.get(phase,1024**3),profiles.get(profile,0))
             remaining=sum(v["bytes"]for n,v in d["phases"].items()if n!=name)
             existing=d["phases"].get(name)
             if existing and(existing["profile"]!=profile or existing["phase"]!=phase or existing["bytes"]!=need):raise ValueError("Disk reservation identity changed")

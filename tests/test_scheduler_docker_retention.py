@@ -154,6 +154,21 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(self.guard.disk(other,"package","package")["admitted"])
         self.guard.disk(name,None,finish=True)
         self.free=30*G;self.assertTrue(self.guard.disk(other,"package","package")["admitted"])
+    def test_runtime_base_disk_profiles_keep_global_free_floor(self):
+        name="webagent-build-development-"+uuid.uuid4().hex+"-package-12345678"
+        self.free=11*G
+        api=self.guard.disk(name,"package","buildkit:v0.25.1:runtime-base-v1:api")
+        self.assertTrue(api["admitted"])
+        self.assertEqual(3*G,api["estimate_bytes"])
+        self.guard.disk(name,None,finish=True)
+        self.free=9*G
+        loop=self.guard.disk(name,"package","buildkit:v0.25.1:runtime-base-v1:loop")
+        self.assertTrue(loop["admitted"])
+        self.assertEqual(512*1024**2,loop["estimate_bytes"])
+        self.guard.disk(name,None,finish=True)
+        self.free=8*G
+        self.assertFalse(self.guard.disk(name,"package","buildkit:v0.25.1:role-context-v2:loop:disk-cache-v1")["admitted"])
+
     def test_restart_reconciles_only_terminal_absent_disk_phase(self):
         name="webagent-build-development-"+uuid.UUID(self.job).hex+"-compile_test-12345678"
         self.guard.disk(name,"compile_test","recipe")

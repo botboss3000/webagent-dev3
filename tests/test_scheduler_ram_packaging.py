@@ -68,12 +68,12 @@ class RamAdmissionTests(unittest.TestCase):
             r=resources.Resources(folder,runner,POLICY,sampler=lambda:sample.copy())
             try:
                 r.profiles["ram"]=[64*1024**2]
-                r.enter("one",{"job_id":"one","task_id":"task-one"},"package","ram","package",timeout=.02,hard_cap=9_999_998_976)
+                r.enter("one",{"job_id":"one","task_id":"task-one"},"package","buildkit:v0.25.1:role-context-v2:api:ram-v1","package",timeout=.02,hard_cap=9_999_998_976)
                 self.assertEqual(r.rows["one"]["estimate"],9_999_998_976);self.assertEqual(r.reserve(),4_800_000_000)
-                with self.assertRaises(TimeoutError):r.enter("two",{"job_id":"two","task_id":"task-two"},"package","other","package",timeout=.02,hard_cap=9_999_998_976)
+                with self.assertRaises(TimeoutError):r.enter("two",{"job_id":"two","task_id":"task-two"},"package","buildkit:v0.25.1:role-context-v2:loop:ram-v1","package",timeout=.02,hard_cap=9_999_998_976)
                 with self.assertRaises(TimeoutError):r.enter("same",{"job_id":"same","task_id":"task-one"},"index_scan","index","index",timeout=.02)
                 r.rows["one"]["state"]="finished"
-                r.enter("two",{"job_id":"two","task_id":"task-two"},"package","other","package",timeout=.02,hard_cap=9_999_998_976)
+                r.enter("two",{"job_id":"two","task_id":"task-two"},"package","buildkit:v0.25.1:role-context-v2:loop:ram-v1","package",timeout=.02,hard_cap=9_999_998_976)
             finally:r.close()
     def test_invalid_protected_configuration_is_rejected(self):
         """Reject over-budget, unpaired, unsafe-reserve and boolean policy values."""

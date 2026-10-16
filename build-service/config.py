@@ -27,7 +27,7 @@ def validate(value):
  ledger=v["code_index_ledger_max_bytes"]
  if type(ledger)is not int or not 512*1024**2<=ledger<=1024**3 or ledger%4096:raise ValueError("Invalid review ledger storage budget")
  policy=v.get("scheduler",{})
- if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","documentation_review_order","post_deployment_indexing"}-MEMORY_KEYS:raise ValueError("Invalid scheduler policy")
+ if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes"}-MEMORY_KEYS:raise ValueError("Invalid scheduler policy")
  policy={**scheduler_defaults(),**policy}
  if policy.get("documentation_review_order","before_deployment")not in {"before_deployment","after_deployment"}:raise ValueError("Invalid documentation review order")
  if policy["mode"]not in {"observe","enforce"}or type(policy["orphan_after_seconds"])is not int or not 60<=policy["orphan_after_seconds"]<=86400:raise ValueError("Invalid ownership policy")
@@ -50,6 +50,11 @@ def validate(value):
  if any(type(n)is not int or n%os.sysconf("SC_PAGE_SIZE")for n in (minimum,default,maximum))or not 1024**3<=minimum<=default<=maximum<=10*1024**3:raise ValueError("Invalid compiler memory policy")
  if type(limits["allow_live_memory_increase"])is not bool:raise ValueError("Invalid live memory policy")
  if limits["allow_live_memory_increase"]and(policy["mode"]!="enforce"or policy["reserve_percent"]<15):raise ValueError("Live memory increases require enforced admission and fifteen percent host reserve")
+ if type(policy.get("package_cache_enabled",False))is not bool:raise ValueError("Invalid package cache policy")
+ if policy.get("package_cache_enabled",False)and(policy["mode"]!="enforce"or policy["reserve_percent"]<15):raise ValueError("Persistent packaging requires enforced admission and fifteen percent reserve")
+ for key,low,high in [("package_cache_download_workers",1,4),("package_cache_max_age_seconds",3600,30*86400),("package_cache_retention_seconds",3600,90*86400),("package_cache_max_bytes",1024**3,32*1024**3),("package_cache_prepare_memory_bytes",1024**3,6*1024**3)]:
+  if type(policy.get(key))is not int or not low<=policy[key]<=high:raise ValueError("Invalid package cache policy: "+key)
+ if policy["package_cache_prepare_memory_bytes"]%os.sysconf("SC_PAGE_SIZE"):raise ValueError("Package cache memory budget must be page aligned")
  if type(policy.get("task_aware_cleanup",False))is not bool:raise ValueError("Invalid Docker retention policy")
  for key,low,high in [("disk_min_free_bytes",1024**3,64*1024**3),("disk_grace_seconds",7200,30*86400),("disk_cleanup_batch",1,32)]:
   if type(policy.get(key))is not int or not low<=policy[key]<=high:raise ValueError("Invalid disk policy: "+key)

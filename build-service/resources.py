@@ -107,9 +107,12 @@ class Resources:
         return self.host["available"]-self.reserve()>=estimate+remaining and not any(r["state"]in {"recovery_required","waiting_intervention","memory_recovery_required"}for r in self.rows.values())
     def enter(self,name,job,phase,profile,kind,timeout=None,hard_cap=None):
         """Wait for measured admission outside the broker lock; revocation still interrupts waiting."""
-        ram_packaging=phase=="package"and kind=="package"and bool(self.policy.get("package_tmpfs_bytes",0))
-        compiler=phase in {"compile_test","compile_release","compile_linked","plugin_compile"}and kind in {"engine","plugin"}
-        allowed_cap=self.policy.get("package_ram_bytes")if ram_packaging else 4026531840
+        ram_packaging=phase=="package"and kind=="package"and profile.endswith(":ram-v1")and bool(self.policy.get("package_tmpfs_bytes",0))
+        cache_preparation=phase=="package"and kind=="package"and profile.startswith("buildkit:v0.25.1:runtime-base-v1:")
+        cache_packaging=phase=="package"and kind=="package"and profile.endswith(":disk-cache-v1")
+        compiler=phase in {"compile_test","compile_release","compile_linked","plugin_compile","plugin_test"}and kind in {"engine","plugin"}
+        allowed_cap=(self.policy.get("package_cache_prepare_memory_bytes") if cache_preparation else
+                     self.policy.get("package_ram_bytes") if ram_packaging or cache_packaging else 4026531840)
         if hard_cap is not None and(type(hard_cap)is not int or hard_cap%os.sysconf("SC_PAGE_SIZE")or not((compiler and 1024**3<=hard_cap<=10*1024**3)or(phase=="package"and kind=="package"and hard_cap==allowed_cap))):raise ValueError("Unsupported enforced phase memory cap")
         if ram_packaging and(hard_cap is None or self.policy.get("reserve_percent",10)<15):raise ValueError("RAM packaging requires full budget and host reserve")
         # tmpfs is unreclaimable without swap: reserve its full process/cache/scratch ceiling, even after small successful samples.

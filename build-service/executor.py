@@ -1,10 +1,12 @@
 """Attributable compilation/testing and artifact-fed packaging in the pinned toolchain."""
-import contextlib,hashlib,io,json,os,posixpath,re,shlex,shutil,stat,subprocess,tarfile,time,uuid
+import contextlib,hashlib,io,json,os,posixpath,re,shlex,shutil,stat,subprocess,tarfile,time,uuid,tomllib
 from pathlib import Path
 RUST="rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f"
 BUILDKIT="moby/buildkit:v0.25.1@sha256:79cc6476ab1a3371c9afd8b44e7c55610057c43e18d9b39b68e2b0c2475cc1b6"
 COMPILER_STAGE_SHA256="474b034d7a843ebf324b654a785b5a5b23135804ef39c662f92fcb3e160dfeaf"
-BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-automation","webagent-outbound-notifications","webagent-context-service","webagent-background-service","webagent-boot-service","webagent-boot-host"]
+# Coordinated Automation extraction removes only its root-bin distribution closure.
+EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256="9a6fa4db4b7a122990056f005117a0c4e0944243e02a2ee42b9957ec12f65908"
+BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-outbound-notifications","webagent-context-service","webagent-background-service","webagent-boot-service","webagent-boot-host"]
 # @code-index {"version":1,"feature":"build-artifact-execution","aliases":["task fencing","verified builds"],"purpose":"Pinned attributable compiler/test/packaging recipes and verified content-addressed artifact reuse.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Identity, exact input verification and completion rules cannot be disabled by model or preference configuration."}}
 COMPILER_MEMORY_CAP=4026531840
 # @code-index {"version":1,"feature":"compiler-memory-policy","aliases":["compiler memory defaults","task memory overrides","live memory growth"],"purpose":"Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/compiler_memory_default_bytes","/compiler_memory_min_bytes","/compiler_memory_max_bytes","/allow_live_memory_increase"]}]}}
@@ -36,7 +38,7 @@ class Executor:
         jobhex=uuid.UUID(job["job_id"]).hex
         name="webagent-build-"+self.config["instance"]+"-"+jobhex+"-"+phase+"-"+uuid.uuid4().hex[:8]
         output.mkdir(parents=True,exist_ok=True)
-        cap=compiler_cap(job.get("compiler_memory_cap"))if phase in {"compile_test","compile_release","compile_linked","plugin_compile"}and kind in {"engine","plugin"}else None
+        cap=compiler_cap(job.get("compiler_memory_cap"))if phase in {"compile_test","compile_release","compile_linked","plugin_compile","plugin_test"}and kind in {"engine","plugin"}else None
         if cap is not None and not self.resources.enabled:raise ValueError("Compiler cap requires enforced resource admission")
         admission_started=time.monotonic()
         self.resources.enter(name,job,phase,profile,kind,timeout=timeout,hard_cap=cap)
@@ -110,21 +112,35 @@ class Executor:
     # @code-index {"version":1,"feature":"ram-packaging","aliases":["RAM build scratch","tmpfs packaging"],"purpose":"Fixed RAM BuildKit workspace and proof. Config: build-service/scheduler-defaults.json -> package_ram_bytes, package_tmpfs_bytes, reserve_percent.","span_lines":65,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/package_ram_bytes","/package_tmpfs_bytes","/reserve_percent"]}],"opportunities":[]}}
     @contextlib.contextmanager
     def packager(self,job,role="generic"):
+        """Keep the cache volume exclusively owned until this BuildKit daemon is removed."""
+        cache=getattr(self.runner,"package_cache",None)
+        with (cache.claim(job) if cache is not None else contextlib.nullcontext(None)) as volume:
+            with self._packager(job,role,volume) as builder:
+                yield builder
+
+    @contextlib.contextmanager
+    def _packager(self,job,role,volume):
         """Bound only this dedicated BuildKit ancestor, preserving reserve and measured role profiles."""
         name="webagent-build-"+self.config["instance"]+"-"+uuid.UUID(job["job_id"]).hex+"-package-"+uuid.uuid4().hex[:8]
         if role not in {"api","loop","generic"}:raise ValueError("Fixed packaging role required")
         cap=package_cap(job.get("package_memory_cap"));identity=None;success=False;oom=False;proof_error=None;primary=False;stage="container_create";cap_outcome=None
-        policy=self.config.get("scheduler",{});scratch=policy.get("package_tmpfs_bytes",0)
-        # Installation policy alone selects this disposable RAM workspace. Model requests cannot add mounts.
-        if scratch:cap=policy["package_ram_bytes"]
+        policy=self.config.get("scheduler",{});scratch=0 if volume else policy.get("package_tmpfs_bytes",0)
+        # Persistent cache uses disk; the RAM scratch recipe remains for legacy jobs.
+        if volume:cap=(policy.get("package_cache_prepare_memory_bytes",3*1024**3)
+                       if getattr(self.runner.job_context,"preparing_runtime_base",False)
+                       else policy.get("package_ram_bytes",0) or cap)
+        elif scratch:cap=policy["package_ram_bytes"]
         if cap is not None and not self.resources.enabled:raise ValueError("Package cap requires enforced admission")
-        self.resources.enter(name,job,"package","buildkit:v0.25.1:role-context-v2:"+role+(":ram-v1"if scratch else""),"package",timeout=600,hard_cap=cap)
+        profile="buildkit:v0.25.1:runtime-base-v1:"+role if getattr(self.runner.job_context,"preparing_runtime_base",False) else "buildkit:v0.25.1:role-context-v2:"+role+(":disk-cache-v1"if volume else ":ram-v1"if scratch else "")
+        self.resources.enter(name,job,"package",profile,"package",timeout=600,hard_cap=cap)
         try:
             create=["docker","create","--name",name,"--privileged","--cgroup-parent","webagent-build-"+self.config["instance"]+".slice",
                 "--label","webagent.scheduler.instance="+self.config["instance"],"--label","webagent.scheduler.job="+uuid.UUID(job["job_id"]).hex,"--label","webagent.scheduler.phase=package","--pids-limit","512"]
             if cap is not None:create +=["--memory",str(cap),"--memory-swap",str(cap)]
             if scratch:create +=["--tmpfs","/var/lib/buildkit:rw,exec,nosuid,nodev,size="+str(scratch)+",mode=0700"]
+            if volume:create +=["--mount","type=volume,src="+volume+",dst=/var/lib/buildkit,volume-nocopy"]
             create +=[BUILDKIT,"--addr","unix:///run/buildkit/buildkitd.sock"]
+            if volume:create +=["--oci-worker-gc=false"]
             self.runner.command(create,timeout=30,private_raw=True)
             # Docker diagnostics share the command stream; only the protected helper identifies this exact container.
             stage="container_identity";created=self.runner.resource_request({"operation":"identity","container":name})
@@ -405,12 +421,95 @@ class Executor:
         cache=Path(self.config["state_root"])/"engine-artifacts";cache.mkdir(mode=0o700,exist_ok=True)
         temporary=cache/(key+".new");temporary.write_text(json.dumps(value));temporary.chmod(0o600);os.replace(temporary,cache/(key+".json"))
 
+    # @code-index {"version":1,"feature":"automation-drop-in","aliases":["standalone automation","automation ability plugin"],"purpose":"Verified standalone Automation compilation, offline dependency provisioning and complete native tests; host publication and permission boundaries remain authoritative.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"The native package contract, test proof and compiler boundaries are invariants; no setting may bypass them."}}
+    def provision_native_registry(self,cache):
+        """Provide a native ability's locked offline dependencies from attested compiler registry bytes.
+
+        No network or application state is supplied. A prior compiler child can
+        modify its scratch cache, so existing bytes must match a host-held engine
+        receipt before reuse; mismatches require explicit reconciliation.
+        """
+        state=Path(self.config['state_root']);cache=Path(cache)
+        if cache.parent!=state/'plugin-builds'or not re.fullmatch(r'[a-f0-9]{64}',cache.name)or cache.is_symlink():
+            raise ValueError('Owned plugin dependency scratch required')
+        cargo=cache/'cargo';target=cargo/'registry'
+        if cargo.is_symlink()or target.is_symlink()or(target.exists()and not target.is_dir()):
+            raise ValueError('Plugin dependency registry identity invalid')
+        candidates=[]
+        for path in sorted((state/'engine-artifacts').glob('*.json'),key=lambda p:p.stat().st_mtime,reverse=True)[:64]:
+            if path.is_symlink()or not path.is_file()or path.stat().st_size>16*1024*1024:
+                raise ValueError('Compiler dependency receipt identity invalid')
+            value=json.loads(path.read_bytes())
+            if value.get('recipe')!=RUST+':single-job:debug0:complete-tests-v5':continue
+            jid=value.get('job_id','')
+            if not re.fullmatch(r'[a-f0-9-]{36}',jid):raise ValueError('Compiler dependency job identity invalid')
+            prefix='optimization-cargo/registry/'
+            hashes={name.removeprefix(prefix):sha for name,sha in value.get('artifacts',{}).items()if name.startswith(prefix)}
+            if not hashes:continue
+            if any(not name or name.startswith('/')or any(p in ('','.','..')for p in name.split('/'))
+                or not isinstance(sha,str)or not re.fullmatch(r'[a-f0-9]{64}',sha)for name,sha in hashes.items()):
+                raise ValueError('Compiler dependency inventory invalid')
+            candidates.append((jid,hashes))
+        def proof(jid,hashes,reused):
+            """Return bounded provenance plus an in-memory inventory for the post-compile check."""
+            digest=hashlib.sha256(json.dumps(hashes,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            return {'job_id':jid,'sha256':digest,'hashes':hashes,'reused':reused}
+        if target.exists():
+            actual=self.artifact_hashes(target)
+            for jid,hashes in candidates:
+                if actual==hashes:return proof(jid,hashes,True)
+            raise ValueError('Plugin dependency scratch differs from verified compiler registry')
+        for jid,hashes in candidates:
+            artifacts=state/'execution'/jid/'output/artifacts';parent=artifacts/'optimization-cargo';source=parent/'registry'
+            if artifacts.is_symlink()or parent.is_symlink()or source.is_symlink():
+                raise ValueError('Compiler dependency source symlink')
+            if not source.is_dir():continue
+            if self.artifact_hashes(source)!=hashes:
+                raise ValueError('Verified compiler dependency registry changed')
+            cargo.mkdir(parents=True,exist_ok=True)
+            shutil.copytree(source,target)
+            if self.artifact_hashes(source)!=hashes or self.artifact_hashes(target)!=hashes:
+                raise ValueError('Plugin dependency provisioning changed inputs')
+            return proof(jid,hashes,False)
+        raise ValueError('Verified offline plugin dependencies unavailable; controlled provisioning required')
+
+    @staticmethod
+    def collect_runtime_artifacts(application,output,artifacts,legacy_automation):
+        """Copy the fixed core closure and only the reviewed recipe's optional legacy distribution.
+
+        The extracted Automation ability is built by the existing standalone plugin builder.
+        Missing mandatory outputs remain fatal; stale Cargo outputs never add a package.
+        """
+        binaries=BINARIES+(["webagent-automation"]if legacy_automation else[])
+        for name in binaries:
+            destination=artifacts/name
+            shutil.copyfile(output/"target/release"/name,destination);destination.chmod(0o555)
+        packages=[("outbound_notifications","webagent-outbound-notifications")]
+        if legacy_automation:packages.insert(0,("automation","webagent-automation"))
+        for package,binary in packages:
+            folder=artifacts/"modules"/package;folder.mkdir(parents=True)
+            shutil.copyfile(artifacts/binary,folder/binary)
+            for path in(application/"src/plugin_packages"/package).iterdir():
+                if path.name in {"package.json","tool-schemas.json"}or path.name.startswith("page."):
+                    if path.is_symlink()or not path.is_file():raise ValueError("Invalid module distribution asset")
+                    shutil.copyfile(path,folder/path.name)
+
     def validate_compiler_recipe(self,blob):
-        """Reject a changed compiler Dockerfile stage rather than silently discard reviewed build instructions."""
-        text=self.runner.execution_entries(blob)["v3/Dockerfile"][1].decode()
+        """Accept only the two reviewed test/build recipes and reject inconsistent extraction inputs.
+
+        Returns whether this captured application still builds the legacy Automation binary.
+        Tests, locked compilation and stable/live equivalence recipes are unchanged.
+        """
+        files=self.runner.execution_entries(blob);text=files["v3/Dockerfile"][1].decode()
         start=text.index("FROM rust:");end=text.index("FROM debian:",start)
-        if hashlib.sha256(text[start:end].encode()).hexdigest()!=COMPILER_STAGE_SHA256:
+        recipe=hashlib.sha256(text[start:end].encode()).hexdigest()
+        if recipe==COMPILER_STAGE_SHA256:return True
+        if recipe!=EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256:
             raise ValueError("Compiler Dockerfile recipe changed; migrate the reviewed attributable engine recipe")
+        cargo=tomllib.loads(files["v3/Cargo.toml"][1].decode())
+        if any(target.get("name")=="webagent-automation"for target in cargo.get("bin",[]))or "v3/src/plugin_packages/automation/main.rs"in files:
+            raise ValueError("Extracted Automation recipe still has a legacy root binary")
+        return False
     def retain_test_manifest(self,output,artifacts):
         """Retain Cargo-attested tests and exact debug support; never substitute optimized binaries."""
         metadata=output/"test-artifacts.json"
@@ -474,7 +573,7 @@ class Executor:
     def engine(self,job,blob,extract,digest):
         """Compile/test once, retain input attestations and produce the complete existing image artifact set."""
         job["artifact_component"]="engine"
-        blob=self.runner.execution_application_blob(blob);self.validate_compiler_recipe(blob)
+        blob=self.runner.execution_application_blob(blob);legacy_automation=self.validate_compiler_recipe(blob)
         root=Path(self.config["state_root"])/"execution"/job["job_id"];source=root/"source";output=root/"output"
         if (root/"verified.json").exists():
             receipt=json.loads((root/"verified.json").read_text())
@@ -533,19 +632,11 @@ class Executor:
         (stable/"mode-equivalence.json").write_text(json.dumps(job["optimized_mode_equivalence"],sort_keys=True)+"\n")
         getattr(self.runner,"resource_progress",lambda _:None)(job)
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Compilation changed application inputs")
-        artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True);hashes={}
-        for name in BINARIES:
-            source_binary=output/"target/release"/name
-            destination=artifacts/name;shutil.copyfile(source_binary,destination);destination.chmod(0o555)
-            hashes[name]=hashlib.sha256(destination.read_bytes()).hexdigest()
+        artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
+        self.collect_runtime_artifacts(application,output,artifacts,legacy_automation)
         shutil.copytree(stable,artifacts/"stable")
         self.retain_test_manifest(output,artifacts)
-        # Preserve packaged module descriptors and the offline optimization registry.
-        for package,binary in [("automation","webagent-automation"),("outbound_notifications","webagent-outbound-notifications")]:
-            folder=artifacts/"modules"/package;folder.mkdir(parents=True)
-            shutil.copyfile(artifacts/binary,folder/binary)
-            for path in(application/"src/plugin_packages"/package).iterdir():
-                if path.name in {"package.json","tool-schemas.json"}or path.name.startswith("page."):shutil.copyfile(path,folder/path.name)
+        # Preserve the offline optimization registry independently of optional abilities.
         registry=artifacts/"optimization-cargo/registry";registry.parent.mkdir()
         shutil.copytree(cargo/"registry",registry)
         dependencies=self.compiler_dependencies(output/"target")
@@ -558,7 +649,7 @@ class Executor:
         receipt={"inputs_sha256":inputs,"artifacts":hashes,"log":logs}
         temporary=root/"verified.new";temporary.write_text(json.dumps(receipt));os.replace(temporary,root/"verified.json")
         return artifacts,logs
-    def package(self,blob,artifacts,entries,role=None,destination=None):
+    def package(self,blob,artifacts,entries,role=None,destination=None,recipe_transform=None):
         """Stream the runtime stage's declared artifact closure; retained tests stay only in the compiler cache."""
         files=entries(blob);dockerfile=files["v3/Dockerfile"][1].decode()
         prefixes=None
@@ -582,7 +673,10 @@ class Executor:
             if not prefixes:raise ValueError("Runtime artifact closure missing")
         marker="FROM debian:bookworm-slim"
         start=dockerfile.index("FROM rust:");end=dockerfile.index(marker,start)
-        dockerfile=dockerfile[:start]+"FROM "+("scratch"if role=="loop"else RUST)+" AS tested_builder\nCOPY scheduler-out /out\n"+dockerfile[end:]
+        if recipe_transform is not None:
+            dockerfile=recipe_transform(dockerfile,role)
+        else:
+            dockerfile=dockerfile[:start]+"FROM "+("scratch"if role=="loop"else RUST)+" AS tested_builder\nCOPY scheduler-out /out\n"+dockerfile[end:]
         files["v3/Dockerfile"]=(0o644,dockerfile.encode())
         stream=io.BytesIO()if destination is None else Path(destination).open("xb")
         try:

@@ -22,5 +22,11 @@
   "disk_grace_seconds": 7200,
   "disk_cleanup_batch": 4,
   "documentation_review_order": "after_deployment",
-  "post_deployment_indexing": true
+  "post_deployment_indexing": true,
+  "package_cache_enabled": false,
+  "package_cache_download_workers": 4,
+  "package_cache_max_age_seconds": 604800,
+  "package_cache_retention_seconds": 604800,
+  "package_cache_max_bytes": 8589934592,
+  "package_cache_prepare_memory_bytes": 3221225472
 }
