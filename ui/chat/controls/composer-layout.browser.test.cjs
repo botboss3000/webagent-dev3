@@ -160,3 +160,53 @@ test('live configuration updates existing automatic bubble corners without navig
  bad=false;live=JSON.parse(JSON.stringify(live));live.chat_common.message_bubbles.user.radius_px=6;live.chat_common.message_bubbles.user.radius_bottom_left_px=null;
  await p.waitForFunction(()=>getComputedStyle(document.getElementById('geometry-user')).borderTopLeftRadius==='6px');assert.equal((await metrics()).user.bottomLeft,'6px');assert.equal(navigations,0);assert.ok(requests>=4);
 });
+
+/** Exercise configured fill against real shared important rules, including clears and live adoption. */
+test('JSON-only bubble backgrounds cover absent transparent solid alpha themes profiles and live clearing',async t=>{
+ const p=await fixture(t);
+ const shared=[path.join(ROOT,'build-service/shared-ui/ui/shared/css/index.css'),path.resolve(ROOT,'../ui/shared/css/index.css')].find(fs.existsSync);
+ assert.ok(shared,'real shared cascade input exists');
+ await p.addStyleTag({path:path.join(UI,'chat/chat.css')});await p.addStyleTag({path:shared});
+ await p.evaluate(()=>{
+  document.documentElement.style.setProperty('--bg-elev','rgb(200, 180, 160)');
+  document.documentElement.style.setProperty('--user-bubble-bg','red');document.documentElement.style.setProperty('--agent-bubble-bg','blue');
+  for(const role of ['user','agent']){
+   const row=document.createElement('div');row.className='message-row '+role;
+   const e=document.createElement('article');e.id='paint-'+role;e.className='chat-bubble v3-config-bubble '+role;e.innerHTML='<div class="bubble-body">Configured bubble</div>';row.append(e);document.getElementById('chat-messages-inner').append(row);
+  }
+  window.paintNodes=['user','agent'].map(role=>document.getElementById('paint-'+role));
+ });
+ const read=()=>p.evaluate(()=>paintNodes.map(e=>{const s=getComputedStyle(e);return {bg:s.backgroundColor,image:s.backgroundImage,filter:s.backdropFilter,opacity:s.opacity,same:e===document.getElementById(e.id)};}));
+ const cases=[
+  ['no message config',undefined,['rgba(0, 0, 0, 0)','rgba(0, 0, 0, 0)']],
+  ['no role config',{},['rgba(0, 0, 0, 0)','rgba(0, 0, 0, 0)']],
+  ...[null,'','   ',0,false,{},[],'url(example.png)','not-a-color','transparent'].map(v=>['clear '+v,{user:{bg_dark:v,bg_light:v},agent:{bg_dark:v,bg_light:v}},['rgba(0, 0, 0, 0)','rgba(0, 0, 0, 0)']]),
+  ['solid independent',{user:{bg_dark:'#123456',bg_light:'#abcdef'},agent:{bg_dark:'red',bg_light:'blue'}},null],
+  ['alpha independent',{user:{bg_dark:'rgba(18, 52, 86, 0.4)',bg_light:'#12345680'},agent:{bg_dark:'#abcdef00',bg_light:'rgba(10, 20, 30, 0.75)'}},null],
+  ['one theme only',{user:{bg_dark:'red'},agent:{bg_light:'blue'}},null],
+  ['clear prior colors',{user:{},agent:{}},['rgba(0, 0, 0, 0)','rgba(0, 0, 0, 0)']]
+ ];
+ for(const surface of ['desktop','mobile','widget']){
+  await p.setViewportSize({width:surface==='mobile'?390:1200,height:844});
+  await p.evaluate(surface=>{window.__CHAT_PORTAL__=surface==='widget';document.getElementById('chat-panel').style.width=surface==='mobile'?'390px':'1100px';},surface);
+  for(const light of [false,true]){
+   await p.evaluate(light=>document.body.classList.toggle('light-mode',light),light);
+   for(const [name,bubbles,constant]of cases){
+    const cfg=config(layout());cfg.chat_common.message_bubbles=bubbles;
+    await p.evaluate(async cfg=>api.initChatConfig({config:cfg}),cfg);await settle(p);
+    const expected=constant|| (name==='solid independent'?(light?['rgb(171, 205, 239)','rgb(0, 0, 255)']:['rgb(18, 52, 86)','rgb(255, 0, 0)']):name==='alpha independent'?(light?['rgba(18, 52, 86, 0.5)','rgba(10, 20, 30, 0.75)']:['rgba(18, 52, 86, 0.4)','rgba(171, 205, 239, 0)']):(light?['rgba(0, 0, 0, 0)','rgb(0, 0, 255)']:['rgb(255, 0, 0)','rgba(0, 0, 0, 0)']));
+    const actual=await read();assert.deepEqual(actual.map(x=>x.bg),expected,surface+' '+light+' '+name);
+    assert.ok(actual.every(x=>x.image==='none'&&x.filter==='none'&&x.opacity==='1'&&x.same),JSON.stringify({surface,light,name,actual}));
+   }
+   const cfg=config(layout());cfg.chat_common.message_bubbles={user:{bg_dark:'red',bg_light:'red'},agent:{bg_dark:'blue',bg_light:'blue'}};
+   cfg['chat_'+surface]={message_bubbles:{user:{bg_dark:'transparent',bg_light:'transparent'}}};
+   await p.evaluate(async cfg=>api.initChatConfig({config:cfg}),cfg);assert.deepEqual((await read()).map(x=>x.bg),['rgba(0, 0, 0, 0)','rgb(0, 0, 255)'],'surface overlay is role-local');
+  }
+ }
+ let live=config(layout());live.chat_common.live_reload={enabled:true,interval_ms:1000};live.chat_common.message_bubbles={user:{bg_dark:'red',bg_light:'red'},agent:{bg_dark:'blue',bg_light:'blue'}};
+ await p.route('**/api/v3/auth/ui-config',route=>route.fulfill({json:{chat_ui:live}}));
+ await p.evaluate(()=>api.initChatConfig());assert.deepEqual((await read()).map(x=>x.bg),['rgb(255, 0, 0)','rgb(0, 0, 255)']);
+ live=JSON.parse(JSON.stringify(live));delete live.chat_common.message_bubbles;
+ await p.waitForFunction(()=>getComputedStyle(document.getElementById('paint-user')).backgroundColor==='rgba(0, 0, 0, 0)'&&getComputedStyle(document.getElementById('paint-agent')).backgroundColor==='rgba(0, 0, 0, 0)');
+ assert.ok((await read()).every(x=>x.same));
+});

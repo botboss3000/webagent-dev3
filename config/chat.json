@@ -23,7 +23,7 @@
     },
     "message_bubbles": {
       "user": {
-        "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing, null or invalid padding uses CSS initial (no padding); corner defaults remain built-in; radius_px is an optional per-role all-corners fallback. line_height is a font-size multiplier or explicit CSS length; its default is 1.5 for either role. border and box_shadow accept CSS values; missing or null means no effect. Both are independent by role. radius_px or any radius_*_px may be auto: half a single text line plus vertical padding and borders; numeric corners override it independently.",
+        "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing, null or invalid padding uses CSS initial (no padding); missing/null role radius defaults to auto; radius_px is an optional per-role all-corners fallback. line_height is a font-size multiplier or explicit CSS length; its default is 1.5 for either role. border and box_shadow accept CSS values; missing or null means no effect. Both are independent by role. radius_px or any radius_*_px may be auto: half a single text line plus vertical padding and borders; numeric corners override it independently. bg_dark and bg_light accept CSS colors, transparent or alpha colors independently per theme and role. Missing, null, empty or invalid colors mean no background; a configured color paints directly without a transparency switch.",
         "padding_top_px": null,
         "padding_right_px": null,
         "padding_bottom_px": null,
@@ -35,10 +35,12 @@
         "line_height": 1.5,
         "border": null,
         "box_shadow": null,
-        "radius_px": "auto"
+        "radius_px": "auto",
+        "bg_dark": null,
+        "bg_light": null
       },
       "agent": {
-        "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing, null or invalid padding uses CSS initial (no padding); corner defaults remain built-in; radius_px is an optional per-role all-corners fallback. line_height is a font-size multiplier or explicit CSS length; its default is 1.5 for either role. border and box_shadow accept CSS values; missing or null means no effect. Both are independent by role. radius_px or any radius_*_px may be auto: half a single text line plus vertical padding and borders; numeric corners override it independently.",
+        "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing, null or invalid padding uses CSS initial (no padding); missing/null role radius defaults to auto; radius_px is an optional per-role all-corners fallback. line_height is a font-size multiplier or explicit CSS length; its default is 1.5 for either role. border and box_shadow accept CSS values; missing or null means no effect. Both are independent by role. radius_px or any radius_*_px may be auto: half a single text line plus vertical padding and borders; numeric corners override it independently. bg_dark and bg_light accept CSS colors, transparent or alpha colors independently per theme and role. Missing, null, empty or invalid colors mean no background; a configured color paints directly without a transparency switch.",
         "padding_top_px": null,
         "padding_right_px": null,
         "padding_bottom_px": null,
@@ -50,7 +52,9 @@
         "line_height": 1.5,
         "border": null,
         "box_shadow": null,
-        "radius_px": "auto"
+        "radius_px": "auto",
+        "bg_dark": null,
+        "bg_light": null
       }
     },
     "live_reload": {
