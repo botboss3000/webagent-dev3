@@ -467,7 +467,7 @@
         "conversation selector",
         "session list"
       ],
-      "purpose": "Mounts and manages the v3 session selector menu, rows, search, and session actions. Config: data/config/chat.json -> chat_common.chat_header.controls.session_dropdown (trigger and menu). Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.",
+      "purpose": "Session dropdown configuration, row limits, context gestures, actions and footer. Config: ui/chat/controls/session-dropdown/session-dropdown.json -> common.trigger/menu/footer/gestures with desktop/mobile/widget overlays; adopted on reload.",
       "locations": [
         {
           "path": "ui/chat/controls/session-dropdown/controller.js",
@@ -478,17 +478,37 @@
           "path": "ui/chat/controls/session-dropdown/list.js",
           "start_line": 4,
           "end_line": 81
+        },
+        {
+          "path": "ui/chat/controls/session-dropdown/config.js",
+          "start_line": 1,
+          "end_line": 25
+        },
+        {
+          "path": "ui/chat/controls/session-dropdown/session-dropdown.css",
+          "start_line": 1,
+          "end_line": 9
+        },
+        {
+          "path": "ui/chat/controls/session-dropdown/session-dropdown.json",
+          "start_line": 1,
+          "end_line": 40
         }
       ],
       "configuration": {
         "status": "configured",
         "references": [
           {
-            "path": "data/config/chat.json",
+            "path": "ui/chat/controls/session-dropdown/session-dropdown.json",
             "pointers": [
-              "/chat_common/chat_header/controls/session_dropdown"
-            ],
-            "profile_overrides": true
+              "/common/trigger",
+              "/common/menu",
+              "/common/footer",
+              "/common/gestures",
+              "/desktop",
+              "/mobile",
+              "/widget"
+            ]
           }
         ],
         "opportunities": []

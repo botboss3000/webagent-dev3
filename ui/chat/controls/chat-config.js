@@ -1,4 +1,5 @@
 // @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"Applies the V3 chat surface profile from data/config/chat.json (runtime /state/config/chat.json, or V3_CHAT_UI_CONFIG_PATH), including live_reload, chat_common, desktop/mobile/widget overlays, and chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
+import {loadSessionDropdownConfig, sessionDropdownConfig} from './session-dropdown/config.js';
 import { watchChatConfig } from './chat-config-live.js';
 import { applyBubblePaint } from '../core/bubble-paint.js';
 import { applyChatPillLayout, disposeChatPillLayout } from './chat-pill-config.js';
@@ -149,7 +150,7 @@ function applyHeader(profile) {
   header.style.setProperty('--chat-header-max-width', config.max_width || profile.content_max_width || '100%');
   const rows = Array.isArray(config.rows) ? config.rows : [];
   headerControl('agent_name');
-  headerNodes.session_dropdown.configure?.(config.controls?.session_dropdown);
+  headerNodes.session_dropdown.configure?.(sessionDropdownConfig(surfaceName()));
   headerNodes.session_dropdown._sessionDropdownController?.close({immediate:true});
   header.replaceChildren();
   for (const row of rows) {
@@ -309,6 +310,10 @@ export function applyChatConfig() {
 export async function initChatConfig({config:provided,root=null} = {}) {
   const generation = ++configGeneration; stopLiveConfig?.(); stopLiveConfig = null;
   chatRoot=root;
+  // Cancel detached layout work synchronously before fetching component settings.
+  if (footerNodes && footerNodes.input !== byId('chat-input')) { disposeChatPillLayout(footerNodes.pill); headerNodes=null; footerNodes=null; footerControls=null; currentSurface=''; currentFooterMode=''; }
+  await loadSessionDropdownConfig();
+  if (generation !== configGeneration) return;
   let data=provided;
   if(!data){
   const response = await fetch('/api/v3/auth/ui-config', { credentials: 'same-origin', cache: 'no-store' });
@@ -317,8 +322,6 @@ export async function initChatConfig({config:provided,root=null} = {}) {
   }
   const config = data.chat_ui || data;
   if (generation !== configGeneration || !config?.chat_common) return;
-  // A remount replaces the partial; never reuse detached header/pill nodes.
-  if (footerNodes && footerNodes.input !== byId('chat-input')) { disposeChatPillLayout(footerNodes.pill); headerNodes=null; footerNodes=null; footerControls=null; currentSurface=''; currentFooterMode=''; }
   documentConfig = config;
   currentSurface = '';
   currentFooterMode = '';

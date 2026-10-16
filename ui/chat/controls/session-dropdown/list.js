@@ -1,10 +1,11 @@
 // V2 dropdown presentation/lifecycle, with independent Rust data authority.
-// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector","session list"],"purpose":"Renders and manages V3 session rows, private search, and session actions Config: data/config/chat.json -> chat_common.chat_header.controls.session_dropdown (trigger and menu). Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/chat_header/controls/session_dropdown"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector","session list"],"purpose":"Session dropdown presentation and interactions. Config: ui/chat/controls/session-dropdown/session-dropdown.json -> common.trigger, common.menu, common.footer, common.gestures with desktop/mobile/widget overlays; adopted on page reload.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/controls/session-dropdown/session-dropdown.json","pointers":["/common/trigger","/common/menu","/common/footer","/common/gestures","/desktop","/mobile","/widget"]}],"opportunities":[]}}
 /** Renders active/recycled sessions, private search results, and revision-fenced management actions. Controller callbacks own navigation; client writes retain retry receipts, and teardown fences pending work. */
 export function createSessionList(root, {guard, refresh, select, client, recycled = () => {}, screenSettings = () => null}) {
   let items = [], selected = '', config = {}, query = '', status = 'active';
   let hits = [], continuation = null, searchInfo = '', searching = false, epoch = 0, timer = 0, destroyed = false;
   let editing = null, checkboxMode = false, batchBusy = false;
+  let hold = null, suppressClickUntil = 0;
   const checked = new Set();
   const menu = root.querySelector('.session-dropdown-menu');
   const abort = new AbortController(), timers = new Set(), receipts = new Map();
@@ -44,9 +45,9 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     const label = root.querySelector('#session-dropdown-label');
     if (label) label.textContent = item?.title || 'New Session';
     root.dataset.loaded = 'true';
-    for (const id of ['icon','status','kebab','delete']) {
+    for (const id of ['icon','label','status','kebab','delete']) {
       const node = root.querySelector('#session-dropdown-' + id);
-      node.hidden = config.trigger?.[{icon:'agent_icon',kebab:'row_actions'}[id] || id] === false || (id === 'delete' && config.trigger?.delete !== true);
+      node.hidden = config.trigger?.[{icon:'agent_icon',label:'session_name',kebab:'row_actions'}[id] || id] === false || (id === 'kebab' && config.trigger?.row_actions !== true) || (id === 'delete' && config.trigger?.delete !== true);
       node.style.display = node.hidden ? 'none' : '';
     }
     root.querySelector('#session-dropdown-icon').classList.toggle('session-row-agent-warning', !!item?.pinned);
@@ -150,7 +151,11 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
   /** Builds the row action popup and optional device display preferences; session mutations stay client-owned and display edits stay browser-local. Unsupported V3 actions remain visibly disabled. */
   function actions(item, anchor) {
     const popup = document.createElement('div'); popup.className = 'session-row-actions'; popup.dataset.source = 'session-list'; popup.dataset.id = item.id;
-    for (const [key, title, glyph, fn] of [
+    const recycledActions = [
+      ['restore','Restore session','archive-restore',() => mutate(item,'restore')],
+      ['purge','Permanently delete session','trash-2',() => mutate(item,'purge')]
+    ];
+    for (const [key, title, glyph, fn] of (item.status === 'recycled' ? recycledActions : [
       ['pinning',item.pinned ? 'Unpin session' : 'Pin session',item.pinned ? 'pin-off' : 'pin',() => mutate(item,'patch',{pinned:!item.pinned})],
       ['auto_rename','Auto rename','wand-2',null],
       ['rename','Rename session','pencil',() => { root._sessionDropdownController.setPopup(null); rename(item, anchor.closest('.session-row')?.querySelector('.session-row-title') || root.querySelector('#session-dropdown-label')); }],
@@ -158,12 +163,12 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
       ['refresh','Refresh session','refresh-cw',async () => { await refresh(); await loadScope(); }],
       ['start_scratchpad','Start a scratchpad','notepad-text',null],
       ['delete','Recycle session','trash-2',() => mutate(item,'recycle')]
-    ]) {
+    ])) {
       if (config.menu?.[key] === false) continue;
       const b = button(title,glyph,fn,'session-row-action' + (key === 'delete' ? ' danger' : ''));
       b.append(document.createTextNode(' ' + title)); b.disabled = !fn;
       if (!fn) b.title = title + ' — unavailable in v3';
-      if (key === 'delete') confirmButton(b, 'Recycle?', fn);
+      if (['delete','restore','purge'].includes(key)) confirmButton(b, key === 'delete' ? 'Recycle?' : key === 'restore' ? 'Restore?' : 'Delete permanently?', fn);
       popup.append(b);
     }
     for (const [key,title,value] of [['agent_id','Agent',item.agent_id],['session_id','Session',item.id]]) {
@@ -172,12 +177,16 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
       b.append(document.createTextNode(` ${title}: ${value}`)); popup.append(b);
     }
     // Device display settings share the popup lifecycle; they never write session/server configuration.
-    const displaySettings = screenSettings(); if (displaySettings) popup.append(displaySettings);
+    const displaySettings = config.menu?.always_on_display === false ? null : screenSettings(); if (displaySettings) popup.append(displaySettings);
+    if (!popup.childElementCount) { root._sessionDropdownController.setPopup(null); return; }
     popup.style.maxHeight = 'min(80vh, 640px)'; popup.style.overflowY = 'auto';
     // Explicit intrinsic width prevents fixed-position shrink-to-fit width changing after placement.
     popup.style.width = 'max-content'; popup.style.maxWidth = 'calc(100vw - 8px)'; popup.style.boxSizing = 'border-box';
+    popup.setAttribute('role','group'); popup.setAttribute('aria-label','Session actions');
     root._sessionDropdownController.setPopup(popup); document.body.append(popup);
+    popup.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); root._sessionDropdownController.setPopup(null); anchor.focus?.(); } });
     // Expanding device preferences changes height; keep the complete scrollable popup inside the viewport.
+    /** Reanchor the complete action popup after display preferences expand. */
     function positionPopup() {
       const r = anchor.getBoundingClientRect(); popup.style.position = 'fixed';
       const bounds = popup.getBoundingClientRect();
@@ -186,7 +195,56 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     }
     displaySettings?.addEventListener('toggle', positionPopup);
     positionPopup(); window.lucide?.createIcons();
+    popup.querySelector('button:not(:disabled)')?.focus({preventScroll:true});
   }
+  /** Cancel pending hold work without activating a row or changing the selected session. */
+  function cancelHold() { if (hold) { clearTimeout(hold.timer); timers.delete(hold.timer); hold = null; } }
+  /** Resolve the row or selected trigger without treating footer fields/buttons as rows. */
+  function contextTarget(event) {
+    if (event.target.closest('button,input,textarea,select')) return null;
+    const row = event.target.closest('.session-row');
+    if (row && menu.contains(row)) {
+      if (checkboxMode || batchBusy) return null;
+      return {item:[...items,...binItems].find(item => item.id === row.dataset.id),anchor:row};
+    }
+    if (event.target.closest('.session-dropdown-trigger') && root.contains(event.target)) return {item:items.find(item => item.id === selected),anchor:root.querySelector('.session-dropdown-trigger')};
+    return null;
+  }
+  /** Open actions with no session navigation; visibility flags still apply inside the popup. */
+  function openContext(target) { if (target?.item && !destroyed) { cancelHold(); actions(target.item,target.anchor); } }
+  for (const host of [root,menu]) {
+    host.addEventListener('contextmenu', event => {
+      const target = contextTarget(event);
+      if (!target?.item || config.gestures?.right_click === false) return;
+      event.preventDefault(); event.stopPropagation(); cancelHold();
+      if (Date.now() >= suppressClickUntil) openContext(target);
+    }, {capture:true,signal:abort.signal});
+    host.addEventListener('keydown', event => {
+      if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+      const target = contextTarget(event); if (!target?.item) return;
+      event.preventDefault(); event.stopPropagation(); openContext(target);
+    }, {capture:true,signal:abort.signal});
+    host.addEventListener('pointerdown', event => {
+      cancelHold();
+      if (!['touch','pen'].includes(event.pointerType) || event.isPrimary === false || config.gestures?.long_press === false) return;
+      const target = contextTarget(event); if (!target?.item) return;
+      const ms = Number(config.gestures?.long_press_ms);
+      const pending = {id:event.pointerId,x:event.clientX,y:event.clientY,timer:0};
+      pending.timer = delay(() => { if (hold !== pending) return; hold = null; suppressClickUntil = Date.now()+1000; openContext(target); },Number.isFinite(ms) ? Math.max(250,Math.min(2000,ms)) : 550);
+      hold = pending;
+    }, {capture:true,signal:abort.signal});
+    host.addEventListener('click', event => {
+      if (Date.now() < suppressClickUntil && contextTarget(event)) { event.preventDefault(); event.stopImmediatePropagation(); }
+    }, {capture:true,signal:abort.signal});
+  }
+  document.addEventListener('pointermove', event => {
+    if (!hold || event.pointerId !== hold.id) return;
+    const configured = Number(config.gestures?.move_tolerance_px);
+    const tolerance = Number.isFinite(configured) ? Math.max(1,Math.min(50,configured)) : 10;
+    if (Math.hypot(event.clientX-hold.x,event.clientY-hold.y) > tolerance) cancelHold();
+  }, {signal:abort.signal});
+  for (const type of ['pointerup','pointercancel','scroll']) document.addEventListener(type,cancelHold,{capture:true,signal:abort.signal});
+  window.addEventListener('blur',cancelHold,{signal:abort.signal});
   /** Runs scoped paginated private search and discards stale/destroyed responses. */
   async function search(more = false) {
     const turn = ++epoch, q = query, scope = status, token = more ? continuation : null;
@@ -214,7 +272,10 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     if (menu.hidden || editing || destroyed) return;
     const focused = menu.querySelector('.session-manage-search-input');
     const focus = focused === document.activeElement, position = focused?.selectionStart;
+    cancelHold();
     menu.replaceChildren();
+    const rowList = document.createElement('div'); rowList.className = 'session-dropdown-rows';
+    menu.append(rowList);
     const source = status === 'active' ? items : binItems;
     const rows = query.trim() ? hits.map(hit => ({item:source.find(s => s.id === hit.session_id),hit})).filter(r => r.item) : source.map(item => ({item}));
     for (const {item,hit} of rows) {
@@ -227,31 +288,31 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
       }
       const title = document.createElement('span'); title.className = 'session-row-title';
       if (config.menu?.agent_icons !== false) { const avatar = document.createElement('span'); avatar.className = 'session-row-agent-icon' + (item.pinned ? ' session-row-agent-warning' : ''); avatar.innerHTML = icon('bot'); title.append(avatar); }
-      const text = document.createElement('span'); text.className = 'session-row-title-label'; text.textContent = item.title || 'New Session'; title.append(text); row.append(title);
+      const text = document.createElement('span'); text.className = 'session-row-title-label'; text.textContent = item.title || 'New Session'; text.hidden = config.menu?.session_name === false; title.append(text); row.append(title);
       if (hit) { const snippet = document.createElement('span'); snippet.className = 'session-row-msg-hit'; snippet.textContent = hit.snippet; snippet.title = hit.snippet; row.append(snippet); }
       if (config.menu?.status !== false) row.append(statusNode(item));
       if (status === 'recycled') {
         const b = button('Restore session','archive-restore',null,'session-row-bin'); b.textContent = 'bin';
-        confirmButton(b,'Restore?',() => mutate(item,'restore')); row.append(b);
+        confirmButton(b,'Restore?',() => mutate(item,'restore')); if (config.menu?.restore !== false) row.append(b);
         const remove = button('Permanently delete session','trash-2',null,'session-row-action danger');
-        confirmButton(remove,'Delete permanently?',() => mutate(item,'purge')); row.append(remove);
-      } else if (!checkboxMode && config.menu?.row_actions !== false) row.append(button('More…','more-vertical',() => actions(item,row.querySelector('.session-row-kebab')),'session-row-kebab'));
-      menu.append(row);
+        confirmButton(remove,'Delete permanently?',() => mutate(item,'purge')); if (config.menu?.purge !== false) row.append(remove);
+      } else if (!checkboxMode && config.menu?.row_actions === true) row.append(button('More…','more-vertical',() => actions(item,row.querySelector('.session-row-kebab')),'session-row-kebab'));
+      rowList.append(row);
     }
     if (!rows.length) { const empty = document.createElement('div'); empty.className = 'session-dropdown-empty'; empty.textContent = searching ? 'Searching…' : searchInfo.startsWith('Search failed:') ? 'Search unavailable; no results verified' : query ? 'No matches in this page' : status === 'recycled' ? 'Recycle bin is empty' : 'No sessions yet'; menu.append(empty); }
     if (searchInfo) { const info = document.createElement('div'); info.className = 'session-dropdown-sync'; info.setAttribute('role','status'); info.textContent = searchInfo; menu.append(info); }
     if (continuation) { const more = button('Continue private search','search',() => search(true),'session-row-action'); more.textContent = 'Continue search'; more.disabled = searching; menu.append(more); }
     const bar = document.createElement('div'); bar.className = 'session-manage-row';
-    if (config.menu?.search !== false) {
+    if (config.footer?.enabled !== false && config.footer?.search !== false) {
       const wrap = document.createElement('span'); wrap.className = 'session-manage-search'; wrap.innerHTML = icon('search');
       const input = document.createElement('input'); input.className = 'session-manage-search-input'; input.placeholder = 'Search private titles and content…'; input.setAttribute('aria-label','Search private session titles and content'); input.value = query;
       input.disabled = batchBusy;
       input.oninput = () => { query = input.value; ++epoch; searching = false; hits = []; continuation = null; clearTimeout(timer); if (query.trim()) timer = delay(() => guard(() => search())(),250); else render(); };
       wrap.append(input); bar.append(wrap);
     }
-    if (config.menu?.recycle_bin !== false) { const b = button(status === 'active' ? 'Recycle bin' : 'Back to active sessions','recycle',async () => { status = status === 'active' ? 'recycled' : 'active'; hits = []; continuation = null; await loadScope(); }); b.setAttribute('aria-pressed',String(status === 'recycled')); b.disabled = batchBusy; bar.append(b); }
-    if (config.menu?.hidden_sessions !== false) { const b = button('Hidden sessions','eye-off',null); b.disabled = true; b.title = 'Hidden sessions — unavailable in v3'; bar.append(b); }
-    if (config.menu?.batch_delete !== false && status === 'active') {
+    if (config.footer?.enabled !== false && config.footer?.recycle_bin !== false) { const b = button(status === 'active' ? 'Recycle bin' : 'Back to active sessions','recycle',async () => { status = status === 'active' ? 'recycled' : 'active'; hits = []; continuation = null; await loadScope(); }); b.setAttribute('aria-pressed',String(status === 'recycled')); b.disabled = batchBusy; bar.append(b); }
+    if (config.footer?.enabled !== false && config.footer?.hidden_sessions !== false) { const b = button('Hidden sessions','eye-off',null); b.disabled = true; b.title = 'Hidden sessions — unavailable in v3'; bar.append(b); }
+    if (config.footer?.enabled !== false && config.footer?.batch_delete !== false && status === 'active') {
       const b = button(checkboxMode ? 'Disable checkbox mode' : 'Enable checkbox mode','square',() => { checkboxMode = !checkboxMode; checked.clear(); render(); },'session-manage-checkbox-toggle');
       b.dataset.state = checkboxMode ? 'on' : 'off'; b.setAttribute('aria-pressed',String(checkboxMode)); b.disabled = batchBusy; bar.append(b);
       if (checkboxMode && checked.size) {
@@ -260,7 +321,12 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
         confirmButton(recycle,`Recycle ${checked.size} selected?`,recycleChecked); bar.append(recycle);
       }
     }
-    menu.append(bar); menu.style.setProperty('--session-menu-open-height',Math.min(menu._availableHeight || 480,menu.scrollHeight) + 'px');
+    if (config.footer?.enabled !== false && bar.childElementCount) menu.append(bar);
+    const count = Number(config.menu?.default_rows);
+    const visibleRows = Number.isInteger(count) ? Math.max(1,Math.min(100,count)) : 8;
+    const height = [...rowList.children].slice(0,visibleRows).reduce((sum,row) => sum+row.getBoundingClientRect().height,0);
+    rowList.style.maxHeight = height ? height+'px' : '';
+    menu.style.setProperty('--session-menu-open-height',Math.min(menu._availableHeight || 480,menu.scrollHeight) + 'px');
     window.lucide?.createIcons();
     if (focus) { const input = menu.querySelector('input'); input?.focus(); if (position != null) input?.setSelectionRange(position,position); }
   }
@@ -272,10 +338,10 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     // Replace authoritative rows/selection and drop checkbox IDs no longer present.
     update(rows,id) { items = rows; selected = id; for (const id of checked) if (!items.some(item => item.id === id)) checked.delete(id); label(); render(); },
     // Reapply menu options; disabling batch delete also clears its transient selection.
-    configure(cfg) { config = cfg || {}; if (config.menu?.batch_delete === false) { checkboxMode = false; checked.clear(); } menu.style.maxHeight = config.menu?.max_height || ''; label(); render(); },
+    configure(cfg) { cancelHold(); config = cfg || {}; root._sessionDropdownController.setPopup(null); if (config.footer?.enabled === false || config.footer?.batch_delete === false) { checkboxMode = false; checked.clear(); } if (config.footer?.enabled === false || config.footer?.recycle_bin === false) status = 'active'; if (config.footer?.enabled === false || config.footer?.search === false) { ++epoch; clearTimeout(timer); query = ''; hits = []; continuation = null; searching = false; searchInfo = ''; } menu.style.setProperty('--session-dropdown-max-height',config.menu?.max_height || 'none'); label(); render(); },
     // Invalidate in-flight search and restore the default active, unfiltered list.
-    reset() { if (!batchBusy) { checkboxMode = false; checked.clear(); } ++epoch; clearTimeout(timer); query = ''; hits = []; continuation = null; searching = false; searchInfo = ''; status = 'active'; },
+    reset() { cancelHold(); if (!batchBusy) { checkboxMode = false; checked.clear(); } ++epoch; clearTimeout(timer); query = ''; hits = []; continuation = null; searching = false; searchInfo = ''; status = 'active'; },
     // Cancel timers/listeners and detach editors before the dropdown root is removed.
-    destroy() { destroyed = true; ++epoch; clearTimeout(timer); clearInterval(tick); for (const t of timers) clearTimeout(t); abort.abort(); editing?.remove(); root.querySelector('#session-dropdown-kebab').onclick = null; root.querySelector('#session-dropdown-delete').onclick = null; }
+    destroy() { cancelHold(); destroyed = true; ++epoch; clearTimeout(timer); clearInterval(tick); for (const t of timers) clearTimeout(t); abort.abort(); editing?.remove(); root.querySelector('#session-dropdown-kebab').onclick = null; root.querySelector('#session-dropdown-delete').onclick = null; }
   };
 }

@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector"],"purpose":"Mounts the V3 session selector menu lifecycle and interaction wiring Config: data/config/chat.json -> chat_common.chat_header.controls.session_dropdown (trigger and menu). Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides. Touch feedback uses ui/vibrate.json -> enabled, duration_ms.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/chat_header/controls/session_dropdown"],"profile_overrides":true},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector"],"purpose":"Session dropdown presentation and interactions. Config: ui/chat/controls/session-dropdown/session-dropdown.json -> common.trigger, common.menu, common.footer, common.gestures with desktop/mobile/widget overlays; adopted on page reload.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/controls/session-dropdown/session-dropdown.json","pointers":["/common/trigger","/common/menu","/common/footer","/common/gestures","/desktop","/mobile","/widget"]}],"opportunities":[]}}
 // Adapted from running v2 session-dropdown/controller.js. V3 owns data/actions.
 /** Mounts menu positioning, keyboard/focus behavior, animation, and teardown around V3-owned data callbacks. */
 export function mountSessionDropdown(root, {refresh, select, guard, resetSearch = () => {}}) {
@@ -449,7 +449,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
  // Shared outside click/focus callback accounts for the menu being detached to body.
  const outside=e=>{if(!root.contains(e.target)&&!menu.contains(e.target)&&!popup?.contains(e.target))closeMenu();};
  document.addEventListener('click',outside,{signal:abort.signal});document.addEventListener('focusin',outside,{signal:abort.signal});
- document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!menu.hidden){closeMenu();root.querySelector('.session-dropdown-trigger').focus();}},{signal:abort.signal});
+ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&popup){_closeRowActions();return;}if(e.key==='Escape'&&!menu.hidden){closeMenu();root.querySelector('.session-dropdown-trigger').focus();}},{signal:abort.signal});
  // Resize callback reanchors an open detached menu without restarting its animation.
  const reposition=()=>{if(!menu.hidden)_positionOpenMenu();};
  window.addEventListener('resize',reposition,{signal:abort.signal});window.visualViewport?.addEventListener('resize',reposition,{signal:abort.signal});
