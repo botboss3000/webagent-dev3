@@ -470,3 +470,29 @@ def checkout_drift(live_blob, checkout_blob, candidate_blob, changed, validate, 
         "next_offset": offset+40 if len(rows)>offset+40 else None,
         "choices": ["synchronize", "proceed", "cancel"] if rows else [],
         "guidance": "Synchronize the listed source first, proceed using the frozen deployed release without overwriting conflicts, or cancel. Proceed preserves deployed changes but does not repair checkout drift." if rows else "Checkout source matches the deployed release."}
+
+
+def proposal_patch(before_blob,after_blob,validate):
+    """Bounded UTF-8 proposal for checked source application, including deletions and Git modes."""
+    import difflib
+    before=entries(before_blob,validate);after=entries(after_blob,validate)
+    changed=[p for p in sorted(set(before)|set(after)) if before.get(p)!=after.get(p) and not inspection_path(p)]
+    if len(changed)>64:raise ValueError("Successor proposal exceeds checked source path bound")
+    patches=[]
+    for path in changed:
+        if not path.startswith("v3/"):raise ValueError("Read-only shared input changed")
+        name=path[3:];old=before.get(path);new=after.get(path)
+        a=old[1].decode("utf-8","strict") if old else ""
+        b=new[1].decode("utf-8","strict") if new else ""
+        if "\0" in a+b:raise ValueError("Binary successor proposal requires explicit recovery")
+        header="diff --git a/"+name+" b/"+name+"\n"
+        mode=lambda value:"100755" if value[0]&0o100 else "100644"
+        if old is None:header+="new file mode "+mode(new)+"\n"
+        elif new is None:header+="deleted file mode "+mode(old)+"\n"
+        elif mode(old)!=mode(new):header+="old mode "+mode(old)+"\nnew mode "+mode(new)+"\n"
+        diff="".join(difflib.unified_diff(a.splitlines(True),b.splitlines(True),fromfile="a/"+name if old else "/dev/null",tofile="b/"+name if new else "/dev/null"))
+        diff="".join(line if line.endswith("\n") else line+"\n\\ No newline at end of file\n" for line in diff.splitlines(True))
+        patches.append(header+diff)
+    patch="".join(patches)
+    if len(patch.encode())>1024*1024:raise ValueError("Successor proposal exceeds checked patch byte bound")
+    return patch

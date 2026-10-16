@@ -3031,8 +3031,95 @@ class Broker:
         self._start_next()
         return result
 
+
+    def successor_task(self,request,args):
+        """Import a terminal frozen proposal through normal checked writes; never replay deployment."""
+        required={"action","task_id","source_job_id","request_id","expected_inputs_sha256"}
+        trusted=request["trusted"];workspace=request["workspace"]
+        if set(args)!=required or not trusted.get("local_caller"):
+            raise PermissionError("Exact operator successor request required")
+        self._incoming_lease(trusted)
+        item=self.scheduler.item(args,trusted,workspace)
+        owner=self.scheduler.owner(trusted,workspace)
+        path=self.scheduler.journal_path(owner,args["request_id"],"successor-"+item["key"])
+        digest=hashlib.sha256(canonical(args)).hexdigest()
+        if path.is_symlink():raise PermissionError("Successor receipt symlink")
+        if path.exists():
+            record=json.loads(path.read_text())
+            if record["digest"]!=digest:raise ValueError("Successor request ID reused")
+            if record["state"]=="done":return record["result"]
+        else:
+            job=self.jobs.get(args["source_job_id"],{})
+            if not job or not self._owned(job,trusted,workspace):raise PermissionError("Owned frozen source job required")
+            previous=self.scheduler.item({"task_id":job.get("task_id")},trusted,workspace)
+            if previous["key"]==item["key"]:raise ValueError("Distinct successor task required")
+            if previous.get("job_id")!=job.get("job_id") or previous.get("status")!="closed" or previous.get("mode")!="isolated":
+                raise ValueError("Latest closed isolated proposal required")
+            if job.get("status")not in {"failed","cancelled","interrupted","stale"} or job.get("effects_started") or job.get("batch_parent") or job.get("batch_members"):
+                raise ValueError("Reconcile effects before importing a terminal preactivation proposal")
+            if any(j.get("task_id")==previous["task_id"] and j.get("user_id")==previous["user_id"] and j.get("workspace")==workspace and j.get("status")in {"queued","running","uncertain","needs_decision"} for j in self.jobs.values()):
+                raise ValueError("Source task has unresolved execution")
+            held=self.scheduler.store.get(previous["key"])
+            if held["generation"]!=job.get("source_generation"):raise ValueError("Frozen ownership generation changed")
+            if held["scopes"] or held["requested"]:raise ValueError("Yield original reservations through release_claims before successor import")
+            if self.scheduler.pending(previous["key"]) or self.scheduler.pending(item["key"]):raise ValueError("Scheduler transition requires recovery")
+            if item.get("status")!="open" or item.get("mode")!="isolated" or item.get("successor"):
+                raise ValueError("Fresh open isolated successor required")
+            tree=Path(item["workspace_path"]).parent
+            snapshot=release.snapshot(tree,TASK_CONTEXT,context_digest)
+            baseline=(tree/"baseline.tar").read_bytes()
+            if context_digest(snapshot)[0]!=args["expected_inputs_sha256"] or context_digest(snapshot)[0]!=context_digest(baseline)[0]:
+                raise ValueError("Unchanged empty successor and exact input binding required")
+            live=self._current_release_blob()
+            current=release.entries(snapshot,context_digest);published=release.entries(live,context_digest)
+            if {p:v for p,v in current.items() if not release.inspection_path(p)}!=published:
+                raise ValueError("Successor baseline is stale; begin a fresh task")
+            source_tree=Path(previous["workspace_path"]).parent
+            frozen=(self.state/job["job_id"]/"task.tar").read_bytes()
+            if context_digest(release.snapshot(source_tree,TASK_CONTEXT,context_digest))[0]!=context_digest(frozen)[0]:
+                raise ValueError("Frozen proposal changed")
+            source_base=(source_tree/"baseline.tar").read_bytes()
+            if context_digest(source_base)[0]!=previous["base_inputs_sha256"]:raise ValueError("Original source baseline changed")
+            merged,changed=release.candidate(source_base,frozen,live,context_digest)
+            patch=checked_git_modes(release.proposal_patch(snapshot,merged,context_digest))
+            if not patch:raise ValueError("Proposal already present in current release")
+            record={"state":"prepared","digest":digest,"source_job_id":job["job_id"],
+                "source_task_id":previous["task_id"],"source_task_key":previous["key"],
+                "source_summary":previous["summary"],"source_generation":job.get("source_generation"),
+                "source_sha256":context_digest(frozen)[0],"baseline_sha256":context_digest(live)[0],
+                "changed_paths":changed,"patch":patch,"request_id":args["request_id"]}
+            self.scheduler.write_record(path,record)
+        # Preparation alone grants no future authority over a proposal that has since resumed.
+        if args["request_id"] not in item.get("applies",{}):
+            previous=self.work[record["source_task_key"]];job=self.jobs[record["source_job_id"]]
+            state=self.scheduler.store.get(previous["key"])
+            if previous.get("job_id")!=job["job_id"] or previous.get("status")!="closed" or job.get("effects_started") or job.get("status")not in {"failed","cancelled","interrupted","stale"}:
+                raise ValueError("Successor source resumed; reconcile before importing")
+            if state["scopes"] or state["requested"] or state["generation"]!=record["source_generation"]:
+                raise ValueError("Successor source ownership changed")
+            if any(j.get("task_id")==previous["task_id"] and j.get("user_id")==previous["user_id"] and j.get("workspace")==workspace and j.get("status")in {"queued","running","uncertain","needs_decision"} for j in self.jobs.values()):
+                raise ValueError("Successor source has unresolved execution")
+            if self.scheduler_digest(self.scheduler_task_snapshot(Path(previous["workspace_path"]).parent))!=record["source_sha256"]:
+                raise ValueError("Successor source bytes changed")
+        # A saved checked-apply receipt settles an interrupted response without a second edit.
+        result=self.handle({**request,"name":"v3_source_apply","arguments":{
+            "task_id":item["task_id"],"request_id":args["request_id"],
+            "expected_inputs_sha256":args["expected_inputs_sha256"],"patch":record["patch"]}})
+        if result.get("status")!="success":
+            return {"status":"requires_reconciliation","source_apply":result,"source_job_id":record["source_job_id"]}
+        provenance={k:v for k,v in record.items() if k not in {"state","digest","patch"}}
+        item["successor"]=provenance
+        original=self.work[record["source_task_key"]]
+        if item["key"] not in original.setdefault("successor_tasks",[]):original["successor_tasks"].append(item["key"])
+        self._save_work()
+        result={"status":"imported","task_id":item["task_id"],"provenance":provenance,
+            "source_apply":result,"artifact_reuse":"requires_exact_input_verification","publication_required":True}
+        self.scheduler.write_record(path,{**record,"state":"done","result":result})
+        return result
+
     def unified_build(self, request, args):
         action = args.get("action")
+        if action=="successor_task":return self.successor_task(request,args)
         if action=="release_claims":return self.release_claims(request,args)
         if action=="reload_memory_policy":return self.reload_memory_policy(args,request["trusted"])
         if action in self.scheduler.actions:return self.scheduler.handle(args,request["trusted"],request["workspace"])

@@ -544,3 +544,132 @@ class RollbackModeDispatchTests(unittest.TestCase):
   with patch.object(self.broker.ui_publication,"rollback_preview",return_value=raw):
    result=self.call("build_work",{"action":"ui_rollback_preview","task_id":"mode-fixture","release_job_id":str(uuid.uuid4())})
   self.assertEqual(result,{**raw,"patch":"content\n"});self.assertTrue(raw["patch"].startswith("old mode"))
+
+
+class SuccessorRecoveryTests(unittest.TestCase):
+    """Terminal proposal imports use real source receipts and independent destination claims."""
+    from test_scheduler_broker import SchedulerBrokerTests as _base
+    setUp=_base.setUp
+    tearDown=_base.tearDown
+    call=_base.call
+    begin=_base.begin
+    write=_base.write
+
+    def proposal(self,yield_claims=True):
+        item=self.begin("old-proposal-task")
+        self.write(item,"README.md","proposal\n")
+        tree=Path(item["workspace_path"]).parent
+        blob=self.broker.scheduler_task_snapshot(tree)
+        job_id=str(uuid.uuid4());folder=self.broker.state/job_id;folder.mkdir()
+        (folder/"task.tar").write_bytes(blob)
+        value=self.broker.scheduler.store.get(item["key"])
+        job={"job_id":job_id,"task_id":item["task_id"],"user_id":item["user_id"],
+            "workspace":self.workspace,"status":"failed","effects_started":False,
+            "source_generation":value["generation"],"isolated":True,"request_key":job_id}
+        self.broker.jobs[job_id]=job;item.update(status="closed",job_id=job_id)
+        if yield_claims:
+            self.broker.scheduler.store.release_scopes(value["id"],value["owner"],value["revision"],value["epoch"],value["scopes"],"fixture yield","yield-fixture-scopes")
+        return item,job
+
+    def request(self,job):
+        item=self.begin("new-proposal-task")
+        tree=Path(item["workspace_path"]).parent
+        return item,{"action":"successor_task","task_id":item["task_id"],"source_job_id":job["job_id"],
+            "request_id":"successor-fixture-import","expected_inputs_sha256":self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree))}
+
+    def test_import_rebases_preserves_original_and_replays(self):
+        original,job=self.proposal();old=Path(original["workspace_path"])/"README.md"
+        self.runner.blob=fixtures.context(extra={"v3/README.md":"original\n","v3/docs/later.md":"later\n"})
+        item,args=self.request(job);result=self.call("build_work",args)
+        self.assertEqual(result["status"],"imported")
+        self.assertEqual((Path(item["workspace_path"])/"README.md").read_text(),"proposal\n")
+        self.assertEqual((Path(item["workspace_path"])/"docs/later.md").read_text(),"later\n")
+        self.assertEqual(old.read_text(),"proposal\n");self.assertEqual(original["status"],"closed")
+        self.assertEqual(self.call("build_work",args),result)
+        self.assertTrue(self.broker.scheduler.store.get(item["key"])["scopes"])
+        self.assertFalse(self.broker.scheduler.store.get(original["key"])["scopes"])
+        self.assertEqual(item["successor"]["source_summary"],original["summary"])
+        with self.assertRaisesRegex(ValueError,"reused"):
+            self.call("build_work",{**args,"expected_inputs_sha256":"0"*64})
+        self.assertFalse(self.runner.calls)
+
+    def test_same_file_conflict_does_not_claim_or_write(self):
+        original,job=self.proposal()
+        self.runner.blob=fixtures.context(extra={"v3/README.md":"other writer\n"})
+        item,args=self.request(job)
+        with self.assertRaisesRegex(ValueError,"source conflict"):self.call("build_work",args)
+        self.assertFalse(self.broker.scheduler.store.get(item["key"])["scopes"])
+        self.assertEqual((Path(item["workspace_path"])/"README.md").read_text(),"other writer\n")
+
+    def test_original_claims_must_be_yielded(self):
+        original,job=self.proposal(False);item,args=self.request(job)
+        with self.assertRaisesRegex(ValueError,"Yield original"):self.call("build_work",args)
+
+    def test_uncertain_effects_and_changed_frozen_source_rejected(self):
+        original,job=self.proposal();item,args=self.request(job)
+        job["effects_started"]=True
+        with self.assertRaisesRegex(ValueError,"Reconcile effects"):self.call("build_work",args)
+        job["effects_started"]=False
+        (Path(original["workspace_path"])/"README.md").write_text("tampered\n")
+        with self.assertRaisesRegex(ValueError,"Frozen proposal changed"):self.call("build_work",args)
+
+    def test_dirty_or_stale_destination_rejected(self):
+        original,job=self.proposal();item,args=self.request(job)
+        self.runner.blob=fixtures.context(extra={"v3/README.md":"original\n","v3/docs/later.md":"late\n"})
+        with self.assertRaisesRegex(ValueError,"baseline is stale"):self.call("build_work",args)
+        self.runner.blob=fixtures.context(extra={"v3/README.md":"original\n"})
+        self.write(item,"README.md","unrelated draft\n")
+        with self.assertRaisesRegex(ValueError,"Unchanged empty"):self.call("build_work",args)
+
+    def test_interrupted_receipt_completion_does_not_apply_twice(self):
+        original,job=self.proposal();item,args=self.request(job)
+        save=self.broker.scheduler.write_record
+        def fail_once(path,record):
+            if record.get("state")=="done":raise RuntimeError("lost reply")
+            return save(path,record)
+        with patch.object(self.broker.scheduler,"write_record",side_effect=fail_once):
+            with self.assertRaisesRegex(RuntimeError,"lost reply"):self.call("build_work",args)
+        value=self.broker.scheduler.store.get(item["key"])
+        result=self.call("build_work",args)
+        self.assertEqual(result["status"],"imported")
+        self.assertEqual(self.broker.scheduler.store.get(item["key"])["generation"],value["generation"])
+
+    def test_unauthorized_or_missing_source_rejected(self):
+        original,job=self.proposal();item,args=self.request(job)
+        with self.assertRaises(PermissionError):self.call("build_work",{**args,"source_job_id":str(uuid.uuid4())})
+        self.trusted.pop("local_caller")
+        with self.assertRaises(PermissionError):self.call("build_work",args)
+
+    def test_proposal_patch_deletion_rename_modes_and_unterminated_text(self):
+        before=fixtures.context(extra={"v3/docs/old.md":"old","v3/docs/remove.md":"gone\n"})
+        after=fixtures.context(extra={"v3/docs/new.md":"old"})
+        patch_text=fixtures.host.release.proposal_patch(before,after,fixtures.host.context_digest)
+        self.assertIn("deleted file mode 100644",patch_text)
+        self.assertIn("new file mode 100644",patch_text)
+        self.assertIn("\\ No newline at end of file",patch_text)
+        many=fixtures.context(extra={"v3/docs/f"+str(i)+".md":"x" for i in range(65)})
+        with self.assertRaisesRegex(ValueError,"path bound"):fixtures.host.release.proposal_patch(fixtures.context(),many,fixtures.host.context_digest)
+
+    def test_saved_import_rechecks_source_and_target_before_retry(self):
+        original,job=self.proposal();item,args=self.request(job)
+        normal=self.broker.handle
+        def blocked(request):
+            if request.get("name")=="v3_source_apply":raise ValueError("fixture wait")
+            return normal(request)
+        with patch.object(self.broker,"handle",side_effect=blocked):
+            with self.assertRaisesRegex(ValueError,"fixture wait"):self.call("build_work",args)
+        job["status"]="running"
+        with self.assertRaisesRegex(ValueError,"source resumed"):self.call("build_work",args)
+        job["status"]="failed"
+        self.write(item,"README.md","new draft\n")
+        with self.assertRaisesRegex(ValueError,"stale source inputs"):self.call("build_work",args)
+
+    def test_mode_only_and_binary_proposals(self):
+        release=fixtures.host.release;validate=fixtures.host.context_digest
+        before=release.entries(fixtures.context(extra={"v3/docs/file.md":"same\n"}),validate)
+        after=dict(before);after["v3/docs/file.md"]=(0o755,b"same\n")
+        text=release.proposal_patch(release.archive(before,validate),release.archive(after,validate),validate)
+        self.assertIn("old mode 100644\nnew mode 100755",text)
+        after["v3/docs/file.md"]=(0o644,b"binary\0")
+        with self.assertRaisesRegex(ValueError,"Binary successor"):
+            release.proposal_patch(release.archive(before,validate),release.archive(after,validate),validate)
