@@ -92,3 +92,33 @@ checking readiness and the reconfiguration receipt.
 Existing native adapters remain supported. This release does not turn pending
 legacy declarations into implemented tools or extract every native handler.
 A new engine capability or incompatible protocol still needs an engine update.
+
+## Native Automation ability boundary
+
+Automation uses the fixed host_interface=automation_v1 registration under
+plugins/abilities/Core/automation/plugin.json. Its standalone crate and complete
+test suite live in service/, alongside the package descriptor, schemas and UI.
+The application Cargo manifest does not build an Automation binary, and its
+image does not copy an Automation distribution. Installations can omit this
+ability directory while retaining the core loop and generic background tasks.
+
+This native reducer protocol differs from generic isolated model plugins.
+The app owns caller scoping, policy, approvals, namespace CAS, durable events,
+background admission and terminal publication. The reducer receives bounded
+host-selected state and metadata through stdin, with host-enforced filesystem,
+network and subprocess confinement. A declaration cannot select another native
+host interface or provide trusted caller identity.
+
+Builds use the locked offline standalone crate and its complete test suite.
+Content-addressed artifacts resolve from the active immutable publication.
+Compatible implementation updates preserve activation identity and schedules;
+admitted calls retain their pinned executable. Missing or disabled packages
+reject new calls. Installation changes rotate activation identity, invalidate
+health and deactivate retained work. Legacy copied files remain rollback
+material and cannot become an executable fallback.
+
+The initial extraction requires a coordinated app release for the native host
+registration. Subsequent compatible package publications use plugin_deploy
+without replacing API/loop/gate. External event adapters, clone runners and
+device execution remain unavailable. This section documents the candidate
+contract; release receipts and live acceptance establish installation status.

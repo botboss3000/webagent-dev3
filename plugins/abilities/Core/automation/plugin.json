@@ -1,0 +1,48 @@
+{
+  "id": "automation",
+  "dispatch": "isolated",
+  "host_interface": "automation_v1",
+  "protocol": 1,
+  "interface": 1,
+  "runtime": "executable",
+  "entrypoint": "webagent_automation",
+  "effect": "write",
+  "schemas": "service/tool-schemas.json",
+  "tools": [
+    "list_event_sources",
+    "list_delivery_channels",
+    "event_subscribe",
+    "list_event_subscriptions",
+    "event_unsubscribe",
+    "schedule_task",
+    "remind_me",
+    "list_automations",
+    "update_automation",
+    "pause_automation",
+    "resume_automation",
+    "cancel_automation",
+    "run_automation_now",
+    "remember_automation_state"
+  ],
+  "build": {
+    "toolchain": "rust-1.90",
+    "inputs": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "service/main.rs",
+      "service/engine.rs",
+      "service/contracts.rs"
+    ],
+    "dependencies": [],
+    "flags": [],
+    "assets": [
+      "automation.json",
+      "automation.skill.md",
+      "service/package.json",
+      "service/tool-schemas.json",
+      "service/page.json",
+      "service/page.js",
+      "service/page.css"
+    ]
+  }
+}

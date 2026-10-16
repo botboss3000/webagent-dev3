@@ -70,7 +70,202 @@ fn host_lock(app: &App, id: &str) -> Result<File> {
         .map_err(|_| anyhow!("Module busy"))?;
     Ok(file)
 }
+// @code-index {"version":1,"feature":"automation-drop-in","aliases":["standalone automation","automation ability plugin"],"purpose":"Trusted Automation lifecycle, pinned reducer execution and current permissions. Config: plugins/abilities/Core/automation/automation.json -> /config/settings; settings flow through host execution_scope and never grant authority.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"plugins/abilities/Core/automation/automation.json","pointers":["/config/settings"]}],"opportunities":[]}}
+/// Automation has one fixed native ability bridge; legacy roots cannot restore a removed package.
+fn automation_ability_host(id: &str) -> bool {
+    id == "automation"
+}
+/// Pin one broker publication before resolving the Automation ability's assets.
+fn automation_ability_root() -> PathBuf {
+    crate::live_assets::published_root()
+        .map(|root| root.join("plugins/abilities"))
+        .unwrap_or_else(|| {
+            PathBuf::from(
+                std::env::var("V3_ABILITIES_ROOT")
+                    .unwrap_or_else(|_| "/opt/v3/plugins/abilities".into()),
+            )
+        })
+        .join("Core/automation")
+}
+/// Keep a bounded content-free activation marker outside immutable package source.
+fn automation_activation_path(root: &FsPath) -> PathBuf {
+    root.join("modules/activation-automation.json")
+}
+/// Read only host-written activation state; absence never installs or enables a package.
+fn automation_activation(root: &FsPath) -> Result<Value> {
+    let path = automation_activation_path(root);
+    let meta = std::fs::symlink_metadata(&path)?;
+    if !meta.is_file()
+        || meta.file_type().is_symlink()
+        || meta.len() > 4096
+        || meta.permissions().mode() & 0o077 != 0
+    {
+        return Err(anyhow!("Unsafe Automation activation marker"));
+    }
+    let value: Value = serde_json::from_slice(&std::fs::read(path)?)?;
+    if !value["installed"].is_boolean()
+        || !value["enabled"].is_boolean()
+        || value["generation"]
+            .as_str()
+            .is_none_or(|v| v.len() != 64 || !v.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(anyhow!("Invalid Automation activation marker"));
+    }
+    Ok(value)
+}
+/// Atomically persist host activation; write disabled first when changing an epoch.
+fn save_automation_activation(
+    root: &FsPath,
+    installed: bool,
+    enabled: bool,
+    generation: &str,
+) -> Result<()> {
+    if generation.len() != 64 || !generation.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(anyhow!("Invalid Automation activation generation"));
+    }
+    let path = automation_activation_path(root);
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("Missing activation directory"))?;
+    std::fs::create_dir_all(parent)?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    file.write_all(&serde_json::to_vec(
+        &json!({"installed":installed,"enabled":enabled,"generation":generation}),
+    )?)?;
+    file.as_file().sync_all()?;
+    file.persist(&path).map_err(anyhow::Error::from)?;
+    File::open(parent)?.sync_all()?;
+    Ok(())
+}
+/// Explicit installed=false wins over retained legacy metadata after uninstall.
+fn automation_installed(record: &Value, legacy_exists: bool) -> bool {
+    record["installed"]
+        .as_bool()
+        .unwrap_or_else(|| legacy_exists && installed_generation(record).is_some())
+}
+/// Retain the old copied package as migration/rollback material without executing it.
+fn legacy_automation_exists(root: &FsPath) -> bool {
+    std::fs::symlink_metadata(root.join("plugins/services/automation/package.json"))
+        .is_ok_and(|meta| meta.is_file() && !meta.file_type().is_symlink())
+}
+/// Read the trusted descriptor's activation generation without confusing it with a build version.
+fn manifest_generation(id: &str, path: &FsPath, descriptor: &Value) -> Result<String> {
+    if automation_ability_host(id) {
+        return descriptor["_host_generation"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow!("Missing Automation activation binding"));
+    }
+    let meta = std::fs::metadata(path)?;
+    Ok(digest(&json!([
+        descriptor["generation"],
+        meta.ino(),
+        meta.len(),
+        meta.mtime(),
+        meta.mtime_nsec()
+    ])))
+}
+/// Bind a reducer invocation to its exact code/assets while compatible updates keep the activation epoch.
+fn manifest_implementation(id: &str, path: &FsPath, descriptor: &Value) -> Result<String> {
+    if automation_ability_host(id) {
+        return descriptor["_host_implementation"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow!("Missing Automation implementation binding"));
+    }
+    manifest_generation(id, path, descriptor)
+}
+/// Require the native protocol acknowledgement before granting implementation-bound health.
+fn automation_probe_ready(reply: &Value) -> bool {
+    reply["result"]["protocol"] == 1
+        && reply["result"]["package"] == "automation"
+        && reply["result"]["ready"] == true
+}
+/// Probe one current implementation and publish health only for that same activation and code version.
+async fn probe_automation(app: &App, generation: &str) -> Result<bool> {
+    let (path, descriptor) = manifest("automation")?;
+    let implementation = manifest_implementation("automation", &path, &descriptor)?;
+    if manifest_generation("automation", &path, &descriptor)? != generation {
+        return Err(anyhow!("Automation activation changed before probe"));
+    }
+    let frame = request(
+        app,
+        "automation",
+        "probe",
+        json!({}),
+        json!({}),
+        generation,
+        true,
+        false,
+        &json!({}),
+    );
+    let healthy = tokio::time::timeout(Duration::from_secs(2), reduce("automation", &frame))
+        .await
+        .is_ok_and(|result| result.is_ok_and(|reply| automation_probe_ready(&reply)));
+    let (current_path, current) = manifest("automation")?;
+    if manifest_generation("automation", &current_path, &current)? != generation
+        || manifest_implementation("automation", &current_path, &current)? != implementation
+    {
+        return Err(anyhow!("Automation changed during health probe"));
+    }
+    write_health(
+        app,
+        "automation",
+        generation,
+        Some(&implementation),
+        healthy,
+    )?;
+    Ok(healthy)
+}
+/// Enable only an explicit administrator-installed package; failed transitions stay unavailable.
+/// Reads/Writes: global module_install:automation and the host activation marker. Reducers never write either.
+async fn automation_lifecycle(app: &App, action: &str) -> Result<Value> {
+    let known = app
+        .store
+        .get("module_install:automation")
+        .await?
+        .unwrap_or(Value::Null);
+    let installed = automation_installed(&known, legacy_automation_exists(&app.store.root));
+    let epoch = digest(&json!(uuid()));
+    match action {
+        "disable" | "uninstall" => {
+            let retain = installed && action != "uninstall";
+            save_automation_activation(&app.store.root, retain, false, &epoch)?;
+            app.store.put("module_install:automation",&json!({"installed":retain,"enabled":false,"generation":epoch,"installed_generation":if retain{Some(epoch.as_str())}else{None},"source":"ability"})).await?;
+            write_health(app, "automation", &epoch, None, false)?;
+            wake::notify(app).await;
+            return Ok(json!({"available":false,"retained_data":true,"installed":retain}));
+        }
+        "install" if installed => return Err(anyhow!("Package already exists")),
+        "enable" if !installed => {
+            return Err(anyhow!(
+                "Known installation required; install the reviewed ability"
+            ))
+        }
+        "install" | "enable" => {}
+        _ => return Err(anyhow!("Unknown module lifecycle action")),
+    }
+    // Resolve a reviewed artifact before changing controls, with no legacy binary fallback.
+    crate::ability_plugins::automation_service(&automation_ability_root())?;
+    save_automation_activation(&app.store.root, true, false, &epoch)?;
+    write_health(app, "automation", &epoch, None, false)?;
+    app.store.put("module_install:automation",&json!({"installed":true,"enabled":true,"generation":epoch,"installed_generation":epoch,"source":"ability"})).await?;
+    save_automation_activation(&app.store.root, true, true, &epoch)?;
+    let healthy = probe_automation(app, &epoch).await;
+    if !matches!(healthy, Ok(true)) {
+        save_automation_activation(&app.store.root, true, false, &epoch)?;
+        app.store.put("module_install:automation",&json!({"installed":true,"enabled":false,"generation":epoch,"installed_generation":epoch,"source":"ability"})).await?;
+        return Err(anyhow!("Module health probe failed"));
+    }
+    crate::migrate_tool_policy_defaults(&app.store).await?;
+    wake::notify(app).await;
+    Ok(json!({"available":available("automation"),"retained_data":true,"installed":true}))
+}
+
 pub(crate) fn package_root(id: &str) -> Option<PathBuf> {
+    if automation_ability_host(id) {
+        return Some(automation_ability_root().join("service"));
+    }
     IDS.contains(&id).then(|| {
         PathBuf::from(std::env::var("V3_MODULE_ROOT").unwrap_or_else(|_| {
             PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()))
@@ -83,6 +278,25 @@ pub(crate) fn package_root(id: &str) -> Option<PathBuf> {
 }
 fn manifest(id: &str) -> Result<(PathBuf, Value)> {
     let root = package_root(id).ok_or_else(|| anyhow!("Unknown module"))?;
+    if automation_ability_host(id) {
+        let state =
+            PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
+        let activation = automation_activation(&state)?;
+        if activation["installed"] != true || activation["enabled"] != true {
+            return Err(anyhow!("Module disabled"));
+        }
+        // Disabled installations never resolve or hash executable artifacts.
+        let ability = root
+            .parent()
+            .ok_or_else(|| anyhow!("Missing Automation ability root"))?;
+        let mut service = crate::ability_plugins::automation_service(ability)?;
+        if service.root != root {
+            return Err(anyhow!("Automation asset binding changed"));
+        }
+        service.descriptor["_host_generation"] = activation["generation"].clone();
+        service.descriptor["_host_implementation"] = json!(service.implementation);
+        return Ok((service.executable, service.descriptor));
+    }
     if root.join(".disabled").exists() {
         return Err(anyhow!("Module disabled"));
     }
@@ -130,17 +344,52 @@ fn health_current(health: &Value, gen: &str, at: u64) -> bool {
             .as_u64()
             .is_some_and(|checked| checked <= at && at.saturating_sub(checked) <= 15)
 }
+/// Bind native health to current implementation while retaining legacy probe semantics.
+fn health_binding_current(
+    health: &Value,
+    generation: &str,
+    implementation: Option<&str>,
+    at: u64,
+) -> bool {
+    health_current(health, generation, at)
+        && implementation.is_none_or(|value| health["implementation"] == value)
+}
+/// Resolve current code and activation together; health from an older implementation cannot authorize tools.
 pub(crate) fn available(id: &str) -> bool {
-    let Ok(gen) = generation(id) else {
+    let Ok((path, descriptor)) = manifest(id) else {
         return false;
+    };
+    let Ok(gen) = manifest_generation(id, &path, &descriptor) else {
+        return false;
+    };
+    let implementation = if automation_ability_host(id) {
+        match manifest_implementation(id, &path, &descriptor) {
+            Ok(value) => Some(value),
+            Err(_) => return false,
+        }
+    } else {
+        None
     };
     let root = PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
     std::fs::read(health_path(&root, id))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .is_some_and(|health| health_current(&health, &gen, now()))
+        .is_some_and(|health| {
+            health_binding_current(&health, &gen, implementation.as_deref(), now())
+        })
 }
+/// Legacy package probes keep their existing activation-bound health format.
 fn mark_health(app: &App, id: &str, gen: &str, healthy: bool) -> Result<()> {
+    write_health(app, id, gen, None, healthy)
+}
+/// Publish content-free probe evidence for one activation and optional native implementation binding.
+fn write_health(
+    app: &App,
+    id: &str,
+    gen: &str,
+    implementation: Option<&str>,
+    healthy: bool,
+) -> Result<()> {
     let dir = app.store.root.join("modules");
     std::fs::create_dir_all(&dir)?;
     let file = health_path(&app.store.root, id);
@@ -152,7 +401,7 @@ fn mark_health(app: &App, id: &str, gen: &str, healthy: bool) -> Result<()> {
         .mode(0o600)
         .open(&temp)?;
     output.write_all(&serde_json::to_vec(
-        &json!({"generation":gen,"healthy":healthy,"checked_at":now()}),
+        &json!({"generation":gen,"implementation":implementation,"healthy":healthy,"checked_at":now()}),
     )?)?;
     output.sync_all()?;
     std::fs::rename(temp, file)?;
@@ -172,15 +421,8 @@ pub(crate) async fn binding_lease(app: &App, run: &Value) -> Result<Option<File>
     Ok(Some(lease))
 }
 fn generation(id: &str) -> Result<String> {
-    let (path, manifest) = manifest(id)?;
-    let meta = std::fs::metadata(path)?;
-    Ok(digest(&json!([
-        manifest["generation"],
-        meta.ino(),
-        meta.len(),
-        meta.mtime(),
-        meta.mtime_nsec()
-    ])))
+    let (path, descriptor) = manifest(id)?;
+    manifest_generation(id, &path, &descriptor)
 }
 pub(crate) fn schemas() -> Vec<Value> {
     let mut schemas = Vec::new();
@@ -232,12 +474,30 @@ async fn administrator(app: &App) -> bool {
         .and_then(|v| access::Principal::from_account(&v).ok())
         .is_some_and(|p| p.active() && p.administrator())
 }
+/// Install the app-owned pure-process sandbox before replaceable Automation code executes.
+/// The outbound transport keeps its existing network-capable path; packages cannot select this boundary.
+fn reducer_process(id: &str, executable: &FsPath) -> Result<tokio::process::Command> {
+    let mut command = tokio::process::Command::new(executable);
+    if automation_ability_host(id) {
+        let sandbox = crate::engine_sandbox::prepare(executable)?;
+        // Preparation allocates and holds path rules in the parent. The pre-exec
+        // closure only applies the existing host Landlock/seccomp/descriptor fence.
+        unsafe {
+            command.pre_exec(move || sandbox.apply());
+        }
+        command.current_dir("/");
+    }
+    command.env_clear().env("PATH", "/usr/bin:/bin");
+    Ok(command)
+}
 async fn reduce(id: &str, request: &Value) -> Result<Value> {
-    let (executable, _) = manifest(id)?;
-    let pinned = generation(id)?;
-    let mut child = tokio::process::Command::new(executable)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
+    let (executable, descriptor) = manifest(id)?;
+    let pinned = manifest_generation(id, &executable, &descriptor)?;
+    let implementation = manifest_implementation(id, &executable, &descriptor)?;
+    if automation_ability_host(id) && request["context"]["generation"] != pinned {
+        return Err(anyhow!("Module changed before request"));
+    }
+    let mut child = reducer_process(id, &executable)?
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -256,7 +516,7 @@ async fn reduce(id: &str, request: &Value) -> Result<Value> {
         .stdout
         .take()
         .ok_or_else(|| anyhow!("Module output unavailable"))?;
-    let result = tokio::time::timeout(Duration::from_secs(20), async move {
+    let mut result = tokio::time::timeout(Duration::from_secs(20), async move {
         let mut input = input;
         input.write_all(&bytes).await?;
         input.shutdown().await?;
@@ -275,7 +535,10 @@ async fn reduce(id: &str, request: &Value) -> Result<Value> {
     .map_err(|_| anyhow!("Module timeout"))??;
     let _ = child.kill().await;
     let _ = child.wait().await;
-    if generation(id)? != pinned {
+    let (current_path, current) = manifest(id)?;
+    // Compatible replacement retains the admitted immutable executable. Removal
+    // or an activation change still withholds its result before namespace CAS.
+    if manifest_generation(id, &current_path, &current)? != pinned {
         return Err(anyhow!("Module changed during request"));
     }
     if result["ok"] != true {
@@ -286,6 +549,7 @@ async fn reduce(id: &str, request: &Value) -> Result<Value> {
     if !result["state"].is_object() {
         return Err(anyhow!("Invalid module state"));
     }
+    result["_host_implementation"] = json!(implementation);
     Ok(result)
 }
 fn safe_rejection(error: &str) -> &'static str {
@@ -505,7 +769,10 @@ async fn perform(
     let unchanged = readonly
         && envelope["generation"] == gen
         && envelope["state"] == app.store.module_state(id).await?["state"];
-    let public = json!({"result":result["result"],"revision":if unchanged{revision}else{revision+1},"available":true});
+    let mut public = json!({"result":result["result"],"revision":if unchanged{revision}else{revision+1},"available":true});
+    if automation_ability_host(id) {
+        public["implementation_generation"] = result["_host_implementation"].clone();
+    }
     if unchanged {
         return Ok(public);
     }
@@ -619,12 +886,17 @@ pub(crate) async fn admin_list(Extension(app): Extension<App>) -> Api {
     }
     let mut modules = Vec::new();
     for id in IDS {
-        let installed = package_root(id).is_some_and(|root| root.join("package.json").is_file());
-        let enabled = app
+        let record = app
             .store
             .get(&format!("module_install:{id}"))
             .await?
-            .is_some_and(|state| state["enabled"] == true);
+            .unwrap_or(Value::Null);
+        let installed = if automation_ability_host(id) {
+            automation_installed(&record, legacy_automation_exists(&app.store.root))
+        } else {
+            package_root(id).is_some_and(|root| root.join("package.json").is_file())
+        };
+        let enabled = record["enabled"] == true;
         modules.push(json!({"id":id,"label":if id=="automation"{"Automation"}else{"Outbound Notifications"},"installed":installed,"available":available(id),"enabled":enabled,"protocol":1}));
     }
     Ok(Json(json!({"modules":modules})))
@@ -640,8 +912,18 @@ pub(crate) async fn status_api(Extension(app): Extension<App>, Path(id): Path<St
         ));
     }
     let state = app.store.module_state(&id).await?;
+    let installed = if automation_ability_host(&id) {
+        let record = app
+            .store
+            .get("module_install:automation")
+            .await?
+            .unwrap_or(Value::Null);
+        automation_installed(&record, legacy_automation_exists(&app.store.root))
+    } else {
+        package_root(&id).is_some_and(|root| root.join("package.json").is_file())
+    };
     Ok(Json(
-        json!({"available":available(&id),"id":id,"revision":state["revision"],"protocol":1,"installed":package_root(&id).is_some_and(|root|root.join("package.json").is_file()),"healthy":available(&id),"event_gap":state["event_gap"]}),
+        json!({"available":available(&id),"id":id,"revision":state["revision"],"protocol":1,"installed":installed,"healthy":available(&id),"event_gap":state["event_gap"]}),
     ))
 }
 pub(crate) async fn call_api(
@@ -943,17 +1225,6 @@ async fn package_service(app: App, id: &'static str) {
         if now().saturating_sub(last_probe) >= 5 {
             if let Ok(gen) = generation(id) {
                 if let Ok(_lease) = package_lock(&app, id, false) {
-                    let probe = request(
-                        &app,
-                        id,
-                        "probe",
-                        json!({}),
-                        json!({}),
-                        &gen,
-                        true,
-                        false,
-                        &json!({}),
-                    );
                     let installed = app
                         .store
                         .get(&format!("module_install:{id}"))
@@ -963,11 +1234,28 @@ async fn package_service(app: App, id: &'static str) {
                         .is_some_and(|record| {
                             record["enabled"] == true && record["generation"] == gen
                         });
-                    let healthy = installed
-                        && tokio::time::timeout(Duration::from_secs(2), reduce(id, &probe))
-                            .await
-                            .is_ok_and(|result| result.is_ok());
-                    let _ = mark_health(&app, id, &gen, healthy);
+                    if automation_ability_host(id) {
+                        if !installed || !probe_automation(&app, &gen).await.unwrap_or(false) {
+                            let _ = write_health(&app, id, &gen, None, false);
+                        }
+                    } else {
+                        let probe = request(
+                            &app,
+                            id,
+                            "probe",
+                            json!({}),
+                            json!({}),
+                            &gen,
+                            true,
+                            false,
+                            &json!({}),
+                        );
+                        let healthy = installed
+                            && tokio::time::timeout(Duration::from_secs(2), reduce(id, &probe))
+                                .await
+                                .is_ok_and(|result| result.is_ok());
+                        let _ = mark_health(&app, id, &gen, healthy);
+                    }
                 }
             }
             last_probe = now();
@@ -1281,6 +1569,9 @@ async fn lifecycle_inner(app: App, id: String, body: Value) -> Result<Value> {
     let action = body["action"]
         .as_str()
         .ok_or_else(|| anyhow!("Action required"))?;
+    if automation_ability_host(&id) {
+        return automation_lifecycle(&app, action).await;
+    }
     match action {
         "install" => {
             if root.exists() {
@@ -1948,5 +2239,130 @@ mod authenticated_caller_namespace_tests {
                 .unwrap()["revision"],
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod automation_ability_host_tests {
+    use super::*;
+    /// A process exit cannot grant health to a wrong or incomplete native protocol.
+    #[test]
+    fn native_health_requires_the_exact_probe_acknowledgement() {
+        let ready = json!({"result":{"protocol":1,"package":"automation","ready":true}});
+        assert!(automation_probe_ready(&ready));
+        for bad in [
+            json!({"result":{"protocol":2,"package":"automation","ready":true}}),
+            json!({"result":{"protocol":1,"package":"outbound","ready":true}}),
+            json!({"result":{"protocol":1,"package":"automation","ready":false}}),
+            json!({"result":{}}),
+            Value::Null,
+        ] {
+            assert!(!automation_probe_ready(&bad));
+        }
+    }
+    /// Compatible replacement identifies code independently from the retained installation authority.
+    #[test]
+    fn compatible_implementation_changes_keep_activation_epoch_separate() {
+        let path = FsPath::new("/not-an-installed-image-distribution");
+        let first =
+            json!({"_host_generation":"a".repeat(64),"_host_implementation":"b".repeat(64)});
+        let mut next = first.clone();
+        next["_host_implementation"] = json!("c".repeat(64));
+        assert_eq!(
+            manifest_generation("automation", path, &first).unwrap(),
+            manifest_generation("automation", path, &next).unwrap()
+        );
+        assert_ne!(
+            manifest_implementation("automation", path, &first).unwrap(),
+            manifest_implementation("automation", path, &next).unwrap()
+        );
+        next["_host_generation"] = json!("d".repeat(64));
+        assert_ne!(
+            manifest_generation("automation", path, &first).unwrap(),
+            manifest_generation("automation", path, &next).unwrap()
+        );
+    }
+    /// A fresh receipt cannot carry health across either a code update or activation revocation.
+    #[test]
+    fn native_health_requires_both_current_bindings_and_a_fresh_probe() {
+        let mut health =
+            json!({"healthy":true,"generation":"epoch","implementation":"code-a","checked_at":100});
+        assert!(health_binding_current(
+            &health,
+            "epoch",
+            Some("code-a"),
+            100
+        ));
+        assert!(!health_binding_current(
+            &health,
+            "epoch",
+            Some("code-b"),
+            100
+        ));
+        assert!(!health_binding_current(
+            &health,
+            "next-epoch",
+            Some("code-a"),
+            100
+        ));
+        assert!(!health_binding_current(
+            &health,
+            "epoch",
+            Some("code-a"),
+            116
+        ));
+        health["implementation"] = Value::Null;
+        assert!(!health_binding_current(
+            &health,
+            "epoch",
+            Some("code-a"),
+            100
+        ));
+        assert!(health_binding_current(&health, "epoch", None, 100));
+    }
+    /// Source presence or retained legacy metadata must not silently reinstall an explicitly removed ability.
+    #[test]
+    fn installation_controls_preserve_omission_and_explicit_uninstall() {
+        let legacy = json!({"enabled":false,"installed_generation":"a".repeat(64)});
+        assert!(automation_installed(&legacy, true));
+        assert!(!automation_installed(&legacy, false));
+        assert!(!automation_installed(&json!({}), true));
+        let mut removed = legacy.clone();
+        removed["installed"] = json!(false);
+        assert!(!automation_installed(&removed, true));
+    }
+    /// Marker updates are private, bounded and atomic; a rejected epoch preserves the previous controls.
+    #[test]
+    fn activation_files_reject_substitution_and_invalid_transitions() {
+        let root = tempfile::tempdir().unwrap();
+        let epoch = "a".repeat(64);
+        save_automation_activation(root.path(), true, false, &epoch).unwrap();
+        let original = automation_activation(root.path()).unwrap();
+        assert_eq!(original["enabled"], false);
+        assert!(save_automation_activation(root.path(), true, true, "invalid").is_err());
+        assert_eq!(automation_activation(root.path()).unwrap(), original);
+        let path = automation_activation_path(root.path());
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", &path).unwrap();
+        assert!(automation_activation(root.path()).is_err());
+    }
+    /// Exercise the native bridge's real pre-exec boundary, not a plugin's voluntary self-check.
+    #[tokio::test]
+    async fn native_reducer_starts_without_access_to_host_files() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("private-state");
+        std::fs::write(&state, b"host-private-fixture").unwrap();
+        let mut allowed = reducer_process("automation", FsPath::new("/bin/true")).unwrap();
+        assert!(allowed.status().await.unwrap().success());
+        let mut denied = reducer_process("automation", FsPath::new("/bin/cat")).unwrap();
+        let result = denied
+            .arg(state)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .await
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(result.stdout.is_empty());
     }
 }

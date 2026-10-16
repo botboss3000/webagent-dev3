@@ -458,3 +458,24 @@ retained under build-jobs/operator-evidence/background-rescan-config-20261015/
 manifest.json, alongside preserved original job receipts. This candidate changes
 only this ledger; implementation, contracts, saved runtime settings, testing and
 cache policies are frozen.
+
+## Optional Automation extraction boundary
+
+The Automation reducer is a standalone ability crate at
+plugins/abilities/Core/automation rather than an application Cargo binary.
+src/ability_plugins.rs validates its fixed automation_v1 registration and
+immutable artifact identity; src/modules.rs owns lifecycle, scoped reducer
+transport, namespace CAS and health. The loop retains durable event scanning
+and background admissions. Generic background tasks do not depend on Automation.
+
+The ability owns schedule/event matching, reducer transitions, schemas and UI.
+The host retains policy, identity, approvals, encrypted storage and effects.
+Compatible implementation replacement preserves activation identity; disable,
+uninstall and reinstall withdraw prior activation. A removed package cannot
+use the historical copied executable. Arbitrary executable plugins receive no
+background authority from this fixed native registration.
+
+The package boundary permits independent implementation updates; a crate split
+alone would not. Shared interface changes require coordinated publication.
+The candidate retains the previous runtime as rollback material; installation,
+measured timings and API/loop adoption remain subject to release acceptance.

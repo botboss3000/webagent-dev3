@@ -1,7 +1,7 @@
 {
   "id": "automation",
   "protocol": 1,
-  "executable": "webagent-automation",
+  "executable": "webagent_automation",
   "public_operations": [
     "list_event_sources",
     "list_delivery_channels",

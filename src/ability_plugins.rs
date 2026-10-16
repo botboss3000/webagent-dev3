@@ -51,6 +51,142 @@ fn runtime_input_hashes(root:&FsPath,manifest:&Value)->Result<std::collections::
     }
     Ok(files)
 }
+// @code-index {"version":1,"feature":"automation-drop-in","aliases":["standalone automation","automation ability plugin"],"purpose":"Fixed automation_v1 identity, bounded schemas and content-addressed native artifact resolution.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Native host registration, activation identity and confined execution are authority invariants; settings cannot bypass them."}}
+/// Fixed native bridge registration; a package cannot request another host service.
+const AUTOMATION_TOOLS: &[&str] = &[
+    "list_event_sources",
+    "list_delivery_channels",
+    "event_subscribe",
+    "list_event_subscriptions",
+    "event_unsubscribe",
+    "schedule_task",
+    "remind_me",
+    "list_automations",
+    "update_automation",
+    "pause_automation",
+    "resume_automation",
+    "cancel_automation",
+    "run_automation_now",
+    "remember_automation_state",
+];
+/// The host executes this reviewed reducer; it never receives state paths or credentials.
+pub(crate) struct AutomationService {
+    pub root: PathBuf,
+    pub executable: PathBuf,
+    pub descriptor: Value,
+    pub implementation: String,
+}
+/// Validate the native Automation interface independently of installation or artifact availability.
+/// Calls: build_key and confined input reads. Package declarations confer no runtime authority.
+fn automation_contract(
+    root: &FsPath,
+    id: &str,
+    tools: &[String],
+    manifest: &Value,
+) -> Result<String> {
+    if id != "automation" || json!(tools) != json!(AUTOMATION_TOOLS) {
+        anyhow::bail!("Unsupported native Automation identity");
+    }
+    let expected = json!({
+        "id":"automation", "dispatch":"isolated", "host_interface":"automation_v1",
+        "protocol":1, "interface":1, "runtime":"executable", "entrypoint":"webagent_automation",
+        "effect":"write", "schemas":"service/tool-schemas.json", "tools":AUTOMATION_TOOLS,
+        "build":{"toolchain":"rust-1.90", "inputs":["Cargo.toml","Cargo.lock","service/main.rs","service/engine.rs","service/contracts.rs"],
+            "dependencies":[], "flags":[], "assets":["automation.json","automation.skill.md","service/package.json","service/tool-schemas.json","service/page.json","service/page.js","service/page.css"]}
+    });
+    if manifest != &expected {
+        anyhow::bail!("Unsupported native Automation contract");
+    }
+    let key = build_key(root, manifest, false)?;
+    runtime_input_hashes(root, manifest)?;
+    let descriptor: Value =
+        serde_json::from_slice(&read(&root.join("service/package.json"), 64 * 1024)?)?;
+    let mut operations: Vec<&str> = AUTOMATION_TOOLS.to_vec();
+    operations.extend(["history", "recycle", "restore", "delete"]);
+    let expected_descriptor = json!({"id":"automation","protocol":1,"executable":"webagent_automation",
+        "public_operations":operations,"read_operations":["list_event_sources","list_delivery_channels","list_event_subscriptions","list_automations","history"]});
+    if descriptor != expected_descriptor {
+        anyhow::bail!("Unsupported Automation reducer interface");
+    }
+    let schemas: Vec<Value> =
+        serde_json::from_slice(&read(&root.join("service/tool-schemas.json"), 256 * 1024)?)?;
+    let mut names = std::collections::BTreeSet::new();
+    for schema in &schemas {
+        let function = if schema["function"].is_object() {
+            &schema["function"]
+        } else {
+            schema
+        };
+        let name = function["name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing Automation schema name"))?;
+        // This native interface preserves its existing bounded arbitrary-memory schema.
+        // Generic isolated tools continue to use the stricter closed-schema validator.
+        if !AUTOMATION_TOOLS.contains(&name)
+            || !names.insert(name)
+            || schema["type"] != "function"
+            || function["description"]
+                .as_str()
+                .is_none_or(|v| v.is_empty() || v.len() > 8192)
+            || function["parameters"]["type"] != "object"
+            || !function["parameters"]["properties"].is_object()
+            || function["parameters"]["additionalProperties"] != false
+        {
+            anyhow::bail!("Invalid native Automation schemas");
+        }
+    }
+    if names.len() != AUTOMATION_TOOLS.len() {
+        anyhow::bail!("Incomplete Automation schemas");
+    }
+    Ok(key)
+}
+/// Resolve a content-addressed artifact from the same immutable ability revision as its assets.
+/// Missing/invalid artifacts withdraw the service; there is no image-distribution fallback.
+pub(crate) fn automation_service(root: &FsPath) -> Result<AutomationService> {
+    automation_service_at(root, FsPath::new("/opt/v3/assets/artifacts"))
+}
+/// Keep the artifact registry explicit for private contract tests; callers never supply it through an API.
+fn automation_service_at(root: &FsPath, artifacts: &FsPath) -> Result<AutomationService> {
+    use std::os::unix::fs::PermissionsExt;
+    let manifest: Value = serde_json::from_slice(&read(&root.join("plugin.json"), 64 * 1024)?)?;
+    let declaration: Value =
+        serde_json::from_slice(&read(&root.join("automation.json"), 64 * 1024)?)?;
+    let tools: Vec<String> = serde_json::from_value(declaration["tools"].clone())?;
+    if declaration["required_module"] != "automation" {
+        anyhow::bail!("Missing Automation host binding");
+    }
+    let key = automation_contract(root, "automation", &tools, &manifest)?;
+    let directory = artifacts.join(&key);
+    let meta = std::fs::symlink_metadata(&directory)?;
+    if !meta.is_dir()
+        || meta.file_type().is_symlink()
+        || !directory
+            .canonicalize()?
+            .starts_with(artifacts.canonicalize()?)
+    {
+        anyhow::bail!("Unsafe Automation artifact directory");
+    }
+    let executable = directory.join("webagent_automation");
+    let code = read(&executable, 32 * 1024 * 1024)?;
+    let mode = std::fs::symlink_metadata(&executable)?.permissions().mode();
+    if mode & 0o111 == 0 || mode & 0o022 != 0 {
+        anyhow::bail!("Unsafe Automation executable");
+    }
+    let descriptor: Value =
+        serde_json::from_slice(&read(&root.join("service/package.json"), 64 * 1024)?)?;
+    let implementation = digest(&json!([
+        key,
+        hex::encode(Sha256::digest(code)),
+        runtime_input_hashes(root, &manifest)?
+    ]));
+    Ok(AutomationService {
+        root: root.join("service"),
+        executable,
+        descriptor,
+        implementation,
+    })
+}
+
 impl Package {
     /// Validate protocol, ownership, schema subset, and executable generation before catalog installation.
     pub(crate) fn load(root:&FsPath,id:&str,tools:&[String])->Result<Option<Self>> {
@@ -62,6 +198,10 @@ impl Package {
         if !path.exists(){return Ok(None);}
         let bytes=read(&path,64*1024)?;
         let manifest:Value=serde_json::from_slice(&bytes)?;
+        if manifest.get("host_interface").is_some() {
+            automation_contract(root,id,tools,&manifest)?;
+            return Ok(None);
+        }
         // Existing native package adapters retain their own contract.
         if matches!(id,"codebase_admin"|"diagnostics") && manifest.get("dispatch").is_none(){
             if id=="diagnostics" {
@@ -275,5 +415,108 @@ mod diagnostics_native_contract_tests {
         std::fs::write(root.path().join("plugin.json"),serde_json::to_vec(&manifest).unwrap()).unwrap();
         std::fs::remove_file(root.path().join("adapter.py")).unwrap();
         assert!(Package::load(root.path(),"diagnostics",&tools).is_err());
+    }
+}
+
+#[cfg(test)]
+mod native_automation_contract_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    /// Build private interface inputs; this fixture asserts contracts, never a Cargo compilation proof.
+    fn fixture() -> (tempfile::TempDir, Value, Vec<String>) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let tools: Vec<String> = AUTOMATION_TOOLS.iter().map(|v| (*v).to_owned()).collect();
+        let manifest = json!({"id":"automation","dispatch":"isolated","host_interface":"automation_v1",
+            "protocol":1,"interface":1,"runtime":"executable","entrypoint":"webagent_automation","effect":"write",
+            "schemas":"service/tool-schemas.json","tools":tools,
+            "build":{"toolchain":"rust-1.90","inputs":["Cargo.toml","Cargo.lock","service/main.rs","service/engine.rs","service/contracts.rs"],"dependencies":[],"flags":[],
+                "assets":["automation.json","automation.skill.md","service/package.json","service/tool-schemas.json","service/page.json","service/page.js","service/page.css"]}});
+        for name in manifest["build"]["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(manifest["build"]["assets"].as_array().unwrap())
+        {
+            let path = root.join(name.as_str().unwrap());
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"private contract fixture").unwrap();
+        }
+        let mut operations = tools.clone();
+        operations.extend(["history", "recycle", "restore", "delete"].map(str::to_owned));
+        let descriptor = json!({"id":"automation","protocol":1,"executable":"webagent_automation","public_operations":operations,
+            "read_operations":["list_event_sources","list_delivery_channels","list_event_subscriptions","list_automations","history"]});
+        let schemas: Vec<Value> = tools.iter().map(|name|json!({"type":"function","function":{"name":name,"description":"private schema fixture",
+            "parameters":{"type":"object","properties":{},"additionalProperties":false}}})).collect();
+        for (name, value) in [
+            ("plugin.json", manifest.clone()),
+            (
+                "automation.json",
+                json!({"tools":tools,"required_module":"automation"}),
+            ),
+            ("service/package.json", descriptor),
+            ("service/tool-schemas.json", json!(schemas)),
+        ] {
+            std::fs::write(root.join(name), serde_json::to_vec(&value).unwrap()).unwrap();
+        }
+        (temp, manifest, tools)
+    }
+    /// Reject forged bridge identities, interface changes and tool authority expansions before loading code.
+    #[test]
+    fn native_registration_rejects_host_and_tool_escalation() {
+        let (root, manifest, tools) = fixture();
+        assert!(automation_contract(root.path(), "automation", &tools, &manifest).is_ok());
+        assert!(automation_contract(root.path(), "other_ability", &tools, &manifest).is_err());
+        for (field, value) in [
+            ("host_interface", json!("codebase_admin")),
+            ("interface", json!(2)),
+            ("entrypoint", json!("../outside")),
+        ] {
+            let mut bad = manifest.clone();
+            bad[field] = value;
+            assert!(
+                automation_contract(root.path(), "automation", &tools, &bad).is_err(),
+                "{field}"
+            );
+        }
+        let mut bad_tools = tools.clone();
+        bad_tools.push("build_work".into());
+        assert!(automation_contract(root.path(), "automation", &bad_tools, &manifest).is_err());
+    }
+    /// A symlinked compile input cannot certify an artifact, even when its bytes are readable.
+    #[test]
+    fn native_inputs_reject_filesystem_substitution() {
+        let (root, manifest, tools) = fixture();
+        let path = root.path().join("service/engine.rs");
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", &path).unwrap();
+        assert!(automation_contract(root.path(), "automation", &tools, &manifest).is_err());
+    }
+    /// Asset updates change runtime identity without recompilation; missing/new-input artifacts never fall back.
+    #[test]
+    fn native_artifact_and_assets_have_independent_version_bindings() {
+        let (root, manifest, tools) = fixture();
+        let registry = tempfile::tempdir().unwrap();
+        assert!(automation_service_at(root.path(), registry.path()).is_err());
+        let key = automation_contract(root.path(), "automation", &tools, &manifest).unwrap();
+        let directory = registry.path().join(&key);
+        std::fs::create_dir(&directory).unwrap();
+        let executable = directory.join("webagent_automation");
+        std::fs::write(&executable, b"fixture artifact identity only").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let first = automation_service_at(root.path(), registry.path()).unwrap();
+        std::fs::write(
+            root.path().join("service/page.js"),
+            b"updated runtime asset",
+        )
+        .unwrap();
+        let next = automation_service_at(root.path(), registry.path()).unwrap();
+        assert_eq!(first.executable, next.executable);
+        assert_ne!(first.implementation, next.implementation);
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o775)).unwrap();
+        assert!(automation_service_at(root.path(), registry.path()).is_err());
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o555)).unwrap();
+        std::fs::write(root.path().join("service/engine.rs"), b"new compiled input").unwrap();
+        assert!(automation_service_at(root.path(), registry.path()).is_err());
     }
 }

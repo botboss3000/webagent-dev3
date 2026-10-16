@@ -1,3 +1,4 @@
+// @code-index {"version":1,"feature":"automation-drop-in","aliases":["standalone automation","automation ability plugin"],"purpose":"Standalone schedules, reminders and internal event reduction. Config: plugins/abilities/Core/automation/automation.json -> /config/settings; effective bounded settings arrive in the trusted request context.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"plugins/abilities/Core/automation/automation.json","pointers":["/config/settings"]}],"opportunities":[]}}
 use chrono::{Datelike, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};

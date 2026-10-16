@@ -32,11 +32,7 @@ RUN --mount=type=cache,id=webagent-v3-registry,target=/usr/local/cargo/registry,
     && install -Dm755 /build/target/release/webagent-mcp /out/webagent-mcp \
     && install -Dm755 /build/target/release/webagent-diagnostics /out/webagent-diagnostics \
     && install -Dm755 /build/target/release/webagent-optimization /out/webagent-optimization \
-    && install -Dm755 /build/target/release/webagent-automation /out/modules/automation/webagent-automation \
     && install -Dm755 /build/target/release/webagent-outbound-notifications /out/modules/outbound_notifications/webagent-outbound-notifications \
-    && cp /build/src/plugin_packages/automation/package.json /out/modules/automation/ \
-    && cp /build/src/plugin_packages/automation/tool-schemas.json /out/modules/automation/ \
-    && cp /build/src/plugin_packages/automation/page.* /out/modules/automation/ \
     && cp /build/src/plugin_packages/outbound_notifications/package.json /out/modules/outbound_notifications/ \
     && cp /build/src/plugin_packages/outbound_notifications/page.* /out/modules/outbound_notifications/ \
     && mkdir -p /out/optimization-cargo \

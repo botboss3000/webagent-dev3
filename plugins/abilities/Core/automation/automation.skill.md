@@ -30,3 +30,15 @@ effects.
 remember_automation_state is scoped to an admitted occurrence and requires its
 ID and the current definition revision. Keep memory concise; it is private
 automation state, not permission or instructions for another agent.
+
+Automation is an optional drop-in ability. Its standalone Rust service, schemas,
+UI and guidance belong to this package. The app retains caller identity,
+permissions, approvals, encrypted state, event delivery, background admission
+and effect reconciliation. Disabling or removing the ability blocks new dispatch
+while retaining private data and rollback material.
+
+Compatible implementation publication preserves installation identity and
+existing schedules. Disable, uninstall or reinstall changes that identity and
+withdraws prior activation; retained definitions require explicit reactivation.
+Administrator Modules controls own installation and health. A model cannot
+install this ability or grant itself background authority.

@@ -6,18 +6,20 @@ use futures_util::StreamExt;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-/// Build a stable native test catalog without installed isolated packages or their external artifacts.
-/// Publication validates complete plugin snapshots separately; native fixture assertions must not depend on them.
+/// Build native catalog metadata without requiring independently compiled executable artifacts.
+/// Keep the fixed Automation host declaration; generic isolated packages remain excluded.
 pub(crate) fn native_catalog() -> abilities::Catalog {
     static ROOT: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     let root = ROOT.get_or_init(|| {
         let target = tempfile::tempdir().expect("native catalog fixture");
-        /// Copy source declarations once, excluding only explicitly isolated plugin directories.
+        /// Copy native declarations and their confined inputs; validate fixed host contracts through Catalog::load.
         fn copy_native(source: &std::path::Path, target: &std::path::Path) {
             let declaration = source.join("plugin.json");
             if declaration.is_file() {
                 let manifest: Value = serde_json::from_slice(&std::fs::read(declaration).unwrap()).unwrap();
-                if manifest["dispatch"] == "isolated" { return; }
+                let native_automation = manifest["id"] == "automation"
+                    && manifest["host_interface"] == "automation_v1";
+                if manifest["dispatch"] == "isolated" && !native_automation { return; }
             }
             std::fs::create_dir_all(target).unwrap();
             for entry in std::fs::read_dir(source).unwrap() {

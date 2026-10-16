@@ -68,9 +68,5 @@ name = "webagent-optimization"
 path = "src/plugin_packages/optimization/main.rs"
 
 [[bin]]
-name = "webagent-automation"
-path = "src/plugin_packages/automation/main.rs"
-
-[[bin]]
 name = "webagent-outbound-notifications"
 path = "src/plugin_packages/outbound_notifications/main.rs"
