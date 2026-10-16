@@ -356,7 +356,7 @@ export async function initChatConfig({config:provided,root=null} = {}) {
       if (!control || !control.closest('#chat-input-area, #chat-header, .v3-context-panel, .v3-chat-model-list, .session-dropdown-menu')) return;
       event.preventDefault();
     }, true);
-    document.addEventListener('v3:keyboard-dismissal-changed', applyChatConfig);
+    document.addEventListener('v3:keyboard-dismissal-changed', scheduleChatGeometry); // Let pointer default focus finish before changing footer layout.
     document.addEventListener('focusin', applyChatConfig);
     document.addEventListener('focusout', () => setTimeout(applyChatConfig, 0));
     document.addEventListener('input', event => { if(event.target === byId('chat-input'))applyChatConfig(); });

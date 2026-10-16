@@ -217,10 +217,10 @@ test('OS dismissal makes empty composer idle, preserves active drafts and reacti
  for(const draft of ['', 'retained draft']){
   await p.locator('#chat-input').fill(draft);await p.locator('#chat-input').tap();await p.evaluate(()=>{vh=500;visualViewport.dispatchEvent(new Event('resize'));events.blur=events.focus=0;});
   assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-active')),true);
-  await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));});assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-idle')),draft==='');
+  await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));});await settle(p);assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-idle')),draft==='');
   const state=await stable(p);assert.equal(state.focused,true);assert.equal(state.blur,0);assert.equal(state.focus,0);assert.equal(state.value,draft);
   await p.evaluate(()=>{vh=500;visualViewport.dispatchEvent(new Event('resize'));input.focus();input.dispatchEvent(new FocusEvent('focusin',{bubbles:true}));});assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-idle')),draft==='');assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),false);
-  await p.locator('#chat-input').tap();assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-active')),true);
+  await p.locator('#chat-input').tap();await settle(p);assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-active')),true);
   await p.locator('#chat-input').blur();await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));});
  }
 });
