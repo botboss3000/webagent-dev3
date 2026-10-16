@@ -163,6 +163,17 @@ def ability_asset_path(path):
     if not path.startswith(ABILITY_ROOT):return False
     # Rust adapters and legacy Python helpers still have core/image consumers.
     return path.endswith((".json",".md")) or codebase_source_path(path) or diagnostics_source_path(path) or git_control_source_path(path)
+def engine_component_source_path(path):
+    """Recognize every registered implementation/contract family at each publication fence."""
+    return path.startswith(("v3/plugins/engine/",
+        "v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/",
+        "v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/",
+        "v3/crates/boot-service/","v3/crates/boot-supervisor/","v3/crates/boot-contracts/",
+        "v3/crates/assets-service/","v3/crates/context-assets/","v3/crates/assets-contracts/",
+        "v3/crates/capability-service/","v3/crates/capability-context/","v3/crates/capability-contracts/",
+        "v3/crates/provider-service/","v3/crates/provider-projection/","v3/crates/provider-contracts/",
+        "v3/crates/engine-service/"))
+
 def generic_package_path(path,blob):
     """Classify registered engine and isolated ability inputs; authority and actual core dependencies still fence publication."""
     if engine_components.package_path(path,release.entries(blob,context_digest)):return True
@@ -735,6 +746,16 @@ class Runner:
         """Pin exact dependencies before create/run and register outputs before later phases."""
         if getattr(self,"retention_enabled",False):
             return self.resource_request({"operation":"retention_pin","image":image,"job_id":job_id})
+    def preflight_deploy_images(self,images,job_id):
+        """Recheck both immutable outputs immediately before stopping either consumer."""
+        if not isinstance(images,dict)or set(images)!={"api","loop"}or any(not isinstance(image,str)or not re.fullmatch(r"sha256:[a-f0-9]{64}",image)for image in images.values())or not isinstance(job_id,str)or not re.fullmatch(r"[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}",job_id):
+            raise ValueError("Exact deployment image pair and job required")
+        for role in ("api","loop"):
+            actual=self.command(["docker","image","inspect","--format","{{.Id}}",images[role]],timeout=10,private_raw=True).strip()
+            if actual!=images[role]:raise ValueError("Prepared deployment image unavailable")
+        for role in ("api","loop"):self.retain_image(images[role],job_id)
+        return dict(images)
+
     def cleanup_status(self):
         """Expose aggregate cleanup telemetry without other tasks' artifact identities."""
         if not getattr(self,"retention_enabled",False):return None
@@ -1402,7 +1423,7 @@ class Runner:
                 "--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["worker_gid"]),"--pids-limit","64","--memory","256m",
                 "--tmpfs","/tmp:rw,size=64m,mode=1777","--mount","type=bind,src="+str(root / DIAGNOSTICS_ROOT)+",dst=/package,readonly",
                 "--entrypoint","python3",image,"-I","-B","/package/test_runner.py"],timeout=60)
-        if any(name.startswith(ABILITY_ROOT) or name.startswith(engine_components.ROOT) or name.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/","v3/crates/boot-service/","v3/crates/boot-supervisor/","v3/crates/boot-contracts/")) or name.startswith("v3/config/") or name=="v3/src/agent_loop/tools/administrator-schemas.json" for name in changed):
+        if any(name.startswith(ABILITY_ROOT) or engine_component_source_path(name) or name.startswith("v3/config/") or name=="v3/src/agent_loop/tools/administrator-schemas.json" for name in changed):
             # A foundation release introduces the validator itself. Validate with
             # its already-tested candidate API image; hot updates use the retained consumer.
             image=(active["images"]["api"] if active is not None
@@ -2934,43 +2955,60 @@ class Broker:
 
     # @code-index {"version":1,"feature":"owner-claim-release","aliases":["release reservations","unblock engine"],"purpose":"Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.","span_lines":48,"configuration":{"status":"not_applicable","rationale":"Ownership fencing and authenticated scope release are fixed authority invariants."}}
     def release_claims(self,request,args):
-        """Owner-only explicit release; preserve drafts and fence every prior execution epoch."""
-        allowed={"action","task_id","scopes","reason","request_id","expected_revision","expected_epoch","commit"}
+        """Release explicit write scopes; sealed execution retains only a bound promotion authority."""
+        allowed={"action","task_id","scopes","reason","request_id","expected_revision","expected_epoch","commit","frozen_job_id"}
         if set(args)-allowed:raise ValueError("Unsupported release arguments")
         if not isinstance(args.get("reason"),str)or not 1<=len(args["reason"].encode())<=500:raise ValueError("Bounded release reason required")
         trusted=request["trusted"];workspace=request["workspace"]
         self._incoming_lease(trusted)
-        item=self.scheduler.item(args,trusted,workspace)
-        owner=self.scheduler.owner(trusted,workspace)
+        item=self.scheduler.item(args,trusted,workspace);owner=self.scheduler.owner(trusted,workspace)
         path=self.scheduler.journal_path(owner,args.get("request_id"),"release-"+item["key"])
         digest=hashlib.sha256(canonical(args)).hexdigest()
         if path.is_symlink():raise PermissionError("Release request symlink")
         record=json.loads(path.read_text())if path.exists()else None
         if record and record["digest"]!=digest:raise ValueError("Request ID reused")
         if record and record["state"]=="rejected":raise ValueError(record["error"])
+        if record and record["state"]=="done":return record["result"]
         token="release-"+hashlib.sha256(canonical([owner,item["key"],args.get("request_id")])).hexdigest()[:56]
+        frozen=record.get("frozen") if record else None
         if not record:
-            if self.scheduler.pending(item["key"]):raise ValueError("Scheduler transition requires recovery")
             value=self.scheduler.ensure(item,trusted,workspace)
-            if type(args.get("expected_revision"))is not int or type(args.get("expected_epoch"))is not int or value["revision"]!=args["expected_revision"]or value["epoch"]!=args["expected_epoch"]:raise ValueError("Stale ownership revision or epoch")
-            record={"digest":digest,"state":"pending","task_key":item["key"],"request_id":args["request_id"]}
+            if type(args.get("expected_revision")) is not int or type(args.get("expected_epoch")) is not int or value["revision"]!=args["expected_revision"] or value["epoch"]!=args["expected_epoch"]:raise ValueError("Stale ownership revision or epoch")
+            active=[j for j in self.jobs.values()if j.get("ownership_id")==item["key"]and j["status"]in {"queued","running","interrupted","uncertain","needs_decision"}]
+            if active:
+                job_id=args.get("frozen_job_id")
+                if len(active)!=1 or not isinstance(job_id,str) or active[0].get("job_id")!=job_id or item.get("job_id")!=job_id:
+                    raise ValueError("Reconcile task execution before releasing claims")
+                job=active[0];candidate=self.state/job_id/"candidate.tar"
+                if job["status"] not in {"queued","running"} or job.get("effects_started") or not candidate.is_file() or self.scheduler_digest(candidate.read_bytes())!=job.get("inputs_sha256") or job.get("ownership_id")!=value["id"] or job.get("ownership_epoch")!=value["epoch"] or job.get("source_generation")!=value["generation"]:
+                    raise ValueError("Exact frozen pre-effect execution required")
+                scopes=args.get("scopes")
+                if not isinstance(scopes,list) or not scopes or not set(scopes)<=set(value["scopes"]):
+                    raise ValueError("Only held scopes can be released")
+                protected=self.scheduler.components(item).scopes(job.get("changed_paths",[]))
+                if any(scheduler_module.ownership.scope_overlap(a,b) for a in scopes for b in protected):raise ValueError("Retain affected source promotion reservations")
+                frozen={"job_id":job_id,"inputs_sha256":job["inputs_sha256"],"generation":value["generation"],"released_scopes":sorted(scopes)}
+            if any(lease.get("task_key")==item["key"] for lease in self.code_index_leases.values()):raise ValueError("Wait for this task maintenance before releasing claims")
+            if self.scheduler.pending(item["key"]):raise ValueError("Scheduler transition requires recovery")
+            record={"digest":digest,"state":"pending","task_key":item["key"],"request_id":args["request_id"],"frozen":frozen}
             self.scheduler.write_record(path,record)
         result=self.scheduler.store.receipt(token)
         if result is None:
-            # No queued/running work may retain a released claim or obsolete epoch.
-            if any(j.get("ownership_id")==item["key"]and j["status"]in {"queued","running","interrupted","uncertain","needs_decision"}for j in self.jobs.values()):raise ValueError("Reconcile task execution before releasing claims")
-            if any(lease.get("task_key")==item["key"]for lease in self.code_index_leases.values()):raise ValueError("Wait for this task maintenance before releasing claims")
             try:
+                active=[j for j in self.jobs.values() if j.get("ownership_id")==item["key"] and j["status"] in {"queued","running","interrupted","uncertain","needs_decision"}]
+                if active and frozen is None:raise ValueError("Reconcile task execution before releasing claims")
+                if any(l.get("task_key")==item["key"] for l in self.code_index_leases.values()):raise ValueError("Wait for this task maintenance before releasing claims")
                 deployed=self.jobs.get(item.get("job_id"),{})
-                if deployed.get("status")=="completed"and(deployed.get("post_deployment")or deployed.get("deferred_documentation")):
+                if frozen is not None:
+                    result=self.scheduler.store.release_frozen_scopes(item["key"],owner,args["expected_revision"],args["expected_epoch"],args["scopes"],frozen,token)
+                elif deployed.get("status")=="completed"and(deployed.get("post_deployment")or deployed.get("deferred_documentation")):
                     evidence=self.scheduler.verified(item,{"job_id":deployed["job_id"],"commit":args.get("commit"),"acceptance":[{"check":"Healthy exact committed deployment; metadata follows without source write reservations","passed":True}]},deployment_only=True)
                     result=self.scheduler.store.release_deployed_scopes(item["key"],owner,args["expected_revision"],args["expected_epoch"],args.get("scopes"),evidence,token)
                 else:
                     result=self.scheduler.store.release_scopes(item["key"],owner,args["expected_revision"],args["expected_epoch"],args.get("scopes"),args.get("reason"),token)
-            except (ValueError,PermissionError)as error:
+            except (ValueError,PermissionError) as error:
                 self.scheduler.write_record(path,{**record,"state":"rejected","error":str(error)[:512]})
                 raise
-        # Repair the registry after a crash between the ownership transaction and save.
         current=self.scheduler.store.get(item["key"])
         if item.get("job_id") and current["evidence"].get("post_deployment_release")==item["job_id"]:
             deployed=self.jobs[item["job_id"]];deployed["write_claim_release"]=current["evidence"]["deployment"];self._save(deployed)
@@ -3054,7 +3092,7 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        review_modules={"post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
+        review_modules={"engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
         allowed={"v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
@@ -4299,10 +4337,10 @@ class Broker:
                         docs_attested and path.startswith("v3/docs/")and path.endswith(".md")) or (
                         (generic_package_path(path,candidate) or generic_package_path(path,base_blob))
                         and not native_package_migration(path,base_blob)))
-                        and path not in core_inputs and not path.startswith(("v3/crates/context-contracts/","v3/crates/background-contracts/","v3/crates/boot-contracts/"))for path in changed)
+                        and path not in core_inputs and not path.startswith(("v3/crates/context-contracts/","v3/crates/background-contracts/","v3/crates/boot-contracts/","v3/crates/assets-contracts/","v3/crates/capability-contracts/","v3/crates/provider-contracts/"))for path in changed)
                     if (package_changed or docs_changed)and not docs_attested:ui_only=False
                     if CONFIG.get("scheduler",{}).get("concurrent_ui_preparation",False)and any(path.startswith("v3/ui/")for path in changed)and not docs_attested:ui_only=False
-                    engine_changed=any(path.startswith("v3/plugins/engine/")or path.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/","v3/crates/boot-service/","v3/crates/boot-supervisor/","v3/crates/boot-contracts/"))for path in changed)
+                    engine_changed=any(engine_component_source_path(path)for path in changed)
                     if engine_changed and not self.runner.engine_hot_swappable():ui_only=False
                     index_only=ui_only and(not changed or any(path in INDEX_METADATA_FILES for path in changed))
                     package_cap=executor_module.package_cap(args.get("package_memory_cap"))
@@ -4525,7 +4563,7 @@ class Broker:
 
     def _run_ui_hot(self, job, blob):
         """Compile independent packages outside publication, then rebase and revalidate under its short lock."""
-        if any(path.startswith("v3/plugins/engine/")or path.startswith(("v3/crates/context-service/","v3/crates/context-assembly/","v3/crates/context-contracts/","v3/crates/background-service/","v3/crates/background-dispatch/","v3/crates/background-contracts/","v3/crates/engine-service/","v3/crates/boot-service/","v3/crates/boot-supervisor/","v3/crates/boot-contracts/"))for path in job.get("changed_paths",[]))and not self.runner.engine_hot_swappable():
+        if any(engine_component_source_path(path)for path in job.get("changed_paths",[]))and not self.runner.engine_hot_swappable():
             raise ValueError("Independent engine replacement requires live mode; publish a coordinated core release")
         if self.scheduler.mode=="enforce"and job["operation"]=="plugin_deploy":
             self._phase(job,"compiling_plugins")
@@ -4537,6 +4575,8 @@ class Broker:
             self._run_ui_hot_locked(job, blob)
 
     def _run_ui_hot_locked(self, job, blob):
+        if any(engine_component_source_path(path)for path in job.get("changed_paths",[]))and not self.runner.engine_hot_swappable():
+            raise ValueError("Independent engine replacement requires live mode; publish a coordinated core release")
         if self._has_unresolved_release(job["job_id"]):
             raise ValueError("uncertain release must be reconciled before UI switch")
         if not job.get("prepared_publication"):
@@ -4714,6 +4754,10 @@ class Broker:
                 with self.lock:
                     job["rollback"] = {"api": TARGETS[0] + "-pre-build-" + job["job_id"], "loop": TARGETS[1] + "-pre-build-" + job["job_id"]}
                     self._save(job)
+                # Packaging and final preparation may be separated by a rebase.
+                # An absent output must fail while both original consumers still run.
+                self._phase(job, "checking_candidate_images")
+                self.runner.preflight_deploy_images(job["images"],job["job_id"])
                 # Record intent before each externally visible mutation. On a
                 # crash the next broker only reconciles, never retries it.
                 self._phase(job, "stopping_loop")

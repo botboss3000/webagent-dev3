@@ -6,7 +6,20 @@ BUILDKIT="moby/buildkit:v0.25.1@sha256:79cc6476ab1a3371c9afd8b44e7c55610057c43e1
 COMPILER_STAGE_SHA256="474b034d7a843ebf324b654a785b5a5b23135804ef39c662f92fcb3e160dfeaf"
 # Coordinated Automation extraction removes only its root-bin distribution closure.
 EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256="9a6fa4db4b7a122990056f005117a0c4e0944243e02a2ee42b9957ec12f65908"
-BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-outbound-notifications","webagent-context-service","webagent-background-service","webagent-boot-service","webagent-boot-host"]
+CONTEXT_COMPILER_STAGE_SHA256="04d76d4efb9fe52ecc1f7ef778aef9a0c096fea97b22011e628d6891bf2fa072"
+CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256="a47b7c8928469f1d9dc535cf9d1df9c6b256052c84f10bd238f36a3b9541597d"
+NEW_CONTEXT_BINARIES={"webagent-assets-service","webagent-capability-service","webagent-provider-service"}
+BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-outbound-notifications","webagent-context-service","webagent-background-service","webagent-boot-service","webagent-boot-host","webagent-assets-service","webagent-capability-service","webagent-provider-service"]
+# Official non-test debug ELFs needed by actual subprocess integration tests.
+SERVICE_SOURCES={
+ "webagent-context-service":"/build/crates/context-service/src/main.rs",
+ "webagent-background-service":"/build/crates/background-service/src/main.rs",
+ "webagent-boot-service":"/build/crates/boot-service/src/main.rs",
+ "webagent-assets-service":"/build/crates/assets-service/src/main.rs",
+ "webagent-capability-service":"/build/crates/capability-service/src/main.rs",
+ "webagent-provider-service":"/build/crates/provider-service/src/main.rs",
+}
+SMOKE_CASE_KEYS=("prepared","background_prepared","boot_prepared","assets_prepared","capability_prepared","provider_prepared")
 # @code-index {"version":1,"feature":"build-artifact-execution","aliases":["task fencing","verified builds"],"purpose":"Pinned attributable compiler/test/packaging recipes and verified content-addressed artifact reuse.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Identity, exact input verification and completion rules cannot be disabled by model or preference configuration."}}
 COMPILER_MEMORY_CAP=4026531840
 # @code-index {"version":1,"feature":"compiler-memory-policy","aliases":["compiler memory defaults","task memory overrides","live memory growth"],"purpose":"Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/compiler_memory_default_bytes","/compiler_memory_min_bytes","/compiler_memory_max_bytes","/allow_live_memory_increase"]}]}}
@@ -317,12 +330,13 @@ class Executor:
 
     @staticmethod
     def smoke_result(text,mode):
-        """Validate both context and background planning proofs for the two optimized deterministic cases."""
+        """Validate every registered pure component's two optimized deterministic cases."""
         if len(text)>65536:raise ValueError("Context smoke result exceeds bound")
         value=json.loads(text)
-        if value.get("mode")!=mode or value.get("equivalence")is not True or value.get("interface_version")!=1 or not isinstance(value.get("prepared"),list)or len(value["prepared"])!=2:raise ValueError("Optimized context smoke failed")
-        if not isinstance(value.get("background_prepared"),list)or len(value["background_prepared"])!=2:raise ValueError("Optimized background smoke failed")
-        if not isinstance(value.get("boot_prepared"),list)or len(value["boot_prepared"])!=2:raise ValueError("Optimized boot smoke failed")
+        if not isinstance(value,dict)or value.get("mode")!=mode or value.get("equivalence")is not True or type(value.get("interface_version"))is not int or value["interface_version"]not in (1,2):raise ValueError("Optimized context smoke failed")
+        if value["interface_version"]==1 and any(key in value for key in SMOKE_CASE_KEYS[3:]):raise ValueError("Legacy smoke cannot attest newer component proofs")
+        for key in SMOKE_CASE_KEYS[:3]if value["interface_version"]==1 else SMOKE_CASE_KEYS:
+            if not isinstance(value.get(key),list)or len(value[key])!=2:raise ValueError("Optimized component smoke failed")
         if mode=="linked"and value.get("service_started")is not False:raise ValueError("Linked smoke started external service")
         if mode=="live"and(value.get("service_reused")is not True or value.get("service_drained")is not True):raise ValueError("Live smoke lifecycle failed")
         return value
@@ -334,7 +348,7 @@ class Executor:
     def live_smoke(text,linked):
         """Require actual host service reuse/drain and exact prepared-result equivalence across modes."""
         value=Executor.smoke_result(text,"live")
-        if value["prepared"]!=linked["prepared"]or value["background_prepared"]!=linked["background_prepared"]or value["boot_prepared"]!=linked["boot_prepared"]:raise ValueError("Optimized linked/live results differ")
+        if value["interface_version"]!=linked["interface_version"]or any(value[key]!=linked[key]for key in (SMOKE_CASE_KEYS[:3]if value["interface_version"]==1 else SMOKE_CASE_KEYS)):raise ValueError("Optimized linked/live results differ")
         return value
     @staticmethod
     def linked_recipe():
@@ -481,13 +495,13 @@ class Executor:
         raise ValueError('Verified offline plugin dependencies unavailable; controlled provisioning required')
 
     @staticmethod
-    def collect_runtime_artifacts(application,output,artifacts,legacy_automation):
+    def collect_runtime_artifacts(application,output,artifacts,legacy_automation,context_components=False):
         """Copy the fixed core closure and only the reviewed recipe's optional legacy distribution.
 
         The extracted Automation ability is built by the existing standalone plugin builder.
         Missing mandatory outputs remain fatal; stale Cargo outputs never add a package.
         """
-        binaries=BINARIES+(["webagent-automation"]if legacy_automation else[])
+        binaries=[name for name in BINARIES if context_components or name not in NEW_CONTEXT_BINARIES]+(["webagent-automation"]if legacy_automation else[])
         for name in binaries:
             destination=artifacts/name
             shutil.copyfile(output/"target/release"/name,destination);destination.chmod(0o555)
@@ -510,25 +524,31 @@ class Executor:
         files=self.runner.execution_entries(blob);text=files["v3/Dockerfile"][1].decode()
         start=text.index("FROM rust:");end=text.index("FROM debian:",start)
         recipe=hashlib.sha256(text[start:end].encode()).hexdigest()
-        if recipe==COMPILER_STAGE_SHA256:return True
-        if recipe!=EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256:
+        if recipe in {COMPILER_STAGE_SHA256,CONTEXT_COMPILER_STAGE_SHA256}:return True
+        if recipe not in {EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256}:
             raise ValueError("Compiler Dockerfile recipe changed; migrate the reviewed attributable engine recipe")
         cargo=tomllib.loads(files["v3/Cargo.toml"][1].decode())
         if any(target.get("name")=="webagent-automation"for target in cargo.get("bin",[]))or "v3/src/plugin_packages/automation/main.rs"in files:
             raise ValueError("Extracted Automation recipe still has a legacy root binary")
         return False
+    def context_component_recipe(self,blob):
+        """Select the additional mandatory outputs from exact reviewed source, never stale binaries."""
+        text=self.runner.execution_entries(blob)["v3/Dockerfile"][1].decode()
+        stage=text[text.index("FROM rust:"):text.index("FROM debian:",text.index("FROM rust:"))]
+        return hashlib.sha256(stage.encode()).hexdigest()in {CONTEXT_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256}
+
     def retain_test_manifest(self,output,artifacts):
         """Retain Cargo-attested tests and exact debug support; never substitute optimized binaries."""
         metadata=output/"test-artifacts.json"
         if metadata.is_symlink()or not metadata.is_file()or metadata.stat().st_size>32*1024*1024:raise ValueError("Cargo test metadata identity")
-        tests=[];support=None;additional_support=[];folder=artifacts/"tests";folder.mkdir()
+        tests=[];support=None;additional_support=[];official_records={};folder=artifacts/"tests";folder.mkdir()
         for line in metadata.read_text().splitlines():
             if len(line)>1024*1024:raise ValueError("Cargo test metadata line bound")
             value=json.loads(line)
             if value.get("reason")!="compiler-artifact"or not value.get("executable"):continue
             target=value["target"];executable=value["executable"]
             test=value.get("profile",{}).get("test")is True
-            official=not test and (target.get("name"),target.get("src_path"))in {("webagent-context-service","/build/crates/context-service/src/main.rs"),("webagent-background-service","/build/crates/background-service/src/main.rs")}
+            official=not test and target.get("name")in SERVICE_SOURCES and SERVICE_SOURCES[target["name"]]==target.get("src_path") and target.get("kind")==["bin"]
             if not test and not official:continue
             expected="/output/target/debug/"
             if not executable.startswith(expected)or ".."in Path(executable).parts:raise ValueError("Cargo test executable escaped fixed target")
@@ -543,6 +563,11 @@ class Executor:
             else:
                 binary=target["name"];destination=artifacts/"test-support/debug"/binary;destination.parent.mkdir(parents=True,exist_ok=True)
                 record={"file":"test-support/debug/"+binary,"destination":"target/debug/"+binary,"package_id":value["package_id"],"source_path":target["src_path"],"profile":"debug"}
+                if binary in official_records:
+                    with source.open("rb")as stream:source_hash=hashlib.file_digest(stream,"sha256").hexdigest()
+                    if official_records[binary]!=record or source_hash!=self.artifact_hashes(destination.parent)[destination.name]:raise ValueError("Repeated official service provenance changed")
+                    continue
+                official_records[binary]=record.copy()
                 if binary=="webagent-context-service":support=record
                 else:additional_support.append(record)
             shutil.copyfile(source,destination);destination.chmod(0o555);record["sha256"]=self.artifact_hashes(destination.parent)[destination.name]
@@ -558,10 +583,18 @@ class Executor:
         if support.get("file")!="test-support/debug/webagent-context-service"or support.get("destination")!="target/debug/webagent-context-service"or support.get("profile")!="debug"or support.get("source_path")!="/build/crates/context-service/src/main.rs":raise ValueError("Retained support provenance invalid")
         if not any(item.get("target_name")=="service"and item.get("kind")==["test"]and item.get("source_path")=="/build/crates/context-service/tests/service.rs"and item.get("package_id")==support.get("package_id")for item in value["tests"]):raise ValueError("Retained integration provenance missing")
         extra=value.get("additional_support",[])
-        integration=[item for item in value["tests"]if item.get("source_path")=="/build/crates/background-service/tests/service.rs"]
-        if len(extra)>1 or bool(integration)!=bool(extra):raise ValueError("Background support inventory incomplete")
+        if not isinstance(extra,list)or len(extra)>len(SERVICE_SOURCES)-1:raise ValueError("Service support inventory incomplete")
+        seen=set()
         for item in extra:
-            if item.get("file")!="test-support/debug/webagent-background-service"or item.get("destination")!="target/debug/webagent-background-service"or item.get("profile")!="debug"or item.get("source_path")!="/build/crates/background-service/src/main.rs"or not any(test.get("package_id")==item.get("package_id")for test in integration):raise ValueError("Background support provenance invalid")
+            binary=item.get("destination","").removeprefix("target/debug/")
+            source=SERVICE_SOURCES.get(binary)
+            if binary=="webagent-context-service"or binary in seen or source is None or item.get("file")!="test-support/debug/"+binary or item.get("destination")!="target/debug/"+binary or item.get("profile")!="debug"or item.get("source_path")!=source:raise ValueError("Service support provenance invalid")
+            seen.add(binary)
+            related=[test for test in value["tests"]if test.get("kind")==["test"]and test.get("source_path","").startswith(source.removesuffix("/src/main.rs")+"/tests/")]
+            if related and not all(test.get("package_id")==item.get("package_id")for test in related):raise ValueError("Service integration provenance invalid")
+        for binary,source in SERVICE_SOURCES.items():
+            if binary=="webagent-context-service":continue
+            if any(test.get("kind")==["test"]and test.get("source_path","").startswith(source.removesuffix("/src/main.rs")+"/tests/")for test in value["tests"])and binary not in seen:raise ValueError("Service support inventory incomplete")
         support_files={item["file"]for item in [support,*extra]}
         names=[]
         for item in [*value["tests"],support,*extra]:
@@ -619,7 +652,7 @@ class Executor:
         dependency=["sh","-c","set -e\ncargo clean --package webagent-v3\ncargo fetch --locked"]if seeded else["cargo","fetch","--locked"]
         logs=("Compatible Cargo dependency cache copied; root package rebuilt and current tests rerun.\n"if seeded else"")
         logs+=self.phase(job,"dependency","dependency",application,output,dependency,"engine:rust1.90:dependency",600,network=True)
-        logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","cargo test --workspace --locked --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json"],"engine:rust1.90:compile_test")
+        logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","set -e\ncargo test --workspace --locked --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"],"engine:rust1.90:compile_test")
         logs+=self.phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--","--test-threads=1"],"engine:rust1.90:test")
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Tests left changed application inputs")
         logs+=self.phase(job,"compile_linked","engine",application,output,self.linked_recipe(),"engine:rust1.90:linked-release")
@@ -640,7 +673,7 @@ class Executor:
         getattr(self.runner,"resource_progress",lambda _:None)(job)
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Compilation changed application inputs")
         artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
-        self.collect_runtime_artifacts(application,output,artifacts,legacy_automation)
+        self.collect_runtime_artifacts(application,output,artifacts,legacy_automation,self.context_component_recipe(blob))
         shutil.copytree(stable,artifacts/"stable")
         self.retain_test_manifest(output,artifacts)
         # Preserve the offline optimization registry independently of optional abilities.

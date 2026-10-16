@@ -268,6 +268,21 @@ class Ownership:
             return result
         return self.mutate(request,["release_scopes",task,owner,revision,epoch,scopes,reason],operation)
 
+    def release_frozen_scopes(self,task,owner,revision,epoch,scopes,binding,request):
+        """Release sealed-source write scopes while retaining execution authority only."""
+        required={"job_id","inputs_sha256","generation","released_scopes"}
+        if not isinstance(binding,dict) or set(binding)!=required or not isinstance(binding["job_id"],str) or not re.fullmatch(r"[0-9a-f-]{36}",binding["job_id"]) or not isinstance(binding["inputs_sha256"],str) or not re.fullmatch(r"[a-f0-9]{64}",binding["inputs_sha256"]) or type(binding["generation"]) is not int or binding["generation"] < 0 or binding["released_scopes"]!=sorted(scopes):
+            raise ValueError("Exact frozen execution binding required")
+        def operation(db):
+            value=self.check(task,owner,revision,epoch,db)
+            if value["state"]!="owned" or value["generation"]!=binding["generation"]:raise ValueError("Frozen generation changed")
+            if not set(scopes)<=set(value["scopes"]):raise ValueError("Only held scopes can be released")
+            held=sorted(set(value["scopes"])-set(scopes))
+            result=self.update(db,value,state="owned",scopes=held,requested=[],evidence=value["evidence"],heartbeat=self.clock())
+            db.execute("INSERT INTO events(task,at,event)VALUES(?,?,?)",(task,self.clock(),canonical({"release_frozen_scopes":sorted(scopes),"job_id":binding["job_id"],"owner":owner})))
+            return result
+        return self.mutate(request,["release_frozen_scopes",task,owner,revision,epoch,scopes,binding],operation)
+
     def release_deployed_scopes(self,task,owner,revision,epoch,scopes,evidence,request):
         """Drop deployed write reservations while retaining read-only completion authority."""
         if not isinstance(scopes,list)or not scopes or len(scopes)>256 or len(scopes)!=len(set(scopes)):raise ValueError("Explicit held scopes required")

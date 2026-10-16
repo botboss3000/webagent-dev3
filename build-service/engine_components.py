@@ -9,8 +9,8 @@ ID="context-assembly"
 BINARY="webagent-context-service"
 SOURCE_INPUTS=["crates/context-service","crates/context-assembly","crates/context-contracts","Cargo.toml","Cargo.lock","config/context-compaction.json"]
 
-REGISTRY={"boot-supervisor":{"binary":"webagent-boot-service","inputs":["crates/boot-service","crates/boot-supervisor","crates/boot-contracts","crates/engine-service","Cargo.toml","Cargo.lock"],"operation":"boot.plan","limit":65536,"timeout":1000},ID:{"binary":BINARY,"inputs":SOURCE_INPUTS,"operation":"context.prepare","limit":16777216,"timeout":30000},
- "background-dispatch":{"binary":"webagent-background-service","inputs":["crates/background-service","crates/background-dispatch","crates/background-contracts","crates/engine-service","Cargo.toml","Cargo.lock"],"operation":"background.plan","limit":65536,"timeout":1000}}
+# Fixed operation/interface versions preserve independent implementation upgrades.
+REGISTRY={'boot-supervisor': {'binary': 'webagent-boot-service', 'inputs': ['crates/boot-service', 'crates/boot-supervisor', 'crates/boot-contracts', 'crates/engine-service', 'Cargo.toml', 'Cargo.lock'], 'operation': 'boot.plan', 'limit': 65536, 'timeout': 1000, 'interface_version': 1}, 'context-assembly': {'binary': 'webagent-context-service', 'inputs': ['crates/context-service', 'crates/context-assembly', 'crates/context-contracts', 'Cargo.toml', 'Cargo.lock', 'config/context-compaction.json'], 'operation': 'context.prepare', 'limit': 16777216, 'timeout': 30000, 'interface_version': 2}, 'background-dispatch': {'binary': 'webagent-background-service', 'inputs': ['crates/background-service', 'crates/background-dispatch', 'crates/background-contracts', 'crates/engine-service', 'Cargo.toml', 'Cargo.lock'], 'operation': 'background.plan', 'limit': 65536, 'timeout': 1000, 'interface_version': 1}, 'context-assets': {'binary': 'webagent-assets-service', 'inputs': ['crates/assets-service', 'crates/context-assets', 'crates/assets-contracts', 'crates/engine-service', 'Cargo.toml', 'Cargo.lock'], 'operation': 'assets.plan', 'limit': 16777216, 'timeout': 30000, 'interface_version': 1}, 'capability-context': {'binary': 'webagent-capability-service', 'inputs': ['crates/capability-service', 'crates/capability-context', 'crates/capability-contracts', 'crates/engine-service', 'Cargo.toml', 'Cargo.lock'], 'operation': 'capability.prepare', 'limit': 16777216, 'timeout': 30000, 'interface_version': 1}, 'provider-projection': {'binary': 'webagent-provider-service', 'inputs': ['crates/provider-service', 'crates/provider-projection', 'crates/provider-contracts', 'crates/engine-service', 'Cargo.toml', 'Cargo.lock'], 'operation': 'provider.project', 'limit': 16777216, 'timeout': 30000, 'interface_version': 1}}
 
 def descriptor(path):
     """Validate the registered engine interface before building or replacing its artifact."""
@@ -20,7 +20,7 @@ def descriptor(path):
     if registered is None:raise ValueError("Unsupported engine identity")
     binary=registered["binary"]
     interface=value.get("interface_version")
-    if interface not in ((1,2)if identity=="background-dispatch"else(1,)):raise ValueError("Unsupported engine interface")
+    if interface not in ((1,2)if identity in {"background-dispatch","context-assembly"}else(1,)):raise ValueError("Unsupported engine interface")
     expected={"schema_version":1,"id":identity,"group":"engine-loop","interface_version":interface,"operation":registered["operation"],"modes":["live","linked"],"runtime_requirements":[],"executable":"artifact/"+binary}
     if set(value)-set(expected)-{"implementation_version","build","limits","artifact_sha256"}or type(value.get("schema_version"))is not int or type(value.get("interface_version"))is not int:raise ValueError("Engine contract fields")
     if any(value.get(k)!=v for k,v in expected.items()):raise ValueError("Unsupported engine contract")
@@ -81,7 +81,8 @@ def build_one(runner,job_id,root,state,assets,executor,scheduler,identity):
     binary_name=REGISTRY[identity]["binary"];service_source=REGISTRY[identity]["inputs"][0]
     if not declaration.exists():return []
     value=descriptor(declaration);application=root/"v3";inputs=closure(application,identity)
-    recipe=executor.RUST+":engine-"+("context"if identity==ID else identity)+"-v1:release:locked:offline:debug0"
+    recipe_version="v1"if identity in {"boot-supervisor","background-dispatch"}or(identity==ID and value["interface_version"]==1)else"v2"
+    recipe=executor.RUST+":engine-"+("context"if identity==ID else identity)+"-"+recipe_version+":release:locked:offline:debug0"
     key=hashlib.sha256(json.dumps({"inputs":inputs,"recipe":recipe,"build":value["build"]},sort_keys=True).encode()).hexdigest()
     with runner.plugin_build_lock(key):
         artifact=assets/"artifacts"/key;binary=artifact/binary_name;receipt=artifact/"engine-receipt.json"

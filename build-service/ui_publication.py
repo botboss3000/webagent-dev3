@@ -59,23 +59,30 @@ class UIPublication:
             index_started=clock()
             destination=self.broker.runner.stage_assets(blob,job["job_id"],asset_root=folder,base_release_id=revision)
             indexed=clock()-index_started
+            host_only=job.get("operation")=="host_service_deploy"
             validation_started=clock()
-            try:
-                self.broker.runner.validate_ui(job["job_id"],job.get("changed_paths",()),root=destination)
-            except Exception:
-                # A coordinated backend switch may temporarily remove a consumer.
-                # Retry only when the exact captured publication/runtime binding changed.
-                with self.broker.deploy_lock:
-                    stale=(self.broker.runner.current_asset_id()!=revision or
-                           self.validate(self.broker._current_release_blob())[0]!=base or self.runtime()!=runtime)
-                if stale:continue
-                raise
-            validated=clock()-validation_started
+            if not host_only:
+                try:
+                    self.broker.runner.validate_ui(job["job_id"],job.get("changed_paths",()),root=destination)
+                except Exception:
+                    # A coordinated backend switch may temporarily remove a consumer.
+                    # Retry only when the exact captured publication/runtime binding changed.
+                    with self.broker.deploy_lock:
+                        stale=(self.broker.runner.current_asset_id()!=revision or
+                               self.validate(self.broker._current_release_blob())[0]!=base or self.runtime()!=runtime)
+                    if stale:continue
+                    raise
+            validated=0.0 if host_only else clock()-validation_started
             manifest,pending=self.reviews(destination,job.get("changed_paths",()))
             evidence=self.policy.dependencies(self.release.entries(blob,self.validate),job.get("changed_paths",()))
             evidence["runtime_images"]=dict(job.get("images",{}))if tested_runtime else{role:identity["image"]for role,identity in runtime.items()}
+            if host_only:
+                # Installed broker bytes do not alter served UI assets. Preserve the
+                # dependency fingerprint while declaring the UI suite inapplicable.
+                evidence.update(tests=[],conservative=False)
             test_started=clock()
-            test_result=self.broker.runner.validate_selected_tests(job["job_id"],destination,evidence)
+            test_result=({"status":"not_required","tests":[],"reason":"host-only broker candidate leaves UI assets unchanged"}
+                         if host_only else self.broker.runner.validate_selected_tests(job["job_id"],destination,evidence))
             with self.broker.lock:
                 job["ui_test_evidence"]=test_result
                 job["preparation"]["frontend_tests_seconds"]=clock()-test_started
@@ -251,7 +258,12 @@ class UIPublication:
             previous=job.get("publication_recovery")
             if previous and previous["digest"]!=digest:raise ValueError("Release recovery already has a different request")
             if previous and previous.get("done"):return previous["result"]
-            if job["status"]!="uncertain"or not job.get("effects_started")or job.get("revoked")or job["job_id"]in self.broker.active_jobs:
+            discard=args["action"]=="discard_prepared_release"
+            # A cancellation after durable intent but before activation must remain
+            # discardable after restart. Other revoked candidates stay fenced.
+            if (job["status"]!="uncertain" or not job.get("effects_started")
+                    or (job.get("revoked") and not discard)
+                    or job["job_id"] in self.broker.active_jobs):
                 raise ValueError("Inactive uncertain publication intent required")
             state=self.broker.scheduler.ensure(item,trusted,workspace)
             self.broker.scheduler.store.assert_owned(item["key"],state["owner"],job["ownership_epoch"],[])

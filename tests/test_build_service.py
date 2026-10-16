@@ -422,6 +422,7 @@ class ReleaseClaimsBrokerTests(unittest.TestCase):
   args={"action":"release_claims","task_id":"release-fixture","scopes":["module:engine"],"reason":"Defer checks","request_id":"fixture-release","expected_revision":a["revision"],"expected_epoch":a["epoch"]}
   self.broker.jobs["fixture-active"]={"ownership_id":key,"status":"running"}
   with self.assertRaisesRegex(ValueError,"execution"):self.call("build_work",args)
+  self.assertIsNone(self.broker.scheduler.pending(key))
   self.broker.jobs.pop("fixture-active")
   with patch.object(self.broker,"_save_work",side_effect=OSError("injected save failure")):
    with self.assertRaises(OSError):self.call("build_work",args)
@@ -430,6 +431,45 @@ class ReleaseClaimsBrokerTests(unittest.TestCase):
   self.assertTrue(Path(item["workspace_path"]).is_dir())
   with self.assertRaisesRegex(ValueError,"reused"):
    self.call("build_work",{**args,"reason":"Different payload"})
+
+
+ def test_frozen_release_retains_promotion_and_epoch(self):
+  import hashlib
+  self.call("v3_build_work",{"action":"begin","task_id":"frozen-release-fixture","summary":"Frozen fixture","mode":"isolated"})
+  key=hashlib.sha256(fixtures.host.canonical([self.trusted["user_id"],self.sid,"frozen-release-fixture"])).hexdigest()
+  item=self.broker.work[key];store=self.broker.scheduler.store;owner=self.broker.scheduler.owner(self.trusted,self.sid)
+  value=store.get(key)
+  value=store.acquire(key,owner,value["revision"],value["epoch"],["module:broker","module:engine","path:src/fixture.rs"],"frozen-acquire")["task"]
+  identity=str(uuid.uuid4());blob=self.broker.scheduler_task_snapshot(Path(item["workspace_path"]).parent)
+  folder=self.state/identity;folder.mkdir();(folder/"candidate.tar").write_bytes(blob)
+  item.update(status="closed",job_id=identity)
+  job={"job_id":identity,"ownership_id":key,"ownership_epoch":value["epoch"],"source_generation":value["generation"],"inputs_sha256":self.broker.scheduler_digest(blob),"user_id":self.trusted["user_id"],"workspace":self.sid,"status":"running","created_at":time.time(),"operation":"build_deploy","changed_paths":["v3/src/fixture.rs"]}
+  self.broker.jobs[identity]=job
+  args={"action":"release_claims","task_id":item["task_id"],"scopes":["module:broker"],"reason":"Yield completed broker editing","request_id":"frozen-release","expected_revision":value["revision"],"expected_epoch":value["epoch"],"frozen_job_id":identity}
+  with patch.object(self.broker,"_start_next"):
+   result=self.call("build_work",args)
+  self.assertEqual(result["epoch"],value["epoch"])
+  self.assertEqual(result["scopes"],["module:engine","path:src/fixture.rs"])
+  self.assertEqual(self.call("build_work",args),result)
+  self.broker.scheduler.assert_job(job)
+  args.update(scopes=["module:engine"],request_id="reject-promotion-release",expected_revision=result["revision"])
+  with self.assertRaisesRegex(ValueError,"promotion"):self.call("build_work",args)
+  self.assertIsNone(self.broker.scheduler.pending(key))
+
+ def test_legacy_pending_release_rejects_active_job_terminally(self):
+  import hashlib
+  self.call("v3_build_work",{"action":"begin","task_id":"legacy-release-fixture","summary":"Legacy fixture","mode":"isolated"})
+  key=hashlib.sha256(fixtures.host.canonical([self.trusted["user_id"],self.sid,"legacy-release-fixture"])).hexdigest()
+  item=self.broker.work[key];store=self.broker.scheduler.store;owner=self.broker.scheduler.owner(self.trusted,self.sid)
+  value=store.get(key);value=store.acquire(key,owner,value["revision"],value["epoch"],["module:broker"],"legacy-acquire")["task"]
+  args={"action":"release_claims","task_id":item["task_id"],"scopes":["module:broker"],"reason":"Legacy release retry","request_id":"legacy-release","expected_revision":value["revision"],"expected_epoch":value["epoch"]}
+  path=self.broker.scheduler.journal_path(owner,args["request_id"],"release-"+key)
+  self.broker.scheduler.write_record(path,{"digest":hashlib.sha256(fixtures.host.canonical(args)).hexdigest(),"state":"pending","task_key":key,"request_id":args["request_id"]})
+  self.broker.jobs["active"]={"ownership_id":key,"status":"running"}
+  with self.assertRaisesRegex(ValueError,"execution"):self.call("build_work",args)
+  self.assertIsNone(self.broker.scheduler.pending(key))
+  self.assertEqual(json.loads(path.read_text())["state"],"rejected")
+  self.assertEqual(store.get(key)["scopes"],["module:broker"])
 
 
 class UIRuntimeRetentionTests(unittest.TestCase):
