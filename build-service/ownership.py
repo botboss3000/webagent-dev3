@@ -68,10 +68,35 @@ class Components:
                 elif not manifest.exists()and not manifest.is_symlink():
                     isolated=self.deleted_isolated(path,parts)
                 if path in self.compile_inputs or(path.endswith(".rs")and not isolated):output.add("module:engine")
-            elif path.startswith("plugins/engine/")or path.startswith(("crates/context-service/","crates/context-assembly/","crates/background-service/","crates/background-dispatch/","crates/engine-service/")):
-                component="background-dispatch"if path.startswith(("plugins/engine/background-dispatch/","crates/background-service/","crates/background-dispatch/","crates/engine-service/"))else"context-assembly"
-                output.add("module:engine-component:"+component)
-                if path in self.compile_inputs:output.add("module:engine")
+            elif path.startswith("plugins/engine/")or path.startswith((
+                "crates/context-service/","crates/context-assembly/","crates/context-contracts/",
+                "crates/background-service/","crates/background-dispatch/","crates/background-contracts/",
+                "crates/boot-service/","crates/boot-supervisor/","crates/boot-contracts/",
+                "crates/assets-service/","crates/context-assets/","crates/assets-contracts/",
+                "crates/capability-service/","crates/capability-context/","crates/capability-contracts/",
+                "crates/provider-service/","crates/provider-projection/","crates/provider-contracts/",
+                "crates/engine-service/")):
+                # Shared wrapper changes affect each dependent service; contracts also require the host.
+                components={
+                    "context-assembly":("context-service","context-assembly","context-contracts"),
+                    "background-dispatch":("background-service","background-dispatch","background-contracts"),
+                    "boot-supervisor":("boot-service","boot-supervisor","boot-contracts"),
+                    "context-assets":("assets-service","context-assets","assets-contracts"),
+                    "capability-context":("capability-service","capability-context","capability-contracts"),
+                    "provider-projection":("provider-service","provider-projection","provider-contracts"),
+                }
+                shared=path.startswith("crates/engine-service/")
+                matched=False
+                for component,crates in components.items():
+                    if path.startswith("plugins/engine/"+component+"/")or any(path.startswith("crates/"+name+"/")for name in crates)or(shared and component!="context-assembly"):
+                        output.add("module:engine-component:"+component);matched=True
+                if not matched and path!="plugins/engine/catalog.json":output.add("module:engine")
+                if path=="plugins/engine/catalog.json":
+                    output.update("module:engine-component:"+component for component in components)
+                if path in self.compile_inputs or any(path.startswith("crates/"+name+"/")for name in (
+                    "context-contracts","background-contracts","boot-contracts",
+                    "assets-contracts","capability-contracts","provider-contracts")):
+                    output.add("module:engine")
             elif path.startswith("build-service/")or path.startswith("tests/test_build")or path.startswith("tests/test_scheduler")or path in {"tests/test_code_index_maintenance.py","tests/test_published_code_index.py","tests/test_index_queue.py","tests/test_ui_policy.py","tests/test_admin_build_install.py"}:
                 # These Python suites validate broker/index contracts, not the Rust engine.
                 output.add("module:broker")
