@@ -5,4 +5,8 @@ V3 checkout as an administrator. It is separate from the current session workspa
 The live checkout accepts status, diff, log, show, branch_list, tag_list and push;
 source commits remain broker owned. If the live remote lacks a saved repository
 connection, report that prerequisite instead of claiming no repository exists.
+Push runs its own outgoing-history credential guard before network transfer; there
+is no separate guard tool. On git_credential_guard, use the returned diagnostics
+commit and path to identify the affected source without printing matched content.
+Do not retry until the history or guard finding is resolved and reviewed.
  Read operations: status, diff, log, show, branch_list, tag_list, stash_list. Mutations: branch_create, branch_delete, tag_create, tag_delete, checkout, stash_push, stash_pop, add, reset, pull, push. Mutations require expected_head. Provide exact paths for add/reset; optional repo defaults webagent-v3. name/ref are strict references, never flags. pull is FF-only; push never forces. Trusted configured remote transport is required.

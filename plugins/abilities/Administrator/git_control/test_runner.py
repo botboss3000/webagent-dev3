@@ -36,6 +36,9 @@ async def push_guard_check():
         git("commit","-qm","guard fixture")
         result=await module.execute("git_tool",{"operation":"push","expected_head":git("rev-parse","HEAD")},base)
         assert result["error_kind"]=="git_credential_guard",result
+        assert result["diagnostics"]["status"]=="located",result
+        assert result["diagnostics"]["path"]=="fixture.txt",result
+        assert result["diagnostics"]["commit"]==git("rev-parse","HEAD"),result
         assert "very-secret" not in str(result)
         assert subprocess.run(["git","--git-dir",str(remote),"rev-parse","--verify","main"],capture_output=True).returncode!=0
 

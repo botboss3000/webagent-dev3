@@ -12,8 +12,8 @@ _RESTRICT=runpy.run_path(str(Path(__file__).resolve().parents[4]/"sandbox.py"))[
 READS={"status","diff","log","show","branch_list","tag_list","stash_list"}
 OPS=READS|{"branch_create","branch_delete","tag_create","tag_delete","checkout","merge","stash_push","stash_pop","add","reset","fetch","pull","push"}
 class Rejected(ValueError):
- def __init__(self,message,kind="git_rejected"):
-  super().__init__(message);self.kind=kind
+ def __init__(self,message,kind="git_rejected",diagnostics=None):
+  super().__init__(message);self.kind=kind;self.diagnostics=diagnostics
 class Uncertain(Exception):pass
 def exact(args,keys,required=()):
  if not isinstance(args,dict) or set(args)-set(keys) or any(k not in args for k in required):raise Rejected("Invalid typed Git arguments")
@@ -253,11 +253,39 @@ async def transport(base,repo,remote,operation):
  env=await NETWORK_TRANSPORT(repo,remote,operation)
  if not isinstance(env,dict):raise Rejected("Configured remote not authorized")
  return remote,env,False
+async def outgoing_guard_location(repo,remote,scan_head):
+ """Locate one blocked outgoing diff without returning Git content or secrets."""
+ try:
+  commits=(await command(repo,["rev-list","--max-count=33",scan_head,"--not","--remotes="+ref(remote)])).decode().splitlines()
+  for sha in commits[:32]:
+   if not re.fullmatch(r"[a-f0-9]{40,64}",sha):return {"status":"unavailable"}
+   paths=(await command(repo,["diff-tree","--root","--no-commit-id","--name-only","-r","-z",sha])).split(b"\0")
+   for raw in paths[:256]:
+    if not raw:continue
+    try:
+     name=raw.decode("utf-8")
+     await command(repo,["show","--format=","--no-ext-diff","--no-textconv","-p",sha,"--",name],scan_only=True,timeout=30)
+    except Rejected as error:
+     if error.kind!="git_credential_guard":continue
+     safe=bool(re.fullmatch(r"[A-Za-z0-9._/-]{1,240}",name)) and not secret(raw)
+     result={"status":"located","commit":sha,"match_class":"credential_pattern"}
+     if safe:result["path"]=name
+     else:result["path_sha256"]=hashlib.sha256(raw).hexdigest();result["path_withheld"]=True
+     return result
+  return {"status":"unlocated","search_bounded":len(commits)>32}
+ except (Rejected,UnicodeError,ValueError):
+  return {"status":"unavailable"}
+
 async def network(base,repo,remote,operation):
  target,env,local=await transport(base,repo,remote,operation)
  if operation=="push":
   # Bounded outgoing-history scan; unknown/new remotes conservatively scan HEAD.
-  await command(repo,["log","--no-ext-diff","--no-textconv","--no-show-signature","-p","HEAD","--not","--remotes="+ref(remote),"--"],scan_only=True,timeout=120)
+  scan_head=await head(repo)
+  try:
+   await command(repo,["log","--no-ext-diff","--no-textconv","--no-show-signature","-p",scan_head,"--not","--remotes="+ref(remote),"--"],scan_only=True,timeout=120)
+  except Rejected as error:
+   if error.kind!="git_credential_guard":raise
+   raise Rejected(str(error),"git_credential_guard",await outgoing_guard_location(repo,remote,scan_head)) from error
  branch=ref((await command(repo,["symbolic-ref","--quiet","--short","HEAD"])).decode().strip()) if operation!="fetch" else ""
  argv=["fetch","--no-tags","--prune",ref(remote)] if operation=="fetch" else (["pull","--ff-only","--no-rebase",target,branch] if operation=="pull" else ["push","--no-verify",target,"HEAD:refs/heads/"+branch])
  output=await command(repo,argv,mutable=True,env_extra=env,local=local,timeout=120)
@@ -366,5 +394,8 @@ async def execute(name,args,base):
   return {"status":"success","output":output}
  except asyncio.CancelledError:raise
  except Uncertain as error:return {"status":"error","error_kind":"git_effect_uncertain","uncertain":True,"output":str(error)}
- except Exception as error:return {"status":"error","error_kind":error.kind if isinstance(error,Rejected) else "git_rejected","output":str(error) if isinstance(error,Rejected) else "Workspace Git rejected"}
+ except Exception as error:
+  result={"status":"error","error_kind":error.kind if isinstance(error,Rejected) else "git_rejected","output":str(error) if isinstance(error,Rejected) else "Workspace Git rejected"}
+  if isinstance(error,Rejected) and error.diagnostics is not None:result["diagnostics"]=error.diagnostics
+  return result
  finally:_SANDBOX_ROOT.reset(token)
