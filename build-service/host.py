@@ -131,11 +131,38 @@ def validate_diagnostics_package(folder):
         if path.is_symlink():raise ValueError("Diagnostics package symlink")
         if path.is_file()and path.suffix==".py":compile(path.read_bytes(),str(path),"exec")
 
+GIT_CONTROL_ROOT="v3/plugins/abilities/Administrator/git_control/"
+GIT_CONTROL_TOOLS=["repository_access","git_tool","resolve_conflict","commit_and_push"]
+GIT_CONTROL_MANIFEST={"version":1,"id":"git_control","protocol":1,"runtime":"python3","entrypoint":"transport.py","interface":1,
+    "tools":GIT_CONTROL_TOOLS,"build":{"inputs":["adapter.py","transport.py","file_manager.py","askpass.py"],
+    "dependencies":[],"toolchain":"image-python3","flags":["-I","-B"],
+    "assets":["git_control.json","git_control.skill.md","tools"]}}
+def git_control_source_path(path):
+    if not path.startswith(GIT_CONTROL_ROOT):return False
+    relative=path[len(GIT_CONTROL_ROOT):]
+    return relative in {"adapter.py","transport.py","file_manager.py","askpass.py","test_runner.py","plugin.json",
+        "git_control.json","git_control.skill.md"} or relative.startswith("tools/")and relative.endswith(".skill.md")
+def validate_git_control_package(folder):
+    folder=Path(folder)
+    for name in ("plugin.json","adapter.py","transport.py","file_manager.py","askpass.py","test_runner.py","git_control.json","git_control.skill.md"):
+        item=folder/name
+        if item.is_symlink()or not item.is_file()or item.stat().st_size>2*1024*1024:raise ValueError("Incomplete Git Control package")
+    if canonical(json.loads((folder/"plugin.json").read_bytes()))!=canonical(GIT_CONTROL_MANIFEST):
+        raise ValueError("Incompatible Git Control contract")
+    declaration=json.loads((folder/"git_control.json").read_bytes())
+    if declaration.get("tools")!=GIT_CONTROL_TOOLS or declaration.get("kind")!="ability" or declaration.get("readiness")!="ready":
+        raise ValueError("Incompatible Git Control catalog")
+    for item in folder.rglob("*"):
+        if item.is_symlink():raise ValueError("Git Control package symlink")
+        if item.is_file()and item.suffix==".py":compile(item.read_bytes(),str(item),"exec")
+        if item.is_file()and item.suffix==".md" and not item.read_text(encoding="utf-8").strip():
+            raise ValueError("Empty Git Control guidance")
+
 ABILITY_ROOT="v3/plugins/abilities/"
 def ability_asset_path(path):
     if not path.startswith(ABILITY_ROOT):return False
     # Rust adapters and legacy Python helpers still have core/image consumers.
-    return path.endswith((".json",".md")) or codebase_source_path(path) or diagnostics_source_path(path)
+    return path.endswith((".json",".md")) or codebase_source_path(path) or diagnostics_source_path(path) or git_control_source_path(path)
 def generic_package_path(path,blob):
     """Classify registered engine and isolated ability inputs; authority and actual core dependencies still fence publication."""
     if engine_components.package_path(path,release.entries(blob,context_digest)):return True
@@ -158,7 +185,10 @@ def native_package_migration(path,baseline):
     raw=entries.get(prefix+parts[1]+".json")
     if raw is None:return False
     installed=entries.get(prefix+"plugin.json")
-    if installed is not None and json.loads(installed[1]).get("dispatch")=="isolated":return False
+    if installed is not None:
+        installed_manifest=json.loads(installed[1])
+        if installed_manifest.get("dispatch")=="isolated" or (parts[1]=="git_control" and installed_manifest==GIT_CONTROL_MANIFEST):
+            return False
     declaration=json.loads(raw[1])
     return declaration.get("readiness")in("ready","partial")or declaration.get("kind")in("virtual_core","service")or bool(declaration.get("required_module"))
 HOT_OPERATIONS={"ui_deploy","index_deploy","plugin_deploy"}
@@ -1356,6 +1386,13 @@ class Runner:
                 "--tmpfs","/tmp:rw,size=64m,mode=1777",
                 "--mount","type=bind,src="+str(root / CODEBASE_ROOT)+",dst=/package,readonly",
                 "-w","/tmp","--entrypoint","python3",image,"-I","-B","/package/test_runner.py"],timeout=30)
+        if any(git_control_source_path(name) for name in changed):
+            validate_git_control_package(root / GIT_CONTROL_ROOT)
+            image=(active["images"]["api"] if active is not None and active.get("operation")=="build_deploy" else self.inspect(TARGETS[0])["Image"])
+            self.command(["docker","run","--rm","--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
+                "--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["worker_gid"]),"--pids-limit","64","--memory","256m",
+                "--tmpfs","/tmp:rw,size=64m,mode=1777","--mount","type=bind,src="+str(root)+",dst=/candidate,readonly",
+                "--entrypoint","python3",image,"-I","-B","/candidate/v3/plugins/abilities/Administrator/git_control/test_runner.py"],timeout=30)
         if any(diagnostics_source_path(name) for name in changed):
             validate_diagnostics_package(root / DIAGNOSTICS_ROOT)
             if (active is None or active.get("operation")!="build_deploy") and not self.diagnostics_hot_swappable():
