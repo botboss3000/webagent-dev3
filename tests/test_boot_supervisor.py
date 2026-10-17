@@ -93,9 +93,9 @@ class BootTests(unittest.TestCase):
         self.docker.state[self.names[0]]["health"]="unhealthy";self.host.reconcile(100)
         self.assertGreater(self.host.deadline,100);self.assertEqual(self.docker.effects,[])
 class NetworkTests(unittest.TestCase):
-    def observe(self,mode="bridge",networks=None,bindings=None,ports=None):
+    def observe(self,mode="bridge",networks=None,bindings=None,ports=None,running=True):
         from unittest.mock import MagicMock,patch
-        value={"Id":"fixed","State":{"Running":True,"Restarting":False,"StartedAt":"first","Health":{"Status":"healthy"}},
+        value={"Id":"fixed","State":{"Running":running,"Restarting":False,"StartedAt":"first","Health":{"Status":"healthy"}},
             "HostConfig":{"NetworkMode":mode,"PortBindings":bindings or {}},
             "NetworkSettings":{"Networks":networks or {},"Ports":ports or {}}}
         peer=MagicMock();peer.getresponse.return_value.status=200
@@ -123,6 +123,14 @@ class NetworkTests(unittest.TestCase):
         with patch.object(d,"inspect",return_value={**before,"id":"new"}),patch.object(d,"connection") as connection:
             with self.assertRaises(RuntimeError):d.action("api","restart",before)
             connection.assert_not_called()
+    def test_stopped_container_uses_normal_start_without_network_repair(self):
+        from unittest.mock import MagicMock,patch
+        before=self.observe(running=False)
+        self.assertFalse(before["bridge_missing"]);self.assertFalse(before["network_fault"])
+        d=m.Docker(["api"]);peer=MagicMock();peer.getresponse.return_value.status=204
+        with patch.object(d,"inspect",return_value=before),patch.object(d,"connection",return_value=peer):d.action("api","start",before)
+        self.assertEqual(peer.request.call_count,1)
+        self.assertEqual(peer.request.call_args.args[1],"/containers/fixed/start?t=10")
     def test_failed_connect_remains_uncertain_without_restart(self):
         from unittest.mock import MagicMock,patch
         d=m.Docker(["api"]);before=self.observe();peer=MagicMock();peer.getresponse.return_value.status=500

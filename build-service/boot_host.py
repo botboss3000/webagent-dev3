@@ -51,9 +51,9 @@ class Docker:
             # while retaining no bridge endpoint or published port. Internal
             # HEALTHCHECK alone cannot certify the configured ingress path.
             host=value.get("HostConfig",{});network=value.get("NetworkSettings",{})
-            bridge_missing=host.get("NetworkMode")=="bridge" and not network.get("Networks",{}).get("bridge",{}).get("IPAddress")
+            bridge_missing=state["Running"] and host.get("NetworkMode")=="bridge" and not network.get("Networks",{}).get("bridge",{}).get("IPAddress")
             published=network.get("Ports") or {}
-            port_missing=any(binding not in (published.get(port) or [])
+            port_missing=state["Running"] and any(binding not in (published.get(port) or [])
                 for port,bindings in (host.get("PortBindings") or {}).items() for binding in (bindings or []))
             network_fault=bridge_missing or port_missing
             return {"exists":True,"id":value["Id"],"running":state["Running"],
