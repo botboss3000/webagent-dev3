@@ -8,6 +8,37 @@ For UI presentation/layout questions and every UI change, read `plugins/abilitie
 
 For v3 Rust work, load the selectable rust_quality skill in this ability for ownership, async design, correctness, and measured optimization guidance. This standard skill remains authoritative for task editing and release workflow.
 
+## Early Rust feature checks
+
+Before a full v3 release build, run default and live compile checks when changing shared host code, feature-gated paths, engine integration, service wrappers, or implementation-crate dependencies. These checks catch feature-boundary errors before optimized release compilation. Guidance-only and asset-only changes do not require Rust checks unless their actual compile dependencies change.
+
+The default profile follows the workspace's existing default features. The live profile disables defaults and enables live-context. Code can compile and pass tests in the linked build yet fail in the live host because replaceable implementation crates are intentionally not linked there. Keep that boundary; do not add an implementation dependency merely to make the live check compile. Verification of replaceable implementations should bind expected identities to trusted component metadata.
+
+1. Obtain the current task input digest through build_work review. Run check=check with feature_profile=default and feature_profile=live against that same unchanged digest.
+2. Supply a distinct stable request_id for each profile. Profile changes require a new request ID; reconcile a timeout or uncertain response through the original request/job instead of submitting a duplicate.
+3. A queued/running receipt is not a pass. Inspect each durable job until its terminal result is completed, with the expected profile and input digest. Changed inputs or a stale result require fresh affected checks.
+4. Fix compile failures before starting the full release build. Run applicable tests separately and retain the normal optimized linked/live equivalence, publication, health, promotion and exact-commit gates.
+
+The live profile is supported only for compile checks (check=check), not check=test or resource_probe. Omitting feature_profile retains existing default behavior. Profiles are a fixed allowlist, not arbitrary Cargo flags. Checks retain isolated snapshots, ownership, unchanged-input attestation and enforced resource limits; they do not deploy, promote source or start documentation/index maintenance.
+
+The protected operator CLI and broker API expose feature_profile today. The in-app build_work tool schema does not yet declare it; in-app agents should hand this check to an authorized operator until that tool surface is extended. Ordinary in-app default checks remain available.
+
+Example operator broker request (replace placeholders with actual task values):
+
+~~~json
+{
+  "action": "check",
+  "task_id": "<owned-task>",
+  "check": "check",
+  "feature_profile": "live",
+  "expected_inputs_sha256": "<fresh-input-digest>",
+  "request_id": "<unique-live-check-id>",
+  "timeout_seconds": 600
+}
+~~~
+
+Use another request ID with feature_profile=default for the companion check. For operator CLI syntax and receipt details, see [the broker reference](../../../../build-service/README.md#standalone-rust-feature-checks).
+
 ## Chat provenance for broker work
 
 Before source tools implicitly create a draft, explicitly call build_work begin
