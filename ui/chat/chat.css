@@ -57,7 +57,7 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 #chat-messages-inner .message-row{width:fit-content;max-width:90%;flex-shrink:0;margin:0;gap:0;align-self:flex-start}
 #chat-messages-inner .message-row.user{align-self:flex-end}
 #chat-messages-inner .message-row>.chat-bubble{box-sizing:border-box;width:fit-content;max-width:100%;margin:0}
-#chat-messages-inner .message-row>.turn-gutter{box-sizing:border-box;max-width:100%;align-self:stretch}
+#chat-messages-inner .message-row>.turn-gutter{box-sizing:border-box;max-width:100%;align-self:stretch;padding:0;margin-bottom:0}
 #chat-messages-inner .message-row.user>.turn-gutter{justify-content:flex-end}
 #chat-messages-inner .bubble-body{white-space:pre-wrap;overflow-wrap:anywhere}
 #chat-messages-inner .turn-gutter{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
