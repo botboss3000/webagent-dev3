@@ -92,4 +92,41 @@ class BootTests(unittest.TestCase):
     def test_unhealthy_has_real_grace_deadline(self):
         self.docker.state[self.names[0]]["health"]="unhealthy";self.host.reconcile(100)
         self.assertGreater(self.host.deadline,100);self.assertEqual(self.docker.effects,[])
+class NetworkTests(unittest.TestCase):
+    def observe(self,mode="bridge",networks=None,bindings=None,ports=None):
+        from unittest.mock import MagicMock,patch
+        value={"Id":"fixed","State":{"Running":True,"Restarting":False,"StartedAt":"first","Health":{"Status":"healthy"}},
+            "HostConfig":{"NetworkMode":mode,"PortBindings":bindings or {}},
+            "NetworkSettings":{"Networks":networks or {},"Ports":ports or {}}}
+        peer=MagicMock();peer.getresponse.return_value.status=200
+        peer.getresponse.return_value.read.return_value=json.dumps(value).encode()
+        d=m.Docker(["api"])
+        with patch.object(d,"connection",return_value=peer):return d.inspect("api")
+    def test_healthy_process_without_bridge_is_unhealthy(self):
+        value=self.observe();self.assertEqual(value["health"],"unhealthy");self.assertTrue(value["bridge_missing"])
+    def test_missing_published_port_is_unhealthy(self):
+        value=self.observe(networks={"bridge":{"IPAddress":"172.17.0.2"}},bindings={"8080/tcp":[{"HostIp":"100.112.23.15","HostPort":"8081"}]})
+        self.assertTrue(value["network_fault"]);self.assertFalse(value["bridge_missing"])
+    def test_complete_ingress_is_healthy_and_none_network_is_valid(self):
+        ports={"8080/tcp":[{"HostIp":"100.112.23.15","HostPort":"8081"}]}
+        self.assertEqual(self.observe(networks={"bridge":{"IPAddress":"172.17.0.2"}},bindings=ports,ports=ports)["health"],"healthy")
+        self.assertFalse(self.observe(mode="none")["network_fault"])
+    def test_repair_is_fixed_target_and_generation_fenced(self):
+        from unittest.mock import MagicMock,patch
+        d=m.Docker(["api"]);before=self.observe();after={**before,"bridge_missing":False,"network_fault":False,"health":"healthy"}
+        connect=MagicMock();connect.getresponse.return_value.status=200
+        restart=MagicMock();restart.getresponse.return_value.status=204
+        with patch.object(d,"inspect",side_effect=[before,after]),patch.object(d,"connection",side_effect=[connect,restart]):d.action("api","restart",before)
+        self.assertEqual(connect.request.call_args.args[:2],("POST","/networks/bridge/connect"))
+        self.assertEqual(json.loads(connect.request.call_args.kwargs["body"]),{"Container":"fixed"})
+        self.assertEqual(restart.request.call_args.args[1],"/containers/fixed/restart?t=10")
+        with patch.object(d,"inspect",return_value={**before,"id":"new"}),patch.object(d,"connection") as connection:
+            with self.assertRaises(RuntimeError):d.action("api","restart",before)
+            connection.assert_not_called()
+    def test_failed_connect_remains_uncertain_without_restart(self):
+        from unittest.mock import MagicMock,patch
+        d=m.Docker(["api"]);before=self.observe();peer=MagicMock();peer.getresponse.return_value.status=500
+        with patch.object(d,"inspect",return_value=before),patch.object(d,"connection",return_value=peer):
+            with self.assertRaises(RuntimeError):d.action("api","restart",before)
+        self.assertEqual(peer.request.call_count,1)
 if __name__=="__main__":unittest.main()

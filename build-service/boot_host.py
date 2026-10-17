@@ -47,9 +47,19 @@ class Docker:
             raw=response.read(2*1024*1024+1)
             if len(raw)>2*1024*1024:raise ValueError("Docker observation bounds")
             value=json.loads(raw);state=value["State"]
+            # Docker can start a healthy process after a failed boot-time bind
+            # while retaining no bridge endpoint or published port. Internal
+            # HEALTHCHECK alone cannot certify the configured ingress path.
+            host=value.get("HostConfig",{});network=value.get("NetworkSettings",{})
+            bridge_missing=host.get("NetworkMode")=="bridge" and not network.get("Networks",{}).get("bridge",{}).get("IPAddress")
+            published=network.get("Ports") or {}
+            port_missing=any(binding not in (published.get(port) or [])
+                for port,bindings in (host.get("PortBindings") or {}).items() for binding in (bindings or []))
+            network_fault=bridge_missing or port_missing
             return {"exists":True,"id":value["Id"],"running":state["Running"],
                 "restarting":state["Restarting"],"started":state["StartedAt"],
-                "health":state.get("Health",{}).get("Status","")}
+                "health":"unhealthy" if state["Running"] and network_fault else state.get("Health",{}).get("Status",""),
+                "bridge_missing":bridge_missing,"network_fault":network_fault}
         finally:connection.close()
     def action(self,name,operation,expected):
         """Recheck container identity/start generation immediately before a permitted effect."""
@@ -57,6 +67,17 @@ class Docker:
         if self.inspect(name)!=expected:raise RuntimeError("Container generation changed")
         connection=self.connection(timeout=40)
         try:
+            if operation in {"start","restart"} and expected.get("bridge_missing"):
+                # Repair only Docker's configured default bridge, under the same
+                # generation fence/effect lease. An uncertain connect is never retried.
+                connection.request("POST","/networks/bridge/connect",
+                    body=json.dumps({"Container":expected["id"]}),headers={"Content-Type":"application/json"})
+                response=connection.getresponse();response.read(4096)
+                if response.status!=200:raise RuntimeError("Docker network repair failed or uncertain")
+                connection.close();connection=self.connection(timeout=40)
+                repaired=self.inspect(name)
+                if any(repaired.get(k)!=expected.get(k) for k in ("id","started","running","restarting")) or repaired.get("bridge_missing"):
+                    raise RuntimeError("Container changed during network repair")
             connection.request("POST","/containers/"+quote(expected["id"],safe="")+"/"+operation+"?t=10")
             response=connection.getresponse();response.read(4096)
             if response.status not in {204,304}:raise RuntimeError("Docker effect failed or uncertain")
