@@ -6761,6 +6761,14 @@ async fn live_context_default_stack_journey() {
     assert!(instructions.contains("LIVE_MAIN_CURRENT"));assert!(instructions.contains("LIVE_SLOT_CURRENT"));
     assert!(!instructions.contains("LIVE_MAIN_FIRST"));assert!(!instructions.contains("LIVE_SLOT_FIRST"));
     for request in requests.iter() {
+        // Assert the actual Responses wire, where omitted strict defaults can make
+        // unload-only fields mandatory and prevent a valid list invocation.
+        let control=request["tools"].as_array().unwrap().iter()
+            .find(|tool|tool["name"]=="context_assets").unwrap();
+        assert_eq!(control["strict"],false);
+        assert_eq!(control["parameters"]["required"],json!(["action"]));
+        assert_eq!(control["parameters"]["properties"]["selector"]["anyOf"][1]["required"],
+            json!(["type","tool_name"]));
         let instructions=request["instructions"].as_str().unwrap();
         assert!(instructions.contains("LIVE_CLOSING")&&instructions.contains("LIVE_JEV_SAVED"));
         assert!(!instructions.contains("LIVE_JEV_SOURCE_"));

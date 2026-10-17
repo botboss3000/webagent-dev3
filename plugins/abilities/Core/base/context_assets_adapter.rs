@@ -7,18 +7,23 @@ use serde_json::{json,Value};
 use tokio_util::sync::CancellationToken;
 use webagent_assets_contracts::{State,Operation,Request,Plan};
 
-/// Register only this fixed native operation, independently of component descriptors.
+/// Register this fixed operation; non-strict wire schemas preserve list/unload optional fields.
 pub fn owns(name:&str)->bool {name=="context_assets"}
 
 /// Publish content-free scope controls; selectors are validated again by the fixed contract.
 pub fn schemas()->Vec<Value> {
- vec![json!({"type":"function","name":"context_assets",
+ vec![json!({"type":"function","name":"context_assets","strict":false,
   "description":"List or unload this requester's dynamically selected conversation tools and skills. Changes selection only; never changes permissions, files or configured visible guidance.",
   "parameters":{"type":"object","properties":{
    "action":{"type":"string","enum":["list","unload"]},
-   "selector":{"type":"object","properties":{"type":{"type":"string","enum":["ability","tool","skill"]},
-    "ability_id":{"type":"string"},"tool_name":{"type":"string"},"kind":{"type":"string","enum":["ability","tool","selectable","own"]},"skill_id":{"type":"string"}},
-    "required":["type"],"additionalProperties":false},
+   "selector":{"anyOf":[
+    {"type":"object","properties":{"type":{"type":"string","enum":["ability"]},"ability_id":{"type":"string","minLength":1}},
+     "required":["type","ability_id"],"additionalProperties":false},
+    {"type":"object","properties":{"type":{"type":"string","enum":["tool"]},"tool_name":{"type":"string","minLength":1}},
+     "required":["type","tool_name"],"additionalProperties":false},
+    {"type":"object","properties":{"type":{"type":"string","enum":["skill"]},"ability_id":{"type":"string","minLength":1},
+     "kind":{"type":"string","enum":["ability","tool","selectable","own"]},"skill_id":{"type":"string","minLength":1}},
+     "required":["type","ability_id","kind","skill_id"],"additionalProperties":false}]},
    "expected_revision":{"type":"integer","minimum":0},
    "request_id":{"type":"string","minLength":1,"maxLength":128}},
    "required":["action"],"additionalProperties":false}})]
