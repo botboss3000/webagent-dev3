@@ -7400,11 +7400,11 @@ async fn worker_control_restores_saved_state_after_launcher_reset() {
 }
 
 /// Exercise normal encrypted run-view storage before bounded public pause projection.
-/// Modern views omit private markers; both component kinds and manual pauses stay distinct.
+/// Modern views omit private markers; all registered component kinds and manual pauses stay distinct.
 #[tokio::test]
 async fn background_component_pause_survives_modern_persisted_view() {
  let (_root,app)=fixture().await;let sid=conversation(&app).await;let id=queued(&app,&sid).await;
- for component in [Some(engine_components::BACKGROUND),Some(engine_components::CONTEXT),None] {
+ for component in engine_components::WORKING_COMPONENTS.into_iter().map(Some).chain([None]) {
   let mut run=app.run(&id).await.unwrap();run["status"]=json!("paused");
   run["component_pause"]=component.map(|id|json!({"version":1,"component":id,"private_field":"must-not-project"})).unwrap_or(Value::Null);
   run["code_index_retrieval_attempted"]=json!(false);run["code_index_retrieval_status"]=json!("not_attempted");run["code_index_retrieval_stage"]=json!("not_started");

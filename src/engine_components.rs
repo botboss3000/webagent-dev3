@@ -359,12 +359,24 @@ fn smoke_service(package:&str)->Result<Service> {
  Ok(Service{connection:tokio::sync::Mutex::new(None),admission:Arc::new(tokio::sync::Semaphore::new(1)),
   executable:StdMutex::new(executable),limits:Limits{max_request_bytes:16777216,max_response_bytes:16777216,timeout_ms:30000,max_concurrency:1}})
 }
+/// Read proof identity from captured descriptors without linking replaceable implementations.
+#[cfg(any(feature="live-context",test))]
+fn smoke_implementation(root:&std::path::Path,id:&str)->Result<String> {
+ if !matches!(id,ASSETS|CAPABILITY|PROJECTION){anyhow::bail!("Offline component identity");}
+ let path=root.join("plugins/engine").join(id).join("component.json");
+ let info=std::fs::symlink_metadata(&path)?;
+ if !info.is_file()||info.file_type().is_symlink()||info.len()>65536{anyhow::bail!("Offline descriptor identity");}
+ let descriptor:Descriptor=serde_json::from_slice(&std::fs::read(path)?)?;
+ descriptor.validate()?;
+ if descriptor.id!=id{anyhow::bail!("Offline descriptor component");}
+ Ok(descriptor.implementation_version)
+}
 /// Validate two calls on the same process rather than accepting a respawn as reuse.
 #[cfg(feature="live-context")]
 async fn smoke_reply<T:serde::Serialize,R:serde::de::DeserializeOwned>(process:&Service,pid:&mut Option<u32>,key:&str,input:&T,
- field:&str,validate:impl Fn(&T,&R)->Result<()>)->Result<R> {
+ field:&str,implementation:&str,validate:impl Fn(&T,&R)->Result<()>)->Result<R> {
  let response=process.call(key,input,&CancellationToken::new()).await?;
- let result=checked_pure_response(input,&response,field,"0.1.0",validate)?;
+ let result=checked_pure_response(input,&response,field,implementation,validate)?;
  let current=process.connection.lock().await.as_ref().and_then(|value|value.0.id()).ok_or_else(||anyhow!("Offline service exited"))?;
  if pid.is_some_and(|previous|previous!=current){anyhow::bail!("Offline service reuse");}*pid=Some(current);
  Ok(result)
@@ -396,7 +408,7 @@ async fn assets_smoke()->Result<Vec<Value>> {
   let input=Request::Place{version:1,state,history,definitions:vec!["main".into(),"verification".into()],
    temporary:vec!["current-mode".into()],schema_names:vec!["file_read".into(),"file_write".into()],history_basis:"smoke-epoch".into(),append};
   #[cfg(feature="linked-context")]let plan=webagent_context_assets::plan(&input)?;
-  #[cfg(feature="live-context")]let plan:Plan=smoke_reply(&process,&mut pid,"offline-assets-smoke",&input,"plan",webagent_assets_contracts::validate_plan).await?;
+  #[cfg(feature="live-context")]let plan:Plan=smoke_reply(&process,&mut pid,"offline-assets-smoke",&input,"plan",&smoke_implementation(std::path::Path::new("."),ASSETS)?,webagent_assets_contracts::validate_plan).await?;
   webagent_assets_contracts::validate_plan(&input,&plan)?;
   let at=if append{3}else{0};
   let expected=Plan::Place{placements:vec![Placement{id:"main".into(),after_input:0,anchor:None},
@@ -423,7 +435,7 @@ async fn capability_smoke()->Result<Vec<Value>> {
      body:format!("{label} selected guidance"),selected:true,natural:false}],
    permitted_schemas:vec!["file_read".into(),"file_write".into()],prior_schema_order:vec!["file_write".into()],menu:format!("{label} temporary menu")};
   #[cfg(feature="linked-context")]let result=webagent_capability_context::prepare(&input)?;
-  #[cfg(feature="live-context")]let result:PreparedCapability=smoke_reply(&process,&mut pid,"offline-capability-smoke",&input,"capability",webagent_capability_contracts::validate_result).await?;
+  #[cfg(feature="live-context")]let result:PreparedCapability=smoke_reply(&process,&mut pid,"offline-capability-smoke",&input,"capability",&smoke_implementation(std::path::Path::new("."),CAPABILITY)?,webagent_capability_contracts::validate_result).await?;
   webagent_capability_contracts::validate_result(&input,&result)?;
   let expected=PreparedCapability{version:1,source_fingerprint:input.source_fingerprint.clone(),main:format!("{}{}",input.base_prompt,input.live_slots),
    definitions:input.guidance.iter().map(|item|Definition{id:item.id.clone(),kind:item.kind,body:item.body.clone()}).collect(),
@@ -451,7 +463,7 @@ async fn provider_smoke()->Result<Vec<Value>> {
     json!({"type":"function_call_output","call_id":"smoke-call","output":"public fixture result"}),
     json!({"role":"developer","content":"current live guidance"})],tools:vec![json!({"name":"z_read"}),json!({"name":"a_read"})]};
   #[cfg(feature="linked-context")]let result=webagent_provider_projection::project(&input)?;
-  #[cfg(feature="live-context")]let result:ResultV1=smoke_reply(&process,&mut pid,"offline-provider-smoke",&input,"projection",webagent_provider_contracts::validate_result).await?;
+  #[cfg(feature="live-context")]let result:ResultV1=smoke_reply(&process,&mut pid,"offline-provider-smoke",&input,"projection",&smoke_implementation(std::path::Path::new("."),PROJECTION)?,webagent_provider_contracts::validate_result).await?;
   webagent_provider_contracts::validate_result(&input,&result)?;
   let subscription=provider==ProviderIdV1::OpenaiSubscription;
   let expected=ResultV1::Projected{version:1,projection:ProjectionV1{provider,
@@ -1028,4 +1040,23 @@ pub(crate) fn background_failure_retry_ms()->Option<u64> {
   }).await.unwrap();
   app.stop.cancel();tokio::time::timeout(Duration::from_secs(1),service).await.unwrap().unwrap();
  }
+}
+
+/// A compatible implementation generation changes proof identity without linking its crate.
+#[cfg(test)]
+#[test]
+fn offline_smoke_uses_frozen_descriptor_versions() {
+ let root=tempfile::tempdir().unwrap();
+ let path=root.path().join("plugins/engine").join(ASSETS).join("component.json");
+ std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+ let mut descriptor:Value=serde_json::from_slice(&std::fs::read("plugins/engine/context-assets/component.json").unwrap()).unwrap();
+ for version in ["0.1.1","0.2.7"] {
+  descriptor["implementation_version"]=json!(version);
+  std::fs::write(&path,serde_json::to_vec(&descriptor).unwrap()).unwrap();
+  assert_eq!(smoke_implementation(root.path(),ASSETS).unwrap(),version);
+ }
+ descriptor["implementation_version"]=json!("");
+ std::fs::write(&path,serde_json::to_vec(&descriptor).unwrap()).unwrap();
+ assert!(smoke_implementation(root.path(),ASSETS).is_err());
+ assert!(smoke_implementation(root.path(),"../unregistered").is_err());
 }

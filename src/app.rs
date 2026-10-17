@@ -234,7 +234,7 @@ fn public_code_index_retrieval(run: &Value) -> Value {
 // Project existing public run fields and fixed host component-pause metadata without private context.
 fn public_run(run: &Value) -> Value {
     json!({"id":run["id"],"session_id":run["session_id"],"status":run["status"],"error":run["error"],
-        "component_pause":if run["status"]=="paused"&&run["component_pause"]["version"]==1&&matches!(run["component_pause"]["component"].as_str(),Some(crate::engine_components::CONTEXT|crate::engine_components::BACKGROUND)) {json!({"version":1,"component":run["component_pause"]["component"],"reason":"component_unavailable"})}else{Value::Null},
+        "component_pause":if run["status"]=="paused"&&run["component_pause"]["version"]==1&&run["component_pause"]["component"].as_str().is_some_and(crate::engine_components::working_component) {json!({"version":1,"component":run["component_pause"]["component"],"reason":"component_unavailable"})}else{Value::Null},
         "code_index_retrieval":public_code_index_retrieval(run),
         "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],
         "attachments":run["attachments"].as_array().cloned().unwrap_or_default(),
