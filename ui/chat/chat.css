@@ -1,7 +1,7 @@
 @import url('/v3-ui/chat/controls/session-dropdown/session-dropdown.css');
 /* V3 chat baseline, paired with /v3-ui/chat/chat.html. Shared v2 app CSS remains the base. */
 #chat-messages{position:absolute!important;inset:0!important;width:100%;height:100%;min-height:0;overflow:auto;padding:0!important}
-#chat-messages-inner{box-sizing:border-box;flex:0 0 auto;min-height:100%;width:100%;max-width:var(--v3-content-max-width,100%)!important;margin-inline:auto;padding:var(--v3-chat-header-clearance,100px) 14px calc(var(--v3-chat-footer-clearance,180px) + var(--v3-tail-gap,0px))!important}
+#chat-messages-inner{box-sizing:border-box;flex:0 0 auto;min-height:100%;width:100%;max-width:var(--v3-content-max-width,100%)!important;margin-inline:auto;padding:var(--v3-chat-header-clearance,100px) 0 calc(var(--v3-chat-footer-clearance,180px) + var(--v3-tail-gap,0px))!important}
 /* Composer geometry is exclusively the canonical v2 shared CSS + chat_ui.json. */
 #composer{display:contents}
 #chat-panel #chat-input{white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:hidden;overflow-y:auto}
