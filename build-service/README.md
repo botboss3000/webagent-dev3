@@ -469,6 +469,48 @@ normal full-ceiling admission and the same kernel/cleanup evidence. It builds
 or deploys no application artifact. New controls use the operator channel;
 native application tool schemas are unchanged.
 
+### Standalone Rust feature checks
+
+Use standalone checks to catch feature-specific imports and cfg errors before a
+full optimized build. The canonical decision rule and agent workflow are in
+[Codebase Admin: Early Rust feature checks](../plugins/abilities/Administrator/codebase_admin/codebase_admin.skill.md#early-rust-feature-checks).
+
+| feature_profile | Fixed compile recipe |
+| --- | --- |
+| omitted or default | cargo check --locked --offline |
+| live | cargo check --locked --offline --no-default-features --features live-context |
+
+The default profile preserves existing workspace defaults. Nondefault profiles
+apply only to check=check; live is rejected for test and resource_probe. Other
+profile names and arbitrary Cargo flags are unsupported. The live profile
+requires enforced resource admission.
+
+From the v3 checkout on the server, replace the uppercase placeholders with the
+owned task ID, its fresh input digest, and a unique stable request ID:
+
+~~~sh
+WEBAGENT_BUILD_CONFIG=/etc/webagent/development/build-service.json \
+python3 -B /home/ar/webagent-dev3/build-service/buildctl.py check TASK_ID \
+  --expected INPUT_SHA256 --request-id LIVE_CHECK_ID \
+  --feature-profile live --timeout 600
+~~~
+
+Run the companion check with --feature-profile default and a different request
+ID against the same unchanged inputs. The operator broker API accepts the same
+selection as feature_profile on build_work action=check. The in-app native tool
+schema does not yet expose this field; use the authorized operator surface.
+
+The selected profile is recorded in job status and check results and binds the
+durable request signature. Reusing a request ID for another profile is rejected.
+A queued/running receipt is not success: inspect its existing job until completed
+with the expected profile and input digest. Reconcile uncertain calls before
+retrying; edits or stale inputs require fresh affected checks.
+
+Checks retain isolated source capture, ownership, input-integrity validation,
+compiler ceilings and resource admission. They do not deploy, promote source or
+start documentation/index maintenance. They supplement applicable tests and
+optimized linked/live equivalence; release gates still apply.
+
 ### Bounded review ledger capacity
 
 The root-owned installation field code_index_ledger_max_bytes bounds the shared
