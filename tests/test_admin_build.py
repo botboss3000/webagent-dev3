@@ -1895,18 +1895,34 @@ class RunnerSpaceTests(unittest.TestCase):
 
     def test_preflight_accepts_adequate_space_without_pruning(self):
         runner = host.Runner()
-        with patch.object(host.shutil, "disk_usage", return_value=type("Usage", (), {"free": host.MIN_SEQUENCE_FREE})()), \
+        with patch.dict(host.CONFIG, {"scheduler": {}}), \
+                patch.object(host.shutil, "disk_usage", return_value=type("Usage", (), {"free": host.MIN_SEQUENCE_FREE})()), \
                 patch.object(runner, "command") as command:
             self.assertEqual(host.MIN_SEQUENCE_FREE, runner.prepare_build_space())
         command.assert_not_called()
 
     def test_preflight_rejects_inadequate_space_without_pruning(self):
         runner = host.Runner()
-        with patch.object(host.shutil, "disk_usage", return_value=type("Usage", (), {"free": host.MIN_SEQUENCE_FREE - 1})()), \
+        with patch.dict(host.CONFIG, {"scheduler": {}}), \
+                patch.object(host.shutil, "disk_usage", return_value=type("Usage", (), {"free": host.MIN_SEQUENCE_FREE - 1})()), \
                 patch.object(runner, "command") as command:
-            with self.assertRaisesRegex(ValueError, "needs 16 GiB free"):
+            with self.assertRaisesRegex(ValueError, "needs 5 GiB free"):
                 runner.prepare_build_space()
         command.assert_not_called()
+
+
+    def test_whole_build_uses_protected_disk_floor_at_exact_boundary(self):
+        """The JSON floor governs initial admission; no fixed 16 GiB gate remains."""
+        runner = host.Runner()
+        self.assertEqual(host.MIN_SEQUENCE_FREE, 5 * 1024 ** 3)
+        for minimum in (5 * 1024 ** 3, 6 * 1024 ** 3):
+            with patch.dict(host.CONFIG, {"scheduler": {"disk_min_free_bytes": minimum}}), \
+                    patch.object(host.shutil, "disk_usage", return_value=type("Usage", (), {"free": minimum})()):
+                self.assertEqual(runner.prepare_build_space(), minimum)
+            with patch.dict(host.CONFIG, {"scheduler": {"disk_min_free_bytes": minimum}}), \
+                    patch.object(host.shutil, "disk_usage", return_value=type("Usage", (), {"free": minimum - 1})()):
+                with self.assertRaisesRegex(ValueError, f"needs {minimum // (1024 ** 3)} GiB free"):
+                    runner.prepare_build_space()
 
 
 if __name__ == "__main__":

@@ -250,7 +250,7 @@ MAX_LOG = 1024 * 1024
 PUBLIC_LOG = 16 * 1024
 MAX_CONTEXT = 128 * 1024 * 1024
 MIN_DEPLOY_FREE = 8 * 1024 * 1024 * 1024
-MIN_SEQUENCE_FREE = 16 * 1024 * 1024 * 1024
+MIN_SEQUENCE_FREE = 5 * 1024 * 1024 * 1024
 
 _release_file = (_module_root / "release.py"
                  if str(__file__).startswith("/proc/self/fd/") else Path(__file__).with_name("release.py"))
@@ -1618,8 +1618,10 @@ class Runner:
         return free
 
     def prepare_build_space(self):
-        # Require room for both images before compiling or changing containers.
-        return self.check_space(MIN_SEQUENCE_FREE)
+        # Honor the protected free-space floor here too. Individual phases still
+        # reserve their additional measured/compiler/package demand separately.
+        minimum = CONFIG.get("scheduler", {}).get("disk_min_free_bytes", MIN_SEQUENCE_FREE)
+        return self.check_space(minimum)
 
     def cargo_task(self, source, check_dir, task, timeout):
         # Full Rust tests intentionally edit and restore their manifest-local
@@ -3265,7 +3267,7 @@ class Broker:
         # must match protected installation. Worker, policy and app changes still build.
         review_modules={"buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
         allowed={"v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
-                 "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py",
+                 "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
         if not trusted.get("local_caller") or not changed or not set(changed)<=allowed:return False
