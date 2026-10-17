@@ -60,7 +60,7 @@ pub(crate) async fn lane_selection(
         .map_err(|_| conflict("Connect the required model provider"))?;
     Ok((selection, tokens))
 }
-// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Ephemeral media caller prepares pure projection before session/model admission; Config: engine controls and provider descriptor fence dispatch. No media answer enters durable history.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/interface_version","/implementation_version","/limits"]}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Ephemeral media caller prepares pure projection before session/model admission; Config: engine controls and provider descriptor fence dispatch. No media answer enters durable history.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled","/revision"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/interface_version","/implementation_version","/limits"]}],"opportunities":[]}}
 /// Return bounded private media text under session-epoch supervision and a 90-second deadline.
 /// Calls CallDraft::prepare before admission; fences current model/component authority and the first network poll, then discards deltas.
 pub(crate) fn lane_answer<'a>(

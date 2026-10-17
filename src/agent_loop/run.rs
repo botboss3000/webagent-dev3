@@ -297,6 +297,7 @@ pub(crate) async fn execute_run(
     crate::engine_components::release_run(&run_key).await;
     result
 }
+/// Advance one claimed run generation, rebuilding current context before model calls and retaining host authority over tool execution and publication.
 async fn execute_run_inner(app:App,id:String,generation:String,cancel:CancellationToken)->Result<()> {
     // Bind actor authority from the sealed run even when recovery/direct callers
     // supply a storage-owner App. Conversation ownership never supplies identity.

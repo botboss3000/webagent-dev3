@@ -23,7 +23,7 @@ backend change is warranted by the reported busy-loop hypothesis.
 | Component | Group | Boundary | Reason | State |
 | --- | --- | --- | --- | --- |
 | Context input/accounting/compaction safety and DTOs | shared-contracts | webagent-context-contracts library | Stable shared policy and host validation; changes rebuild actual consumers | Extracted; full workspace suite and optimized foundation linked/live release verified |
-| Context assembly algorithm | engine-loop | webagent-context-assembly library | Replaceable implementation; live core excludes this dependency | Extracted; baseline linked/live equivalence verified; compatible live 0.1.1 independently published |
+| Context assembly algorithm | engine-loop | webagent-context-assembly library | Replaceable implementation; live core excludes this dependency | Deployed; interface 2 / implementation 0.2.0 accounts synthetic context growth; earlier compatible 0.1.1 pilot retained as history |
 | Context service | engine-loop | webagent-context-service executable, one supervised process per execution descriptor generation | Independent live updates over inherited private pipes | Real confinement, host integration, replacement, withdrawal and restored retained work verified |
 | Background planning contracts | shared-contracts | webagent-background-contracts version-2 library | Bounded metadata and independent host validation | Deployed; full workspace and optimized equivalence verified |
 | Background selection policy | engine-loop | webagent-background-dispatch 0.2.0 library | Independent implementation replacement, linked stable calls | Deployed; configurable timing, paired idle/claim measurements, live withdrawal/restoration and process reuse verified |
@@ -32,6 +32,12 @@ backend change is warranted by the reported busy-loop hypothesis.
 | Boot recovery selection | engine-loop | webagent-boot-supervisor library | Healthy idle has no deadline; stable build calls directly | Deployed; stable/live equality and independent 0.1.1 replacement verified |
 | Boot service wrapper | engine-loop | webagent-boot-service over webagent-engine-service | Confined reusable private pipes | Replacement, withdrawal retention, selective restoration and exact artifact reuse verified |
 | Boot event, persistence and Docker authority | engine-loop | Protected boot_host.py plus fixed webagent-boot-host launch authority | Host owns permissions, credentials, desired/uncertain state and effects | Deployed; existing pre-exec sandbox reused and verified |
+| Conversation asset contract | shared-contracts | webagent-assets-contracts version-1 library | Validate transitions, safe anchors, receipts and exact host reconstruction | Deployed; compaction/Undo retention and stale unload fences verified |
+| Conversation asset planning | engine-loop | webagent-context-assets plus webagent-assets-service | Pure selection/layout planning with encrypted persistence retained in host | Independent 0.1.1 replacement, withdrawal and selective restoration verified |
+| Capability contract | shared-contracts | webagent-capability-contracts version-1 library | Validate exact current bodies, inclusion causes and schema order | Deployed; complete guidance and current-source checks verified |
+| Capability composition | engine-loop | webagent-capability-context plus webagent-capability-service | Current host-authorized prompt/guidance composition | Independent 0.1.1 replacement and lifecycle verified |
+| Provider projection contract | shared-contracts | webagent-provider-contracts version-1 library | Validate native profiles and reference-only source coverage | Deployed; endpoint/credential authority remains host-owned |
+| Provider projection planning | engine-loop | webagent-provider-projection plus webagent-provider-service | Replace formatting policy behind a bounded pure interface | Independent 0.1.1 replacement and lifecycle verified |
 | API, loop scheduling, authority, storage and recovery | engine-loop | Existing main application | Keep run ownership, credentials, persistence and permission checks authoritative | Remain embedded |
 | Existing abilities and module hosts | module-host | Existing supported native/isolated paths | Preserve tool identities, grants and publication behavior | Unchanged by extraction |
 
@@ -67,7 +73,7 @@ Record cold and incremental compile/link/test duration, cache reuse, rebuild fan
 Completion entry: the first pilot and agreed runtime acceptance are complete. Exact release/commit evidence and remaining measurement limits are recorded below. Historical investigation notes retain their status at the time; the completion evidence supersedes earlier pending notes.
 
 ## Maintenance rule for subsequent work
-Before substantial engine changes, consult this ledger and assess whether extraction helps the concrete change. Record the component hierarchy, crate/process boundary, build/runtime requirements, rationale, rejected alternatives, progress, measurements, release evidence and next step. Keep the ledger and affected repository/publication guidance current. Complete affected Code Index/documentation review while the broker task is open. A future extraction is an assessed opportunity, not mandatory adjacent cleanup.
+Before substantial engine changes, consult this ledger and assess whether extraction helps the concrete change. Record the component hierarchy, crate/process boundary, build/runtime requirements, rationale, rejected alternatives, progress, measurements, release evidence and next step. Keep the ledger and affected repository/publication guidance current. After implementation publication and user review, complete documentation and Code Index work in a separate maintenance task/activity tied to exact release identities. Keep the implementation task closed; indexing and reviews do not gate its completion. A future extraction is an assessed opportunity, not mandatory adjacent cleanup.
 
 ### Verification notes, 2026-10-13
 
@@ -479,3 +485,44 @@ The package boundary permits independent implementation updates; a crate split
 alone would not. Shared interface changes require coordinated publication.
 The candidate retains the previous runtime as rollback material; installation,
 measured timings and API/loop adoption remain subject to release acceptance.
+
+## Live context completion — 2026-10-16
+
+The context-assets, capability-context and provider-projection components are
+implemented, independently replaceable and deployed. Their version-1 contracts
+separate pure policy from host-owned authorization, credentials, encrypted state
+and run/publication authority. Each has a linked library and reusable confined
+service wrapper, its own declared build closure and limits, and no runtime
+component dependencies. Context assembly uses interface 2 for exact synthetic
+provider-growth accounting. See [live model-call context](context-assembly.md)
+for the complete execution route, configuration and operator guidance.
+
+Rejected alternatives: storing loaded skill text permanently would hide live
+updates and lose freshness after compaction; persisting synthetic instructions
+as chat would duplicate them during replay; one provider-neutral message format
+would discard native placement/reasoning rules. Linking implementation constants
+into the live host would cross the independent replacement boundary. Read validated
+frozen descriptors for offline proof identity instead. Stability of unchanged
+bytes/order is verified; provider cache-hit rates and workload speedups are not.
+
+Main release 8a7c2d23-c936-4471-bbeb-d4aa8624aa83 / commit
+4a8a1c558927a457b3ee3cad9548dda3db7e3719 shipped the implementation.
+Independent compatible replacement 94bbf01f-d3b1-443e-82b0-d4477b6c57aa /
+014c9481787a7455c6a641471bd54456b1226afb retained API/loop/gate identities.
+Actual descriptor withdrawal/restoration passed separately for all three new
+components, preserving input and selectively restoring eligible work.
+
+Final correction be5e2765-66c3-4c12-b88c-6108b6475d3d /
+69389a4942ee9ed40ac84b508d02bf4c9df0c09c passed 941 tests with five ignored,
+default/live early checks, both optimized proofs, and unchanged input checks.
+It reused all six verified service artifacts. Live prompt/skill refresh,
+compaction, unload, conversation retention, public pause markers, exactly one
+final reply after restoration, and manual/cancel negative controls passed.
+API, loop and gate were healthy; source promotion and the exact commit were
+verified; all source reservations were released. No push was performed.
+
+The full separately published Code Verification skill remains unchanged.
+Evidence: build-jobs/coordination/checks/0aff5b55dbbd9e373305015ef269e15defce4a2cdeed1d9997d330640c824c1e/context-lifecycle/.
+Documentation/index/review follow-up was separately authorized on 2026-10-17.
+Historical pending notes above retain their meaning at the time and are
+superseded by this completion evidence; index/review status needs its own receipts.

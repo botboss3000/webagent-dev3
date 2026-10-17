@@ -95,6 +95,7 @@ class FakeRunner:
             self.blob = context("changed")
         return "sha256:" + ("a" if role == "api" else "b") * 64, "TOKEN=NEVER-EXPOSE-THIS\nAuthorization: Bearer hidden\n"
 
+    # Simulate candidate-image admission before any consumer replacement effects.
     def preflight_deploy_images(self,images,job_id):
         self.calls.append(("image_preflight",dict(images)))
         if getattr(self,"missing_deploy_role",None):
@@ -1439,6 +1440,7 @@ class BuildTests(unittest.TestCase):
         self.runner.block.set()
         self.wait(submitted)
 
+    # Require unavailable candidate images to fail preflight while preserving both original consumers.
     def assert_missing_candidate_preserves_consumers(self,role):
         built=self.wait(self.build())
         before=copy.deepcopy(self.runner.containers)
@@ -1451,9 +1453,11 @@ class BuildTests(unittest.TestCase):
         self.assertFalse(any(call[0]in {"stop","rename","create","start","activate_assets","promote"}for call in self.runner.calls))
         self.assertTrue(any(call[0]=="image_preflight"for call in self.runner.calls))
 
+    # Cover API-image absence at the preflight boundary without stopping either consumer.
     def test_missing_candidate_api_image_keeps_both_original_consumers_running(self):
         self.assert_missing_candidate_preserves_consumers("api")
 
+    # Cover loop-image absence at the preflight boundary without stopping either consumer.
     def test_missing_candidate_loop_image_keeps_both_original_consumers_running(self):
         self.assert_missing_candidate_preserves_consumers("loop")
 

@@ -1599,6 +1599,7 @@ async fn agent_loop_gates_tool_and_denial_continues_without_worker() {
 }
 
 #[tokio::test]
+/// Verify a catalog change revokes a loaded ability before its already queued tool can execute.
 async fn catalog_change_revokes_loaded_ability_before_pending_tool() {
     use axum::routing::post;
     let (_root, mut app) = fixture().await;
@@ -1675,6 +1676,7 @@ fn native_ability_frames<'a>(request: &'a Value, ability: &str) -> Vec<&'a str> 
 }
 
 #[tokio::test]
+/// Verify compaction preserves chat history, measures the dispatched envelope, and keeps call-scoped mode guidance outside durable history.
 async fn long_run_compacts_before_model_and_keeps_full_message_history() {
     use axum::routing::post;
     let (root, mut app) = fixture().await;
@@ -2933,6 +2935,7 @@ async fn state_inspection_is_authenticated_policy_controlled_and_session_bounded
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 #[tokio::test]
+/// Verify native ability loading adds current guidance only to model-call frames and keeps state inspection scoped to the active session.
 async fn agent_discovers_ability_then_inspects_only_its_current_session() {
     use axum::routing::post;
 
@@ -3081,6 +3084,7 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
 }
 
 #[tokio::test]
+/// Verify dispatch reloads current prompt slots even when a queued message retained an older admission snapshot.
 async fn prompt_slot_instructions_reload_after_a_message_is_accepted() {
     use axum::routing::post;
 
@@ -3926,6 +3930,7 @@ async fn session_mode_api_requires_auth_and_csrf_and_is_session_scoped() {
 }
 
 #[tokio::test]
+/// Verify switching to read-only invalidates prior write approval and denies the queued write at execution.
 async fn read_only_revokes_old_approval_and_denies_write_at_execution() {
     use axum::routing::post;
 
@@ -4124,6 +4129,7 @@ async fn publication_commits_one_terminal_message_and_private_receipt() {
 
 
 #[tokio::test]
+/// Verify uncertain-checkpoint reconciliation persists the accepted result idempotently and publishes only one final reply.
 async fn uncertain_write_recovery_decisions_preserve_effects_and_publish_once() {
     use axum::routing::post;
     let (root, mut app) = fixture().await;
@@ -4237,6 +4243,7 @@ fn late_known_write_result_resolves_cancel_and_shutoff_without_replay() {
 }
 
 #[tokio::test]
+/// Verify each call receives its current mode suffix while durable transcript and base instructions remain free of that call-scoped contribution.
 async fn current_mode_contribution_changes_per_call_without_entering_history() {
     use axum::routing::post;
     let (_root, mut app) = fixture().await;
@@ -5715,6 +5722,7 @@ async fn ability_revocation_keeps_parallel_write_outcomes_uncertain() {
 }
 
 #[tokio::test]
+/// Verify manifest removal withdraws its schemas and projected guidance during an active run without persisting guidance in history.
 async fn removed_manifest_withdraws_cached_schemas_and_guidance_within_run() {
     use axum::routing::post;
     let (root, mut app) = fixture().await;
@@ -5782,6 +5790,7 @@ async fn removed_manifest_withdraws_cached_schemas_and_guidance_within_run() {
 }
 
 #[tokio::test]
+/// Verify withdrawal during credential retrieval rebuilds a safe request, while cancellation prevents dispatch and final publication.
 async fn bundle_withdrawal_during_credentials_rebuilds_before_provider_dispatch() {
     use axum::routing::post;
     for cancelled in [false,true] {
@@ -7240,6 +7249,7 @@ async fn visibility_native_call(app:&App,sid:&str,id:&str,name:&str,args:Value)-
     result
 }
 #[tokio::test]
+/// Verify native skill discovery identifies supplied guidance and selected skill text refreshes after simulated compaction and edits.
 async fn native_skill_catalog_marks_supplied_guidance_and_rebuilds_selected_after_compaction() {
     let (_root,app)=fixture().await;
     visibility_fixture_base_access(&app).await;

@@ -950,8 +950,8 @@
         },
         {
           "path": "src/agent_loop/run.rs",
-          "start_line": 1035,
-          "end_line": 1080
+          "start_line": 1036,
+          "end_line": 1081
         },
         {
           "path": "crates/context-service/src/main.rs",
@@ -1292,6 +1292,142 @@
           }
         ],
         "opportunities": []
+      }
+    },
+    {
+      "id": "context-permanent-assets",
+      "aliases": [
+        "permanent selections",
+        "context unload",
+        "compaction selectors"
+      ],
+      "purpose": "Host-owned encrypted selectors and safe call-only layout. Config: config/engine-components.json -> disabled, revision (source seeds data-root controls); plugins/engine/context-assets/component.json -> limits; config/prompts.json -> base_instructions, closing_reporting, jev_guidance.",
+      "locations": [
+        {
+          "path": "src/context/assets.rs",
+          "start_line": 80,
+          "end_line": 103,
+          "purpose": "Restore identities before current-source assembly"
+        },
+        {
+          "path": "src/storage/context_assets.rs",
+          "start_line": 96,
+          "end_line": 119,
+          "purpose": "Revision-fenced encrypted host commit"
+        },
+        {
+          "path": "crates/context-assets/src/lib.rs",
+          "start_line": 43,
+          "end_line": 66,
+          "purpose": "Safe permanent anchors and temporary placement",
+          "configuration": {
+            "status": "not_applicable",
+            "rationale": "The pure planner preserves safe anchors and schema order; host-resolved configuration is input, never authority."
+          }
+        },
+        {
+          "path": "plugins/abilities/Core/base/context_assets_adapter.rs",
+          "start_line": 61,
+          "end_line": 84,
+          "purpose": "Native scoped list and unload"
+        }
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "config/engine-components.json",
+            "pointers": [
+              "/disabled",
+              "/revision"
+            ]
+          },
+          {
+            "path": "plugins/engine/context-assets/component.json",
+            "pointers": [
+              "/limits"
+            ]
+          },
+          {
+            "path": "config/prompts.json",
+            "pointers": [
+              "/base_instructions",
+              "/closing_reporting",
+              "/jev_guidance"
+            ]
+          }
+        ],
+        "opportunities": []
+      }
+    },
+    {
+      "id": "capability-composition",
+      "aliases": [
+        "live prompts",
+        "live skills",
+        "current main instructions"
+      ],
+      "purpose": "Resolve current full guidance and schemas each call. Config: config/prompts.json -> base_instructions, closing_reporting, jev_guidance; saved agent slots remain host records.",
+      "locations": [
+        {
+          "path": "src/context/assets.rs",
+          "start_line": 131,
+          "end_line": 154,
+          "purpose": "Current published prompt defaults plus saved slots"
+        },
+        {
+          "path": "crates/capability-context/src/lib.rs",
+          "start_line": 15,
+          "end_line": 38,
+          "purpose": "Pure current-body composition and schema order"
+        }
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "config/prompts.json",
+            "pointers": [
+              "/base_instructions",
+              "/closing_reporting",
+              "/jev_guidance"
+            ]
+          }
+        ],
+        "opportunities": []
+      }
+    },
+    {
+      "id": "provider-projection",
+      "aliases": [
+        "provider formatting",
+        "DeepSeek replay",
+        "native instruction placement"
+      ],
+      "purpose": "Pure reference plans preserve installed provider transport, replay and instruction placement without endpoint or credential authority.",
+      "locations": [
+        {
+          "path": "crates/provider-contracts/src/lib.rs",
+          "start_line": 98,
+          "end_line": 133,
+          "purpose": "Installed provider-specific wire profiles"
+        },
+        {
+          "path": "crates/provider-projection/src/lib.rs",
+          "start_line": 13,
+          "end_line": 67,
+          "purpose": "Pure ordered source-reference planning"
+        },
+        {
+          "path": "src/models/provider/mod.rs",
+          "start_line": 52,
+          "end_line": 75,
+          "purpose": "Host-selected provider contract binding"
+        }
+      ],
+      "configuration": {
+        "status": "not_applicable",
+        "rationale": "Installed transport identity, reasoning isolation and exact source reconstruction are protocol invariants."
       }
     }
   ]

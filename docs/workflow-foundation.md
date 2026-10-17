@@ -113,8 +113,12 @@ effective policy revision is a digest of resolved settings, not an independent
 counter. Live changes are read at loop boundaries; the current limit is checked
 again before publication. Tool denials remain mandatory. Named Auto mode waives
 only per-tool Ask checkpoints after live denial checks; other modes retain
-approval semantics. Existing model selection and base instructions are pinned at
-admission; live revocation still applies before dispatch.
+approval semantics. Model selection remains pinned at admission. Base prompts, saved agent slots,
+selected guidance and permitted schemas resolve from current sources at each
+model-call boundary; dispatch rechecks their source and authority fingerprints.
+Permanent selection identities survive compaction and restart without freezing
+their text. See [live model-call context](context-assembly.md). Live revocation
+still applies before dispatch.
 
 ## Manager message admission
 

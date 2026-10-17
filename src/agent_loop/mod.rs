@@ -2,6 +2,7 @@
 use super::*;
 mod run;
 pub(crate) use run::{execute_run, settle_abandoned_interrupt, settle_followup_interrupt};
+/// Stage explicit selection effects before clearing pending call identity; the host Store commits them with the canonical tool result.
 pub(super) fn append_tool(run: &mut Value, result: &Value) -> Result<()> {
     workflow::record_tool_result(run, result)?;
     let previous_tools=run["selected_tools"].clone();

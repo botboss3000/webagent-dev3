@@ -432,6 +432,7 @@ fn system_summary_input(context: &loop_runtime::Context, selection: &provider::P
     validate_system_summary_input(context,selection,&input,provider::DEFAULT_INSTRUCTIONS,max_bytes)?;
     Ok(input)
 }
+/// Validate the complete summary envelope, including current instructions, against the System model and workflow byte ceilings.
 fn validate_system_summary_input(context:&loop_runtime::Context,selection:&provider::ProviderSelection,input:&[Value],instructions:&str,max_bytes:usize)->Result<()> {
     #[derive(serde::Serialize)]
     struct Envelope<'a>{instructions:&'a str,tools:[Value;0],input:&'a [Value]}
@@ -511,6 +512,7 @@ mod system_budget_tests {
         assert!(system_summary_input(&context,&standard,"small".into(),8).is_err());
     }
 }
+/// Seed installation tool permissions; live account, agent and session gates still constrain execution.
 fn policy_default() -> Value {
     let mut policy=json!({"version":1,"rules":{"list_abilities":"allow","load_ability":"allow","list_skills":"allow","load_skill":"allow","context_assets":"allow","get_time":"allow","get_date":"allow","calculate":"allow","read_attachment":"allow","search_this_session":"allow","read_own_prompt":"allow","web_search":"allow","get_weather":"allow","maps_geocode":"allow","file_list":"allow","file_read":"allow","file_search":"allow","state_inspect":"allow","prompt_slot_read":"allow","prompt_slot_write":"require_approval","file_write":"require_approval","file_edit":"require_approval","workspace_seed":"require_approval","source_review":"allow","source_patch":"require_approval","promotion_propose":"allow","shell":"require_approval","python":"require_approval"}});
     for name in ["task_status","task_wait","task_cancel"] {policy["rules"][name]=json!("allow");}

@@ -7,8 +7,10 @@ engine=importlib.util.module_from_spec(spec);spec.loader.exec_module(engine)
 spec=importlib.util.spec_from_file_location("engine_executor",ROOT/"build-service/executor.py")
 executor=importlib.util.module_from_spec(spec);spec.loader.exec_module(executor)
 class EngineTests(unittest.TestCase):
+    # Construct the coordinated context interface-v2 descriptor used by publication fixtures.
     def descriptor(self):
         return {"schema_version":1,"id":"context-assembly","group":"engine-loop","interface_version":2,"implementation_version":"0.2.0","operation":"context.prepare","modes":["live","linked"],"runtime_requirements":[],"build":{"package":engine.BINARY,"source_inputs":engine.SOURCE_INPUTS,"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/"+engine.BINARY,"limits":{"max_request_bytes":16777216,"max_response_bytes":16777216,"timeout_ms":30000,"max_concurrency":1}}
+    # Preserve structured proof identity in artifact files despite diagnostic-log redaction.
     def test_structured_smoke_artifact_survives_true_environment_redaction(self):
         import test_admin_build as fixtures
         proof={"mode":"linked","equivalence":True,"interface_version":2,"prepared":[{},{}],"background_prepared":[{},{}],"boot_prepared":[{},{}],"assets_prepared":[{},{}],"capability_prepared":[{},{}],"provider_prepared":[{},{}],"service_started":False};raw=json.dumps(proof)
@@ -47,12 +49,14 @@ class EngineTests(unittest.TestCase):
         self.assertIn("v3/crates/context-assembly/src/lib.rs",worker.linked_dependencies(Path("linked-target"),files));self.assertEqual(worker.compiler_dependencies.call_args.args[0],Path("linked-target"))
         worker.compiler_dependencies.return_value={"src/main.rs"}
         with self.assertRaisesRegex(ValueError,"attestation"):worker.linked_dependencies(Path("linked-target"),files)
+    # Require live-service lifecycle evidence and exact prepared-case equivalence with linked mode.
     def test_live_optimized_smoke_requires_lifecycle_and_equal_prepared_cases(self):
         linked={"mode":"linked","equivalence":True,"interface_version":2,"prepared":[{"envelope":"fixture1"},{"envelope":"fixture2"}],"background_prepared":[{},{}],"boot_prepared":[{},{}],"assets_prepared":[{},{}],"capability_prepared":[{},{}],"provider_prepared":[{},{}],"service_started":False}
         live={**linked,"mode":"live","service_reused":True,"service_drained":True}
         self.assertEqual(executor.Executor.live_smoke(json.dumps(live),linked)["mode"],"live")
         for changed in ({**live,"service_reused":False},{**live,"service_drained":False},{**live,"prepared":[{},{}]}):
             with self.assertRaises(ValueError):executor.Executor.live_smoke(json.dumps(changed),linked)
+    # Reject incomplete or wrong-mode proofs before accepting linked equivalence.
     def test_optimized_linked_proof_rejects_live_mode_and_failed_equivalence(self):
         self.assertEqual(executor.Executor.linked_smoke('{"mode":"linked","equivalence":true,"interface_version":2,"prepared":[{},{}],"background_prepared":[{},{}],"boot_prepared":[{},{}],"assets_prepared":[{},{}],"capability_prepared":[{},{}],"provider_prepared":[{},{}],"service_started":false}')["mode"],"linked")
         for value in ({"mode":"live","equivalence":True},{"mode":"linked","equivalence":False},{"mode":"linked"}):
@@ -79,6 +83,7 @@ class EngineTests(unittest.TestCase):
             runtime=worker.phase.call_args_list[-1].args[5]
             self.assertEqual(runtime,["cargo","test","--locked","--offline","engine_components::","--","--test-threads=1","--nocapture"])
             self.assertNotIn("engine_components::",worker.phase.call_args_list[1].args[5])
+    # Bind compiler memory evidence to its container and reject unenforced limits or OOM outcomes.
     def test_cap_requires_kernel_enforcement_and_oom_cannot_pass(self):
         import threading,uuid
         from unittest.mock import Mock
@@ -120,6 +125,7 @@ class EngineTests(unittest.TestCase):
         broker=object.__new__(fixtures.host.Broker);broker.runner=types.SimpleNamespace(secrets=[]);broker._queue_preflight=Mock(return_value=None);broker.jobs={};broker.active=None;broker.active_ui=None
         job={"job_id":"fixture","status":"running","resource_waiting":{"phase":"test","reason":"headroom","deadline_at":1234,"estimate_bytes":1024}}
         self.assertEqual(broker._view(job)["resource_waiting"],job["resource_waiting"])
+    # Permit hot replacement only when both current consumers attest live execution.
     def test_actual_execution_mode_gates_hot_engine_replacement(self):
         import test_admin_build as fixtures
         from unittest.mock import Mock
@@ -172,6 +178,7 @@ class EngineTests(unittest.TestCase):
             self.assertEqual((folder/'artifact'/engine.BINARY).read_bytes(),b'fixture artifact');self.assertEqual(json.loads((folder/'component.json').read_bytes())["artifact_sha256"],sha)
             binary.write_bytes(b'tampered')
             with self.assertRaisesRegex(ValueError,"changed"):engine.seal(generation,[output],root)
+    # Accept identical staging retries and reject a changed source behind the same generation.
     def test_staged_generation_retries_preserve_source_and_sealed_artifact(self):
         import uuid
         spec=importlib.util.spec_from_file_location("engine_release",ROOT/"build-service/release.py")
