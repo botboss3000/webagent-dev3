@@ -1,0 +1,1288 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-10-17T15:31:06.556978+00:00",
+  "source_commit": "31d27d813e5a1d5d9d61a9a4e64aa4d9f5beb998",
+  "purpose": "Recreate non-secret v3 broker/host support after SSD swap; no live runtime state",
+  "files": [
+    {
+      "path": "/etc/webagent/development/build-service.json",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 1962,
+      "sha256": "55c029c0432976e952194c6bdf6e6e1be48fe43f0a198af5db2aa1619f4de97c",
+      "content": "{\"api_container\": \"webagent-dev-v3\", \"api_pids_limit\": 1024, \"app_gid\": 1100, \"app_uid\": 1100, \"bind_address\": \"100.112.23.15\", \"checkout_root\": \"/home/ar/webagent-dev3\", \"code_index_ledger_max_bytes\": 805306368, \"gate_container\": \"webagent-dev-v3-gate\", \"install_root\": \"/var/lib/webagent/development/build-service\", \"instance\": \"development\", \"loop_container\": \"webagent-dev-v3-loop\", \"port\": 8081, \"public_origin\": \"https://dev.webagent.live\", \"runtime_root\": \"/home/ar/webagent-dev3/runtime/build\", \"scheduler\": {\"allow_live_memory_increase\": true, \"compiler_memory_default_bytes\": 5368709120, \"compiler_memory_max_bytes\": 10737418240, \"compiler_memory_min_bytes\": 1073741824, \"component_indexing\": true, \"concurrent_ui_preparation\": true, \"disk_cleanup_batch\": 4, \"disk_grace_seconds\": 7200, \"disk_min_free_bytes\": 5368709120, \"documentation_review_order\": \"after_deployment\", \"max_parked\": 2, \"max_phases\": 4, \"max_ui_preparations\": 2, \"memory_pressure_percent\": 5, \"mode\": \"enforce\", \"orphan_after_seconds\": 300, \"package_cache_download_workers\": 4, \"package_cache_enabled\": true, \"package_cache_max_age_seconds\": 604800, \"package_cache_max_bytes\": 8589934592, \"package_cache_prepare_memory_bytes\": 3221225472, \"package_cache_retention_seconds\": 604800, \"package_ram_bytes\": 9999998976, \"package_tmpfs_bytes\": 7999995904, \"post_deployment_indexing\": true, \"reserve_bytes\": 805306368, \"reserve_percent\": 15, \"task_aware_cleanup\": true, \"ui_file_reservations\": true, \"ui_test_image\": \"sha256:e4fbe3af7fbf8d2e0562be677b42e26d8245382f2dacd1ef826badf883b07961\"}, \"service_account\": \"ar\", \"service_dir\": \"/var/lib/webagent/development/build-service/releases/b0ef7367215418087cac31e7ee23568d0de04de1cb6936d5c42decf5f96fe010\", \"source_owner\": \"ar\", \"state_root\": \"/home/ar/webagent-dev3/build-jobs\", \"worker_control\": \"/var/lib/webagent-v3-build-worker/control.sock\", \"worker_gid\": 1000, \"worker_uid\": 1000, \"workspace_root\": \"/home/ar/webagent-dev3/workspaces\"}\n"
+    },
+    {
+      "path": "/etc/systemd/system/webagent-build-development.service",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 461,
+      "sha256": "e6c5004564ea8ae400608e0987f028df3af34217cd40f07bcf751f8906612f99",
+      "content": "[Unit]\nDescription=WebAgent build service development\nAfter=docker.service\nRequires=docker.service\n\n[Service]\nType=simple\nEnvironment=WEBAGENT_BUILD_CONFIG=/etc/webagent/development/build-service.json\nExecStart=/usr/bin/python3 -I /var/lib/webagent/development/build-service/releases/b0ef7367215418087cac31e7ee23568d0de04de1cb6936d5c42decf5f96fe010/bootstrap.py --foreground\nRestart=on-failure\nTimeoutStopSec=90\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n"
+    },
+    {
+      "path": "/etc/systemd/system/webagent-boot-development.service",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 620,
+      "sha256": "597e6957a91bfde05ddb6ca6199edafaa6755695f74727fa4293dcd0d1b3b27b",
+      "content": "[Unit]\nDescription=WebAgent v3 event-driven boot recovery\nAfter=docker.service\n\n[Service]\nType=simple\nEnvironment=WEBAGENT_BUILD_CONFIG=/etc/webagent/development/build-service.json\nExecStart=/usr/bin/python3 -B /var/lib/webagent/development/build-service/releases/4f75e28348cc88b0c52f0abf2ea720ba92d0f3a3f45ceedfa44da84c6085658d/boot_host.py\nRestart=on-failure\nRestartSec=5\nUMask=0022\nNoNewPrivileges=true\nRestrictAddressFamilies=AF_UNIX\nProtectSystem=strict\nProtectHome=read-only\nReadWritePaths=/var/lib/webagent/development/boot-supervisor\nMemoryMax=128M\nTasksMax=32\nCPUQuota=50%\n\n[Install]\nWantedBy=multi-user.target\n"
+    },
+    {
+      "path": "/etc/systemd/system/webagent-console-power.service",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 583,
+      "sha256": "74179a165538c4fb9880534cda0afc247f3be43bee4f2f41c8c168e99632ae2a",
+      "content": "[Unit]\nDescription=WebAgent physical console monitor power saving\nAfter=getty@tty1.service\nConditionPathExists=/dev/tty1\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/sh -c 'exec /usr/bin/setterm --term linux --blank 1 --powersave powerdown --powerdown 1 < /dev/tty1 > /dev/tty1'\nExecStop=/bin/sh -c 'exec /usr/bin/setterm --term linux --blank 0 --powersave off --powerdown 0 < /dev/tty1 > /dev/tty1'\nExecStop=/bin/sh -c 'exec /usr/bin/setterm --term linux --blank poke < /dev/tty1 > /dev/tty1'\nTimeoutStartSec=10\nTimeoutStopSec=10\n\n[Install]\nWantedBy=multi-user.target\n"
+    },
+    {
+      "path": "/etc/systemd/system/webagent-dev-artifact-prune.service",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 292,
+      "sha256": "8e33f5731ffd182d31ec9752bcae5c36ec15a498f2969916b59e6153199987c1",
+      "content": "[Unit]\nDescription=Prune verified terminal v3 development artifacts\nAfter=docker.service\nRequires=docker.service\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nUser=ar\nExecStart=/usr/bin/python3 -B /usr/local/sbin/v3-artifact-prune --apply\nNice=19\nIOSchedulingClass=idle\nTimeoutStartSec=300\n"
+    },
+    {
+      "path": "/etc/systemd/system/webagent-dev-artifact-prune.timer",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 193,
+      "sha256": "5bcad6ae3014ab72c40d92598b04c657341585723a567d743ea3faabd17d6da9",
+      "content": "[Unit]\nDescription=Periodic WebAgent development build artifact cleanup\n\n[Timer]\nOnBootSec=15min\nOnUnitActiveSec=10min\nRandomizedDelaySec=1min\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n"
+    },
+    {
+      "path": "/etc/systemd/system/webagent-dev-artifact-prune.path",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 269,
+      "sha256": "e7b000ff78a39817ce11d14118b2c2c71834f4fb8d8ed15b7df4036236bf901c",
+      "content": "[Unit]\nDescription=Prune development artifacts when v3 build receipts change\n\n[Path]\nPathChanged=/home/ar/webagent-dev3/build-jobs\nPathChanged=/home/ar/webagent-dev3/build-jobs/coordination\nUnit=webagent-dev-artifact-prune.service\n\n[Install]\nWantedBy=multi-user.target\n"
+    },
+    {
+      "path": "/etc/systemd/system/docker-disk-guard.service",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 217,
+      "sha256": "bcb8373e51daf9fbcd63cddbef67e7e1ba7500f4e24986634de46c4752f7e828",
+      "content": "[Unit]\nDescription=Docker disk usage guard (prune when / is nearly full)\nRequires=docker.service\nAfter=docker.service\n\n[Service]\nType=oneshot\nExecStart=/usr/local/sbin/docker-disk-guard\nNice=19\nIOSchedulingClass=idle\n"
+    },
+    {
+      "path": "/etc/systemd/system/docker-disk-guard.timer",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 173,
+      "sha256": "7c1b2ed21374caf9183b87d3d7e5b5799d63cce683df19e9ae10cef779547663",
+      "content": "[Unit]\nDescription=Periodic Docker disk usage guard\n\n[Timer]\nOnBootSec=10min\nOnUnitActiveSec=15min\nRandomizedDelaySec=2min\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n"
+    },
+    {
+      "path": "/etc/systemd/system/getty@tty1.service.d/autologin.conf",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 83,
+      "sha256": "f193f3c0c5bedfca6a06e8b2bb8e52eef49db27ae6f71611f229216e22eff19d",
+      "content": "[Service]\nExecStart=\nExecStart=-/usr/sbin/agetty --autologin ar --noclear %I $TERM\n"
+    },
+    {
+      "path": "/etc/systemd/system/webagent-boot-development.service.d/20-network-ready.conf",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 515,
+      "sha256": "2dbc80b1f18bdf9db0ed4f99616c3e0ecf8fb94018e7bc8e012aa313392b9de8",
+      "content": "[Unit]\nWants=network-online.target tailscaled.service\nAfter=network-online.target tailscaled.service\n\n[Service]\nRestrictAddressFamilies=\nRestrictAddressFamilies=AF_UNIX AF_NETLINK\n# Only startup waits: Docker binds the API to this host-owned Tailscale address.\n# No network configuration is changed and no readiness poll remains after boot.\nExecStartPre=/usr/bin/timeout 120 /bin/sh -c 'until /usr/sbin/ip -o -4 addr show dev tailscale0 2>/dev/null | /usr/bin/grep -Fq \"inet 100.112.23.15/\"; do /bin/sleep 1; done'\n"
+    },
+    {
+      "path": "/etc/systemd/system/webagent-boot-development.service.d/30-protected-release.conf",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 182,
+      "sha256": "638434148dc4eaf76bcbeb46c35f61228b6d9951472873d837e94c331964bacf",
+      "content": "[Service]\nExecStart=\nExecStart=/usr/bin/python3 -B /var/lib/webagent/development/build-service/releases/df19695b49f40878a239f944aefd86a2939ee7ae4df8ca0f798034f71361d6a7/boot_host.py\n"
+    },
+    {
+      "path": "/usr/local/sbin/v3-artifact-prune",
+      "uid": 0,
+      "gid": 0,
+      "mode": 493,
+      "size": 5037,
+      "sha256": "42ac37164b5b0a26f42e0ccd39b4ec4804463c693b962652d3b19f409cfe67a7",
+      "content": "#!/usr/bin/env python3\n\"\"\"V3-only development artifact retention. Never operates Docker resources.\"\"\"\nimport argparse, fcntl, hashlib, json, os, pathlib, re, shutil, subprocess, time\nROOT = pathlib.Path(\"/home/ar/webagent-dev3/build-jobs\")\nPIN = \"4f605f3b-4444-4447-a511-3a9d4b9677df\"\nAGE = 7200\nDONE = {\"completed\", \"cancelled\"}\ndef load(path):\n    return json.loads(path.read_text())\ndef fingerprint(root):\n    paths = [root/\"coordination/items.json\", *sorted(root.glob(\"*.json\"))]\n    return [(str(p), hashlib.sha256(p.read_bytes()).hexdigest()) for p in paths]\ndef compiler_active():\n    rows = subprocess.check_output([\"ps\", \"-eo\", \"comm=\"], text=True).splitlines()\n    if any(x.strip() in {\"cargo\",\"rustc\",\"rustdoc\",\"buildx\"} for x in rows):\n        return True\n    names = subprocess.check_output([\"docker\",\"ps\",\"--format\",\"{{.Names}}\"],text=True).splitlines()\n    if any(re.search(r\"(?:v3|codex).*(?:build|check|perf|acceptance|test)\", n) for n in names):\n        return True\n    return False\ndef plan(root, items, jobs, mounts, now):\n    protected = [pathlib.Path(m).resolve() for m in mounts]\n    def blocked(path):\n        p=path.resolve()\n        return path.is_symlink() or any(p==m or p in m.parents or m in p.parents for m in protected)\n    def old(path):\n        return path.exists() and now-path.stat().st_mtime >= AGE\n    def terminal(t):\n        j=jobs.get(t.get(\"job_id\"), {})\n        return t.get(\"job_id\") != PIN and (t.get(\"status\")==\"abandoned\" or\n            t.get(\"status\")==\"closed\" and j.get(\"status\") in DONE)\n    out=[]\n    for key,t in items.items():\n        if not re.fullmatch(r\"[0-9a-f]{64}\",key) or not terminal(t): continue\n        finished = t.get(\"finished_at\", jobs.get(t.get(\"job_id\"), {}).get(\"finished_at\", 0))\n        if now - finished < AGE: continue\n        for path in [root/\"coordination/trees\"/key,root/\"checks\"/key]:\n            if old(path) and not blocked(path):out.append(path)\n    # Keep two newest successful release jobs, as well as all mounted paths.\n    completed=sorted((j for j in jobs.values() if j.get(\"status\")==\"completed\"),key=lambda j:j.get(\"created_at\",0),reverse=True)\n    recent={j[\"job_id\"] for j in completed[:2]}\n    for key,j in jobs.items():\n        path=root/key\n        if key==PIN or key in recent or j.get(\"status\") not in DONE or now-j.get(\"finished_at\",0)<AGE:continue\n        if old(path) and not blocked(path):out.append(path)\n    # Preserve current UI selection and two newest immutable asset releases.\n    assets=root/\"ui-assets/releases\"\n    if assets.exists():\n        folders=sorted((p for p in assets.iterdir() if p.is_dir() and not p.is_symlink()),key=lambda p:p.stat().st_mtime,reverse=True)\n        for path in folders[2:]:\n            j=jobs.get(path.name,{})\n            if j.get(\"status\")==\"completed\" and old(path) and not blocked(path):out.append(path)\n    return out\ndef main():\n    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument(\"--apply\",action=\"store_true\");args=ap.parse_args()\n    with (ROOT/\".v3-prune.lock\").open(\"a\") as lock:\n        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)\n        if compiler_active():print(\"deferred: compiler or development build process active\");return\n        before=fingerprint(ROOT);items=load(ROOT/\"coordination/items.json\")\n        jobs={p.stem:load(p) for p in ROOT.glob(\"*.json\")}\n        if any(j.get(\"status\") in {\"queued\",\"running\",\"needs_decision\"} for j in jobs.values()):\n            print(\"deferred: queued, active or decision-waiting build\");return\n        containers=json.loads(subprocess.check_output([\"docker\",\"inspect\",\"webagent-dev-v3\",\"webagent-dev-v3-loop\",\"webagent-dev-v3-gate\"],text=True))\n        if any(c[\"State\"].get(\"Health\",{}).get(\"Status\")!=\"healthy\" for c in containers):raise RuntimeError(\"v3 runtime must be healthy\")\n        mounts=[m[\"Source\"] for c in containers for m in c[\"Mounts\"] if m[\"Source\"].startswith(str(ROOT))]\n        current=ROOT/\"ui-assets/current\"\n        if current.exists():mounts.append(str(current.resolve()))\n        # Broad /live-checkout mount is intentionally not a blanket artifact pin.\n        candidates=plan(ROOT,items,jobs,mounts,time.time())\n        total=0;removed=[]\n        for path in candidates:\n            size=int(subprocess.check_output([\"du\",\"-sk\",str(path)],text=True).split()[0])*1024\n            if args.apply:\n                if before!=fingerprint(ROOT) or compiler_active():raise RuntimeError(\"inputs or compiler state changed; cleanup stopped\")\n                shutil.rmtree(path)\n            total+=size;removed.append({\"path\":str(path),\"bytes\":size})\n        report={\"applied\":args.apply,\"count\":len(removed),\"GiB\":round(total/1024**3,3),\"artifacts\":removed,\"preserved_job\":PIN}\n        print(json.dumps({k:v for k,v in report.items() if k!=\"artifacts\"}))\n        if args.apply:\n            folder=ROOT/\"operator-pruning\";folder.mkdir(exist_ok=True)\n            (folder/(time.strftime(\"%Y%m%dT%H%M%SZ\",time.gmtime())+\".json\")).write_text(json.dumps(report,indent=2)+\"\\n\")\nif __name__==\"__main__\":main()\n"
+    },
+    {
+      "path": "/usr/local/sbin/docker-disk-guard",
+      "uid": 0,
+      "gid": 0,
+      "mode": 493,
+      "size": 1616,
+      "sha256": "c59d94c92675a19ef7e7bd555091460359449033a184a17855a738594f2ce0bc",
+      "content": "#!/usr/bin/python3 -I\n\"\"\"Stable root-owned timer entrypoint; resolve only the installed development guard.\"\"\"\nimport json,os,re,stat\nfrom pathlib import Path\ndef main():\n    \"\"\"Never execute checkout code or accept caller-controlled cleanup paths.\"\"\"\n    if os.geteuid()!=0:raise PermissionError(\"Root guard required\")\n    config=Path(\"/etc/webagent/development/build-service.json\")\n    cursor=config\n    while cursor!=cursor.parent:\n        s=cursor.lstat()\n        if stat.S_ISLNK(s.st_mode)or s.st_uid!=0 or s.st_mode&0o022:raise PermissionError(\"Protected config path required\")\n        cursor=cursor.parent\n    value=json.loads(config.read_bytes());directory=value.get(\"service_dir\",\"\")\n    if not re.fullmatch(r\"/var/lib/webagent/development/build-service/releases/[a-f0-9]{64}\",directory):raise PermissionError(\"Fixed development installation required\")\n    if not value.get(\"scheduler\",{}).get(\"task_aware_cleanup\",False):\n        print(json.dumps({\"applied\":False,\"deferred\":\"Task-aware cleanup is disabled\"}));return\n    target=Path(directory)/\"docker_retention.py\"\n    if not target.exists()and not target.is_symlink():\n        print(json.dumps({\"applied\":False,\"deferred\":\"Coordinated V3 retention not installed; unknown and required artifacts preserved\"}))\n        return\n    cursor=target\n    while cursor!=cursor.parent:\n        s=cursor.lstat()\n        if stat.S_ISLNK(s.st_mode)or s.st_uid!=0 or s.st_mode&0o022:raise PermissionError(\"Protected guard path required\")\n        cursor=cursor.parent\n    os.execv(\"/usr/bin/python3\",[\"python3\",\"-I\",str(target),\"--apply\"])\nif __name__==\"__main__\":main()\n"
+    },
+    {
+      "path": "/usr/local/bin/webagent",
+      "uid": 0,
+      "gid": 0,
+      "mode": 493,
+      "size": 487,
+      "sha256": "60b4a0850c1686522787e1e984d05794cbb8d75e28d1177456773507d9dd2aa3",
+      "content": "#!/usr/bin/env bash\n# WebAgent boot dashboard launcher. Exit 2 tells the session wrapper to\n# fall back to the legacy whiptail menu (no UI possible).\nset -u\nVENV=/home/ar/webagent-boot/.venv/bin/python\nAPP=/home/ar/webagent-boot/app.py\n\n[ -x \"$VENV\" ] || exit 2\n[ -r \"$APP\" ] || exit 2\n[ -t 0 ] || exit 2\ncase \"${TERM:-}\" in\n  dumb|\"\") exit 2 ;;\nesac\n\n\"$VENV\" \"$APP\" \"$@\"\nrc=$?\ncase \"$rc\" in\n  0|20|21) exit \"$rc\" ;;\n  *) exit 2 ;;   # unexpected dashboard failure -> fallback menu\nesac\n"
+    },
+    {
+      "path": "/usr/local/bin/webagent-dashboard",
+      "uid": 0,
+      "gid": 0,
+      "mode": 493,
+      "size": 487,
+      "sha256": "60b4a0850c1686522787e1e984d05794cbb8d75e28d1177456773507d9dd2aa3",
+      "content": "#!/usr/bin/env bash\n# WebAgent boot dashboard launcher. Exit 2 tells the session wrapper to\n# fall back to the legacy whiptail menu (no UI possible).\nset -u\nVENV=/home/ar/webagent-boot/.venv/bin/python\nAPP=/home/ar/webagent-boot/app.py\n\n[ -x \"$VENV\" ] || exit 2\n[ -r \"$APP\" ] || exit 2\n[ -t 0 ] || exit 2\ncase \"${TERM:-}\" in\n  dumb|\"\") exit 2 ;;\nesac\n\n\"$VENV\" \"$APP\" \"$@\"\nrc=$?\ncase \"$rc\" in\n  0|20|21) exit \"$rc\" ;;\n  *) exit 2 ;;   # unexpected dashboard failure -> fallback menu\nesac\n"
+    },
+    {
+      "path": "/usr/local/bin/webagent-boot-dashboard",
+      "uid": 0,
+      "gid": 0,
+      "mode": 493,
+      "size": 487,
+      "sha256": "60b4a0850c1686522787e1e984d05794cbb8d75e28d1177456773507d9dd2aa3",
+      "content": "#!/usr/bin/env bash\n# WebAgent boot dashboard launcher. Exit 2 tells the session wrapper to\n# fall back to the legacy whiptail menu (no UI possible).\nset -u\nVENV=/home/ar/webagent-boot/.venv/bin/python\nAPP=/home/ar/webagent-boot/app.py\n\n[ -x \"$VENV\" ] || exit 2\n[ -r \"$APP\" ] || exit 2\n[ -t 0 ] || exit 2\ncase \"${TERM:-}\" in\n  dumb|\"\") exit 2 ;;\nesac\n\n\"$VENV\" \"$APP\" \"$@\"\nrc=$?\ncase \"$rc\" in\n  0|20|21) exit \"$rc\" ;;\n  *) exit 2 ;;   # unexpected dashboard failure -> fallback menu\nesac\n"
+    },
+    {
+      "path": "/usr/local/bin/webagent-boot-menu",
+      "uid": 0,
+      "gid": 0,
+      "mode": 493,
+      "size": 6283,
+      "sha256": "d0b4c664b8250e46c8e4035c4332ab2525170644c1768778c9a7882f3595c291",
+      "content": "#!/usr/bin/env bash\n\nset -u\n\nTUNNEL_CONTAINER=\"cloudflared-webagent-named\"\nAUTO_RUN_SECONDS=\"${WEBAGENT_BOOT_TIMEOUT_SECONDS:-30}\"\nif ! [[ \"$AUTO_RUN_SECONDS\" =~ ^[1-9][0-9]*$ ]]; then\n  AUTO_RUN_SECONDS=30\nfi\n\nstart_webagent=true\nstart_tunnel=true\ndestination=\"console\"\ndeadline=$((SECONDS + AUTO_RUN_SECONDS))\n\nuse_defaults() {\n  start_webagent=true\n  start_tunnel=true\n  destination=\"console\"\n}\n\nnetwork_summary() {\n  local route interface address gateway connection internet tailscale tunnel\n\n  route=\"$(ip -4 route show default 2>/dev/null | head -n 1)\"\n  interface=\"$(awk '{for (i=1; i<=NF; i++) if ($i == \"dev\") {print $(i+1); exit}}' <<<\"$route\")\"\n  gateway=\"$(awk '{for (i=1; i<=NF; i++) if ($i == \"via\") {print $(i+1); exit}}' <<<\"$route\")\"\n\n  if [[ -n \"$interface\" ]]; then\n    address=\"$(ip -4 -o addr show dev \"$interface\" scope global 2>/dev/null | awk 'NR == 1 {sub(/\\/.*/, \"\", $4); print $4}')\"\n    if [[ -d \"/sys/class/net/$interface/wireless\" ]]; then\n      connection=\"Wi-Fi $interface\"\n    else\n      connection=\"$interface\"\n    fi\n    connection+=\" | ${address:-no IPv4}\"\n    [[ -n \"$gateway\" ]] && connection+=\" | gateway $gateway\"\n  else\n    connection=\"Disconnected - no default route\"\n  fi\n\n  if curl --fail --silent --max-time 2 --output /dev/null https://www.cloudflare.com/ 2>/dev/null; then\n    internet=\"Online\"\n  else\n    internet=\"Offline or unreachable\"\n  fi\n\n  if [[ \"$(systemctl is-active tailscaled 2>/dev/null)\" == \"active\" ]]; then\n    tailscale=\"Connected | $(tailscale ip -4 2>/dev/null | head -n 1)\"\n  else\n    tailscale=\"Stopped\"\n  fi\n\n  if [[ \"$(docker inspect --format '{{.State.Running}}' \"$TUNNEL_CONTAINER\" 2>/dev/null)\" == \"true\" ]]; then\n    tunnel=\"Running | webagent.live\"\n  else\n    tunnel=\"Stopped (selected to start)\"\n  fi\n\n  printf 'Live network status\\n Network:    %s\\n Internet:   %s\\n Tailscale:  %s\\n Cloudflare: %s' \\\n    \"$connection\" \"$internet\" \"$tailscale\" \"$tunnel\"\n}\n\nmark_check() {\n  if \"$1\"; then printf '[x]'; else printf '[ ]'; fi\n}\n\nmark_radio() {\n  if [[ \"$destination\" == \"$1\" ]]; then printf '(o)'; else printf '( )'; fi\n}\n\nwhile true; do\n  status_text=\"$(network_summary)\"\n  remaining=$((deadline - SECONDS))\n  if ((remaining <= 0)); then\n    use_defaults\n    break\n  fi\n\n  prompt=\"${status_text}\n\nDefaults auto-run in ${remaining} seconds: WebAgent + tunnel + command prompt.\nSelect an item to change it, or choose Run:\"\n\n  selection=\"$(timeout --foreground \"${remaining}s\" whiptail \\\n    --title \"WebAgent Server\" \\\n    --ok-button \"Select\" \\\n    --cancel-button \"Terminal\" \\\n    --default-item \"run\" \\\n    --notags \\\n    --menu \"$prompt\" \\\n    24 76 7 \\\n    \"webagent\" \"$(mark_check \"$start_webagent\") Start WebAgent\" \\\n    \"tunnel\" \"$(mark_check \"$start_tunnel\") Start permanent Cloudflare tunnel\" \\\n    \"console\" \"$(mark_radio console) Open command prompt after startup\" \\\n    \"chromium\" \"$(mark_radio chromium) Open Chromium after startup\" \\\n    \"xfce\" \"$(mark_radio xfce) Open XFCE desktop after startup\" \\\n    \"run\" \"Run selected options\" \\\n    3>&1 1>&2 2>&3)\"\n  menu_status=$?\n\n  if [[ $menu_status -eq 124 ]]; then\n    use_defaults\n    break\n  elif [[ $menu_status -ne 0 ]]; then\n    exit 10\n  fi\n\n  case \"$selection\" in\n    webagent)\n      if $start_webagent; then start_webagent=false; else start_webagent=true; fi\n      ;;\n    tunnel)\n      if $start_tunnel; then start_tunnel=false; else start_tunnel=true; fi\n      ;;\n    console|chromium|xfce)\n      destination=\"$selection\"\n      ;;\n    run)\n      break\n      ;;\n  esac\ndone\n\nmessages=()\nerrors=()\ndocker_ready=false\nwebagent_ready=false\nwebagent_healthy=false\n\nif $start_webagent || $start_tunnel; then\n  for _ in $(seq 1 30); do\n    if docker info >/dev/null 2>&1; then\n      docker_ready=true\n      break\n    fi\n    sleep 1\n  done\n  if ! $docker_ready; then\n    errors+=(\"Docker did not become ready within 30 seconds.\")\n  fi\nfi\n\n# The permanent tunnel routes webagent.live to this WebAgent instance, so\n# selecting it implicitly starts WebAgent even if that service was cleared.\nif $docker_ready && { $start_webagent || $start_tunnel; }; then\n  if ! docker container inspect webagent >/dev/null 2>&1; then\n    errors+=(\"The WebAgent container does not exist.\")\n  elif [[ \"$(docker inspect --format '{{.State.Running}}' webagent 2>/dev/null)\" == \"true\" ]]; then\n    webagent_ready=true\n    messages+=(\"WebAgent was already running.\")\n  elif docker start webagent >/dev/null; then\n    webagent_ready=true\n    if $start_tunnel && ! $start_webagent; then\n      messages+=(\"WebAgent started because the tunnel requires it.\")\n    else\n      messages+=(\"WebAgent started.\")\n    fi\n  else\n    errors+=(\"WebAgent could not be started. Run: docker logs webagent\")\n  fi\nfi\n\nif $webagent_ready && { $start_webagent || $start_tunnel; }; then\n  for _ in $(seq 1 45); do\n    if curl --fail --silent --max-time 2 \"http://localhost:8080/health\" >/dev/null; then\n      webagent_healthy=true\n      break\n    fi\n    sleep 1\n  done\n  if ! $webagent_healthy; then\n    errors+=(\"WebAgent did not become healthy within 45 seconds.\")\n  fi\nfi\n\nif $start_tunnel; then\n  if ! $webagent_healthy; then\n    errors+=(\"The permanent tunnel requires a healthy WebAgent container.\")\n  elif ! docker container inspect \"$TUNNEL_CONTAINER\" >/dev/null 2>&1; then\n    errors+=(\"The permanent Cloudflare tunnel container does not exist.\")\n  elif [[ \"$(docker inspect --format '{{.State.Running}}' \"$TUNNEL_CONTAINER\" 2>/dev/null)\" == \"true\" ]]; then\n    messages+=(\"Permanent Cloudflare tunnel was already running.\")\n  elif docker start \"$TUNNEL_CONTAINER\" >/dev/null; then\n    messages+=(\"Permanent Cloudflare tunnel started for webagent.live.\")\n  else\n    errors+=(\"Permanent Cloudflare tunnel could not be started.\")\n  fi\nfi\n\nif ! $start_webagent && ! $start_tunnel; then\n  messages+=(\"No server services were selected.\")\nfi\n\nmkdir -p \"$HOME/.cache\"\n{\n  printf 'WebAgent boot run: %s\\n' \"$(date --iso-8601=seconds)\"\n  printf '%s\\n' \"${messages[@]}\"\n  if ((${#errors[@]})); then\n    printf '%s\\n' \"${errors[@]}\"\n  fi\n} >\"$HOME/.cache/webagent-boot.log\"\n\nif ((${#errors[@]})); then\n  whiptail --title \"WebAgent startup problem\" --msgbox \"$(printf '%s\\n' \"${errors[@]}\")\" 14 76\n  exit 1\nfi\n\ncase \"$destination\" in\n  chromium) exit 20 ;;\n  xfce) exit 21 ;;\n  *) exit 0 ;;\nesac\n"
+    },
+    {
+      "path": "/usr/local/bin/webagent-boot-session",
+      "uid": 0,
+      "gid": 0,
+      "mode": 493,
+      "size": 1621,
+      "sha256": "7ac163ef4564df1959f26d3222f7c91d80d51e81ccceaf29448b68d8d346a96e",
+      "content": "#!/usr/bin/env bash\n# Boot session for the physical console (tty1).\n#\n# First screen is the persistent boot dashboard: it auto-starts and\n# supervises the WebAgent stacks. Leaving it into Chromium or XFCE starts\n# that interface; closing it returns here to the dashboard again. Quitting\n# to the command prompt drops to a shell (the next fresh login reopens the\n# dashboard). If the dashboard cannot run at all the legacy whiptail menu\n# takes over as a fallback.\nset -u\n\nLOG=\"$HOME/.cache/webagent-boot.log\"\nDASH=/usr/local/bin/webagent-boot-dashboard\nMENU=/usr/local/bin/webagent-boot-menu\nCHROMIUM=/usr/local/bin/webagent-chromium-session\n\nlaunch_gui() {\n  case \"$1\" in\n    20) clear\n        echo \"Opening Chromium. Close it to return to the boot console.\"\n        startx \"$CHROMIUM\" -- :0 ;;\n    21) clear\n        echo \"Opening XFCE. Log out to return to the boot console.\"\n        startx /usr/bin/startxfce4 -- :0 ;;\n  esac\n}\n\nrun_dashboard() {\n  if [ -x \"$DASH\" ]; then\n    \"$DASH\"\n  else\n    return 2\n  fi\n}\n\n# First screen: dashboard, or the legacy menu if the dashboard cannot run.\nrc=0\nrun_dashboard\nrc=$?\nif [ \"$rc\" -eq 2 ]; then\n  clear\n  echo \"Boot dashboard unavailable - falling back to the classic menu.\"\n  echo\n  \"$MENU\"\n  rc=$?\nfi\n\n# GUI sessions return to the dashboard when the user closes them.\nwhile [ \"$rc\" -eq 20 ] || [ \"$rc\" -eq 21 ]; do\n  launch_gui \"$rc\"\n  rc=0\n  run_dashboard\n  rc=$?\n  if [ \"$rc\" -eq 2 ]; then\n    clear\n    echo \"Boot dashboard unavailable - returning to the command prompt.\"\n    break\n  fi\ndone\n\nclear\nif [ -f \"$LOG\" ]; then\n  tail -n 30 \"$LOG\"\n  echo\nfi\nexec /bin/bash -l\n"
+    },
+    {
+      "path": "/usr/local/bin/webagent-chromium-session",
+      "uid": 0,
+      "gid": 0,
+      "mode": 493,
+      "size": 438,
+      "sha256": "ec87ca9b0fb404d93a649ceb1a01249e78e6db8033014b3c3811e7859ad10953",
+      "content": "#!/usr/bin/env bash\n\nset -u\n\nWEBAGENT_URL=\"http://localhost:8080/app\"\n\nif [[ -z \"${DBUS_SESSION_BUS_ADDRESS:-}\" ]]; then\n  exec dbus-run-session -- \"$0\"\nfi\n\nxfwm4 --replace >/dev/null 2>&1 &\nwindow_manager_pid=$!\nsleep 1\n\n/snap/bin/chromium --disable-background-mode --new-window \"$WEBAGENT_URL\"\nchromium_status=$?\n\nkill \"$window_manager_pid\" >/dev/null 2>&1 || true\nwait \"$window_manager_pid\" 2>/dev/null || true\nexit \"$chromium_status\"\n"
+    },
+    {
+      "path": "/etc/profile.d/webagent-console-menu.sh",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "size": 319,
+      "sha256": "a35de391b1532be009f588e75ab410d8aac44583adf632aee4ddc1428c44713d",
+      "content": "# Launch the physical-server boot menu only for the automatic tty1 login.\nif [[ \"$(tty 2>/dev/null)\" == \"/dev/tty1\" \\\n      && -z \"${SSH_CONNECTION:-}\" \\\n      && -z \"${DISPLAY:-}\" \\\n      && -z \"${WEBAGENT_CONSOLE_SESSION:-}\" ]]; then\n  export WEBAGENT_CONSOLE_SESSION=1\n  exec /usr/local/bin/webagent-boot-session\nfi\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/_append.py",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "size": 8094,
+      "sha256": "96716573ec62acc99ce02a964b1c531e6c7124eb153dea774274113484855fb0",
+      "content": "p = \"/home/ar/webagent-boot/app.py\"\ns = open(p).read()\n\nanchor = \"def main() -> int:\"\nclasses = '''class PasswordModal(Screen):\n    \"\"\"Masked password prompt for a secured network.\"\"\"\n\n    CSS = \"\"\"\n    #pw_title { height: 1; background: #003333; color: #9fd8d8; }\n    Input { width: 40; margin: 1 0; }\n    \"\"\"\n\n    def __init__(self, ssid: str):\n        super().__init__()\n        self.ssid = ssid\n\n    def compose(self) -> ComposeResult:\n        yield Static(f\" Password for {self.ssid} \", id=\"pw_title\")\n        yield Input(password=True, id=\"pw\")\n        with Horizontal():\n            yield Button(\"Connect\", id=\"pw-ok\")\n            yield Button(\"Cancel\", id=\"pw-cancel\")\n\n    def on_button_pressed(self, event: Button.Pressed) -> None:\n        if event.button.id == \"pw-ok\":\n            self.dismiss((self.ssid, self.query_one(\"#pw\", Input).value))\n        elif event.button.id == \"pw-cancel\":\n            self.dismiss(None)\n\n    def on_input_submitted(self, event) -> None:\n        self.dismiss((self.ssid, event.value))\n\n\nclass NetworkScreen(Screen):\n    \"\"\"Wi-Fi and Ethernet control surface, pushed from the boot screen.\"\"\"\n\n    BINDINGS = [\n        Binding(\"escape\", \"back\", \"back\", show=False),\n        Binding(\"q\", \"back\", \"back\", show=False),\n        Binding(\"w\", \"wifi_mode\", \"wifi\", show=False),\n        Binding(\"e\", \"eth_mode\", \"ethernet\", show=False),\n        Binding(\"r\", \"refresh\", \"rescan\", show=False),\n        Binding(\"d\", \"disconnect\", \"disconnect\", show=False),\n        Binding(\"f\", \"forget\", \"forget\", show=False),\n        Binding(\"o\", \"radio\", \"radio\", show=False),\n    ]\n\n    CSS = \"\"\"\n    #net_title { height: 1; background: #003333; color: #9fd8d8; }\n    #net_status { height: 3; color: #b0b0b0; }\n    #net_list { height: 1fr; }\n    #net_hint { height: 1; color: #6b6b6b; }\n    ListItem { padding: 0 0; }\n    \"\"\"\n\n    def __init__(self, netio: NetIO):\n        super().__init__()\n        self.netio = netio\n        self.mode = \"wifi\"      # \"wifi\" | \"eth\"\n        self.items: list[dict] = []\n        self.status_data: dict = {}\n        self.wifi_on = True\n        self.conn = \"unknown\"\n        self.wifi_ip = \"\"\n        self.msg = \"\"\n\n    def compose(self) -> ComposeResult:\n        yield Static(\" Network \", id=\"net_title\")\n        yield Static(\"\", id=\"net_status\")\n        yield ListView(id=\"net_list\")\n        yield Static(\" w wifi  e ethernet  enter connect  r rescan  \"\n                     \"d disconnect  f forget  o radio  q back\", id=\"net_hint\")\n\n    def on_mount(self) -> None:\n        self.set_interval(self._auto, 8.0)\n        asyncio.create_task(self._refresh())\n        self.query_one(\"#net_list\", ListView).focus()\n\n    # ---- data --------------------------------------------------------\n    def _load_all(self) -> None:\n        self.status_data = self.netio.status()\n        self.wifi_on = bool(self.status_data.get(\"wifi_on\"))\n        self.conn = self.status_data.get(\"connectivity\", \"unknown\")\n        self.wifi_ip = \"\"\n        if self.mode == \"wifi\":\n            self.items = self.netio.wifi_list()\n            dev = self.netio.wifi_device()\n            if dev:\n                self.wifi_ip = self.netio.device_ip(dev)\n        else:\n            self.items = self.netio.ethernet_devices()\n\n    # ---- rendering ---------------------------------------------------\n    def _item_text(self, it: dict) -> Text:\n        if self.mode == \"wifi\":\n            sig = int(it.get(\"signal\", 0))\n            color = \"green\" if sig >= 60 else (\"yellow\" if sig >= 30 else \"red\")\n            mark = \" * \" if it.get(\"active\") else \"   \"\n            sec = it.get(\"security\") or \"open\"\n            t = Text(f\"{mark}{it.get('ssid', '?'):24s}  {sig:3d}%  {sec}\")\n            t.stylize(color)\n            if it.get(\"active\"):\n                t.stylize(\"bold\")\n            return t\n        else:\n            state = it.get(\"state\", \"?\")\n            color = \"green\" if state == \"connected\" else \"grey62\"\n            t = Text(f\"   {it.get('device', '?'):10s}  {state:12s}  \"\n                     f\"{it.get('ip') or '-':15s}  {it.get('connection', '')}\")\n            t.stylize(color)\n            return t\n\n    def _status_text(self) -> str:\n        head = f\"{'WIFI' if self.mode == 'wifi' else 'ETHERNET'}   \"\n        head += f\"internet {self.conn}\"\n        if self.mode == \"wifi\":\n            head += f\"   radio {'on' if self.wifi_on else 'off'}\"\n        lines = [head]\n        if self.mode == \"wifi\":\n            active = next((x for x in self.items if x.get(\"active\")), None)\n            if active:\n                sec = active.get(\"security\") or \"open\"\n                lines.append(f\"connected: {active['ssid']}  {active['signal']}%  {sec}  {self.wifi_ip}\")\n            else:\n                lines.append(\"not connected\")\n        else:\n            for d in self.items:\n                lines.append(f\"{d['device']}  {d['state']}  {d.get('ip') or '-'}\")\n        if self.msg:\n            lines.append(f\"  {self.msg}\")\n        return \"\\n\".join(lines)\n\n    def _update_status(self) -> None:\n        self.query_one(\"#net_status\", Static).update(self._status_text())\n\n    def _render(self) -> None:\n        self._update_status()\n        lv = self.query_one(\"#net_list\", ListView)\n        lv.clear()\n        for it in self.items:\n            lv.append(ListItem(self._item_text(it)))\n\n    # ---- refresh / modes --------------------------------------------\n    async def _refresh(self) -> None:\n        await asyncio.to_thread(self._load_all)\n        self._render()\n\n    async def _auto(self) -> None:\n        await asyncio.to_thread(self._load_all)\n        self._update_status()\n\n    def action_refresh(self) -> None:\n        asyncio.create_task(self._refresh())\n\n    def action_wifi_mode(self) -> None:\n        self.mode = \"wifi\"\n        self.msg = \"showing wifi networks\"\n        asyncio.create_task(self._refresh())\n\n    def action_eth_mode(self) -> None:\n        self.mode = \"eth\"\n        self.msg = \"showing ethernet devices\"\n        asyncio.create_task(self._refresh())\n\n    def action_back(self) -> None:\n        self.app.pop_screen()\n\n    # ---- actions -----------------------------------------------------\n    def on_list_view_selected(self, event) -> None:\n        asyncio.create_task(self._connect())\n\n    async def _connect(self) -> None:\n        i = self.query_one(\"#net_list\", ListView).index\n        if i is None or i >= len(self.items):\n            return\n        it = self.items[i]\n        if self.mode == \"eth\":\n            up = it.get(\"state\") != \"connected\"\n            ok, msg = await asyncio.to_thread(self.netio.ethernet_set, it[\"device\"], up)\n        else:\n            if it.get(\"security\"):\n                res = await self.app.push_screen(PasswordModal(it[\"ssid\"]))\n                if not res:\n                    return\n                ssid, pw = res\n                ok, msg = await asyncio.to_thread(self.netio.wifi_connect, ssid, pw)\n            else:\n                ok, msg = await asyncio.to_thread(self.netio.wifi_connect, it[\"ssid\"], None)\n        self.msg = msg\n        await self._refresh()\n\n    def action_disconnect(self) -> None:\n        asyncio.create_task(self._disconnect())\n\n    async def _disconnect(self) -> None:\n        if self.mode == \"wifi\":\n            ok, msg = await asyncio.to_thread(self.netio.wifi_disconnect)\n        else:\n            i = self.query_one(\"#net_list\", ListView).index\n            if i is None or i >= len(self.items):\n                return\n            ok, msg = await asyncio.to_thread(self.netio.ethernet_set, self.items[i][\"device\"], False)\n        self.msg = msg\n        await self._refresh()\n\n    def action_forget(self) -> None:\n        asyncio.create_task(self._forget())\n\n    async def _forget(self) -> None:\n        if self.mode != \"wifi\":\n            return\n        i = self.query_one(\"#net_list\", ListView).index\n        if i is None or i >= len(self.items):\n            return\n        ssid = self.items[i][\"ssid\"]\n        ok, msg = await asyncio.to_thread(self.netio.wifi_forget, ssid)\n        self.msg = msg\n        await self._refresh()\n\n    def action_radio(self) -> None:\n        asyncio.c\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/app.py",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "size": 20854,
+      "sha256": "cf2097dcc964bf44955d1858f003c8ffeaf7abcfded14ddddce1681c2c52bb8f",
+      "content": "#!/usr/bin/env python\n\"\"\"app.py - WebAgent boot dashboard (bare-bones Textual console UI).\n\nBoot behaviour: opens on the physical console, immediately starts the\nproduction and development stacks, then supervises them. The screen keeps\nrunning until the user leaves into a command prompt, Chromium or XFCE.\n\"\"\"\nfrom __future__ import annotations\n\nimport asyncio\nimport os\nimport sys\nimport time\n\nfrom textual import events\nfrom textual.app import App, ComposeResult\nfrom textual.binding import Binding\nfrom textual.containers import Horizontal, Vertical\nfrom textual.screen import Screen\nfrom textual.widgets import Button, Input, ListItem, ListView, Static\nfrom rich.text import Text\n\nfrom services import SERVICES, SERVICE_BY_ID\nfrom controller import Controller\nfrom dockerio import Executor\nfrom netio import NetIO\nfrom netscreen import NetworkScreen\nfrom screensaver import ScreensaverScreen\n\nSEV_COLOR = {0: \"green\", 1: \"yellow\", 2: \"red\", 3: \"grey62\"}\nEXIT_CONSOLE = 0\nEXIT_CHROMIUM = 20\nEXIT_XFCE = 21\n\n# The interface rows below the four service rows (numbers 5..9), reachable\n# with up/down or a number key. Each entry is (key, label, action): action\n# runs on Enter/press when the row is selected; None means status-only.\nEXTRAS = [\n    (\"net\", \"Network\", \"action_open_network\"),\n    (\"tailscale\", \"Tailscale\", None),\n    (\"console\", \"Command prompt\", \"action_leave_console\"),\n    (\"xfce\", \"XFCE\", \"action_leave_xfce\"),\n    (\"chromium\", \"Chromium\", \"action_leave_chromium\"),\n]\n\n\nclass ServiceRow(Horizontal):\n    \"\"\"One service: label + status + toggle/restart buttons.\"\"\"\n\n    def __init__(self, spec, *args, **kwargs):\n        self.spec = spec\n        super().__init__(id=f\"row-{spec.id}\", classes=\"row\", *args, **kwargs)\n\n    def compose(self) -> ComposeResult:\n        yield Static(\"\", id=f\"sname-{self.spec.id}\", classes=\"sname\")\n        yield Static(\"\", id=f\"sstatus-{self.spec.id}\", classes=\"sstatus\")\n        tg = Button(\"Stop\", id=f\"tg-{self.spec.id}\")\n        tg.can_focus = False\n        yield tg\n        rs = Button(\"Restart\", id=f\"rs-{self.spec.id}\")\n        rs.can_focus = False\n        yield rs\n\n\nclass ExtraRow(Horizontal):\n    \"\"\"One interface row below the services (Network / Tailscale / leave\n    actions): left label plus a live coloured status on the right, in the\n    same two-column layout as the service rows.\"\"\"\n\n    def __init__(self, index, *args, **kwargs):\n        self.index = index\n        super().__init__(id=f\"er-{index}\", classes=\"row\", *args, **kwargs)\n\n    def compose(self) -> ComposeResult:\n        yield Static(\"\", id=f\"ename-{self.index}\", classes=\"sname\")\n        yield Static(\"\", id=f\"estat-{self.index}\", classes=\"sstatus\")\n\n\nclass LeaveRow(Horizontal):\n    \"\"\"Bottom row of interface buttons.\"\"\"\n\n    def compose(self) -> ComposeResult:\n        yield Button(\"Command prompt\", id=\"leave-console\")\n        yield Button(\"Network\", id=\"leave-network\")\n        yield Button(\"Chromium\", id=\"leave-chromium\")\n        yield Button(\"XFCE\", id=\"leave-xfce\")\n\n\nclass BootApp(App):\n    TITLE = \"WebAgent server\"\n    SUB_TITLE = \"boot console\"\n\n    CSS = \"\"\"\n    Screen { background: #000000; }\n    #titlebar { height: 1; background: #003333; color: #9fd8d8; }\n    #feed { height: 3; color: #b0b0b0; }\n    .row { height: 1; }\n    .sname { width: 29; }\n    .sstatus { width: 30; }\n    .row Button { width: 9; margin: 0 1 0 0; }\n    #leave { height: 1; }\n    #leave Button { width: 18; margin: 0 1 0 0; }\n    #hint { height: 1; color: #6b6b6b; }\n    Button { background: #0f2a3d; color: #cfe8ff; }\n    Button:focus { background: #1b4a6b; }\n    \"\"\"\n\n    BINDINGS = [\n        Binding(\"s\", \"start_selected\", \"start\", show=False),\n        Binding(\"x\", \"stop_selected\", \"stop\", show=False),\n        Binding(\"r\", \"restart_selected\", \"restart\", show=False),\n        Binding(\"space\", \"activate_selected\", \"activate\", show=False),\n        Binding(\"enter\", \"activate_selected\", \"activate\", show=False),\n        Binding(\"up\", \"up\", \"up\", show=False),\n        Binding(\"down\", \"down\", \"down\", show=False),\n        Binding(\"1\", \"pick_1\", \"\", show=False),\n        Binding(\"2\", \"pick_2\", \"\", show=False),\n        Binding(\"3\", \"pick_3\", \"\", show=False),\n        Binding(\"4\", \"pick_4\", \"\", show=False),\n        Binding(\"5\", \"pick_5\", \"\", show=False),\n        Binding(\"6\", \"pick_6\", \"\", show=False),\n        Binding(\"7\", \"pick_7\", \"\", show=False),\n        Binding(\"8\", \"pick_8\", \"\", show=False),\n        Binding(\"9\", \"pick_9\", \"\", show=False),\n        Binding(\"ctrl+u\", \"preview_screensaver\", \"screensaver\", show=False),\n    ]\n\n    def __init__(\n        self,\n        controller: Controller | None = None,\n        netio: NetIO | None = None,\n        saver_idle_seconds: float | None = None,\n    ):\n        from idle_driver import IdleLinuxDriver\n        super().__init__(driver_class=IdleLinuxDriver)\n        if controller is None:\n            dry = bool(os.environ.get(\"WEBAGENT_BOOT_DRYRUN\"))\n            from boot_client import Controller as HostClient\n            controller = HostClient(dry_run=dry)\n        self.controller = controller\n        self.services = getattr(controller, \"services\", SERVICES)\n        self.service_by_id = {spec.id: spec for spec in self.services}\n        self.netio = netio or NetIO(dry_run=bool(os.environ.get(\"WEBAGENT_BOOT_DRYRUN\")))\n        self.selected = 0\n        self.exit_code = EXIT_CONSOLE\n        self._task: asyncio.Task | None = None\n        self.view: dict[str, str] = {}   # sid -> status text (for tests)\n        # idle screensaver (default 60 s; 0 disables, env overrides)\n        if saver_idle_seconds is None:\n            try:\n                saver_idle_seconds = float(\n                    os.environ.get(\"WEBAGENT_BOOT_SAVER_SECONDS\", \"60\")\n                )\n            except ValueError:\n                saver_idle_seconds = 60.0\n        self.saver_idle = max(0.0, float(saver_idle_seconds))\n        self.saver_watch_s = 0.5\n        self._idle_wake = asyncio.Event()\n        self._presentation_timers = []\n        self._saver: ScreensaverScreen | None = None\n        self._saver_task: asyncio.Task | None = None\n        self._last_activity = time.monotonic()\n        self.last_net = \"\"\n\n    def compose(self) -> ComposeResult:\n        yield Static(\" WebAgent server - boot console \", id=\"titlebar\")\n        yield Static(\"\", id=\"feed\")\n        for spec in self.services:\n            yield ServiceRow(spec)\n        for i in range(len(EXTRAS)):\n            yield ExtraRow(i)\n        yield Static(f\"  1-{len(self.services) + len(EXTRAS)} run   up/down select   enter run   s start   x stop   r restart\", id=\"hint\")\n\n    # ------------------------------------------------------------------\n    def on_mount(self) -> None:\n        self._task = asyncio.create_task(self._supervise())\n        if self.saver_idle > 0:\n            self._saver_task = asyncio.create_task(self._watch_screensaver())\n\n    def on_unmount(self) -> None:\n        if self._task:\n            self._task.cancel()\n        if self._saver_task:\n            self._saver_task.cancel()\n\n    async def _supervise(self) -> None:\n        while True:\n            # Host recovery runs independently. Presentation sleeps until a key wakes it.\n            if getattr(self.controller, \"passive\", False) and self.is_screensaver_up():\n                await self._idle_wake.wait()\n            try:\n                await self.tick_once()\n            except asyncio.CancelledError:\n                return\n            except Exception as e:  # keep the UI alive no matter what\n                self.controller.push(f\"dashboard error: {e}\")\n                await self.refresh_ui()\n            await asyncio.sleep(max(1.0, self.controller.tick_s))\n\n    async def tick_once(self) -> None:\n        await asyncio.to_thread(self.controller.run_tick)\n        await self.refresh_ui()\n\n    async def refresh_ui(self) -> None:\n        # Supervision still ticks; sleeping presentation performs no widget updates.\n        if self.is_screensaver_up():\n            return\n        ctl = self.controller\n        for i, spec in enumerate(self.services):\n            st = ctl.statuses.get(spec.id)\n            sev = st.severity if st else 3\n            text = st.text if st else \"?\"\n            rt = ctl.rt[spec.id]\n            o = ctl.obs.get(spec.id)\n\n            if o and spec.role == \"app\" and o.exists and o.running and not o.http_ok and o.http_text:\n                text = f\"{text} ({o.http_text})\"\n\n            mark = \">\" if i == self.selected else \" \"\n            plain_name = f\"  {mark} {i+1} {spec.title}\"\n            self.view[f\"{spec.id} name\"] = plain_name\n            name = Text(plain_name)\n            if i == self.selected:\n                name.stylize(\"bold\")\n            self.query_one(f\"#sname-{spec.id}\", Static).update(name)\n            chip = \"ON\" if rt.desired else \"OFF\"\n            stat = Text(f\"[{chip}] {text}\")\n            stat.stylize(SEV_COLOR.get(sev, \"grey62\"))\n            self.query_one(f\"#sstatus-{spec.id}\", Static).update(stat)\n            self.view[spec.id] = text\n\n            toggle = self.query_one(f\"#tg-{spec.id}\", Button)\n            running = bool(o and o.running)\n            toggle.label = \"Stop\" if (rt.desired and running) else \"Start\"\n            toggle.disabled = not bool(o and o.exists)\n            restart = self.query_one(f\"#rs-{spec.id}\", Button)\n            restart.disabled = not bool(o and o.exists and o.running)\n\n        feed = \"\\n\".join(list(ctl.events)[-4:])\n        self.query_one(\"#feed\", Static).update(feed)\n\n        # host network picture (refreshed at most every 4 s so key presses\n        # stay snappy); gathered again after keyboard wake\n        now = time.monotonic()\n        if now - getattr(self, \"_net_at\", 0.0) > 4.0:\n            try:\n                pic = await asyncio.to_thread(ctl.ex.net_picture)\n            except Exception:\n                pic = {}\n            self._pic = pic\n            self._net_at = now\n        pic = getattr(self, \"_pic\", {})\n        lan = pic.get(\"lan\") or {}\n        ts = pic.get(\"ts\") or {}\n        self.last_net = pic.get(\"line\") or \"network summary unavailable\"\n\n        for i, (key, label, _action) in enumerate(EXTRAS):\n            rowidx = i + len(self.services)\n            sel = rowidx == self.selected\n            mark = \">\" if sel else \" \"\n            num = rowidx + 1\n            n = Text(f\"  {mark} {num} {label}\")\n            if sel:\n                n.stylize(\"bold #ffd54a\")\n            else:\n                n.stylize(\"#cfe8ff\")\n            self.query_one(f\"#ename-{i}\", Static).update(n)\n            status = Text(\"\")\n            if key == \"net\":\n                status = self._net_status(lan)\n            elif key == \"tailscale\":\n                status = self._ts_status(ts)\n            self.query_one(f\"#estat-{i}\", Static).update(status)\n\n    @staticmethod\n    def _net_status(lan: dict) -> Text:\n        \"\"\"Row status for the Network entry: connected-to name + health.\"\"\"\n        kind = lan.get(\"kind\")\n        conn = lan.get(\"connectivity\", \"unknown\")\n        name = str(lan.get(\"name\") or \"\")\n        word = {\"full\": \"online\", \"limited\": \"limited\",\n                \"none\": \"offline\"}.get(conn, \"?\")\n        color = {\"full\": \"green\", \"limited\": \"yellow\",\n                 \"none\": \"red\"}.get(conn, \"grey62\")\n        if kind in (\"wifi\", \"ethernet\") and name:\n            return Text(f\"{name} · {word}\", style=color)\n        if conn == \"none\":\n            return Text(\"offline\", style=color)\n        return Text(word, style=color)\n\n    @staticmethod\n    def _ts_status(ts: dict) -> Text:\n        \"\"\"Row status for the Tailscale entry: state + number of peers.\"\"\"\n        if ts.get(\"state\") == \"online\":\n            peers = int(ts.get(\"peers\") or 0)\n            plural = \"s\" if peers != 1 else \"\"\n            return Text(f\"online · {peers} peer{plural}\", style=\"green\")\n        return Text(\"offline\", style=\"red\")\n\n    # ------------------------------------------------------------------\n    # selection & actions\n    def _selected_id(self) -> str:\n        return self.services[self.selected].id\n\n    def _set_selected(self, i: int) -> None:\n        self.selected = i % (len(self.services) + len(EXTRAS))\n        asyncio.create_task(self.refresh_ui())\n\n    async def _run_manual(self, op: str) -> None:\n        sid = self._selected_id()\n        msg = await asyncio.to_thread(self.controller.manual, sid, op)\n        await self.refresh_ui()\n        if \"not healthy yet\" in msg:\n            self.controller.push(f\"{self.service_by_id[sid].title}: {msg}\")\n\n    def _boot_active(self) -> bool:\n        # list navigation applies only on the boot (default) screen\n        return self.screen is self.screen_stack[0]\n\n    def action_up(self) -> None:\n        if self._boot_active():\n            self._set_selected(self.selected - 1)\n\n    def action_down(self) -> None:\n        if self._boot_active():\n            self._set_selected(self.selected + 1)\n\n    def _pick(self, i: int) -> None:\n        if not self._boot_active() or not 0 <= i < len(self.services) + len(EXTRAS):\n            return\n        self.selected = i\n        asyncio.create_task(self.refresh_ui())\n        self._activate()\n\n    def action_pick_1(self) -> None: self._pick(0)\n    def action_pick_2(self) -> None: self._pick(1)\n    def action_pick_3(self) -> None: self._pick(2)\n    def action_pick_4(self) -> None: self._pick(3)\n    def action_pick_5(self) -> None: self._pick(4)\n    def action_pick_6(self) -> None: self._pick(5)\n    def action_pick_7(self) -> None: self._pick(6)\n    def action_pick_8(self) -> None: self._pick(7)\n    def action_pick_9(self) -> None: self._pick(8)\n\n    def action_start_selected(self) -> None:\n        if self._boot_active() and self.selected < len(self.services):\n            asyncio.create_task(self._run_manual(\"start\"))\n\n    def action_stop_selected(self) -> None:\n        if self._boot_active() and self.selected < len(self.services):\n            asyncio.create_task(self._run_manual(\"stop\"))\n\n    def action_restart_selected(self) -> None:\n        if self._boot_active() and self.selected < len(self.services):\n            asyncio.create_task(self._run_manual(\"restart\"))\n\n    def action_activate_selected(self) -> None:\n        if self._boot_active():\n            self._activate()\n\n    def _activate(self) -> None:\n        if self.selected < len(self.services):\n            sid = self.services[self.selected].id\n            op = \"stop\" if self.controller.rt[sid].desired else \"start\"\n            asyncio.create_task(self._run_manual(op))\n        else:\n            _key, _label, action = EXTRAS[self.selected - len(self.services)]\n            if not action:\n                return  # status-only row (Tailscale)\n            result = getattr(self, action)()\n            if asyncio.iscoroutine(result):\n                asyncio.create_task(result)\n\n    def action_leave_console(self) -> None:\n        self.exit_code = EXIT_CONSOLE\n        self.exit(EXIT_CONSOLE)\n\n    def action_leave_chromium(self) -> None:\n        self.exit_code = EXIT_CHROMIUM\n        self.exit(EXIT_CHROMIUM)\n\n    def action_leave_xfce(self) -> None:\n        self.exit_code = EXIT_XFCE\n        self.exit(EXIT_XFCE)\n\n    async def action_open_network(self) -> None:\n        await self.push_screen(NetworkScreen(self.netio))\n\n    def on_button_pressed(self, event: Button.Pressed) -> None:\n        self._note_activity()\n        bid = event.button.id or \"\"\n        if bid.startswith(\"tg-\"):\n            sid = bid[3:]\n            self._set_selected(self.services.index(self.service_by_id[sid]))\n            op = \"stop\" if self.controller.rt[sid].desired else \"start\"\n            asyncio.create_task(self._run_manual(op))\n        elif bid.startswith(\"rs-\"):\n            sid = bid[3:]\n            self._set_selected(self.services.index(self.service_by_id[sid]))\n            asyncio.create_task(self._run_manual(\"restart\"))\n        elif bid == \"leave-console\":\n            self.action_leave_console()\n        elif bid == \"leave-chromium\":\n            self.action_leave_chromium()\n        elif bid == \"leave-xfce\":\n            self.action_leave_xfce()\n        elif bid == \"leave-network\":\n            self.action_open_network()\n\n    # ------------------------------------------------------------------\n    # idle screensaver\n    def _note_activity(self) -> None:\n        self._last_activity = time.monotonic()\n\n    def is_screensaver_up(self) -> bool:\n        return self._saver is not None\n\n    async def _enter_screensaver(self) -> None:\n        if self._saver is not None or self.saver_idle <= 0:\n            return\n        self._idle_wake.clear()\n        saver = ScreensaverScreen(self)\n        self._saver = saver\n        try:\n            await self.push_screen(saver)\n            self.call_after_refresh(self._pause_presentation_timers)\n        except Exception:\n            self._saver = None\n            raise\n\n    async def leave_screensaver(self) -> None:\n        saver = self._saver\n        if saver is None:\n            return\n        self._saver = None\n        self._resume_presentation_timers()\n        self._note_activity()\n        self._idle_wake.set()\n        # Reveal the console before contacting the host. A missing or slow host\n        # must never leave an opaque screen covering otherwise usable controls.\n        await self.pop_screen()\n        await self.refresh_ui()\n        if getattr(self.controller, \"passive\", False):\n            asyncio.create_task(self._refresh_after_wake())\n\n    async def _refresh_after_wake(self) -> None:\n        try:\n            await asyncio.to_thread(self.controller.run_tick)\n        except Exception:\n            from services import Status\n            for spec in self.services:\n                self.controller.statuses[spec.id] = Status(2, \"supervisor unavailable\")\n            self.controller.push(\"supervisor unavailable; status will retry while visible\")\n        await self.refresh_ui()\n\n    async def _watch_screensaver(self) -> None:\n        while True:\n            # No idle-watch polling while the black screen waits for a key.\n            if self._saver is not None:\n                await self._idle_wake.wait()\n            await asyncio.sleep(self.saver_watch_s)\n            try:\n                if self.saver_idle <= 0 or self._saver is not None:\n                    continue\n                if time.monotonic() - self._last_activity >= self.saver_idle:\n                    await self._enter_screensaver()\n            except asyncio.CancelledError:\n                raise\n            except Exception as e:\n                self.controller.push(f\"screensaver: {e}\")\n\n    def action_preview_screensaver(self) -> None:\n        if self._boot_active():\n            asyncio.create_task(self._enter_screensaver())\n\n    def action_quit(self) -> None:\n        # ctrl+q while the screensaver is up only wakes it; a second press quits\n        if self._saver is not None:\n            asyncio.create_task(self.leave_screensaver())\n            return\n        self.exit_code = EXIT_CONSOLE\n        self.exit(EXIT_CONSOLE)\n\n    def _pause_presentation_timers(self) -> None:\n        # Wait until the first black frame has painted, then stop widget/animation timers.\n        if not self.is_screensaver_up():\n            return\n        seen = set()\n        owners = [self]\n        for screen in self.screen_stack:\n            owners.extend([screen, *screen.walk_children()])\n        for owner in owners:\n            for timer in list(getattr(owner, \"_timers\", ())):\n                if id(timer) not in seen and timer._active.is_set():\n                    seen.add(id(timer))\n                    timer.pause()\n                    self._presentation_timers.append(timer)\n\n    def _resume_presentation_timers(self) -> None:\n        timers, self._presentation_timers = self._presentation_timers, []\n        for timer in timers:\n            timer.resume()\n\n    async def on_event(self, event: events.Event) -> None:\n        # Observe originating keyboard input before an Input/modal can consume it.\n        if isinstance(event, events.Key) and not event.is_forwarded:\n            self._note_activity()\n            if self.is_screensaver_up():\n                event.stop()\n                event.prevent_default()\n                asyncio.create_task(self.leave_screensaver())\n                return\n        elif isinstance(event, (events.MouseDown, events.Paste)) and not self.is_screensaver_up():\n            self._note_activity()\n        await super().on_event(event)\n\n    # keyboard / mouse activity resets the idle timer\n    def on_key(self, event: events.Key) -> None:\n        self._note_activity()\n\n    def on_mouse_down(self, event: events.MouseDown) -> None:\n        self._note_activity()\n\n\ndef main() -> int:\n    app = BootApp()\n    code = app.run()\n    if code is None:\n        code = app.exit_code\n    return int(code) if code is not None else EXIT_CONSOLE\n\n\nif __name__ == \"__main__\":\n    sys.exit(main())\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/boot_client.py",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "size": 3117,
+      "sha256": "7cb7a49cf9a3d0988304a735fcbf2c7a38d7808b60d35138cf8e2377fdee0e8b",
+      "content": "\"\"\"Presentation client for the protected event-driven v3 boot host.\"\"\"\nfrom collections import deque\nimport json,socket,struct\nfrom services import ServiceSpec,RT,Status,Observed\nfrom dockerio import Executor\nSERVICES=[\n ServiceSpec(\"dev-api\",\"dev\",\"app\",\"webagent-dev-v3\",\"API\",\"dev.webagent.live\",\"WebAgent v3 API\"),\n ServiceSpec(\"dev-loop\",\"dev\",\"app\",\"webagent-dev-v3-loop\",\"Loop\",\"dev.webagent.live\",\"WebAgent v3 agent loop\"),\n ServiceSpec(\"dev-gate\",\"dev\",\"app\",\"webagent-dev-v3-gate\",\"Gate\",\"dev.webagent.live\",\"WebAgent v3 publication gate\"),\n]\nclass Controller:\n    \"\"\"Cache host-authoritative state; never gather Docker state or plan recovery here.\"\"\"\n    services=SERVICES\n    passive=True\n    def __init__(self,dry_run=False):\n        self.dry_run=dry_run;self.ex=Executor(dry_run=dry_run);self.tick_s=5;self.events=deque(maxlen=6)\n        self.rt={s.id:RT() for s in SERVICES};self.obs={};self.statuses={};self.notes={}\n    def push(self,msg):self.events.append(msg)\n    def request(self,value):\n        with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as peer:\n            peer.settimeout(3);peer.connect(\"/var/lib/webagent/development/boot-supervisor/ui.sock\")\n            _,uid,_=struct.unpack(\"3i\",peer.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))\n            if uid!=0:raise ValueError(\"Boot host identity changed\")\n            peer.sendall(json.dumps(value).encode()+b\"\\n\")\n            raw=peer.makefile(\"rb\").readline(65537)\n        if len(raw)>65536 or not raw.endswith(b\"\\n\"):raise ValueError(\"Boot response bounds\")\n        reply=json.loads(raw)\n        if reply.get(\"status\")!=\"success\":raise ValueError(\"Boot host rejected request\")\n        return reply[\"output\"]\n    def run_tick(self):\n        value=self.request({\"operation\":\"status\"})\n        for spec in SERVICES:\n            item=value[\"services\"][spec.container];o=item[\"observation\"]\n            self.rt[spec.id].desired=item[\"desired\"]\n            self.obs[spec.id]=Observed(exists=bool(o.get(\"exists\")),running=bool(o.get(\"running\")),\n                docker_health=o.get(\"health\",\"\"),http_ok=o.get(\"health\")==\"healthy\")\n            if value[\"component_paused\"]:sev,text=1,\"recovery paused: component unavailable\"\n            elif not item[\"desired\"]:sev,text=3,\"off\"\n            elif item[\"uncertain\"]:sev,text=2,\"uncertain: manual action required\"\n            elif not o.get(\"exists\"):sev,text=2,\"container missing\"\n            elif o.get(\"health\")==\"healthy\":sev,text=0,\"healthy\"\n            elif o.get(\"running\"):sev,text=1,o.get(\"health\") or \"running\"\n            else:sev,text=1,\"stopped: recovery pending\"\n            self.statuses[spec.id]=Status(sev,text)\n    def manual(self,sid,operation):\n        spec=next(s for s in SERVICES if s.id==sid)\n        if operation==\"toggle\":operation=\"stop\" if self.rt[sid].desired else \"start\"\n        if self.dry_run:\n            message=\"dry-run: would \"+operation+\" \"+spec.container\n            self.push(message);return message\n        self.request({\"operation\":\"manual\",\"name\":spec.container,\"action\":operation})\n        self.run_tick();return \"host accepted \"+operation\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/controller.py",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "size": 7243,
+      "sha256": "a88e67c62c471eb767ba006fbf78a0bdbaae7c7fb56678aa0d7d0700d928f357",
+      "content": "\"\"\"controller.py — drives the supervisor: gather real state, plan, act, log.\n\nHolds mutable runtime state and an event feed. UI-agnostic (no Textual\nimports) so it can be tested headlessly with a fake Executor.\n\"\"\"\nfrom __future__ import annotations\n\nimport os\nimport time\nfrom collections import deque\nfrom datetime import datetime, timezone\n\nfrom services import (\n    SERVICES,\n    SERVICE_BY_ID,\n    Cfg,\n    RT,\n    plan,\n    urls_for,\n)\n\n\nclass Controller:\n    def __init__(\n        self,\n        executor,\n        cfg: Cfg | None = None,\n        log_path: str | None = None,\n        tick_s: float = 5.0,\n    ):\n        self.ex = executor\n        self.cfg = cfg or Cfg()\n        self.tick_s = tick_s\n        self.rt: dict[str, RT] = {s.id: RT() for s in SERVICES}\n        self.obs: dict[str, \"Observed\"] = {}\n        self.statuses: dict[str, object] = {}\n        self.notes: dict[str, str] = {}\n        self.events: deque[str] = deque(maxlen=6)\n        self.docker_ok = False\n        self.docker_noted = False\n        self._was_running: dict[str, bool] = {}\n        self._last_note: dict[str, str] = {}\n        self.log_path = log_path or os.path.join(\n            os.path.expanduser(\"~\"), \".cache\", \"webagent-boot.log\"\n        )\n        self._start_log()\n\n    # ------------------------------------------------------------------\n    def _start_log(self) -> None:\n        try:\n            os.makedirs(os.path.dirname(self.log_path), exist_ok=True)\n            with open(self.log_path, \"w\") as fh:\n                fh.write(f\"WebAgent boot run: {datetime.now(timezone.utc).isoformat()}\\n\")\n                fh.write(\"Boot dashboard started; supervising all services.\\n\")\n        except Exception:\n            pass\n\n    def append_log(self, line: str) -> None:\n        try:\n            with open(self.log_path, \"a\") as fh:\n                fh.write(f\"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} {line}\\n\")\n        except Exception:\n            pass\n\n    def push(self, msg: str) -> None:\n        stamp = time.strftime(\"%H:%M:%S\")\n        self.events.append(f\"{stamp}  {msg}\")\n        self.append_log(msg)\n\n    # ------------------------------------------------------------------\n    def gather(self, now: float | None = None) -> None:\n        self.docker_ok = self.ex.docker_ok()\n        online = self.ex.internet_ok()\n        for spec in SERVICES:\n            o = self.ex.inspect(spec.container)\n            if spec.role == \"app\" and o.exists and o.running:\n                url, fb = urls_for(spec)\n                ok, ms, txt = self.ex.probe(url, fb)\n                if ok:\n                    o.http_ok = True\n                    o.http_text = txt\n                elif txt.startswith(\"unreachable:\"):\n                    # Host cannot connect at all - trust the container's own\n                    # docker healthcheck (operator-defined liveness).\n                    o.http_ok = o.docker_health == \"healthy\"\n                    o.http_text = txt.replace(\"unreachable:\", \"host-unreachable:\")\n                else:\n                    o.http_ok = False\n                    o.http_text = txt\n                o.http_ms = ms\n            if spec.role == \"tunnel\" and o.exists and o.running and online:\n                url, _ = urls_for(spec)\n                ok, ms, txt = self.ex.probe(url, None)\n                o.http_ms = ms\n                if ok:\n                    o.http_ok = True\n                    o.http_text = txt\n                elif txt.startswith(\"HTTP 5\"):\n                    o.http_ok = False\n                    o.http_text = txt\n                else:\n                    o.http_ok = None\n                    o.http_text = txt\n            self.obs[spec.id] = o\n\n    def run_tick(self) -> None:\n        now = time.time()\n        self.gather(now)\n        actions, statuses, notes = plan(\n            self.obs, self.rt, now, self.cfg, self.docker_ok\n        )\n        self.statuses = statuses\n        self.notes = notes\n\n        # docker-daemon transition note (once per down/up)\n        if not self.docker_ok and not self.docker_noted:\n            self.docker_noted = True\n            self.push(\"docker daemon not ready - waiting\")\n        elif self.docker_ok and self.docker_noted:\n            self.docker_noted = False\n            self.push(\"docker daemon ready\")\n\n        # run planned actions\n        for a in actions:\n            spec = SERVICE_BY_ID[a.service]\n            if a.kind == \"netconnect\":\n                net = getattr(self.obs.get(a.service), \"netmode\", \"\") or \"bridge\"\n                if net == \"default\":\n                    net = \"bridge\"\n                ok, msg = self.ex.network_connect(spec.container, net)\n            else:\n                ok, msg = self.ex.container_action(spec.container, a.kind)\n            rt = self.rt[a.service]\n            if ok:\n                rt.last_attempt = now\n                rt.attempts.append(now)\n            word = \"ok\" if ok else \"FAILED\"\n            self.push(f\"{a.kind} {spec.container}: {word} ({a.reason})\")\n            if not ok:\n                self.push(f\"  -> {msg}\")\n\n        # transitions worth reporting\n        for spec in SERVICES:\n            o = self.obs.get(spec.id)\n            if not o:\n                continue\n            was = self._was_running.get(spec.id)\n            if was is False and o.running:\n                self.push(f\"{spec.container} is running\")\n            elif was is True and not o.running and o.exists:\n                self.push(f\"{spec.container} stopped\")\n            self._was_running[spec.id] = o.running\n\n        # notes (waiting/backoff/attention) - report when they change\n        for sid, note in notes.items():\n            if self._last_note.get(sid) != note:\n                self._last_note[sid] = note\n                self.push(f\"{SERVICE_BY_ID[sid].container}: {note}\")\n        for sid in list(self._last_note):\n            if sid not in notes:\n                self._last_note.pop(sid, None)\n\n    # ------------------------------------------------------------------\n    def manual(self, sid: str, op: str) -> str:\n        \"\"\"User-initiated start/stop/restart/toggle. Returns status text.\"\"\"\n        spec = SERVICE_BY_ID[sid]\n        rt = self.rt[sid]\n\n        if op == \"toggle\":\n            rt.desired = not rt.desired\n            op = \"start\" if rt.desired else \"stop\"\n\n        if op == \"start\":\n            rt.desired = True\n            if spec.role == \"tunnel\":\n                app = SERVICE_BY_ID[f\"{spec.stack}-app\"]\n                app_obs = self.obs.get(app.id)\n                app_ok = bool(app_obs and app_obs.http_ok)\n                if not app_ok:\n                    return f\"tunnel not started - {app.container} is not healthy yet\"\n        elif op == \"stop\":\n            rt.desired = False\n        elif op == \"restart\":\n            rt.desired = True\n        else:\n            return f\"unknown action {op}\"\n\n        # manual control resets the crash guard\n        rt.attempts = []\n        rt.crash = False\n        rt.last_attempt = 0.0\n\n        ok, msg = self.ex.container_action(spec.container, op)\n        if ok:\n            self.push(f\"manual {op} {spec.container}: ok\")\n            self.run_tick()\n        else:\n            self.push(f\"manual {op} {spec.container}: FAILED - {msg}\")\n        return msg\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/dockerio.py",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "size": 13776,
+      "sha256": "6170a6b09d451d4c8a0c9eaf85a711d8564a5b5e09f46f450f811c9cd0f73a15",
+      "content": "\"\"\"dockerio.py — real-world I/O for the boot dashboard.\n\nThin wrapper around docker + HTTP probes. Swap in a fake Executor in tests;\npass dry_run=True to log actions instead of executing them.\n\"\"\"\nfrom __future__ import annotations\n\nimport datetime as _dt\nimport json\nimport os\nimport subprocess\nimport time\nimport urllib.error\nimport urllib.request\n\nfrom services import Observed\n\n\ndef _run(cmd: list[str], timeout: float = 90.0) -> tuple[int, str, str]:\n    try:\n        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)\n        return p.returncode, p.stdout.strip(), p.stderr.strip()\n    except subprocess.TimeoutExpired:\n        return 124, \"\", \"timed out\"\n    except FileNotFoundError:\n        return 127, \"\", \"command not found\"\n\n\ndef _parse_started_epoch(iso: str) -> float | None:\n    iso = (iso or \"\").strip()\n    if not iso:\n        return None\n    try:\n        dt = _dt.datetime.fromisoformat(iso.replace(\"Z\", \"+00:00\"))\n        if dt.tzinfo is None:\n            dt = dt.replace(tzinfo=_dt.timezone.utc)\n        return dt.timestamp()\n    except ValueError:\n        return None\n\n\n_UA = (\"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \"\n       \"(KHTML, like Gecko) Chrome/120.0 Safari/537.36\")\n\n\ndef _request(url: str) -> urllib.request.Request:\n    return urllib.request.Request(url, headers={\"User-Agent\": _UA})\n\n\nclass Executor:\n    \"\"\"Real executor: docker + HTTP + network summary.\"\"\"\n\n    def __init__(self, dry_run: bool = False):\n        self.dry_run = dry_run\n        self.dry_log: list[tuple[str, str]] = []     # (container, action)\n        self._internet_cache: tuple[float, bool] = (0.0, False)\n\n    # --- docker ---------------------------------------------------------\n    def docker_ok(self) -> bool:\n        rc, _, _ = _run([\"docker\", \"info\"], timeout=20.0)\n        return rc == 0\n\n    def inspect(self, container: str) -> Observed:\n        rc, out, err = _run(\n            [\"docker\", \"inspect\", \"--format\",\n             \"{{.State.Running}}|{{.State.StartedAt}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.HostConfig.NetworkMode}}|{{len .NetworkSettings.Networks}}\",\n             container],\n            timeout=30.0,\n        )\n        if rc != 0:\n            if \"No such object\" in err:\n                return Observed(exists=False)\n            # docker not reachable or other error: keep unknown-but-existing\n            return Observed(exists=True)\n        parts = out.split(\"|\", 4)\n        running = parts[0].strip().lower() == \"true\"\n        started = _parse_started_epoch(parts[1] if len(parts) > 1 else \"\")\n        health = parts[2].strip() if len(parts) > 2 else \"\"\n        netmode = parts[3].strip() if len(parts) > 3 else \"\"\n        net_attached = True\n        if len(parts) > 4:\n            net_attached = parts[4].strip() != \"0\"\n        return Observed(exists=True, running=running, docker_health=health,\n                        started_epoch=started, netmode=netmode,\n                        net_attached=net_attached)\n\n    def probe(self, url: str, fallback: str | None = None,\n              timeout: float = 3.0) -> tuple[bool, float | None, str]:\n        \"\"\"Return (ok, elapsed_ms, short_result).\"\"\"\n        for target in (url, fallback):\n            if not target:\n                continue\n            t0 = time.perf_counter()\n            try:\n                with urllib.request.urlopen(_request(target), timeout=timeout) as resp:\n                    resp.read(64)\n                    ms = (time.perf_counter() - t0) * 1000.0\n                    return True, ms, str(resp.status)\n            except urllib.error.HTTPError as e:\n                ms = (time.perf_counter() - t0) * 1000.0\n                if e.code == 404 and target is url and fallback:\n                    continue\n                return False, ms, f\"HTTP {e.code}\"\n            except urllib.error.URLError as e:\n                ms = (time.perf_counter() - t0) * 1000.0\n                reason = getattr(e, \"reason\", None)\n                text = \"error\"\n                if isinstance(reason, ConnectionRefusedError):\n                    text = \"refused\"\n                elif isinstance(reason, TimeoutError):\n                    text = \"timeout\"\n                elif isinstance(reason, OSError):\n                    text = getattr(reason, \"strerror\", \"error\")\n                return False, ms, f\"unreachable:{text}\"\n            except OSError as e:\n                ms = (time.perf_counter() - t0) * 1000.0\n                if isinstance(e, TimeoutError):\n                    return False, ms, \"unreachable:timeout\"\n                text = getattr(e, \"reason\", \"error\")\n                if isinstance(text, Exception):\n                    text = str(e)\n                return False, ms, f\"unreachable:{text}\"\n        return False, None, \"no url\"\n\n    def container_action(self, container: str, action: str) -> tuple[bool, str]:\n        \"\"\"start | stop | restart. Returns (ok, message).\"\"\"\n        if self.dry_run:\n            self.dry_log.append((container, action))\n            return True, f\"dry-run: would {action} {container}\"\n        rc, out, err = _run([\"docker\", action, container], timeout=120.0)\n        if rc == 0:\n            return True, (out or err or f\"{action} ok\")\n        return False, (err or f\"{action} failed (rc {rc})\")\n\n    def network_connect(self, container: str, network: str = \"bridge\") -> tuple[bool, str]:\n        \"\"\"Re-attach a detached container to its docker network.\"\"\"\n        if self.dry_run:\n            self.dry_log.append((container, f\"netconnect:{network}\"))\n            return True, f\"dry-run: would connect {container} to {network}\"\n        rc, out, err = _run([\"docker\", \"network\", \"connect\", network, container], timeout=60.0)\n        if rc == 0:\n            return True, (out or err or f\"connected {container} to {network}\")\n        return False, (err or f\"network connect failed (rc {rc})\")\n\n    def internet_ok(self) -> bool:\n        \"\"\"Cached: can the host reach the public internet?\"\"\"\n        return self._internet_ok()\n\n    # --- network summary -------------------------------------------------\n    def _internet_ok(self) -> bool:\n        now = time.monotonic()\n        if now - self._internet_cache[0] < 30.0:\n            return self._internet_cache[1]\n        ok = False\n        try:\n            with urllib.request.urlopen(_request(\"https://www.cloudflare.com/\"), timeout=3.0) as r:\n                r.read(32)\n                ok = True\n        except Exception:\n            ok = False\n        self._internet_cache = (now, ok)\n        return ok\n\n    def net_summary(self) -> str:\n        \"\"\"One-line network picture for the footer area.\"\"\"\n        try:\n            bits = []\n            rc, out, _ = _run([\"ip\", \"-4\", \"route\", \"show\", \"default\"], timeout=10.0)\n            iface = gw = \"\"\n            if rc == 0 and out:\n                fields = out.split()\n                for i, f in enumerate(fields):\n                    if f == \"dev\":\n                        iface = fields[i + 1]\n                    elif f == \"via\":\n                        gw = fields[i + 1]\n            if iface:\n                if os.path.isdir(f\"/sys/class/net/{iface}/wireless\"):\n                    rc2, ssid, _ = _run([\"iwgetid\", \"-r\"], timeout=10.0)\n                    net = f\"wifi {iface} ({ssid})\" if rc2 == 0 and ssid else f\"wifi {iface}\"\n                else:\n                    net = iface\n                rc2, out2, _ = _run([\"ip\", \"-4\", \"-o\", \"addr\", \"show\", \"dev\", iface], timeout=10.0)\n                addr = \"\"\n                for line in out2.splitlines():\n                    parts = line.split()\n                    if len(parts) >= 4:\n                        addr = parts[3].split(\"/\")[0]\n                        break\n                net += f\" {addr}\"\n                if gw:\n                    net += f\" gw {gw}\"\n                bits.append(net)\n            else:\n                bits.append(\"no default route\")\n\n            rc2, out2, _ = _run([\"ip\", \"-4\", \"-o\", \"addr\", \"show\", \"dev\", \"tailscale0\"], timeout=10.0)\n            ts = \"\"\n            if rc2 == 0:\n                for line in out2.splitlines():\n                    parts = line.split()\n                    if len(parts) >= 4 and parts[3].startswith(\"100.\"):\n                        ts = parts[3].split(\"/\")[0]\n                        break\n            bits.append(f\"tailscale {ts}\" if ts else \"tailscale off\")\n\n            bits.append(\"internet on\" if self._internet_ok() else \"internet OFF\")\n            return \" | \".join(bits)\n        except Exception as e:  # never let a summary failure break the UI\n            return f\"net summary unavailable ({e})\"\n    def net_picture(self) -> dict:\n        \"\"\"LAN link + Tailscale state + one-line summary for the dashboard.\n\n        Returns {\"lan\": {...}, \"ts\": {...}, \"line\": \"...\"}. Never raises.\n        Network names (wifi SSID / wired profile) are preferred over the\n        numeric address; health words come from NetworkManager connectivity.\n        \"\"\"\n        try:\n            lan = {\"kind\": \"none\", \"name\": \"\", \"addr\": \"\", \"gw\": \"\",\n                   \"connectivity\": \"unknown\", \"internet\": False}\n\n            # NetworkManager connectivity state -> health word for the row\n            rc, out, _ = _run([\"nmcli\", \"-t\", \"general\", \"status\"], timeout=10.0)\n            conn = \"\"\n            if rc == 0 and out:\n                parts = out.split(\":\")\n                conn = parts[1] if len(parts) > 1 else \"\"\n            if conn not in (\"full\", \"limited\", \"none\"):\n                conn = \"unknown\"\n            lan[\"connectivity\"] = conn\n\n            # default route -> uplink interface + gateway\n            iface = \"\"\n            rc, out, _ = _run([\"ip\", \"-4\", \"route\", \"show\", \"default\"], timeout=10.0)\n            if rc == 0 and out:\n                fields = out.split()\n                for pos, tok in enumerate(fields):\n                    if tok == \"dev\" and pos + 1 < len(fields):\n                        iface = fields[pos + 1]\n                    elif tok == \"via\" and pos + 1 < len(fields):\n                        lan[\"gw\"] = fields[pos + 1]\n\n            addr = \"\"\n            if iface:\n                rc, out, _ = _run(\n                    [\"ip\", \"-4\", \"-o\", \"addr\", \"show\", \"dev\", iface], timeout=10.0\n                )\n                for line in out.splitlines():\n                    parts = line.split()\n                    if len(parts) >= 4:\n                        addr = parts[3].split(\"/\")[0]\n                        break\n                lan[\"addr\"] = addr\n\n                wireless = os.path.isdir(\"/sys/class/net/\" + iface + \"/wireless\")\n                lan[\"kind\"] = \"wifi\" if wireless else \"ethernet\"\n\n                # show the network by name: active wifi SSID first, otherwise\n                # the wired/wifi profile name, then the interface\n                name = \"\"\n                if wireless:\n                    rc, out, _ = _run(\n                        [\"nmcli\", \"-t\", \"-f\", \"IN-USE,SSID\", \"device\",\n                         \"wifi\", \"list\"],\n                        timeout=15.0,\n                    )\n                    for line in out.splitlines():\n                        bits = line.split(\":\")\n                        if len(bits) >= 2 and bits[0] == \"*\":\n                            name = bits[1]\n                            break\n                if not name:\n                    rc, out, _ = _run(\n                        [\"nmcli\", \"-t\", \"-f\", \"TYPE,NAME\", \"connection\",\n                         \"show\", \"--active\"],\n                        timeout=10.0,\n                    )\n                    want = \"802-11-wireless\" if wireless else \"802-3-ethernet\"\n                    for line in out.splitlines():\n                        bits = line.split(\":\")\n                        if len(bits) >= 2 and bits[0] == want:\n                            name = bits[1]\n                            break\n                lan[\"name\"] = name or iface\n\n            lan[\"internet\"] = lan[\"connectivity\"] == \"full\"\n\n            # Tailscale: online flag + peer count via its own status API\n            ts = {\"state\": \"offline\", \"peers\": 0}\n            rc, out, _ = _run([\"tailscale\", \"status\", \"--json\"], timeout=15.0)\n            if rc == 0 and out:\n                try:\n                    data = json.loads(out)\n                    self_rec = data.get(\"Self\") or {}\n                    if bool(self_rec.get(\"Online\")):\n                        ts = {\"state\": \"online\",\n                              \"peers\": len(data.get(\"Peer\") or [])}\n                except Exception:\n                    ts = {\"state\": \"offline\", \"peers\": 0}\n\n            # one-line summary kept for the screensaver card\n            bits = []\n            if lan.get(\"kind\") in (\"wifi\", \"ethernet\"):\n                lp = [lan.get(\"kind\"), lan.get(\"name\") or \"\",\n                      lan.get(\"addr\") or \"\"]\n                bits.append(\" \".join(x for x in lp if x))\n            else:\n                bits.append(\"no link\")\n            if ts.get(\"state\") == \"online\":\n                peers = ts.get(\"peers\") or 0\n                bits.append(\"tailscale online (\" + str(peers) +\n                            \" peer\" + (\"\" if peers == 1 else \"s\") + \")\")\n            else:\n                bits.append(\"tailscale off\")\n            bits.append(\"internet on\" if lan[\"internet\"] else \"internet OFF\")\n            line = \" | \".join(bits)\n            return {\"lan\": lan, \"ts\": ts, \"line\": line}\n        except Exception as exc:  # never let a summary failure break the UI\n            return {\n                \"lan\": {\"kind\": \"none\", \"name\": \"\", \"addr\": \"\", \"gw\": \"\",\n                        \"connectivity\": \"unknown\", \"internet\": False},\n                \"ts\": {\"state\": \"offline\", \"peers\": 0},\n                \"line\": \"network summary unavailable (\" + str(exc) + \")\",\n            }\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/dryrun.py",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "size": 1764,
+      "sha256": "e818fc5588a78f67197877891ac118f00a705fa1fbb63865ae6f50ff48ed5e81",
+      "content": "#!/usr/bin/env python\n\"\"\"dryrun.py - one live tick against the real server, READ-ONLY.\n\nDocker state is inspected and health endpoints probed, but the controller\nruns in dry-run mode: no container is started, stopped or restarted.\nPlanned actions are listed as \"(dry)\".\n\nUsage: ./.venv/bin/python dryrun.py\n\"\"\"\nfrom __future__ import annotations\n\nimport os\nimport sys\n\nsys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n\nfrom dockerio import Executor\nfrom controller import Controller\nfrom services import SERVICES, SERVICE_BY_ID\n\nSEV = {0: \"ok \", 1: \"busy\", 2: \"BAD \", 3: \"off \"}\n\n\ndef main() -> int:\n    ctl = Controller(Executor(dry_run=True),\n                     log_path=\"/tmp/webagent-boot-dryrun.log\")\n    ctl.run_tick()\n    print(\"=== live status (dry-run, nothing changed) ===\\n\")\n    for spec in SERVICES:\n        st = ctl.statuses.get(spec.id)\n        txt = st.text if st else \"?\"\n        sev = st.severity if st else 3\n        rt = ctl.rt[spec.id]\n        o = ctl.obs.get(spec.id)\n        run = \"up\" if (o and o.running) else \"down\"\n        want = \"on\" if rt.desired else \"off\"\n        print(f\"  {SEV.get(sev, '?')} [{want}/{run}] {spec.title:24s} {txt}\")\n    notes = ctl.notes\n    if notes:\n        print(\"\\n=== notes ===\")\n        for k, v in notes.items():\n            print(f\"  {SERVICE_BY_ID[k].container}: {v}\")\n    if ctl.ex.dry_log:\n        print(\"\\n=== actions this run WOULD take (dry) ===\")\n        for cont, act in ctl.ex.dry_log:\n            print(f\"  {act:8s} {cont}\")\n    else:\n        print(\"\\n=== actions: none needed this tick ===\")\n    print(\"\\nnet:\", ctl.ex.net_summary())\n    print(\"\\n=== event feed ===\")\n    for ev in ctl.events:\n        print(\" \", ev)\n    return 0\n\n\nif __name__ == \"__main__\":\n    sys.exit(main())\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/idle_driver.py",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "size": 2156,
+      "sha256": "321ef379d7e87e40d0f09e1a6db94bf75cb9c6abbce775647aa8b71d2b2a1ef3",
+      "content": "\"\"\"Textual terminal input with real event waits and explicit shutdown wake.\"\"\"\nimport os,selectors\nfrom codecs import getincrementaldecoder\nfrom textual.drivers.linux_driver import LinuxDriver\nfrom textual._xterm_parser import XTermParser\nfrom textual._parser import get_time\n\nclass IdleLinuxDriver(LinuxDriver):\n    \"\"\"Retain the installed Textual parser; wake only for input or its actual Escape deadline.\"\"\"\n    _input_wake_write=None\n\n    def disable_input(self):\n        # Set before waking: the reader must not reenter an infinite select during join.\n        try:\n            self._stop_input=True\n            if self._input_wake_write is not None:os.write(self._input_wake_write,b\"x\")\n        except OSError:pass\n        super().disable_input()\n\n    def run_input_thread(self):\n        \"\"\"Use a pipe to interrupt blocking select during suspend/exit; no 10 Hz idle tick.\"\"\"\n        reader,writer=os.pipe2(os.O_CLOEXEC|os.O_NONBLOCK)\n        self._input_wake_write=writer;self._stop_input=False\n        parser=XTermParser(self._debug);decode=getincrementaldecoder(\"utf-8\")().decode\n        try:\n            with selectors.SelectSelector() as selector:\n                selector.register(self.fileno,selectors.EVENT_READ)\n                selector.register(reader,selectors.EVENT_READ)\n                while not self.exit_event.is_set() and not self._stop_input:\n                    # The parser owns a deadline only for an incomplete sequence (e.g. bare Escape).\n                    deadline=parser._timeout_time\n                    timeout=None if deadline is None else max(0,deadline-get_time())\n                    for key,_ in selector.select(timeout):\n                        if key.fd==reader:\n                            os.read(reader,4096)\n                            continue\n                        data=os.read(self.fileno,4096)\n                        if not data:return\n                        for event in parser.feed(decode(data)):self.process_message(event)\n                    for event in parser.tick():self.process_message(event)\n        finally:\n            self._input_wake_write=None\n            os.close(reader);os.close(writer)\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/netio.py",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "size": 7505,
+      "sha256": "ac822de31cad2e4423e42bc457693231e4cc8c096af1797ca14b4c724d435f74",
+      "content": "\"\"\"netio.py — NetworkManager (nmcli) wrapper for the Network screen.\n\nSame injectable/testable style as dockerio.py. Read methods return plain\ndicts/lists; mutating methods return (ok, message). dry_run=True logs\ninstead of executing.\n\"\"\"\nfrom __future__ import annotations\n\nfrom typing import Optional\n\nfrom dockerio import _run\n\n\ndef _split(line: str) -> list[str]:\n    \"\"\"Split an nmcli `-e yes` terse line, honouring escaped colons.\"\"\"\n    parts: list[str] = []\n    cur: list[str] = []\n    i = 0\n    while i < len(line):\n        c = line[i]\n        if c == \"\\\\\" and i + 1 < len(line):\n            cur.append(line[i + 1])\n            i += 2\n            continue\n        if c == \":\":\n            parts.append(\"\".join(cur))\n            cur = []\n            i += 1\n            continue\n        cur.append(c)\n        i += 1\n    parts.append(\"\".join(cur))\n    return parts\n\n\nclass NetIO:\n    \"\"\"nmcli access. Swap in FakeNetIO for tests.\"\"\"\n\n    def __init__(self, dry_run: bool = False):\n        self.dry_run = dry_run\n        self.dry_log: list[tuple[str, ...]] = []\n\n    def _run(self, cmd: list[str], timeout: float = 60.0):\n        return _run(cmd, timeout)\n\n    def _nm(self, *args: str, timeout: float = 60.0):\n        return self._run([\"nmcli\", \"-e\", \"yes\", *args], timeout)\n\n    # ---- status -----------------------------------------------------\n    def status(self) -> dict:\n        rc, out, _ = self._nm(\"-t\", \"general\", \"status\")\n        fields = _split(out) if out else []\n        state = fields[0] if fields else \"unknown\"\n        connectivity = fields[1] if len(fields) > 1 else \"unknown\"\n        rc, radio, _ = self._nm(\"radio\", \"wifi\")\n        wifi_on = radio.strip().lower() == \"enabled\"\n        return {\"state\": state, \"connectivity\": connectivity, \"wifi_on\": wifi_on}\n\n    def wifi_device(self) -> Optional[str]:\n        rc, out, _ = self._nm(\"-t\", \"-f\", \"DEVICE,TYPE,STATE\", \"device\")\n        for line in out.splitlines():\n            f = _split(line)\n            if len(f) >= 2 and f[1] == \"wifi\":\n                return f[0]\n        return None\n\n    def device_ip(self, device: str) -> str:\n        rc, out, _ = self._nm(\"-g\", \"IP4.ADDRESS\", \"device\", \"show\", device)\n        return out.strip() if rc == 0 and out.strip() else \"no ip\"\n\n    # ---- wifi -------------------------------------------------------\n    def wifi_list(self) -> list[dict]:\n        rc, out, _ = self._nm(\"-t\", \"-f\", \"IN-USE,SSID,SIGNAL,SECURITY\",\n                              \"device\", \"wifi\", \"list\")\n        items: list[dict] = []\n        for line in out.splitlines():\n            f = _split(line)\n            if len(f) < 4 or not f[1]:\n                continue\n            try:\n                signal = int(f[2])\n            except ValueError:\n                signal = 0\n            items.append({\n                \"ssid\": f[1],\n                \"signal\": signal,\n                \"security\": f[3] or \"\",\n                \"active\": f[0] == \"*\",\n            })\n        # one row per SSID: prefer the active entry, otherwise strongest\n        best: dict[str, dict] = {}\n        for it in items:\n            key = it[\"ssid\"]\n            prev = best.get(key)\n            if prev is None or (it[\"active\"] and not prev[\"active\"]) or                (it[\"active\"] == prev[\"active\"] and it[\"signal\"] > prev[\"signal\"]):\n                best[key] = it\n        return list(best.values())\n\n    def wifi_rescan(self) -> tuple[bool, str]:\n        if self.dry_run:\n            self.dry_log.append((\"wifi_rescan\",))\n            return True, \"dry-run: rescan\"\n        rc, out, err = self._nm(\"device\", \"wifi\", \"rescan\", timeout=30.0)\n        if rc == 0:\n            return True, \"scan refreshed\"\n        return False, err or \"rescan failed\"\n\n    def wifi_connect(self, ssid: str, password: Optional[str]) -> tuple[bool, str]:\n        if self.dry_run:\n            self.dry_log.append((\"wifi_connect\", ssid, password or \"\"))\n            return True, f\"dry-run: would connect {ssid}\"\n        cmd = [\"device\", \"wifi\", \"connect\", ssid]\n        if password:\n            cmd += [\"password\", password]\n        rc, out, err = self._nm(*cmd, timeout=60.0)\n        if rc == 0:\n            return True, f\"connected to {ssid}\"\n        return False, err or out or f\"connect failed (rc {rc})\"\n\n    def wifi_disconnect(self) -> tuple[bool, str]:\n        dev = self.wifi_device()\n        if self.dry_run:\n            self.dry_log.append((\"wifi_disconnect\", dev or \"wifi\"))\n            return True, \"dry-run: would disconnect\"\n        if not dev:\n            return False, \"no wifi device found\"\n        rc, out, err = self._nm(\"device\", \"disconnect\", dev, timeout=30.0)\n        if rc == 0:\n            return True, \"wifi disconnected\"\n        return False, err or \"disconnect failed\"\n\n    def _profile_for_ssid(self, ssid: str) -> Optional[str]:\n        rc, out, _ = self._nm(\"-t\", \"-f\", \"NAME,TYPE\", \"connection\", \"show\")\n        for line in out.splitlines():\n            f = _split(line)\n            if len(f) >= 2 and f[1] == \"802-11-wireless\":\n                rc2, ss, _ = self._nm(\"-g\", \"802-11-wireless.ssid\",\n                                      \"connection\", \"show\", f[0])\n                if rc2 == 0 and ss.strip() == ssid:\n                    return f[0]\n        return None\n\n    def wifi_forget(self, ssid: str) -> tuple[bool, str]:\n        if self.dry_run:\n            self.dry_log.append((\"wifi_forget\", ssid))\n            return True, f\"dry-run: would forget {ssid}\"\n        name = self._profile_for_ssid(ssid)\n        if not name:\n            return False, f\"no saved profile for {ssid}\"\n        rc, out, err = self._nm(\"connection\", \"delete\", name, timeout=30.0)\n        if rc == 0:\n            return True, f\"forgot {ssid}\"\n        return False, err or \"delete failed\"\n\n    def wifi_radio(self, on: bool) -> tuple[bool, str]:\n        if self.dry_run:\n            self.dry_log.append((\"wifi_radio\", \"on\" if on else \"off\"))\n            return True, f\"dry-run: radio {'on' if on else 'off'}\"\n        rc, out, err = self._nm(\"radio\", \"wifi\", \"on\" if on else \"off\")\n        if rc == 0:\n            return True, f\"wifi radio {'on' if on else 'off'}\"\n        return False, err or \"radio toggle failed\"\n\n    # ---- ethernet ---------------------------------------------------\n    def ethernet_devices(self) -> list[dict]:\n        rc, out, _ = self._nm(\"-t\", \"-f\", \"DEVICE,TYPE,STATE,CONNECTION\", \"device\")\n        virtual = (\"veth\", \"docker\", \"br-\", \"virbr\", \"tun\", \"tap\", \"tailscale\", \"lo\")\n        items: list[dict] = []\n        for line in out.splitlines():\n            f = _split(line)\n            if len(f) >= 3 and f[1] == \"ethernet\"                and not f[0].startswith(virtual):\n                ip = self.device_ip(f[0]) if f[2] == \"connected\" else \"\"\n                items.append({\n                    \"device\": f[0],\n                    \"state\": f[2],\n                    \"connection\": f[3] if len(f) > 3 else \"\",\n                    \"ip\": ip,\n                })\n        return items\n\n    def ethernet_set(self, device: str, up: bool) -> tuple[bool, str]:\n        if self.dry_run:\n            self.dry_log.append((\"ethernet_set\", device, \"up\" if up else \"down\"))\n            return True, f\"dry-run: {'connect' if up else 'disconnect'} {device}\"\n        rc, out, err = self._nm(\"device\", \"connect\" if up else \"disconnect\",\n                                device, timeout=60.0)\n        if rc == 0:\n            return True, f\"{device} {'connected' if up else 'disconnected'}\"\n        return False, err or \"operation failed\"\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/netscreen.py",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "size": 9824,
+      "sha256": "e7dcd0bd2541691b6b0432bfb555f9402ae5d5681c314a78993a66a285bf7d60",
+      "content": "\"\"\"netscreen.py - Network screen (Wi-Fi + Ethernet) for the boot dashboard.\"\"\"\nfrom __future__ import annotations\n\nimport asyncio\n\nfrom textual.app import ComposeResult\nfrom textual.binding import Binding\nfrom textual.containers import Horizontal\nfrom textual.screen import Screen\nfrom textual.widgets import Button, Input, Label, ListItem, ListView, Static\nfrom rich.text import Text\n\nfrom netio import NetIO\n\n\nclass PasswordModal(Screen):\n    \"\"\"Masked password prompt for a secured network.\"\"\"\n\n    CSS = \"\"\"\n    #pw_title { height: 1; background: #003333; color: #9fd8d8; }\n    Input { width: 40; margin: 1 0; }\n    \"\"\"\n\n    def __init__(self, ssid: str, callback):\n        super().__init__()\n        self.ssid = ssid\n        self.callback = callback\n\n    def compose(self) -> ComposeResult:\n        yield Static(f\" Password for {self.ssid} \", id=\"pw_title\")\n        yield Input(password=True, id=\"pw\")\n        with Horizontal():\n            yield Button(\"Connect\", id=\"pw-ok\")\n            yield Button(\"Cancel\", id=\"pw-cancel\")\n\n    def on_button_pressed(self, event: Button.Pressed) -> None:\n        if event.button.id == \"pw-ok\":\n            self.callback(self.ssid, self.query_one(\"#pw\", Input).value)\n            self.dismiss()\n        elif event.button.id == \"pw-cancel\":\n            self.dismiss()\n\n    def on_input_submitted(self, event) -> None:\n        self.callback(self.ssid, event.value)\n        self.dismiss()\n\n\nclass NetworkScreen(Screen):\n    \"\"\"Wi-Fi and Ethernet control surface, pushed from the boot screen.\"\"\"\n\n    BINDINGS = [\n        Binding(\"escape\", \"back\", \"back\", show=False),\n        Binding(\"q\", \"back\", \"back\", show=False),\n        Binding(\"w\", \"wifi_mode\", \"wifi\", show=False),\n        Binding(\"e\", \"eth_mode\", \"ethernet\", show=False),\n        Binding(\"r\", \"refresh\", \"rescan\", show=False),\n        Binding(\"d\", \"disconnect\", \"disconnect\", show=False),\n        Binding(\"f\", \"forget\", \"forget\", show=False),\n        Binding(\"o\", \"radio\", \"radio\", show=False),\n    ]\n\n    CSS = \"\"\"\n    #net_title { height: 1; background: #003333; color: #9fd8d8; }\n    #net_status { height: 3; color: #b0b0b0; }\n    #net_list { height: 1fr; }\n    #net_hint { height: 1; color: #6b6b6b; }\n    ListItem { padding: 0 0; }\n    \"\"\"\n\n    def __init__(self, netio: NetIO):\n        super().__init__()\n        self.netio = netio\n        self.mode = \"wifi\"\n        self.items: list[dict] = []\n        self.status_data: dict = {}\n        self.wifi_on = True\n        self.conn = \"unknown\"\n        self.wifi_ip = \"\"\n        self.msg = \"\"\n\n    def compose(self) -> ComposeResult:\n        yield Static(\" Network \", id=\"net_title\")\n        yield Static(\"\", id=\"net_status\")\n        yield ListView(id=\"net_list\")\n        yield Static(\" w wifi  e ethernet  enter connect  r rescan  \"\n                     \"d disconnect  f forget  o radio  q back\", id=\"net_hint\")\n\n    def on_mount(self) -> None:\n        self._timer = self.set_interval(8.0, self._auto)\n        asyncio.create_task(self._refresh())\n        self.query_one(\"#net_list\", ListView).focus()\n\n    def on_screen_suspend(self) -> None:\n        # Covered network/password screens do no periodic network presentation work.\n        timer = getattr(self, \"_timer\", None)\n        if timer is not None:\n            timer.pause()\n\n    def on_screen_resume(self) -> None:\n        timer = getattr(self, \"_timer\", None)\n        if timer is not None:\n            timer.resume()\n            asyncio.create_task(self._refresh())\n\n    def on_unmount(self) -> None:\n        t = getattr(self, \"_timer\", None)\n        if t is not None:\n            t.stop()\n\n    # ---- data --------------------------------------------------------\n    def _load_all(self) -> None:\n        self.status_data = self.netio.status()\n        self.wifi_on = bool(self.status_data.get(\"wifi_on\"))\n        self.conn = self.status_data.get(\"connectivity\", \"unknown\")\n        self.wifi_ip = \"\"\n        if self.mode == \"wifi\":\n            self.items = self.netio.wifi_list()\n            dev = self.netio.wifi_device()\n            if dev:\n                self.wifi_ip = self.netio.device_ip(dev)\n        else:\n            self.items = self.netio.ethernet_devices()\n\n    # ---- rendering ---------------------------------------------------\n    def _item_text(self, it: dict) -> Text:\n        if self.mode == \"wifi\":\n            sig = int(it.get(\"signal\", 0))\n            color = \"green\" if sig >= 60 else (\"yellow\" if sig >= 30 else \"red\")\n            mark = \" * \" if it.get(\"active\") else \"   \"\n            sec = it.get(\"security\") or \"open\"\n            t = Text(f\"{mark}{it.get('ssid', '?'):24s}  {sig:3d}%  {sec}\")\n            t.stylize(color)\n            if it.get(\"active\"):\n                t.stylize(\"bold\")\n            return t\n        else:\n            state = it.get(\"state\", \"?\")\n            color = \"green\" if state == \"connected\" else \"grey62\"\n            t = Text(f\"   {it.get('device', '?'):10s}  {state:12s}  \"\n                     f\"{it.get('ip') or '-':15s}  {it.get('connection', '')}\")\n            t.stylize(color)\n            return t\n\n    def _status_text(self) -> str:\n        head = \"WIFI\" if self.mode == \"wifi\" else \"ETHERNET\"\n        head += f\"   internet {self.conn}\"\n        if self.mode == \"wifi\":\n            head += f\"   radio {'on' if self.wifi_on else 'off'}\"\n        lines = [head]\n        if self.mode == \"wifi\":\n            active = next((x for x in self.items if x.get(\"active\")), None)\n            if active:\n                sec = active.get(\"security\") or \"open\"\n                lines.append(f\"connected: {active['ssid']}  {active['signal']}%  {sec}  {self.wifi_ip}\")\n            else:\n                lines.append(\"not connected\")\n        else:\n            for d in self.items:\n                lines.append(f\"{d['device']}  {d['state']}  {d.get('ip') or '-'}\")\n        if self.msg:\n            lines.append(f\"  {self.msg}\")\n        return \"\\n\".join(lines)\n\n    def _update_status(self) -> None:\n        if not self.is_mounted or self.app.screen is not self:\n            return\n        self.query_one(\"#net_status\", Static).update(self._status_text())\n\n    def _rebuild(self) -> None:\n        if not self.is_mounted or self.app.screen is not self:\n            return\n        self._update_status()\n        lv = self.query_one(\"#net_list\", ListView)\n        lv.clear()\n        for it in self.items:\n            lv.append(ListItem(Label(self._item_text(it))))\n        if self.items:\n            lv.index = 0\n\n    # ---- refresh / modes --------------------------------------------\n    async def _refresh(self) -> None:\n        await asyncio.to_thread(self._load_all)\n        self._rebuild()\n\n    async def _auto(self) -> None:\n        if self.app.screen is not self:\n            return\n        await asyncio.to_thread(self._load_all)\n        self._update_status()\n\n    def action_refresh(self) -> None:\n        asyncio.create_task(self._refresh())\n\n    def action_wifi_mode(self) -> None:\n        self.mode = \"wifi\"\n        self.msg = \"showing wifi networks\"\n        asyncio.create_task(self._refresh())\n\n    def action_eth_mode(self) -> None:\n        self.mode = \"eth\"\n        self.msg = \"showing ethernet devices\"\n        asyncio.create_task(self._refresh())\n\n    def action_back(self) -> None:\n        self.app.pop_screen()\n\n    # ---- actions -----------------------------------------------------\n    def on_list_view_selected(self, event) -> None:\n        asyncio.create_task(self._connect())\n\n    async def _connect(self) -> None:\n        if not self.is_mounted or self.app.screen is not self:\n            return\n        i = self.query_one(\"#net_list\", ListView).index\n        if i is None or i >= len(self.items):\n            return\n        it = self.items[i]\n        if self.mode == \"eth\":\n            up = it.get(\"state\") != \"connected\"\n            ok, msg = await asyncio.to_thread(self.netio.ethernet_set, it[\"device\"], up)\n        else:\n            if it.get(\"security\"):\n                def _cb(ssid, pw):\n                    if pw is not None:\n                        asyncio.create_task(self._finish_connect(ssid, pw))\n                await self.app.push_screen(PasswordModal(it[\"ssid\"], _cb))\n                return\n            else:\n                ok, msg = await asyncio.to_thread(self.netio.wifi_connect, it[\"ssid\"], None)\n        self.msg = msg\n        await self._refresh()\n\n    async def _finish_connect(self, ssid: str, pw: str) -> None:\n        ok, msg = await asyncio.to_thread(self.netio.wifi_connect, ssid, pw)\n        self.msg = msg\n        await self._refresh()\n\n    def action_disconnect(self) -> None:\n        asyncio.create_task(self._disconnect())\n\n    async def _disconnect(self) -> None:\n        if self.mode == \"wifi\":\n            ok, msg = await asyncio.to_thread(self.netio.wifi_disconnect)\n        else:\n            i = self.query_one(\"#net_list\", ListView).index\n            if i is None or i >= len(self.items):\n                return\n            ok, msg = await asyncio.to_thread(self.netio.ethernet_set, self.items[i][\"device\"], False)\n        self.msg = msg\n        await self._refresh()\n\n    def action_forget(self) -> None:\n        asyncio.create_task(self._forget())\n\n    async def _forget(self) -> None:\n        if self.mode != \"wifi\":\n            return\n        i = self.query_one(\"#net_list\", ListView).index\n        if i is None or i >= len(self.items):\n            return\n        ssid = self.items[i][\"ssid\"]\n        ok, msg = await asyncio.to_thread(self.netio.wifi_forget, ssid)\n        self.msg = msg\n        await self._refresh()\n\n    def action_radio(self) -> None:\n        asyncio.create_task(self._radio())\n\n    async def _radio(self) -> None:\n        ok, msg = await asyncio.to_thread(self.netio.wifi_radio, not self.wifi_on)\n        self.wifi_on = not self.wifi_on\n        self.msg = msg\n        await self._refresh()\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/screensaver.py",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "size": 3785,
+      "sha256": "ab5b94daaf7497d4a0b4116986861d1da9b4fb42ca8122d0c9c7180e2d97dc13",
+      "content": "\"\"\"screensaver.py - black idle screen for the boot console.\n\nService supervision remains active while display updates are suspended.\nOnly keyboard input wakes the black screen. Legacy bounce helpers are unused.\n\"\"\"\nfrom __future__ import annotations\n\nimport asyncio\nimport random\nimport time\nfrom dataclasses import dataclass\n\nfrom rich.text import Text\n\nfrom textual import events\nfrom textual.app import ComposeResult\nfrom textual.screen import Screen\nfrom textual.widgets import Static\n\nfrom services import SERVICES\n\n# Palette mirrors app.py (SEV_COLOR) so the floating card reads like the\n# dashboard it came from.\nSEV_COLOR = {0: \"green\", 1: \"yellow\", 2: \"red\", 3: \"grey62\"}\nTITLE_BAND = \"bold #9fd8d8 on #003333\"\nNAME_COLOR = \"bold #9fd8d8\"\nNET_COLOR = \"#7fa8c9\"\nFEED_COLOR = \"#9a9a9a\"\nHINT_COLOR = \"#5f6b70\"\n\nMAX_CARD_W = 84       # widest card we float\nSIDE_FREE = 4         # free cells per side so the card can drift in x\nREFRESH_EVERY = 1.5   # seconds between live content refreshes\nFRAME_S = 0.05        # animation frame time (20 fps)\n\n\ndef _fit(raw: str, width: int) -> str:\n    \"\"\"Truncate (or pad) a plain-ASCII line to exactly `width` cells.\"\"\"\n    if width <= 0:\n        return \"\"\n    clipped = raw[:width]\n    return clipped + \" \" * (width - len(clipped))\n\n\n@dataclass\nclass Bouncer:\n    \"\"\"A point moving in a straight line with specular edge reflection.\n\n    Pure logic (no UI) so the physics is unit-testable: the card travels at\n    a fixed angle and velocity, and each edge hit mirrors that axis so it\n    leaves bouncing straight into the reflected direction.\n    \"\"\"\n\n    x: float\n    y: float\n    vx: float\n    vy: float\n    max_x: int\n    max_y: int\n\n    @classmethod\n    def make(cls, max_x: int, max_y: int) -> \"Bouncer\":\n        vx = random.uniform(7.0, 13.0) * random.choice((-1, 1))\n        vy = random.uniform(7.0, 13.0) * random.choice((-1, 1))\n        if max_x <= 0:\n            vx = 0.0\n        if max_y <= 0:\n            vy = 0.0\n        return cls(0.0, 0.0, vx, vy, max(0, max_x), max(0, max_y))\n\n    def step(self, dt: float) -> tuple[bool, bool]:\n        \"\"\"Advance for `dt` seconds.\n\n        Returns (hit_left_or_right_edge, hit_top_or_bottom_edge).\n        \"\"\"\n        self.x += self.vx * dt\n        self.y += self.vy * dt\n        hit_x = hit_y = False\n        if self.x < 0.0:\n            self.x = -self.x\n            self.vx = -self.vx\n            hit_x = True\n        elif self.x > self.max_x:\n            self.x = 2.0 * self.max_x - self.x\n            self.vx = -self.vx\n            hit_x = True\n        if self.y < 0.0:\n            self.y = -self.y\n            self.vy = -self.vy\n            hit_y = True\n        elif self.y > self.max_y:\n            self.y = 2.0 * self.max_y - self.y\n            self.vy = -self.vy\n            hit_y = True\n        self.x = max(0.0, min(float(self.max_x), self.x))\n        self.y = max(0.0, min(float(self.max_y), self.y))\n        return hit_x, hit_y\n\n\nclass ScreensaverScreen(Screen):\n    \"\"\"Opaque black idle screen with keyboard wake and no display timer.\"\"\"\n\n    CSS = \"\"\"\n    ScreensaverScreen { background: #000000; }\n    \"\"\"\n\n    def __init__(self, host: object, **kwargs):\n        super().__init__(**kwargs)\n        self._host = host\n\n    async def on_key(self, event: events.Key) -> None:\n        # The wake key is consumed: it must never start/stop a service.\n        event.stop()\n        event.prevent_default()\n        if getattr(self._host, \"is_screensaver_up\", lambda: False)():\n            # pop_screen waits on this screen's pump; await it outside the handler.\n            asyncio.create_task(self._host.leave_screensaver())\n\n    def on_mouse_down(self, event: events.MouseDown) -> None:\n        event.stop()\n\n    def on_click(self, event: events.Click) -> None:\n        event.stop()\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/services.py",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "size": 11682,
+      "sha256": "c9b41268573bc45def6141deab1dc9635a5fb9a824d22df66a827530c0611421",
+      "content": "\"\"\"services.py — WebAgent boot dashboard: stack definitions + pure supervisor logic.\n\nNo I/O and no UI in this module. plan() is a pure function of a state\nsnapshot plus engine timers, so it can be unit-tested without docker.\n\"\"\"\nfrom __future__ import annotations\n\nimport time\nfrom dataclasses import dataclass, field\nfrom typing import Optional\n\n\n# ---------------------------------------------------------------------------\n# Stack definitions (prod + dev live on this physical server)\n# ---------------------------------------------------------------------------\n\n@dataclass(frozen=True)\nclass ServiceSpec:\n    id: str              # e.g. \"prod-app\"\n    stack: str           # \"prod\" | \"dev\"\n    role: str            # \"app\" | \"tunnel\"\n    container: str       # docker container name\n    label: str           # short label (legacy)\n    domain: str          # public domain it serves\n    title: str           # full display line in the boot list\n\nSERVICES: list[ServiceSpec] = [\n    ServiceSpec(\"prod-app\",    \"prod\", \"app\",    \"webagent\",                       \"WebAgent\",  \"webagent.live\",     \"App Webagent\"),\n    ServiceSpec(\"prod-tunnel\", \"prod\", \"tunnel\", \"cloudflared-webagent-named\",     \"Tunnel\",    \"webagent.live\",     \"Tunnel webagent.live\"),\n    ServiceSpec(\"dev-app\",     \"dev\",  \"app\",    \"webagent-dev\",                   \"WebAgent\",  \"dev.webagent.live\", \"App Webagent-dev\"),\n    ServiceSpec(\"dev-tunnel\",  \"dev\",  \"tunnel\", \"cloudflared-webagent-dev-named\", \"Tunnel\",    \"dev.webagent.live\", \"Tunnel dev.webagent.live\"),\n]\n\nSERVICE_BY_ID: dict[str, ServiceSpec] = {s.id: s for s in SERVICES}\n\n# Public URLs the tunnels serve; probed to catch a running-but-dead tunnel.\nTUNNEL_URLS: dict[str, str] = {\n    \"prod-tunnel\": \"https://webagent.live/app\",\n    \"dev-tunnel\":  \"https://dev.webagent.live/app\",\n}\n\n\n# Health endpoints probed by the supervisor (readiness first, liveness fallback).\nAPP_URLS: dict[str, tuple[str, str]] = {\n    \"prod-app\": (\"http://localhost:8080/health/ready\", \"http://localhost:8080/health\"),\n    \"dev-app\":  (\"http://100.112.23.15:8081/health/ready\", \"http://100.112.23.15:8081/health\"),\n}\n\n\ndef urls_for(spec: ServiceSpec) -> tuple[Optional[str], Optional[str]]:\n    if spec.role == \"tunnel\":\n        url = TUNNEL_URLS.get(spec.id)\n        return (url, None)\n    return APP_URLS[spec.id]\n\n\n# ---------------------------------------------------------------------------\n# Engine configuration & mutable runtime\n# ---------------------------------------------------------------------------\n\n@dataclass\nclass Cfg:\n    startup_grace: float = 120.0    # allow an app this long to serve at boot\n    unhealthy_grace: float = 45.0   # docker-unhealthy while running: restart after this\n    min_attempt_gap: float = 30.0   # never auto-start/restart more often than this\n    max_auto_restarts: int = 3      # recovery attempts allowed per guard window\n    guard_window: float = 3600.0\n    healthy_reset_after: float = 120.0  # sustained healthy time clears the crash guard\n    tunnel_grace: float = 30.0         # public URL may lag while a tunnel registers\n\n\n@dataclass\nclass Observed:\n    \"\"\"Real state gathered each tick (docker inspect / http probe).\"\"\"\n    exists: bool = True\n    running: bool = False\n    docker_health: str = \"\"          # healthy | starting | unhealthy | \"\"\n    started_epoch: Optional[float] = None\n    http_ok: Optional[bool] = None   # apps only\n    http_ms: Optional[float] = None\n    http_text: str = \"\"              # \"200\", \"503\", \"timeout\", \"refused\"...\n    netmode: str = \"\"               # HostConfig.NetworkMode (bridge/none/host)\n    net_attached: bool = True       # has at least one docker network endpoint\n\n\n@dataclass\nclass RT:\n    \"\"\"Supervisor bookkeeping for one service.\"\"\"\n    desired: bool = True\n    crash: bool = False\n    attempts: list = field(default_factory=list)   # auto recovery attempt times\n    last_attempt: float = 0.0\n\n\n@dataclass\nclass Status:\n    severity: int   # 0 ok(green) 1 busy(amber) 2 bad(red) 3 off(gray)\n    text: str\n\n\n@dataclass\nclass Action:\n    service: str     # service id\n    kind: str        # start | stop | restart\n    reason: str = \"\"\n\n\n# ---------------------------------------------------------------------------\n# Pure planning\n# ---------------------------------------------------------------------------\n\ndef _attempts_allowed(rt: RT, now: float, cfg: Cfg) -> tuple[bool, str]:\n    recent = [t for t in rt.attempts if now - t < cfg.guard_window]\n    if len(recent) >= cfg.max_auto_restarts:\n        rt.crash = True\n        return False, \"crash-loop guard reached - manual action required\"\n    if now - rt.last_attempt < cfg.min_attempt_gap:\n        return False, \"waiting (backoff after last attempt)\"\n    return True, \"\"\n\n\ndef plan(\n    obs_by_id: dict[str, Observed],\n    rt_by_id: dict[str, RT],\n    now: float,\n    cfg: Cfg,\n    docker_ok: bool,\n) -> tuple[list[Action], dict[str, Status], dict[str, str]]:\n    \"\"\"Decide what the supervisor should do this tick.\n\n    Returns (actions, statuses, notes). Pure - no side effects.\n    \"\"\"\n    actions: list[Action] = []\n    statuses: dict[str, Status] = {}\n    notes: dict[str, str] = {}\n\n    app_specs = {s.stack: s for s in SERVICES if s.role == \"app\"}\n\n    for spec in SERVICES:\n        o = obs_by_id.get(spec.id, Observed())\n        r = rt_by_id.setdefault(spec.id, RT())\n        age = (now - o.started_epoch) if o.started_epoch is not None else None\n\n        # --- container missing ---------------------------------------------\n        if not o.exists:\n            notes[spec.id] = \"container does not exist\"\n            statuses[spec.id] = Status(2, \"MISSING container\")\n            continue\n\n        # --- user turned it off --------------------------------------------\n        if not r.desired:\n            if o.running:\n                actions.append(Action(spec.id, \"stop\", \"user stopped\"))\n                statuses[spec.id] = Status(3, \"stopping\")\n            else:\n                statuses[spec.id] = Status(3, \"off\")\n            continue\n\n        # --- docker not up yet ---------------------------------------------\n        if not docker_ok:\n            statuses[spec.id] = Status(1, \"waiting for docker\")\n            continue\n\n        # --- running but detached from its docker network ------------------\n        if o.running and not o.net_attached:\n            net = o.netmode or \"bridge\"\n            if net == \"default\":\n                net = \"bridge\"\n            if net in (\"none\", \"host\", \"container\") or net.startswith(\"container:\"):\n                statuses[spec.id] = Status(2, \"no network (unsupported)\")\n                notes[spec.id] = f\"container uses netmode {net}; manual fix needed\"\n            else:\n                allowed, why = _attempts_allowed(r, now, cfg)\n                if allowed:\n                    actions.append(Action(spec.id, \"netconnect\", f\"re-attach to {net}\"))\n                    statuses[spec.id] = Status(2, \"no network - reconnecting\")\n                    notes[spec.id] = \"container lost its docker network\"\n                else:\n                    statuses[spec.id] = Status(2, \"no network\")\n                    notes[spec.id] = why\n            continue\n\n        # --- apps -----------------------------------------------------------\n        if spec.role == \"app\":\n            healthy = bool(o.http_ok)\n            if o.running:\n                if healthy:\n                    r.crash = False\n                    if age is not None and age > cfg.healthy_reset_after:\n                        r.attempts = []\n                    text = f\"healthy {o.http_ms:.0f}ms\" if o.http_ms is not None else \"healthy\"\n                    statuses[spec.id] = Status(0, text)\n                else:\n                    docker_unhealthy = o.docker_health == \"unhealthy\"\n                    over_grace = age is not None and age > cfg.startup_grace\n                    over_unhealthy = docker_unhealthy and age is not None and age > cfg.unhealthy_grace\n                    if over_grace or over_unhealthy:\n                        allowed, why = _attempts_allowed(r, now, cfg)\n                        if allowed:\n                            actions.append(Action(spec.id, \"restart\", \"unhealthy (no response)\"))\n                            statuses[spec.id] = Status(2, \"unhealthy - restarting\")\n                        else:\n                            statuses[spec.id] = Status(2, \"unhealthy\")\n                            if why:\n                                notes[spec.id] = why\n                    elif docker_unhealthy:\n                        statuses[spec.id] = Status(2, \"unhealthy (docker)\")\n                    else:\n                        statuses[spec.id] = Status(1, \"starting\")\n                continue\n            else:\n                # not running, desired on\n                allowed, why = _attempts_allowed(r, now, cfg)\n                if allowed:\n                    actions.append(Action(spec.id, \"start\", \"desired state is on\"))\n                    statuses[spec.id] = Status(1, \"starting\")\n                else:\n                    statuses[spec.id] = Status(2, \"stopped\")\n                    if why:\n                        notes[spec.id] = why\n                continue\n\n        # --- tunnels --------------------------------------------------------\n        app_spec = app_specs[spec.stack]\n        app_obs = obs_by_id.get(app_spec.id, Observed())\n        app_rt = rt_by_id.setdefault(app_spec.id, RT())\n        app_healthy = bool(app_obs.http_ok) and app_rt.desired\n\n        # an app switched off takes its tunnel down with it\n        if o.running and not app_rt.desired:\n            actions.append(Action(spec.id, \"stop\", \"app turned off\"))\n            statuses[spec.id] = Status(3, \"stopping (app off)\")\n            continue\n\n        if o.running:\n            if app_healthy:\n                if o.http_ok is False and age is not None and age > cfg.tunnel_grace:\n                    allowed, why = _attempts_allowed(r, now, cfg)\n                    if allowed:\n                        actions.append(Action(spec.id, \"restart\", \"tunnel not forwarding\"))\n                        statuses[spec.id] = Status(2, \"tunnel down - restarting\")\n                    else:\n                        statuses[spec.id] = Status(2, \"tunnel down\")\n                        if why:\n                            notes[spec.id] = why\n                else:\n                    r.crash = False\n                    if age is not None and age > cfg.healthy_reset_after:\n                        r.attempts = []\n                    if o.http_ok is False:\n                        statuses[spec.id] = Status(1, \"tunnel starting\")\n                    else:\n                        statuses[spec.id] = Status(0, \"running - app healthy\")\n            else:\n                statuses[spec.id] = Status(2, \"running - app not healthy\")\n            continue\n\n        # tunnel not running\n        if not app_rt.desired:\n            statuses[spec.id] = Status(3, \"off (app off)\")\n        elif not app_obs.exists:\n            statuses[spec.id] = Status(2, \"waiting for app container\")\n        elif not app_healthy:\n            statuses[spec.id] = Status(1, \"waiting for app to be healthy\")\n            notes[spec.id] = \"starts automatically when the app answers its health check\"\n        else:\n            allowed, why = _attempts_allowed(r, now, cfg)\n            if allowed:\n                actions.append(Action(spec.id, \"start\", \"app healthy\"))\n                statuses[spec.id] = Status(1, \"starting\")\n            else:\n                statuses[spec.id] = Status(2, \"stopped\")\n                if why:\n                    notes[spec.id] = why\n\n    return actions, statuses, notes\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/install.sh",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 509,
+      "size": 1860,
+      "sha256": "735bf2db0ab9be2d06f949144bc1bba0a24440dca3ecfed76f52db4fc5be6118",
+      "content": "#!/usr/bin/env bash\n# Install the WebAgent boot dashboard. Run with sudo:\n#     sudo /home/ar/webagent-boot/install.sh\n#\n# - backs up every existing boot file to /home/ar/boot-backups/<timestamp>/\n# - installs the dashboard launchers (webagent-boot-dashboard,\n#   webagent-dashboard, webagent), the session wrapper and the xfce\n#   console shortcut into /usr/local/bin\n# - leaves the legacy whiptail menu in place as an automatic fallback\nset -eu\n\nTS=$(date +%Y%m%dT%H%M%S)\nBACKUP=\"/home/ar/boot-backups/$TS\"\nSRC=/home/ar/webagent-boot/bin\n\necho \"==> Backing up existing boot files to $BACKUP\"\nmkdir -p \"$BACKUP\"\nfor f in \\\n  /usr/local/bin/webagent-boot-menu \\\n  /usr/local/bin/webagent-boot-session \\\n  /usr/local/bin/webagent-chromium-session \\\n  /usr/local/bin/webagent-boot-dashboard \\\n  /usr/local/bin/webagent \\\n  /usr/local/bin/xfce \\\n  /etc/profile.d/webagent-console-menu.sh\ndo\n  if [ -f \"$f\" ]; then\n    cp -p \"$f\" \"$BACKUP/\"\n    echo \"    backed up $f\"\n  fi\ndone\nchown -R ar:ar \"$BACKUP\" 2>/dev/null || true\n\necho \"==> Installing dashboard launchers, session wrapper and xfce\"\ninstall -m 0755 -o root -g root \"$SRC/webagent-boot-dashboard\" /usr/local/bin/webagent-boot-dashboard\ninstall -m 0755 -o root -g root \"$SRC/webagent-boot-session\"   /usr/local/bin/webagent-boot-session\ninstall -m 0755 -o root -g root \"$SRC/webagent-boot-dashboard\" /usr/local/bin/webagent-dashboard\ninstall -m 0755 -o root -g root \"$SRC/webagent-boot-dashboard\" /usr/local/bin/webagent\ninstall -m 0755 -o root -g root \"$SRC/xfce\" /usr/local/bin/xfce\n\necho \"==> Done. The boot console now opens the dashboard on next login.\"\necho \"    Test it now with:  webagent  or  webagent-dashboard   (needs a real terminal)\"\necho \"    XFCE desktop from a console:      xfce\"\necho \"    Rollback:          sudo cp -p $BACKUP/webagent-boot-session /usr/local/bin/webagent-boot-session\"\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/README.md",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "size": 7903,
+      "sha256": "cb732ffb1436ae7f8a403407ea0f71385197760edf62553a8047392876de9827",
+      "content": "# WebAgent boot dashboard\n\nReplaces the one-shot whiptail boot menu with a persistent console dashboard\nthat runs on the physical server's tty1 at login.\n\n## What it does\n\n- Opens automatically on the boot console (tty1, no SSH/desktop).\n- Immediately starts both stacks in dependency order:\n\n  | # | Service | Container | Serves |\n  |---|---------|-----------|--------|\n  | 1 | WebAgent (prod) | `webagent` | webagent.live |\n  | 2 | Tunnel (prod) | `cloudflared-webagent-named` | |\n  | 3 | WebAgent (dev) | `webagent-dev` | dev.webagent.live |\n  | 4 | Tunnel (dev) | `cloudflared-webagent-dev-named` | |\n\n- Shows live health per service every ~5s (HTTP readiness probe for apps,\n  docker state, latency); host network and Tailscale health appear in\n  the two rows below the services (5 = Network, 6 = Tailscale).\n- Supervises: a service that should be on but is down/unhealthy is\n  restarted automatically (with backoff + a crash-loop guard). Tunnels\n  wait for their app to answer the health check, then start by themselves.\n- Manual control per row: `s` start, `x` stop, `r` restart, `Space` toggle\n  (or click the buttons). Deliberately stopping a service sets it OFF and\n  the supervisor will not fight you; stopping an app also takes its tunnel\n  down. Manual actions reset the crash guard.\n- Rows 5-9 under the services: **5 Network** opens the network manager and\n  shows the connected network by **name** (SSID / wired profile, not the IP)\n  plus its health in green; **6 Tailscale** has its own line showing online\n  state and peer count in green; then **Command prompt**, **XFCE** and\n  **Chromium**. The separate \"Network Status\" lines above the services were\n  removed - the row statuses are now the summary.\n- Leave buttons (and keys): Command prompt (`q`), Chromium (`b`), XFCE\n  (`f`). Chromium/XFCE return to the dashboard when closed. `q` drops\n  to a shell; the next fresh console login reopens the dashboard.\n- Console shortcuts: `webagent` starts the dashboard\n  (`webagent-dashboard` is the same launcher under another name);\n  `xfce` starts the XFCE desktop from the console and returns to\n  the dashboard when you log out of XFCE.\n\n## Files\n\n| File | Role |\n|------|------|\n| `services.py` | Stack definitions + pure supervisor planner (no I/O) |\n| `dockerio.py` | docker + HTTP probes + network summary |\n| `controller.py` | Tick loop: gather, plan, act, log |\n| `app.py` | Textual UI (bare-bones) |\n| `netio.py` | nmcli wrapper (scan/connect/forget/radio/ethernet) |\n| `netscreen.py` | Network screen (Wi-Fi + Ethernet) |\n| `bin/webagent-boot-session` | Console session wrapper (installed to /usr/local/bin) |\n| `bin/webagent-boot-dashboard` | Launcher into the venv app |\n| `bin/xfce` | Console shortcut: start the XFCE desktop, return to the dashboard on logout |\n| `install.sh` | `sudo` install: backs up + installs root files |\n| `tests/` | Headless unit + Pilot tests |\n\n## Install\n\n```bash\nsudo /home/ar/webagent-boot/install.sh\n```\n\nThe legacy whiptail menu (`/usr/local/bin/webagent-boot-menu`) is left in\nplace and used automatically if the dashboard cannot start (bad terminal,\nbroken venv). Original boot files are backed up to\n`/home/ar/boot-backups/<timestamp>/`.\n\n## Run / test\n\n```bash\nwebagent-dashboard          # manual launch in any real terminal\nwebagent                    # same dashboard (alias)\nsudo /home/ar/webagent-boot/install.sh && webagent\n\nxfce                        # from a console: open the XFCE desktop.\n                            # Logging out of XFCE returns to the dashboard.\n```\n\nTests (no root, no docker mutations):\n\n```bash\ncd /home/ar/webagent-boot\n.venv/bin/python tests/test_engine.py\n.venv/bin/python tests/test_controller.py\nPYTHONUTF8=1 .venv/bin/python tests/test_pilot.py\n```\n\nSafety: container writes never happen during tests (FakeExecutor) or when\nthe controller is created in dry-run mode. Live reads (docker inspect,\nhealth GETs) are safe anytime.\n\n## Network screen (Wi-Fi + Ethernet)\n\nFrom the boot dashboard press **`n`** (or the **Network** button) to open the\nnetwork screen; **`q`**/`Esc` returns.\n\n- **Wi-Fi** (`w`): list of nearby networks (SSID, signal, security, active\n  marker). `Enter` connects (masked password prompt for secured networks),\n  `r` rescans, `d` disconnects, `f` forgets the selected profile, `o` toggles\n  the Wi-Fi radio.\n- **Ethernet** (`e`): list of wired devices with state + IP. `Enter` toggles\n  connect/disconnect.\n- Connecting saves the profile (normal `nmcli` behaviour), so it auto-joins\n  after reboots. The netplan-managed profile for the current SSID is\n  re-created by netplan after a \"forget\" - that is expected and shown as-is.\n\nBacking modules: `netio.py` (nmcli wrapper) and `netscreen.py` (the screen).\nTests: `tests/test_netio.py`, `tests/test_pilot_net.py`.\n\n## Black screen on idle\n\nAfter 60 seconds without keyboard activity, the console goes black. The idle\nscreen has no widgets, animation, status refresh or display timer. Hidden\ndashboard redraws and idle-watch polling are suspended. Service supervision\ncontinues at its existing cadence.\n\nPress any keyboard key to restore the current dashboard. The first key only\nwakes the display and cannot start, stop or restart a service. Mouse input does\nnot wake it. Ctrl+U previews the black screen.\n\nWEBAGENT_BOOT_SAVER_SECONDS changes the timeout; 0 disables blanking.\nWEBAGENT_BOOT_SAVER_ANIMATE is no longer used.\n\nThe change is presentation-only, outside the v3 broker publication context.\nController planning, executor authority and service-control behavior are retained.\nTests use fake service executors and verify blank pixels, no hidden redraws,\nongoing supervision, mouse inactivity, keyboard wake and current status on wake.\nLive activation still needs a restart that cannot alter legacy containers; the\nexisting startup preflight proposed legacy starts, so no restart is certified.\n\n## Keyboard-woken idle console\nThe default dashboard is a status/control client of the protected v3 event-driven boot host. It manages only the development API, agent loop and publication gate; production and retired development containers are untouched. After the configured idle interval it shows a completely black screen. Mouse input does not wake it. Keyboard input refreshes current host status and restores the dashboard. While black it performs no status polling, rendering animation or network presentation probes.\n\nStartup and recovery run independently in webagent-boot-development.service. Docker lifecycle/health events and actual retry deadlines drive it. Native container restart policies still recover exited processes. Host-owned desired state, manual stops, uncertainty and the crash guard survive console/host restarts. A withdrawn/disabled boot engine retains pending state without linked fallback; restoration only resumes eligible desired recovery.\n\nThe supported planner lives in the v3 engine catalog: version-1 boot.plan, Rust library webagent-boot-supervisor, confined webagent-boot-service and a trusted host launcher reusing the established pre-exec sandbox. Backend publication, tests and ledger evidence belong to the v3 broker workflow. Existing legacy Controller/FakeExecutor scenarios are retained as characterization; normal console startup uses boot_client.Controller.\n\nThe installed Textual Linux driver had a 100 ms input poll even when rendering was\nquiet. idle_driver.IdleLinuxDriver uses its existing parser's actual deadline for\nincomplete sequences, a shutdown wake pipe, and otherwise a blocking selector.\nPresentation timers are paused after the first black frame paints and restored\non wake. This includes network and password screens; masked input is retained.\nThe originating keyboard event is observed before a modal consumes it, so active\ntyping prevents premature idle. A real PTY fixture verifies zero idle CPU ticks,\nbare-Escape wake and shutdown without a blocked reader.\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/bin/webagent-boot-dashboard",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 509,
+      "size": 487,
+      "sha256": "60b4a0850c1686522787e1e984d05794cbb8d75e28d1177456773507d9dd2aa3",
+      "content": "#!/usr/bin/env bash\n# WebAgent boot dashboard launcher. Exit 2 tells the session wrapper to\n# fall back to the legacy whiptail menu (no UI possible).\nset -u\nVENV=/home/ar/webagent-boot/.venv/bin/python\nAPP=/home/ar/webagent-boot/app.py\n\n[ -x \"$VENV\" ] || exit 2\n[ -r \"$APP\" ] || exit 2\n[ -t 0 ] || exit 2\ncase \"${TERM:-}\" in\n  dumb|\"\") exit 2 ;;\nesac\n\n\"$VENV\" \"$APP\" \"$@\"\nrc=$?\ncase \"$rc\" in\n  0|20|21) exit \"$rc\" ;;\n  *) exit 2 ;;   # unexpected dashboard failure -> fallback menu\nesac\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/bin/webagent-boot-session",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 509,
+      "size": 1621,
+      "sha256": "7ac163ef4564df1959f26d3222f7c91d80d51e81ccceaf29448b68d8d346a96e",
+      "content": "#!/usr/bin/env bash\n# Boot session for the physical console (tty1).\n#\n# First screen is the persistent boot dashboard: it auto-starts and\n# supervises the WebAgent stacks. Leaving it into Chromium or XFCE starts\n# that interface; closing it returns here to the dashboard again. Quitting\n# to the command prompt drops to a shell (the next fresh login reopens the\n# dashboard). If the dashboard cannot run at all the legacy whiptail menu\n# takes over as a fallback.\nset -u\n\nLOG=\"$HOME/.cache/webagent-boot.log\"\nDASH=/usr/local/bin/webagent-boot-dashboard\nMENU=/usr/local/bin/webagent-boot-menu\nCHROMIUM=/usr/local/bin/webagent-chromium-session\n\nlaunch_gui() {\n  case \"$1\" in\n    20) clear\n        echo \"Opening Chromium. Close it to return to the boot console.\"\n        startx \"$CHROMIUM\" -- :0 ;;\n    21) clear\n        echo \"Opening XFCE. Log out to return to the boot console.\"\n        startx /usr/bin/startxfce4 -- :0 ;;\n  esac\n}\n\nrun_dashboard() {\n  if [ -x \"$DASH\" ]; then\n    \"$DASH\"\n  else\n    return 2\n  fi\n}\n\n# First screen: dashboard, or the legacy menu if the dashboard cannot run.\nrc=0\nrun_dashboard\nrc=$?\nif [ \"$rc\" -eq 2 ]; then\n  clear\n  echo \"Boot dashboard unavailable - falling back to the classic menu.\"\n  echo\n  \"$MENU\"\n  rc=$?\nfi\n\n# GUI sessions return to the dashboard when the user closes them.\nwhile [ \"$rc\" -eq 20 ] || [ \"$rc\" -eq 21 ]; do\n  launch_gui \"$rc\"\n  rc=0\n  run_dashboard\n  rc=$?\n  if [ \"$rc\" -eq 2 ]; then\n    clear\n    echo \"Boot dashboard unavailable - returning to the command prompt.\"\n    break\n  fi\ndone\n\nclear\nif [ -f \"$LOG\" ]; then\n  tail -n 30 \"$LOG\"\n  echo\nfi\nexec /bin/bash -l\n"
+    },
+    {
+      "path": "/home/ar/webagent-boot/bin/xfce",
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 509,
+      "size": 779,
+      "sha256": "de3e8ec42b43042a457814531a4551a3a4a865f5a136d00380f06593ec7b605f",
+      "content": "#!/usr/bin/env bash\n# Launch the XFCE desktop session from the boot console, then return to\n# the WebAgent dashboard when XFCE is closed (log out of XFCE).\n#\n# Installed by install.sh to /usr/local/bin/xfce.\nset -u\n\nif [ -n \"${DISPLAY:-}\" ]; then\n  echo \"An X display is already active (DISPLAY=${DISPLAY}).\" >&2\n  echo \"Log out of XFCE and use the console instead.\" >&2\n  exit 1\nfi\nif [ ! -t 0 ]; then\n  echo \"Run xfce from a real console.\" >&2\n  exit 1\nfi\n\nDASH=/usr/local/bin/webagent-dashboard\n\nclear\necho \"Opening XFCE. Log out of XFCE to return to the WebAgent dashboard.\"\nstartx /usr/bin/startxfce4 -- :0\nrc=$?\n\n# XFCE session ended with a clean logout: bring the dashboard back.\nif [ \"$rc\" -eq 0 ] && [ -x \"$DASH\" ] && [ -t 0 ]; then\n  clear\n  exec \"$DASH\"\nfi\nexit \"$rc\"\n"
+    }
+  ],
+  "installed_broker": {
+    "package_id": "b0ef7367215418087cac31e7ee23568d0de04de1cb6936d5c42decf5f96fe010",
+    "files": [
+      {
+        "installed_path": "apt_prefetch.py",
+        "source": "build-service/apt_prefetch.py",
+        "sha256": "92adc018d7d0a4eb5ab9b5376883752b61f06564a50463c95aa5e58120b2327d",
+        "size": 9373
+      },
+      {
+        "installed_path": "boot_host.py",
+        "source": "build-service/boot_host.py",
+        "sha256": "f4a75ccf20c91a90fd7fe9e2d1d575240961230f7fd78068d4bd232c710e1793",
+        "size": 24451
+      },
+      {
+        "installed_path": "bootstrap.py",
+        "source": "build-service/install.py",
+        "sha256": "c2f58800ad5666a2f41ab129b92188436854b2d622410645918407627894e0e7",
+        "size": 42939
+      },
+      {
+        "installed_path": "buildctl.py",
+        "source": "build-service/buildctl.py",
+        "sha256": "97b761be049d7f33326875d1d9cabdfc8f927618969bfcb8da4f2374c41768f4",
+        "size": 13833
+      },
+      {
+        "installed_path": "config.py",
+        "source": "build-service/config.py",
+        "sha256": "4f43829eb68af6bcd5e9140d240791f48e03cfda5b8a99a299d77cacd34cc361",
+        "size": 13345
+      },
+      {
+        "installed_path": "deploy.py",
+        "source": "build-service/deploy.py",
+        "sha256": "8d21aa2347bfafcf2e63606acae2c631b480a28a4da2f1ddee4cb108aafeea37",
+        "size": 6228
+      },
+      {
+        "installed_path": "docker_guard_dispatch.py",
+        "source": "build-service/docker_guard_dispatch.py",
+        "sha256": "c59d94c92675a19ef7e7bd555091460359449033a184a17855a738594f2ce0bc",
+        "size": 1616
+      },
+      {
+        "installed_path": "docker_retention.py",
+        "source": "build-service/docker_retention.py",
+        "sha256": "05d7fc54ce2714279605b46c453ddb0476a28589ffc2a2265adbd8113b034ff1",
+        "size": 21509
+      },
+      {
+        "installed_path": "engine_components.py",
+        "source": "build-service/engine_components.py",
+        "sha256": "28473ffdfc0bfe40ca13186b236b3152d34e3a95656649aba7214899a0c36e3f",
+        "size": 17640
+      },
+      {
+        "installed_path": "executor.py",
+        "source": "build-service/executor.py",
+        "sha256": "10ec59b6ca6379b90f8426f94c36ffc8a8f6e9c9503ada910ddda9385c3afa20",
+        "size": 65631
+      },
+      {
+        "installed_path": "host.py",
+        "source": "build-service/host.py",
+        "sha256": "85862c2da614bcfaa249f5cccb1c056f5014c2e003da37ccbc18dfe55d33b42a",
+        "size": 365026
+      },
+      {
+        "installed_path": "image_reuse.py",
+        "source": "build-service/image_reuse.py",
+        "sha256": "14dd2a1c0ac431a3745b0e3b7433452d1b2ed1120c9f7d2ce663378b4e597b00",
+        "size": 18207
+      },
+      {
+        "installed_path": "index-maintenance.py",
+        "source": "plugins/abilities/Administrator/code_index/maintenance.py",
+        "sha256": "203540884e6e43120a9e325129bd59832f110a104380ade80925bcbed995faf7",
+        "size": 29207
+      },
+      {
+        "installed_path": "index-scanner.py",
+        "source": "plugins/abilities/Administrator/code_index/adapter.py",
+        "sha256": "a5f5aa5d3fff20612c88af26bc78f29d2a006d4bea932d6bf74185a0152509de",
+        "size": 96390
+      },
+      {
+        "installed_path": "index_coordinator.py",
+        "source": "build-service/index_coordinator.py",
+        "sha256": "c89821f435a66df7ad2a81877d402a7298b65270a591d8e3a1860c2aee7cdabe",
+        "size": 14715
+      },
+      {
+        "installed_path": "index_queue.py",
+        "source": "build-service/index_queue.py",
+        "sha256": "ce0f7516bb2f1ea01db21dbc72ec619df20705c710f3de4bf5df986b93694caf",
+        "size": 13646
+      },
+      {
+        "installed_path": "lifecycle.py",
+        "source": "build-service/lifecycle.py",
+        "sha256": "e0805f9bebc38a78477b3816684e845e3ce7c8474bf79078419c94d6d4bf59a1",
+        "size": 14232
+      },
+      {
+        "installed_path": "ownership.py",
+        "source": "build-service/ownership.py",
+        "sha256": "926f5dcf946af88b3b5ed6c86ad3e778e07d023ddfd1ef7b0afce556f3e727a4",
+        "size": 30598
+      },
+      {
+        "installed_path": "packaging_cache.py",
+        "source": "build-service/packaging_cache.py",
+        "sha256": "ee6fca986bfb489e1d3999cd6ddb396d337f1e6fedf1134c0fcd1ea782c126c9",
+        "size": 27010
+      },
+      {
+        "installed_path": "performance.py",
+        "source": "build-service/performance.py",
+        "sha256": "9b869b01c4a1d397875c13143a79a5cc81ad8f06f0ba0cffc100f9f2d06b2484",
+        "size": 31317
+      },
+      {
+        "installed_path": "post_deployment.py",
+        "source": "build-service/post_deployment.py",
+        "sha256": "6ac6df1f2089bd4fb6f834f8ef674d1daa56c2a3cc2f90accf6e194a865478a1",
+        "size": 22386
+      },
+      {
+        "installed_path": "reconfigure.py",
+        "source": "build-service/reconfigure.py",
+        "sha256": "453e7d8beb65e634547b75d356776357e44cee4556363b7ad0ef2c99219477ee",
+        "size": 7065
+      },
+      {
+        "installed_path": "release.py",
+        "source": "build-service/release.py",
+        "sha256": "9e4a34576d551011020520949da7beb1a90b15c46d8009d4cee4822bb8492e15",
+        "size": 24612
+      },
+      {
+        "installed_path": "resource_control.py",
+        "source": "build-service/resource_control.py",
+        "sha256": "44a4be7f9d760b63186689ff0c516309295313e5008907b8c7fa299df08821ba",
+        "size": 21147
+      },
+      {
+        "installed_path": "resources.py",
+        "source": "build-service/resources.py",
+        "sha256": "cd2436d33cace70470ccfe1256126e849aca96f75ed29a7a2af820e6ebc2f4f9",
+        "size": 37060
+      },
+      {
+        "installed_path": "review_policy.py",
+        "source": "build-service/review_policy.py",
+        "sha256": "7ad45b9f6e3fcf3c13a4eeaf8400cb11933a6fd3fe57e5d70d745188b70f2b7e",
+        "size": 25320
+      },
+      {
+        "installed_path": "review_store.py",
+        "source": "build-service/review_store.py",
+        "sha256": "03c2ddc0049119487ac8a4db939bbc6ed34cc270f8b2293fdebd5d4819f6cecf",
+        "size": 35466
+      },
+      {
+        "installed_path": "scheduler-defaults.json",
+        "source": "build-service/scheduler-defaults.json",
+        "sha256": "18fcfa2397ebc6c21c6ef67d0edc6ee26b9b593bbb2599d2501cd15b488abdc2",
+        "size": 1029
+      },
+      {
+        "installed_path": "scheduler.py",
+        "source": "build-service/scheduler.py",
+        "sha256": "538d284563aa37cf6547808a11d9e70f8c25414aa10d082ca52454a257fe0796",
+        "size": 53742
+      },
+      {
+        "installed_path": "shared-ui/ui/favicon.svg",
+        "source": "build-service/shared-ui/ui/favicon.svg",
+        "sha256": "1ea7ca5ad573c3e3a11330fa398843a9b8e740183faf9a4e1af849c6085bae6a",
+        "size": 447
+      },
+      {
+        "installed_path": "shared-ui/ui/main-panel/agents/agents.css",
+        "source": "build-service/shared-ui/ui/main-panel/agents/agents.css",
+        "sha256": "7d70cab1184eb95be4a70347f5fce7b52bd5ca3621d3d17cf6cdb078c8a31deb",
+        "size": 187311
+      },
+      {
+        "installed_path": "shared-ui/ui/main-panel/agents/agents.html",
+        "source": "build-service/shared-ui/ui/main-panel/agents/agents.html",
+        "sha256": "0a92c5fdcc3e17b4dbd21fca3091dccf9e49940248c9731472c2abb3d32182d7",
+        "size": 28255
+      },
+      {
+        "installed_path": "shared-ui/ui/shared/css/app1.css",
+        "source": "build-service/shared-ui/ui/shared/css/app1.css",
+        "sha256": "9eeb492f0e6e38b08742cc4de3690c969de907e5ab355808b6205c070f36e50b",
+        "size": 352113
+      },
+      {
+        "installed_path": "shared-ui/ui/shared/css/app2.css",
+        "source": "build-service/shared-ui/ui/shared/css/app2.css",
+        "sha256": "2d617b2e4ac82617c0e3047a2743a29e9b20ea5e2c2ded0a81f6dcd2b8a61d9b",
+        "size": 15686
+      },
+      {
+        "installed_path": "shared-ui/ui/shared/css/app3.css",
+        "source": "build-service/shared-ui/ui/shared/css/app3.css",
+        "sha256": "725be03a5e83cb5f09ee171122deed274ae57202b32f5dc237f6e4f91991322e",
+        "size": 268406
+      },
+      {
+        "installed_path": "shared-ui/ui/shared/css/design-system.css",
+        "source": "build-service/shared-ui/ui/shared/css/design-system.css",
+        "sha256": "75d86a5004a9c13b9e9e1d31592da6169cb486282de5ca11d9777c97b020ee42",
+        "size": 56144
+      },
+      {
+        "installed_path": "shared-ui/ui/shared/css/index.css",
+        "source": "build-service/shared-ui/ui/shared/css/index.css",
+        "sha256": "8cf6989ffa9ba80a581ca66c438105bf2f18fe32a7558f80a6019fb4b70863c2",
+        "size": 29289
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/fonts.css",
+        "source": "build-service/shared-ui/ui/vendor/fonts/fonts.css",
+        "sha256": "2a403fc54ba6907e2b9921f7d4e8d797480d41a814c03ceae2ff58326c437f82",
+        "size": 5750
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/inter/inter-latin-400-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/inter/inter-latin-400-normal.woff2",
+        "sha256": "2301bb030a2bcaa9c763cc4771bd717aac16709c29eaba00673fcbe7cdf99a59",
+        "size": 21564
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/inter/inter-latin-500-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/inter/inter-latin-500-normal.woff2",
+        "sha256": "eebf14aba456b89b7e899584e076588a92e422a45b37fb5fa36ce17519a3e8c5",
+        "size": 22760
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/inter/inter-latin-600-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/inter/inter-latin-600-normal.woff2",
+        "sha256": "3022fadde78fd30c384797bcef8bebc18c96083527a850f62a58d8957a8b208f",
+        "size": 22820
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/inter/inter-latin-700-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/inter/inter-latin-700-normal.woff2",
+        "sha256": "7b43cb86a0e63bbb55376b4ea60d8cc9527a1421c367aa09962725e0c5140f5f",
+        "size": 22904
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/inter/inter-latin-ext-400-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/inter/inter-latin-ext-400-normal.woff2",
+        "sha256": "56d25f402cc61fdce9234854cfed7454a56640f40b43aea6ecccd2eb8a950863",
+        "size": 29268
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/inter/inter-latin-ext-500-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/inter/inter-latin-ext-500-normal.woff2",
+        "sha256": "7e15a0f1fa0b0dc355709d096d44f7a193d13a768d31d4c110bc4f749715da2f",
+        "size": 32232
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/inter/inter-latin-ext-600-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/inter/inter-latin-ext-600-normal.woff2",
+        "sha256": "5f70855945ba172e94934e29808f41634939aef0f4f79187f5c802697f6f6507",
+        "size": 32548
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/inter/inter-latin-ext-700-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/inter/inter-latin-ext-700-normal.woff2",
+        "sha256": "c17e9995083308c693edea87e048ac5f73b554d88b184eb12570654a4e75d8af",
+        "size": 32728
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/jetbrains-mono/jetbrains-mono-latin-400-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/jetbrains-mono/jetbrains-mono-latin-400-normal.woff2",
+        "sha256": "7c53386f55c866c1b4c9309c4bcf74eda10896aab3a1780b0af5cc4976e27a27",
+        "size": 21088
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/jetbrains-mono/jetbrains-mono-latin-500-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/jetbrains-mono/jetbrains-mono-latin-500-normal.woff2",
+        "sha256": "4765dee1c0be507cde85c3de952bb24707b798f0e4002c360b9434d66c8bbc3c",
+        "size": 21820
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/jetbrains-mono/jetbrains-mono-latin-600-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/jetbrains-mono/jetbrains-mono-latin-600-normal.woff2",
+        "sha256": "1cd6778760d101a5c522f5d1de6fe17efa9e66950bcd5fce274ae3b4f494f923",
+        "size": 21936
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/jetbrains-mono/jetbrains-mono-latin-ext-400-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/jetbrains-mono/jetbrains-mono-latin-ext-400-normal.woff2",
+        "sha256": "a6e389bf813456339e6fb3f4d35a988fb648a10c9de700d2dffaf439e5add283",
+        "size": 7076
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/jetbrains-mono/jetbrains-mono-latin-ext-500-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/jetbrains-mono/jetbrains-mono-latin-ext-500-normal.woff2",
+        "sha256": "75a484756797e02dd09888f3f7d63e98713e29da3901192c806eecce0e6aad39",
+        "size": 7232
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/fonts/jetbrains-mono/jetbrains-mono-latin-ext-600-normal.woff2",
+        "source": "build-service/shared-ui/ui/vendor/fonts/jetbrains-mono/jetbrains-mono-latin-ext-600-normal.woff2",
+        "sha256": "2b43572c0a4585ea33028541168c6a8ce6ad069ed4de169fcd0a737b03d8b129",
+        "size": 7256
+      },
+      {
+        "installed_path": "shared-ui/ui/vendor/lucide/lucide.min.js",
+        "source": "build-service/shared-ui/ui/vendor/lucide/lucide.min.js",
+        "sha256": "5de4fffddc1b41ad1226d5e986fcc552adb8ad9efd1566e71dfdcdb664f9a6c2",
+        "size": 358106
+      },
+      {
+        "installed_path": "ui-test.Dockerfile",
+        "source": "build-service/ui-test.Dockerfile",
+        "sha256": "47ebef5e597fb21f186dd7d98520be05f65061ec279fa0374b28c86c733bca5f",
+        "size": 783
+      },
+      {
+        "installed_path": "ui_policy.py",
+        "source": "build-service/ui_policy.py",
+        "sha256": "095c6c5b72508aa3e99119304dbc4a7d703557e7575614f1b809ba65bc160ff6",
+        "size": 3805
+      },
+      {
+        "installed_path": "ui_publication.py",
+        "source": "build-service/ui_publication.py",
+        "sha256": "0ed2fd7691e4256dbbb69bf7981a7c5ef1aa3545359dfbc96c5694b223637e30",
+        "size": 35270
+      },
+      {
+        "installed_path": "workspace.py",
+        "source": "build-service/workspace.py",
+        "sha256": "07137f0059137542333ca5e3b0e136291306ad5d1f626ffc72010bcd11df2151",
+        "size": 10466
+      },
+      {
+        "installed_path": "workspace_executor.py",
+        "source": "build-service/workspace_executor.py",
+        "sha256": "1190b19a87aef8a2753caf2305ca28f8392f3c246ab1f596f7d806018a14edcc",
+        "size": 1396
+      },
+      {
+        "installed_path": "workspace_support.py",
+        "source": "build-service/workspace_support.py",
+        "sha256": "3acaf08a8f5ea54578a1a6757f53781986a8edc2917c28ea801359e8a57e568e",
+        "size": 20608
+      }
+    ],
+    "installation_receipt": {
+      "bootstrap_sha256": "c2f58800ad5666a2f41ab129b92188436854b2d622410645918407627894e0e7",
+      "host_sha256": "85862c2da614bcfaa249f5cccb1c056f5014c2e003da37ccbc18dfe55d33b42a",
+      "modules": {
+        "apt_prefetch.py": "92adc018d7d0a4eb5ab9b5376883752b61f06564a50463c95aa5e58120b2327d",
+        "boot_host.py": "f4a75ccf20c91a90fd7fe9e2d1d575240961230f7fd78068d4bd232c710e1793",
+        "buildctl.py": "97b761be049d7f33326875d1d9cabdfc8f927618969bfcb8da4f2374c41768f4",
+        "config.py": "4f43829eb68af6bcd5e9140d240791f48e03cfda5b8a99a299d77cacd34cc361",
+        "deploy.py": "8d21aa2347bfafcf2e63606acae2c631b480a28a4da2f1ddee4cb108aafeea37",
+        "docker_guard_dispatch.py": "c59d94c92675a19ef7e7bd555091460359449033a184a17855a738594f2ce0bc",
+        "docker_retention.py": "05d7fc54ce2714279605b46c453ddb0476a28589ffc2a2265adbd8113b034ff1",
+        "engine_components.py": "28473ffdfc0bfe40ca13186b236b3152d34e3a95656649aba7214899a0c36e3f",
+        "executor.py": "10ec59b6ca6379b90f8426f94c36ffc8a8f6e9c9503ada910ddda9385c3afa20",
+        "image_reuse.py": "14dd2a1c0ac431a3745b0e3b7433452d1b2ed1120c9f7d2ce663378b4e597b00",
+        "index-maintenance.py": "203540884e6e43120a9e325129bd59832f110a104380ade80925bcbed995faf7",
+        "index_coordinator.py": "c89821f435a66df7ad2a81877d402a7298b65270a591d8e3a1860c2aee7cdabe",
+        "index_queue.py": "ce0f7516bb2f1ea01db21dbc72ec619df20705c710f3de4bf5df986b93694caf",
+        "lifecycle.py": "e0805f9bebc38a78477b3816684e845e3ce7c8474bf79078419c94d6d4bf59a1",
+        "ownership.py": "926f5dcf946af88b3b5ed6c86ad3e778e07d023ddfd1ef7b0afce556f3e727a4",
+        "packaging_cache.py": "ee6fca986bfb489e1d3999cd6ddb396d337f1e6fedf1134c0fcd1ea782c126c9",
+        "post_deployment.py": "6ac6df1f2089bd4fb6f834f8ef674d1daa56c2a3cc2f90accf6e194a865478a1",
+        "reconfigure.py": "453e7d8beb65e634547b75d356776357e44cee4556363b7ad0ef2c99219477ee",
+        "resource_control.py": "44a4be7f9d760b63186689ff0c516309295313e5008907b8c7fa299df08821ba",
+        "resources.py": "cd2436d33cace70470ccfe1256126e849aca96f75ed29a7a2af820e6ebc2f4f9",
+        "review_policy.py": "7ad45b9f6e3fcf3c13a4eeaf8400cb11933a6fd3fe57e5d70d745188b70f2b7e",
+        "review_store.py": "03c2ddc0049119487ac8a4db939bbc6ed34cc270f8b2293fdebd5d4819f6cecf",
+        "scheduler-defaults.json": "18fcfa2397ebc6c21c6ef67d0edc6ee26b9b593bbb2599d2501cd15b488abdc2",
+        "scheduler.py": "538d284563aa37cf6547808a11d9e70f8c25414aa10d082ca52454a257fe0796",
+        "ui-test.Dockerfile": "47ebef5e597fb21f186dd7d98520be05f65061ec279fa0374b28c86c733bca5f",
+        "ui_policy.py": "095c6c5b72508aa3e99119304dbc4a7d703557e7575614f1b809ba65bc160ff6",
+        "ui_publication.py": "0ed2fd7691e4256dbbb69bf7981a7c5ef1aa3545359dfbc96c5694b223637e30",
+        "workspace.py": "07137f0059137542333ca5e3b0e136291306ad5d1f626ffc72010bcd11df2151",
+        "workspace_executor.py": "1190b19a87aef8a2753caf2305ca28f8392f3c246ab1f596f7d806018a14edcc",
+        "workspace_support.py": "3acaf08a8f5ea54578a1a6757f53781986a8edc2917c28ea801359e8a57e568e"
+      },
+      "performance_sha256": "9b869b01c4a1d397875c13143a79a5cc81ad8f06f0ba0cffc100f9f2d06b2484",
+      "release_sha256": "9e4a34576d551011020520949da7beb1a90b15c46d8009d4cee4822bb8492e15",
+      "scanner_sha256": "a5f5aa5d3fff20612c88af26bc78f29d2a006d4bea932d6bf74185a0152509de"
+    }
+  },
+  "console_python_packages": [
+    "linkify-it-py==2.2.0",
+    "markdown-it-py==4.2.0",
+    "mdit-py-plugins==0.6.1",
+    "mdurl==0.1.2",
+    "platformdirs==4.11.7",
+    "Pygments==2.21.0",
+    "rich==15.0.0",
+    "textual==8.2.8",
+    "typing_extensions==4.16.0"
+  ],
+  "observed_host_packages": [
+    [
+      "acl",
+      "2.3.2-2"
+    ],
+    [
+      "chromium-browser",
+      "2:1snap1-0ubuntu4"
+    ],
+    [
+      "containerd",
+      "2.2.2-0ubuntu1.1"
+    ],
+    [
+      "docker-buildx",
+      "0.30.1-0ubuntu1"
+    ],
+    [
+      "docker.io",
+      "29.1.3-0ubuntu4.1"
+    ],
+    [
+      "python3",
+      "3.14.3-0ubuntu2"
+    ],
+    [
+      "python3-apport",
+      "2.34.0-0ubuntu2"
+    ],
+    [
+      "python3-apt",
+      "3.1.0ubuntu1"
+    ],
+    [
+      "python3-attr",
+      "25.4.0-1build1"
+    ],
+    [
+      "python3-autocommand",
+      "2.2.2-4"
+    ],
+    [
+      "python3-automat",
+      "25.4.16-1build1"
+    ],
+    [
+      "python3-babel",
+      "2.17.0-2"
+    ],
+    [
+      "python3-bcrypt",
+      "5.0.0-3build1"
+    ],
+    [
+      "python3-blinker",
+      "1.9.0-2build1"
+    ],
+    [
+      "python3-boto3",
+      "1.40.72-1build1"
+    ],
+    [
+      "python3-botocore",
+      "1.40.72+repack-1build1"
+    ],
+    [
+      "python3-bpfcc",
+      "0.35.0+ds-1ubuntu2"
+    ],
+    [
+      "python3-certifi",
+      "2026.1.4+ds-1"
+    ],
+    [
+      "python3-cffi-backend:amd64",
+      "2.0.0-3build1"
+    ],
+    [
+      "python3-chardet",
+      "5.2.0+dfsg-2build1"
+    ],
+    [
+      "python3-click",
+      "8.2.0+0.really.8.1.8-1build1"
+    ],
+    [
+      "python3-commandnotfound",
+      "23.04.0build1"
+    ],
+    [
+      "python3-configobj",
+      "5.0.9-1build1"
+    ],
+    [
+      "python3-constantly",
+      "23.10.4-2build1"
+    ],
+    [
+      "python3-cryptography",
+      "46.0.5-1ubuntu2.2"
+    ],
+    [
+      "python3-dateutil",
+      "2.9.0-4build1"
+    ],
+    [
+      "python3-dbus",
+      "1.4.0-1build2"
+    ],
+    [
+      "python3-debconf",
+      "1.5.92"
+    ],
+    [
+      "python3-debian",
+      "1.0.1ubuntu2"
+    ],
+    [
+      "python3-distro",
+      "1.9.0-1build1"
+    ],
+    [
+      "python3-distro-info",
+      "1.15"
+    ],
+    [
+      "python3-distupgrade",
+      "1:26.04.18"
+    ],
+    [
+      "python3-gdbm",
+      "3.14.3-0ubuntu2"
+    ],
+    [
+      "python3-gi",
+      "3.56.2-1"
+    ],
+    [
+      "python3-hamcrest",
+      "2.1.0-3"
+    ],
+    [
+      "python3-httplib2",
+      "0.22.0-1ubuntu0.1"
+    ],
+    [
+      "python3-hyperlink",
+      "21.0.0-6build1"
+    ],
+    [
+      "python3-idna",
+      "3.11-1ubuntu0.1"
+    ],
+    [
+      "python3-incremental",
+      "24.7.2-4"
+    ],
+    [
+      "python3-inflect",
+      "7.5.0-1build1"
+    ],
+    [
+      "python3-jaraco.context",
+      "6.0.1-2"
+    ],
+    [
+      "python3-jaraco.functools",
+      "4.1.0-1build1"
+    ],
+    [
+      "python3-jaraco.text",
+      "4.0.0-1build1"
+    ],
+    [
+      "python3-jinja2",
+      "3.1.6-1build1"
+    ],
+    [
+      "python3-jmespath",
+      "1.0.1-1build1"
+    ],
+    [
+      "python3-json-pointer",
+      "2.4-4"
+    ],
+    [
+      "python3-jsonpatch",
+      "1.32-6"
+    ],
+    [
+      "python3-jsonschema",
+      "4.19.2-6ubuntu2"
+    ],
+    [
+      "python3-jsonschema-specifications",
+      "2023.12.1-4"
+    ],
+    [
+      "python3-jwt",
+      "2.10.1-4ubuntu1.1"
+    ],
+    [
+      "python3-launchpadlib",
+      "2.1.0-1build1"
+    ],
+    [
+      "python3-lazr.restfulclient",
+      "0.14.6-3build1"
+    ],
+    [
+      "python3-lazr.uri",
+      "1.0.6-7build1"
+    ],
+    [
+      "python3-linkify-it",
+      "2.0.3-1ubuntu3"
+    ],
+    [
+      "python3-magic",
+      "2:0.4.27-3build1"
+    ],
+    [
+      "python3-markdown-it",
+      "3.0.0-3build1"
+    ],
+    [
+      "python3-markupsafe",
+      "3.0.3-1build1"
+    ],
+    [
+      "python3-mdurl",
+      "0.1.2-1build1"
+    ],
+    [
+      "python3-minimal",
+      "3.14.3-0ubuntu2"
+    ],
+    [
+      "python3-more-itertools",
+      "10.8.0-1build1"
+    ],
+    [
+      "python3-netaddr",
+      "1.3.0-1build1"
+    ],
+    [
+      "python3-netifaces:amd64",
+      "0.11.0-2build7"
+    ],
+    [
+      "python3-netplan",
+      "1.2-1ubuntu5"
+    ],
+    [
+      "python3-oauthlib",
+      "3.3.1-1build1"
+    ],
+    [
+      "python3-openssl",
+      "25.3.0-1ubuntu1"
+    ],
+    [
+      "python3-packaging",
+      "26.0-1"
+    ],
+    [
+      "python3-passlib",
+      "1.9.3-1ubuntu1"
+    ],
+    [
+      "python3-pexpect",
+      "4.9-4"
+    ],
+    [
+      "python3-pkg-resources",
+      "78.1.1-0.1build1"
+    ],
+    [
+      "python3-problem-report",
+      "2.34.0-0ubuntu2"
+    ],
+    [
+      "python3-psutil",
+      "7.1.0-1ubuntu1"
+    ],
+    [
+      "python3-ptyprocess",
+      "0.7.0-6build1"
+    ],
+    [
+      "python3-pyasn1",
+      "0.6.3-1ubuntu0.1"
+    ],
+    [
+      "python3-pyasn1-modules",
+      "0.4.1-2build1"
+    ],
+    [
+      "python3-pygments",
+      "2.19.2+dfsg-1"
+    ],
+    [
+      "python3-pyparsing",
+      "3.3.2-2"
+    ],
+    [
+      "python3-referencing",
+      "0.36.2-1ubuntu2"
+    ],
+    [
+      "python3-requests",
+      "2.32.5+dfsg-1ubuntu1.1"
+    ],
+    [
+      "python3-rich",
+      "13.9.4-1.2"
+    ],
+    [
+      "python3-rpds-py",
+      "0.27.1-2ubuntu3"
+    ],
+    [
+      "python3-s3transfer",
+      "0.14.0-1build1"
+    ],
+    [
+      "python3-serial",
+      "3.5-2build1"
+    ],
+    [
+      "python3-service-identity",
+      "24.2.0-1build1"
+    ],
+    [
+      "python3-setuptools",
+      "78.1.1-0.1build1"
+    ],
+    [
+      "python3-six",
+      "1.17.0-2build1"
+    ],
+    [
+      "python3-software-properties",
+      "0.120"
+    ],
+    [
+      "python3-systemd",
+      "235-1build9"
+    ],
+    [
+      "python3-twisted",
+      "25.5.0-5ubuntu0.1"
+    ],
+    [
+      "python3-typeguard",
+      "4.4.4-2"
+    ],
+    [
+      "python3-typing-extensions",
+      "4.15.0-2"
+    ],
+    [
+      "python3-uc-micro",
+      "1.0.3-1build1"
+    ],
+    [
+      "python3-update-manager",
+      "1:26.04.5"
+    ],
+    [
+      "python3-urllib3",
+      "2.6.3-1ubuntu1.1"
+    ],
+    [
+      "python3-wadllib",
+      "2.0.0-3"
+    ],
+    [
+      "python3-xkit",
+      "0.5.0ubuntu8"
+    ],
+    [
+      "python3-yaml",
+      "6.0.3-1build1"
+    ],
+    [
+      "python3-zipp",
+      "3.23.0-1build1"
+    ],
+    [
+      "python3-zope.interface",
+      "8.2-1build1"
+    ],
+    [
+      "python3.14",
+      "3.14.4-1ubuntu0.2"
+    ],
+    [
+      "python3.14-gdbm",
+      "3.14.4-1ubuntu0.2"
+    ],
+    [
+      "python3.14-minimal",
+      "3.14.4-1ubuntu0.2"
+    ],
+    [
+      "runc",
+      "1.4.0-0ubuntu1"
+    ],
+    [
+      "systemd",
+      "259.5-0ubuntu3.4"
+    ],
+    [
+      "systemd-cryptsetup",
+      "259.5-0ubuntu3.4"
+    ],
+    [
+      "systemd-hwe-hwdb",
+      "259.5.3ubuntu"
+    ],
+    [
+      "systemd-resolved",
+      "259.5-0ubuntu3.4"
+    ],
+    [
+      "systemd-sysv",
+      "259.5-0ubuntu3.4"
+    ],
+    [
+      "tailscale",
+      "1.102.3"
+    ],
+    [
+      "tailscale-archive-keyring",
+      "1.35.181"
+    ],
+    [
+      "util-linux",
+      "2.41.3-3ubuntu2.2"
+    ],
+    [
+      "whiptail",
+      "0.52.25-1ubuntu3"
+    ],
+    [
+      "xfce4",
+      "4.20.1"
+    ],
+    [
+      "xfce4-appfinder",
+      "4.20.0-2build1"
+    ],
+    [
+      "xfce4-appmenu-plugin",
+      "25.04+dfsg-3ubuntu1"
+    ],
+    [
+      "xfce4-clipman",
+      "2:1.6.6-1build2"
+    ],
+    [
+      "xfce4-clipman-plugin",
+      "2:1.6.6-1build2"
+    ],
+    [
+      "xfce4-genmon-plugin:amd64",
+      "4.3.0-1"
+    ],
+    [
+      "xfce4-helpers",
+      "4.20.1-1ubuntu2"
+    ],
+    [
+      "xfce4-notes",
+      "1.11.1-1build1"
+    ],
+    [
+      "xfce4-notes-plugin",
+      "1.11.1-1build1"
+    ],
+    [
+      "xfce4-notifyd",
+      "0.9.7-2build1"
+    ],
+    [
+      "xfce4-panel",
+      "4.20.7-1"
+    ],
+    [
+      "xfce4-pulseaudio-plugin:amd64",
+      "0.5.1-1"
+    ],
+    [
+      "xfce4-screenshooter",
+      "1.11.1-1build1"
+    ],
+    [
+      "xfce4-session",
+      "4.20.4-1"
+    ],
+    [
+      "xfce4-settings",
+      "4.20.1-1ubuntu2"
+    ],
+    [
+      "xfce4-taskmanager",
+      "1.5.8-1build1"
+    ],
+    [
+      "xfce4-terminal",
+      "1.1.5-1"
+    ],
+    [
+      "xinit",
+      "1.4.2-1build1"
+    ]
+  ],
+  "unit_enablement": {
+    "webagent-build-development.service": "enabled",
+    "webagent-boot-development.service": "enabled",
+    "webagent-console-power.service": "enabled",
+    "webagent-dev-artifact-prune.service": "static",
+    "webagent-dev-artifact-prune.timer": "enabled",
+    "webagent-dev-artifact-prune.path": "enabled",
+    "docker-disk-guard.service": "static",
+    "docker-disk-guard.timer": "enabled"
+  },
+  "excluded": [
+    "credentials and encryption keys",
+    "users and databases",
+    "Code Index databases",
+    "Docker images and BuildKit/Cargo caches",
+    "task queues and release histories",
+    "runtime sockets and browser profiles",
+    "compiled boot binaries and their live adoption state"
+  ],
+  "restore_guidance": "docs/ssd-restore.md"
+}
