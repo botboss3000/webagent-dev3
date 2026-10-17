@@ -139,3 +139,18 @@ class WaitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FeatureProfileCLITests(unittest.TestCase):
+    def test_check_forwards_only_bounded_profile_and_receipt_arguments(self):
+        argv=["buildctl","check","fixture-task","--expected","a"*64,"--request-id","fixture-request","--feature-profile","live"]
+        with patch("sys.argv",argv),patch.object(client,"call",return_value={"status":"queued"})as call,patch("sys.stdout",new=io.StringIO()):
+            self.assertEqual(client.main(),0)
+        self.assertEqual(call.call_args.args[0],"build_work")
+        self.assertEqual(call.call_args.args[1]["feature_profile"],"live")
+        self.assertEqual(call.call_args.args[1]["request_id"],"fixture-request")
+    def test_cli_rejects_unsupported_profile_before_contacting_broker(self):
+        argv=["buildctl","check","fixture-task","--expected","a"*64,"--request-id","fixture-request","--feature-profile","all"]
+        with patch("sys.argv",argv),patch.object(client,"call")as call,patch("sys.stderr",new=io.StringIO()):
+            with self.assertRaises(SystemExit):client.main()
+        call.assert_not_called()

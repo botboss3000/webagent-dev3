@@ -118,7 +118,7 @@ class CacheTests(unittest.TestCase):
                 recipe=archive.extractfile("v3/Dockerfile").read().decode()
                 self.assertIn("FROM scratch AS tested_builder"if role=="loop"else"FROM "+module.RUST+" AS tested_builder",recipe)
             self.assertNotIn("tests/webagent_v3-0123456789abcdef",names)
-            if role=="loop":self.assertEqual(names,{"webagent-v3","core-inputs.txt","webagent-context-service","webagent-background-service"})
+            if role=="loop":self.assertEqual(names,{"webagent-v3","core-inputs.txt","webagent-context-service","webagent-background-service","webagent-boot-service","webagent-assets-service","webagent-capability-service","webagent-provider-service"})
             else:
                 self.assertIn("optimization-cargo/registry/cache",names);self.assertIn("modules/descriptor.json",names)
     def test_registry_or_test_tampering_is_rejected(self):
@@ -127,3 +127,43 @@ class CacheTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"Cached compiler output changed"):self.worker.cached_engine(self.blob,self.output())
 
 if __name__=="__main__":unittest.main()
+
+
+class FeatureProfileTests(unittest.TestCase):
+    def test_allowlist_keeps_default_commands_and_rejects_arbitrary_args(self):
+        self.assertEqual(module.check_argv("check"),["cargo","check","--locked","--offline"])
+        self.assertEqual(module.check_argv("test"),["cargo","test","--locked","--offline","--no-run"])
+        self.assertEqual(module.check_argv("check","live"),["cargo","check","--locked","--offline","--no-default-features","--features","live-context"])
+        for bad in ["all","--all-features",{},[],True]:
+            with self.assertRaisesRegex(ValueError,"Unsupported"):module.check_profile(bad)
+        with self.assertRaisesRegex(ValueError,"only to compile"):module.check_argv("test","live")
+    def test_executor_passes_fixed_profile_to_admitted_compiler_phase(self):
+        from unittest.mock import patch
+        for profile in [None,"default","live"]:
+            with tempfile.TemporaryDirectory()as directory:
+                runner=types.SimpleNamespace(execution_application_blob=lambda b:b,execution_source_digest=lambda p:"fixed")
+                worker=module.Executor(runner,None,{"state_root":directory});job={"job_id":str(uuid.uuid4()),"feature_profile":profile}
+                def extract(source,blob):source.mkdir();(source/"v3").mkdir()
+                with patch.object(worker,"phase",return_value="checked")as phase:
+                    worker.check(job,b"snapshot","check",30,extract)
+                compile_call=phase.call_args_list[1].args
+                self.assertEqual(compile_call[5],module.check_argv("check",profile))
+                self.assertEqual(compile_call[6],"engine:rust1.90:check"+(":live-context-v1"if profile=="live"else""))
+                self.assertEqual(compile_call[1:3],("compile_test","engine"))
+
+class RealFeatureProfileTests(unittest.TestCase):
+    @unittest.skipUnless(__import__("os").environ.get("WEBAGENT_TEST_REAL_RUST_PROFILE")=="1","Explicit pinned-toolchain fixture")
+    def test_default_compiles_but_live_rejects_optional_implementation_reference(self):
+        import subprocess,os
+        with tempfile.TemporaryDirectory()as directory:
+            root=Path(directory);(root/"src").mkdir();(root/"implementation/src").mkdir(parents=True)
+            (root/"Cargo.toml").write_text('[package]\nname="profile-fixture"\nversion="0.1.0"\nedition="2021"\n[workspace]\nmembers=["implementation"]\n[features]\ndefault=["dep:optional-implementation"]\nlive-context=[]\n[dependencies]\noptional-implementation={path="implementation",optional=true}\n')
+            (root/"src/main.rs").write_text('fn main(){let _ = optional_implementation::value();}\n')
+            (root/"implementation/Cargo.toml").write_text('[package]\nname="optional-implementation"\nversion="0.1.0"\nedition="2021"\n')
+            (root/"implementation/src/lib.rs").write_text('pub fn value()->u8{1}\n')
+            command=["docker","run","--rm","--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges","--memory","512m","--memory-swap","512m","--cpus","1","--pids-limit","128","--user",str(os.getuid())+":"+str(os.getgid()),"--mount","type=bind,src="+directory+",dst=/workspace","--tmpfs","/tmp:rw,size=64m","-e","CARGO_HOME=/workspace/cargo","-e","CARGO_TARGET_DIR=/workspace/target","-w","/workspace",module.RUST]
+            def run(argv):return subprocess.run(command+argv,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=60)
+            lock=run(["cargo","generate-lockfile","--offline"]);self.assertEqual(lock.returncode,0,lock.stdout)
+            default=run(module.check_argv("check"));self.assertEqual(default.returncode,0,default.stdout)
+            live=run(module.check_argv("check","live"));self.assertNotEqual(live.returncode,0)
+            self.assertIn("optional_implementation",live.stdout);self.assertIn("E0433",live.stdout)

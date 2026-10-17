@@ -160,7 +160,20 @@ def main():
     apply=commands.add_parser("apply",help="checked isolated source patch with derived ownership")
     apply.add_argument("task_id");apply.add_argument("--patch",required=True)
     apply.add_argument("--expected",required=True);apply.add_argument("--request-id",required=True)
+    check=commands.add_parser("check",help="Run a durable task-scoped compile check without deployment")
+    check.add_argument("task_id");check.add_argument("--expected",required=True)
+    check.add_argument("--request-id",required=True)
+    check.add_argument("--feature-profile",choices=("default","live"))
+    check.add_argument("--timeout",type=int,default=600)
+    check.add_argument("--compiler-memory-cap",type=int)
     args = parser.parse_args()
+    if args.command=="check":
+        if not 1<=args.timeout<=600:parser.error("--timeout must be between 1 and 600 seconds")
+        request={"action":"check","task_id":args.task_id,"check":"check","expected_inputs_sha256":args.expected,
+            "request_id":args.request_id,"timeout_seconds":args.timeout}
+        if args.feature_profile is not None:request["feature_profile"]=args.feature_profile
+        if args.compiler_memory_cap is not None:request["compiler_memory_cap"]=args.compiler_memory_cap
+        print(json.dumps(call("build_work",request),sort_keys=True));return 0
     if args.command=="schedule":
         value=json.loads(sys.stdin.read(1024*1024)if args.input=="-"else Path(args.input).read_text())
         print(json.dumps(call("build_work",value),sort_keys=True));return 0

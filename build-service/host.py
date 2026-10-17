@@ -2649,7 +2649,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint") if key in job}
         if job.get("review_wait"):
             review=job["review_wait"]
             view["review_wait"]={k:review[k]for k in ("state","started_at","last_activity_at","expires_at")if k in review}
@@ -3195,7 +3195,7 @@ class Broker:
         if action=="reload_memory_policy":return self.reload_memory_policy(args,request["trusted"])
         if action in self.scheduler.actions:return self.scheduler.handle(args,request["trusted"],request["workspace"])
         allowed = {"action", "task_id", "summary", "expected_inputs_sha256", "sync_decision",
-            "expected_sync_digest", "offset", "job_id", "request_id", "check", "timeout_seconds", "compiler_memory_cap", "package_memory_cap", "test_filter"}
+            "expected_sync_digest", "offset", "job_id", "request_id", "check", "timeout_seconds", "compiler_memory_cap", "package_memory_cap", "test_filter", "feature_profile"}
         if set(args) - allowed: raise ValueError("unsupported build_work argument")
         def call(tool, arguments):
             return self.handle({**request, "name": tool, "arguments": arguments})
@@ -3204,7 +3204,7 @@ class Broker:
         if action == "check":
             return call("v3_cargo_task", {"task_id": args.get("task_id"),
                 "task": args.get("check", "check"), "expected_inputs_sha256": args.get("expected_inputs_sha256"),
-                "timeout_seconds": args.get("timeout_seconds", 600),**({"compiler_memory_cap":args["compiler_memory_cap"]}if "compiler_memory_cap"in args else{}),**({"test_filter":args["test_filter"]}if "test_filter"in args else{})})
+                "timeout_seconds": args.get("timeout_seconds", 600),**({"request_id":args["request_id"]}if "request_id"in args else{}),**({"compiler_memory_cap":args["compiler_memory_cap"]}if "compiler_memory_cap"in args else{}),**({"test_filter":args["test_filter"]}if "test_filter"in args else{}),**({"feature_profile":args["feature_profile"]}if "feature_profile"in args else{})})
         if action == "receipt":
             return call("v3_source_receipt", {"task_id": args.get("task_id"), "request_id": args.get("request_id")})
         if action == "review":
@@ -3263,8 +3263,8 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        review_modules={"index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
-        allowed={"v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
+        allowed={"v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
@@ -3744,7 +3744,7 @@ class Broker:
 
     def cargo_request(self,args,trusted,workspace):
         """Capture under the coordinator lock; compile an isolated copy outside it and attest unchanged inputs."""
-        if set(args)-{"task_id","task","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter"}or not{"task_id","task","expected_inputs_sha256"}<=set(args):
+        if set(args)-{"task_id","task","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter","feature_profile"}or not{"task_id","task","expected_inputs_sha256"}<=set(args):
             raise ValueError("Task-scoped Cargo check arguments required")
         task_id,task=args["task_id"],args["task"];expected=args["expected_inputs_sha256"];timeout=args.get("timeout_seconds",600)
         if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test","resource_probe"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
@@ -3754,12 +3754,17 @@ class Broker:
             raise ValueError("Stable check request ID required")
         request_key="check-"+hashlib.sha256(canonical([trusted["user_id"],workspace,task_id,request_id])).hexdigest() if request_id else None
         if task=="resource_probe"and not(trusted.get("local_caller")and self.resources.enabled):raise PermissionError("Resource probe requires enforced operator channel")
+        profile=executor_module.check_profile(args.get("feature_profile"))
+        if profile!="default":
+            if task!="check":raise ValueError("Feature profiles apply only to compile checks")
+            if not self.resources.enabled:raise PermissionError("Live feature checks require enforced resource admission")
         selected=executor_module.test_filter(args.get("test_filter"))
         if selected is not None and (task!="test"or trusted.get("local_caller")is not True):raise PermissionError("Filtered tests require a local operator test request")
         cap=executor_module.compiler_cap(args.get("compiler_memory_cap"))
         if cap is not None and (trusted.get("local_caller")is not True or not self.resources.enabled):raise PermissionError("Enforced compiler cap requires local operator")
         signature=[task_id,task,expected,timeout]if cap is None else[task_id,task,expected,timeout,cap]
         if selected is not None:signature+=[selected]
+        if profile!="default":signature+=[{"feature_profile":profile}]
         request_signature=hashlib.sha256(canonical(signature)).hexdigest()
         with self.lock:
             self._incoming_lease(trusted)
@@ -3767,7 +3772,7 @@ class Broker:
                 previous=next((j for j in self.jobs.values() if j.get("request_key")==request_key),None)
                 if previous:
                     if previous.get("check_signature")!=request_signature:raise ValueError("Check request ID reused with different inputs")
-                    return (previous.get("check_result") if previous["status"] not in {"queued","running"} else None) or {"task_id":task_id,"job_id":previous["job_id"],"task":task,"status":previous["status"],"inputs_sha256":previous["inputs_sha256"],"log_excerpt":scrub(previous.get("log",""))[-4096:]}
+                    return (previous.get("check_result") if previous["status"] not in {"queued","running"} else None) or {"task_id":task_id,"job_id":previous["job_id"],"task":task,"feature_profile":previous.get("feature_profile","default"),"status":previous["status"],"inputs_sha256":previous["inputs_sha256"],"log_excerpt":scrub(previous.get("log",""))[-4096:]}
             # Retry signatures describe caller input, not a subsequently changed default.
             cap=executor_module.compiler_cap(args.get("compiler_memory_cap"),CONFIG.get("scheduler",{}))
             if cap is None and self.resources.enabled:cap=CONFIG.get("scheduler",{}).get("compiler_memory_default_bytes",5*1024**3)
@@ -3787,7 +3792,7 @@ class Broker:
             job={"job_id":job_id,"request_key":request_key or "check-"+job_id,"check_signature":request_signature,"task_id":task_id,"user_id":trusted["user_id"],"workspace":workspace,
                 "operation":"check","status":"queued","phase":"queued_check","created_at":time.time(),"started_at":None if request_id else time.time(),
                 "inputs_sha256":before,"lease_until":time.time()+timeout+120,"access_fingerprint":trusted["access_fingerprint"],
-                "images":{},"log":"","phase_history":[],"summary":"Isolated Cargo "+task,"compiler_memory_cap":cap,"test_filter":selected}
+                "images":{},"log":"","phase_history":[],"summary":"Isolated Cargo "+task,"compiler_memory_cap":cap,"test_filter":selected,"feature_profile":profile}
             if ownership_value:
                 job.update(ownership_id=key,ownership_epoch=ownership_value["epoch"],source_generation=ownership_value["generation"])
             self.jobs[job_id]=job;self._save(job)
@@ -3796,14 +3801,14 @@ class Broker:
             self.check_runs[job_id]=(job,item,root,blob,before,task,timeout,event)
             self._start_next()
         if request_id:
-            return {"task_id":task_id,"job_id":job_id,"task":task,"status":"queued","inputs_sha256":before,"log_excerpt":""}
+            return {"task_id":task_id,"job_id":job_id,"task":task,"feature_profile":profile,"status":"queued","inputs_sha256":before,"log_excerpt":""}
         # Legacy synchronous callers wait outside the coordination lock.
         deadline=time.monotonic()+timeout
         while time.monotonic()<deadline:
             with self.lock:
                 if job.get("check_result"):return job["check_result"]
                 if job["status"]not in {"queued","running"}:
-                    return {"task_id":task_id,"job_id":job_id,"task":task,"status":job["status"],"inputs_sha256":before,"log_excerpt":""}
+                    return {"task_id":task_id,"job_id":job_id,"task":task,"feature_profile":profile,"status":job["status"],"inputs_sha256":before,"log_excerpt":""}
             time.sleep(0.05)
         raise TimeoutError("Check remains queued or running; inspect the existing job receipt")
 
@@ -3830,8 +3835,8 @@ class Broker:
             after=context_digest(release.snapshot(root,TASK_CONTEXT,context_digest))[0]
             if after!=before:status="stale"
             job.update(status=status,phase="finished",finished_at=time.time(),log=scrub(log)[-MAX_LOG:],reason="Inputs unchanged"if after==before else"Task changed during check")
-            job["rust_tests"]={"status":("passed" if status=="completed" else status) if task=="test" else "not_run","check":task}
-            job["check_result"]={"task_id":task_id,"job_id":job_id,"task":task,"status":status,"inputs_sha256":after,"log_excerpt":scrub(log)[-4096:]}
+            job["rust_tests"]={"status":("passed" if status=="completed" else status) if task=="test" else "not_run","check":task,"feature_profile":job.get("feature_profile","default")}
+            job["check_result"]={"task_id":task_id,"job_id":job_id,"task":task,"feature_profile":job.get("feature_profile","default"),"status":status,"inputs_sha256":after,"log_excerpt":scrub(log)[-4096:]}
             job.setdefault("phase_history",[]).append({"phase":"finished","at":job["finished_at"]})
             self._save(job);self.job_cancellations.pop(job_id,None);item["last_activity_at"]=time.time();self._save_work()
             self.active_jobs.discard(job_id);self.active=next(iter(self.active_jobs),None)
@@ -3880,8 +3885,8 @@ class Broker:
             result["patch"]=checked_git_modes(result["patch"])
             return result
         if name=="build_work"and args.get("action")=="check":
-            if set(args)-{"action","task_id","check","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter"}:raise ValueError("Unsupported check arguments")
-            return self.cargo_request({"task_id":args.get("task_id"),"task":args.get("check","check"),"expected_inputs_sha256":args.get("expected_inputs_sha256"),"timeout_seconds":args.get("timeout_seconds",600),**({"request_id":args["request_id"]} if "request_id" in args else {}),**({"compiler_memory_cap":args["compiler_memory_cap"]}if "compiler_memory_cap"in args else{}),**({"test_filter":args["test_filter"]}if "test_filter"in args else{})},trusted,workspace)
+            if set(args)-{"action","task_id","check","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter","feature_profile"}:raise ValueError("Unsupported check arguments")
+            return self.cargo_request({"task_id":args.get("task_id"),"task":args.get("check","check"),"expected_inputs_sha256":args.get("expected_inputs_sha256"),"timeout_seconds":args.get("timeout_seconds",600),**({"request_id":args["request_id"]} if "request_id" in args else {}),**({"compiler_memory_cap":args["compiler_memory_cap"]}if "compiler_memory_cap"in args else{}),**({"test_filter":args["test_filter"]}if "test_filter"in args else{}),**({"feature_profile":args["feature_profile"]}if "feature_profile"in args else{})},trusted,workspace)
         with self.lock:
             if name == "build_service_maintenance":
                 if not trusted.get("local_caller") or set(args)-{"action","task_id"} or args.get("action") not in {"status","drain","resume"}:raise PermissionError("Operator maintenance required")

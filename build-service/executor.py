@@ -1,6 +1,20 @@
 """Attributable compilation/testing and artifact-fed packaging in the pinned toolchain."""
 import contextlib,hashlib,io,json,os,posixpath,re,shlex,shutil,stat,subprocess,tarfile,time,uuid,tomllib
 from pathlib import Path
+FEATURE_PROFILES={"default":(),"live":("--no-default-features","--features","live-context")}
+def check_profile(value=None):
+    """Only fixed feature sets may select a compiler recipe; arbitrary Cargo arguments are forbidden."""
+    if value is None:return "default"
+    if not isinstance(value,str)or value not in FEATURE_PROFILES:raise ValueError("Unsupported compile-check feature profile")
+    return value
+
+def check_argv(task,profile=None):
+    """Preserve default check/test commands and expose live compilation as a standalone check."""
+    selected=check_profile(profile)
+    if task not in {"check","test"}or(selected!="default"and task!="check"):
+        raise ValueError("Feature profiles apply only to compile checks")
+    return (["cargo","check","--locked","--offline",*FEATURE_PROFILES[selected]]if task=="check"else["cargo","test","--locked","--offline","--no-run"])
+
 RUST="rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f"
 BUILDKIT="moby/buildkit:v0.25.1@sha256:79cc6476ab1a3371c9afd8b44e7c55610057c43e18d9b39b68e2b0c2475cc1b6"
 COMPILER_STAGE_SHA256="474b034d7a843ebf324b654a785b5a5b23135804ef39c662f92fcb3e160dfeaf"
@@ -270,14 +284,15 @@ class Executor:
 
     def check(self,job,blob,task,timeout,extract):
         """Use the same attributable recipes for bounded foreground checks and release compilation."""
+        profile=check_profile(job.get("feature_profile"));argv=check_argv(task,profile)
         job["artifact_component"]="engine"
         root=Path(self.config["state_root"])/"checks"/job["job_id"];source=root/"source";output=root/"output"
         blob=self.runner.execution_application_blob(blob);root.mkdir(parents=True,exist_ok=True);extract(source,blob);output.mkdir(exist_ok=True)
         application=source/"v3";before=self.runner.execution_source_digest(source);start=time.monotonic()
         log=self.phase(job,"dependency","dependency",application,output,["cargo","fetch","--locked"],"engine:rust1.90:dependency",min(timeout,600),network=True)
         remaining=max(1,timeout-int(time.monotonic()-start))
-        argv=["cargo","check","--locked","--offline"]if task=="check"else["cargo","test","--locked","--offline","--no-run"]
-        log+=self.phase(job,"compile_test","engine",application,output,argv,"engine:rust1.90:"+("check"if task=="check"else"compile_test"),remaining)
+        recipe="engine:rust1.90:"+("check"if task=="check"else"compile_test")+(":live-context-v1"if profile=="live"else"")
+        log+=self.phase(job,"compile_test","engine",application,output,argv,recipe,remaining)
         if task=="test":
             selected=test_filter(job.get("test_filter"))
             runtime=["cargo","test","--locked","--offline"]+([selected]if selected is not None else[])+["--","--test-threads=1"]+(["--nocapture"]if selected is not None else[])

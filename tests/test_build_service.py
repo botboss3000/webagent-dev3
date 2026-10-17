@@ -772,3 +772,64 @@ class ReleaseReconciliationTests(unittest.TestCase):
         self.assertEqual(self.call("build_work",args)["status"],"aborted_uncommitted")
         self.assertEqual(self.broker.scheduler.store.get(item["key"]),before)
         self.assertIsNone(self.broker.scheduler.pending(item["key"]))
+
+
+class FeatureProfileBrokerTests(unittest.TestCase):
+    from test_scheduler_broker import SchedulerBrokerTests as _base
+    setUp=_base.setUp
+    tearDown=_base.tearDown
+    call=_base.call
+    begin=_base.begin
+    def request(self):
+        item=self.begin("feature-profile-fixture");tree=Path(item["workspace_path"]).parent
+        return item,{"action":"check","task_id":item["task_id"],"check":"check","expected_inputs_sha256":self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree)),"timeout_seconds":30,"request_id":"feature-check-request"}
+    def test_profiles_bind_receipts_and_default_signature_remains_compatible(self):
+        import hashlib
+        item,args=self.request();self.broker.resources.enabled=True
+        with patch.object(self.broker,"_start_next"):
+            default=self.call("build_work",args)
+            job=self.broker.jobs[default["job_id"]]
+            signature=[item["task_id"],"check",args["expected_inputs_sha256"],30]
+            self.assertEqual(job["check_signature"],hashlib.sha256(fixtures.host.canonical(signature)).hexdigest())
+            self.assertEqual(default["feature_profile"],"default")
+            with self.assertRaisesRegex(ValueError,"different inputs"):self.call("build_work",{**args,"feature_profile":"live"})
+            live=self.call("build_work",{**args,"request_id":"live-check-request","feature_profile":"live"})
+            self.assertEqual(live["feature_profile"],"live");self.assertNotEqual(live["job_id"],default["job_id"])
+            self.assertNotEqual(self.broker.jobs[live["job_id"]]["check_signature"],job["check_signature"])
+            call=self.broker.check_runs[live["job_id"]]
+            with patch.object(self.runner.executor,"check",return_value="live compiler result"):
+                self.broker._execute_check(*call)
+            receipt=self.call("build_work",{**args,"request_id":"live-check-request","feature_profile":"live"})
+            self.assertEqual(receipt["feature_profile"],"live");self.assertEqual(receipt["status"],"completed")
+            self.assertEqual(self.broker._view(self.broker.jobs[live["job_id"]])["feature_profile"],"live")
+        self.assertFalse(self.runner.calls)
+        self.assertEqual(item["status"],"open");self.assertNotIn("job_id",item)
+    def test_invalid_profiles_never_create_jobs(self):
+        item,args=self.request();self.broker.resources.enabled=True
+        for value in ["arbitrary","--features all",[],{},True]:
+            with self.assertRaisesRegex(ValueError,"Unsupported"):self.call("build_work",{**args,"feature_profile":value})
+        with self.assertRaisesRegex(ValueError,"only to compile"):self.call("build_work",{**args,"check":"test","feature_profile":"live"})
+        self.assertFalse(self.broker.jobs)
+    def test_live_requires_normal_resource_admission(self):
+        item,args=self.request();self.broker.resources.enabled=False
+        with self.assertRaisesRegex(PermissionError,"resource admission"):self.call("build_work",{**args,"feature_profile":"live"})
+
+    def test_live_input_race_is_stale_without_publication(self):
+        item,args=self.request();self.broker.resources.enabled=True
+        with patch.object(self.broker,"_start_next"):
+            result=self.call("build_work",{**args,"feature_profile":"live"})
+            invocation=self.broker.check_runs[result["job_id"]]
+            def mutate(*arguments):
+                (Path(item["workspace_path"])/"README.md").write_text("changed while checking\n")
+                return "compiler passed"
+            with patch.object(self.runner.executor,"check",side_effect=mutate):
+                receipt=self.broker._execute_check(*invocation)
+        self.assertEqual(receipt["status"],"stale");self.assertEqual(receipt["feature_profile"],"live")
+        self.assertNotEqual(receipt["inputs_sha256"],args["expected_inputs_sha256"])
+        self.assertFalse(self.runner.calls);self.assertEqual(item["status"],"open")
+    def test_unified_forwarding_preserves_profile_and_request_identity(self):
+        item,args=self.request()
+        with patch.object(self.broker,"cargo_request",return_value={"status":"queued"})as call:
+            self.broker.unified_build({"trusted":self.trusted,"workspace":self.workspace},{**args,"feature_profile":"live"})
+        self.assertEqual(call.call_args.args[0]["feature_profile"],"live")
+        self.assertEqual(call.call_args.args[0]["request_id"],args["request_id"])
