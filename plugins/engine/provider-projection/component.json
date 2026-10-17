@@ -3,7 +3,7 @@
   "id": "provider-projection",
   "group": "engine-loop",
   "interface_version": 1,
-  "implementation_version": "0.1.0",
+  "implementation_version": "0.1.1",
   "operation": "provider.project",
   "modes": [
     "live",

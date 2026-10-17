@@ -3,7 +3,7 @@
   "id": "capability-context",
   "group": "engine-loop",
   "interface_version": 1,
-  "implementation_version": "0.1.0",
+  "implementation_version": "0.1.1",
   "operation": "capability.prepare",
   "modes": [
     "live",

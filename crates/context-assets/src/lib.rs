@@ -1,7 +1,7 @@
 //! Pure replaceable planning: no file, store, provider, credential or authorization access.
 use anyhow::{bail,Result};
 use webagent_assets_contracts::{self as contract,Operation,Placement,Plan,Receipt,Request,State};
-pub const IMPLEMENTATION_VERSION:&str=env!("CARGO_PKG_VERSION");
+pub const IMPLEMENTATION_VERSION:&str="0.1.1";
 
 /// Apply an already-authorized operation to a snapshot; the host still commits with CAS.
 fn transition(state:&State,operation:&Operation,input_digest:String)->Result<Plan> {

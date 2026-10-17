@@ -3,7 +3,7 @@
   "id": "context-assets",
   "group": "engine-loop",
   "interface_version": 1,
-  "implementation_version": "0.1.0",
+  "implementation_version": "0.1.1",
   "operation": "assets.plan",
   "modes": [
     "live",

@@ -7,7 +7,7 @@ pub use webagent_capability_contracts::{Definition, Guidance, GuidanceKind, Incl
     InclusionReason, PrepareRequest, PreparedCapability};
 use webagent_capability_contracts::{inclusion_reason, validate_request, validate_result, INTERFACE_VERSION};
 
-pub const IMPLEMENTATION_VERSION: &str = "0.1.0";
+pub const IMPLEMENTATION_VERSION: &str = "0.1.1";
 
 /// Compose exact current strings and retain stable definition/schema ordering.
 /// Missing/Off/denied assets must already be omitted by the host. A remembered
