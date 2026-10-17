@@ -833,3 +833,68 @@ class FeatureProfileBrokerTests(unittest.TestCase):
             self.broker.unified_build({"trusted":self.trusted,"workspace":self.workspace},{**args,"feature_profile":"live"})
         self.assertEqual(call.call_args.args[0]["feature_profile"],"live")
         self.assertEqual(call.call_args.args[0]["request_id"],args["request_id"])
+
+class SubmissionRecoveryTests(unittest.TestCase):
+    """Unchanged source can submit after yielding claims without receipt rewrites."""
+    from test_scheduler_broker import SchedulerBrokerTests as _base
+    setUp=_base.setUp
+    tearDown=_base.tearDown
+    call=_base.call
+    begin=_base.begin
+    write=_base.write
+
+    def proposal(self):
+        item=self.begin("unchanged-submit-fixture")
+        self.write(item,"README.md","retained maintenance proposal\n")
+        blob=self.broker.scheduler_task_snapshot(Path(item["workspace_path"]).parent)
+        return item,self.broker.scheduler_digest(blob)
+
+    def submit(self,item,digest):
+        self.broker.scheduler.submit(item,self.trusted,self.workspace,["v3/README.md"],digest)
+        return self.broker.scheduler.store.get(item["key"])
+
+    def release(self,item):
+        value=self.broker.scheduler.store.get(item["key"])
+        return self.call("build_work",{"action":"release_claims","task_id":item["task_id"],
+            "scopes":value["scopes"],"reason":"Yield unpublished maintenance claims",
+            "request_id":"submit-yield-"+str(value["revision"]),
+            "expected_revision":value["revision"],"expected_epoch":value["epoch"]})
+
+    def test_legacy_receipt_survives_release_and_unchanged_resubmission(self):
+        import hashlib
+        item,digest=self.proposal();scheduler=self.broker.scheduler;store=scheduler.store
+        value=store.get(item["key"])
+        legacy="submit-"+hashlib.sha256((item["key"]+digest).encode()).hexdigest()[:48]
+        original=store.edited(value["id"],value["owner"],value["revision"],value["epoch"],legacy)
+        item["ownership_inputs_sha256"]=digest;item["source_generation"]=original["generation"]
+        self.broker._save_work();self.release(item)
+        self.assertNotIn("ownership_inputs_sha256",item)
+        result=self.submit(item,digest)
+        self.assertEqual(result["generation"],original["generation"]+1)
+        self.assertEqual(store.receipt(legacy),original)
+        self.assertEqual(self.submit(item,digest)["generation"],result["generation"])
+        current=self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(Path(item["workspace_path"]).parent))
+        self.assertEqual(current,digest)
+        self.assertFalse(self.broker.jobs)
+
+    def test_committed_submission_recovers_lost_work_save_after_restart(self):
+        item,digest=self.proposal();saved=dict(item)
+        with patch.object(self.broker,"_save_work",side_effect=OSError("fixture lost work save")):
+            with self.assertRaises(OSError):self.submit(item,digest)
+        store=self.broker.scheduler.store
+        committed=store.get(item["key"])
+        item.clear();item.update(saved)
+        self.broker.scheduler.store=type(store)(store.path)
+        recovered=self.submit(item,digest)
+        self.assertEqual(recovered["generation"],committed["generation"])
+        self.assertEqual(recovered["revision"],committed["revision"])
+        self.assertEqual(item["source_generation"],committed["generation"])
+        self.assertEqual(item["ownership_inputs_sha256"],digest)
+
+    def test_stale_work_marker_cannot_reuse_released_epoch(self):
+        item,digest=self.proposal();first=self.submit(item,digest)
+        self.release(item);item["ownership_inputs_sha256"]=digest
+        second=self.submit(item,digest)
+        self.assertGreater(second["epoch"],first["epoch"])
+        self.assertEqual(second["generation"],first["generation"]+1)
+        self.assertEqual(second["evidence"]["submission"]["epoch"],second["epoch"])

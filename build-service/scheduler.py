@@ -235,9 +235,17 @@ class Scheduler:
         """Direct operator patches also require derived claims before any build is admitted."""
         if self.mode!="enforce":return
         value=self.reserve(item,trusted,workspace,paths)
-        if item.get("ownership_inputs_sha256")!=inputs:
-            current=self.store.edited(value["id"],value["owner"],value["revision"],item["ownership_epoch"],"submit-"+hashlib.sha256((item["key"]+inputs).encode()).hexdigest()[:48])
-            item["source_generation"]=current["generation"];item["ownership_inputs_sha256"]=inputs;self.broker._save_work()
+        # SQLite is the freshness authority; the work-file marker may be lost or
+        # cleared after a claim release. Never reuse a prior epoch's receipt ID.
+        binding={"inputs_sha256":inputs,"epoch":value["epoch"],"generation":value["generation"]}
+        current=value
+        if value["evidence"].get("submission")!=binding:
+            token="submit-v2-"+hashlib.sha256(ownership.canonical(
+                [item["key"],value["owner"],value["revision"],value["epoch"],inputs]).encode()).hexdigest()[:48]
+            current=self.store.submitted(value["id"],value["owner"],value["revision"],
+                                         item["ownership_epoch"],inputs,token)
+        item["source_generation"]=current["generation"];item["ownership_revision"]=current["revision"]
+        item["ownership_inputs_sha256"]=inputs;self.broker._save_work()
     def list(self,trusted,workspace,administrator=False,offset=0,limit=20):
         """Expose reservation metadata only; private source, evidence bodies and chat text stay private."""
         if type(offset)is not int or type(limit)is not int or not 0<=offset<=1000 or not 1<=limit<=50:raise ValueError("Bounded reservation page required")

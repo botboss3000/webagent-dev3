@@ -184,3 +184,30 @@ class LegacyUIReservationTests(unittest.TestCase):
   self.assertTrue(m.scope_overlap("path:ui/chat/new.js","module:ui:chat"))
   self.assertFalse(m.scope_overlap("module:ui:chat","path:ui/chat-other/a.js"))
   self.assertFalse(m.scope_overlap("path:ui/chat/a.js","path:ui/chat/b.js"))
+
+class SubmissionBindingTests(unittest.TestCase):
+    setUp=OwnershipTests.setUp
+    tearDown=OwnershipTests.tearDown
+    request=OwnershipTests.request
+    begin=OwnershipTests.begin
+    acquire=OwnershipTests.acquire
+    current=OwnershipTests.current
+
+    def test_submission_binding_is_atomic_receipted_and_epoch_fenced(self):
+        value=self.acquire(self.begin("submitted-owner"),["module:engine"])["task"]
+        args=(value["id"],value["owner"],value["revision"],value["epoch"],"a"*64,"submitted-first")
+        result=self.store.submitted(*args)
+        self.assertEqual(self.store.submitted(*args),result)
+        self.assertEqual(result["evidence"]["submission"],
+                         {"inputs_sha256":"a"*64,"epoch":value["epoch"],"generation":value["generation"]+1})
+        with self.assertRaisesRegex(ValueError,"Request ID reused"):
+            self.store.submitted(*args[:-2],"b"*64,args[-1])
+        reopened=m.Ownership(self.store.path,lambda:self.time)
+        self.assertEqual(reopened.get(value["id"])["evidence"],result["evidence"])
+        released=self.store.release_scopes(result["id"],result["owner"],result["revision"],result["epoch"],result["scopes"],"fixture yield","submitted-release")
+        self.assertEqual(released["evidence"],{})
+        with self.assertRaisesRegex(ValueError,"Stale"):
+            self.store.submitted(result["id"],result["owner"],released["revision"],result["epoch"],"a"*64,"submitted-stale")
+        for invalid in ("", "short", None):
+            with self.assertRaises(ValueError):
+                self.store.submitted(released["id"],released["owner"],released["revision"],released["epoch"],invalid,"submitted-invalid")

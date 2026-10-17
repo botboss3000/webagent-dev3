@@ -277,6 +277,23 @@ class Ownership:
             if value["state"]not in {"owned","validating"}:raise ValueError("Editing ownership required")
             return self.update(db,value,state="owned",generation=value["generation"]+1,evidence={},heartbeat=self.clock())
         return self.mutate(request,["edited",task,owner,revision,epoch],operation)
+    def submitted(self,task,owner,revision,epoch,inputs,request):
+        """Atomically bind a submitted source digest to its new ownership generation.
+
+        The durable binding survives a lost coordination-file save. Scope release,
+        edits and ownership changes invalidate it through normal evidence fencing.
+        """
+        if not isinstance(inputs,str)or not re.fullmatch(r"[a-f0-9]{64}",inputs):
+            raise ValueError("Exact submitted source digest required")
+        def operation(db):
+            value=self.check(task,owner,revision,epoch,db)
+            if value["state"]not in {"owned","validating"}:raise ValueError("Submission ownership required")
+            generation=value["generation"]+1
+            binding={"inputs_sha256":inputs,"epoch":epoch,"generation":generation}
+            return self.update(db,value,state="owned",generation=generation,
+                               evidence={"submission":binding},heartbeat=self.clock())
+        return self.mutate(request,["submitted",task,owner,revision,epoch,inputs],operation)
+
     # @code-index {"version":1,"feature":"owner-claim-release","aliases":["release reservations","unblock engine"],"purpose":"Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.","span_lines":17,"configuration":{"status":"not_applicable","rationale":"Ownership fencing and authenticated scope release are fixed authority invariants."}}
     def release_scopes(self,task,owner,revision,epoch,scopes,reason,request):
         """Release explicit owner claims, fence old epochs and retain the unpublished draft."""
