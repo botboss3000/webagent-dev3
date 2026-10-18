@@ -746,6 +746,83 @@ class Runner:
         """Pin exact dependencies before create/run and register outputs before later phases."""
         if getattr(self,"retention_enabled",False):
             return self.resource_request({"operation":"retention_pin","image":image,"job_id":job_id})
+    def preflight_runtime_mounts(self,job,previous,publication_id=None):
+        """Check exact proposed source mounts as runtime users, without state, sockets or activation."""
+        selected=publication_id or job["job_id"];uuid.UUID(selected);root=ASSET_ROOT/"releases"/selected
+        manifest=release.verify_publication(root,selected,None if publication_id else job["inputs_sha256"])
+        view=Path(CONFIG["state_root"])/job["job_id"]/"runtime-preflight-view"
+        if view.is_symlink():raise ValueError("Runtime preflight view symlink")
+        view.mkdir(mode=0o755,parents=True,exist_ok=True);view.chmod(0o755)
+        for folder in (view/"releases",view/"releases"/selected,view/"artifacts"):
+            if folder.is_symlink():raise ValueError("Runtime preflight mount placeholder symlink")
+            folder.mkdir(mode=0o755,exist_ok=True);folder.chmod(0o755)
+        pointer=view/"current"
+        if pointer.is_symlink():
+            if os.readlink(pointer)!="releases/"+selected:raise ValueError("Runtime preflight pointer changed")
+        elif pointer.exists():raise ValueError("Runtime preflight pointer unavailable")
+        else:pointer.symlink_to("releases/"+selected)
+        program="""import json,os,pathlib,sys
+root=pathlib.Path(sys.argv[1]).resolve(strict=True);counts={'files':0,'executables':0,'json_files':0}
+def failed(error):raise error
+for directory,dirs,files in os.walk(root,followlinks=False,onerror=failed):
+ p=pathlib.Path(directory)
+ if p.is_symlink()or not os.access(p,os.R_OK|os.X_OK):raise RuntimeError('Runtime directory unreadable')
+ for name in dirs:
+  if (p/name).is_symlink():raise RuntimeError('Runtime source symlink')
+ for name in files:
+  path=p/name
+  if path.is_symlink()or not path.is_file():raise RuntimeError('Runtime file identity')
+  with path.open('rb')as stream:
+   parts=path.relative_to(root).parts
+   runtime_json=parts[:2]==('v3','config')or(parts[:2]==('v3','plugins')and name in {'plugin.json','component.json','catalog.json'})
+   if path.suffix=='.json'and runtime_json:json.load(stream);counts['json_files']+=1
+   else:stream.read(1)
+  counts['files']+=1
+  if path.stat().st_mode&0o111:
+   if not os.access(path,os.X_OK):raise RuntimeError('Runtime executable inaccessible')
+   counts['executables']+=1
+print(json.dumps(counts))"""
+        images=job.get("images") if publication_id is None else {role:previous[role]["Image"]for role in ("api","loop")}
+        if not images or set(images)!={"api","loop"}:raise ValueError("Runtime preflight requires both candidate images")
+        results=[];plans=[]
+        allowed={"/live-v3","/opt/v3/config","/opt/v3/ui","/opt/v3/plugins/abilities","/opt/v3/assets",
+            "/opt/v3/shared-ui/shared/css","/opt/v3/shared-ui/main-panel/agents","/opt/v3/shared-ui/vendor/fonts","/opt/v3/shared-ui/vendor/leaflet","/opt/v3/shared-ui/vendor/lucide","/opt/v3/shared-ui/favicon.svg"}
+        for role in ("api","loop"):
+            proposed=release.release_mounts(previous[role]["HostConfig"],root,ASSET_ROOT);mounts=[]
+            for item in proposed["Mounts"]:
+                target=item.get("Target")
+                if target not in allowed:continue
+                if item.get("Type")!="bind"or item.get("ReadOnly")is not True:raise ValueError("Runtime code mount must be read-only")
+                source=Path(item["Source"])
+                if target=="/opt/v3/assets":source=view
+                elif not source.resolve().is_relative_to(root.resolve()):raise ValueError("Runtime source mount outside exact publication")
+                mounts.append((str(source),target))
+            mounts.extend([(str(root),"/opt/v3/assets/releases/"+selected),(str(ASSET_ROOT/"artifacts"),"/opt/v3/assets/artifacts")]);plans.append({"role":role,"mounts":mounts})
+            checks=[("application",CONFIG["app_uid"],CONFIG["app_gid"],images[role],"/usr/local/bin/webagent-v3",["--validate-assets=/opt/v3/assets/current/v3"])]
+            if role=="api":
+                checks.append(("worker_catalog",CONFIG["worker_uid"],CONFIG["worker_gid"],images[role],"/usr/local/bin/webagent-v3",["--validate-assets=/opt/v3/assets/current/v3"]))
+                checks.append(("worker",CONFIG["worker_uid"],CONFIG["worker_gid"],images[role],"python3",["-I","-B","-c",program,"/opt/v3/assets/current"]))
+            for identity,uid,gid,image,entry,arguments in checks:
+                name="webagent-runtime-preflight-"+uuid.UUID(job["job_id"]).hex+"-"+uuid.uuid4().hex[:8]
+                argv=["docker","run","--rm","--name",name,"--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
+                    "--pids-limit","64","--memory","512m","--memory-swap","512m","--cpus","1","--user",str(uid)+":"+str(gid),"--tmpfs","/tmp:rw,size=64m,mode=1777"]
+                for source,target in mounts:argv.extend(["--mount","type=bind,src="+source+",dst="+target+",readonly"])
+                try:output=self.command([*argv,"--entrypoint",entry,image,*arguments],timeout=60)
+                finally:subprocess.run(["docker","rm","-f",name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
+                value=json.loads(output)
+                if identity in {"application","worker_catalog"}and not isinstance(value.get("catalog_version"),str):raise ValueError("Candidate runtime catalog validator unavailable")
+                if identity=="worker"and not value.get("files"):raise ValueError("Worker runtime source unreadable")
+                results.append({"role":role,"identity":identity,"uid":uid,"gid":gid,"status":"passed"})
+        release.verify_publication(root,selected,manifest["candidate_sha256"])
+        if publication_id and self.current_asset_id()!=publication_id:raise ValueError("Published source changed during runtime preflight")
+        for role,name in zip(("api","loop"),TARGETS):
+            current=self.inspect(name)
+            if current["Id"]!=previous[role]["Id"]or current["Image"]!=previous[role]["Image"]:raise ValueError("Runtime changed during preflight")
+        proof={"status":"passed","publication_id":selected,"source_sha256":manifest["candidate_sha256"],"images":images,
+            "mounts_sha256":hashlib.sha256(canonical(plans)).hexdigest(),"checks":results}
+        job["runtime_preflight"]=proof;getattr(self,"resource_progress",lambda _:None)(job)
+        return proof
+
     def preflight_deploy_images(self,images,job_id):
         """Recheck both immutable outputs immediately before stopping either consumer."""
         if not isinstance(images,dict)or set(images)!={"api","loop"}or any(not isinstance(image,str)or not re.fullmatch(r"sha256:[a-f0-9]{64}",image)for image in images.values())or not isinstance(job_id,str)or not re.fullmatch(r"[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}",job_id):
@@ -2674,7 +2751,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight") if key in job}
         if job.get("review_wait"):
             review=job["review_wait"]
             view["review_wait"]={k:review[k]for k in ("state","started_at","last_activity_at","expires_at")if k in review}
@@ -3772,13 +3849,13 @@ class Broker:
         if set(args)-{"task_id","task","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter","feature_profile"}or not{"task_id","task","expected_inputs_sha256"}<=set(args):
             raise ValueError("Task-scoped Cargo check arguments required")
         task_id,task=args["task_id"],args["task"];expected=args["expected_inputs_sha256"];timeout=args.get("timeout_seconds",600)
-        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test","resource_probe","dependencies"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
+        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test","resource_probe","dependencies","runtime_readability"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
             raise ValueError("Bounded task Cargo request required")
         request_id=args.get("request_id")
         if request_id is not None and (not isinstance(request_id,str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",request_id)):
             raise ValueError("Stable check request ID required")
         request_key="check-"+hashlib.sha256(canonical([trusted["user_id"],workspace,task_id,request_id])).hexdigest() if request_id else None
-        if task in {"resource_probe","dependencies"}and not(trusted.get("local_caller")and self.resources.enabled):raise PermissionError("Resource probe requires enforced operator channel")
+        if task in {"resource_probe","dependencies","runtime_readability"}and not(trusted.get("local_caller")and self.resources.enabled):raise PermissionError("Resource probe requires enforced operator channel")
         profile=executor_module.check_profile(args.get("feature_profile"))
         if profile!="default":
             if task!="check":raise ValueError("Feature profiles apply only to compile checks")
@@ -3811,7 +3888,7 @@ class Broker:
                 raise ValueError("This task already has pending execution")
             ownership_value=None
             if self.scheduler.mode=="enforce":
-                if task=="dependencies":
+                if task in {"dependencies","runtime_readability"}:
                     value=self.scheduler.ensure(item,trusted,workspace)
                     self.scheduler.store.assert_owned(key,self.scheduler.owner(trusted,workspace),value["epoch"],[])
                 else:self.scheduler.submit(item,trusted,workspace,["build-service/resources.py"]if task=="resource_probe"else["src","Cargo.toml","Cargo.lock"],before)
@@ -3852,7 +3929,10 @@ class Broker:
                 raise ValueError("Task changed before check execution")
             if hasattr(self.runner,"job_context"):self.runner.job_context.job=job;self.runner.job_context.event=event
             if self.resources.enabled:
-                log=self.runner.executor.probe(job)if task=="resource_probe"else self.runner.executor.check(job,blob,task,timeout,lambda p,b:release.extract(p,b,context_digest))
+                if task=="runtime_readability":
+                    previous={role:self.runner.inspect(name)for role,name in zip(("api","loop"),TARGETS)}
+                    self.runner.preflight_runtime_mounts(job,previous,self.runner.current_asset_id());log="Published runtime mount readability passed as application and worker identities"
+                else:log=self.runner.executor.probe(job)if task=="resource_probe"else self.runner.executor.check(job,blob,task,timeout,lambda p,b:release.extract(p,b,context_digest))
             else:log=self.runner.cargo_task(root,self.state/"checks"/job_id,task,timeout)
             status="completed"
         except Exception as error:
@@ -5008,6 +5088,9 @@ class Broker:
                 # An absent output must fail while both original consumers still run.
                 self._phase(job, "checking_candidate_images")
                 self.runner.preflight_deploy_images(job["images"],job["job_id"])
+                self._phase(job,"checking_runtime_mounts")
+                # Production Runner always implements this gate; legacy test adapters can omit it.
+                if hasattr(self.runner,"preflight_runtime_mounts"):self.runner.preflight_runtime_mounts(job,previous)
                 # Record intent before each externally visible mutation. On a
                 # crash the next broker only reconciles, never retries it.
                 self._phase(job, "stopping_loop")

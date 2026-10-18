@@ -898,3 +898,99 @@ class SubmissionRecoveryTests(unittest.TestCase):
         self.assertGreater(second["epoch"],first["epoch"])
         self.assertEqual(second["generation"],first["generation"]+1)
         self.assertEqual(second["evidence"]["submission"]["epoch"],second["epoch"])
+
+
+class RuntimeReadabilityTests(unittest.TestCase):
+    """Validate proposed mount isolation and identities before a candidate can affect runtime."""
+    def setUp(self):
+        import copy
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
+        self.assets=self.root/"assets";self.assets.mkdir();self.identity=str(uuid.uuid4());self.publication=self.assets/"releases"/self.identity
+        (self.publication/"v3/plugins/abilities").mkdir(parents=True);(self.publication/"v3/config").mkdir();(self.assets/"artifacts").mkdir()
+        self.config={**fixtures.host.CONFIG,"state_root":str(self.root/"jobs")}
+        self.previous={role:{"Id":role+"-before","Image":"sha256:"+("1"if role=="api"else"2")*64,
+            "HostConfig":{"Mounts":[{"Type":"bind","Source":str(self.root/"private-data"),"Target":"/state","ReadOnly":False},
+                {"Type":"bind","Source":str(self.root/"live"),"Target":"/live-checkout","ReadOnly":False},
+                {"Type":"bind","Source":str(self.root/"socket"),"Target":"/run/control.sock","ReadOnly":True},
+                {"Type":"bind","Source":str(self.root/"old"),"Target":"/live-v3","ReadOnly":True},
+                {"Type":"bind","Source":str(self.root/"old"),"Target":"/opt/v3/plugins/abilities","ReadOnly":True}]}}for role in ("api","loop")}
+        self.job={"job_id":self.identity,"inputs_sha256":"a"*64,"images":{role:value["Image"]for role,value in self.previous.items()}}
+        self.calls=[]
+        def command(argv,timeout):
+            self.calls.append(argv)
+            return json.dumps({"files":10}if "python3"in argv else{"catalog_version":"fixture"})
+        self.runner=types.SimpleNamespace(command=command,inspect=lambda name:self.previous["api"if name==fixtures.host.TARGETS[0]else"loop"],current_asset_id=lambda:self.identity)
+    def run_preflight(self,publication_id=None):
+        with patch.object(fixtures.host,"CONFIG",self.config),patch.object(fixtures.host,"ASSET_ROOT",self.assets),                patch.object(fixtures.host.release,"verify_publication",return_value={"candidate_sha256":"a"*64}),                patch.object(fixtures.host.subprocess,"run"):
+            return fixtures.host.Runner.preflight_runtime_mounts(self.runner,self.job,self.previous,publication_id)
+    def test_checks_both_application_images_and_worker_with_source_only_mounts(self):
+        proof=self.run_preflight()
+        self.assertEqual(len(self.calls),4);self.assertEqual(proof["status"],"passed")
+        self.assertEqual([(c["role"],c["identity"])for c in proof["checks"]],[("api","application"),("api","worker_catalog"),("api","worker"),("loop","application")])
+        for argv in self.calls:
+            self.assertEqual(argv[argv.index("--network")+1],"none");self.assertIn("--read-only",argv)
+            self.assertNotIn("/state"," ".join(argv));self.assertNotIn("control.sock"," ".join(argv))
+            for i,arg in enumerate(argv):
+                if arg=="--mount":self.assertTrue(argv[i+1].endswith(",readonly"))
+        self.assertEqual(self.calls[0][self.calls[0].index("--user")+1],str(self.config["app_uid"])+":"+str(self.config["app_gid"]))
+        self.assertEqual(self.calls[1][self.calls[1].index("--user")+1],str(self.config["worker_uid"])+":"+str(self.config["worker_gid"]))
+    def test_failure_does_not_record_success_or_change_current_pointer(self):
+        def rejected(argv,timeout):raise RuntimeError("candidate unreadable")
+        self.runner.command=rejected
+        with self.assertRaisesRegex(RuntimeError,"candidate unreadable"):self.run_preflight()
+        self.assertNotIn("runtime_preflight",self.job);self.assertFalse((self.assets/"current").exists())
+    def test_changed_runtime_and_pointer_are_fenced(self):
+        before=self.runner.inspect
+        self.runner.inspect=lambda name:{**before(name),"Id":"newer-runtime"}
+        with self.assertRaisesRegex(ValueError,"Runtime changed"):self.run_preflight()
+        self.runner.inspect=before;self.runner.current_asset_id=lambda:str(uuid.uuid4())
+        with self.assertRaisesRegex(ValueError,"source changed"):self.run_preflight(self.identity)
+    def test_private_view_symlink_is_rejected(self):
+        view=Path(self.config["state_root"])/self.identity/"runtime-preflight-view";view.parent.mkdir(parents=True);view.symlink_to(self.root)
+        with self.assertRaisesRegex(ValueError,"view symlink"):self.run_preflight()
+    def test_semantically_invalid_catalog_cannot_pass(self):
+        self.runner.command=lambda argv,timeout:"{}"
+        with self.assertRaisesRegex(ValueError,"catalog validator"):self.run_preflight()
+
+    def test_actual_worker_probe_rejects_malformed_configuration(self):
+        import subprocess,sys
+        self.run_preflight();argv=next(c for c in self.calls if "python3"in c);program=argv[argv.index("-c")+1]
+        source=self.root/"worker-fixture";(source/"v3/config").mkdir(parents=True);(source/"v3/config/example.json").write_text("{}")
+        passed=subprocess.run([sys.executable,"-c",program,str(source)],capture_output=True,timeout=5)
+        self.assertEqual(passed.returncode,0)
+        (source/"v3/config/example.json").write_text("malformed-json")
+        failed=subprocess.run([sys.executable,"-c",program,str(source)],capture_output=True,timeout=5)
+        self.assertNotEqual(failed.returncode,0)
+
+    def test_restrictive_broker_umask_does_not_hide_public_probe_directories(self):
+        import os
+        previous=os.umask(0o077)
+        try:
+            self.run_preflight()
+            view=Path(self.config["state_root"])/self.identity/"runtime-preflight-view"
+            for folder in (view,view/"releases",view/"releases"/self.identity,view/"artifacts"):
+                self.assertEqual(folder.stat().st_mode&0o777,0o755)
+        finally:os.umask(previous)
+
+class RuntimePrestopGateTests(unittest.TestCase):
+    setUp=fixtures.BuildTests.setUp
+    tearDown=fixtures.BuildTests.tearDown
+    call=fixtures.BuildTests.call
+    build=fixtures.BuildTests.build
+    wait=fixtures.BuildTests.wait
+    deploy=fixtures.BuildTests.deploy
+    def test_unreadable_candidate_fails_before_any_consumer_mutation(self):
+        import copy
+        built=self.wait(self.build());before=copy.deepcopy(self.runner.containers);self.runner.calls.clear()
+        def unreadable(job,previous):raise ValueError("runtime mount unreadable")
+        self.runner.preflight_runtime_mounts=unreadable
+        result=self.wait(self.deploy(built))
+        self.assertEqual(result["status"],"failed");self.assertEqual(result["phase"],"checking_runtime_mounts")
+        self.assertEqual(self.runner.containers,before)
+        self.assertFalse(any(c[0]in {"stop","rename","create","start","activate_assets","promote"}for c in self.runner.calls))
+    def test_successful_gate_precedes_first_stop(self):
+        built=self.wait(self.build());self.runner.calls.clear()
+        self.runner.preflight_runtime_mounts=lambda job,previous:self.runner.calls.append(("runtime_mount_preflight",))
+        result=self.wait(self.deploy(built));self.assertEqual(result["status"],"completed")
+        gate=next(i for i,c in enumerate(self.runner.calls)if c[0]=="runtime_mount_preflight")
+        self.assertTrue(all(gate<i for i,c in enumerate(self.runner.calls)if c[0]=="stop"))
