@@ -121,6 +121,22 @@ class CacheTests(unittest.TestCase):
             if role=="loop":self.assertEqual(names,{"webagent-v3","core-inputs.txt","webagent-context-service","webagent-background-service","webagent-boot-service","webagent-assets-service","webagent-capability-service","webagent-provider-service"})
             else:
                 self.assertIn("optimization-cargo/registry/cache",names);self.assertIn("modules/descriptor.json",names)
+    def test_exact_suite_proof_reuses_tests_but_changed_fixture_runs_them(self):
+        from unittest.mock import patch
+        stable=self.artifacts/"stable";stable.mkdir()
+        for name in ("smoke.json","mode-equivalence.json"):(stable/name).write_text("{}")
+        self.worker.runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in
+            ("execution_entries","execution_application_blob","execution_source_digest","execution_source_digest_blob")})
+        hashes=self.worker.artifact_hashes(self.artifacts)
+        self.worker.retain_engine(self.job,self.blob,{"src/main.rs","config/embedded.json"},hashes,"test result: ok. 2 passed; 0 failed\n")
+        for candidate,reuse in [(self.blob,True),(self.candidate({"v3/config/runtime-fixture.json":"changed"}),False)]:
+            job={"job_id":str(uuid.uuid4())}
+            with patch.object(self.worker,"validate_compiler_recipe",return_value=False),patch.object(self.worker,"phase",return_value="test result: ok. 2 passed; 0 failed\n")as phase:
+                artifacts,log=self.worker.engine(job,candidate,lambda p,b:fixtures.host.release.extract(p,b,fixtures.host.context_digest),fixtures.host.context_digest)
+            self.assertEqual(phase.call_count,0 if reuse else 2)
+            self.assertEqual("test_reuse"in job,reuse)
+            self.assertEqual(self.worker.artifact_hashes(artifacts),hashes)
+
     def test_registry_or_test_tampering_is_rejected(self):
         """Validate every packaged artifact rather than just the main executable."""
         (self.artifacts/"optimization-cargo/registry/cache").write_bytes(b"tampered")
@@ -144,7 +160,7 @@ class FeatureProfileTests(unittest.TestCase):
                 runner=types.SimpleNamespace(execution_application_blob=lambda b:b,execution_source_digest=lambda p:"fixed")
                 worker=module.Executor(runner,None,{"state_root":directory});job={"job_id":str(uuid.uuid4()),"feature_profile":profile}
                 def extract(source,blob):source.mkdir();(source/"v3").mkdir()
-                with patch.object(worker,"dependencies",return_value="dependencies checked"),patch.object(worker,"phase",return_value="checked")as phase:
+                with patch.object(worker,"verification_binding",return_value={}),patch.object(worker,"cached_check_result",return_value=("fixture",None)),patch.object(worker,"record_check_result"),patch.object(worker,"dependencies",return_value="dependencies checked"),patch.object(worker,"phase",return_value="checked")as phase:
                     worker.check(job,b"snapshot","check",30,extract)
                 compile_call=phase.call_args_list[0].args
                 self.assertEqual(compile_call[5],module.check_argv("check",profile))
@@ -361,3 +377,57 @@ class DependencySchedulerTests(unittest.TestCase):
         self.assertEqual(self.broker.scheduler.job_scopes(job),set())
         self.assertTrue(self.broker.scheduler.execution_eligible(job,[{**job,"operation":"build_deploy","check_task":"check"}]))
         self.broker.resources.enabled=False
+
+
+class VerificationEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        import json
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
+        self.runner=types.SimpleNamespace(execution_entries=fixtures.host.Runner.execution_entries,resource_progress=lambda job:None)
+        self.worker=module.Executor(self.runner,None,{"state_root":str(self.root)})
+        self.blob=fixtures.context(extra={"v3/src/main.rs":"fn main() {}","v3/config/fixture.json":"{}"})
+        self.job={"job_id":str(uuid.uuid4()),"compiler_memory_cap":5*1024**3}
+    def certificate(self,task="check",profile="default",job=None):
+        import json
+        job=job or self.job;binding=self.worker.verification_binding(job,self.blob,task,profile)
+        key,_=self.worker.cached_check_result(binding);self.worker.record_check_result(job,binding,key,"successful verification")
+        (self.root/(job["job_id"]+".json")).write_text(json.dumps({**job,"status":"completed","operation":"check"}))
+        return binding,key
+    def test_only_completed_matching_receipts_reuse(self):
+        import json
+        binding,key=self.certificate();self.assertEqual(self.worker.cached_check_result(binding)[1]["job_id"],self.job["job_id"])
+        for status in ("failed","cancelled","running","interrupted","stale"):
+            (self.root/(self.job["job_id"]+".json")).write_text(json.dumps({**self.job,"status":status,"operation":"check"}))
+            self.assertIsNone(self.worker.cached_check_result(binding)[1])
+    def test_feature_filter_cap_and_fixture_changes_do_not_reuse(self):
+        binding,key=self.certificate(task="test")
+        for changed in ({**binding,"feature_profile":"live"},{**binding,"test_filter":"focused"},{**binding,"compiler_memory_cap":10*1024**3}):
+            self.assertIsNone(self.worker.cached_check_result(changed)[1])
+        altered=fixtures.context(extra={"v3/src/main.rs":"fn main() {}","v3/config/fixture.json":"{\"changed\":true}"})
+        self.assertNotEqual(binding,self.worker.verification_binding(self.job,altered,"test","default"))
+    def test_corrupt_certificate_fails_closed(self):
+        import json
+        binding,key=self.certificate();p=self.root/"verification-certificates"/(key+".json");value=json.loads(p.read_text());value["binding"]["task"]="different";p.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError,"binding changed"):self.worker.cached_check_result(binding)
+    def test_focused_package_selection_and_root_filters_are_bounded(self):
+        metadata={"packages":[{"source":None,"name":"component","manifest_path":"/build/crates/component/Cargo.toml"}]}
+        plan=self.worker.focused_test_plan(["v3/crates/component/src/lib.rs","v3/src/api/auth.rs","v3/src/api/user.rs","v3/src/main.rs","v3/src/chat.rs"],metadata)
+        self.assertEqual(plan,[{"package":"component"},{"filter":"auth"},{"filter":"user"}])
+        self.assertEqual(self.worker.focused_test_plan(["v3/config/settings.json"],metadata),[])
+    def test_phase_failure_and_success_have_truthful_progress(self):
+        from unittest.mock import patch
+        args=(self.job,"test","test",self.root,self.root,["fixed"],"fixed-recipe")
+        with patch.object(self.worker,"_phase_workload",return_value="ok"):
+            self.assertEqual(self.worker.phase(*args),"ok")
+        self.assertEqual(self.job["phase_timings"][-1]["outcome"],"completed");self.assertNotIn("active_verification",self.job)
+        with patch.object(self.worker,"_phase_workload",side_effect=RuntimeError("test failed")):
+            with self.assertRaises(RuntimeError):self.worker.phase(*args)
+        self.assertEqual(self.job["phase_timings"][-1]["outcome"],"failed");self.assertNotIn("active_verification",self.job)
+    def test_focus_failure_stops_before_required_suite_and_reports_failure(self):
+        from unittest.mock import patch
+        import json
+        (self.root/"dependency-metadata.json").write_text("{}")
+        self.job["changed_paths"]=["v3/src/api/auth.rs"]
+        with patch.object(self.worker,"metadata_receipt",return_value={"packages":[]}),patch.object(self.worker,"phase",side_effect=RuntimeError("behavior regression")):
+            with self.assertRaisesRegex(RuntimeError,"behavior regression"):self.worker.focused_tests(self.job,self.root,self.root)
+        proof=self.job["focused_verification"];self.assertEqual(proof["required_suite"],"workspace");self.assertEqual(proof["runs"][0]["status"],"failed")

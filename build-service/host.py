@@ -2751,7 +2751,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification") if key in job}
         if job.get("review_wait"):
             review=job["review_wait"]
             view["review_wait"]={k:review[k]for k in ("state","started_at","last_activity_at","expires_at")if k in review}
@@ -3942,7 +3942,7 @@ class Broker:
         with self.lock:
             after=context_digest(release.snapshot(root,TASK_CONTEXT,context_digest))[0]
             if after!=before:status="stale"
-            job.update(status=status,phase="finished",finished_at=time.time(),log=scrub(log)[-MAX_LOG:],reason="Inputs unchanged"if after==before else"Task changed during check")
+            job.update(status=status,phase="finished",finished_at=time.time(),log=scrub(log)[-MAX_LOG:],reason=("Inputs unchanged"if status=="completed"else("Task changed during check"if after!=before else scrub(log)[-600:])))
             job["rust_tests"]={"status":("passed" if status=="completed" else status) if task=="test" else "not_run","check":task,"feature_profile":job.get("feature_profile","default")}
             job["check_result"]={"task_id":task_id,"job_id":job_id,"task":task,"feature_profile":job.get("feature_profile","default"),"status":status,"inputs_sha256":after,"log_excerpt":scrub(log)[-4096:]}
             job.setdefault("phase_history",[]).append({"phase":"finished","at":job["finished_at"]})

@@ -92,6 +92,20 @@ class Executor:
         return job["packaging_preflight"]
 
     def phase(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False):
+        """Expose bounded phase timing and current work without command text or private paths."""
+        started=time.monotonic();token=uuid.uuid4().hex;outcome="failed"
+        job["active_verification"]={"id":token,"phase":phase,"recipe":profile,"started_at":time.time()}
+        getattr(self.runner,"resource_progress",lambda _:None)(job)
+        try:
+            result=self._phase_workload(job,phase,kind,source,output,argv,profile,timeout,network)
+            outcome="completed";return result
+        finally:
+            job.setdefault("phase_timings",[]).append({"phase":phase,"recipe":profile,"seconds":round(time.monotonic()-started,3),"outcome":outcome})
+            job["phase_timings"]=job["phase_timings"][-128:]
+            if job.get("active_verification",{}).get("id")==token:job.pop("active_verification",None)
+            getattr(self.runner,"resource_progress",lambda _:None)(job)
+
+    def _phase_workload(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False):
         """Launch one identified container and preserve counters before removing a terminal container."""
         jobhex=uuid.UUID(job["job_id"]).hex
         name="webagent-build-"+self.config["instance"]+"-"+jobhex+"-"+phase+"-"+uuid.uuid4().hex[:8]
@@ -385,6 +399,95 @@ class Executor:
         if self.dependency_binding(source)!=binding:raise ValueError("Dependency inputs changed during offline verification")
         return log
 
+    def verification_source(self,blob):
+        """Conservatively bind every captured application/fixture file, excluding private inspection data."""
+        files=self.runner.execution_entries(blob)
+        return hashlib.sha256(json.dumps([(name,mode,hashlib.sha256(body).hexdigest())for name,(mode,body)in sorted(files.items())],separators=(",",":")).encode()).hexdigest()
+
+    def test_proof(self,blob):
+        import platform
+        return {"policy":"exact-source-tests-v1","source_sha256":self.verification_source(blob),"toolchain":RUST,
+            "architecture":platform.machine(),"kernel":platform.release(),"executor_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "identities":{k:self.config.get(k)for k in ("service_uid","service_gid","app_uid","app_gid","worker_uid","worker_gid")}}
+
+    def verification_binding(self,job,blob,task,profile):
+        return {**self.test_proof(blob),"task":task,"feature_profile":profile,"test_filter":job.get("test_filter"),
+            "compiler_memory_cap":job.get("compiler_memory_cap"),"executor_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+
+    def cached_check_result(self,binding):
+        key=hashlib.sha256(json.dumps(binding,sort_keys=True).encode()).hexdigest()
+        folder=Path(self.config["state_root"])/"verification-certificates"
+        if folder.is_symlink():raise ValueError("Verification certificate directory symlink")
+        folder.mkdir(mode=0o700,parents=True,exist_ok=True);path=folder/(key+".json")
+        if path.is_symlink():raise ValueError("Verification certificate symlink")
+        if not path.exists():return key,None
+        if path.stat().st_size>2*1024*1024:raise ValueError("Verification certificate exceeds bound")
+        value=json.loads(path.read_bytes())
+        if value.get("binding")!=binding or not isinstance(value.get("log"),str):raise ValueError("Verification certificate binding changed")
+        identity=value.get("job_id","")
+        if not re.fullmatch(r"[a-f0-9-]{36}",identity):raise ValueError("Verification certificate job identity invalid")
+        receipt=Path(self.config["state_root"])/(identity+".json")
+        if receipt.is_symlink():raise ValueError("Verification job receipt symlink")
+        if not receipt.is_file():return key,None
+        previous=json.loads(receipt.read_bytes())
+        if previous.get("status")!="completed"or previous.get("operation")!="check"or previous.get("verification_key")!=key or previous.get("revoked"):
+            return key,None
+        return key,value
+
+    def record_check_result(self,job,binding,key,log):
+        folder=Path(self.config["state_root"])/"verification-certificates"
+        if folder.is_symlink():raise ValueError("Verification certificate directory symlink")
+        folder.mkdir(mode=0o700,parents=True,exist_ok=True)
+        value={"binding":binding,"job_id":job["job_id"],"log":log[-1024*1024:]}
+        temporary=folder/(key+".new-"+uuid.uuid4().hex)
+        with temporary.open("x")as stream:json.dump(value,stream,sort_keys=True);stream.flush();os.fsync(stream.fileno())
+        os.replace(temporary,folder/(key+".json"));job["verification_key"]=key
+        getattr(self.runner,"resource_progress",lambda _:None)(job)
+
+    @staticmethod
+    def focused_test_plan(changed,metadata):
+        """Fail-fast selection never replaces the required workspace suite or expands executable arguments."""
+        packages=[];filters=[]
+        local=[]
+        for item in metadata.get("packages",[]):
+            path=item.get("manifest_path","")
+            if item.get("source")is None and path.startswith("/build/")and path.endswith("/Cargo.toml"):
+                local.append((path[len("/build/"):-len("/Cargo.toml")],item.get("name","")))
+        for path in sorted(changed):
+            relative=path.removeprefix("v3/")
+            if not relative.endswith(".rs"):continue
+            matches=[(prefix,name)for prefix,name in local if prefix and relative.startswith(prefix+"/")]
+            if matches:
+                _,name=max(matches,key=lambda entry:len(entry[0]))
+                if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,79}",name)and name not in packages:packages.append(name)
+            elif relative.startswith("src/"):
+                stem=Path(relative).stem
+                if stem not in {"mod","main","lib"}and re.fullmatch(r"[A-Za-z0-9_]{1,80}",stem)and stem not in filters:filters.append(stem)
+        filters.sort(key=lambda stem:(stem not in {"auth","user","policy","permissions","approvals","recovery"},stem))
+        return [{"package":name}for name in packages[:3]]+[{"filter":value}for value in filters[:max(0,3-len(packages[:3]))]]
+
+    def focused_tests(self,job,application,output):
+        metadata_path=output/"dependency-metadata.json"
+        if not metadata_path.is_file():return "Focused selection unavailable; required workspace suite follows.\n"
+        metadata=self.metadata_receipt(metadata_path);plan=self.focused_test_plan(job.get("changed_paths",[]),metadata)
+        proof={"policy":"fail-fast-v1","required_suite":"workspace","runs":[]};job["focused_verification"]=proof
+        for item in plan:
+            argv=["cargo","test","--workspace","--locked","--offline"]
+            if "package"in item:argv=["cargo","test","--locked","--offline","-p",item["package"]]
+            else:argv.append(item["filter"])
+            argv.extend(["--","--test-threads=1"]);started=time.monotonic()
+            entry={**item,"status":"running"};proof["runs"].append(entry)
+            getattr(self.runner,"resource_progress",lambda _:None)(job)
+            try:
+                log=self.phase(job,"test","test",application,output,argv,"engine:rust1.90:focused-v1:"+item.get("package",item.get("filter")),3600)
+                matched=sum(int(value)for value in re.findall(r"test result: ok\. ([0-9]+) passed",log))
+                entry.update(status="passed"if matched else"no_matches",matched=matched)
+            except BaseException:
+                entry["status"]="failed";raise
+            finally:
+                entry["seconds"]=time.monotonic()-started;getattr(self.runner,"resource_progress",lambda _:None)(job)
+        return "Fail-fast focused checks complete; required workspace suite follows.\n"
+
     def check(self,job,blob,task,timeout,extract):
         """Use the same attributable recipes for bounded foreground checks and release compilation."""
         profile=check_profile(job.get("feature_profile"));argv=None if task=="dependencies"else check_argv(task,profile)
@@ -392,6 +495,14 @@ class Executor:
         root=Path(self.config["state_root"])/"checks"/job["job_id"];source=root/"source";output=root/"output"
         blob=self.runner.execution_application_blob(blob);root.mkdir(parents=True,exist_ok=True);extract(source,blob);output.mkdir(exist_ok=True)
         application=source/"v3";before=self.runner.execution_source_digest(source);start=time.monotonic()
+        binding=None;key=None
+        if task!="dependencies":
+            binding=self.verification_binding(job,blob,task,profile);key,cached=self.cached_check_result(binding)
+            job["verification_cache"]={"decision":"hit"if cached else"miss","key":key,"reason":"exact_source_recipe_profile_and_fixture_binding"if cached else"no_completed_matching_certificate"}
+            if cached:
+                job["verification_cache"]["source_job_id"]=cached["job_id"]
+                getattr(self.runner,"resource_progress",lambda _:None)(job)
+                return "Reused completed verification from "+cached["job_id"]+"; no compiler or tests executed for this receipt.\n"+cached["log"]
         log=self.dependencies(job,application,output,prepare=task=="dependencies",timeout=min(timeout,600))
         if task=="dependencies":return log
         remaining=max(1,timeout-int(time.monotonic()-start))
@@ -402,6 +513,7 @@ class Executor:
             runtime=["cargo","test","--locked","--offline"]+([selected]if selected is not None else[])+["--","--test-threads=1"]+(["--nocapture"]if selected is not None else[])
             log+=self.phase(job,"test","test",application,output,runtime,"engine:rust1.90:test",max(1,timeout-int(time.monotonic()-start)))
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Check changed its captured application inputs")
+        self.record_check_result(job,binding,key,log)
         return log
 
     @staticmethod
@@ -577,7 +689,7 @@ class Executor:
             job["cargo_cache_reuse"]=previous.name
             return True
         return False
-    def retain_engine(self,job,blob,dependencies,hashes):
+    def retain_engine(self,job,blob,dependencies,hashes,log=None):
         """Publish a content-addressed cache receipt only after tests, source and every output are verified."""
         files=self.runner.execution_entries(blob);inputs={}
         for name in dependencies:
@@ -587,10 +699,11 @@ class Executor:
                 inputs[relative]=hashlib.sha256(files[relative][1]).hexdigest()
         value={"recipe":RUST+":single-job:debug0:complete-tests-v5","rust_inputs":self.rust_inputs(files),"compiled_inputs":inputs,
             "artifacts":hashes,"job_id":job["job_id"]}
+        if log is not None:value.update(test_proof=self.test_proof(blob),test_log=log[-1024*1024:])
         if not inputs:raise ValueError("Compiled input closure missing")
-        key=hashlib.sha256(json.dumps({k:v for k,v in value.items()if k not in {"job_id","artifacts"}},sort_keys=True).encode()).hexdigest()
+        key=hashlib.sha256(json.dumps({k:v for k,v in value.items()if k not in {"job_id","artifacts","test_proof","test_log"}},sort_keys=True).encode()).hexdigest()
         cache=Path(self.config["state_root"])/"engine-artifacts";cache.mkdir(mode=0o700,exist_ok=True)
-        temporary=cache/(key+".new");temporary.write_text(json.dumps(value));temporary.chmod(0o600);os.replace(temporary,cache/(key+".json"))
+        temporary=cache/(key+".new-"+uuid.uuid4().hex);temporary.write_text(json.dumps(value));temporary.chmod(0o600);os.replace(temporary,cache/(key+".json"))
 
     # @code-index {"version":1,"feature":"automation-drop-in","aliases":["standalone automation","automation ability plugin"],"purpose":"Verified standalone Automation compilation, offline dependency provisioning and complete native tests; host publication and permission boundaries remain authoritative.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"The native package contract, test proof and compiler boundaries are invariants; no setting may bypass them."}}
     def provision_native_registry(self,cache):
@@ -777,12 +890,19 @@ class Executor:
             artifacts,old=cached;logs="Verified compiler artifacts reused; locked Rust tests previously passed on identical compiled inputs.\n"
             manifest=self.test_manifest(artifacts)
             self.restore_test_support(output,artifacts,manifest)
-            for binary in sorted((artifacts/"tests").iterdir()):
-                if not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",binary.name):raise ValueError("Cached test executable name invalid")
-                logs+=self.phase(job,"test","test",application,output,["/output/artifacts/tests/"+binary.name,"--test-threads=1"],"engine:rust1.90:test")
+            reused_tests=old.get("test_proof")==self.test_proof(blob)and isinstance(old.get("test_log"),str)
+            if reused_tests:
+                job["test_reuse"]={"source_job_id":old["job_id"],"binding":old["test_proof"],"decision":"reused_completed_workspace_suite"}
+                logs="Exact source, toolchain and fixture proof matched; complete workspace test evidence reused from "+old["job_id"]+".\n"+old["test_log"]
+            else:
+                for binary in sorted((artifacts/"tests").iterdir()):
+                    if not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",binary.name):raise ValueError("Cached test executable name invalid")
+                    logs+=self.phase(job,"test","test",application,output,["/output/artifacts/tests/"+binary.name,"--test-threads=1"],"engine:rust1.90:test")
             if self.runner.execution_source_digest(source)!=self.runner.execution_source_digest_blob(blob):
                 raise ValueError("Cached tests changed candidate source")
             logs=logs.replace("locked Rust tests previously passed on identical compiled inputs.","current candidate ran retained tests from identical compiled inputs.")
+            if self.artifact_hashes(artifacts)!=old["artifacts"]:raise ValueError("Retained test run changed verified compiler artifacts")
+            if not reused_tests:self.retain_engine(job,blob,[name.removeprefix("v3/")for name in old["compiled_inputs"]],old["artifacts"],logs)
             receipt={"inputs_sha256":digest(blob),"artifacts":old["artifacts"],"log":logs,"reused_from":old["job_id"]}
             temporary=root/"verified.new";temporary.write_text(json.dumps(receipt));os.replace(temporary,root/"verified.json")
             if not (artifacts/"stable/smoke.json").is_file():raise ValueError("Retained optimized linked smoke proof missing")
@@ -796,6 +916,8 @@ class Executor:
         logs=self.dependencies(job,application,output,prepare=True)
         if seeded:logs+=self.phase(job,"dependency","dependency",application,output,["cargo","clean","--package","webagent-v3"],"engine:rust1.90:clean-root",600)
         logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"],"engine:rust1.90:compile_test")
+        logs+=self.focused_tests(job,application,output)
+        if self.runner.execution_source_digest(source)!=before:raise ValueError("Focused tests changed captured application inputs")
         logs+=self.phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads=1"],"engine:rust1.90:test")
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Tests left changed application inputs")
         logs+=self.phase(job,"compile_linked","engine",application,output,self.linked_recipe(),"engine:rust1.90:linked-release")
@@ -828,7 +950,7 @@ class Executor:
         core=self.core_dependencies(metadata,output/"target")
         (artifacts/"core-inputs.txt").write_text("\n".join(sorted(core))+"\n")
         if "v3/src/main.rs"not in {self.local_dependency(name)for name in dependencies}:raise ValueError("Compiler dependency attestation missing")
-        hashes=self.artifact_hashes(artifacts);self.retain_engine(job,blob,dependencies,hashes)
+        hashes=self.artifact_hashes(artifacts);self.retain_engine(job,blob,dependencies,hashes,logs)
         receipt={"inputs_sha256":inputs,"artifacts":hashes,"log":logs}
         temporary=root/"verified.new";temporary.write_text(json.dumps(receipt));os.replace(temporary,root/"verified.json")
         return artifacts,logs
