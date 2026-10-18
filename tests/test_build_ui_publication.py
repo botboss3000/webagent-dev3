@@ -103,8 +103,10 @@ class ConcurrentUIEntryTests(unittest.TestCase):
     def wait(self,jobs):
         deadline=time.monotonic()+8
         while time.monotonic()<deadline:
-            rows=[self.broker.jobs[job]for job in jobs]
-            if all(row["status"]not in {"queued","running"}for row in rows):return rows
+            # Match the API lock: never observe status before its atomic receipt is populated.
+            with self.broker.lock:
+                rows=[self.broker.jobs[job]for job in jobs]
+                if all(row["status"]not in {"queued","running"}for row in rows):return rows
             time.sleep(.01)
         self.fail("Bounded UI publications did not finish")
 

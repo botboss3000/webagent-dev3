@@ -1453,6 +1453,11 @@ print(json.dumps(counts))"""
             result["image"]=result["retention_pin"]["image"]
         return result
 
+    @staticmethod
+    def ui_test_timeout(tests):
+        """Bound the serial aggregate by selected fixture count, retaining every required fixture."""
+        return min(900,max(300,45*len(tests)))
+
     def validate_selected_tests(self,job_id,root,evidence):
         """Execute dependency-selected frontend fixtures in one isolated browser-capable worker."""
         tests=evidence["tests"]
@@ -1473,7 +1478,7 @@ print(json.dumps(counts))"""
                 "--env","PLAYWRIGHT_MODULE=/opt/ui-tests/playwright-entry.cjs",
                 "--env","CHROMIUM_PATH=/opt/ui-tests/chromium","--env","BROWSER_EXECUTABLE=/opt/ui-tests/chromium",
                 "--mount","type=bind,src="+str(root)+",dst=/candidate,readonly","--workdir","/candidate/v3",
-                "--entrypoint","node",image,"--experimental-vm-modules","--test","--test-concurrency=1",*["/candidate/"+p for p in tests]],timeout=300,kind="ui_test")
+                "--entrypoint","node",image,"--experimental-vm-modules","--test","--test-concurrency=1",*["/candidate/"+p for p in tests]],timeout=self.ui_test_timeout(tests),kind="ui_test")
         return {"binding":binding,"image":image,"recipe":recipe,"tests":tests,"status":"passed"if tests else"not_applicable","reused":False}
 
     def validate_ui(self, job_id, changed, *, root=None):
@@ -2999,7 +3004,10 @@ class Broker:
             item = self.work[key]
             if implicit:item["implicit_source"]=True;self._save_work()
         if item.get("mode") != "isolated" or item["status"] != "open":
-            raise ValueError("task is no longer open; use a new task_id")
+            # A closed generation may return its exact committed receipt, never edit again.
+            receipt=item.get("applies",{}).get(args.get("request_id"))if mutating else None
+            if receipt and receipt.get("file_request_sha256")==hashlib.sha256(canonical(args)).hexdigest():return dict(receipt)
+            raise ValueError("task is no longer open; use a new Broker ID")
         forwarded = {"task_id": task_id, "path": path}
         if name in ("file_list", "file_read"):
             forwarded.update({k: args[k] for k in ("offset", "limit") if k in args})
@@ -3991,12 +3999,84 @@ class Broker:
             self._start_next()
         return job["check_result"]
 
+    def broker_arguments(self,request,args):
+        """Resolve host-generated IDs under authenticated session/branch scope, never model identity."""
+        name=request["name"];trusted=request["trusted"];workspace=request["workspace"]
+        files={"file_list","file_read","file_search","file_edit","file_write"}
+        supported=name in files or name in {"build_work","v3_build_work"}or name.startswith("v3_source_")
+        if not supported:return args,None
+        if set(args)&{"session_id","user_id","origin","broker_scope"}:raise ValueError("Broker identity is runtime owned")
+        selected=args.get("broker_id");legacy=args.get("task_id")
+        if selected is not None and legacy is not None:raise ValueError("Use broker_id or legacy task_id, not both")
+        # Legacy calls preserve their exact protocol and never redirect a branch's current selection.
+        if selected is None and legacy is not None:return args,None
+        implicit=name in files or(name in {"build_work","v3_build_work"}and args.get("action")in {"begin","review","preflight","finish","decide","check","receipt","abandon","continue","acceptance","complete","heartbeat","reserve"})
+        if selected is None and not implicit:return args,None
+        if selected is not None and(not isinstance(selected,str)or(selected!="new"and not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",selected))):raise ValueError("Broker ID must be new or a returned ID")
+        self._incoming_lease(trusted)
+        scope=trusted.get("broker_scope",workspace)
+        if not isinstance(scope,str)or not 1<=len(scope)<=128 or any(ord(c)<32 for c in scope):raise ValueError("Invalid trusted broker scope")
+        token=hashlib.sha256(canonical([trusted["user_id"],workspace,scope])).hexdigest()
+        folder=self.work_dir/"broker-bindings"
+        if folder.is_symlink():raise ValueError("Broker binding directory symlink")
+        folder.mkdir(mode=0o700,exist_ok=True);path=folder/(token+".json")
+        if path.is_symlink():raise ValueError("Broker binding symlink")
+        if path.exists()and path.stat().st_size>8*1024*1024:raise ValueError("Broker binding receipt exceeds bound")
+        state=json.loads(path.read_bytes())if path.exists()else{"requests":{},"current":None}
+        rid=args.get("request_id")
+        if rid is not None and(not isinstance(rid,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",rid)):raise ValueError("Stable broker request ID required")
+        receipt_key=hashlib.sha256(canonical([name,rid])).hexdigest()if rid else None
+        fingerprint=hashlib.sha256(canonical([name,args])).hexdigest()
+        receipt=state["requests"].get(receipt_key)if receipt_key else None
+        creates=name in files or args.get("action")=="begin"
+        if receipt:
+            if receipt["fingerprint"]!=fingerprint:raise ValueError("Broker request ID reused with changed operation")
+            target=receipt["broker_id"];selection=receipt["selection"]
+        else:
+            target=selected if selected not in (None,"new")else state["current"]
+            if selected=="new":
+                if not creates:raise ValueError("new requires a source operation or begin, never a release action")
+                target=None
+            key=hashlib.sha256(canonical([trusted["user_id"],workspace,target])).hexdigest()if target else None
+            current=self.work.get(key)
+            if selected not in (None,"new")and current is None:raise ValueError("Unknown Broker ID in this caller session")
+            if selected is None and current and current["status"]!="open"and creates:target=None
+            if not target:
+                if not creates:raise ValueError("No current broker work; start with a source operation or broker_id=new")
+                if not rid:raise ValueError("Automatic broker creation requires runtime-generated request_id")
+                target=("auto-source-"if selected is None and name in files else"broker-")+hashlib.sha256(canonical([token,name,rid])).hexdigest()[:48];selection="created"
+            else:selection="selected"if selected else"continued"
+            if receipt_key:
+                if len(state["requests"])>=10000:raise ValueError("Broker binding receipt limit reached; maintenance required")
+                state["requests"][receipt_key]={"broker_id":target,"fingerprint":fingerprint,"selection":selection}
+                self.scheduler.write_record(path,state)
+        key=hashlib.sha256(canonical([trusted["user_id"],workspace,target])).hexdigest();item=self.work.get(key)
+        if item is None:
+            if selection!="created":raise ValueError("Selected broker work is unavailable")
+            summary=args.get("summary")or"Isolated source work"
+            self.handle({**request,"name":"v3_build_work","arguments":{"action":"begin","task_id":target,"summary":summary,"mode":"isolated"}})
+            item=self.work[key];item["broker_managed"]=True;self._save_work()
+        replay=name in {"file_edit","file_write"}and receipt and rid in item.get("applies",{})
+        if (name in files or args.get("action")=="begin")and item["status"]!="open"and not replay:raise ValueError("Broker work is closed; use broker_id=new for separate work")
+        if args.get("action")=="begin"and item.get("summary")!=(args.get("summary")or"Isolated source work"):
+            raise ValueError("Broker work summary changed; select new work explicitly")
+        state["current"]=target;self.scheduler.write_record(path,state)
+        normalized={k:v for k,v in args.items()if k!="broker_id"};normalized["task_id"]=target
+        if name in {"file_edit","file_write"}and selection=="created"and normalized.get("expected_inputs_sha256")is None:
+            normalized["expected_inputs_sha256"]=item["base_inputs_sha256"]
+        if name in files and name not in {"file_edit","file_write"}:normalized.pop("request_id",None)
+        if args.get("action")=="begin":
+            normalized.pop("request_id",None);normalized.setdefault("summary",item["summary"])
+            if name=="v3_build_work":normalized.setdefault("mode","isolated")
+            else:normalized.pop("mode",None)
+        return normalized,{"broker_id":target,"selection":selection,"provenance":item.get("provenance",{}),"state":item["status"]}
+
     def handle(self, request):
         """Authorize broker operations and classify actual compiler consumers before a frozen release is admitted."""
         if not isinstance(request, dict) or set(request) - {"id", "name", "arguments", "workspace", "timeout_seconds", "trusted"}:
             raise ValueError("invalid broker request")
         trusted, workspace, args = request.get("trusted"), request.get("workspace"), request.get("arguments", {})
-        if not isinstance(trusted, dict) or not {"user_id", "session_id"} <= set(trusted) or set(trusted) - {"user_id", "session_id", "lease_until", "access_fingerprint", "local_caller", "bridge_caller"}:
+        if not isinstance(trusted, dict) or not {"user_id", "session_id"} <= set(trusted) or set(trusted) - {"user_id", "session_id", "lease_until", "access_fingerprint", "local_caller", "bridge_caller", "broker_scope"}:
             raise ValueError("trusted caller required")
         if not isinstance(trusted["user_id"], str) or not 1 <= len(trusted["user_id"]) <= 128 or "\0" in trusted["user_id"]:
             raise ValueError("invalid caller")
@@ -4008,6 +4088,24 @@ class Broker:
         if not isinstance(args, dict):
             raise ValueError("arguments must be an object")
         name = request.get("name")
+        if not isinstance(name,str):raise ValueError("Broker tool name required")
+        # The normalized recursive call carries legacy task_id and cannot create/select again.
+        with self.lock:
+            normalized,context=self.broker_arguments(request,args)
+        if context is not None:
+            result=self.handle({**request,"arguments":normalized})
+            if isinstance(result,dict):
+                result=dict(result);result["broker_id"]=context["broker_id"]
+                if name in {"file_list","file_read","file_search","file_edit","file_write"}:result["task_created"]=context["selection"]=="created"
+                if result.get("job_id"):
+                    result["broker_job_id"]=result["job_id"]
+                    job=self.jobs.get(result["job_id"],{})
+                    if job.get("status")=="completed"and job.get("operation")in {"build_deploy","ui_deploy","plugin_deploy","host_service_deploy","index_deploy"}:result["broker_release_id"]=result["job_id"]
+                context.update({k:result[k]for k in ("broker_job_id","broker_release_id")if k in result})
+                item=self.work.get(hashlib.sha256(canonical([trusted["user_id"],workspace,context["broker_id"]])).hexdigest(),{})
+                context.update(state=item.get("status",context["state"]),summary=item.get("summary",""))
+                result["broker_context"]=context
+            return result
         if name in ("workspace_seed","source_review","source_patch","v3_workspace_status","v3_workspace_action") or (name=="v3_cargo_task" and "task_id" not in args):
             return self.workspace_request(name,args,trusted,workspace)
         if name=="code_index_maintenance":
@@ -4615,7 +4713,9 @@ class Broker:
                         raise ValueError("coordination registry full; administrator maintenance required")
                     item = {"task_id": task_id, "user_id": trusted["user_id"],
                             "workspace": workspace, "summary": summary, "status": "open",
-                            "created_at": time.time(), "mode": mode, "key": key, "applies": {}}
+                            "created_at": time.time(), "mode": mode, "key": key, "applies": {},
+                            "provenance":{"origin":"operator"if trusted.get("local_caller")or trusted.get("bridge_caller")else"webagent",
+                                "session_id":None if trusted.get("local_caller")or trusted.get("bridge_caller")else workspace}}
                     if mode == "isolated":
                         blob = self._current_release_blob()
                         # Only authenticated admin and the fixed local operator receive

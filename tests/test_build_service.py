@@ -1074,3 +1074,81 @@ class RecoveryDockerBoundaryTests(unittest.TestCase):
    self.assertEqual(runner.create(fixtures.host.TARGETS[0],"sha256:"+"2"*64,previous,"/frozen"),"a"*64)
   labels=json.loads(connection.request.call_args.kwargs["body"])["Labels"]
   self.assertEqual(labels,{"existing":"preserved","webagent.release.job":job,"webagent.release.role":"api","webagent.release.instance":fixtures.host.CONFIG["instance"]})
+
+class AutomaticBrokerIdentityTests(unittest.TestCase):
+    from test_scheduler_broker import SchedulerBrokerTests as _base
+    setUp=_base.setUp
+    tearDown=_base.tearDown
+    call=_base.call
+
+    def write_new(self,path="docs/first.md",request="automatic-first-write",**kwargs):
+        return self.call("file_write",{"path":path,"content":"first\n","broker_id":"new","request_id":request,**kwargs})
+
+    def test_new_default_switch_and_returned_identity(self):
+        first=self.write_new();bid=first["broker_id"]
+        self.assertTrue(first["task_created"])
+        second=self.write_new("docs/second.md","automatic-second-write")
+        self.assertNotEqual(bid,second["broker_id"])
+        current=self.call("file_read",{"path":"docs/second.md"})
+        self.assertEqual(current["broker_id"],second["broker_id"])
+        switched=self.call("file_read",{"path":"docs/first.md","broker_id":bid})
+        self.assertEqual(switched["broker_id"],bid)
+        self.assertEqual(self.call("file_read",{"path":"docs/first.md"})["broker_id"],bid)
+
+    def test_retry_new_after_restart_never_creates_twice(self):
+        args={"path":"docs/first.md","content":"first\n","broker_id":"new","request_id":"automatic-first-write"}
+        first=self.call("file_write",args);count=len(self.broker.work)
+        state=self.broker.state;self.broker.shutdown();self.broker=fixtures.host.Broker(state,self.runner)
+        self.assertEqual(self.call("file_write",args),first);self.assertEqual(len(self.broker.work),count)
+        with self.assertRaisesRegex(ValueError,"reused"):self.call("file_write",{**args,"content":"different"})
+
+    def test_branch_defaults_do_not_redirect_other_branches(self):
+        self.trusted["broker_scope"]="branch-one";first=self.write_new()
+        self.trusted["broker_scope"]="branch-two";second=self.write_new("docs/second.md","automatic-second-write")
+        self.trusted["broker_scope"]="branch-one"
+        self.assertEqual(self.call("file_read",{"path":"docs/first.md"})["broker_id"],first["broker_id"])
+        self.trusted["broker_scope"]="branch-two"
+        self.assertEqual(self.call("file_read",{"path":"docs/second.md"})["broker_id"],second["broker_id"])
+
+    def test_trusted_provenance_requires_no_model_session_id(self):
+        self.trusted.pop("local_caller",None);self.trusted["lease_until"]=time.time()+30;first=self.write_new()
+        self.assertEqual(first["broker_context"]["provenance"],{"origin":"webagent","session_id":self.workspace})
+        with self.assertRaises(ValueError):self.write_new("docs/spoof.md","automatic-spoof-write",session_id=str(uuid.uuid4()))
+
+    def test_explicit_unknown_closed_and_mixed_aliases_do_not_create(self):
+        count=len(self.broker.work)
+        with self.assertRaisesRegex(ValueError,"Unknown Broker ID"):self.call("file_read",{"path":"README.md","broker_id":"unknown-broker"})
+        self.assertEqual(len(self.broker.work),count)
+        first=self.write_new();bid=first["broker_id"]
+        item=next(item for item in self.broker.work.values()if item["task_id"]==bid);item["status"]="closed";self.broker._save_work()
+        with self.assertRaisesRegex(ValueError,"closed"):self.call("file_read",{"path":"README.md","broker_id":bid})
+        with self.assertRaisesRegex(ValueError,"not both"):self.call("file_read",{"path":"README.md","broker_id":bid,"task_id":bid})
+        with self.assertRaisesRegex(ValueError,"never a release"):self.call("build_work",{"action":"finish","broker_id":"new","request_id":"automatic-bad-finish"})
+
+    def test_existing_work_keeps_digest_and_ownership_gates(self):
+        first=self.write_new();bid=first["broker_id"]
+        args={"path":"docs/first.md","content":"changed\n","broker_id":bid,"request_id":"automatic-second-edit"}
+        with self.assertRaisesRegex(ValueError,"require expected"):self.call("file_write",args)
+        with self.assertRaisesRegex(ValueError,"stale task inputs"):self.call("file_write",{**args,"expected_inputs_sha256":"0"*64,"request_id":"automatic-stale-edit"})
+        self.assertEqual(self.call("file_write",{**args,"request_id":"automatic-valid-edit","expected_inputs_sha256":first["workspace_inputs_sha256"]})["status"],"success")
+
+    def test_new_write_receipt_replays_after_closure_without_reopening(self):
+        args={"path":"docs/first.md","content":"first\n","broker_id":"new","request_id":"automatic-first-write"}
+        first=self.call("file_write",args);item=next(i for i in self.broker.work.values()if i["task_id"]==first["broker_id"])
+        item["status"]="closed";self.broker._save_work();count=len(self.broker.work)
+        again=self.call("file_write",args)
+        self.assertEqual(again["broker_id"],first["broker_id"]);self.assertEqual(again["file_request_sha256"],first["file_request_sha256"])
+        self.assertEqual(item["status"],"closed");self.assertEqual(len(self.broker.work),count)
+
+    def test_first_read_and_begin_create_without_extra_operation(self):
+        read=self.call("file_list",{"path":"","broker_id":"new","request_id":"automatic-initial-read"})
+        self.assertTrue(read["broker_id"].startswith("broker-"))
+        begun=self.call("build_work",{"action":"begin","broker_id":"new","summary":"Separate outcome","request_id":"automatic-explicit-begin"})
+        self.assertNotEqual(read["broker_id"],begun["broker_id"])
+        self.assertEqual(self.call("build_work",{"action":"review"})["broker_id"],begun["broker_id"])
+
+class FrontendAggregateBudgetTests(unittest.TestCase):
+ def test_selected_serial_fixture_budget_is_bounded(self):
+  self.assertEqual(fixtures.host.Runner.ui_test_timeout([]),300)
+  self.assertEqual(fixtures.host.Runner.ui_test_timeout(["fixture"]*16),720)
+  self.assertEqual(fixtures.host.Runner.ui_test_timeout(["fixture"]*256),900)
