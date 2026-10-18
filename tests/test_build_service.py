@@ -601,6 +601,62 @@ class SuccessorRecoveryTests(unittest.TestCase):
         self.assertFalse(self.broker.scheduler.store.get(item["key"])["scopes"])
         self.assertEqual((Path(item["workspace_path"])/"README.md").read_text(),"other writer\n")
 
+    def test_atomic_transfer_preserves_closed_source_and_review_lookup(self):
+        original,job=self.proposal(False);item,args=self.request(job);args["transfer_claims"]=True
+        held=self.broker.scheduler.store.get(original["key"])
+        result=self.call("build_work",args)
+        self.assertEqual(result["status"],"imported")
+        self.assertEqual(original["status"],"closed")
+        source=self.broker.scheduler.store.get(original["key"])
+        self.assertEqual(source["state"],"abandoned");self.assertEqual(source["epoch"],held["epoch"]+1)
+        self.assertEqual(source["scopes"],[])
+        self.assertEqual(set(self.broker.scheduler.store.get(item["key"])["scopes"]),set(held["scopes"]))
+        self.assertIn(original["key"],self.broker.review_policy.task_keys())
+        self.assertEqual(self.call("build_work",args),result)
+        self.assertEqual((Path(original["workspace_path"])/"README.md").read_text(),"proposal\n")
+
+    def test_transfer_crash_after_sqlite_commit_recovers_once(self):
+        original,job=self.proposal(False);item,args=self.request(job);args["transfer_claims"]=True
+        normal=self.broker.scheduler.store.transfer
+        def lost(**kwargs):normal(**kwargs);raise RuntimeError("lost transfer response")
+        with patch.object(self.broker.scheduler.store,"transfer",side_effect=lost):
+            with self.assertRaisesRegex(RuntimeError,"lost transfer"):self.call("build_work",args)
+        epoch=self.broker.scheduler.store.get(original["key"])["epoch"]
+        self.assertEqual(self.call("build_work",args)["status"],"imported")
+        self.assertEqual(self.broker.scheduler.store.get(original["key"])["epoch"],epoch)
+
+    def test_transfer_conflict_does_not_move_claims(self):
+        original,job=self.proposal(False)
+        self.runner.blob=fixtures.context(extra={"v3/README.md":"conflict\n"})
+        item,args=self.request(job);args["transfer_claims"]=True
+        before=self.broker.scheduler.store.get(original["key"])
+        with self.assertRaisesRegex(ValueError,"source conflict"):self.call("build_work",args)
+        self.assertEqual(before,self.broker.scheduler.store.get(original["key"]))
+        self.assertFalse(self.broker.scheduler.store.get(item["key"])["scopes"])
+
+    def test_transfer_rejects_unrelated_scopes_and_stale_retry(self):
+        original,job=self.proposal(False);item,args=self.request(job);args["transfer_claims"]=True
+        store=self.broker.scheduler.store;value=store.get(original["key"])
+        store.acquire(value["id"],value["owner"],value["revision"],value["epoch"],[*value["scopes"],"path:docs/extra.md"],"extra-successor-scope")
+        with self.assertRaisesRegex(ValueError,"Yield unrelated"):self.call("build_work",args)
+
+    def test_transferred_apply_response_loss_and_source_resumption_are_fenced(self):
+        original,job=self.proposal(False);item,args=self.request(job);args["transfer_claims"]=True
+        normal=self.broker.handle
+        def blocked(request):
+            if request.get("name")=="v3_source_apply":raise RuntimeError("lost before apply")
+            return normal(request)
+        with patch.object(self.broker,"handle",side_effect=blocked):
+            with self.assertRaisesRegex(RuntimeError,"lost before apply"):self.call("build_work",args)
+        self.assertFalse(self.broker.scheduler.store.get(original["key"])["scopes"])
+        job["effects_started"]=True
+        with self.assertRaisesRegex(ValueError,"source resumed"):self.call("build_work",args)
+        job["effects_started"]=False
+        result=self.call("build_work",args);value=self.broker.scheduler.store.get(item["key"])
+        self.assertEqual(result["status"],"imported")
+        self.assertEqual(self.call("build_work",args),result)
+        self.assertEqual(value,self.broker.scheduler.store.get(item["key"]))
+
     def test_original_claims_must_be_yielded(self):
         original,job=self.proposal(False);item,args=self.request(job)
         with self.assertRaisesRegex(ValueError,"Yield original"):self.call("build_work",args)

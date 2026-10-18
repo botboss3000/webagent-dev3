@@ -69,8 +69,13 @@ class ReviewPolicy:
 
     def task_keys(self):
         """Reuse completed assertions only through the scanner's source/dependency checks."""
-        with self.broker.lock:jobs=list(self.broker.jobs.values())
-        return (getattr(self.broker,"maintenance_activities",None).evidence_keys() if getattr(self.broker,"maintenance_activities",None) else []) + [job["ownership_id"] for job in jobs
+        with self.broker.lock:
+            jobs=list(self.broker.jobs.values())
+            successors=[item["successor"]["source_task_key"]for item in self.broker.work.values()
+                if item.get("successor",{}).get("source_task_key")]
+        # These are lookup candidates, never inherited approvals: projection checks exact
+        # source, dependency, configuration and descriptor bindings for each assertion.
+        return successors + (getattr(self.broker,"maintenance_activities",None).evidence_keys() if getattr(self.broker,"maintenance_activities",None) else []) + [job["ownership_id"] for job in jobs
                 if job.get("deferred_documentation") and job.get("ownership_id")
                 and job.get("status") == "completed"]
 

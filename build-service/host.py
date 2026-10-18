@@ -3208,7 +3208,7 @@ class Broker:
         """Import a terminal frozen proposal through normal checked writes; never replay deployment."""
         required={"action","task_id","source_job_id","request_id","expected_inputs_sha256"}
         trusted=request["trusted"];workspace=request["workspace"]
-        if set(args)!=required or not trusted.get("local_caller"):
+        if set(args)-{"transfer_claims"}!=required or type(args.get("transfer_claims",False))is not bool or not trusted.get("local_caller"):
             raise PermissionError("Exact operator successor request required")
         self._incoming_lease(trusted)
         item=self.scheduler.item(args,trusted,workspace)
@@ -3233,7 +3233,7 @@ class Broker:
                 raise ValueError("Source task has unresolved execution")
             held=self.scheduler.store.get(previous["key"])
             if held["generation"]!=job.get("source_generation"):raise ValueError("Frozen ownership generation changed")
-            if held["scopes"] or held["requested"]:raise ValueError("Yield original reservations through release_claims before successor import")
+            if held["requested"]or(held["scopes"]and not args.get("transfer_claims")):raise ValueError("Yield original reservations through release_claims before successor import")
             if self.scheduler.pending(previous["key"]) or self.scheduler.pending(item["key"]):raise ValueError("Scheduler transition requires recovery")
             if item.get("status")!="open" or item.get("mode")!="isolated" or item.get("successor"):
                 raise ValueError("Fresh open isolated successor required")
@@ -3260,6 +3260,13 @@ class Broker:
                 "source_summary":previous["summary"],"source_generation":job.get("source_generation"),
                 "source_sha256":context_digest(frozen)[0],"baseline_sha256":context_digest(live)[0],
                 "changed_paths":changed,"patch":patch,"request_id":args["request_id"]}
+            if args.get("transfer_claims")and held["scopes"]:
+                target=self.scheduler.ensure(item,trusted,workspace)
+                if target["state"]!="waiting"or target["scopes"]or target["requested"]:raise ValueError("Empty unreserved successor required for claim transfer")
+                allowed=set(self.scheduler.components(item).scopes(changed))
+                if not set(held["scopes"])<=allowed:raise ValueError("Yield unrelated original reservations before successor transfer")
+                record["claim_transfer"]={"task":held["id"],"owner":held["owner"],"revision":held["revision"],"epoch":held["epoch"],
+                    "target":target["id"],"new_owner":target["owner"],"request":"successor-"+hashlib.sha256(canonical([owner,item["key"],args["request_id"]])).hexdigest()[:48],"scopes":held["scopes"]}
             self.scheduler.write_record(path,record)
         # Preparation alone grants no future authority over a proposal that has since resumed.
         if args["request_id"] not in item.get("applies",{}):
@@ -3267,19 +3274,37 @@ class Broker:
             state=self.scheduler.store.get(previous["key"])
             if previous.get("job_id")!=job["job_id"] or previous.get("status")!="closed" or job.get("effects_started") or job.get("status")not in {"failed","cancelled","interrupted","stale"}:
                 raise ValueError("Successor source resumed; reconcile before importing")
-            if state["scopes"] or state["requested"] or state["generation"]!=record["source_generation"]:
+            transfer=record.get("claim_transfer")
+            moved=self.scheduler.store.receipt(transfer["request"])if transfer else None
+            if state["generation"]!=record["source_generation"]or state["requested"]:
                 raise ValueError("Successor source ownership changed")
+            if transfer:
+                if moved:
+                    if state["state"]!="abandoned"or state["epoch"]!=transfer["epoch"]+1 or state["scopes"]or state["evidence"].get("transfer_to")!=item["key"]:
+                        raise ValueError("Successor transfer source fence changed")
+                elif state["revision"]!=transfer["revision"]or state["epoch"]!=transfer["epoch"]or state["scopes"]!=transfer["scopes"]:
+                    raise ValueError("Successor source ownership changed")
+            elif state["scopes"]:raise ValueError("Successor source ownership changed")
             if any(j.get("task_id")==previous["task_id"] and j.get("user_id")==previous["user_id"] and j.get("workspace")==workspace and j.get("status")in {"queued","running","uncertain","needs_decision"} for j in self.jobs.values()):
                 raise ValueError("Successor source has unresolved execution")
             if self.scheduler_digest(self.scheduler_task_snapshot(Path(previous["workspace_path"]).parent))!=record["source_sha256"]:
                 raise ValueError("Successor source bytes changed")
+            if transfer:
+                # Stable SQLite receipt makes a crash after the atomic transfer recoverable.
+                if moved is None:
+                    moved=self.scheduler.store.transfer(**{k:v for k,v in transfer.items()if k!="scopes"})
+                target=self.scheduler.store.get(item["key"])
+                if target["epoch"]!=moved["task"]["epoch"]or not set(transfer["scopes"])<=set(target["scopes"]):raise ValueError("Successor destination ownership changed")
+                item.update(ownership_epoch=target["epoch"],ownership_revision=target["revision"],source_generation=target["generation"])
+                self._save_work()
         # A saved checked-apply receipt settles an interrupted response without a second edit.
         result=self.handle({**request,"name":"v3_source_apply","arguments":{
             "task_id":item["task_id"],"request_id":args["request_id"],
             "expected_inputs_sha256":args["expected_inputs_sha256"],"patch":record["patch"]}})
         if result.get("status")!="success":
             return {"status":"requires_reconciliation","source_apply":result,"source_job_id":record["source_job_id"]}
-        provenance={k:v for k,v in record.items() if k not in {"state","digest","patch"}}
+        provenance={k:v for k,v in record.items() if k not in {"state","digest","patch","claim_transfer"}}
+        if record.get("claim_transfer"):provenance["claim_transfer_receipt"]=record["claim_transfer"]["request"]
         item["successor"]=provenance
         original=self.work[record["source_task_key"]]
         if item["key"] not in original.setdefault("successor_tasks",[]):original["successor_tasks"].append(item["key"])
