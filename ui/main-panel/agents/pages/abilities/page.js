@@ -190,6 +190,19 @@ export async function renderAbilities(host, request, options) {
             throw error;
           }
         },
+        onResultDeduplicationChange: async (_, included) => {
+          try {
+            await request(scope + '/abilities/' + encodeURIComponent(ability.id) +
+              '/tools/' + encodeURIComponent(tool.name) + '/result-deduplication', 'PUT',
+              { expected_revision: data.revision, included });
+            expandedAbility = ability.id;
+            await rerender({ administratorNotice: 'Duplicate-result setting saved.' });
+          } catch (error) {
+            status.textContent = error.status === 409
+              ? 'Settings changed. Reload before saving: ' + error.message : error.message;
+            throw error;
+          }
+        },
         onPermissionChange: (_, mode) => saveToolPermission(mode),
         onVisibilityChange: (_, mode) => save(ability, 'tool', mode, toolRow.querySelector('.ac-tri'), tool.name),
       });

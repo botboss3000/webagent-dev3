@@ -1,4 +1,5 @@
 'use strict';
+import {requestTouchVibration} from '../../../../shared/vibrate.js';
 
 const scopeOptions = [
   ['code_index', 'Code Index tools'],
@@ -27,15 +28,17 @@ function staleMessage(error) {
     : 'Save failed: ' + message;
 }
 
-export function renderToolOutputPolicy(host, agent, persist) {
+function renderExperimentalPolicy(host, agent, persist, available) {
   const title = document.createElement('h3');
-  title.textContent = 'Tool output retention';
+  title.textContent = 'Lifetime/budget retention';
   const hint = document.createElement('p');
   hint.className = 'ac-hint';
-  hint.textContent = 'Older eligible read results can be shortened in later model calls while their original run records remain available. Saved changes apply at the next model call; no restart is needed.';
+  hint.textContent = available
+    ? 'Under development · Experimental — disabled. Saved lifetime and budget values are preserved for a later strategy revision.'
+    : 'Under development · Experimental — backend update pending. Saved settings below are read-only; the running lifetime/budget policy is unchanged.';
   host.append(title, hint);
 
-  const canManage = Boolean(agent.can_manage);
+  const canManage = false;
   let policy = structuredClone(agent.tool_output_policy || agent.tool_output_defaults || {});
   const eligible = Array.isArray(agent.tool_output_eligible_tools)
     ? agent.tool_output_eligible_tools : [];
@@ -153,6 +156,7 @@ export function renderToolOutputPolicy(host, agent, persist) {
   save.textContent = 'Save tool output settings';
   save.disabled = !canManage;
   save.addEventListener('click', async () => {
+    if (!canManage || save.disabled) return;
     const next = {
       enabled: enabled.checked,
       scope: scope.value,
@@ -193,6 +197,7 @@ export function renderToolOutputPolicy(host, agent, persist) {
   reset.textContent = 'Reset to app defaults';
   reset.disabled = !canManage || !agent.tool_output_overridden;
   reset.addEventListener('click', async () => {
+    if (!canManage || reset.disabled) return;
     save.disabled = true;
     reset.disabled = true;
     status.textContent = 'Resetting…';
@@ -208,6 +213,61 @@ export function renderToolOutputPolicy(host, agent, persist) {
     }
   });
   if (canManage) host.append(save, reset);
-  if (!canManage) status.textContent = 'Read-only: only an agent manager can change these settings.';
+  if (!canManage) status.textContent = available
+    ? 'Lifetime/budget eviction is disabled independently of duplicate-result suppression.'
+    : 'Backend update pending. These saved values do not change the active runtime policy.';
   fill(agent);
+}
+
+
+export function renderToolOutputPolicy(host, agent, persist) {
+  const title = document.createElement('h3');
+  title.textContent = 'Duplicate tool results';
+  const {wrap, labelEl, help} = createField(host, 'Suppress identical tool results',
+    'Included tools still execute and save their complete results. Exact unchanged repeats reference a full result in context. Choose included tools on Abilities. Changes apply to future results at the next model call.');
+  host.insertBefore(title, wrap);
+  const enabled = document.createElement('input');
+  enabled.type = 'checkbox';
+  enabled.id = 'identity-tool-result-deduplication-enabled';
+  wrap.style.webkitTapHighlightColor = 'transparent';
+  enabled.addEventListener('click', event => {
+    if (!enabled.disabled) requestTouchVibration(event);
+  });
+  labelEl.htmlFor = enabled.id;
+  const available = typeof agent.tool_result_deduplication?.enabled === 'boolean';
+  let savedEnabled = available && agent.tool_result_deduplication.enabled;
+  enabled.checked = savedEnabled;
+  enabled.disabled = !agent.can_manage || !available;
+  const status = document.createElement('p');
+  status.className = 'ac-hint';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+  if (!available) status.textContent = 'Duplicate-result configuration is unavailable: backend update pending. No suppression setting can be saved yet.';
+  else if (!agent.can_manage) status.textContent = 'Read-only: only an agent manager can change this setting.';
+  wrap.append(enabled, help, status);
+  enabled.addEventListener('change', async () => {
+    if (!available || !agent.can_manage || enabled.disabled) {
+      enabled.checked = savedEnabled;
+      return;
+    }
+    enabled.disabled = true;
+    status.textContent = 'Saving…';
+    try {
+      const saved = await persist({tool_result_deduplication: {enabled: enabled.checked}});
+      savedEnabled = saved.tool_result_deduplication.enabled;
+      status.textContent = 'Saved. Future results use this setting; existing references stay unchanged.';
+    } catch (error) {
+      status.textContent = staleMessage(error);
+    } finally {
+      enabled.checked = savedEnabled;
+      enabled.disabled = !agent.can_manage || !available;
+    }
+  });
+  const experimental = document.createElement('fieldset');
+  experimental.disabled = true;
+  experimental.style.cssText = 'border:0;padding:0;margin:0;min-width:0';
+  host.append(experimental);
+  const policy = structuredClone(agent.tool_output_policy || agent.tool_output_defaults || {});
+  if (available) policy.enabled = false;
+  renderExperimentalPolicy(experimental, {...agent, tool_output_policy: policy}, persist, available);
 }

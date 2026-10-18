@@ -3,6 +3,7 @@
 // Keep these copies synchronized with ui/shared/js/dom-utils.js; v3 saves are supplied as callbacks.
 // Credential and tool-editor workflows remain unported; callers do not enable their options.
 import { _markSaving, _flashSaveCheck } from './models/dom-utils.js';
+import {requestTouchVibration} from './vibrate.js';
 const _noop = () => {};
 const _TOOL_ALWAYS_ON = new Set(); // v3 authority is provided by the Rust projection, not v2 core names.
 function _moreDotsSvg() {
@@ -346,6 +347,7 @@ export function _buildToolRow(toolMeta, opts) {
       onPermissionChange,
       onVisibilityChange,
       onExecutionChange: opts?.onExecutionChange,
+      onResultDeduplicationChange: opts?.onResultDeduplicationChange,
     }));
   }
   return row;
@@ -363,6 +365,7 @@ function _buildToolStateControl(toolMeta, opts) {
     onPermissionChange = _noop,
     onVisibilityChange = _noop,
     onExecutionChange,
+    onResultDeduplicationChange,
   } = opts || {};
 
   const ORDER = ['deny', 'ask', 'auto'];          // least → most permissive
@@ -375,6 +378,10 @@ function _buildToolStateControl(toolMeta, opts) {
   let vis = toolMeta.mode === 'discoverable' ? 'discoverable' : 'visible';
   let execution = toolMeta.execution ? { ...toolMeta.execution } : null;
   let savingExecution = false;
+  let resultDeduplication = toolMeta.result_deduplication;
+  let savingResultDeduplication = false;
+  const showResultDeduplication = typeof resultDeduplication === 'boolean'
+    && typeof onResultDeduplicationChange === 'function';
   const showExecution = !!execution && typeof onExecutionChange === 'function';
   const backgroundCapable = toolMeta.background_capable === true;
   const maxSupportedConcurrency = Number.isInteger(toolMeta.max_supported_concurrency)
@@ -462,6 +469,22 @@ function _buildToolStateControl(toolMeta, opts) {
     return ok;
   }
 
+  async function saveResultDeduplication() {
+    if (!canEdit || !showResultDeduplication || savingResultDeduplication) return false;
+    const before = resultDeduplication;
+    resultDeduplication = !before;
+    savingResultDeduplication = true;
+    _markSaving(tri);
+    let ok = true;
+    let message = '';
+    try { ok = (await onResultDeduplicationChange(toolMeta.name, resultDeduplication)) !== false; }
+    catch (error) { ok = false; message = error?.message || 'Not saved'; }
+    if (!ok) resultDeduplication = before;
+    savingResultDeduplication = false;
+    _flashSaveCheck(tri, ok, message);
+    return ok;
+  }
+
   // ── The panel body. Rebuilt on every open/repaint from live state, so the
   //    ✓ marks always show exactly one selection per section. ─────────────────
   const _menuItems = () => {
@@ -494,6 +517,14 @@ function _buildToolStateControl(toolMeta, opts) {
           action: () => _save('vis', v),
         });
       }
+    }
+    if (showResultDeduplication) {
+      out.push({ separator: true });
+      out.push({ info: true, className: 'ac-tool-state-head', label: 'Result context' });
+      out.push({ label: 'Suppress identical results', checkbox: true,
+        checked: resultDeduplication, disabled: !canEdit || savingResultDeduplication,
+        keepOpen: true, action: saveResultDeduplication });
+      out.push({ info: true, label: 'Uses the Identity policy. Every call executes and saves its original output; only successful exact repeats can become references. Does not grant permission or skip actions.' });
     }
     const policies = toolMeta.advanced_policies;
     if (policies?.uncertain_outcome === 'review') {
@@ -677,8 +708,9 @@ export function openFloatingMenu(items, top, left, owner = null) {
     btn.type = 'button';
     btn.disabled = !!item.disabled;
     if (item.title) btn.title = item.title;
-    if (item.radio) {
-      btn.setAttribute('role', 'menuitemradio');
+    if (item.checkbox) btn.style.webkitTapHighlightColor = 'transparent';
+    if (item.radio || item.checkbox) {
+      btn.setAttribute('role', item.checkbox ? 'menuitemcheckbox' : 'menuitemradio');
       btn.setAttribute('aria-checked', String(!!item.checked));
     }
     // An item may ship its own inline SVG (`iconHtml`) instead of a lucide name.
@@ -706,15 +738,20 @@ export function openFloatingMenu(items, top, left, owner = null) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const actionable = !item.disabled && typeof item.action === 'function';
+      if (actionable && item.checkbox) requestTouchVibration(e);
       // A `keepOpen` item belongs to a MULTI-SECTION panel: the user still has
       // another section to set, so the panel stays up and repaints in place (the
       // ✓ marks follow the new selection) instead of dismissing on the first pick.
       if (actionable && item.keepOpen) {
+        const restoreCheckboxFocus = item.checkbox && document.activeElement === btn;
         const r = item.action();
         const repaint = () => {
           // Only repaint if the user hasn't already dismissed the panel.
           if (document.getElementById('files-floating-menu')?._owner !== owner) return;
           openFloatingMenu(items, top, left, owner);
+          if (restoreCheckboxFocus && document.activeElement === document.body) {
+            document.querySelector('#files-floating-menu [role="menuitemcheckbox"]:not(:disabled)')?.focus();
+          }
         };
         repaint();                                        // optimistic
         if (r && typeof r.then === 'function') r.then(repaint, repaint);   // settle/revert
