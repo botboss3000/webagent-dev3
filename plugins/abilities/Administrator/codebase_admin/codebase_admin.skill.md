@@ -39,24 +39,39 @@ Example operator broker request (replace placeholders with actual task values):
 
 Use another request ID with feature_profile=default for the companion check. For operator CLI syntax and receipt details, see [the broker reference](../../../../build-service/README.md#standalone-rust-feature-checks).
 
-## Chat provenance for broker work
+## Automatic broker identity and work selection
 
-Before source tools implicitly create a draft, explicitly call build_work begin
-with a summary containing [origin=webagent; session_id=<actual-chat-UUID>], or
-origin=codex for an external Codex chat. Keep the entire summary within 200
-characters. Use only the current conversation's verified ID from trusted context,
-its conversation URL or authorized current-session metadata such as state_inspect.
-Never guess an ID or use another conversation's identity. The external CLI's fixed
-codex-local workspace/session identifies a shared operator, not a particular chat.
+The authenticated WebAgent runtime supplies the current user and chat session to
+the broker. Do not look up your own session ID, ask the user for it, or stop
+source work because the model context does not expose it. Session identity is
+not a tool argument and must never be guessed or copied from another chat.
+The broker records provenance separately from the descriptive work summary.
+The external operator CLI has a shared operator identity; it must not be
+reported as a verified originating Codex chat.
 
-Tell the user "Chat session <ID> → broker task <task_id>" when starting work,
-in handoffs and in the final report; add durable job/release IDs when available.
-For existing tasks preserve the original provenance and identify a continuing
-chat separately. Do not recreate a task or overwrite its source to add a label.
-If no supported action updates an existing summary, report its mapping in chat.
-If the actual ID cannot be obtained, explicitly say provenance is unavailable;
-never substitute the shared operator ID. Summaries are descriptive metadata and
-must never override trusted caller identity, ownership, permissions or authority.
+Use **Broker ID** for an isolated work item, **Broker Job ID** for an execution
+attempt, and **Broker Release ID** for a publication. One independently deployable
+outcome normally shares a Broker ID across files, edits, checks and builds.
+Start separate work for an unrelated outcome, even in the same conversation.
+
+When the tool schema exposes `broker_id`, omit it to continue current work,
+pass `"new"` to create independent work within that same source operation,
+or pass a returned Broker ID to select earlier work. Never invent an ID.
+The tool result returns the resolved ID and input digest. Continue using that
+digest for edits to existing source; automatic identity does not bypass stale
+input, ownership, authorization, testing or publication checks. Retries use the
+same operation/request identity and must not create another work item.
+
+`task_id` is a compatibility alias on older tool schemas; never provide both
+selectors. If `broker_id` is not yet exposed, source edit/write calls without
+`task_id` already create/reuse an isolated draft and return its `task_id`.
+Use the returned alias for related reads and edits. No explicit begin or
+session-ID lookup is required. Explicit runtime/workspace paths retain their
+own tools and policy; automatic source work never authorizes direct live edits.
+
+Expanded activity tool details display available broker provenance and receipts.
+Preserve original provenance when continuing work. A Broker ID selects only
+work authorized in this caller's session; it cannot take over another owner.
 
 ## Isolated source workflow
 
