@@ -1002,10 +1002,16 @@ class Runner:
     def readable_assets(self,destination):
         # Only allowlisted, frozen source/index artifacts cross into application
         # containers. Private task inspection snapshots are never published here.
-        for path in [destination,*destination.rglob("*")]:
+        paths=[destination,*destination.rglob("*")]
+        # Validate the whole source-only tree before changing any permission bits.
+        for path in paths:
             if path.is_symlink():raise PermissionError("Published asset symlink forbidden")
+            if release.inspection_path(path.relative_to(destination).as_posix()):
+                raise PermissionError("Private inspection data cannot be published")
+            if not path.is_dir() and not path.is_file():raise PermissionError("Published asset is not regular source")
+        for path in paths:
             if path.is_dir():path.chmod(0o755)
-            elif not path.is_file() or path.stat().st_mode&0o444!=0o444:raise PermissionError("Published asset is not readable source")
+            else:path.chmod((path.stat().st_mode&0o111)|0o444)
 
     def stage_assets(self, blob, job_id, *, asset_root=None, base_release_id=None):
         scanner = Path(CONFIG["service_dir"])/"index-scanner.py"
@@ -1290,9 +1296,16 @@ class Runner:
                 if controlled:
                     active=getattr(self.job_context,"job",None)
                     if active is None or active["job_id"]!=job_id:raise ValueError("Owned attributable plugin job required")
+                    # Reuse only registry bytes bound to a completed engine compiler receipt.
+                    registry=self.executor.provision_native_registry(cache)
+                    self.executor.phase(active,"plugin_test","plugin",source,cache,
+                        ["cargo","test","--locked","--offline","--","--test-threads=1"],
+                        "plugin:rust1.90:"+manifest["id"]+":tests",600)
                     self.executor.phase(active,"plugin_compile","plugin",source,cache,
                         ["cargo","build","--release","--locked","--offline","--bin",entry],
                         "plugin:rust1.90:"+manifest["id"],600)
+                    if self.executor.artifact_hashes(cache/"cargo/registry")!=registry["hashes"]:
+                        raise ValueError("Native compilation changed verified dependency registry")
                 else:
                     self.command(["docker","run","--rm","--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
                         "--user",str(CONFIG["service_uid"])+":"+str(CONFIG["service_gid"]),"--pids-limit","128","--memory","2g","--cpus","1",

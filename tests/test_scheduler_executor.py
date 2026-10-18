@@ -167,3 +167,68 @@ class RealFeatureProfileTests(unittest.TestCase):
             default=run(module.check_argv("check"));self.assertEqual(default.returncode,0,default.stdout)
             live=run(module.check_argv("check","live"));self.assertNotEqual(live.returncode,0)
             self.assertIn("optional_implementation",live.stdout);self.assertIn("E0433",live.stdout)
+
+
+class NativeBuilderPhaseTests(unittest.TestCase):
+    """The real builder must provision verified bytes and test before publishing a binary."""
+    def exercise(self, *, fail_tests=False, alter_registry=False):
+        import json
+        from unittest.mock import patch
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
+        root=Path(temp.name);assets=root/'assets';state=root/'state';job_id=str(uuid.uuid4())
+        package=assets/'releases'/job_id/'v3/plugins/abilities/Custom/fixture';(package/'src').mkdir(parents=True)
+        inputs={'Cargo.toml':'[package]\nname="fixture_runner"\nversion="0.1.0"\nedition="2021"\n','Cargo.lock':'version = 4\n','src/main.rs':'fn main() {}'}
+        for name,value in inputs.items():(package/name).write_text(value)
+        (package/'plugin.json').write_text(json.dumps({'id':'fixture','dispatch':'isolated','runtime':'executable','entrypoint':'fixture_runner','build':{'toolchain':'rust-1.90','inputs':list(inputs),'dependencies':[],'flags':[],'assets':[]}}))
+        phases=[];runner=fixtures.host.Runner();runner.resources=types.SimpleNamespace(enabled=True);runner.job_context=types.SimpleNamespace(job={'job_id':job_id})
+        def provision(cache):
+            registry=cache/'cargo/registry';registry.mkdir(parents=True);(registry/'crate').write_bytes(b'verified crate')
+            phases.append('provision');return {'hashes':module.Executor.artifact_hashes(registry)}
+        def phase(job, phase, kind, source, cache, argv, profile, timeout):
+            self.assertEqual(job['job_id'],job_id);self.assertEqual(kind,'plugin');self.assertIn('--locked',argv);self.assertIn('--offline',argv);phases.append(phase)
+            if phase=='plugin_test' and fail_tests:raise ValueError('native test failed')
+            if phase=='plugin_compile':
+                binary=cache/'target/release/fixture_runner';binary.parent.mkdir(parents=True);binary.write_bytes(b'tested executable')
+                if alter_registry:(cache/'cargo/registry/crate').write_bytes(b'altered crate')
+        runner.executor=types.SimpleNamespace(provision_native_registry=provision,phase=phase,artifact_hashes=module.Executor.artifact_hashes)
+        with patch.object(fixtures.host,'ASSET_ROOT',assets),patch.object(fixtures.host,'STATE',state):
+            if fail_tests or alter_registry:
+                with self.assertRaisesRegex(ValueError,'native test failed' if fail_tests else 'changed verified dependency'):
+                    runner.build_ability_artifacts(job_id)
+                self.assertEqual(list((assets/'artifacts').glob('*/fixture_runner')) if (assets/'artifacts').exists() else [],[])
+            else:
+                result=runner.build_ability_artifacts(job_id);self.assertEqual(len(result),1);self.assertFalse(result[0]['reused'])
+        return phases
+    def test_verified_registry_and_complete_tests_precede_native_compile(self):
+        self.assertEqual(self.exercise(),['provision','plugin_test','plugin_compile'])
+    def test_native_test_failure_never_publishes_an_artifact(self):
+        self.assertEqual(self.exercise(fail_tests=True),['provision','plugin_test'])
+    def test_compiler_registry_mutation_never_publishes_an_artifact(self):
+        self.assertEqual(self.exercise(alter_registry=True),['provision','plugin_test','plugin_compile'])
+
+
+class FrozenSourcePermissionsTests(unittest.TestCase):
+    """Permission normalization applies to approved copies, never private inspection artifacts."""
+    def test_private_authoring_modes_become_read_only_container_readable_copies(self):
+        import stat
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);source=root/'v3/ui/file.js';source.parent.mkdir(parents=True);source.write_bytes(b'approved source');source.chmod(0o600)
+            gate=root/'v3/data/config/gates/fixture.json';gate.parent.mkdir(parents=True);gate.write_text('{}');gate.chmod(0o660)
+            executable=root/'v3/ui/run';executable.write_bytes(b'fixture executable');executable.chmod(0o755)
+            before=fixtures.host.release.asset_source_digest(root)
+            fixtures.host.Runner().readable_assets(root)
+            self.assertEqual(stat.S_IMODE(source.stat().st_mode),0o444);self.assertEqual(stat.S_IMODE(gate.stat().st_mode),0o444);self.assertEqual(stat.S_IMODE(executable.stat().st_mode),0o555)
+            self.assertEqual(source.read_bytes(),b'approved source');self.assertEqual(fixtures.host.release.asset_source_digest(root),before)
+    def test_inspection_data_is_rejected_before_any_permissions_change(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);source=root/'source';source.write_text('source');source.chmod(0o600)
+            private=root/'v3/data/user_data/admin/private.db';private.parent.mkdir(parents=True);private.write_bytes(b'inspection fixture');private.chmod(0o600)
+            with self.assertRaisesRegex(PermissionError,'Private inspection'):
+                fixtures.host.Runner().readable_assets(root)
+            self.assertEqual(source.stat().st_mode&0o777,0o600);self.assertEqual(private.stat().st_mode&0o777,0o600)
+    def test_symlink_is_rejected_before_any_permissions_change(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);source=root/'source';source.write_text('source');source.chmod(0o600);(root/'escape').symlink_to('/etc')
+            with self.assertRaisesRegex(PermissionError,'symlink'):
+                fixtures.host.Runner().readable_assets(root)
+            self.assertEqual(source.stat().st_mode&0o777,0o600)
