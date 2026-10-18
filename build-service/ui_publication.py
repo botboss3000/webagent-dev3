@@ -166,7 +166,7 @@ class UIPublication:
             if guard is not None:guard.__exit__(None,None,None)
         finally:self.broker.deploy_lock.release()
 
-    recovery_actions={"discard_prepared_release","restore_failed_ui","restore_backend_predecessor","recover_backend_api_bind","complete_activated_release"}
+    recovery_actions={"discard_prepared_release","restore_failed_ui","restore_backend_predecessor","restore_captured_backend","recover_backend_api_bind","complete_activated_release"}
 
     def legacy_recovery_binding(self,job,folder):
         """Recover old UI receipts using their recorded container IDs/images and exact predecessor."""
@@ -239,6 +239,82 @@ class UIPublication:
             raise ValueError("Restored predecessor process generation changed")
         return current
 
+    def restore_captured_backend(self,job,folder,recorded,digest,request_id):
+        """Restore only captured identities; reconcile every effect from a durable intent.
+
+        Failed replacements are quarantined, never deleted. Names are discovery
+        handles; mutations target exact Docker IDs to fence concurrent replacement.
+        """
+        import hashlib,re
+        if job.get("operation")!="build_deploy"or job.get("publication_policy_version")!=1:
+            raise ValueError("Captured backend publication required")
+        if not isinstance(recorded,dict)or set(recorded)!={"api","loop"}:raise ValueError("Predecessor runtime receipt required")
+        captured=self.backend_predecessor_capture(folder);runner=self.broker.runner
+        fingerprint=hashlib.sha256(json.dumps(captured,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+        previous=job.get("publication_recovery")or{}
+        plan=previous.get("restore")
+        if plan and plan["capture_sha256"]!=fingerprint:raise ValueError("Captured predecessor binding changed")
+        if previous.get("runtime"):
+            return self.backend_predecessor_binding(job,folder,recorded,previous)
+        roles={};observed={}
+        for role,name in zip(("api","loop"),self.broker.publication_targets):
+            old=captured[role];backup=name+"-pre-build-"+job["job_id"];failed=name+"-failed-build-"+job["job_id"]
+            if job.get("rollback",{}).get(role)!=backup:raise ValueError("Captured rollback name changed")
+            if not re.fullmatch(r"[a-f0-9]{64}",old.get("Id",""))or old.get("Id")!=recorded[role].get("id")or old.get("Image")!=recorded[role].get("image"):
+                raise ValueError("Captured predecessor identity changed")
+            values={n:runner.inspect_recovery(n)for n in (name,backup,failed)}
+            originals=[(n,v)for n,v in values.items()if v and v.get("Id")==old["Id"]]
+            if len(originals)!=1 or originals[0][0]not in {name,backup}:raise ValueError("Exact captured predecessor unavailable")
+            old_name,live=originals[0]
+            if any(key not in old or live.get(key)!=old[key]for key in ("Image","Config","HostConfig")):
+                raise ValueError("Captured predecessor configuration changed")
+            if live.get("State",{}).get("Status")not in {"running","exited","created"}:raise ValueError("Captured predecessor state requires reconciliation")
+            if values[backup]and values[backup]["Id"]!=old["Id"]:raise ValueError("Rollback name occupied by another container")
+            replacements=[v for n,v in values.items()if v and v["Id"]!=old["Id"]]
+            if len(replacements)>1:raise ValueError("Ambiguous failed replacement")
+            candidate=replacements[0]if replacements else None
+            if candidate:
+                labels=candidate.get("Config",{}).get("Labels")or{}
+                certified=job.get("candidate_containers",{}).get(role)==candidate.get("Id")
+                marked=all(labels.get(k)==v for k,v in {"webagent.release.job":job["job_id"],"webagent.release.role":role,"webagent.release.instance":self.broker.runner.source_config["instance"]}.items())
+                if candidate.get("Image")!=job.get("images",{}).get(role)or not(certified or marked)or not re.fullmatch(r"[a-f0-9]{64}",candidate.get("Id","")):
+                    raise ValueError("Unrecognized replacement container; explicit reconciliation required")
+                if candidate.get("State",{}).get("Status")not in {"running","exited","created"}:raise ValueError("Failed replacement state requires reconciliation")
+            value={"id":old["Id"],"image":old["Image"],"failed_name":failed,"candidate_id":candidate["Id"]if candidate else None}
+            if plan and plan["roles"].get(role)!=value:raise ValueError("Captured restoration identities changed")
+            roles[role]=value;observed[role]=(name,backup,failed,values,old_name,candidate)
+        runner.preflight_deploy_images({role:value["image"]for role,value in roles.items()},job["job_id"])
+        if plan is None:
+            job["publication_recovery"]={"digest":digest,"request_id":request_id,"action":"restore_captured_backend","done":False,
+                "restore":{"capture_sha256":fingerprint,"roles":roles,"milestones":[]}}
+            self.broker._save(job)
+        recovery=job["publication_recovery"]
+        def effect(role,operation,identity,call):
+            recovery["restore"]["intent"]={"role":role,"operation":operation,"container_id":identity};self.broker._save(job)
+            call()
+            recovery["restore"]["milestones"].append({"role":role,"operation":operation,"container_id":identity})
+            recovery["restore"].pop("intent",None);self.broker._save(job)
+        # All roles/configurations are checked before the first mutation.
+        for role,(name,backup,failed,values,old_name,candidate)in observed.items():
+            if candidate and candidate["State"]["Status"]=="running":
+                effect(role,"stop_failed",candidate["Id"],lambda v=candidate:runner.stop(v["Id"]))
+            if candidate and values[name]and values[name]["Id"]==candidate["Id"]:
+                effect(role,"quarantine_failed",candidate["Id"],lambda v=candidate,n=failed:runner.rename(v["Id"],n))
+            if old_name==backup:
+                effect(role,"restore_name",roles[role]["id"],lambda v=roles[role],n=name:runner.rename(v["id"],n))
+        predecessor=job["asset_previous"]
+        if runner.current_asset_id()==job["job_id"]:
+            effect("assets","restore_pointer",None,lambda:runner.activate_assets(predecessor))
+        elif runner.current_asset_id()!=predecessor:raise ValueError("Active pointer advanced during restoration")
+        # Start both before checking either: API readiness depends on loop heartbeat.
+        for role,name in zip(("api","loop"),self.broker.publication_targets):
+            value=runner.inspect_recovery(name)
+            if not value or value["Id"]!=roles[role]["id"]:raise ValueError("Restored identity changed before start")
+            if value["State"]["Status"]!="running":effect(role,"start_predecessor",value["Id"],lambda v=value:runner.start(v["Id"]))
+        bound=self.backend_predecessor_binding(job,folder,recorded,None)
+        recovery["runtime"]=bound;self.broker._save(job)
+        return bound
+
     def recover(self,request,args):
         """Reconcile durable intent with exact effects before admitting another publication."""
         if set(args)!={"action","task_id","job_id","request_id"}or args.get("action")not in self.recovery_actions:
@@ -270,10 +346,11 @@ class UIPublication:
             folder=self.broker.state/job["job_id"]
             legacy=job.get("publication_policy_version",0)==0 and job["operation"]=="ui_deploy" and args["action"]=="restore_failed_ui"
             bound=self.legacy_recovery_binding(job,folder)if legacy else job.get("preparation",{}).get("runtime_before")
-            backend=args["action"]=="restore_backend_predecessor"
+            restore=args["action"]=="restore_captured_backend"
+            backend=restore or args["action"]=="restore_backend_predecessor"
             bind_recovery=args["action"]=="recover_backend_api_bind"
-            if backend:bound=self.backend_predecessor_binding(job,folder,bound,previous)
-            elif not bind_recovery and(not bound or self.runtime()!=bound):raise ValueError("Runtime binding changed; explicit runtime reconciliation required")
+            if backend and not restore:bound=self.backend_predecessor_binding(job,folder,bound,previous)
+            elif not restore and not bind_recovery and(not bound or self.runtime()!=bound):raise ValueError("Runtime binding changed; explicit runtime reconciliation required")
             folder=self.broker.state/job["job_id"]
             baseline=folder/"publication-base.tar"
             if baseline.is_symlink()or not baseline.is_file():raise ValueError("Durable publication baseline required")
@@ -377,6 +454,9 @@ class UIPublication:
                 if active not in {job["job_id"],predecessor}:raise ValueError("Active pointer advanced; use a compensating release")
                 if not self.broker.runner.checkout_matches(before,job.get("changed_paths",())):raise ValueError("Checkout effects need reconciliation")
                 self.release.verify_publication(self.assets/"releases"/job["job_id"],job["job_id"],job["inputs_sha256"])
+                if restore:
+                    bound=self.restore_captured_backend(job,folder,bound,digest,args["request_id"])
+                    active=self.broker.runner.current_asset_id()
             elif discard:
                 if active!=predecessor:raise ValueError("Prepared release is active or publication advanced")
                 if not self.broker.runner.checkout_matches(before,job.get("changed_paths",())):raise ValueError("Checkout effects need reconciliation")
@@ -386,7 +466,7 @@ class UIPublication:
                 # A retry may observe the pointer already restored by this same durable intent.
                 if active!=job["job_id"]and not(previous and active==predecessor):raise ValueError("Active pointer advanced; use a compensating release")
                 if not legacy:self.release.verify_publication(self.assets/"releases"/job["job_id"],job["job_id"],job["inputs_sha256"])
-            job["publication_recovery"]={"digest":digest,"request_id":args["request_id"],"action":args["action"],"done":False}
+            job["publication_recovery"]={**(job.get("publication_recovery")or{}),"digest":digest,"request_id":args["request_id"],"action":args["action"],"done":False}
             if backend:job["publication_recovery"]["runtime"]=bound
             self.broker._save(job)
             if backend:

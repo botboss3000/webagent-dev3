@@ -1696,10 +1696,21 @@ print(json.dumps(counts))"""
                 connection.close()
 
     def inspect(self, name):
-        if name not in TARGETS and not any(re.fullmatch(re.escape(target)+r"-pre-build-[0-9a-f-]{36}",name) for target in TARGETS):
+        if name not in TARGETS and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed)-build-[0-9a-f-]{36}",name) for target in TARGETS):
             raise ValueError("container outside development target")
         value = json.loads(self.command(["docker", "inspect", name], timeout=30, private_raw=True))[0]
         self.secrets.extend(item.partition("=")[2] for item in value.get("Config", {}).get("Env", []) if "=" in item)
+        return value
+
+    def inspect_recovery(self,name):
+        """Discover only fixed release names; a Docker error never means absent."""
+        if name not in TARGETS and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed)-build-[0-9a-f-]{36}",name)for target in TARGETS):
+            raise ValueError("Recovery container outside development target")
+        identities=self.command(["docker","ps","--all","--no-trunc","--filter","name=^/"+name+"$","--format","{{.ID}}"],timeout=30).splitlines()
+        if not identities:return None
+        if len(identities)!=1 or not re.fullmatch(r"[a-f0-9]{64}",identities[0]):raise ValueError("Ambiguous recovery container")
+        value=self.inspect(name)
+        if value.get("Id")!=identities[0]or value.get("Name")!="/"+name:raise ValueError("Recovery container discovery changed")
         return value
 
     def check_space(self, minimum):
@@ -1904,6 +1915,10 @@ print(json.dumps(counts))"""
                 env.extend(("V3_UI_ROOT=/opt/v3/assets/current/v3/ui",
                             "V3_SHARED_UI_ROOT=/opt/v3/assets/current/ui"))
                 config["Env"] = env
+                job=getattr(self.job_context,"job",None)or{}
+                if not re.fullmatch(r"[a-f0-9-]{36}",job.get("job_id","")):raise ValueError("Attributable release container required")
+                config["Labels"]={**(config.get("Labels")or{}),"webagent.release.job":job["job_id"],
+                    "webagent.release.role":"api"if name==TARGETS[0]else"loop","webagent.release.instance":CONFIG["instance"]}
         if name == TARGETS[1]:
             host = loop_plugin_mounts(host)
         # Container-id-derived values must not be reused. Preserve configured
@@ -5141,8 +5156,10 @@ class Broker:
                     self.runner.rename(name, job["rollback"][role])
                     self._phase(job, "creating_" + role)
                     if job.get("isolated"):
-                        self.runner.create(name, job["images"][role], previous[role],
+                        created=self.runner.create(name, job["images"][role], previous[role],
                                            job["release_root"])
+                        if isinstance(created,str)and re.fullmatch(r"[a-f0-9]{64}",created):
+                            job.setdefault("candidate_containers",{})[role]=created;self._save(job)
                     else:
                         self.runner.create(name, job["images"][role], previous[role])
                     self._phase(job, "starting_" + role)

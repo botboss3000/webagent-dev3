@@ -1050,3 +1050,27 @@ class RuntimePrestopGateTests(unittest.TestCase):
         result=self.wait(self.deploy(built));self.assertEqual(result["status"],"completed")
         gate=next(i for i,c in enumerate(self.runner.calls)if c[0]=="runtime_mount_preflight")
         self.assertTrue(all(gate<i for i,c in enumerate(self.runner.calls)if c[0]=="stop"))
+
+class RecoveryDockerBoundaryTests(unittest.TestCase):
+ def test_discovery_distinguishes_absence_errors_and_identity_races(self):
+  from unittest.mock import Mock
+  runner=fixtures.host.Runner();name=fixtures.host.TARGETS[0]
+  runner.command=Mock(return_value="")
+  self.assertIsNone(runner.inspect_recovery(name))
+  runner.command.side_effect=RuntimeError("Docker unavailable")
+  with self.assertRaisesRegex(RuntimeError,"Docker unavailable"):runner.inspect_recovery(name)
+  runner.command=Mock(return_value="a"*64+"\n")
+  with patch.object(runner,"inspect",return_value={"Id":"b"*64,"Name":"/"+name}):
+   with self.assertRaisesRegex(ValueError,"discovery changed"):runner.inspect_recovery(name)
+  with self.assertRaisesRegex(ValueError,"outside development"):runner.inspect_recovery("production")
+
+ def test_created_release_containers_have_exact_recovery_labels(self):
+  from unittest.mock import Mock
+  runner=fixtures.host.Runner();job=str(uuid.uuid4());runner.job_context.job={"job_id":job}
+  runner.command=Mock(return_value=json.dumps([{"Config":{}}]))
+  connection=Mock();response=connection.getresponse.return_value;response.status=201;response.read.return_value=json.dumps({"Id":"a"*64}).encode()
+  previous={"Image":"sha256:"+"1"*64,"Config":{"Env":[],"Labels":{"existing":"preserved"}},"HostConfig":{}}
+  with patch.object(fixtures.host,"DockerHTTP",return_value=connection),patch.object(runner,"published_runtime_source",return_value=Path("/published")),patch.object(fixtures.host.release,"release_mounts",return_value={}):
+   self.assertEqual(runner.create(fixtures.host.TARGETS[0],"sha256:"+"2"*64,previous,"/frozen"),"a"*64)
+  labels=json.loads(connection.request.call_args.kwargs["body"])["Labels"]
+  self.assertEqual(labels,{"existing":"preserved","webagent.release.job":job,"webagent.release.role":"api","webagent.release.instance":fixtures.host.CONFIG["instance"]})

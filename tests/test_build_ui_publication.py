@@ -676,6 +676,146 @@ class BackendPredecessorRecoveryTests(ConcurrentUIEntryTests):
         self.assertEqual(self.runner.current_asset_id(),job)
 
 
+class CapturedBackendRestorationTests(ConcurrentUIEntryTests):
+    """Exercise actual restoration effects against independently identified fake containers."""
+    def setUp(self):
+        super().setUp()
+        import copy,hashlib
+        for name,value in self.runner.containers.items():
+            value.update(Id=hashlib.sha256(name.encode()).hexdigest(),Name="/"+name)
+        self.runner.inspect_recovery=lambda name:copy.deepcopy(self.runner.containers.get(name))
+        def resolve(identity):
+            if identity in self.runner.containers:return identity
+            names=[name for name,value in self.runner.containers.items()if value["Id"]==identity]
+            if len(names)!=1:raise ValueError("Fixture identity unavailable")
+            return names[0]
+        stop,start,rename,create=self.runner.stop,self.runner.start,self.runner.rename,self.runner.create
+        self.runner.stop=lambda identity:stop(resolve(identity))
+        self.runner.start=lambda identity:start(resolve(identity))
+        def move(identity,target):
+            rename(resolve(identity),target);self.runner.containers[target]["Name"]="/"+target
+        self.runner.rename=move
+        def replacement(name,image,previous,release_root=None):
+            create(name,image,previous,release_root)
+            role="api"if name==fixtures.host.TARGETS[0]else"loop"
+            jid=next(j["job_id"]for j in self.broker.jobs.values()if j.get("release_root")==str(release_root));value=self.runner.containers[name]
+            value.update(Id=uuid.uuid4().hex+uuid.uuid4().hex,Name="/"+name)
+            value["State"]["Status"]="created"
+            value["Config"]["Labels"]={"webagent.release.job":jid,"webagent.release.role":role,"webagent.release.instance":fixtures.host.CONFIG["instance"]}
+            return value["Id"]
+        self.runner.create=replacement
+
+    def failed(self,point="both_created"):
+        self.predecessor=self.runner.current_asset_id()
+        self.change("captured-backend-task","src/main.rs","fn main() {}\n","fn main() { let _x=3; }\n")
+        api,loop=fixtures.host.TARGETS
+        if point=="api_create":self.runner.fail_create=True
+        elif point=="both_created":self.runner.fail_verify_ui=True
+        else:
+            method,target={"stop_loop":("stop",loop),"loop_create":("create",loop),"after_api_create":("create",api)}[point]
+            original=getattr(self.runner,method)
+            def fail(*args,**kwargs):
+                if args[0]==target:
+                    if point!="loop_create":original(*args,**kwargs)
+                    raise RuntimeError("fixture activation checkpoint")
+                return original(*args,**kwargs)
+            setattr(self.runner,method,fail)
+        job=self.finish("captured-backend-task");row=self.wait([job])[0]
+        self.assertEqual(row["status"],"uncertain",row.get("reason"))
+        self.runner.fail_create=False;self.runner.fail_verify_ui=False
+        if point not in {"api_create","both_created"}:setattr(self.runner,method,original)
+        return job
+
+    def restore(self,job):
+        return self.recovery("captured-backend-task",job,"restore_captured_backend","captured-backend-recovery-request")
+
+    def verify_originals(self,job):
+        capture=json.loads((self.broker.state/job/"container-config.json").read_bytes())
+        for role,name in zip(("api","loop"),fixtures.host.TARGETS):
+            actual=self.runner.containers[name]
+            for key in ("Id","Image","Config","HostConfig"):self.assertEqual(actual[key],capture[role][key])
+            self.assertEqual(actual["State"]["Status"],"running")
+        self.assertEqual(self.runner.current_asset_id(),self.predecessor)
+        self.assertFalse(self.broker._has_unresolved_release())
+
+    def test_restores_and_retains_both_failed_candidates(self):
+        job=self.failed();candidate=(self.broker.state/job/"candidate.tar").read_bytes();start=len(self.runner.calls)
+        result=self.restore(job);self.verify_originals(job)
+        self.assertTrue(result["effects_reconciled"]);self.assertEqual(self.restore(job),result)
+        for role,name in zip(("api","loop"),fixtures.host.TARGETS):
+            failed=self.runner.containers[name+"-failed-build-"+job]
+            self.assertEqual(failed["Image"],self.broker.jobs[job]["images"][role]);self.assertEqual(failed["State"]["Status"],"exited")
+        self.assertEqual((self.broker.state/job/"candidate.tar").read_bytes(),candidate)
+        self.assertFalse(any(c[0]in {"remove","build","create","promote"}for c in self.runner.calls[start:]))
+        self.assertNotIn("NEVER-EXPOSE-THIS",json.dumps(result)+json.dumps(self.broker.jobs[job]["publication_recovery"]))
+
+    def test_each_activation_boundary_can_restore(self):
+        for point in ("stop_loop","api_create","loop_create","after_api_create"):
+            with self.subTest(point=point):
+                case=type(self)("test_restores_and_retains_both_failed_candidates");case.setUp()
+                try:job=case.failed(point);case.restore(job);case.verify_originals(job)
+                finally:case.tearDown()
+
+    def test_crash_after_every_restore_effect_reconciles_exactly(self):
+        for boundary in range(1,10):
+            with self.subTest(boundary=boundary):
+                case=type(self)("test_restores_and_retains_both_failed_candidates");case.setUp()
+                try:
+                    job=case.failed();count=[0];original={name:getattr(case.runner,name)for name in ("stop","rename","start","activate_assets")}
+                    def wrapper(name):
+                        def effect(*args,**kwargs):
+                            result=original[name](*args,**kwargs);count[0]+=1
+                            if count[0]==boundary:raise RuntimeError("lost effect response")
+                            return result
+                        return effect
+                    for name in original:setattr(case.runner,name,wrapper(name))
+                    with self.assertRaisesRegex(RuntimeError,"lost effect response"):case.restore(job)
+                    for name,value in original.items():setattr(case.runner,name,value)
+                    self.assertTrue(case.restore(job)["effects_reconciled"]);case.verify_originals(job)
+                    self.assertEqual(case.restore(job)["status"],"failed")
+                finally:case.tearDown()
+
+    def test_restart_after_uncertain_rename_uses_durable_intent(self):
+        job=self.failed();normal=self.runner.rename
+        def lost(*args):normal(*args);raise RuntimeError("lost rename")
+        with patch.object(self.runner,"rename",side_effect=lost):
+            with self.assertRaises(RuntimeError):self.restore(job)
+        state=self.broker.state;self.broker.shutdown();self.broker=fixtures.host.Broker(state,self.runner)
+        self.assertTrue(self.restore(job)["effects_reconciled"]);self.verify_originals(job)
+
+    def test_authority_lease_epoch_and_source_fences_precede_effects(self):
+        job=self.failed();start=len(self.runner.calls)
+        self.trusted["local_caller"]=False
+        with self.assertRaisesRegex(PermissionError,"Operator recovery"):self.restore(job)
+        self.trusted["local_caller"]=True
+        with patch.object(self.runner,"checkout_matches",return_value=False):
+            with self.assertRaisesRegex(ValueError,"Checkout effects"):self.restore(job)
+        self.broker.jobs[job]["ownership_epoch"]+=1
+        with self.assertRaises((ValueError,PermissionError)):self.restore(job)
+        self.assertFalse(any(c[0]in {"stop","rename","start"}for c in self.runner.calls[start:]))
+
+    def test_changed_predecessor_config_stops_before_any_mutation(self):
+        job=self.failed();loop=fixtures.host.TARGETS[1];self.runner.containers[self.broker.jobs[job]["rollback"]["loop"]]["HostConfig"]["Memory"]+=1
+        start=len(self.runner.calls)
+        with self.assertRaisesRegex(ValueError,"configuration changed"):self.restore(job)
+        self.assertFalse(any(c[0]in {"stop","rename","start"}for c in self.runner.calls[start:]))
+
+    def test_unknown_candidate_and_newer_pointer_are_preserved(self):
+        job=self.failed();api=fixtures.host.TARGETS[0];self.runner.containers[api]["Id"]=uuid.uuid4().hex+uuid.uuid4().hex;self.runner.containers[api]["Config"]["Labels"]={}
+        with self.assertRaisesRegex(ValueError,"Unrecognized replacement"):self.restore(job)
+        new=str(uuid.uuid4());self.runner._stage(self.runner.blob,new,self.runner.assets);self.runner.activate_assets(new)
+        with self.assertRaisesRegex(ValueError,"pointer advanced"):self.restore(job)
+        self.assertEqual(self.runner.current_asset_id(),new)
+
+    def test_changed_capture_after_partial_restore_requires_reconciliation(self):
+        job=self.failed();normal=self.runner.rename
+        def lost(*args):normal(*args);raise RuntimeError("lost rename")
+        with patch.object(self.runner,"rename",side_effect=lost):
+            with self.assertRaises(RuntimeError):self.restore(job)
+        path=self.broker.state/job/"container-config.json";value=json.loads(path.read_bytes());value["loop"]["HostConfig"]["Memory"]+=1;path.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError,"binding changed"):self.restore(job)
+
+
 class BackendBindRecoveryTests(ConcurrentUIEntryTests):
     """Resume only the exact candidate API after a transient host-port bind failure."""
     def failed_bind(self):
