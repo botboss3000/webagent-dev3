@@ -5,6 +5,12 @@ from pathlib import Path
 import sqlite3
 import time
 import uuid
+import threading
+import contextlib
+
+class PublicationWaitTimeout(TimeoutError):
+    """Pre-effect publication admission can resume through the existing decision lane."""
+
 
 
 # @code-index {"version":1,"feature":"concurrent-ui-publication","aliases":["concurrent ui publication"],"purpose":"Prepare private candidates and serialize exact source/index publication. Config: build-service/scheduler-defaults.json -> concurrent_ui_preparation, max_ui_preparations.","span_lines":70,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/concurrent_ui_preparation","/max_ui_preparations"]}],"opportunities":[]}}
@@ -14,6 +20,7 @@ class UIPublication:
         """Bind preparation and recovery to this protected host's fixed release authority."""
         self.broker=broker;self.release=release;self.validate=validate
         self.context=context;self.assets=asset_root;self.policy=policy
+        self.wait_timeout=300.;self.holder=None
 
     def enabled(self,job):
         """Existing queued generations retain their admitted release contract."""
@@ -42,11 +49,77 @@ class UIPublication:
             if not selected or any(row["status"]!="complete"for row in selected):pending.append(path)
         return manifest,pending
 
+    def cancelled(self,job):
+        """Check cancellation without holding a publication or authority lock."""
+        event=self.broker.job_cancellations.get(job["job_id"])
+        if self.broker.stopping or job.get("revoked")or(event is not None and event.is_set())or job.get("lease_until",float("inf"))<=time.time():
+            raise PermissionError("Publication wait cancelled or authorization expired")
+
+    def wait_for(self,job,resource,probe,timeout=None,owner=None,purpose="publication"):
+        """Bound a nonblocking acquisition; never wait while holding host authority."""
+        if getattr(self.broker.lock,"_is_owned",lambda:False)():raise RuntimeError("Publication acquisition while broker authority lock is held")
+        timeout=self.wait_timeout if timeout is None else timeout
+        started=time.monotonic();since=time.time();last=0.;waiting=False;outcome="failed"
+        try:
+            while True:
+                self.cancelled(job)
+                if probe():outcome="acquired";return
+                waiting=True;now=time.monotonic()
+                if now-started>=timeout:outcome="timed_out";raise PublicationWaitTimeout("Publication wait timed out: "+resource)
+                if now-last>=1:
+                    blocker=owner()if owner else None
+                    with self.broker.lock:
+                        self.broker._batch_lease(job)
+                        job["phase"]="waiting_publication"
+                        job["publication_wait"]={"resource":resource,"owner":blocker,"purpose":purpose,"reason":"Publication serialization"if resource=="deploy_lock"else"Boot supervisor or publication effect lease", "since":since,"deadline_at":since+timeout,"elapsed_seconds":round(now-started,3),"state":"waiting"}
+                        self.broker._save(job)
+                    last=now
+                time.sleep(min(.1,max(0,timeout-(time.monotonic()-started))))
+        except PermissionError:
+            outcome="cancelled";raise
+        finally:
+            if waiting:
+                with self.broker.lock:
+                    value=job.get("publication_wait",{"resource":resource,"since":since,"purpose":purpose})
+                    value={**value,"state":outcome,"elapsed_seconds":round(time.monotonic()-started,3)}
+                    job["publication_wait"]=value
+                    job.setdefault("publication_wait_history",[]).append(dict(value));job["publication_wait_history"]=job["publication_wait_history"][-16:]
+                    self.broker._save(job)
+
+    def acquire(self,job,purpose="publication"):
+        """Track known owners without taking the broker lock across lock acquisition."""
+        acquired=False
+        def probe():
+            nonlocal acquired
+            acquired=self.broker.deploy_lock.acquire(blocking=False);return acquired
+        try:
+            self.wait_for(job,"deploy_lock",probe,owner=lambda:dict(self.holder)if self.holder else None,purpose=purpose)
+            self.cancelled(job)
+            self.holder={"job_id":job["job_id"],"thread_id":threading.get_ident(),"since":time.time()}
+        except BaseException:
+            if acquired:self.broker.deploy_lock.release()
+            raise
+
+    @contextlib.contextmanager
+    def capture(self,job):
+        self.acquire(job,"capture_publication_base")
+        try:yield
+        finally:self.release_locks(None)
+
     def admit(self,job,blob,tested_runtime=False):
+        try:return self._admit(job,blob,tested_runtime)
+        except TimeoutError as error:
+            if not isinstance(error,PublicationWaitTimeout)and not getattr(error,"recoverable_admission",False):raise
+            with self.broker.lock:
+                job.update(status="needs_decision",phase="waiting_publication_base",reason=str(error)+"; no publication effects started; resume this durable job after contention settles")
+                self.broker._save(job)
+            return None
+
+    def _admit(self,job,blob,tested_runtime=False):
         """Return with publication and boot-effect locks held only for a current prepared candidate."""
         clock=time.monotonic;started=clock();job.setdefault("preparation",{})
         for attempt in range(1,4):
-            with self.broker.deploy_lock:
+            with self.capture(job):
                 with self.broker.lock:self.broker._batch_lease(job)
                 if self.broker._has_unresolved_release(job["job_id"]):raise ValueError("Reconcile uncertain publication first")
                 live=self.broker._current_release_blob();base=self.validate(live)[0]
@@ -67,7 +140,7 @@ class UIPublication:
                 except Exception:
                     # A coordinated backend switch may temporarily remove a consumer.
                     # Retry only when the exact captured publication/runtime binding changed.
-                    with self.broker.deploy_lock:
+                    with self.capture(job):
                         stale=(self.broker.runner.current_asset_id()!=revision or
                                self.validate(self.broker._current_release_blob())[0]!=base or self.runtime()!=runtime)
                     if stale:continue
@@ -81,6 +154,7 @@ class UIPublication:
                 # dependency fingerprint while declaring the UI suite inapplicable.
                 evidence.update(tests=[],conservative=False)
             test_started=clock()
+            if not host_only:self.broker._phase(job,"frontend_tests")
             test_result=({"status":"not_required","tests":[],"reason":"host-only broker candidate leaves UI assets unchanged"}
                          if host_only else self.broker.runner.validate_selected_tests(job["job_id"],destination,evidence))
             with self.broker.lock:
@@ -106,10 +180,14 @@ class UIPublication:
                     if not self.broker.scheduler.review_wait(job,reset=True):raise PermissionError("Prepared review delegation unavailable")
                     self.broker._save(job)
                 return None
-            wait_started=clock();self.broker.deploy_lock.acquire();guard=None;held=True
+            self.broker._phase(job,"waiting_publication")
+            wait_started=clock();self.acquire(job);guard=None;held=True
             try:
-                guard=self.broker.boot_effect_lease();guard.__enter__()
+                entering=self.broker.boot_effect_lease(job=job);entering.__enter__();guard=entering
                 if self.broker.runner.current_asset_id()!=revision or self.validate(self.broker._current_release_blob())[0]!=base or self.runtime()!=runtime:
+                    with self.broker.lock:
+                        job["preparation"].setdefault("stale_attempts",[]).append({"attempt":attempt,"reason":"Published base, asset pointer or runtime changed","captured_release_id":revision,"observed_release_id":self.broker.runner.current_asset_id(),"at":time.time()})
+                        self.broker._save(job)
                     closing=guard;guard=None;held=False
                     self.release_locks(closing);continue
                 with self.broker.lock:self.broker._batch_lease(job)
@@ -164,7 +242,9 @@ class UIPublication:
         """A failed receipt write or boot lease cleanup must not strand publication."""
         try:
             if guard is not None:guard.__exit__(None,None,None)
-        finally:self.broker.deploy_lock.release()
+        finally:
+            self.holder=None
+            self.broker.deploy_lock.release()
 
     recovery_actions={"discard_prepared_release","restore_failed_ui","restore_backend_predecessor","restore_captured_backend","recover_backend_api_bind","complete_activated_release"}
 

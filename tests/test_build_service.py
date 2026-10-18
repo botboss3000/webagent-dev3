@@ -1152,3 +1152,107 @@ class FrontendAggregateBudgetTests(unittest.TestCase):
   self.assertEqual(fixtures.host.Runner.ui_test_timeout([]),300)
   self.assertEqual(fixtures.host.Runner.ui_test_timeout(["fixture"]*16),720)
   self.assertEqual(fixtures.host.Runner.ui_test_timeout(["fixture"]*256),900)
+
+class PublicationWaitUnitTests(unittest.TestCase):
+ def setUp(self):
+  import threading
+  self.saved=[];self.broker=types.SimpleNamespace(lock=threading.RLock(),deploy_lock=threading.RLock(),stopping=False,job_cancellations={},_batch_lease=lambda job:None,_save=lambda job:self.saved.append(json.loads(json.dumps(job))))
+  self.pub=fixtures.host.ui_publication_module.UIPublication(self.broker,None,None,None,None,None);self.pub.wait_timeout=.2
+  self.job={"job_id":str(uuid.uuid4()),"lease_until":time.time()+60,"preparation":{}}
+ def occupy(self):
+  import threading
+  held=threading.Event();release=threading.Event()
+  def owner():
+   self.broker.deploy_lock.acquire();self.pub.holder={"job_id":"known-owner","since":time.time()};held.set();release.wait(3);self.pub.holder=None;self.broker.deploy_lock.release()
+  worker=threading.Thread(target=owner);worker.start();self.assertTrue(held.wait(1));self.addCleanup(worker.join,3);self.addCleanup(release.set);return release
+ def test_timeout_exposes_owner_and_subsequent_acquisition_succeeds(self):
+  release=self.occupy()
+  with self.assertRaises(fixtures.host.ui_publication_module.PublicationWaitTimeout):self.pub.acquire(self.job)
+  receipt=self.job["publication_wait"];self.assertEqual(receipt["state"],"timed_out");self.assertEqual(receipt["owner"]["job_id"],"known-owner");self.assertGreater(receipt["elapsed_seconds"],.15)
+  release.set();time.sleep(.02);self.pub.acquire(self.job);self.pub.release_locks(None)
+ def test_cancel_waiting_and_release_owner_unchanged(self):
+  import threading
+  self.occupy();event=threading.Event();self.broker.job_cancellations[self.job["job_id"]]=event
+  timer=threading.Timer(.03,event.set);timer.start()
+  with self.assertRaisesRegex(PermissionError,"cancelled"):self.pub.acquire(self.job)
+  timer.join();self.assertEqual(self.job["publication_wait"]["state"],"cancelled");self.assertEqual(self.pub.holder["job_id"],"known-owner")
+ def test_wait_never_holds_authority_and_inverse_order_fails_fast(self):
+  def probe():
+   self.assertFalse(self.broker.lock._is_owned());return True
+  self.pub.wait_for(self.job,"boot_effect_lease",probe)
+  with self.broker.lock:
+   with self.assertRaisesRegex(RuntimeError,"authority lock"):self.pub.acquire(self.job)
+ def test_boot_cleanup_error_does_not_strand_publication(self):
+  self.pub.acquire(self.job)
+  class Broken:
+   def __exit__(self,*args):raise RuntimeError("cleanup failed")
+  with self.assertRaisesRegex(RuntimeError,"cleanup failed"):self.pub.release_locks(Broken())
+  self.pub.acquire(self.job);self.pub.release_locks(None)
+ def test_receipt_error_after_acquisition_does_not_leak(self):
+  release=self.occupy();self.pub.wait_timeout=1
+  def save(job):
+   if job.get("publication_wait",{}).get("state")=="waiting":release.set()
+   if job.get("publication_wait",{}).get("state")=="acquired":raise RuntimeError("receipt error")
+  self.broker._save=save
+  with self.assertRaisesRegex(RuntimeError,"receipt error"):self.pub.acquire(self.job)
+  self.broker._save=lambda job:None;self.pub.acquire(self.job);self.pub.release_locks(None)
+ def test_boot_file_wait_is_bounded_and_closes_its_descriptor(self):
+  import fcntl,os
+  from unittest.mock import Mock
+  with tempfile.TemporaryDirectory()as folder:
+   root=Path(folder);path=root/"boot-supervisor/effects.lock";path.parent.mkdir();path.touch();path.chmod(0o644)
+   held=os.open(path,os.O_RDONLY);fcntl.flock(held,fcntl.LOCK_EX);self.broker.ui_publication=self.pub
+   real_stat=os.fstat;real_close=os.close
+   def root_owned(fd):
+    v=real_stat(fd);return types.SimpleNamespace(st_mode=v.st_mode,st_uid=0,st_nlink=v.st_nlink)
+   try:
+    with patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"install_root":str(root/"installation")}),patch.object(fixtures.host.os,"fstat",side_effect=root_owned),patch.object(fixtures.host.os,"close",wraps=real_close)as closed:
+     with self.assertRaises(fixtures.host.ui_publication_module.PublicationWaitTimeout):
+      with fixtures.host.Broker.boot_effect_lease(self.broker,job=self.job):pass
+     self.assertEqual(self.job["publication_wait"]["resource"],"boot_effect_lease");self.assertEqual(closed.call_count,1)
+     fcntl.flock(held,fcntl.LOCK_UN)
+     with fixtures.host.Broker.boot_effect_lease(self.broker,job=self.job):pass
+   finally:os.close(held)
+ def test_timeout_is_resumable_without_effects(self):
+  self.occupy()
+  self.pub._admit=lambda *args:self.pub.acquire(self.job)
+  self.assertIsNone(self.pub.admit(self.job,b"source"));self.assertEqual(self.job["status"],"needs_decision");self.assertFalse(self.job.get("effects_started"))
+
+class BrowserAdmissionReceiptTests(unittest.TestCase):
+ def test_owner_timeout_and_cancelled_wait_receipts_are_retained(self):
+  import threading
+  from test_scheduler_resources import Fake,G
+  with tempfile.TemporaryDirectory()as folder:
+   runner=Fake();scheduler=fixtures.host.resource_module.Resources(folder,runner,{"mode":"enforce"},sampler=lambda:{"available":20*G,"total":24*G,"pressure":{}})
+   runner.resource_progress=lambda job:None
+   try:
+    scheduler.enter("first",{"job_id":"first","lease_until":time.time()+60},"ui_test","ui-profile","ui_test",timeout=.2)
+    job={"job_id":"second","lease_until":time.time()+60}
+    with self.assertRaisesRegex(TimeoutError,"component_busy"):scheduler.enter("second",job,"ui_test","ui-profile","ui_test",timeout=.02)
+    self.assertEqual(job["phase"],"waiting_frontend_admission");self.assertEqual(job["last_resource_wait"]["owners"][0]["job_id"],"first");self.assertEqual(job["last_resource_wait"]["state"],"timed_out")
+    job={"job_id":"third","lease_until":time.time()+60};timer=threading.Timer(.02,lambda:job.update(revoked=True));timer.start()
+    with self.assertRaises(PermissionError):scheduler.enter("third",job,"ui_test","ui-profile","ui_test",timeout=1)
+    timer.join();self.assertEqual(job["last_resource_wait"]["state"],"cancelled")
+    scheduler.finish("first",True);job={"job_id":"fourth","lease_until":time.time()+60};scheduler.enter("fourth",job,"ui_test","ui-profile","ui_test",timeout=.1);scheduler.finish("fourth",True)
+   finally:scheduler.close()
+
+class AdmissionCleanupTests(unittest.TestCase):
+ def test_failed_receipt_does_not_keep_admission_or_disk_reservation(self):
+  from test_scheduler_resources import Fake,G
+  from unittest.mock import Mock
+  with tempfile.TemporaryDirectory()as folder:
+   runner=Fake();runner.resource_progress=Mock(side_effect=RuntimeError("receipt error"));runner.disk_finish=Mock()
+   scheduler=fixtures.host.resource_module.Resources(folder,runner,{"mode":"enforce"},sampler=lambda:{"available":20*G,"total":24*G,"pressure":{}})
+   try:
+    with self.assertRaisesRegex(RuntimeError,"receipt error"):scheduler.enter("phase",{"job_id":"job"},"ui_test","ui-profile","ui_test",timeout=.1)
+    self.assertEqual(scheduler.rows["phase"]["state"],"failed");runner.disk_finish.assert_called_once_with("phase")
+    runner.resource_progress=Mock();scheduler.enter("next",{"job_id":"next"},"ui_test","ui-profile","ui_test",timeout=.1);scheduler.finish("next",True)
+   finally:scheduler.close()
+ def test_admission_timeout_pauses_but_execution_timeout_fails(self):
+  broker=types.SimpleNamespace(lock=__import__("threading").RLock(),_save=lambda job:None)
+  pub=fixtures.host.ui_publication_module.UIPublication(broker,None,None,None,None,None)
+  def fail(*args):raise fixtures.host.resource_module.AdmissionTimeout("browser admission timed out")
+  pub._admit=fail;job={"job_id":"test"};self.assertIsNone(pub.admit(job,b"source"));self.assertEqual(job["status"],"needs_decision")
+  def execution(*args):raise TimeoutError("fixed build task timeout")
+  pub._admit=execution
+  with self.assertRaisesRegex(TimeoutError,"fixed build"):pub.admit({"job_id":"test"},b"source")

@@ -1209,8 +1209,10 @@ print(json.dumps(counts))"""
         image=arguments[entry+2];program=arguments[entry+3:]
         name="webagent-build-"+CONFIG["instance"]+"-"+uuid.UUID(job["job_id"]).hex+"-"+phase+"-"+uuid.uuid4().hex[:8]
         profile=kind+":"+hashlib.sha256((Path(CONFIG["service_dir"])/("index-scanner.py"if kind=="index"else"ui_policy.py")).read_bytes()).hexdigest()+":"+image
-        deadline=time.monotonic()+timeout
+        # Resource admission and execution have separate bounded budgets. Queue
+        # contention must not silently consume the fixture's execution allowance.
         resources.enter(name,job,phase,profile,kind,timeout=timeout)
+        deadline=time.monotonic()+timeout
         identity=None;success=False;oom=False
         try:
             create=["docker","create","--name",name,"--cgroup-parent","webagent-build-"+CONFIG["instance"]+".slice",
@@ -2771,7 +2773,10 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait") if key in job}
+        for key in ("publication_wait","resource_waiting"):
+            if view.get(key,{}).get("state","waiting")=="waiting"and view.get(key,{}).get("since"):
+                view[key]={**view[key],"elapsed_seconds":round(max(0,time.time()-view[key]["since"]),3)}
         if job.get("review_wait"):
             review=job["review_wait"]
             view["review_wait"]={k:review[k]for k in ("state","started_at","last_activity_at","expires_at")if k in review}
@@ -5017,7 +5022,7 @@ class Broker:
         return merged
 
     @contextlib.contextmanager
-    def boot_effect_lease(self):
+    def boot_effect_lease(self,job=None):
         """Serialize publication/container replacement against the trusted boot host."""
         path=Path(CONFIG["install_root"]).parent/"boot-supervisor/effects.lock"
         if not path.exists():
@@ -5027,7 +5032,12 @@ class Broker:
         try:
             info=os.fstat(fd)
             if not stat.S_ISREG(info.st_mode)or info.st_uid!=0 or info.st_nlink!=1 or info.st_mode&0o022:raise ValueError("Boot effect lease identity")
-            fcntl.flock(fd,fcntl.LOCK_EX)
+            if job is None:fcntl.flock(fd,fcntl.LOCK_EX)
+            else:
+                def probe():
+                    try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);return True
+                    except BlockingIOError:return False
+                self.ui_publication.wait_for(job,"boot_effect_lease",probe)
             yield
         finally:os.close(fd)
 
@@ -5321,7 +5331,7 @@ class Broker:
                 try:
                     if boot_guard is not None:boot_guard.__exit__(None,None,None)
                 finally:
-                    if deploy_locked:self.deploy_lock.release()
+                    if deploy_locked:self.ui_publication.release_locks(None)
             with self.lock:
                 self._mirror_batch(job)
                 self.job_cancellations.pop(job["job_id"], None)

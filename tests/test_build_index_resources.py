@@ -53,6 +53,14 @@ class MeasuredIndexExecutionTests(unittest.TestCase):
         self.assertEqual(next(iter(self.runner.resources.rows.values()))["metrics"]["peak_memory"],1234)
         self.assertIsNone(self.runner.job_context.phase_container)
 
+    def test_admission_wait_does_not_shorten_execution_budget(self):
+        now=[0.];normal=self.runner.resources.enter
+        def queued(*args,**kwargs):normal(*args,**kwargs);now[0]=180.
+        self.runner.resources.enter=queued
+        with patch.object(fixtures.host.time,"monotonic",side_effect=lambda:now[0]):self.runner.index_command(self.argv,timeout=300)
+        execution=next(c for c in self.calls if c[0]=="command"and c[1][:2]==["docker","exec"])
+        self.assertEqual(execution[2]["timeout"],300)
+
     def test_oom_is_not_successful_evidence(self):
         self.oom=True
         with self.assertRaisesRegex(RuntimeError,"memory budget"):self.runner.index_command(self.argv)

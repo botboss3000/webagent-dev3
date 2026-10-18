@@ -20,6 +20,10 @@ def host_sample():
         except (OSError,ValueError,StopIteration):pressure[kind]=0.
     return {"available":memory["MemAvailable"],"total":memory["MemTotal"],"swap_free":memory.get("SwapFree",0),"swap_total":memory.get("SwapTotal",0),"pressure":pressure}
 # @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Measured admission and compiler parking. Config: build-service/scheduler-defaults.json -> reserve_bytes, reserve_percent, max_phases, max_parked, memory_pressure_percent; protected overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image","/package_ram_bytes","/package_tmpfs_bytes"]}],"opportunities":[]}}
+class AdmissionTimeout(TimeoutError):
+    """A pre-effect admission wait can resume through normal host authorization."""
+    recoverable_admission=True
+
 class Resources:
     """Control only broker-created container identities; ownership and execution authority remain separate."""
     def __init__(self,state,runner,policy=None,clock=time.monotonic,sampler=host_sample):
@@ -119,7 +123,9 @@ class Resources:
         estimate=hard_cap if hard_cap is not None else self.estimate(profile,kind);deadline=time.monotonic()+timeout if timeout is not None else None
         deadline_at=time.time()+timeout if timeout is not None else None
         progress=getattr(self.runner,"resource_progress",lambda _:None)
-        disk_wait=None
+        disk_wait=None;wait_started=time.monotonic();wait_since=time.time()
+        cancel_event=getattr(getattr(self.runner,"job_context",None),"event",None)
+        def cancelled():return self.stop.is_set()or(cancel_event is not None and cancel_event.is_set())or job.get("revoked")or job.get("lease_until",float("inf"))<=time.time()
         with self.condition:
             def report():
                 """Persist progress outside the resource lock to preserve broker/resource lock ordering."""
@@ -146,23 +152,40 @@ class Resources:
                 return disk_wait is None or disk_wait.get("admitted")is True
             while self.enabled and not eligible():
                 if deadline is not None and time.monotonic()>=deadline:
-                    job.pop("resource_waiting",None);report();raise TimeoutError("Resource admission exceeded remaining check timeout")
-                if self.stop.is_set()or job.get("revoked")or job.get("lease_until",float("inf"))<=time.time():
-                    job.pop("resource_waiting",None);report();raise PermissionError("Build admission cancelled or authorization expired")
-                waiting={"phase":phase,"reason":"headroom","estimate_bytes":estimate,"available_bytes":self.host["available"],"reserve_bytes":self.reserve(),"deadline_at":deadline_at}
+                    value=job.pop("resource_waiting",None)
+                    if value:job["last_resource_wait"]={**value,"state":"timed_out","elapsed_seconds":round(time.monotonic()-wait_started,3)}
+                    report();raise AdmissionTimeout("Resource admission timed out: "+str((value or{}).get("reason","headroom")))
+                if cancelled():
+                    value=job.pop("resource_waiting",None)
+                    if value:job["last_resource_wait"]={**value,"state":"cancelled","elapsed_seconds":round(time.monotonic()-wait_started,3)}
+                    report();raise PermissionError("Build admission cancelled or authorization expired")
+                blockers=[{"job_id":r["job_id"],"phase":r["phase"],"state":r["state"]}for r in self.rows.values()if r.get("component")==component and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}][:16]
+                waiting={"phase":phase,"resource":component if blockers else"host_headroom","reason":"component_busy"if blockers else"headroom","owners":blockers,"since":wait_since,"elapsed_seconds":round(time.monotonic()-wait_started,1),"estimate_bytes":estimate,"available_bytes":self.host["available"],"reserve_bytes":self.reserve(),"deadline_at":deadline_at,"state":"waiting"}
+                if kind=="ui_test":job["phase"]="waiting_frontend_admission"
                 if disk_wait and not disk_wait.get("admitted"):waiting.update(disk_wait);waiting.pop("admitted",None)
                 if job.get("resource_waiting")!=waiting:job["resource_waiting"]=waiting;report()
                 self.condition.wait(min(.5,max(0,deadline-time.monotonic()))if deadline is not None else .5)
-            if self.stop.is_set()or job.get("revoked")or job.get("lease_until",float("inf"))<=time.time():
+            if cancelled():
                 finish=getattr(self.runner,"disk_finish",None)
                 if callable(finish):finish(name)
                 raise PermissionError("Scheduler stopping")
-            job.pop("resource_waiting",None)
+            value=job.pop("resource_waiting",None)
+            if value:job["last_resource_wait"]={**value,"state":"admitted","elapsed_seconds":round(time.monotonic()-wait_started,3)}
+            if kind=="ui_test":job["phase"]="frontend_tests"
             now=self.clock()
             self.rows[name]={"job_id":job["job_id"],"task_id":job.get("task_id"),"ram_packaging":ram_packaging,"phase":phase,"profile":profile,"kind":kind,"component":component,"estimate":estimate,"hard_cap":hard_cap,"priority":job.get("priority",0),"state":"admitted","revision":0,"started_at":time.time(),"started":now,"paused_seconds":0.,"paused_at":None,"metrics":{},"container_id":None}
             if kind=="index"and job.get("internal_index"):
                 self.rows[name].update(internal_index=True,owner_user=job["user_id"],owner_workspace=job["workspace"])
-            self.persist();report()
+            try:self.persist();report()
+            except BaseException:
+                self.rows[name].update(state="failed",finished=self.clock())
+                finish=getattr(self.runner,"disk_finish",None)
+                try:
+                    if callable(finish):finish(name)
+                finally:self.condition.notify_all()
+                try:self.persist()
+                except Exception:pass
+                raise
     def attached(self,name,identity):
         """Bind the new phase to its exact container identity before the monitor controls it."""
         with self.condition:

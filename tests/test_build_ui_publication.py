@@ -869,3 +869,45 @@ class BackendBindRecoveryTests(ConcurrentUIEntryTests):
         self.runner.containers[loop]["State"]["Status"]="exited"
         with self.assertRaisesRegex(ValueError,"Candidate loop changed or unhealthy"):self.recover_bind(job)
         self.assertNotIn("publication_recovery",self.broker.jobs[job])
+
+class PublicationAdmissionIntegrationTests(ConcurrentUIEntryTests):
+    def test_boot_entry_failure_releases_publication_and_next_job_finishes(self):
+        self.change("boot-entry-failure","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        class Broken:
+            def __enter__(self):raise RuntimeError("boot lease entry failed")
+            def __exit__(self,*args):raise AssertionError("Unentered guard must not be exited")
+        with patch.object(self.broker,"boot_effect_lease",return_value=Broken()):
+            job=self.finish("boot-entry-failure");row=self.wait([job])[0]
+        self.assertEqual(row["status"],"failed");self.assertIn("boot lease entry failed",row["reason"]);self.assertFalse(self.broker.jobs[job].get("effects_started"))
+        self.change("after-entry-failure","ui/probe/b.css","main {}\n","main { color: blue; }\n")
+        next_job=self.finish("after-entry-failure");self.assertEqual(self.wait([next_job])[0]["status"],"completed")
+
+    def test_cancellation_during_final_wait_releases_all_locks(self):
+        self.change("cancel-publish-wait","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        ready=threading.Event();go=threading.Event();normal=self.runner.validate_selected_tests
+        def tests(*args):ready.set();go.wait(3);return normal(*args)
+        self.runner.validate_selected_tests=tests
+        job=self.finish("cancel-publish-wait");self.assertTrue(ready.wait(2))
+        with self.broker.deploy_lock:
+            go.set();deadline=time.monotonic()+2
+            while not self.broker.jobs[job].get("publication_wait")and time.monotonic()<deadline:time.sleep(.01)
+            self.assertEqual(self.broker.jobs[job]["publication_wait"]["resource"],"deploy_lock")
+            self.call("v3_build_cancel",{"job_id":job,"request_id":"cancel-publication-wait-fixture","expected_job_ids":[job]})
+            row=self.wait([job])[0]
+            self.assertEqual(row["status"],"cancelled");self.assertFalse(self.broker.jobs[job].get("effects_started"))
+        self.runner.validate_selected_tests=normal
+        self.change("after-wait-cancel","ui/probe/b.css","main {}\n","main { color: blue; }\n")
+        next_job=self.finish("after-wait-cancel");self.assertEqual(self.wait([next_job])[0]["status"],"completed")
+
+    def test_bounded_wait_resumes_same_durable_job(self):
+        self.change("resume-publish-wait","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        ready=threading.Event();go=threading.Event();normal=self.runner.validate_selected_tests
+        def tests(*args):ready.set();go.wait(3);return normal(*args)
+        self.runner.validate_selected_tests=tests;self.broker.ui_publication.wait_timeout=.08
+        job=self.finish("resume-publish-wait");self.assertTrue(ready.wait(2))
+        with self.broker.deploy_lock:
+            go.set();row=self.wait([job])[0];self.assertEqual(row["status"],"needs_decision");self.assertFalse(self.broker.jobs[job].get("effects_started"))
+        self.runner.validate_selected_tests=normal
+        report=self.call("build_work",{"action":"preflight","task_id":"resume-publish-wait"})["synchronization"]
+        self.call("build_work",{"action":"decide","task_id":"resume-publish-wait","sync_decision":"proceed","expected_sync_digest":report["digest"]})
+        self.assertEqual(self.wait([job])[0]["status"],"completed")
