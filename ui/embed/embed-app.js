@@ -52,7 +52,7 @@ async function ensureAuthenticated(){if(credential&&Date.now()/1000<expires)retu
 const descriptor=await publicRequest('/embed/'+encodeURIComponent(agentId)+'/descriptor?origin='+encodeURIComponent(hostOrigin));
 document.getElementById('embed-agent-name').textContent=descriptor.agent.name||'WebAgent';
 setChatSurfaceActions({title:descriptor.agent.name||'WebAgent',minimize:()=>emit('minimize'),close:()=>emit('close')});
-chat=await mountChatPanel({root,resolveAsset,request,guard,note,keyId,forgetKey:key=>ids.delete(key),refresh,getState:()=>state,getAgentId:()=>agentId,getIdentity:()=>identity,onEvent:emit,createStream:url=>createFetchStream(url,{headers:()=>({Authorization:'Bearer '+credential})})});
+chat=await mountChatPanel({root,resolveAsset,enableMainNotes:false,request,guard,note,keyId,forgetKey:key=>ids.delete(key),refresh,getState:()=>state,getAgentId:()=>agentId,getIdentity:()=>identity,onEvent:emit,createStream:url=>createFetchStream(url,{headers:()=>({Authorization:'Bearer '+credential})})});
 await initChatConfig({config:descriptor.chat_ui,root});
 const access=await publicRequest('/auth/access-mode').catch(()=>({guest_access:false}));document.getElementById('embed-guest').hidden=!(access.guest_access&&descriptor.config?.guest_access);
 let theme;try{theme=localStorage.getItem('v3-theme')}catch{}document.body.classList.toggle('light-mode',theme==='light');

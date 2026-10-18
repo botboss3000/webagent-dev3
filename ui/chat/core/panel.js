@@ -1,3 +1,4 @@
+import {createMainNotes} from '../elements/main-notes/index.js';
 // @code-index {"version":1,"feature":"chat-panel","aliases":["chat panel","conversation panel","session transcript"],"purpose":"Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides. Touch feedback: ui/vibrate.json -> enabled, duration_ms; gestures stay client-owned.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common/composer/keyboard_focus"],"profile_overrides":true},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
 // V2-style panel/client separation; markup and message protocol remain V3.
 // @code-index {"version":1,"feature":"chat-screen-panel-routing","aliases":["conversation display lifecycle"],"purpose":"Panel feeds selected-session runs/live messages to display policy from data/config/chat.json -> chat_common.screen_display and surface overrides; history loading is excluded.","span_lines":3,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/screen_display"],"profile_overrides":true}],"opportunities":[]}}
@@ -29,7 +30,7 @@ const mountedPanels = new WeakMap();
  * Reports session/run/sent changes through onEvent and returns the mounted panel API.
  * Missing or incomplete partial markup and synchronous setup failures propagate to the shell.
  */
-export async function mountChatPanel({root = document.getElementById('chat-panel'), createStream, resolveAsset, onEvent = () => {}, request, guard, note, clearNoticeFrom, keyId, forgetKey, refresh, getState, getAgentId, getIdentity=()=>({})}) {
+export async function mountChatPanel({root = document.getElementById('chat-panel'), createStream, resolveAsset, enableMainNotes=true, onEvent = () => {}, request, guard, note, clearNoticeFrom, keyId, forgetKey, refresh, getState, getAgentId, getIdentity=()=>({})}) {
   mountedPanels.get(root)?.destroy();
   // Resolves partial element IDs only within this panel root.
   const $ = id => root.querySelector('#' + id);
@@ -61,6 +62,7 @@ async function mountChat(){
   root.replaceChildren(template.content);
 }
 await mountChat();
+const mainNotes=enableMainNotes?createMainNotes({request}):null;if(mainNotes){mainNotes.element.dataset.headerExtension='main-notes';$('chat-header').append(mainNotes.element);}
 // Display activity uses authoritative selected-session run states and live publications.
 const screenAwake=mountScreenAwake(root,{getProfile:currentChatProfile});
 const notifications=mountChatNotifications({root,guard});
@@ -328,7 +330,7 @@ $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
   function disconnect(){screenAwake.select('');followups.reset();session='';activityRuns=[];elementContext='';anchor.reset();progress.reset();notifications.clearTools();$('runs').replaceChildren();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();sharing.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
   /** Disconnects and disposes panel-owned timers, observers, listeners, and mounted child controls. */
   function destroy(){
-    disposeFeedback();screenAwake.destroy();++sessionGeneration;closeUndoDialog?.();
+    mainNotes?.destroy();disposeFeedback();screenAwake.destroy();++sessionGeneration;closeUndoDialog?.();
     disconnect();followups.destroy();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
     $('chat-input').onkeydown=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;

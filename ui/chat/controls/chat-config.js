@@ -152,6 +152,8 @@ function applyHeader(profile) {
   headerControl('agent_name');
   headerNodes.session_dropdown.configure?.(sessionDropdownConfig(surfaceName()));
   headerNodes.session_dropdown._sessionDropdownController?.close({immediate:true});
+  // Preserve durable element mounts while rebuilding only configured control rows.
+  const extensions=[...header.children].filter(node=>node.dataset.headerExtension);
   header.replaceChildren();
   for (const row of rows) {
     const line = document.createElement('div');
@@ -173,6 +175,7 @@ function applyHeader(profile) {
     }
     if (line.querySelector('.chat-header-zone:not(:empty)')) header.append(line);
   }
+  header.append(...extensions);
 }
 
 let footerNodes = null;
