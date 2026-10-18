@@ -1,3 +1,4 @@
+import {renderMainChat} from './main-chat.js';
 
 'use strict';
 import { renderSharedChat } from './shared-chat.js';
@@ -64,6 +65,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   };
   if(agent.can_manage)await renderEmbedSettings(content,request,{agentId});
   renderSharedChat(content, agent, persist, request, {agentId});
+  await renderMainChat(content, request);
   renderCompaction(content, agent, persist);
   renderToolOutputPolicy(content, agent, persist);
   const title = document.createElement('h3'); title.textContent = 'Chat modes'; content.append(title);
