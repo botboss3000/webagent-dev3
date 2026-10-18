@@ -1,11 +1,18 @@
+/** Create text-only page content and controls. */
 const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
+/** Refresh same-origin identity and CSRF state before a module mutation. */
 async function identity(){const r=await fetch('/api/v3/auth/me',{credentials:'same-origin',cache:'no-store'});if(!r.ok)throw Error('Sign in to manage this module');return r.json();}
 const pendingRequests=new Map();
+/** Recognize the host-owned review subscription independently of its prompt. */
 const fixedReview=row=>row.id==='main-notes-review'||row.trigger?.kind==='main_notes';
+/** Identify definitions whose intent belongs in the Main Notes editor. */
 const notesManaged=row=>fixedReview(row)||row.id?.startsWith('main-notes-action-');
+/** Preserve one request ID and exact arguments across uncertain module-call retries. */
 async function request(id,action,args){const logical={...args};delete logical.request_id;const fingerprint=JSON.stringify([id,action,logical]);let intent=pendingRequests.get(fingerprint);if(!intent){intent={id:crypto.randomUUID(),args:{...args}};if(args.request_id!==undefined)intent.args.request_id=intent.id;if(pendingRequests.size>=32)pendingRequests.delete(pendingRequests.keys().next().value);pendingRequests.set(fingerprint,intent);}const requestId=intent.id;args=intent.args;const me=await identity();const r=await fetch('/api/v3/modules/'+id+'/call',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','x-csrf-token':me.csrf_token},body:JSON.stringify({action,args,client_request_id:requestId})});const data=await r.json().catch(()=>({}));if(!r.ok||data.ok===false)throw Error(data.error||data.message||'Operation failed ('+r.status+')');pendingRequests.delete(fingerprint);return data.result??data;}
+/** Add a labelled control to the Automation editor. */
 function field(form,label,type='text',choices){const wrap=el('label',label);const input=choices?el('select'):el(type==='textarea'?'textarea':'input');if(!choices&&type!=='textarea')input.type=type;if(choices)for(const [value,text]of choices){const o=el('option',text);o.value=value;input.append(o);}wrap.append(input);form.append(wrap);return input;}
 
+/** Mount Automation management while keeping note-owned intent in its own editor. */
 export async function start(mount){
  const root=el('section');root.className='module-page';mount.replaceChildren(root);root.append(el('h2','Automations'));
  const notice=el('p');notice.className='module-notice';notice.setAttribute('role','status');root.append(notice);
@@ -19,8 +26,11 @@ export async function start(mount){
  const timezone=field(form,'Cron timezone');timezone.value=Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';
  const destination=field(form,'Output','text',[['new_session','New conversation'],['existing_chat','Existing conversation'],['silent','Silent']]);
  const session=field(form,'Existing conversation','text',[['','Choose a conversation']]);let conversations=[];
+ /** Load visible agents and conversations without granting dispatch authority. */
  async function choices(){try{const r=await fetch('/api/v3/models/agents',{credentials:'same-origin',cache:'no-store'});if(r.ok){const data=await r.json();const value=agent.value;agent.replaceChildren();for(const row of data.agents||[]){if(row.status!=='active')continue;const option=el('option',row.name||row.id);option.value=row.id;agent.append(option);}agent.value=value;if(!agent.value&&agent.options.length)agent.selectedIndex=0;}const chats=await fetch('/api/v3/sessions',{credentials:'same-origin',cache:'no-store'});if(chats.ok){const data=await chats.json();conversations=data.sessions||[];conversationChoices(new URL(location.href).searchParams.get('session_id')||'');}}catch(e){notice.textContent='Conversation choices unavailable: '+e.message;}}
+ /** Rebuild explicit destinations and preserve a still-valid conversation selection. */
  function conversationChoices(preferred=session.value){session.replaceChildren();const placeholder=el('option','Choose a conversation');placeholder.value='';session.append(placeholder);for(const row of conversations){if((row.agent_id||'shared_default')!==agent.value)continue;const option=el('option',row.title||'Conversation');option.value=row.id;session.append(option);}session.value=preferred;}
+ /** Display inputs for the selected existing trigger kind. */
  function showFields(){when.parentElement.hidden=kind.value!=='once';expression.parentElement.hidden=kind.value!=='cron';timezone.parentElement.hidden=kind.value!=='cron';source.parentElement.hidden=kind.value!=='event';filter.parentElement.hidden=kind.value!=='event';session.parentElement.hidden=destination.value!=='existing_chat';}
  kind.onchange=showFields;destination.onchange=showFields;agent.onchange=()=>conversationChoices('');showFields();
  const submit=el('button','Create automation');submit.type='submit';form.append(submit);
@@ -29,10 +39,14 @@ export async function start(mount){
  const refresh=el('button','Refresh');controls.append(refresh);const more=el('button','Load more');more.hidden=true;controls.append(more);
  const scroll=el('div');scroll.className='module-scroll';root.append(scroll);const table=el('table');scroll.append(table);
  const history=el('pre');root.append(history);
+ /** Surface operation progress/errors while retaining host permission checks. */
  async function perform(action,args){notice.textContent='Working…';try{const result=await request('automation',action,args);notice.textContent='Saved';return result;}catch(e){notice.textContent=e.message;throw e;}}
+ /** Page definitions through the current account-scoped Automation API. */
  async function load(append=false){try{const data=await request('automation','list_automations',{offset:append?rows.length:0,limit:100});const page=data.items||[];rows=append?rows.concat(page):page;more.hidden=page.length<100;render();notice.textContent='Loaded '+rows.length+' automations';}catch(e){notice.textContent=e.message;table.replaceChildren();}}
+ /** Protect fixed review ownership and managed intent while rendering lifecycle controls. */
  function render(){table.replaceChildren();const head=el('tr');for(const t of ['Select','Task','Status','Next run','Output','Actions'])head.append(el('th',t));table.append(head);for(const row of rows){if(view.value==='recycled'&&row.status!=='recycled'||view.value==='active'&&!['active','paused'].includes(row.status)||view.value==='completed'&&!['completed','cancelled','expired','disabled'].includes(row.status))continue;
  const isReview=fixedReview(row),isManaged=notesManaged(row);if(isReview)selected.delete(row.id);const tr=el('tr');const box=el('input');box.type='checkbox';box.disabled=isReview;box.checked=selected.has(row.id);box.onchange=()=>{if(box.checked)selected.add(row.id);else selected.delete(row.id);};const select=el('td');select.append(box);tr.append(select,el('td',row.prompt),el('td',row.status+(row.last_error?' · '+row.last_error:'')),el('td',row.next_ms?new Date(row.next_ms).toLocaleString():'—'),el('td',({new_session:'New conversation',existing_chat:'Existing conversation',silent:'Silent'})[row.destination?.kind||row.destination?.type]||'—'));const actions=el('td');tr.append(actions);
+ /** Bind a revision-fenced operation; the host checks live permission before effects. */
  const action=(label,operation,extra={})=>{const b=el('button',label);b.onclick=async()=>{b.disabled=true;try{await perform(operation,{id:row.id,expected_revision:row.revision,request_id:crypto.randomUUID(),...extra});await load();}catch{}finally{b.disabled=false;}};actions.append(b);};
  action(row.status==='paused'?'Resume':'Pause',row.status==='paused'?'resume_automation':'pause_automation');if(!isManaged)action('Run now','run_automation_now');if(!isReview)action(row.status==='recycled'?'Restore':'Recycle',row.status==='recycled'?'restore':'recycle');
  const edit=el('button','Edit');edit.onclick=()=>{editing=row;prompt.value=row.prompt;agent.value=row.agent_id||'shared_default';agent.disabled=true;destination.value=row.destination.kind||row.destination.type;conversationChoices(row.destination.session_id||'');kind.value=row.trigger.kind==='event'?'event':row.trigger.kind==='cron'?'cron':'once';kind.disabled=true;source.value=row.trigger.source||'session_settled';filter.value=JSON.stringify(row.trigger.filter||{});if(row.trigger.at_ms){const date=new Date(row.trigger.at_ms);when.value=new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16);}expression.value=row.trigger.expression||'';timezone.value=row.trigger.timezone||timezone.value;submit.textContent='Save changes';showFields();form.scrollIntoView({block:'nearest'});};if(!isManaged)actions.append(edit);else actions.append(el('span',isReview?'Main Chat review subscription. Use Identity to disable coordination.':'Managed from Main Notes. Edit its action or requested timing there.'));

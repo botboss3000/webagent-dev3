@@ -1429,6 +1429,159 @@
         "status": "not_applicable",
         "rationale": "Installed transport identity, reasoning isolation and exact source reconstruction are protocol invariants."
       }
+    },
+    {
+      "id": "main-chat-main-notes",
+      "aliases": [
+        "Main Chat",
+        "Main Notes",
+        "cross-session notebook",
+        "permanent coordination session",
+        "note approval scopes"
+      ],
+      "purpose": "Permanent private Main Chat and durable Main Notes. Config: encrypted module_state:main_chat settings -> enabled, chat_name, notes_name, context_limit_bytes, write_mode, reporting through /api/v3/main-chat. Indirect Automation authority ceilings: plugins/abilities/Core/automation/automation.json -> /config/settings. Notes approval never grants execution.",
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "plugins/abilities/Core/automation/automation.json",
+            "pointers": [
+              "/config/settings"
+            ]
+          }
+        ],
+        "opportunities": [],
+        "rationale": "Automation ceilings are indirect. Main Chat preferences are encrypted account state exposed through /api/v3/main-chat, not a JSON file."
+      },
+      "locations": [
+        {
+          "path": "src/main_chat.rs",
+          "start_line": 159,
+          "end_line": 238,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "src/storage/main_notes.rs",
+          "start_line": 1,
+          "end_line": 71,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "src/api/user.rs",
+          "start_line": 335,
+          "end_line": 414,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "src/storage/session.rs",
+          "start_line": 413,
+          "end_line": 492,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "src/modules.rs",
+          "start_line": 1419,
+          "end_line": 1498,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "src/agent_loop/run.rs",
+          "start_line": 404,
+          "end_line": 483,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "plugins/abilities/Core/automation/service/engine.rs",
+          "start_line": 429,
+          "end_line": 508,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        }
+      ]
+    },
+    {
+      "id": "main-chat-main-notes-ui",
+      "aliases": [
+        "Main Chat Identity settings",
+        "Main Notes widget",
+        "Main Chat deletion controls",
+        "Notes Automation management"
+      ],
+      "purpose": "Permanent private Main Chat and durable Main Notes. Config: encrypted module_state:main_chat settings -> enabled, chat_name, notes_name, context_limit_bytes, write_mode, reporting through /api/v3/main-chat. Indirect Automation authority ceilings: plugins/abilities/Core/automation/automation.json -> /config/settings. Notes approval never grants execution.",
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "plugins/abilities/Core/automation/automation.json",
+            "pointers": [
+              "/config/settings"
+            ]
+          }
+        ],
+        "opportunities": [],
+        "rationale": "Automation ceilings are indirect. Main Chat preferences are encrypted account state exposed through /api/v3/main-chat, not a JSON file."
+      },
+      "locations": [
+        {
+          "path": "ui/main-panel/agents/pages/identity/main-chat.js",
+          "start_line": 1,
+          "end_line": 52,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "ui/chat/elements/main-notes/index.js",
+          "start_line": 1,
+          "end_line": 52,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "ui/chat/elements/main-notes/style.css",
+          "start_line": 1,
+          "end_line": 1,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "ui/chat/core/panel.js",
+          "start_line": 1,
+          "end_line": 80,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "ui/chat/controls/chat-config.js",
+          "start_line": 1,
+          "end_line": 80,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "ui/embed/embed-app.js",
+          "start_line": 55,
+          "end_line": 113,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "ui/chat/controls/session-dropdown/list.js",
+          "start_line": 5,
+          "end_line": 84,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "ui/main-panel/agents/pages/sessions/js/adapter.js",
+          "start_line": 33,
+          "end_line": 52,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "ui/main-panel/agents/pages/sessions/js/sessions-page.js",
+          "start_line": 1110,
+          "end_line": 1189,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        },
+        {
+          "path": "plugins/abilities/Core/automation/service/page.js",
+          "start_line": 1,
+          "end_line": 59,
+          "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
+        }
+      ]
     }
   ]
 }

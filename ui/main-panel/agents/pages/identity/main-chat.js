@@ -1,10 +1,12 @@
 // Personal coordination settings are independent of the selected agent identity.
+/** Mount account-wide settings, retaining exact retries and rejecting detached renders. */
 export async function renderMainChat(host, request) {
   const section=document.createElement('section');section.className='main-chat-settings';section.style.webkitTapHighlightColor='transparent';host.append(section);
   const title=document.createElement('h3');title.textContent='Main Chat';section.append(title);
   const hint=document.createElement('p');hint.className='ac-hint';hint.textContent='Your private coordination chat and cross-session notes. These settings apply to your account across agents.';section.append(hint);
   const form=document.createElement('form');section.append(form);
   const fields=new Map();
+  /** Register an accessible preference input in the settings form. */
   function field(key,label,type='text',choices=null){
     const wrap=document.createElement('div');wrap.className='ac-cfg-field';const text=document.createElement('label');text.className='ac-label';text.textContent=label;
     const input=document.createElement(choices?'select':'input');input.id='main-chat-'+key;input.dataset.mainChatField=key;text.htmlFor=input.id;
@@ -25,9 +27,13 @@ export async function renderMainChat(host, request) {
   const open=document.createElement('a');open.className='ac-btn ac-btn-ghost';open.textContent='Open Main Chat';open.hidden=true;
   form.append(save,reload,open,status);
   let state=null,pending=null,busy=false,generation=0;
+  // Ignore asynchronous results after this Identity section has been detached.
   const alive=()=>section.isConnected;
+  /** Freeze preference inputs while loading or reconciling an uncertain write. */
   function lock(value){for(const input of fields.values())input.disabled=value;save.disabled=value;}
+  /** Adopt server revisions/settings and clear the reconciled pending request. */
   function paint(data){state=data;pending=null;const settings=data.settings;for(const [key,input]of fields){if(key==='enabled')input.checked=settings.enabled;else input.value=key==='context_kib'?settings.context_limit_bytes/1024:settings[key];}open.hidden=!data.session_id;if(data.session_id)open.href='/app?session_id='+encodeURIComponent(data.session_id);lock(false);save.textContent='Save Main Chat';}
+  /** Reload canonical settings; a generation fence rejects stale navigation responses. */
   async function load(){const epoch=++generation;busy=true;lock(true);status.textContent='Loading Main Chat…';try{const data=await request('/main-chat');if(!alive()||epoch!==generation)return;paint(data);status.textContent=data.review_status==='automation_unavailable'?'Automation is unavailable. Enable the Automations ability to coordinate reviews.':data.review_status==='paused'?'Review subscription is paused. Review its Automation approval and controls.':'';}catch(error){if(alive()&&epoch===generation)status.textContent='Main Chat unavailable: '+error.message;}finally{if(epoch===generation)busy=false;}}
   reload.addEventListener('click',()=>{if(!busy)void load();});
   form.addEventListener('submit',async event=>{
