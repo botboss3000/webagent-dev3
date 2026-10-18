@@ -2,13 +2,13 @@
 .v2-activity-group {
   box-sizing: border-box;
   width: 100%;
-  margin: 8px 0 14px;
+  margin: 0;
   color: var(--fg-3);
   font-size: 12px;
 }
 .v2-activity-group > summary {
   cursor: pointer;
-  padding: 6px 8px;
+  padding: 0 8px;
   border-radius: var(--r-sm);
   overflow-wrap: anywhere;
 }
