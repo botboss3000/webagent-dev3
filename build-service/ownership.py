@@ -294,6 +294,18 @@ class Ownership:
                                evidence={"submission":binding},heartbeat=self.clock())
         return self.mutate(request,["submitted",task,owner,revision,epoch,inputs],operation)
 
+    def clear_pending_requests(self,task,owner,revision,epoch,reason,request):
+        """Withdraw only unacquired requests, retaining frozen generation and evidence."""
+        if not isinstance(reason,str)or not 1<=len(reason.encode())<=500:raise ValueError("Bounded withdrawal reason required")
+        def operation(db):
+            value=self.check(task,owner,revision,epoch,db)
+            if value["scopes"]:raise ValueError("Release held claims separately before clearing requests")
+            if not value["requested"]:raise ValueError("Unacquired pending requests required")
+            result=self.update(db,value,requested=[],epoch=epoch+1)
+            db.execute("INSERT INTO events(task,at,event)VALUES(?,?,?)",(task,self.clock(),canonical({"clear_pending_requests":value["requested"],"reason":reason,"owner":owner})))
+            return result
+        return self.mutate(request,["clear_pending_requests",task,owner,revision,epoch,reason],operation)
+
     # @code-index {"version":1,"feature":"owner-claim-release","aliases":["release reservations","unblock engine"],"purpose":"Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.","span_lines":17,"configuration":{"status":"not_applicable","rationale":"Ownership fencing and authenticated scope release are fixed authority invariants."}}
     def release_scopes(self,task,owner,revision,epoch,scopes,reason,request):
         """Release explicit owner claims, fence old epochs and retain the unpublished draft."""

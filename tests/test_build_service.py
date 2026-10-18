@@ -593,6 +593,24 @@ class SuccessorRecoveryTests(unittest.TestCase):
             self.call("build_work",{**args,"expected_inputs_sha256":"0"*64})
         self.assertFalse(self.runner.calls)
 
+    def test_pending_withdrawal_unblocks_successor_without_reopening_source(self):
+        original,job=self.proposal();store=self.broker.scheduler.store
+        holder=self.begin("successor-queue-holder");v=store.get(holder["key"])
+        store.acquire(v["id"],v["owner"],v["revision"],v["epoch"],["module:engine"],"successor-holder")
+        v=store.get(original["key"])
+        waiting=store.acquire(v["id"],v["owner"],v["revision"],v["epoch"],["module:engine"],"successor-wait")["task"]
+        source=self.broker.scheduler_task_snapshot(Path(original["workspace_path"]).parent)
+        item,args=self.request(job)
+        with self.assertRaisesRegex(ValueError,"reservations"):self.call("build_work",args)
+        result=self.call("build_work",{"action":"clear_pending_requests","task_id":original["task_id"],"expected_revision":waiting["revision"],"expected_epoch":waiting["epoch"],"reason":"Import preserved source","request_id":"successor-withdraw"})
+        v=store.get(holder["key"])
+        store.release_scopes(v["id"],v["owner"],v["revision"],v["epoch"],v["scopes"],"fixture holder finished","successor-holder-release")
+        args["request_id"]="successor-after-withdraw"
+        self.assertEqual(self.call("build_work",args)["status"],"imported")
+        self.assertEqual(result["generation"],waiting["generation"])
+        self.assertEqual(self.broker.scheduler_task_snapshot(Path(original["workspace_path"]).parent),source)
+        self.assertEqual(original["status"],"closed")
+
     def test_same_file_conflict_does_not_claim_or_write(self):
         original,job=self.proposal()
         self.runner.blob=fixtures.context(extra={"v3/README.md":"other writer\n"})
@@ -1256,3 +1274,78 @@ class AdmissionCleanupTests(unittest.TestCase):
   def execution(*args):raise TimeoutError("fixed build task timeout")
   pub._admit=execution
   with self.assertRaisesRegex(TimeoutError,"fixed build"):pub.admit({"job_id":"test"},b"source")
+
+
+class ClearPendingRequestsTests(unittest.TestCase):
+    """Withdraw a terminal proposal's queued intent without touching frozen source."""
+    from test_scheduler_broker import SchedulerBrokerTests as _base
+    setUp=_base.setUp
+    tearDown= _base.tearDown
+    call= _base.call
+    begin= _base.begin
+    action= _base.action
+    def fixture(self):
+        holder=self.begin("pending-holder");item=self.begin("pending-terminal")
+        store=self.broker.scheduler.store;owner=self.broker.scheduler.owner(self.trusted,self.workspace)
+        def acquire(i,r):
+            v=store.get(i["key"])
+            return store.acquire(i["key"],owner,v["revision"],v["epoch"],["module:engine"],r)
+        acquire(holder,"holder-acquire");self.assertFalse(acquire(item,"terminal-wait")["acquired"])
+        item.update(status="closed",job_id="cancelled-job")
+        self.broker.jobs["cancelled-job"]={"job_id":"cancelled-job","ownership_id":item["key"],"status":"cancelled"}
+        self.broker._save_work()
+        return item,store.get(item["key"])
+    def test_preserves_source_generation_evidence_state_and_retries(self):
+        item,before=self.fixture();tree=Path(item["workspace_path"]).parent
+        source=self.broker.scheduler_task_snapshot(tree);baseline=(tree/"baseline.tar").read_bytes()
+        result,request=self.action(item["task_id"],"clear_pending_requests",reason="Import successor")
+        self.assertEqual(result["requested"],[]);self.assertEqual(result["scopes"],[])
+        for k in ("generation","evidence","state","heartbeat","owner"):
+            self.assertEqual(result[k],before[k],k)
+        self.assertEqual(result["epoch"],before["epoch"]+1)
+        self.assertEqual(self.call("build_work",request),result)
+        self.assertEqual(self.broker.scheduler_task_snapshot(tree),source)
+        self.assertEqual((tree/"baseline.tar").read_bytes(),baseline)
+        self.assertEqual(item["status"],"closed");self.assertEqual(item["job_id"],"cancelled-job")
+        with self.assertRaisesRegex(ValueError,"reused"):
+            self.call("build_work",{**request,"reason":"changed"})
+    def test_rejects_open_active_uncertain_and_effectful_tasks(self):
+        item,before=self.fixture();job=self.broker.jobs["cancelled-job"]
+        item["status"]="open"
+        with self.assertRaisesRegex(ValueError,"Closed"):self.action(item["task_id"],"clear_pending_requests",reason="withdraw")
+        item["status"]="closed"
+        for status in ("queued","running","interrupted","uncertain","needs_decision"):
+            job["status"]=status
+            with self.assertRaisesRegex(ValueError,"execution"):self.action(item["task_id"],"clear_pending_requests",reason="withdraw")
+        job.update(status="failed",effects_started=True)
+        with self.assertRaisesRegex(ValueError,"effects"):self.action(item["task_id"],"clear_pending_requests",reason="withdraw")
+        self.assertEqual(self.broker.scheduler.store.get(item["key"]),before)
+    def test_rejects_held_scopes_and_stale_or_foreign_owner(self):
+        item,before=self.fixture()
+        request={"task_id":item["task_id"],"action":"clear_pending_requests","request_id":"stale-clear","expected_revision":before["revision"]-1,"expected_epoch":before["epoch"],"reason":"withdraw"}
+        with self.assertRaisesRegex(ValueError,"Stale"):self.call("build_work",request)
+        with patch.dict(self.trusted,user_id="other-owner"):
+            with self.assertRaises(ValueError):self.action(item["task_id"],"clear_pending_requests",reason="withdraw")
+        # A separate closed fixture with held scopes must use normal release instead.
+        holder=next(i for i in self.broker.work.values()if i["task_id"]=="pending-holder")
+        holder.update(status="closed");self.broker.jobs["held-job"]={"ownership_id":holder["key"],"status":"cancelled"}
+        with self.assertRaisesRegex(ValueError,"held claims"):self.action(holder["task_id"],"clear_pending_requests",reason="withdraw")
+        self.assertEqual(self.broker.scheduler.store.get(item["key"]),before)
+    def test_commit_then_journal_failure_replays_without_second_mutation(self):
+        item,before=self.fixture();write=self.broker.scheduler.write_record
+        def fail_done(path,record):
+            if record.get("state")=="done":raise OSError("lost response")
+            return write(path,record)
+        request={"task_id":item["task_id"],"action":"clear_pending_requests","request_id":"lost-clear","expected_revision":before["revision"],"expected_epoch":before["epoch"],"reason":"withdraw"}
+        with patch.object(self.broker.scheduler,"write_record",side_effect=fail_done):
+            with self.assertRaises(OSError):self.call("build_work",request)
+        after=self.broker.scheduler.store.get(item["key"])
+        self.assertEqual(self.call("build_work",request),after)
+        self.assertEqual(self.broker.scheduler.store.get(item["key"]),after)
+    def test_restart_preserves_receipt_and_clear_does_not_resurrect_orphan(self):
+        item,before=self.fixture();store=self.broker.scheduler.store
+        with store.transaction()as db:store.update(db,store.get(item["key"],db),state="orphaned")
+        result,request=self.action(item["task_id"],"clear_pending_requests",reason="withdraw")
+        reopened=type(store)(store.path)
+        self.assertEqual(reopened.get(item["key"]),result);self.assertEqual(result["state"],"orphaned")
+        self.assertEqual(self.call("build_work",request),result)

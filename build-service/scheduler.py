@@ -18,7 +18,7 @@ class Conflict(ValueError):
 # @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Source reservations and completion. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds; protected installation overrides at broker restart.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image"]}],"opportunities":[]}}
 class Scheduler:
     """Derive authority and scope from the broker; caller assertions never certify a release."""
-    actions={"create","resources","pause","resume","priority","reconcile","increase_memory","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover","reconcile_acquisition"}
+    actions={"create","resources","pause","resume","priority","reconcile","increase_memory","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover","reconcile_acquisition","clear_pending_requests"}
     def __init__(self,broker,config):
         """Load reviewed coordination policy and open its private durable ownership store."""
         self.broker=broker;self.config=config
@@ -611,6 +611,18 @@ class Scheduler:
         revision=args.get("expected_revision");epoch=args.get("expected_epoch")
         request="action-"+hashlib.sha256(ownership.canonical([owner,value["id"],args.get("request_id")]).encode()).hexdigest()
         if type(revision)is not int or type(epoch)is not int:raise ValueError("Expected ownership revision and epoch required")
+        if action=="clear_pending_requests":
+            if set(args)!={"action","task_id","expected_revision","expected_epoch","reason","request_id"}:raise ValueError("Exact pending withdrawal request required")
+            # Closed proposals may withdraw a queue request without reviving their lease.
+            if item.get("status")!="closed":raise ValueError("Closed terminal task required")
+            jobs=[j for j in self.broker.jobs.values()if j.get("ownership_id")==item["key"]or(j.get("task_id")==item["task_id"]and j.get("user_id")==item["user_id"]and j.get("workspace")==item["workspace"]) ]
+            if not jobs or any(j.get("status")not in {"cancelled","failed","stale","completed"}for j in jobs):
+                raise ValueError("Reconcile task execution before clearing requests")
+            if any(j.get("effects_started")and j.get("status")!="completed"for j in jobs):
+                raise ValueError("Reconcile deployment effects before clearing requests")
+            if item.get("acquisition_refresh")or any(l.get("task_key")==item["key"]for l in self.broker.code_index_leases.values()):
+                raise ValueError("Reconcile task transition or maintenance before clearing requests")
+            return self.store.clear_pending_requests(value["id"],owner,revision,epoch,args.get("reason"),request)
         if action=="reserve":
             paths=args.get("paths")
             if not isinstance(paths,list)or not 1<=len(paths)<=128:raise ValueError("Bounded source paths required")
