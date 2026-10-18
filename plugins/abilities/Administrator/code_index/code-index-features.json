@@ -1582,6 +1582,115 @@
           "purpose": "Main Chat identity, private Notes ownership, policy, persistence or verified UI/scheduler integration."
         }
       ]
+    },
+    {
+      "id": "broker-automatic-work-selection",
+      "aliases": [
+        "Broker ID",
+        "automatic chat identity",
+        "isolated source selection"
+      ],
+      "purpose": "Runtime-owned chat attribution and retry-stable Broker ID selection; source edits are isolated, private reads select returned work, and ordinary reads retain worker/background behavior. Ownership, source digests and publication authority remain host enforced.",
+      "configuration": {
+        "status": "not_applicable",
+        "rationale": "Authenticated identity, source integrity and selection protocol are fixed authority boundaries, not bypassable preferences."
+      },
+      "locations": [
+        {
+          "path": "build-service/host.py",
+          "start_line": 4007,
+          "end_line": 4077,
+          "purpose": "Host-owned selection and durable per-session/optional trusted-branch retry bindings"
+        },
+        {
+          "path": "build-service/host.py",
+          "start_line": 4097,
+          "end_line": 4114,
+          "purpose": "Attach bounded Broker ID, Broker Job ID and Broker Release ID metadata after authorized dispatch"
+        },
+        {
+          "path": "build-service/host.py",
+          "start_line": 4722,
+          "end_line": 4731,
+          "purpose": "Keep authenticated WebAgent chat provenance distinct from shared external operator identity"
+        },
+        {
+          "path": "src/agent_loop/tools/administrator.rs",
+          "start_line": 346,
+          "end_line": 366,
+          "purpose": "Preserve ordinary read routing; normalize source edits/private reads and generate stable call-bound request IDs"
+        },
+        {
+          "path": "src/agent_loop/tools/administrator.rs",
+          "start_line": 390,
+          "end_line": 397,
+          "purpose": "Generate missing broker request identity inside the authenticated runtime"
+        },
+        {
+          "path": "src/agent_loop/tools/mod.rs",
+          "start_line": 129,
+          "end_line": 145,
+          "purpose": "Compiled file-tool Broker ID selection and compatibility schemas"
+        },
+        {
+          "path": "src/agent_loop/tools/administrator-schemas.json",
+          "start_line": 1171,
+          "end_line": 1215,
+          "purpose": "Build-work contract and compatibility identity alias"
+        },
+        {
+          "path": "tests/test_build_service.py",
+          "start_line": 1078,
+          "end_line": 1148,
+          "purpose": "Identity selection, retry, owner isolation and trusted provenance regression checks"
+        },
+        {
+          "path": "src/agent_loop/tools/administrator-schemas.json",
+          "start_line": 1327,
+          "end_line": 1332,
+          "purpose": "Compiled build_work Broker ID selector schema; session identity is not a model argument"
+        }
+      ]
+    },
+    {
+      "id": "broker-activity-provenance",
+      "aliases": [
+        "Broker Job ID",
+        "Broker Release ID",
+        "originating chat",
+        "expanded broker details"
+      ],
+      "purpose": "Display bounded broker provenance from existing persisted tool results in expanded mini-transcript activity details, with inert text and no extra interaction rows.",
+      "configuration": {
+        "status": "not_applicable",
+        "rationale": "Receipt identity labels and safe rendering are fixed contracts; the section appears only when valid broker metadata is present."
+      },
+      "locations": [
+        {
+          "path": "ui/chat/elements/mini-transcript/rows.js",
+          "start_line": 44,
+          "end_line": 65,
+          "purpose": "Bounded envelope extraction and specific work/execution/publication labels"
+        },
+        {
+          "path": "ui/chat/elements/mini-transcript/rows.js",
+          "start_line": 131,
+          "end_line": 135,
+          "purpose": "Render or hide optional broker details from the existing interaction result"
+        },
+        {
+          "path": "ui/chat/elements/elements.browser.test.cjs",
+          "start_line": 65,
+          "end_line": 78,
+          "purpose": "Nested transport metadata, inert hostile-looking summaries and absent-section regression checks"
+        },
+        {
+          "path": "plugins/abilities/Administrator/codebase_admin/codebase_admin.json",
+          "start_line": 6,
+          "end_line": 10,
+          "purpose": "Agent-visible declaration describes automatic chat identity and private-read selection"
+        }
+      ]
     }
   ]
 }
