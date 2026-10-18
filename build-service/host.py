@@ -1297,7 +1297,8 @@ class Runner:
                     active=getattr(self.job_context,"job",None)
                     if active is None or active["job_id"]!=job_id:raise ValueError("Owned attributable plugin job required")
                     # Reuse only registry bytes bound to a completed engine compiler receipt.
-                    registry=self.executor.provision_native_registry(cache)
+                    self.executor.dependencies(active,source,cache,prepare=True)
+                    registry={"hashes":self.executor.artifact_hashes(cache/"cargo/registry")}
                     self.executor.phase(active,"plugin_test","plugin",source,cache,
                         ["cargo","test","--locked","--offline","--","--test-threads=1"],
                         "plugin:rust1.90:"+manifest["id"]+":tests",600)
@@ -2673,7 +2674,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task") if key in job}
         if job.get("review_wait"):
             review=job["review_wait"]
             view["review_wait"]={k:review[k]for k in ("state","started_at","last_activity_at","expires_at")if k in review}
@@ -3771,13 +3772,13 @@ class Broker:
         if set(args)-{"task_id","task","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter","feature_profile"}or not{"task_id","task","expected_inputs_sha256"}<=set(args):
             raise ValueError("Task-scoped Cargo check arguments required")
         task_id,task=args["task_id"],args["task"];expected=args["expected_inputs_sha256"];timeout=args.get("timeout_seconds",600)
-        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test","resource_probe"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
+        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test","resource_probe","dependencies"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
             raise ValueError("Bounded task Cargo request required")
         request_id=args.get("request_id")
         if request_id is not None and (not isinstance(request_id,str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",request_id)):
             raise ValueError("Stable check request ID required")
         request_key="check-"+hashlib.sha256(canonical([trusted["user_id"],workspace,task_id,request_id])).hexdigest() if request_id else None
-        if task=="resource_probe"and not(trusted.get("local_caller")and self.resources.enabled):raise PermissionError("Resource probe requires enforced operator channel")
+        if task in {"resource_probe","dependencies"}and not(trusted.get("local_caller")and self.resources.enabled):raise PermissionError("Resource probe requires enforced operator channel")
         profile=executor_module.check_profile(args.get("feature_profile"))
         if profile!="default":
             if task!="check":raise ValueError("Feature profiles apply only to compile checks")
@@ -3810,11 +3811,14 @@ class Broker:
                 raise ValueError("This task already has pending execution")
             ownership_value=None
             if self.scheduler.mode=="enforce":
-                self.scheduler.submit(item,trusted,workspace,["build-service/resources.py"]if task=="resource_probe"else["src","Cargo.toml","Cargo.lock"],before)
+                if task=="dependencies":
+                    value=self.scheduler.ensure(item,trusted,workspace)
+                    self.scheduler.store.assert_owned(key,self.scheduler.owner(trusted,workspace),value["epoch"],[])
+                else:self.scheduler.submit(item,trusted,workspace,["build-service/resources.py"]if task=="resource_probe"else["src","Cargo.toml","Cargo.lock"],before)
                 ownership_value=self.scheduler.store.get(key)
             job_id=str(uuid.uuid4());event=threading.Event();self.job_cancellations[job_id]=event
             job={"job_id":job_id,"request_key":request_key or "check-"+job_id,"check_signature":request_signature,"task_id":task_id,"user_id":trusted["user_id"],"workspace":workspace,
-                "operation":"check","status":"queued","phase":"queued_check","created_at":time.time(),"started_at":None if request_id else time.time(),
+                "operation":"check","check_task":task,"status":"queued","phase":"queued_check","created_at":time.time(),"started_at":None if request_id else time.time(),
                 "inputs_sha256":before,"lease_until":time.time()+timeout+120,"access_fingerprint":trusted["access_fingerprint"],
                 "images":{},"log":"","phase_history":[],"summary":"Isolated Cargo "+task,"compiler_memory_cap":cap,"test_filter":selected,"feature_profile":profile}
             if ownership_value:

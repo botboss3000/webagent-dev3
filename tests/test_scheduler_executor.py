@@ -144,9 +144,9 @@ class FeatureProfileTests(unittest.TestCase):
                 runner=types.SimpleNamespace(execution_application_blob=lambda b:b,execution_source_digest=lambda p:"fixed")
                 worker=module.Executor(runner,None,{"state_root":directory});job={"job_id":str(uuid.uuid4()),"feature_profile":profile}
                 def extract(source,blob):source.mkdir();(source/"v3").mkdir()
-                with patch.object(worker,"phase",return_value="checked")as phase:
+                with patch.object(worker,"dependencies",return_value="dependencies checked"),patch.object(worker,"phase",return_value="checked")as phase:
                     worker.check(job,b"snapshot","check",30,extract)
-                compile_call=phase.call_args_list[1].args
+                compile_call=phase.call_args_list[0].args
                 self.assertEqual(compile_call[5],module.check_argv("check",profile))
                 self.assertEqual(compile_call[6],"engine:rust1.90:check"+(":live-context-v1"if profile=="live"else""))
                 self.assertEqual(compile_call[1:3],("compile_test","engine"))
@@ -190,7 +190,7 @@ class NativeBuilderPhaseTests(unittest.TestCase):
             if phase=='plugin_compile':
                 binary=cache/'target/release/fixture_runner';binary.parent.mkdir(parents=True);binary.write_bytes(b'tested executable')
                 if alter_registry:(cache/'cargo/registry/crate').write_bytes(b'altered crate')
-        runner.executor=types.SimpleNamespace(provision_native_registry=provision,phase=phase,artifact_hashes=module.Executor.artifact_hashes)
+        runner.executor=types.SimpleNamespace(dependencies=lambda job,source,cache,**kw:provision(cache),phase=phase,artifact_hashes=module.Executor.artifact_hashes)
         with patch.object(fixtures.host,'ASSET_ROOT',assets),patch.object(fixtures.host,'STATE',state):
             if fail_tests or alter_registry:
                 with self.assertRaisesRegex(ValueError,'native test failed' if fail_tests else 'changed verified dependency'):
@@ -252,3 +252,112 @@ class PublishedRuntimeMountTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Owned frozen'):runner.published_runtime_source('/other')
             verify.assert_not_called()
             with self.assertRaisesRegex(ValueError,'receipt mismatch'):runner.published_runtime_source('/owned/release')
+
+
+class SharedDependencyTests(unittest.TestCase):
+    """Downloads may cross source generations; compiled/test evidence must not follow them."""
+    def setUp(self):
+        import contextlib
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
+        self.source=self.root/"source";self.source.mkdir();(self.source/"Cargo.toml").write_text('[package]\nname="fixture"\nversion="0.1.0"\n')
+        self.payload=b"locked crate archive";sha=hashlib.sha256(self.payload).hexdigest()
+        (self.source/"Cargo.lock").write_text('version=4\n[[package]]\nname="example"\nversion="1.0.0"\nsource="registry+https://github.com/rust-lang/crates.io-index"\nchecksum="'+sha+'"\n')
+        self.runner=types.SimpleNamespace(plugin_build_lock=lambda key:contextlib.nullcontext(),resource_progress=lambda job:None)
+        self.worker=module.Executor(self.runner,None,{"state_root":str(self.root/"state")});self.calls=[]
+        def phase(job,phase,kind,source,output,argv,profile,timeout=600,network=False):
+            self.calls.append((argv,network));output.mkdir(parents=True,exist_ok=True)
+            if argv[:2]==["cargo","fetch"]:
+                p=output/"cargo/registry/cache/crates-io/example-1.0.0.crate";p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(self.payload)
+            return "phase complete\n"
+        self.worker.phase=phase
+    def output(self):
+        p=self.root/uuid.uuid4().hex;p.mkdir();return p
+    def test_prepare_then_other_job_reuses_downloads_offline_after_source_edit(self):
+        a={"job_id":str(uuid.uuid4())};self.worker.dependencies(a,self.source,self.output(),prepare=True)
+        self.assertEqual(a["dependency_cache"]["decision"],"prepared")
+        (self.source/"src").mkdir();(self.source/"src/main.rs").write_text("fn main(){changed()}")
+        self.calls.clear();b={"job_id":str(uuid.uuid4())};self.worker.dependencies(b,self.source,self.output())
+        self.assertEqual(a["dependency_cache"]["key"],b["dependency_cache"]["key"])
+        self.assertEqual(b["dependency_cache"]["decision"],"hit");self.assertFalse(any(network for _,network in self.calls))
+        self.assertNotIn("compiler_artifact_reuse",b)
+    def test_ordinary_miss_fails_before_network_or_compilation(self):
+        job={"job_id":str(uuid.uuid4())}
+        with self.assertRaisesRegex(ValueError,"check=dependencies"):self.worker.dependencies(job,self.source,self.output())
+        self.assertEqual(self.calls,[]);self.assertEqual(job["dependency_cache"]["reason"],"no_verified_dependency_entry")
+    def test_lock_manifest_and_toolchain_change_invalidate_download_key(self):
+        from unittest.mock import patch
+        first=self.worker.dependency_binding(self.source)
+        (self.source/"Cargo.toml").write_text('[package]\nname="fixture"\nversion="0.2.0"\n')
+        self.assertNotEqual(first,self.worker.dependency_binding(self.source))
+        second=self.worker.dependency_binding(self.source)
+        with patch.object(module,"RUST",module.RUST+"-changed"):self.assertNotEqual(second,self.worker.dependency_binding(self.source))
+        (self.source/"Cargo.lock").write_text((self.source/"Cargo.lock").read_text()+"\n# changed lock\n")
+        self.assertNotEqual(second,self.worker.dependency_binding(self.source))
+    def test_cache_corruption_fails_closed_without_fetch(self):
+        job={"job_id":str(uuid.uuid4())};self.worker.dependencies(job,self.source,self.output(),prepare=True)
+        cache=self.root/"state/cargo-dependencies"/job["dependency_cache"]["key"]
+        next((cache/"cargo").rglob("*.crate")).write_bytes(b"tampered")
+        self.calls.clear()
+        with self.assertRaisesRegex(ValueError,"cache changed"):self.worker.dependencies({},self.source,self.output())
+        self.assertEqual(self.calls,[])
+    def test_bad_or_missing_locked_archives_cannot_publish(self):
+        self.payload=b"wrong archive"
+        with self.assertRaisesRegex(ValueError,"checksum mismatch"):self.worker.dependencies({},self.source,self.output(),prepare=True)
+        self.assertFalse(any((self.root/"state/cargo-dependencies").glob("*/receipt.json")))
+    def test_source_symlink_and_unsupported_registry_are_rejected(self):
+        (self.source/"Cargo.lock").unlink();(self.source/"Cargo.lock").symlink_to(self.source/"Cargo.toml")
+        with self.assertRaisesRegex(ValueError,"symlink"):self.worker.dependency_binding(self.source)
+    def test_preparation_is_atomic_after_interruption(self):
+        from unittest.mock import patch
+        original=self.worker.phase
+        def fail(*args,**kwargs):
+            result=original(*args,**kwargs)
+            if args[4][0:2]!=["cargo","fetch"]:raise RuntimeError("offline validation interrupted")
+            return result
+        with patch.object(self.worker,"phase",side_effect=RuntimeError("fetch interrupted")):
+            with self.assertRaises(RuntimeError):self.worker.dependencies({},self.source,self.output(),prepare=True)
+        self.assertFalse(any((self.root/"state/cargo-dependencies").glob("*/receipt.json")))
+        self.worker.dependencies({},self.source,self.output(),prepare=True)
+    def test_old_private_registry_is_preserved_instead_of_certified(self):
+        output=self.output();p=output/"cargo/registry/old";p.parent.mkdir(parents=True);p.write_text("unverified old scratch")
+        self.worker.dependencies({},self.source,output,prepare=True)
+        self.assertEqual(next(output.glob("previous-cargo-*/registry/old")).read_text(),"unverified old scratch")
+
+    def test_parallel_compatible_preparations_fetch_once(self):
+        import threading,concurrent.futures
+        mutex=threading.Lock();self.runner.plugin_build_lock=lambda key:mutex
+        jobs=[{"job_id":str(uuid.uuid4())}for _ in range(2)];outputs=[self.output(),self.output()]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2)as pool:
+            results=[pool.submit(self.worker.dependencies,job,self.source,out,prepare=True)for job,out in zip(jobs,outputs)]
+            for result in results:result.result(timeout=5)
+        self.assertEqual(sum(bool(network)for _,network in self.calls),1)
+        self.assertEqual({j["dependency_cache"]["decision"]for j in jobs},{"prepared","hit"})
+
+    def test_cargo_home_configuration_is_not_inherited_or_shared(self):
+        output=self.output();cargo=output/"cargo";cargo.mkdir();(cargo/"config.toml").write_text("untrusted prior compiler configuration")
+        self.worker.dependencies({},self.source,output,prepare=True)
+        self.assertFalse((cargo/"config.toml").exists())
+        self.assertEqual(next(output.glob("previous-cargo-*/config.toml")).read_text(),"untrusted prior compiler configuration")
+
+class DependencySchedulerTests(unittest.TestCase):
+    from test_scheduler_broker import SchedulerBrokerTests as base
+    setUp=base.setUp
+    tearDown=base.tearDown
+    call=base.call
+    begin=base.begin
+    write=base.write
+    def test_dependency_check_uses_existing_authority_without_expanding_source_claims(self):
+        from unittest.mock import patch
+        item=self.begin("dependency-authority-fixture")
+        self.write(item,"build-service/example.py","# owned broker source\n")
+        before=self.broker.scheduler.store.get(item["key"])
+        self.broker.resources.enabled=True
+        tree=Path(item["workspace_path"]).parent;digest=self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree))
+        with patch.object(self.broker,"_start_next"):
+            result=self.call("build_work",{"action":"check","task_id":item["task_id"],"check":"dependencies", "request_id":"dependency-authority-check","expected_inputs_sha256":digest})
+        job=self.broker.jobs[result["job_id"]]
+        self.assertEqual(job["check_task"],"dependencies")
+        self.assertEqual(self.broker.scheduler.store.get(item["key"])["scopes"],before["scopes"])
+        self.assertEqual(self.broker.scheduler.job_scopes(job),set())
+        self.assertTrue(self.broker.scheduler.execution_eligible(job,[{**job,"operation":"build_deploy","check_task":"check"}]))
+        self.broker.resources.enabled=False

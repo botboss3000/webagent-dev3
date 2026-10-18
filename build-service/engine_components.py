@@ -109,8 +109,7 @@ def build_one(runner,job_id,root,state,assets,executor,scheduler,identity):
                 elif path.is_file():shutil.copyfile(path,source/name)
             reused_from=seed_cache(cache,assets,state,inputs,recipe,executor)
             cargo=cache/"cargo";cargo.mkdir(exist_ok=True)
-            if not (cargo/"registry").exists():
-                runner.command(["docker","cp",runner.inspect_api_name+":/opt/optimization-cargo/registry",str(cargo)],timeout=120)
+            runner.executor.dependencies(active,source,cache,prepare=True)
             def phase(name,argv,network=False):
                 """Run a fixed component recipe through measured protected phase admission."""
                 return runner.executor.phase(active,name,"dependency"if name=="engine_metadata"else"plugin",source,cache,argv,"plugin:rust1.90:engine-"+("context"if identity==ID else identity),600,network=network)

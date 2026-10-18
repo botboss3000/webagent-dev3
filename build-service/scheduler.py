@@ -423,6 +423,7 @@ class Scheduler:
 
     def job_scopes(self,job):
         """Compute artifact conflicts from reserved component groups, never from job labels alone."""
+        if job.get("operation")=="check"and job.get("check_task")=="dependencies":return set()
         if job.get("ownership_id"):
             value=self.store.get(job["ownership_id"])
             return {s for s in value["scopes"]if s.startswith("module:")}|({"module:engine"}if job["operation"]in {"build","build_deploy","check"}else set())
@@ -438,6 +439,7 @@ class Scheduler:
             scopes=self.job_scopes(job)
             if any(scopes&self.job_scopes(other)for other in active):return False
             def writes(value):
+                if value.get("operation")=="check"and value.get("check_task")=="dependencies":return []
                 return [s[5:]for s in self.store.get(value["ownership_id"])["scopes"]if s.startswith("path:")]if value.get("ownership_id")else []
             paths=writes(job)
             if any(ownership.overlap(a,b)for other in active for a in paths for b in writes(other)):return False

@@ -282,14 +282,118 @@ class Executor:
         job["artifact_component"]="resource-probe:"+job["job_id"]
         return self.phase(job,"compile_test","engine",source,root/"output",["sh","-c","rustc --version && sleep 30"],"resource:memory-probe-v1",90)
 
+    @staticmethod
+    def dependency_binding(source):
+        """Bind downloads to locked dependencies, manifests, Cargo configuration and pinned toolchain."""
+        import platform
+        paths=[source/"Cargo.lock",*sorted(source.rglob("Cargo.toml")),
+            *sorted((source/".cargo").glob("**/*"))]
+        if len(paths)>4096:raise ValueError("Dependency manifest bound exceeded")
+        inputs={}
+        for path in paths:
+            if path.is_symlink():raise ValueError("Dependency input symlink")
+            if path.is_dir():continue
+            if not path.is_file():raise ValueError("Locked dependency input unavailable: "+path.name)
+            inputs[path.relative_to(source).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()
+        return {"schema_version":1,"toolchain":RUST,"architecture":platform.machine(),"inputs":inputs}
+
+    @staticmethod
+    def verify_dependency_archives(source,cargo):
+        """Require each crates.io archive to match the checksum in this exact lockfile."""
+        locked=tomllib.loads((source/"Cargo.lock").read_text());required={}
+        for package in locked.get("package",[]):
+            origin=package.get("source")
+            if origin is None:continue
+            if origin!="registry+https://github.com/rust-lang/crates.io-index":
+                raise ValueError("Shared offline cache requires reviewed support for non-crates.io dependencies")
+            checksum=package.get("checksum")
+            if not isinstance(checksum,str)or not re.fullmatch(r"[a-f0-9]{64}",checksum):raise ValueError("Locked registry checksum missing")
+            required[package["name"]+"-"+package["version"]+".crate"]=checksum
+        found={}
+        for path in (cargo/"registry/cache").glob("*/*.crate"):
+            if path.is_symlink()or not path.is_file():raise ValueError("Dependency archive identity invalid")
+            if path.name in required:
+                sha=hashlib.sha256(path.read_bytes()).hexdigest()
+                if sha!=required[path.name]:raise ValueError("Dependency archive checksum mismatch: "+path.name)
+                found[path.name]=sha
+        missing=sorted(set(required)-set(found))
+        if missing:raise ValueError("Missing locked dependency archives: "+", ".join(missing[:12]))
+        return len(found)
+
+    def dependencies(self,job,source,output,*,prepare=False,timeout=600):
+        """Share verified downloads only; compiler objects and tests retain independent proof rules."""
+        binding=self.dependency_binding(source);key=hashlib.sha256(json.dumps(binding,sort_keys=True).encode()).hexdigest()
+        root=Path(self.config["state_root"])/"cargo-dependencies"
+        if root.is_symlink():raise ValueError("Shared dependency directory symlink")
+        root.mkdir(mode=0o700,parents=True,exist_ok=True)
+        destination=root/key;cargo=output/"cargo";cargo.mkdir(parents=True,exist_ok=True)
+        if cargo.is_symlink():raise ValueError("Private Cargo directory symlink")
+        names=("registry",)
+        def inventory(folder):return self.artifact_hashes(folder)
+        def persist(value):
+            job["dependency_cache"]={"key":key,"toolchain":RUST,"lockfile_sha256":binding["inputs"]["Cargo.lock"],**value}
+            getattr(self.runner,"resource_progress",lambda _:None)(job)
+        def preserve_private():
+            # Cargo-home configuration is compiler-writable scratch too; never inherit it into a trusted fetch.
+            if cargo.is_symlink():raise ValueError("Private dependency symlink")
+            if any(cargo.iterdir()):
+                cargo.rename(output/("previous-cargo-"+uuid.uuid4().hex));cargo.mkdir()
+        validated=False
+        with self.runner.plugin_build_lock("dependencies-"+key):
+            if destination.is_symlink():raise ValueError("Shared dependency cache symlink")
+            if destination.exists():
+                receipt=destination/"receipt.json";shared=destination/"cargo"
+                if receipt.is_symlink()or not receipt.is_file()or receipt.stat().st_size>16*1024*1024:raise ValueError("Dependency receipt unavailable")
+                saved=json.loads(receipt.read_bytes())
+                if saved.get("binding")!=binding or inventory(shared)!=saved.get("inventory"):raise ValueError("Verified dependency cache changed")
+                preserve_private()
+                for name in names:
+                    if (shared/name).exists():shutil.copytree(shared/name,cargo/name)
+                if inventory(shared)!=saved["inventory"]or {p:sha for p,sha in inventory(cargo).items()if p.startswith("registry/")}!=saved["inventory"]:
+                    raise ValueError("Dependency copy verification failed")
+                persist({"decision":"hit","reason":"matching_lock_manifests_toolchain","archives":saved["archives"]})
+                log="Verified shared Cargo downloads reused: "+key+"\n"
+            else:
+                persist({"decision":"miss","reason":"no_verified_dependency_entry","preparation_required":not prepare})
+                if not prepare:
+                    packages=tomllib.loads((source/"Cargo.lock").read_text()).get("package",[])
+                    required=[p["name"]+"@"+p["version"]for p in packages if p.get("source")][:8]
+                    raise ValueError("Offline dependency cache miss: "+key+"; unverified locked inputs: "+", ".join(required)+"; run build_work check=dependencies on this task before compilation")
+                # A compiler child can mutate its scratch. Fresh fetch never certifies old private bytes.
+                preserve_private()
+                log=self.phase(job,"dependency","dependency",source,output,["cargo","fetch","--locked"],"cargo-dependencies:rust1.90:fetch-v1",timeout,network=True)
+                count=self.verify_dependency_archives(source,cargo)
+                self.phase(job,"dependency","dependency",source,output,["sh","-c","cargo metadata --locked --offline --format-version 1 > /output/dependency-metadata.json"],"cargo-dependencies:rust1.90:offline-v1",timeout)
+                validated=True
+                captured={p:sha for p,sha in inventory(cargo).items()if p.startswith("registry/")}
+                temporary=root/(key+".preparing-"+uuid.uuid4().hex);temporary.mkdir(mode=0o700);copy=temporary/"cargo";copy.mkdir()
+                for name in names:
+                    if (cargo/name).exists():shutil.copytree(cargo/name,copy/name)
+                if inventory(copy)!=captured:raise ValueError("Dependency snapshot changed during publication")
+                with (temporary/"receipt.json").open("x")as stream:
+                    json.dump({"binding":binding,"inventory":captured,"archives":count},stream,sort_keys=True);stream.flush();os.fsync(stream.fileno())
+                if self.dependency_binding(source)!=binding:raise ValueError("Dependency inputs changed during preparation")
+                os.rename(temporary,destination)
+                fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY)
+                try:os.fsync(fd)
+                finally:os.close(fd)
+                persist({"decision":"prepared","reason":"locked_fetch_checksum_and_offline_metadata_verified","archives":count})
+        try:
+            if not validated:log+=self.phase(job,"dependency","dependency",source,output,["sh","-c","cargo metadata --locked --offline --format-version 1 > /output/dependency-metadata.json"],"cargo-dependencies:rust1.90:offline-v1",timeout)
+        except (RuntimeError,ValueError)as error:
+            raise ValueError("Offline dependency preflight failed for "+key+": "+str(error)[:1600])from error
+        if self.dependency_binding(source)!=binding:raise ValueError("Dependency inputs changed during offline verification")
+        return log
+
     def check(self,job,blob,task,timeout,extract):
         """Use the same attributable recipes for bounded foreground checks and release compilation."""
-        profile=check_profile(job.get("feature_profile"));argv=check_argv(task,profile)
+        profile=check_profile(job.get("feature_profile"));argv=None if task=="dependencies"else check_argv(task,profile)
         job["artifact_component"]="engine"
         root=Path(self.config["state_root"])/"checks"/job["job_id"];source=root/"source";output=root/"output"
         blob=self.runner.execution_application_blob(blob);root.mkdir(parents=True,exist_ok=True);extract(source,blob);output.mkdir(exist_ok=True)
         application=source/"v3";before=self.runner.execution_source_digest(source);start=time.monotonic()
-        log=self.phase(job,"dependency","dependency",application,output,["cargo","fetch","--locked"],"engine:rust1.90:dependency",min(timeout,600),network=True)
+        log=self.dependencies(job,application,output,prepare=task=="dependencies",timeout=min(timeout,600))
+        if task=="dependencies":return log
         remaining=max(1,timeout-int(time.monotonic()-start))
         recipe="engine:rust1.90:"+("check"if task=="check"else"compile_test")+(":live-context-v1"if profile=="live"else"")
         log+=self.phase(job,"compile_test","engine",application,output,argv,recipe,remaining)
@@ -688,18 +792,11 @@ class Executor:
             return artifacts,logs
         seeded=self.seed_cargo_cache(job,blob,output)
         cargo=output/"cargo";cargo.mkdir(exist_ok=True)
-        # First provisioning has no running API. The locked dependency phase can seed
-        # its own registry; a retained runtime registry is only a compatible cache.
-        if not seeded:
-            try:self.runner.command(["docker","exec",self.config["api_container"],"test","-d","/opt/optimization-cargo/registry"],timeout=10)
-            except RuntimeError:pass
-            else:self.runner.command(["docker","cp",self.config["api_container"]+":/opt/optimization-cargo/registry",str(cargo)],timeout=120)
         inputs=digest(blob);before=self.runner.execution_source_digest(source)
-        dependency=["sh","-c","set -e\ncargo clean --package webagent-v3\ncargo fetch --locked"]if seeded else["cargo","fetch","--locked"]
-        logs=("Compatible Cargo dependency cache copied; root package rebuilt and current tests rerun.\n"if seeded else"")
-        logs+=self.phase(job,"dependency","dependency",application,output,dependency,"engine:rust1.90:dependency",600,network=True)
-        logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","set -e\ncargo test --workspace --locked --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"],"engine:rust1.90:compile_test")
-        logs+=self.phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--","--test-threads=1"],"engine:rust1.90:test")
+        logs=self.dependencies(job,application,output,prepare=True)
+        if seeded:logs+=self.phase(job,"dependency","dependency",application,output,["cargo","clean","--package","webagent-v3"],"engine:rust1.90:clean-root",600)
+        logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"],"engine:rust1.90:compile_test")
+        logs+=self.phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads=1"],"engine:rust1.90:test")
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Tests left changed application inputs")
         logs+=self.phase(job,"compile_linked","engine",application,output,self.linked_recipe(),"engine:rust1.90:linked-release")
         stable=output/"stable";stable.mkdir(exist_ok=True)
