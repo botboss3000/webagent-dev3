@@ -1798,6 +1798,15 @@ class Runner:
     def rename(self, name, target):
         self.command(["docker", "rename", name, target], timeout=30)
 
+    def published_runtime_source(self, release_root):
+        """Bind runtime mounts to the verified readable copy, keeping task modes private."""
+        job=getattr(self.job_context,"job",None)or{}
+        if not job.get("job_id") or Path(job.get("release_root",""))!=Path(release_root):
+            raise ValueError("Owned frozen runtime source required")
+        destination=ASSET_ROOT/"releases"/job["job_id"]
+        release.verify_publication(destination,job["job_id"],job["inputs_sha256"])
+        return destination
+
     def create(self, name, image, previous, release_root=None):
         # Docker engine JSON preserves the inspected container configuration,
         # including private Env values, without shell escaping or printing it.
@@ -1810,7 +1819,7 @@ class Runner:
             # Image releases adopt the protected operator budget; retained-image
             # reconfiguration already carries its explicitly selected HostConfig.
             if name == TARGETS[0]:host["PidsLimit"]=CONFIG["api_pids_limit"]
-            host = release.release_mounts(host, Path(release_root), ASSET_ROOT)
+            host = release.release_mounts(host, self.published_runtime_source(release_root), ASSET_ROOT)
             if name in TARGETS:
                 env = [value for value in config.get("Env", [])
                        if not value.startswith(("V3_UI_ROOT=", "V3_SHARED_UI_ROOT="))]

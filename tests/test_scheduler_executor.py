@@ -232,3 +232,23 @@ class FrozenSourcePermissionsTests(unittest.TestCase):
             with self.assertRaisesRegex(PermissionError,'symlink'):
                 fixtures.host.Runner().readable_assets(root)
             self.assertEqual(source.stat().st_mode&0o777,0o600)
+
+
+class PublishedRuntimeMountTests(unittest.TestCase):
+    def test_runtime_mounts_use_verified_readable_publication_not_private_task(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            base=Path(temporary);private=base/'private/release';private.mkdir(parents=True,mode=0o700)
+            assets=base/'assets';job_id=str(uuid.uuid4());published=assets/'releases'/job_id
+            runner=fixtures.host.Runner();runner.job_context=types.SimpleNamespace(job={'job_id':job_id,'release_root':str(private),'inputs_sha256':'a'*64})
+            with patch.object(fixtures.host,'ASSET_ROOT',assets),patch.object(fixtures.host.release,'verify_publication') as verify:
+                self.assertEqual(runner.published_runtime_source(private),published)
+                verify.assert_called_once_with(published,job_id,'a'*64)
+            self.assertEqual(private.stat().st_mode&0o777,0o700)
+    def test_runtime_mount_rejects_wrong_source_and_unverified_publication(self):
+        from unittest.mock import patch
+        runner=fixtures.host.Runner();runner.job_context=types.SimpleNamespace(job={'job_id':str(uuid.uuid4()),'release_root':'/owned/release','inputs_sha256':'a'*64})
+        with patch.object(fixtures.host.release,'verify_publication',side_effect=ValueError('receipt mismatch')) as verify:
+            with self.assertRaisesRegex(ValueError,'Owned frozen'):runner.published_runtime_source('/other')
+            verify.assert_not_called()
+            with self.assertRaisesRegex(ValueError,'receipt mismatch'):runner.published_runtime_source('/owned/release')
