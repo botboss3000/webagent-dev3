@@ -412,7 +412,7 @@ class VerificationEvidenceTests(unittest.TestCase):
     def test_focused_package_selection_and_root_filters_are_bounded(self):
         metadata={"packages":[{"source":None,"name":"component","manifest_path":"/build/crates/component/Cargo.toml"}]}
         plan=self.worker.focused_test_plan(["v3/crates/component/src/lib.rs","v3/src/api/auth.rs","v3/src/api/user.rs","v3/src/main.rs","v3/src/chat.rs"],metadata)
-        self.assertEqual(plan,[{"package":"component"},{"filter":"auth"},{"filter":"user"}])
+        self.assertEqual([p["test"]for p in plan if "test"in p],[r["test"]for r in module.HOST_FOCUSED_REGISTRY]);self.assertEqual(plan[-1],{"package":"component"})
         self.assertEqual(self.worker.focused_test_plan(["v3/config/settings.json"],metadata),[])
     def test_phase_failure_and_success_have_truthful_progress(self):
         from unittest.mock import patch
@@ -427,7 +427,107 @@ class VerificationEvidenceTests(unittest.TestCase):
         from unittest.mock import patch
         import json
         (self.root/"dependency-metadata.json").write_text("{}")
-        self.job["changed_paths"]=["v3/src/api/auth.rs"]
+        self.job["changed_paths"]=["v3/src/models/provider/mod.rs"];self.runner.execution_source_digest=lambda root:"captured-fixture"
         with patch.object(self.worker,"metadata_receipt",return_value={"packages":[]}),patch.object(self.worker,"phase",side_effect=RuntimeError("behavior regression")):
-            with self.assertRaisesRegex(RuntimeError,"behavior regression"):self.worker.focused_tests(self.job,self.root,self.root)
+            with self.assertRaisesRegex(ValueError,"behavior regression"):self.worker.focused_tests(self.job,self.root,self.root)
         proof=self.job["focused_verification"];self.assertEqual(proof["required_suite"],"workspace");self.assertEqual(proof["runs"][0]["status"],"failed")
+
+
+class HostFocusedVerificationTests(unittest.TestCase):
+    def setUp(self):
+        import json
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
+        self.source=self.root/"source";self.output=self.root/"output";self.output.mkdir()
+        self.blob=fixtures.context(extra={"v3/src/main.rs":"fn main() {}","v3/config/prompts.json":"{}"})
+        fixtures.host.release.extract(self.source,self.blob,fixtures.host.context_digest)
+        self.runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in ("execution_source_digest","execution_application_blob","execution_entries")},resource_progress=lambda job:None)
+        self.worker=module.Executor(self.runner,None,{"state_root":str(self.root/"state")});self.calls=[]
+        self.job={"job_id":str(uuid.uuid4()),"inputs_sha256":fixtures.host.context_digest(self.blob)[0],"changed_paths":["v3/src/engine_components.rs"]}
+        (self.output/"dependency-metadata.json").write_text('{"packages":[]}')
+        def phase(*args):self.calls.append(args);return "test result: ok. 1 passed; 0 failed; 0 ignored\n"
+        self.worker.phase=phase
+    def run_focus(self):return self.worker.focused_tests(self.job,self.source/"v3",self.output)
+    def test_host_tests_precede_three_component_packages(self):
+        metadata={"packages":[{"source":None,"name":"component"+str(n),"manifest_path":"/build/crates/component"+str(n)+"/Cargo.toml"}for n in range(4)]}
+        changed=["v3/crates/component"+str(n)+"/src/lib.rs"for n in range(4)]
+        plan=self.worker.focused_test_plan(changed+["v3/src/engine_components.rs"],metadata)
+        self.assertEqual([p["test"]for p in plan if "test"in p],[r["test"]for r in module.HOST_FOCUSED_REGISTRY])
+        self.assertEqual([p["package"]for p in plan if "test"not in p],["component0","component1","component2"])
+    def test_each_registry_selects_only_relevant_host_checks(self):
+        plan=self.worker.focused_test_plan(["v3/src/models/provider/mod.rs"],{})
+        self.assertEqual([p["id"]for p in plan],["host-prompt-restoration"])
+        plan=self.worker.focused_test_plan(["v3/plugins/engine/context-assets/component.json"],{})
+        self.assertEqual([p["id"]for p in plan],["host-offline-descriptor-identity"])
+        for path in ["v3/ui/chat/a.js","v3/worker.py","v3/docs/context.md","v3/src/unrelated.rs","v3/crates/unrelated/src/lib.rs"]:
+            self.assertEqual(self.worker.focused_test_plan([path],{}),[])
+    def test_exact_names_profile_input_recipe_counts_and_timing(self):
+        self.run_focus();proof=self.job["focused_verification"]
+        self.assertEqual(proof["status"],"passed");self.assertEqual(proof["inputs_sha256"],self.job["inputs_sha256"])
+        self.assertEqual(proof["policy_sha256"],module.HOST_FOCUSED_POLICY_SHA256)
+        self.assertEqual(len(proof["runs"]),2)
+        for run,call in zip(proof["runs"],self.calls):
+            self.assertEqual(run["matched"],1);self.assertTrue(run["inputs_unchanged"]);self.assertEqual(run["feature_profile"],"default")
+            self.assertIn("--exact",call[5]);self.assertIn("--bin",call[5]);self.assertGreater(call[7],0);self.assertLessEqual(call[7],120)
+            self.assertGreaterEqual(run["seconds"],0);self.assertEqual(run["status"],"passed")
+        self.assertFalse((self.root/"state/verification-certificates").exists())
+    def test_zero_and_ignored_only_results_fail_before_next_check(self):
+        for log in ["test result: ok. 0 passed; 0 failed; 0 ignored", "test result: ok. 0 passed; 0 failed; 1 ignored", "compiled successfully"]:
+            self.calls=[]
+            def zero(*args):self.calls.append(args);return log
+            self.worker.phase=zero
+            with self.assertRaisesRegex(ValueError,"Zero matched assertions"):self.run_focus()
+            self.assertEqual(len(self.calls),1);self.assertEqual(self.job["focused_verification"]["status"],"failed")
+    def test_content_and_mode_mutation_reject_successful_assertions(self):
+        path=self.source/"v3/config/prompts.json";original=path.read_bytes();mode=path.stat().st_mode&0o777
+        for mutation in [lambda:path.write_bytes(b"changed"),lambda:path.chmod(mode^0o100)]:
+            def changed(*args):mutation();return "test result: ok. 1 passed; 0 failed"
+            self.worker.phase=changed
+            with self.assertRaisesRegex(ValueError,"including file modes"):self.run_focus()
+            run=self.job["focused_verification"]["runs"][0];self.assertEqual(run["status"],"input_mutated");self.assertFalse(run["inputs_unchanged"])
+            path.write_bytes(original);path.chmod(mode)
+    def test_cancellation_is_not_a_reusable_pass(self):
+        def cancel(*args):raise PermissionError("fixture cancellation")
+        self.worker.phase=cancel
+        with self.assertRaises(PermissionError):self.run_focus()
+        self.assertEqual(self.job["focused_verification"]["status"],"cancelled")
+        self.assertEqual(self.job["focused_verification"]["runs"][0]["status"],"cancelled")
+    def test_early_failure_stops_full_and_optimized_pipeline(self):
+        self.pipeline(False)
+    def test_success_continues_into_full_suite_then_optimized_pipeline(self):
+        self.pipeline(True)
+    def pipeline(self,success):
+        from unittest.mock import patch
+        job={**self.job,"job_id":str(uuid.uuid4())};phases=[]
+        def dependency(job,application,output,**kwargs):
+            (output/"dependency-metadata.json").write_text('{"packages":[]}');return "offline ready\n"
+        def phase(job,phase,kind,source,output,argv,recipe,*args):
+            phases.append((phase,recipe))
+            if "focused-v2"in recipe and not success:raise RuntimeError("host regression")
+            if phase=="compile_linked":raise RuntimeError("optimized pipeline reached")
+            return "test result: ok. 1 passed; 0 failed\n"
+        with patch.object(self.worker,"validate_compiler_recipe",return_value=False),patch.object(self.worker,"cached_engine",return_value=None),patch.object(self.worker,"seed_cargo_cache",return_value=False),patch.object(self.worker,"dependencies",side_effect=dependency),patch.object(self.worker,"phase",side_effect=phase):
+            with self.assertRaisesRegex((ValueError,RuntimeError),"optimized pipeline reached"if success else"host regression"):
+                self.worker.engine(job,self.blob,lambda root,blob:fixtures.host.release.extract(root,blob,fixtures.host.context_digest),fixtures.host.context_digest)
+        required=[p for p in phases if p[1]=="engine:rust1.90:test"]
+        self.assertEqual(bool(required),success);self.assertEqual(any(p[0]=="compile_linked"for p in phases),success)
+        self.assertFalse((self.root/"state/execution"/job["job_id"]/"verified.json").exists())
+
+    def test_missing_required_source_is_reported_as_failed_input_guard(self):
+        def deleted(*args):(self.source/"v3/Cargo.lock").unlink();return "test result: ok. 1 passed; 0 failed"
+        self.worker.phase=deleted
+        with self.assertRaisesRegex(ValueError,"provider::tests::.*including file modes"):self.run_focus()
+        self.assertEqual(self.job["focused_verification"]["runs"][0]["status"],"input_mutated")
+
+    def test_retained_host_binary_uses_exact_test_with_no_compiler(self):
+        from unittest.mock import patch
+        manifest={"tests":[{"file":"tests/webagent_v3-0123456789abcdef","target_name":"webagent-v3","source_path":"/build/src/main.rs"}]}
+        with patch.object(self.worker,"test_manifest",return_value=manifest):self.worker.focused_tests(self.job,self.source/"v3",self.output,retained=self.output/"artifacts")
+        self.assertEqual(len(self.calls),2)
+        for call in self.calls:self.assertEqual(call[5][0],"/output/artifacts/tests/webagent_v3-0123456789abcdef");self.assertIn("--exact",call[5]);self.assertNotIn("cargo",call[5])
+        self.assertEqual(self.job["focused_verification"]["reuse"],"verified_retained_test_binaries")
+
+    def test_invalid_retained_manifest_is_not_left_running(self):
+        from unittest.mock import patch
+        with patch.object(self.worker,"test_manifest",side_effect=ValueError("Invalid retained manifest")):
+            with self.assertRaisesRegex(ValueError,"Invalid retained manifest"):self.worker.focused_tests(self.job,self.source/"v3",self.output,retained=self.output/"artifacts")
+        self.assertEqual(self.job["focused_verification"]["status"],"failed");self.assertFalse(self.calls)

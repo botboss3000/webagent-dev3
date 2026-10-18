@@ -55,6 +55,16 @@ def test_filter(value):
     if not isinstance(value,str)or not re.fullmatch(r"[A-Za-z0-9_:]{1,160}",value):raise ValueError("Invalid bounded Rust test filter")
     return value
 
+# Protected registrations; source paths select fixed assertions, never shell text.
+HOST_FOCUSED_POLICY="registered-host-v2"
+HOST_FOCUSED_REGISTRY=(
+ {"id":"host-prompt-restoration","test":"provider::tests::configured_base_instructions_loads_and_recovers_from_file_changes",
+  "paths":("src/models/provider/","config/prompts.json","src/agent_loop/","src/context/","src/engine_components.rs","src/main.rs","Cargo.toml","Cargo.lock","build.rs","crates/context-contracts/","crates/context-assembly/","crates/context-service/","plugins/engine/context-assembly/")},
+ {"id":"host-offline-descriptor-identity","test":"engine_components::offline_smoke_uses_frozen_descriptor_versions",
+  "paths":("src/engine_components.rs","src/context/","src/agent_loop/","src/main.rs","Cargo.toml","Cargo.lock","build.rs","crates/context-contracts/","crates/context-assembly/","crates/context-service/","crates/engine-service/","crates/context-assets/","crates/assets-contracts/","crates/assets-service/","crates/capability-contracts/","crates/capability-context/","crates/capability-service/","crates/provider-contracts/","crates/provider-projection/","crates/provider-service/","crates/background-contracts/","crates/background-dispatch/","crates/background-service/","crates/boot-contracts/","crates/boot-supervisor/","crates/boot-service/","plugins/engine/")},
+)
+HOST_FOCUSED_POLICY_SHA256=hashlib.sha256(json.dumps({"version":HOST_FOCUSED_POLICY,"registry":HOST_FOCUSED_REGISTRY,"component_limit":3},sort_keys=True).encode()).hexdigest()
+
 class Executor:
     """Fixed phase recipes; model arguments never become host commands or mount paths."""
     def __init__(self,runner,resources,config):
@@ -446,47 +456,90 @@ class Executor:
 
     @staticmethod
     def focused_test_plan(changed,metadata):
-        """Fail-fast selection never replaces the required workspace suite or expands executable arguments."""
-        packages=[];filters=[]
+        """Registered host assertions precede at most three affected library packages."""
+        paths=sorted({p.removeprefix("v3/")for p in changed});plan=[];packages=[]
+        for rule in HOST_FOCUSED_REGISTRY:
+            affected=[p for p in paths if any(p==prefix or prefix.endswith("/")and p.startswith(prefix)for prefix in rule["paths"])]
+            if affected:plan.append({"id":rule["id"],"package":"webagent-v3","target":"webagent-v3","test":rule["test"],"feature_profile":"default","affected_paths":affected})
         local=[]
         for item in metadata.get("packages",[]):
             path=item.get("manifest_path","")
             if item.get("source")is None and path.startswith("/build/")and path.endswith("/Cargo.toml"):
                 local.append((path[len("/build/"):-len("/Cargo.toml")],item.get("name","")))
-        for path in sorted(changed):
-            relative=path.removeprefix("v3/")
-            if not relative.endswith(".rs"):continue
+        for relative in paths:
+            if not relative.endswith((".rs","Cargo.toml")):continue
             matches=[(prefix,name)for prefix,name in local if prefix and relative.startswith(prefix+"/")]
             if matches:
                 _,name=max(matches,key=lambda entry:len(entry[0]))
                 if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,79}",name)and name not in packages:packages.append(name)
-            elif relative.startswith("src/"):
-                stem=Path(relative).stem
-                if stem not in {"mod","main","lib"}and re.fullmatch(r"[A-Za-z0-9_]{1,80}",stem)and stem not in filters:filters.append(stem)
-        filters.sort(key=lambda stem:(stem not in {"auth","user","policy","permissions","approvals","recovery"},stem))
-        return [{"package":name}for name in packages[:3]]+[{"filter":value}for value in filters[:max(0,3-len(packages[:3]))]]
+        return plan+[{"package":name}for name in packages[:3]]
 
-    def focused_tests(self,job,application,output):
+    def focused_tests(self,job,application,output,retained=None):
+        """Fail fast without certifying a partial pass or replacing the required suite.
+
+        Each phase uses the normal host cancellation/admission controls. Guards bind
+        bytes and file modes before any successful assertion can be reused.
+        """
+        source=application.parent;before=self.runner.execution_source_digest(source)
         metadata_path=output/"dependency-metadata.json"
-        if not metadata_path.is_file():return "Focused selection unavailable; required workspace suite follows.\n"
-        metadata=self.metadata_receipt(metadata_path);plan=self.focused_test_plan(job.get("changed_paths",[]),metadata)
-        proof={"policy":"fail-fast-v1","required_suite":"workspace","runs":[]};job["focused_verification"]=proof
-        for item in plan:
-            argv=["cargo","test","--workspace","--locked","--offline"]
-            if "package"in item:argv=["cargo","test","--locked","--offline","-p",item["package"]]
-            else:argv.append(item["filter"])
-            argv.extend(["--","--test-threads=1"]);started=time.monotonic()
-            entry={**item,"status":"running"};proof["runs"].append(entry)
-            getattr(self.runner,"resource_progress",lambda _:None)(job)
-            try:
-                log=self.phase(job,"test","test",application,output,argv,"engine:rust1.90:focused-v1:"+item.get("package",item.get("filter")),3600)
-                matched=sum(int(value)for value in re.findall(r"test result: ok\. ([0-9]+) passed",log))
-                entry.update(status="passed"if matched else"no_matches",matched=matched)
-            except BaseException:
-                entry["status"]="failed";raise
-            finally:
-                entry["seconds"]=time.monotonic()-started;getattr(self.runner,"resource_progress",lambda _:None)(job)
-        return "Fail-fast focused checks complete; required workspace suite follows.\n"
+        metadata=self.metadata_receipt(metadata_path)if retained is None and metadata_path.is_file()else {"packages":[]}
+        plan=self.focused_test_plan(job.get("changed_paths",[]),metadata)
+        proof={"policy":HOST_FOCUSED_POLICY,"policy_sha256":HOST_FOCUSED_POLICY_SHA256,"required_suite":"workspace",
+            "inputs_sha256":job.get("inputs_sha256"),"source_sha256":before,"toolchain":RUST,"selection":plan,
+            "reuse":"verified_retained_test_binaries"if retained is not None else"existing_private_cargo_target",
+            "status":"running"if plan else"not_applicable","runs":[]}
+        job["focused_verification"]=proof;started=time.monotonic();deadline=started+600
+        progress=getattr(self.runner,"resource_progress",lambda _:None);progress(job)
+        manifest=None
+        def unchanged():
+            try:return self.runner.execution_source_digest(source)==before
+            except (OSError,ValueError):return False
+        def authorized():
+            event=getattr(getattr(self.runner,"job_context",None),"event",None)
+            if job.get("revoked")or job.get("lease_until",float("inf"))<=time.time()or(event is not None and event.is_set()):
+                raise PermissionError("Focused verification cancelled or authorization expired")
+        try:
+            manifest=self.test_manifest(retained)if retained is not None and plan else None
+            for item in plan:
+                label=item.get("test",item["package"]);entry={**item,"feature_profile":"default","status":"running","matched":0,"started_at":time.time()}
+                proof["runs"].append(entry);run_started=time.monotonic();progress(job)
+                try:
+                    authorized();remaining=deadline-time.monotonic()
+                    if remaining<=0:raise TimeoutError("Focused verification stage deadline exceeded")
+                    argv=["cargo","test","--locked","--offline","-p",item["package"]]
+                    if "test"in item:argv.extend(["--bin",item["target"],item["test"],"--","--exact","--test-threads=1"])
+                    else:argv.extend(["--","--test-threads=1"])
+                    if retained is not None:
+                        matches=[row for row in manifest["tests"]if row["target_name"]==item.get("target")and row["source_path"]=="/build/src/main.rs"]
+                        if len(matches)!=1:raise ValueError("Registered retained host test binary unavailable")
+                        argv=["/output/artifacts/"+matches[0]["file"],item["test"],"--exact","--test-threads=1"]
+                    entry["argv"]=argv;entry["recipe"]="engine:rust1.90:focused-v2:"+item.get("id",item["package"])
+                    log=self.phase(job,"test","test",application,output,argv,entry["recipe"],min(120 if "test"in item else 300,remaining))
+                    authorized()
+                    counts=re.findall(r"test result: ok\. ([0-9]+) passed; ([0-9]+) failed",log[-1024*1024:])
+                    entry["matched"]=sum(int(passed)for passed,failed in counts)
+                    if any(int(failed)for passed,failed in counts):raise ValueError("Test summary reports failed assertions")
+                    if not entry["matched"]:raise ValueError("Zero matched assertions for registered selection")
+                    if "test"in item and entry["matched"]!=1:raise ValueError("Exact registered test count differs from one")
+                    if not unchanged():raise ValueError("Focused test changed captured inputs, including file modes")
+                    entry.update(status="passed",inputs_unchanged=True)
+                except PermissionError as error:
+                    entry.update(status="cancelled",reason=str(error)[:1200]);proof["status"]="cancelled";raise
+                except Exception as error:
+                    entry.update(status="failed",reason=str(error)[:1200]);proof["status"]="failed"
+                    raise ValueError("Focused verification failed: "+label+": "+str(error)[:1200])from error
+                finally:
+                    entry["seconds"]=round(time.monotonic()-run_started,3)
+                    entry["inputs_unchanged"]=unchanged()
+                    if not entry["inputs_unchanged"]:entry["status"]="input_mutated";proof["status"]="failed"
+                    progress(job)
+            if plan:proof["status"]="passed"
+            return "Fail-fast registered checks complete; required workspace suite follows.\n"
+        except BaseException:
+            if proof["status"]=="running":proof["status"]="failed"
+            raise
+        finally:
+            proof["seconds"]=round(time.monotonic()-started,3);progress(job)
 
     def check(self,job,blob,task,timeout,extract):
         """Use the same attributable recipes for bounded foreground checks and release compilation."""
@@ -882,6 +935,7 @@ class Executor:
             receipt=json.loads((root/"verified.json").read_text())
             if receipt["inputs_sha256"]!=digest(blob):raise ValueError("Artifact source changed")
             if self.artifact_hashes(output/"artifacts")!=receipt["artifacts"]:raise ValueError("Retained artifact changed")
+            if receipt.get("test_proof")!=self.test_proof(blob):raise ValueError("Retained verification recipe/environment changed; reconcile through a successor")
             return output/"artifacts",receipt["log"]
         blob=self.runner.execution_application_blob(blob)
         root.mkdir(parents=True,exist_ok=True);extract(source,blob);application=source/"v3";output.mkdir(exist_ok=True)
@@ -895,6 +949,7 @@ class Executor:
                 job["test_reuse"]={"source_job_id":old["job_id"],"binding":old["test_proof"],"decision":"reused_completed_workspace_suite"}
                 logs="Exact source, toolchain and fixture proof matched; complete workspace test evidence reused from "+old["job_id"]+".\n"+old["test_log"]
             else:
+                logs+=self.focused_tests(job,application,output,retained=artifacts)
                 for binary in sorted((artifacts/"tests").iterdir()):
                     if not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",binary.name):raise ValueError("Cached test executable name invalid")
                     logs+=self.phase(job,"test","test",application,output,["/output/artifacts/tests/"+binary.name,"--test-threads=1"],"engine:rust1.90:test")
@@ -903,7 +958,7 @@ class Executor:
             logs=logs.replace("locked Rust tests previously passed on identical compiled inputs.","current candidate ran retained tests from identical compiled inputs.")
             if self.artifact_hashes(artifacts)!=old["artifacts"]:raise ValueError("Retained test run changed verified compiler artifacts")
             if not reused_tests:self.retain_engine(job,blob,[name.removeprefix("v3/")for name in old["compiled_inputs"]],old["artifacts"],logs)
-            receipt={"inputs_sha256":digest(blob),"artifacts":old["artifacts"],"log":logs,"reused_from":old["job_id"]}
+            receipt={"inputs_sha256":digest(blob),"artifacts":old["artifacts"],"log":logs,"reused_from":old["job_id"],"test_proof":self.test_proof(blob)}
             temporary=root/"verified.new";temporary.write_text(json.dumps(receipt));os.replace(temporary,root/"verified.json")
             if not (artifacts/"stable/smoke.json").is_file():raise ValueError("Retained optimized linked smoke proof missing")
             job["linked_stable"]=json.loads((artifacts/"stable/smoke.json").read_text())
@@ -951,7 +1006,7 @@ class Executor:
         (artifacts/"core-inputs.txt").write_text("\n".join(sorted(core))+"\n")
         if "v3/src/main.rs"not in {self.local_dependency(name)for name in dependencies}:raise ValueError("Compiler dependency attestation missing")
         hashes=self.artifact_hashes(artifacts);self.retain_engine(job,blob,dependencies,hashes,logs)
-        receipt={"inputs_sha256":inputs,"artifacts":hashes,"log":logs}
+        receipt={"inputs_sha256":inputs,"artifacts":hashes,"log":logs,"test_proof":self.test_proof(blob)}
         temporary=root/"verified.new";temporary.write_text(json.dumps(receipt));os.replace(temporary,root/"verified.json")
         return artifacts,logs
     def package(self,blob,artifacts,entries,role=None,destination=None,recipe_transform=None):
