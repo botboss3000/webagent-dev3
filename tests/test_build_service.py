@@ -1349,3 +1349,78 @@ class ClearPendingRequestsTests(unittest.TestCase):
         reopened=type(store)(store.path)
         self.assertEqual(reopened.get(item["key"]),result);self.assertEqual(result["state"],"orphaned")
         self.assertEqual(self.call("build_work",request),result)
+
+class ContinuationReconciliationTests(unittest.TestCase):
+    """Legacy switched orphan continuations settle without release effects."""
+    from test_scheduler_broker import SchedulerBrokerTests as _base
+    setUp=_base.setUp
+    tearDown=_base.tearDown
+    call=_base.call
+    begin=_base.begin
+    write=_base.write
+    publish=_base.publish
+    action=_base.action
+    def fixture(self,switched=True):
+        import hashlib
+        item=self.begin("orphan-continue-task");self.write(item,"README.md","published\n");job,commit=self.publish(item)
+        scheduler=self.broker.scheduler;store=scheduler.store
+        with store.transaction()as db:store.update(db,store.get(item["key"],db),state="orphaned")
+        value=store.get(item["key"]);owner=scheduler.owner(self.trusted,self.workspace)
+        job["source_generation"]=value["generation"]
+        item["base_inputs_sha256"]=self.broker.scheduler_digest((Path(item["workspace_path"]).parent/"baseline.tar").read_bytes())
+        original={"action":"continue","task_id":item["task_id"],"request_id":"legacy-orphan-continue","expected_revision":value["revision"],"expected_epoch":value["epoch"]}
+        path=scheduler.journal_path(owner,original["request_id"],item["key"])
+        digest=hashlib.sha256(fixtures.host.scheduler_module.ownership.canonical([owner,original]).encode()).hexdigest()
+        record={"digest":digest,"state":"pending","request_id":original["request_id"],"task_key":item["key"],"value":value,"previous_job":job["job_id"]}
+        if switched:
+            scheduler.write_record(path,record)
+            with self.assertRaisesRegex(ValueError,"Editing ownership"):
+                scheduler.continuation(item,original,value,record,path,owner,value["revision"],value["epoch"],"legacy-transition-token")
+        request={"action":"reconcile_continuation","task_id":item["task_id"],"original_request_id":original["request_id"],"expected_transition_sha256":digest,"expected_revision":value["revision"],"expected_epoch":value["epoch"],"request_id":"recover-legacy-continuation"}
+        return item,job,value,path,original,request
+    def test_new_orphan_request_fails_before_journal_or_filesystem_changes(self):
+        item,job,value,path,original,request=self.fixture(False)
+        tree=Path(item["workspace_path"]).parent;before=self.broker.scheduler_task_snapshot(tree)
+        with self.assertRaisesRegex(ValueError,"Recover editing ownership"):self.call("build_work",original)
+        self.assertFalse(path.exists());self.assertFalse((self.broker.work_dir/"generations"/item["key"]).exists())
+        self.assertEqual(self.broker.scheduler_task_snapshot(tree),before)
+    def test_reconcile_preserves_both_generations_and_original_release(self):
+        item,job,value,path,original,request=self.fixture();tree=Path(item["workspace_path"]).parent
+        before=self.broker.scheduler_task_snapshot(tree);archive=self.broker.work_dir/"generations"/item["key"]/job["job_id"]
+        frozen=self.broker.scheduler_task_snapshot(archive);job_before=json.loads(json.dumps(job))
+        result=self.call("build_work",request);v=result["ownership"]
+        self.assertEqual((v["revision"],v["epoch"],v["generation"]),(value["revision"]+1,value["epoch"]+1,value["generation"]+1))
+        self.assertEqual(v["scopes"],value["scopes"]);self.assertFalse(result["deployment_replayed"])
+        self.assertEqual(self.broker.scheduler_task_snapshot(tree),before);self.assertEqual(self.broker.scheduler_task_snapshot(archive),frozen)
+        self.assertEqual(job,job_before);self.assertEqual(item["status"],"open")
+        self.assertEqual(self.call("build_work",request),result)
+        self.assertEqual(self.call("build_work",original)["status"],"open")
+        self.write(item,"README.md","authorized correction\n")
+    def test_recovery_rejects_stale_binding_and_foreign_caller(self):
+        item,job,value,path,original,request=self.fixture()
+        with self.assertRaisesRegex(ValueError,"Stale"):self.call("build_work",{**request,"expected_revision":value["revision"]-1})
+        with self.assertRaisesRegex(ValueError,"identity"):self.call("build_work",{**request,"expected_transition_sha256":"0"*64})
+        with patch.dict(self.trusted,local_caller=False):
+            with self.assertRaises((PermissionError,ValueError)):self.call("build_work",request)
+        self.assertEqual(self.broker.scheduler.store.get(item["key"]),value)
+    def test_recovery_rejects_modified_correction_or_archive(self):
+        item,job,value,path,original,request=self.fixture();tree=Path(item["workspace_path"])
+        file=tree/"README.md";before=file.read_bytes();file.write_text("unreviewed correction\n")
+        with self.assertRaisesRegex(ValueError,"source or archive"):self.call("build_work",request)
+        file.write_bytes(before)
+        archive=self.broker.work_dir/"generations"/item["key"]/job["job_id"]/"v3/README.md";archive.write_text("changed archive\n")
+        with self.assertRaisesRegex(ValueError,"source or archive"):self.call("build_work",request)
+        self.assertEqual(self.broker.scheduler.store.get(item["key"]),value)
+    def test_recovery_refuses_unresolved_execution(self):
+        item,job,value,path,original,request=self.fixture()
+        self.broker.jobs["uncertain-correction"]={"ownership_id":item["key"],"status":"uncertain"}
+        with self.assertRaisesRegex(ValueError,"active execution"):self.call("build_work",request)
+        self.assertEqual(self.broker.scheduler.store.get(item["key"]),value)
+    def test_committed_mutation_with_failed_save_reconciles_once(self):
+        item,job,value,path,original,request=self.fixture()
+        with patch.object(self.broker,"_save_work",side_effect=OSError("lost save")):
+            with self.assertRaises(OSError):self.call("build_work",request)
+        committed=self.broker.scheduler.store.get(item["key"])
+        result=self.call("build_work",request)
+        self.assertEqual(result["ownership"],committed);self.assertEqual(self.broker.scheduler.store.get(item["key"]),committed)
+        self.assertEqual(json.loads(path.read_text())["state"],"done")

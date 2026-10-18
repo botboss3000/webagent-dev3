@@ -3,7 +3,7 @@
 Ownership is separate from immutable source generations and release receipts.
 Config: protected build-service.json -> scheduler.mode and orphan_after_seconds.
 """
-import hashlib,importlib.util,json,os,re,subprocess,time
+import hashlib,importlib.util,json,os,re,stat,subprocess,time
 from pathlib import Path
 def sibling(name):
     """Load the exact paired installed implementation, never a model-selected path."""
@@ -18,7 +18,7 @@ class Conflict(ValueError):
 # @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Source reservations and completion. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds; protected installation overrides at broker restart.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image"]}],"opportunities":[]}}
 class Scheduler:
     """Derive authority and scope from the broker; caller assertions never certify a release."""
-    actions={"create","resources","pause","resume","priority","reconcile","increase_memory","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover","reconcile_acquisition","clear_pending_requests"}
+    actions={"create","resources","pause","resume","priority","reconcile","increase_memory","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover","reconcile_acquisition","clear_pending_requests","reconcile_continuation"}
     def __init__(self,broker,config):
         """Load reviewed coordination policy and open its private durable ownership store."""
         self.broker=broker;self.config=config
@@ -505,6 +505,7 @@ class Scheduler:
         """Journal mutations so retries survive both ownership and filesystem transition crashes."""
         self.broker._incoming_lease(trusted)
         action=args.get("action")
+        if action=="reconcile_continuation":return self.reconcile_continuation(args,trusted,workspace)
         if action=="reconcile_acquisition":return self.reconcile_acquisition(args,trusted,workspace)
         if action=="create":
             if set(args)-{"action","task_id","summary"}:raise ValueError("Unsupported creation arguments")
@@ -531,6 +532,7 @@ class Scheduler:
             if self.pending(item["key"]):raise ValueError("Previous scheduler request requires recovery")
             if type(args.get("expected_revision"))is not int or type(args.get("expected_epoch"))is not int:raise ValueError("Expected ownership revision and epoch required")
             if value["revision"]!=args["expected_revision"]or value["epoch"]!=args["expected_epoch"]:raise ValueError("Stale ownership revision or epoch")
+            if action=="continue"and value["state"]not in {"owned","validating"}:raise ValueError("Recover editing ownership before continuation")
             record={"digest":digest,"state":"pending","request_id":args["request_id"],"task_key":item["key"],"value":value,"previous_job":item.get("job_id")}
             self.write_record(path,record)
         # The original CAS state remains available even when the SQLite mutation already committed.
@@ -552,6 +554,71 @@ class Scheduler:
             destination["acquisition_refresh"]={"revision":target["revision"]};self.broker._save_work()
             self.refresh_waiter(destination,target)
         item["status"]="abandoned";self.broker._save_work();return result
+    def reconcile_continuation(self,args,trusted,workspace):
+        """Settle an already switched, unchanged correction baseline; never replay a release."""
+        required={"action","task_id","original_request_id","expected_transition_sha256","expected_revision","expected_epoch","request_id"}
+        if set(args)!=required or trusted.get("local_caller")is not True:raise PermissionError("Exact operator continuation reconciliation required")
+        self.broker._incoming_lease(trusted)
+        item=self.item(args,trusted,workspace);key=item["key"];owner=self.owner(trusted,workspace)
+        original_path=self.journal_path(owner,args["original_request_id"],key)
+        path=self.journal_path(owner,args["request_id"],"continuation-recovery-"+key)
+        def read(p):
+            fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+            try:
+                meta=os.fstat(fd)
+                if not stat.S_ISREG(meta.st_mode)or meta.st_nlink!=1 or meta.st_size>1024*1024:raise ValueError("Invalid continuation journal")
+                with os.fdopen(fd,"rb",closefd=False)as stream:return json.loads(stream.read(1024*1024+1))
+            finally:os.close(fd)
+        digest=hashlib.sha256(ownership.canonical([owner,args]).encode()).hexdigest()
+        record=read(path)if path.exists()or path.is_symlink()else None
+        if record:
+            if record["digest"]!=digest:raise ValueError("Continuation recovery request ID reused")
+            if record["state"]=="done":return record["result"]
+        previous=read(original_path)
+        if previous.get("task_key")!=key or previous.get("request_id")!=args["original_request_id"]or previous.get("digest")!=args["expected_transition_sha256"]:
+            raise ValueError("Original continuation identity differs")
+        if previous.get("state")!="pending"and not(record and previous.get("reconciled_by")==args["request_id"]):raise ValueError("Exact pending continuation required")
+        if self.pending(key,except_path=path)not in {args["original_request_id"],None}:raise ValueError("Another scheduler transition requires recovery")
+        job=self.broker.jobs.get(previous.get("previous_job"))
+        if not job or job.get("status")!="completed"or job.get("task_id")!=item["task_id"]or job.get("user_id")!=item["user_id"]or job.get("workspace")!=workspace:
+            raise ValueError("Completed owned generation required")
+        if any(j.get("ownership_id")==key and j.get("status")in {"queued","running","interrupted","uncertain","needs_decision"}for j in self.broker.jobs.values()):raise ValueError("Reconcile active execution first")
+        if any(l.get("task_key")==key for l in self.broker.code_index_leases.values())or item.get("acquisition_refresh"):raise ValueError("Reconcile active maintenance or acquisition first")
+        folder=self.broker.work_dir/"continuations"/key/original_path.stem
+        baseline=folder/"baseline.tar";tree=self.broker.work_dir/"trees"/key
+        archive=self.broker.work_dir/"generations"/key/job["job_id"]
+        if not baseline.is_file()or not archive.is_dir()or not tree.is_dir()or(folder/"prepared").exists()or(folder/"preparing").exists():raise ValueError("Already switched continuation with preserved archive required")
+        blob=baseline.read_bytes();frozen=(self.broker.state/job["job_id"]/"task.tar").read_bytes()
+        binding={"baseline_sha256":self.broker.scheduler_digest(blob),"archive_sha256":self.broker.scheduler_digest(frozen),"previous_job":job["job_id"],"archive_baseline_sha256":self.broker.scheduler_digest((archive/"baseline.tar").read_bytes())}
+        if (tree/"baseline.tar").read_bytes()!=blob or self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree))!=binding["baseline_sha256"]or self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(archive))!=binding["archive_sha256"]:
+            raise ValueError("Continuation source or archive changed")
+        token="continuation-recovery-"+hashlib.sha256(ownership.canonical([owner,key,args["request_id"]]).encode()).hexdigest()[:40]
+        committed=self.store.receipt(token);current=self.store.get(key);old=previous["value"]
+        if old["generation"]!=job.get("source_generation"):raise ValueError("Original continuation generation differs")
+        if current["owner"]!=owner or old["owner"]!=owner:raise PermissionError("Current continuation owner required")
+        if record:
+            if record["binding"]!=binding:raise ValueError("Continuation recovery binding changed")
+        else:
+            if item.get("status")!="closed"or item.get("job_id")!=job["job_id"]:raise ValueError("Closed latest generation required")
+            if item.get("base_inputs_sha256")!=binding["archive_baseline_sha256"]:raise ValueError("Archived original baseline differs")
+            if type(args["expected_revision"])is not int or type(args["expected_epoch"])is not int or any(current[k]!=old[k]for k in ["revision","epoch","generation","scopes","requested"])or current["revision"]!=args["expected_revision"]or current["epoch"]!=args["expected_epoch"]:
+                raise ValueError("Stale continuation ownership binding")
+            record={"state":"pending","digest":digest,"task_key":key,"request_id":args["request_id"],"binding":binding}
+            self.write_record(path,record)
+        if committed is None:
+            committed=self.store.recover_continuation(key,owner,args["expected_revision"],args["expected_epoch"],old["generation"],token)
+        current=self.store.get(key)
+        if any(current[k]!=committed[k]for k in ["owner","epoch","generation","scopes"]):raise ValueError("Recovered ownership changed")
+        if job["job_id"]not in item.setdefault("previous_jobs",[]):item["previous_jobs"].append(job["job_id"])
+        item.pop("job_id",None);item.pop("inputs_sha256",None);item.pop("ownership_inputs_sha256",None)
+        item.update(status="open",base_inputs_sha256=binding["baseline_sha256"],source_generation=committed["generation"],ownership_revision=committed["revision"],ownership_epoch=committed["epoch"])
+        self.broker._save_work()
+        continuation={"task_id":item["task_id"],"status":"open","workspace_path":item["workspace_path"],"ownership":committed}
+        self.write_record(original_path,{**previous,"state":"done","result":continuation,"reconciled_by":args["request_id"]})
+        result={**continuation,"original_request_id":args["original_request_id"],"reconciliation_request_id":args["request_id"],"source_preserved":True,"deployment_replayed":False,**binding}
+        self.write_record(path,{**record,"state":"done","result":result})
+        return result
+
     def continuation(self,item,args,value,record,path,owner,revision,epoch,request):
         """Recoverable generation switch; preserve the old tree and pin the new baseline once."""
         job=self.broker.jobs.get(record["previous_job"])

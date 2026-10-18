@@ -269,6 +269,16 @@ class Ownership:
             if not any(scope==held or(scope.startswith("path:")and held.startswith("path:")and overlap(held[5:],scope[5:])and(scope==held or scope.startswith(held+"/")))for held in value["scopes"]):
                 raise PermissionError("Source scope not reserved")
         return value
+    def recover_continuation(self,task,owner,revision,epoch,generation,request):
+        """Complete a host-verified switched baseline while fencing abandoned workers."""
+        def operation(db):
+            value=self.check(task,owner,revision,epoch,db)
+            if value["state"]not in {"orphaned","owned","validating"}or value["generation"]!=generation:
+                raise ValueError("Continuation ownership generation changed")
+            if not value["scopes"]or value["requested"]:raise ValueError("Stable held continuation scopes required")
+            return self.update(db,value,state="owned",epoch=epoch+1,generation=generation+1,evidence={},heartbeat=self.clock())
+        return self.mutate(request,["recover_continuation",task,owner,revision,epoch,generation],operation)
+
     def edited(self,task,owner,revision,epoch,request):
         """A correction advances the source generation and invalidates previous acceptance."""
         def operation(db):
