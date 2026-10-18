@@ -1,22 +1,26 @@
-// @code-index {"version":1,"feature":"chat-message-bubbles","aliases":["chat bubbles","bubble colors","bubble borders"],"purpose":"Applies JSON-only bg_dark/bg_light (unset/null means no fill), border/box_shadow, bubble paint and JSON-only per-side padding (unset/null means initial), per-corner radius (auto uses the single-line box) and role line_height. Config: data/config/chat.json -> chat_common.message_bubbles.user/agent paint, border, box_shadow, padding_*_px, radius_*_px and line_height; chat_desktop/chat_mobile/chat_widget overrides merge onto chat_common.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles/user","/chat_common/message_bubbles/agent"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-message-bubbles","aliases":["chat bubbles","bubble colors","bubble borders"],"purpose":"Applies JSON-only bg_dark/bg_light (unset/null means no fill), border/box_shadow, bubble paint and JSON-only per-side padding (unset/null means initial), per-corner radius (auto uses the single-line box) and role line_height. Config: data/config/chat.json -> chat_common.message_bubbles.user/agent paint, background_opacity, backdrop_blur_px, border, box_shadow, padding_*_px, radius_*_px and line_height; chat_desktop/chat_mobile/chat_widget overrides merge onto chat_common.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles/user","/chat_common/message_bubbles/agent"],"profile_overrides":true}],"opportunities":[]}}
 const radiusFrames = new WeakMap();
 /** Applies role-local presentation; auto corners use one text line plus vertical padding and borders. */
 export function applyBubblePaint(bubble, lane = {}) {
+  // Opacity applies only to the fill, preserving opaque text, borders and controls.
+  const opacity = typeof lane.background_opacity === 'number' && Number.isFinite(lane.background_opacity) && lane.background_opacity >= 0 && lane.background_opacity <= 1 ? lane.background_opacity : null;
   for (const [property, value] of [
     ['--message-bg-dark', lane.bg_dark],
     ['--message-bg-light', lane.bg_light],
   ]) {
     // Transparent is the no-fill reset; every actual color comes from this role's JSON.
-    bubble.style.setProperty(property, typeof value === 'string' && CSS.supports('color', value.trim()) ? value.trim() : 'transparent');
+    const color = typeof value === 'string' && CSS.supports('color', value.trim()) ? value.trim() : 'transparent';
+    bubble.style.setProperty(property, opacity === null ? color : 'color-mix(in srgb, ' + color + ' ' + opacity * 100 + '%, transparent)');
   }
   // Feed the shared important theme rules; explicit no-fill prevents cross-theme inheritance.
   for (const role of ['user','agent']) {
     bubble.style.setProperty('--chat-' + role + '-background', 'var(--message-bg-dark)');
     bubble.style.setProperty('--chat-' + role + '-background-light', 'var(--message-bg-light)');
   }
-  // A transparent fill must not retain the inherited glass surface.
-  bubble.style.setProperty('backdrop-filter', 'initial', 'important');
-  bubble.style.setProperty('-webkit-backdrop-filter', 'initial', 'important');
+  // Missing/null/invalid blur clears inherited or previously configured glass.
+  const blur = typeof lane.backdrop_blur_px === 'number' && Number.isFinite(lane.backdrop_blur_px) && lane.backdrop_blur_px >= 0 ? 'blur(' + lane.backdrop_blur_px + 'px)' : 'initial';
+  bubble.style.setProperty('backdrop-filter', blur, 'important');
+  bubble.style.setProperty('-webkit-backdrop-filter', blur, 'important');
   // Initial makes unset effects absent and clears prior profile values; presets live only in chat.json.
   for (const [property, value] of [['--message-border', lane.border], ['--message-shadow', lane.box_shadow]]) {
     bubble.style.setProperty(property, typeof value === 'string' && value.trim() ? value.trim() : 'initial');

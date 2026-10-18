@@ -210,3 +210,45 @@ test('JSON-only bubble backgrounds cover absent transparent solid alpha themes p
  await p.waitForFunction(()=>getComputedStyle(document.getElementById('paint-user')).backgroundColor==='rgba(0, 0, 0, 0)'&&getComputedStyle(document.getElementById('paint-agent')).backgroundColor==='rgba(0, 0, 0, 0)');
  assert.ok((await read()).every(x=>x.same));
 });
+/** Opacity changes fill only; independent blur resets on omitted/null/invalid live profiles. */
+test('JSON bubble glass supports role-local opacity blur validation and live reset',async t=>{
+ const p=await fixture(t);
+ const shared=[path.join(ROOT,'build-service/shared-ui/ui/shared/css/index.css'),path.resolve(ROOT,'../ui/shared/css/index.css')].find(fs.existsSync);
+ await p.addStyleTag({path:path.join(UI,'chat/chat.css')});await p.addStyleTag({path:shared});
+ await p.evaluate(()=>{
+  for(const role of ['user','agent']){
+   const e=document.createElement('article');e.id='glass-'+role;e.className='chat-bubble v3-config-bubble '+role;
+   e.innerHTML='<span>Readable text</span>';document.getElementById('chat-messages-inner').append(e);
+  }
+ });
+ const apply=async(user,agent={})=>{
+  const cfg=config(layout());cfg.chat_common.message_bubbles={user,agent};
+  await p.evaluate(async cfg=>api.initChatConfig({config:cfg}),cfg);await settle(p);
+  return p.evaluate(()=>['user','agent'].map(role=>{const e=document.getElementById('glass-'+role),s=getComputedStyle(e);return {bg:s.backgroundColor,filter:s.backdropFilter,webkit:s.webkitBackdropFilter,opacity:s.opacity,textOpacity:getComputedStyle(e.firstChild).opacity};}));
+ };
+ for(const light of [false,true]){
+  await p.evaluate(light=>document.body.classList.toggle('light-mode',light),light);
+  let r=await apply({bg_dark:'red',bg_light:'blue',background_opacity:0.5,backdrop_blur_px:8},{bg_dark:'green',bg_light:'green',background_opacity:0.25,backdrop_blur_px:3});
+  assert.match(r[0].bg,/0\.5\)?$/);assert.equal(r[0].filter,'blur(8px)');assert.equal(r[1].filter,'blur(3px)');
+  assert.ok(r.every(x=>x.opacity==='1'&&x.textOpacity==='1'));
+  r=await apply({bg_dark:'rgba(255, 0, 0, .4)',bg_light:'rgba(255, 0, 0, .4)',background_opacity:0.5,backdrop_blur_px:0});
+  assert.match(r[0].bg,/0\.2\)?$/);assert.equal(r[0].filter,'blur(0px)');assert.equal(r[1].filter,'none');
+  for(const opacity of [0,1]){r=await apply({bg_dark:'red',bg_light:'red',background_opacity:opacity});if(opacity===1)assert.equal(r[0].bg,'color(srgb 1 0 0)');else assert.match(r[0].bg,/ \/ 0\)$/);}
+  for(const value of [undefined,null,-1,2,'0.5',false,{},[]]){
+   r=await apply({bg_dark:'red',bg_light:'red',background_opacity:value,backdrop_blur_px:value});
+   assert.equal(r[0].bg,'rgb(255, 0, 0)');
+   assert.equal(r[0].filter,typeof value==='number'&&value>=0?'blur('+value+'px)':'none');
+  }
+  r=await apply({background_opacity:0.5,backdrop_blur_px:8});
+  assert.equal(r[0].bg,'color(srgb 0 0 0 / 0)');assert.equal(r[0].filter,'blur(8px)');
+  r=await apply({});assert.equal(r[0].filter,'none');assert.equal(r[0].bg,'rgba(0, 0, 0, 0)');
+ }
+ let live=config(layout());live.chat_common.live_reload={enabled:true,interval_ms:1000};
+ live.chat_common.message_bubbles={user:{bg_dark:'red',bg_light:'red',background_opacity:0.5,backdrop_blur_px:8}};
+ await p.route('**/api/v3/auth/ui-config',route=>route.fulfill({json:{chat_ui:live}}));
+ await p.evaluate(()=>api.initChatConfig());
+ assert.equal(await p.locator('#glass-user').evaluate(e=>getComputedStyle(e).backdropFilter),'blur(8px)');
+ live=JSON.parse(JSON.stringify(live));live.chat_common.message_bubbles.user.background_opacity=null;live.chat_common.message_bubbles.user.backdrop_blur_px=null;
+ await p.waitForFunction(()=>getComputedStyle(document.getElementById('glass-user')).backdropFilter==='none');
+ assert.equal(await p.locator('#glass-user').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(255, 0, 0)');
+});
