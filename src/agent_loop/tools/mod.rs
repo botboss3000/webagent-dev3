@@ -125,7 +125,8 @@ pub(crate) fn native_schemas() -> Vec<Value> {
         for schema in &mut schemas {
             if matches!(schema["name"].as_str(), Some("file_list"|"file_read"|"file_search"|"file_edit"|"file_write")) {
                 let properties = schema["parameters"]["properties"].as_object_mut().unwrap();
-                properties.insert("task_id".into(), json!({"type":"string","pattern":"^[A-Za-z0-9_-]{8,80}$","description":"Omit or set null for live files; never invent a placeholder ID. Supply one stable ID for an isolated build task; missing tasks are created automatically. Paths then are source-relative."}));
+                properties.insert("task_id".into(), json!({"type":"string","pattern":"^[A-Za-z0-9_-]{8,80}$","description":"Deprecated compatibility alias. Prefer broker_id; do not supply both. Never use a chat session ID here."}));
+                properties.insert("broker_id".into(),json!({"type":"string","pattern":"^(new|[A-Za-z0-9_-]{8,80})$","description":"Omit to continue current broker work; new creates independent isolated work in this operation; reuse a returned Broker ID to switch. Session identity is automatic. Never invent an ID."}));
                 if matches!(schema["name"].as_str(), Some("file_edit"|"file_write")) {
                     schema["parameters"]["properties"]["expected_inputs_sha256"] = json!({"type":"string","pattern":"^[a-f0-9]{64}$","description":"Task digest from the latest task read/list/review; required when writing an existing task."});
                     schema["parameters"]["properties"]["request_id"] = json!({"type":"string","pattern":"^[A-Za-z0-9_-]{8,80}$","description":"Stable task-write request ID. Reuse only for identical retries; inspect build_work receipt after uncertainty."});
@@ -135,7 +136,7 @@ pub(crate) fn native_schemas() -> Vec<Value> {
                     schema["parameters"]["properties"]["limit"] = json!({"type":"integer","minimum":1,"maximum":100});
                 }
                 let description = schema["description"].as_str().unwrap().to_owned();
-                schema["description"] = json!(format!("{description}. Optional task_id selects isolated source for a build and automatically creates the task; omit for explicit live edits or runtime configuration. Never deploys."));
+                schema["description"] = json!(format!("{description}. Source writes use isolated broker work automatically. Reads without a selector inspect published/container files; pass a returned broker_id for private-source reads. Optional broker_id selects current, new or returned work. Explicit runtime/workspace paths retain their owning tools. Never deploys."));
             }
         }
         schemas.extend(crate::background_tasks::schemas());

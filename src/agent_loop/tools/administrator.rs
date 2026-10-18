@@ -342,6 +342,25 @@ fn implicit_source_write(name: &str, args: &Value) -> Result<Option<String>> {
     Ok(Some(relative.to_owned()))
 }
 
+/// Broker IDs select work; authenticated session identity is attached only by host().
+fn broker_file_arguments(sid:&str,pending_id:&str,name:&str,args:&Value)->Result<Option<Value>> {
+    let legacy=args.get("task_id").is_some_and(|v|!v.is_null());
+    let selected=args.get("broker_id").is_some_and(|v|!v.is_null());
+    if legacy && selected {bail!("Use broker_id or legacy task_id, not both");}
+    // Ordinary reads retain the worker/background contract; private reads select returned work.
+    if !legacy && !selected && !matches!(name,"file_edit"|"file_write") {return Ok(None);}
+    let raw=args["path"].as_str().unwrap_or("");
+    let path=raw.strip_prefix("/live-checkout/").unwrap_or(raw);
+    if !legacy && !selected && raw.starts_with('/') && !raw.starts_with("/live-checkout/") {return Ok(None);}
+    if selected && path.starts_with('/') {bail!("Broker ID requires a source-relative path");}
+    if matches!(name,"file_edit"|"file_write") && !legacy {implicit_source_write(name,args)?;}
+    let mut forwarded=args.clone();forwarded["path"]=json!(if path=="." {""} else {path});
+    if (!legacy || matches!(name,"file_edit"|"file_write")) && forwarded["request_id"].is_null() {
+        forwarded["request_id"]=json!(format!("broker-{}",digest(&json!([sid,pending_id]))));
+    }
+    Ok(Some(forwarded))
+}
+
 pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending_id:&str,policy_version:u64,cancel:CancellationToken)->Result<Value> {
     if cancel.is_cancelled(){bail!("Tool execution cancelled");}
     let agent=session_agent_id(app,sid).await?;
@@ -355,17 +374,12 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
             Ok(result)
         },
         "file_list"|"file_read"|"file_search"|"file_edit"|"file_write"=>{
-            if args.get("task_id").is_some_and(|value|!value.is_null()) {
-                host(app,sid,run_id,name,args,cancel).await
-            } else if let Some(path)=implicit_source_write(name,args)? {
-                let mut draft=args.clone();
-                draft["path"]=json!(path);
-                if draft["request_id"].is_null() {draft["request_id"]=json!(format!("implicit-{}",digest(&json!([sid,pending_id]))));}
+            if let Some(draft)=broker_file_arguments(sid,pending_id,name,args)? {
                 host(app,sid,run_id,name,&draft,cancel).await
             } else {
                 let mut live=args.clone();
                 if let Some(object)=live.as_object_mut(){
-                    object.remove("task_id");
+                    object.remove("task_id");object.remove("broker_id");
                     object.retain(|_,value|!value.is_null());
                     if object.contains_key("expected_inputs_sha256") || object.contains_key("request_id") {bail!("Task write arguments require task_id; live fallback denied");}
                 }
@@ -375,8 +389,8 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
         },
         "build_work"=>{
             let mut request=args.clone();
-            if request["action"]=="check" && request["request_id"].is_null() {
-                request["request_id"]=json!(format!("check-{}",digest(&json!([sid,pending_id]))));
+            if request["request_id"].is_null() {
+                request["request_id"]=json!(format!("broker-{}",digest(&json!([sid,pending_id]))));
             }
             host(app,sid,run_id,name,&request,cancel).await
         },
@@ -446,6 +460,19 @@ pub fn valid_development_path(path:&str,sid:&str,agent:&str)->bool {
 }
 #[cfg(test)] mod tests {
     use super::*;
+    #[test] fn automatic_broker_file_selection_is_retry_stable_and_runtime_scoped() {
+        let args=json!({"path":"src/app.rs","broker_id":"new"});
+        let first=broker_file_arguments("session-one","call-one","file_read",&args).unwrap().unwrap();
+        assert_eq!(first["broker_id"],"new");assert!(first["request_id"].is_string());
+        assert_eq!(Some(first.clone()),broker_file_arguments("session-one","call-one","file_read",&args).unwrap());
+        assert_ne!(first["request_id"],broker_file_arguments("session-two","call-one","file_read",&args).unwrap().unwrap()["request_id"]);
+        assert!(broker_file_arguments("s","c","file_read",&json!({"path":"src/a.rs"})).unwrap().is_none());
+        assert!(broker_file_arguments("s","c","file_search",&json!({"query":"fn", "regex":true,"path":"src"})).unwrap().is_none());
+        assert!(broker_file_arguments("s","c","file_read",&json!({"path":"/workspaces/own/file"})).unwrap().is_none());
+        assert!(broker_file_arguments("s","c","file_read",&json!({"path":"src/a.rs","broker_id":"new","task_id":"old-task"})).is_err());
+        assert!(broker_file_arguments("s","c","file_read",&json!({"path":"/state/private","broker_id":"new"})).is_err());
+        assert_eq!(broker_file_arguments("s","c","file_read",&json!({"path":"/live-checkout/src/a.rs","broker_id":"selected-work"})).unwrap().unwrap()["path"],"src/a.rs");
+    }
     #[test] fn implicit_source_writes_are_broker_scoped() {
         assert_eq!(implicit_source_write("file_write",&json!({"path":"src/app.rs"})).unwrap(),Some("src/app.rs".into()));
         assert_eq!(implicit_source_write("file_edit",&json!({"path":"/live-checkout/ui/app.css"})).unwrap(),Some("ui/app.css".into()));

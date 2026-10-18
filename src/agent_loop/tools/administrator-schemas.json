@@ -1169,7 +1169,7 @@
   {
     "type": "function",
     "name": "build_work",
-    "description": "Manage isolated source ownership, checks and release generations. reservations reveals conflicts; reserve acquires modules before edits; finish builds/tests/publishes but retains ownership. acceptance verifies release/commit plus agent checks; complete explicitly frees ownership. continue reopens corrections, handoff transfers atomically. resources and bounded pause/resume/priority/reconcile control attributable phases; takeover requires administrator review.",
+    "description": "Manage isolated broker work. Broker ID selects one independently deployable outcome; omit to continue, new to separate, or reuse a returned ID. Broker Job ID identifies execution; Broker Release ID identifies publication. Session identity and request receipts are runtime owned. Ownership and publication gates remain enforced.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1205,7 +1205,8 @@
         },
         "task_id": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9_-]{8,80}$"
+          "pattern": "^[A-Za-z0-9_-]{8,80}$",
+          "description": "Deprecated compatibility alias for broker_id. Do not supply both."
         },
         "summary": {
           "type": "string",
@@ -1322,6 +1323,11 @@
         "task_key": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
+        },
+        "broker_id": {
+          "type": "string",
+          "pattern": "^(new|[A-Za-z0-9_-]{8,80})$",
+          "description": "Omit to continue current broker work; new creates independent work; a returned Broker ID selects existing work. Runtime attaches chat identity. Never invent an ID."
         }
       },
       "required": [

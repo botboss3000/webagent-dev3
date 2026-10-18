@@ -57,6 +57,7 @@ Start separate work for an unrelated outcome, even in the same conversation.
 When the tool schema exposes `broker_id`, omit it to continue current work,
 pass `"new"` to create independent work within that same source operation,
 or pass a returned Broker ID to select earlier work. Never invent an ID.
+Source edits use this automatic selection. Ordinary reads without a selector keep their published/container behavior, including background reads and search filters. Pass the returned Broker ID when reading or searching the private draft.
 The tool result returns the resolved ID and input digest. Continue using that
 digest for edits to existing source; automatic identity does not bypass stale
 input, ownership, authorization, testing or publication checks. Retries use the
