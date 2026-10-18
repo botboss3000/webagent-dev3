@@ -30,6 +30,7 @@ export function createSessionAdapter({request, roster, userId, changed, isAlive=
   async function mutate(id,action,fields={}){
     if(!isAlive())throw Error('Sessions page closed');
     const row=rows.get(id);if(!row)throw Error('Refresh before changing this session');
+    if(['recycle','purge'].includes(action)&&(row.main_chat===true||row.can_delete===false))throw Error('Main Chat cannot be deleted');
     if(action==='recycle'&&row._origin==='bin')throw Error('Permanent deletion is pending in V3');
     const signature=JSON.stringify({id,action,fields});
     let body=receipts.get(signature);

@@ -81,3 +81,11 @@ test('configuration deep-merges surface overlays without consulting legacy chat 
  const value=await p.evaluate(async()=>{await cfg.loadSessionDropdownConfig();return cfg.sessionDropdownConfig('chat_mobile');});assert.deepEqual(value,{menu:{rename:true,delete:false},footer:{enabled:false}});
  await p.route('**/session-dropdown.json',route=>route.fulfill({status:503,body:'unavailable'}));assert.deepEqual(await p.evaluate(async()=>{await cfg.loadSessionDropdownConfig();return cfg.sessionDropdownConfig('chat_mobile');}),value);
 });
+
+test('renamed Main Chat keeps rename and hides delete across trigger, menu and batch selection',async t=>{
+ const p=await fixture(t);await p.evaluate(()=>{items[0]={...items[0],title:'Renamed coordinator',main_chat:true,can_delete:false};list.update(items,'s0');});
+ await configure(p,{trigger:{delete:true,row_actions:true},menu:{rename:true,delete:true,purge:true,row_actions:true}});
+ assert.equal(await p.locator('#session-dropdown-delete').isVisible(),false);
+ await p.locator('#session-dropdown-kebab').click();assert.equal(await p.getByRole('button',{name:'Recycle session',exact:true}).count(),0);assert.equal(await p.getByRole('button',{name:'Rename session',exact:true}).count(),1);await p.keyboard.press('Escape');
+ await openList(p);await p.getByRole('button',{name:'Enable checkbox mode',exact:true}).click();assert.equal(await p.locator('.session-row[data-id="s0"] .session-row-checkbox').isDisabled(),true);await p.locator('.session-row[data-id="s0"]').click();assert.equal(await p.evaluate(()=>writes.length),0);
+});

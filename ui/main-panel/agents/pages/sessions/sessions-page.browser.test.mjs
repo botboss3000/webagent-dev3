@@ -54,6 +54,16 @@ let browser;try{
  await page.evaluate(()=>document.body.classList.add('light-mode'));
  await page.locator('#sessions-search-input').fill('');await page.waitForTimeout(250);
  await page.evaluate(()=>fixture.controller.destroy());const before=await page.evaluate(()=>fixture.calls.length);await page.evaluate(()=>window.dispatchEvent(new Event('v3:sessions-changed')));await page.waitForTimeout(100);assert.equal(await page.evaluate(()=>fixture.calls.length),before);
+
+ await page.evaluate(async()=>{
+  const host=document.getElementById('sessions-section');host.innerHTML=await(await fetch('/ui/main-panel/agents/pages/sessions/sessions.html')).text();
+  const {mountSessions}=await import('/ui/main-panel/agents/pages/sessions/js/sessions-page.js');
+  const main={id:'main-protected',title:'Renamed coordinator',agent_id:'one',status:'active',metadata_revision:3,main_chat:true,can_delete:false,message_count:0};
+  window.protectedPage=mountSessions(host,{request:async()=>({sessions:[main],next_offset:null}),userId:'protected-fixture',roster:[{id:'one',name:'One'}],getSessionId:()=>null,open:()=>{},changed:()=>{}});
+  const {createSessionAdapter}=await import('/ui/main-panel/agents/pages/sessions/js/adapter.js');let writes=0;const adapter=createSessionAdapter({request:async()=>{writes++;},roster:[],userId:'protected',changed:()=>{}});adapter.project(main);let blocked=false;try{await adapter.mutate(main.id,'recycle');}catch(error){blocked=error.message.includes('cannot be deleted');}window.protectedResult={blocked,writes};
+ });
+ await page.locator('tr[data-session-id="main-protected"]').waitFor();assert.equal(await page.locator('tr[data-session-id="main-protected"] .sessions-check-cell').count(),0);
+ await page.locator('tr[data-session-id="main-protected"] [data-session-row-more]').click();assert.equal(await page.locator('.session-row-actions [data-action="delete"]').count(),0);assert.equal(await page.locator('.session-row-actions [data-action="rename"]').count(),1);assert.deepEqual(await page.evaluate(()=>protectedResult),{blocked:true,writes:0});await page.evaluate(()=>protectedPage.destroy());
  assert.deepEqual(errors,[]);
  // Exercise the public page mount with a long catalog and its docked footer.
  await page.evaluate(async()=>{

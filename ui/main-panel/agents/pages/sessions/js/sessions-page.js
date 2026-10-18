@@ -1107,7 +1107,7 @@ function _renderCell(row, col, ctx) {
 function _renderCheckCell(row, isSession) {
   // Cross-catalog rows can't be selected — bulk actions (delete/restore) must
   // stay scoped to the currently viewed catalog.
-  if (row._cross || row._nativeCodexCatalog) return '<td class="col-check"></td>';
+  if (row._cross || row._nativeCodexCatalog || row.main_chat===true || row.can_delete===false) return '<td class="col-check"></td>';
   const id = isSession ? row.session_id : row.id;
   return '<td class="col-check"><span class="sessions-check-cell" role="checkbox" tabindex="0" aria-label="Select session" aria-checked="false" data-session-id="' + _esc(id || '') + '"> </span></td>';
 }
@@ -1904,6 +1904,7 @@ function _openSessionRowActions(sid, kebabBtn) {
     `<button type="button" class="session-row-action" data-action="${isRead ? 'mark-unread' : 'mark-read'}">${icon(isRead ? 'mail-open' : 'check-circle', { size: '14px' })} ${isRead ? 'Mark unread' : 'Mark read'}</button>` +
     `<button type="button" class="session-row-action danger" data-action="delete">${icon('trash-2', { size: '14px' })} Delete session</button>`;
 
+  if(sess.main_chat===true||sess.can_delete===false)popup.querySelector('[data-action="delete"]')?.remove();
   for(const [action,reason] of [['auto-rename','On-demand auto rename · Pending V3'],['mark-unread','Mark unread · Pending V3']]){const button=popup.querySelector(`[data-action="${action}"]`);if(button){button.disabled=true;button.title=reason;button.textContent=reason;}}
   if(sess._origin==='bin'){for(const action of ['pin','rename','mark-read','delete']){const button=popup.querySelector(`[data-action="${action}"]`);if(button){button.disabled=true;button.title=action==='delete'?'Permanent deletion · Pending V3':'Restore this session first';}}const restore=document.createElement('button');restore.className='session-row-action';restore.textContent='Restore session';restore.onclick=async()=>{if(await _restoreOne(sid)){_closeSessionRowActions();await _loadAndRender('mutation');}};popup.prepend(restore);}
   const info = document.createElement('div');
@@ -1983,7 +1984,7 @@ function _openSessionRowActions(sid, kebabBtn) {
 // bin); bin-origin rows permanently delete (with ?permanent=true) — so the
 // merged 'both' view can act on both catalogs in one go.
 async function _deleteOneSession(btn,sid,origin) {
-  if(origin==='bin'||disposed)return;
+  if(origin==='bin'||disposed||adapter.rows.get(sid)?.main_chat===true||adapter.rows.get(sid)?.can_delete===false)return;
   advanceDeleteBtn(btn,{size:'14px',armTitle:'Click again to recycle',onConfirm:async()=>{
     try{await adapter.mutate(sid,'recycle');_closeSessionRowActions();_toast('Session recycled');await _loadAndRender('mutation');}
     catch(error){_toast(error.message);throw error;}
@@ -2001,7 +2002,7 @@ async function runBatch(ids,action){
   _toast(`${action==='recycle'?'Recycled':'Restored'} ${success.length} of ${ids.length} sessions`+(failed.length?`; ${failed.length} failed: ${[...new Set(errors)].join('; ')}`:''));
 }
 async function _deleteSelectedSessions(){
-  const ids=_getSelectedSessionIds().filter(sid=>adapter.rows.get(sid)?._origin==='active');
+  const ids=_getSelectedSessionIds().filter(sid=>adapter.rows.get(sid)?._origin==='active'&&adapter.rows.get(sid)?.main_chat!==true&&adapter.rows.get(sid)?.can_delete!==false);
   await runBatch(ids,'recycle');
 }
 async function _restoreOne(sid){try{await adapter.mutate(sid,'restore');return true;}catch(error){_toast(error.message);return false;}}

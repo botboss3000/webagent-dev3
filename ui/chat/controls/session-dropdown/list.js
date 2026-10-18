@@ -2,6 +2,7 @@
 // @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector","session list"],"purpose":"Session dropdown presentation and interactions. Config: ui/chat/controls/session-dropdown/session-dropdown.json -> common.trigger, common.menu, common.footer, common.gestures with desktop/mobile/widget overlays; adopted on page reload.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/controls/session-dropdown/session-dropdown.json","pointers":["/common/trigger","/common/menu","/common/footer","/common/gestures","/desktop","/mobile","/widget"]}],"opportunities":[]}}
 /** Renders active/recycled sessions, private search results, and revision-fenced management actions. Controller callbacks own navigation; client writes retain retry receipts, and teardown fences pending work. */
 export function createSessionList(root, {guard, refresh, select, client, recycled = () => {}, screenSettings = () => null}) {
+  const protectedSession=item=>item?.main_chat===true||item?.can_delete===false;
   let items = [], selected = '', config = {}, query = '', status = 'active';
   let hits = [], continuation = null, searchInfo = '', searching = false, epoch = 0, timer = 0, destroyed = false;
   let editing = null, checkboxMode = false, batchBusy = false;
@@ -47,16 +48,17 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     root.dataset.loaded = 'true';
     for (const id of ['icon','label','status','kebab','delete']) {
       const node = root.querySelector('#session-dropdown-' + id);
-      node.hidden = config.trigger?.[{icon:'agent_icon',label:'session_name',kebab:'row_actions'}[id] || id] === false || (id === 'kebab' && config.trigger?.row_actions !== true) || (id === 'delete' && config.trigger?.delete !== true);
+      node.hidden = config.trigger?.[{icon:'agent_icon',label:'session_name',kebab:'row_actions'}[id] || id] === false || (id === 'kebab' && config.trigger?.row_actions !== true) || (id === 'delete' && (config.trigger?.delete !== true || protectedSession(item)));
       node.style.display = node.hidden ? 'none' : '';
     }
     root.querySelector('#session-dropdown-icon').classList.toggle('session-row-agent-warning', !!item?.pinned);
     const statusEl = root.querySelector('#session-dropdown-status');
     statusEl.replaceChildren(); if (item) statusEl.append(statusNode(item));
-    root.querySelector('#session-dropdown-delete').disabled = !item || item.status === 'recycled';
+    root.querySelector('#session-dropdown-delete').disabled = !item || item.status === 'recycled' || protectedSession(item);
   }
   /** Sends revision-fenced client actions with stable retry IDs for uncertain responses. */
   async function mutate(item, action, changes = {}, deferred = false) {
+    if (['recycle','purge'].includes(action)&&protectedSession(item)) throw Error('Main Chat cannot be deleted');
     const body = {expected_revision:item.metadata_revision, ...changes};
     const receiptKey = JSON.stringify([item.id, action, body]);
     if (!receipts.has(receiptKey)) receipts.set(receiptKey, crypto.randomUUID());
@@ -82,7 +84,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
   /** Recycles selected sessions sequentially; failed rows stay selected for retry. */
   async function recycleChecked() {
     if (batchBusy || destroyed) return;
-    const targets = items.filter(item => checked.has(item.id));
+    const targets = items.filter(item => checked.has(item.id)&&!protectedSession(item));
     if (!targets.length) return;
     batchBusy = true; render();
     const failures = []; let completed = 0;
@@ -102,7 +104,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
   }
   /** Updates one checkbox selection unless a batch operation is active. */
   function toggleChecked(id) {
-    if (batchBusy) return;
+    if (batchBusy||protectedSession(items.find(item=>item.id===id))) return;
     if (checked.has(id)) checked.delete(id); else checked.add(id);
     render();
   }
@@ -164,7 +166,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
       ['start_scratchpad','Start a scratchpad','notepad-text',null],
       ['delete','Recycle session','trash-2',() => mutate(item,'recycle')]
     ])) {
-      if (config.menu?.[key] === false) continue;
+      if (config.menu?.[key] === false || (['delete','purge'].includes(key)&&protectedSession(item))) continue;
       const b = button(title,glyph,fn,'session-row-action' + (key === 'delete' ? ' danger' : ''));
       b.append(document.createTextNode(' ' + title)); b.disabled = !fn;
       if (!fn) b.title = title + ' — unavailable in v3';
@@ -283,7 +285,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
       row.dataset.id = item.id; row.dataset.agent = item.agent_id; row.tabIndex = 0;
       if (checkboxMode && status === 'active') {
         const b = button('Select ' + (item.title || 'New Session'),checked.has(item.id) ? 'check-square' : 'square',() => toggleChecked(item.id),'session-row-checkbox');
-        b.dataset.checked = checked.has(item.id) ? '1' : '0'; b.setAttribute('aria-pressed',String(checked.has(item.id))); b.disabled = batchBusy;
+        b.dataset.checked = checked.has(item.id) ? '1' : '0'; b.setAttribute('aria-pressed',String(checked.has(item.id))); b.disabled = batchBusy||protectedSession(item);
         row.append(b);
       }
       const title = document.createElement('span'); title.className = 'session-row-title';
