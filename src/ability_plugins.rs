@@ -84,7 +84,9 @@ fn automation_contract(
     tools: &[String],
     manifest: &Value,
 ) -> Result<String> {
-    if id != "automation" || json!(tools) != json!(AUTOMATION_TOOLS) {
+    let legacy_tools=json!(tools)==json!(AUTOMATION_TOOLS);
+    let mut main_notes_tools=vec!["main_notes_read","main_notes_write"];main_notes_tools.extend(AUTOMATION_TOOLS);
+    if id != "automation" || !legacy_tools && json!(tools)!=json!(main_notes_tools) {
         anyhow::bail!("Unsupported native Automation identity");
     }
     let expected = json!({
@@ -94,7 +96,9 @@ fn automation_contract(
         "build":{"toolchain":"rust-1.90", "inputs":["Cargo.toml","Cargo.lock","service/main.rs","service/engine.rs","service/contracts.rs"],
             "dependencies":[], "flags":[], "assets":["automation.json","automation.skill.md","service/package.json","service/tool-schemas.json","service/page.json","service/page.js","service/page.css"]}
     });
-    if manifest != &expected {
+    let mut with_notes=expected.clone();
+    with_notes["build"]["assets"].as_array_mut().unwrap().push(json!("skills/main_notes_review.skill.md"));
+    if manifest != &expected && manifest != &with_notes {
         anyhow::bail!("Unsupported native Automation contract");
     }
     let key = build_key(root, manifest, false)?;

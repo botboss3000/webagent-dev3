@@ -820,12 +820,46 @@ pub(crate) async fn tool_call(
         .await
         .map_err(|_| anyhow!("Agent unavailable"))?;
     if let Some(target) = args["id"].as_str() {
+        if target.starts_with("main-notes-action-") {
+            let notes=scoped.store.main_chat_state().await?;
+            if notes["session_id"]!=sid {return Err(anyhow!("Only Main Chat manages Main Notes schedules"));}
+        }
         let state = scoped.store.module_state(id).await?;
         if let Some(owner) = state["state"]["definitions"][target]["agent_id"].as_str() {
             if owner != agent {
                 return Err(anyhow!("Automation belongs to another agent"));
             }
         }
+    }
+    if let Some(binding)=args.get("main_notes_action").filter(|v|!v.is_null()) {
+        if !matches!(name,"schedule_task"|"remind_me"|"update_automation") {return Err(anyhow!("Main Notes action binding requires a schedule operation"));}
+        let notes=scoped.store.main_chat_state().await?;
+        if notes["settings"]["enabled"]!=true||notes["session_id"]!=sid {return Err(anyhow!("Only Main Chat coordinates Main Notes schedules"));}
+        let topic=binding["topic_id"].as_str().ok_or_else(||anyhow!("Topic ID required"))?.to_owned();
+        let entry=binding["entry_id"].as_str().ok_or_else(||anyhow!("Entry ID required"))?.to_owned();
+        let action=&notes["topics"][&topic]["entries"][&entry];
+        let action_id=format!("main-notes-action-{}",&digest(&json!([topic,entry]))[..40]);
+        let updating=name=="update_automation";
+        if updating&&args["id"]!=action_id {return Err(anyhow!("Schedule identity does not match the Main Notes action"));}
+        let existing=if updating {scoped.store.module_state("automation").await?["state"]["definitions"][&action_id].clone()}else{Value::Null};
+        let trigger=if updating&&args["trigger"].is_null(){existing["trigger"].clone()}else{args["trigger"].clone()};
+        let prompt=if updating&&args["prompt"].is_null(){existing["prompt"].clone()}else{args["prompt"].clone()};
+        if action.is_null()||action["timing"].is_null()||action["timing"]!=trigger||action["text"]!=prompt {
+            return Err(anyhow!("Schedule prompt and timing must match the current Main Notes action"));
+        }
+        if matches!(action["state"].as_str(),Some("done"|"cancelled")) {return Err(anyhow!("Action is already terminal"));}
+        if name!="remind_me" {
+            let destination=if updating&&args["destination"].is_null(){&existing["destination"]}else{&args["destination"]};
+            let kind=destination["type"].as_str().or_else(||destination["kind"].as_str()).unwrap_or("");
+            if !matches!(kind,"existing_chat"|"existing_session"|"chat")||destination["session_id"]!=sid {
+                return Err(anyhow!("Main Notes schedules must explicitly target Main Chat"));
+            }
+        }
+        let intent=crate::main_chat::action_intent(&notes["topics"][&topic],action);
+        if !updating {args["request_id"]=json!(action_id);}
+        args["main_notes_intent"]=json!(intent);
+    } else if name=="update_automation"&&args["id"].as_str().is_some_and(|v|v.starts_with("main-notes-action-")) {
+        return Err(anyhow!("Main Notes updates require their current action binding"));
     }
     let mut scope = execution_scope(&scoped, &agent, Some(sid), false).await?;
     if name == "remember_automation_state" {
@@ -995,6 +1029,21 @@ pub(crate) async fn binding_valid(app: &App, run: &Value) -> bool {
     if binding.is_null() {
         return true;
     }
+    if binding["id"]=="automation" {
+        let aid=binding["automation_id"].as_str().unwrap_or("");
+        if aid=="main-notes-review"||aid.starts_with("main-notes-action-") {
+            let Ok(notes)=app.store.main_chat_state().await else{return false};
+            if notes["settings"]["enabled"]!=true {return false;}
+            if aid.starts_with("main-notes-action-") {
+                let definition=app.store.module_state("automation").await.ok()
+                    .map(|s|s["state"]["definitions"][aid].clone()).unwrap_or(Value::Null);
+                let current=crate::main_chat::scheduled_entry_current(&notes,aid,&definition);
+                // A completed action may publish its final model reply. A further
+                // tool dispatch has a pending call and still fails this live fence.
+                if !current && !(run["phase"]=="model"&&run["pending"].is_null()) {return false;}
+            }
+        }
+    }
     let Some(id) = binding["id"].as_str() else {
         return false;
     };
@@ -1053,6 +1102,14 @@ async fn admit(app: &App, id: &str, gen: &str, admission: &Value) -> Result<Valu
     let definition =
         &snapshot["state"]["definitions"][admission["automation_id"].as_str().unwrap_or("")];
     let occurrence = &snapshot["state"]["occurrences"][oid];
+    let aid=admission["automation_id"].as_str().unwrap_or("");
+    if aid=="main-notes-review"||aid.starts_with("main-notes-action-") {
+        let notes=app.store.main_chat_state().await?;
+        if notes["settings"]["enabled"]!=true {return Err(anyhow!("Main Chat is disabled"));}
+        if aid.starts_with("main-notes-action-")&&!crate::main_chat::scheduled_entry_current(&notes,aid,&definition) {
+            return Err(anyhow!("Automation proposal withdrawn"));
+        }
+    }
     if definition["status"] != "active"
         || definition["revision"] != admission["revision"]
         || occurrence["status"] != "queued"
@@ -1215,6 +1272,7 @@ async fn package_service(app: App, id: &'static str) {
     let mut inflight = std::collections::HashSet::new();
     let mut seen = std::collections::HashSet::new();
     let mut last_started = HashMap::new();
+    let mut last_dispatched_wake = HashMap::new();
     let mut wake_hints = crate::wake::subscribe();
     let mut last_probe = 0;
     let mut cursor = 0usize;
@@ -1273,7 +1331,11 @@ async fn package_service(app: App, id: &'static str) {
                         break;
                     }
                     let uid = user.store.current_user_id().to_owned();
-                    if last_started.get(&uid) == Some(&now()) {
+                    let wake_sequence=*wake_hints.borrow();
+                    // A wake received during an in-flight reducer stays pending for
+                    // that user. Same-second writes do not depend on polling recovery.
+                    let hinted=id=="automation"&&last_dispatched_wake.get(&uid)!=Some(&wake_sequence);
+                    if !hinted && last_started.get(&uid) == Some(&now()) {
                         continue;
                     }
                     if !inflight.insert(uid.clone()) {
@@ -1282,6 +1344,7 @@ async fn package_service(app: App, id: &'static str) {
                     let startup = !seen.contains(&uid);
                     cursor = cursor.wrapping_add(1);
                     last_started.insert(uid.clone(), now());
+                    last_dispatched_wake.insert(uid.clone(),wake_sequence);
                     jobs.spawn(async move {
                         let success = tick_package(&user, id, startup).await.is_ok();
                         (uid, success)
@@ -1347,6 +1410,15 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<(
     }
     if id == "outbound_notifications" && !administrator(app).await {
         return Ok(());
+    }
+    let notes=app.store.main_chat_state().await?;
+    if id=="automation"&&notes["settings"]["enabled"]==true {
+        if let Some(sid)=notes["session_id"].as_str() {
+            if app.store.module_state(id).await?["state"]["definitions"]["main-notes-review"].is_null() {
+                let scope=execution_scope(app,"shared_default",Some(sid),false).await?;
+                perform(app,id,"bootstrap_main",json!({"session_id":sid}),None,None,true,scope).await?;
+            }
+        }
     }
     let initial = app.store.module_state(id).await?;
     let latest = app.store.notification_page(i64::MAX, 1).await?["latest_seq"]
@@ -1441,7 +1513,10 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<(
             }
         }
     }
-    perform(app,id,"tick",json!({"events":page["events"],"cursor":page["next_seq"],"pruned_through":page["pruned_through"],"event_page":page,"agent_settings":settings,"agent_allowed":allowed}),None,None,true,json!({"startup":startup,"event_scan_cursor":cursor})).await?;
+    let mut changes:Vec<Value>=notes["changes"].as_object().into_iter().flatten().map(|(_,v)|v.clone())
+        .filter(|v|v["version"].as_u64().unwrap_or(0)>initial["state"]["main_notes_cursor"].as_u64().unwrap_or(0)).collect();
+    changes.sort_by_key(|v|v["version"].as_u64().unwrap_or(0));changes.truncate(128);
+    perform(app,id,"tick",json!({"events":page["events"],"cursor":page["next_seq"],"pruned_through":page["pruned_through"],"event_page":page,"agent_settings":settings,"agent_allowed":allowed,"main_chat_enabled":notes["settings"]["enabled"],"main_notes_changes":changes}),None,None,true,json!({"startup":startup,"event_scan_cursor":cursor})).await?;
     if id == "outbound_notifications" {
         let reserve = perform(
             app,

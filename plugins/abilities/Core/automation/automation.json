@@ -3,6 +3,8 @@
   "kind": "ability",
   "description": "Optional schedules, reminders and internal event-triggered agent tasks.",
   "tools": [
+    "main_notes_read",
+    "main_notes_write",
     "list_event_sources",
     "list_delivery_channels",
     "event_subscribe",

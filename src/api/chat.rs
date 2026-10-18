@@ -374,13 +374,15 @@ pub(crate) async fn events(
                     let summary = app.store.shared_read_summary(&id,&user_id).await.ok()?;
                     let participation=app.store.participation_state(&id).await.ok()?;
                     let queue_state=crate::followup_queue::public(&app.store.followup_queue(&id).await.ok()?);
-                    let revision=digest(&json!([summary["metadata_revision"],participation["revision"],participation["generation"],queue_state["queue_state"]["revision"]]));
+                    // Private notes revisions refresh the dedicated element without adding transcript messages.
+                    let notes_revision=if opening_main_owner(&app,&id,&user_id).await {app.store.main_chat_state().await.ok()?["revision"].clone()}else{Value::Null};
+                    let revision=digest(&json!([summary["metadata_revision"],participation["revision"],participation["generation"],queue_state["queue_state"]["revision"],notes_revision]));
                     if metadata_revision.as_ref() != Some(&revision) {
                         metadata_revision = Some(revision);
                         // Metadata events deliberately carry no SSE ID: event-log
                         // sequence numbers are not public chat sequence numbers.
                         let event = Event::default().event("session_updated")
-                            .data(json!({"session":summary,"participation":participation,"queue":queue_state["queue"],"queue_state":queue_state["queue_state"],"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id()}).to_string());
+                            .data(json!({"session":summary,"participation":participation,"queue":queue_state["queue"],"queue_state":queue_state["queue_state"],"main_notes_revision":notes_revision,"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id()}).to_string());
                         return Some((Ok(event), (app, id, cursor, queue, start, auth_key,
                             expires, checked, user_id, generation, agent_id, access_revision,
                             metadata_revision, metadata_checked)));
@@ -774,4 +776,9 @@ mod shared_command_projection_tests {
    assert!(!result.to_string().contains("owner-only"));
   }
  }
+}
+
+// Shared observers must not learn even the existence or revision of private Main Notes.
+async fn opening_main_owner(app:&App,sid:&str,user:&str)->bool {
+    user==app.store.current_user_id()&&app.store.get(&key("session",sid)).await.ok().flatten().is_some_and(|s|s["main_chat"]==true)
 }

@@ -392,7 +392,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             return Ok(());
         }
         let sid = run["session_id"].as_str().unwrap().to_owned();
-        let workflow_policy = match current_workflow_policy(&app).await {
+        let mut workflow_policy = match current_workflow_policy(&app).await {
             Ok(policy) => policy,
             Err(_) => {
                 run["status"] = json!("paused");
@@ -401,6 +401,15 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                 return Ok(());
             }
         };
+        let main_chat=app.store.main_chat_state().await?;
+        if main_chat["session_id"]==sid {
+            if main_chat["settings"]["enabled"]==true {
+                let skill=json!({"ability_id":"automation","kind":"selectable","skill_id":"main_notes_review"});
+                if !run["loaded_skills"].is_array(){run["loaded_skills"]=json!([]);}
+                if !run["loaded_skills"].as_array().unwrap().contains(&skill){run["loaded_skills"].as_array_mut().unwrap().push(skill);}
+            }
+            workflow_policy.max_context_bytes=workflow_policy.max_context_bytes.min(main_chat["settings"]["context_limit_bytes"].as_u64().unwrap_or(262144) as usize);
+        }
         if run["ability_catalog_version"] != app.abilities.version() {
             run["loaded_abilities"] = json!([]);
             run["ability_catalog_version"] = json!(app.abilities.version());
@@ -595,6 +604,15 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                 lifetime: context_input::Lifetime::Call, content: mode_content,
                 turn: run["turns"].as_u64().unwrap_or(0), call: call_number,
             }];
+            let requester=run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id());
+            let own_notes=app.store.for_user(requester).await?.main_chat_state().await?;
+            if own_notes["settings"]["enabled"]==true {
+                contributions.push(context_input::Contribution {
+                    id:"main_notes_policy".into(),source:"native_main_notes_policy".into(),lifetime:context_input::Lifetime::Call,
+                    content:format!("Main Chat and Main Notes are enabled for this requester. Keep temporary plans and minor edits local. Contribute ongoing goals, decisions, blockers and actions that matter across sessions through the policy-gated Main Notes tools when available. Read before contributing; merge existing topics and entries, retain sources and user-requested timing, never invent timing. Main Chat alone coordinates note-bound schedules. Saving or approving notes never authorizes execution. Reporting preference: {}. Use current execution and Automation permissions independently.",own_notes["settings"]["reporting"].as_str().unwrap_or("meaningful")),
+                    turn:run["turns"].as_u64().unwrap_or(0),call:call_number,
+                });
+            }
             if run["module_binding"].is_object() {
                 // Only runtime identifiers enter this call-scoped contribution.
                 // Trigger payloads and remembered values remain untrusted history evidence.

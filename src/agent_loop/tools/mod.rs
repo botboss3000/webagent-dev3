@@ -49,7 +49,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 pub fn is_read(name: &str) -> bool {
-    crate::modules::is_read(name) || matches!(name,"mcp_list_connections"|"mcp_search_servers"|"mcp_inspect_server"|"mcp_list_tools") || matches!(
+    name=="main_notes_read" || crate::modules::is_read(name) || matches!(name,"mcp_list_connections"|"mcp_search_servers"|"mcp_inspect_server"|"mcp_list_tools") || matches!(
         name,
         "task_status" | "task_wait" | "task_cancel"
             | "search_tools" | "list_tools" | "load_tool"
@@ -145,6 +145,7 @@ pub(crate) fn native_schemas() -> Vec<Value> {
         schemas.extend(core_directory_decision::schemas());
         schemas.extend(core_utilities::schemas());
         schemas.extend(core_session::schemas());
+        schemas.extend(crate::main_chat::schemas());
         schemas.extend(core_skills::schemas());
         schemas.extend(core_context_assets::schemas());
         schemas.extend(core_prompt::schemas());

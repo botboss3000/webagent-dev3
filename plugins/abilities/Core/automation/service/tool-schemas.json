@@ -43,7 +43,8 @@
               "session_settled",
               "run.completed",
               "run.failed",
-              "run.cancelled"
+              "run.cancelled",
+              "main_notes.updated"
             ]
           },
           "prompt": {
@@ -228,6 +229,23 @@
           },
           "filter": {
             "type": "object"
+          },
+          "main_notes_action": {
+            "type": "object",
+            "properties": {
+              "topic_id": {
+                "type": "string"
+              },
+              "entry_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic_id",
+              "entry_id"
+            ],
+            "additionalProperties": false,
+            "description": "Bind a Main Notes action. Only Main Chat may coordinate it; trigger must match saved user timing. Uses one stable schedule identity."
           }
         },
         "required": [
@@ -280,6 +298,23 @@
           },
           "filter": {
             "type": "object"
+          },
+          "main_notes_action": {
+            "type": "object",
+            "properties": {
+              "topic_id": {
+                "type": "string"
+              },
+              "entry_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic_id",
+              "entry_id"
+            ],
+            "additionalProperties": false,
+            "description": "Bind a Main Notes action. Only Main Chat may coordinate it; trigger must match saved user timing. Uses one stable schedule identity."
           }
         },
         "required": [
@@ -388,6 +423,23 @@
           },
           "filter": {
             "type": "object"
+          },
+          "main_notes_action": {
+            "type": "object",
+            "properties": {
+              "topic_id": {
+                "type": "string"
+              },
+              "entry_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic_id",
+              "entry_id"
+            ],
+            "additionalProperties": false,
+            "description": "Bind a Main Notes action. Only Main Chat may coordinate it; trigger must match saved user timing. Uses one stable schedule identity."
           }
         },
         "required": [

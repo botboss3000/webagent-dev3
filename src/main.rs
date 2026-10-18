@@ -38,6 +38,7 @@ mod optimization_settings;
 mod optimization_prompt;
 mod services;
 mod modules;
+mod main_chat;
 mod wake;
 mod session_naming;
 mod administrator_services;

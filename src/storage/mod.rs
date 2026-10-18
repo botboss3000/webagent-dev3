@@ -21,6 +21,7 @@ mod shared_read;
 mod requester_quota;
 mod actions;
 mod module_records;
+mod main_notes;
 pub(crate) mod context_assets;
 
 use crate::access;

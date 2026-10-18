@@ -14,6 +14,8 @@ struct State {
     #[serde(default)]
     revision: u64,
     #[serde(default)]
+    main_notes_cursor: u64,
+    #[serde(default)]
     definitions: BTreeMap<String, Definition>,
     #[serde(default)]
     occurrences: BTreeMap<String, Occurrence>,
@@ -31,6 +33,8 @@ struct Definition {
     destination: Value,
     #[serde(default)]
     creation_digest: String,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    main_notes_intent: Option<String>,
     trigger: Value,
     status: String,
     next_ms: Option<i64>,
@@ -266,6 +270,7 @@ fn trigger(
         let source = string(args, "source")?;
         if ![
             "session_settled",
+            "main_notes.updated",
             "run.completed",
             "run.failed",
             "run.cancelled",
@@ -421,9 +426,28 @@ fn reduce(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), S
             }
             return Ok((json!({"inactive":true}), vec![], true));
         }
+        "bootstrap_main" => {
+            let id="main-notes-review";
+            if state.definitions.contains_key(id) {return Ok((json!({"registered":true}),vec![],false));}
+            let cfg=settings(&r.context);
+            if cfg["allow_event_subscriptions"]==false {return Err("event_subscriptions_disabled".into());}
+            let cap=cfg["max_automations_per_user"].as_u64().unwrap_or(20).min(LIMIT as u64) as usize;
+            if state.definitions.values().filter(|d|!["cancelled","recycled","completed"].contains(&d.status.as_str())).count()>=cap {return Err("automation_capacity".into());}
+            let sid=string(a,"session_id")?;
+            state.definitions.insert(id.into(),Definition {
+                id:id.into(),revision:1,agent_id:string(&r.context,"agent_id")?,
+                prompt:"Review the changed Main Notes entries using the main_notes_review skill. An update authorizes review only. Read current notes and policy. Execute only an already authorized action, schedule using existing Automation permissions, ask for input/approval, or wait. Record progress and outcomes; keep routine maintenance quiet.".into(),
+                reminder:false,destination:json!({"type":"existing_chat","session_id":sid}),
+                creation_digest:"main-notes-review-v1".into(),main_notes_intent:None,trigger:json!({"kind":"main_notes","source":"main_notes.updated"}),
+                status:if cfg["require_approval"]==true {"paused"}else{"active"}.into(),next_ms:None,
+                created_ms:now,expires_ms:None,daily_cap:cfg["max_events_per_subscription"].as_u64().unwrap_or(50).min(1000),
+                retry_limit:0,failure_limit:5,failures:0,memory:Value::Null,armed_by_user:false,last_error:None,activation_seq:None,
+            });
+            return Ok((json!({"registered":true}),vec![],true));
+        }
         "probe" => json!({"protocol":1,"package":"automation","ready":true}),
         "list_event_sources" => {
-            json!({"sources":[{"id":"session_settled","available":true},{"id":"run.completed","available":true},{"id":"run.failed","available":true},{"id":"run.cancelled","available":true}],"external_adapters":"unavailable"})
+            json!({"sources":[{"id":"session_settled","available":true},{"id":"run.completed","available":true},{"id":"run.failed","available":true},{"id":"run.cancelled","available":true},{"id":"main_notes.updated","available":true}],"external_adapters":"unavailable"})
         }
         "list_delivery_channels" => {
             json!({"channels":[{"kind":"existing_chat","available":true},{"kind":"new_session","available":true},{"kind":"silent","available":true}],"runners":[{"id":"inline","available":true},{"id":"clone","available":false},{"id":"device","available":false}]})
@@ -441,7 +465,7 @@ fn reduce(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), S
             if r.operation == "history" {
                 json!({"items":state.occurrences.values().filter(|o|state.definitions.get(&o.automation_id).is_some_and(|d|allowed.contains(d.agent_id.as_str())) && a["id"].as_str().is_none_or(|id|o.automation_id==id)).skip(offset).take(limit).collect::<Vec<_>>()})
             } else {
-                json!({"items":state.definitions.values().filter(|d|allowed.contains(d.agent_id.as_str()) && (!event_only || d.trigger["kind"]=="event")).skip(offset).take(limit).collect::<Vec<_>>()})
+                json!({"items":state.definitions.values().filter(|d|allowed.contains(d.agent_id.as_str()) && (!event_only || d.trigger["kind"]=="event" || d.trigger["kind"]=="main_notes")).skip(offset).take(limit).collect::<Vec<_>>()})
             }
         }
         "schedule_task" | "remind_me" | "event_subscribe" => {
@@ -497,6 +521,7 @@ fn reduce(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), S
                 id: id.clone(),
                 revision: 1,
                 creation_digest: digest,
+                main_notes_intent:a["main_notes_intent"].as_str().map(str::to_owned),
                 agent_id: string(&r.context, "agent_id")?,
                 prompt: string(a, "prompt")?,
                 reminder,
@@ -641,6 +666,7 @@ fn reduce(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), S
                     d.memory = a["memory"].clone();
                 }
                 "update_automation" => {
+                    if let Some(intent)=a["main_notes_intent"].as_str(){d.main_notes_intent=Some(intent.to_owned());}
                     if d.status == "completed" {
                         d.status = "paused".into();
                     }
@@ -807,10 +833,31 @@ fn tick(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), Str
             settings(&r.context)
         };
         !(d.trigger["kind"] == "cron" && cfg["allow_recurring_schedules"] == false
-            || d.trigger["kind"] == "event" && cfg["allow_event_subscriptions"] == false
+            || matches!(d.trigger["kind"].as_str(),Some("event"|"main_notes")) && cfg["allow_event_subscriptions"] == false
             || cfg["require_approval"] == true && !d.armed_by_user)
     };
+    if r.args["main_chat_enabled"]==true {
+        if let Some(mut d)=state.definitions.get("main-notes-review").cloned().filter(|d|d.status=="active"&&allowed(d)) {
+            let cfg=if r.args["agent_settings"].is_object(){&r.args["agent_settings"][&d.agent_id]}else{settings(&r.context)};
+            d.daily_cap=d.daily_cap.min(cfg["max_events_per_subscription"].as_u64().unwrap_or(50));
+            let changes:Vec<Value>=r.args["main_notes_changes"].as_array().into_iter().flatten()
+                .filter(|change|change["version"].as_u64().is_some_and(|v|v>state.main_notes_cursor)).take(128).cloned().collect();
+            if let Some(last)=changes.last().and_then(|c|c["version"].as_u64()) {
+                let actionable:Vec<_>=changes.iter().filter(|c|c["review_required"]==true).cloned().collect();
+                if actionable.is_empty() {state.main_notes_cursor=last;}
+                else {
+                    let event=json!({"kind":"main_notes.updated","version":last,"changes":actionable});
+                    match queue(state,&d,now,format!("main-notes-review:version:{last}"),event,vec![]) {
+                        Ok(())=>state.main_notes_cursor=last,
+                        Err(error)=>errors.push(json!({"id":d.id,"error":error})),
+                    }
+                }
+            }
+        }
+    }
     for d in &definitions {
+        if (d.id=="main-notes-review"||d.id.starts_with("main-notes-action-"))&&r.args["main_chat_enabled"]!=true {continue;}
+
         if d.status != "active" || !allowed(d) {
             continue;
         }
@@ -881,7 +928,7 @@ fn tick(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), Str
                 if !settled && d.trigger["source"] != source {
                     continue;
                 }
-                if event["agent_id"] == d.agent_id {
+                if event["agent_id"] == d.agent_id && source!="main_notes.updated" {
                     continue;
                 }
                 let chain: Vec<String> = event["causal_chain"]
@@ -938,7 +985,8 @@ fn tick(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), Str
         let Some(d) = state.definitions.get(&o.automation_id) else {
             continue;
         };
-        if o.status != "queued" || d.status != "active" || !allowed(d) || busy.contains(&d.id) {
+        if o.status != "queued" || d.status != "active" || !allowed(d) || busy.contains(&d.id)
+            || (d.id=="main-notes-review"||d.id.starts_with("main-notes-action-"))&&r.args["main_chat_enabled"]!=true {
             continue;
         }
         if o.revision != d.revision {
@@ -1889,5 +1937,22 @@ mod acceptance_boundary_tests {
         );
         assert_eq!(accepted["ok"], true);
         assert_eq!(accepted["state"]["definitions"]["job"]["memory"], at_limit);
+    }
+}
+
+#[cfg(test)]
+mod main_notes_tests {
+    use super::*;
+    fn call(state:Value,op:&str,args:Value)->Value {dispatch(json!({"protocol":1,"operation":op,"state":state,"args":args,"now_ms":1792310000000i64,"context":{"user_id":"admin","agent_id":"shared_default","session_id":"main","settings":{}}}))}
+    #[test]
+    fn bootstrap_recovery_dedup_and_pause() {
+        let initial=call(json!({}),"bootstrap_main",json!({"session_id":"main"}));assert_eq!(initial["ok"],true);
+        let duplicate=call(initial["state"].clone(),"bootstrap_main",json!({"session_id":"main"}));assert_eq!(duplicate["state"]["definitions"].as_object().unwrap().len(),1);
+        let args=json!({"main_chat_enabled":true,"main_notes_changes":[{"version":1,"review_required":true,"entry_id":"a"}],"agent_allowed":{"shared_default":true}});
+        let tick=call(duplicate["state"].clone(),"tick",args.clone());assert_eq!(tick["ok"],true);assert_eq!(tick["state"]["main_notes_cursor"],1);
+        let repeat=call(tick["state"].clone(),"tick",args);assert_eq!(repeat["state"]["occurrences"].as_object().unwrap().len(),1);
+        let paused=call(repeat["state"].clone(),"tick",json!({"main_chat_enabled":false,"main_notes_changes":[{"version":2,"review_required":true}]}));
+        assert_eq!(paused["admissions"].as_array().unwrap().len(),0);assert_eq!(paused["state"]["main_notes_cursor"],1);
+        let resumed=call(paused["state"].clone(),"tick",json!({"main_chat_enabled":true,"main_notes_changes":[{"version":2,"review_required":false}]}));assert_eq!(resumed["state"]["main_notes_cursor"],2);
     }
 }

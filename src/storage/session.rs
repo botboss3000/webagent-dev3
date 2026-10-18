@@ -111,6 +111,8 @@ pub fn public_session(value: &Value) -> Result<Value> {
     let metadata: SessionMetadata = serde_json::from_value(value.clone())?;
     let mut summary = serde_json::to_value(metadata)?;
     summary["id"] = value["id"].clone();
+    summary["main_chat"] = json!(value["main_chat"] == true);
+    summary["can_delete"] = json!(value["main_chat"] != true);
     summary["history_revision"] = json!(value["history_revision"].as_u64().unwrap_or(0));
     summary["agent_id"] = json!(value["agent_id"].as_str().unwrap_or("shared_default"));
     Ok(summary)
@@ -408,6 +410,7 @@ impl Store {
         let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(&key).fetch_optional(&mut *tx).await? else { return Ok(SessionPatchOutcome::NotFound); };
         let mut session = self.unseal(&raw)?;
+        if session["main_chat"] == true {return Ok(SessionPatchOutcome::Conflict("Main Chat cannot be deleted"));}
         let metadata: SessionMetadata = serde_json::from_value(session.clone())?;
         if metadata.status == SessionStatus::Deleted { return Ok(SessionPatchOutcome::NotFound); }
         if metadata.metadata_revision != body.expected_revision { return Ok(SessionPatchOutcome::Conflict("Session metadata revision changed")); }
@@ -465,6 +468,7 @@ impl Store {
         let Some(raw)=sqlx::query_scalar::<_,Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(&key).fetch_optional(&mut *tx).await? else {return Ok(SessionPatchOutcome::NotFound);};
         let session=self.unseal(&raw)?;
+        if session["main_chat"]==true {return Ok(SessionPatchOutcome::Conflict("Main Chat cannot be deleted"));}
         if session["status"]=="deleted" {return Ok(SessionPatchOutcome::NotFound);}
         if session["metadata_revision"].as_u64()!=Some(body.expected_revision) {
             return Ok(SessionPatchOutcome::Conflict("Session metadata revision changed"));
@@ -565,6 +569,8 @@ impl Store {
         if let Some(raw) = previous {
             let previous = self.unseal(&raw)?;
             if previous["status"] == "deleted" { return Err(RecycledSession.into()); }
+            // The coordinator role is immutable across partial checkpoint/compaction writes.
+            if previous["main_chat"]==true {object.insert("main_chat".into(),json!(true));}
             if previous["history_revision"].as_u64().unwrap_or(0)
                 > object.get("history_revision").and_then(Value::as_u64).unwrap_or(0) {
                 // A pre-Undo snapshot must not restore the discarded compaction context.
