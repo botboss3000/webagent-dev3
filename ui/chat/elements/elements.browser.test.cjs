@@ -57,3 +57,22 @@ test('mini transcript can be opened by an alternate ellipsis trigger',async t=>{
  await p.locator('.chat-typing-ellipsis').click();assert.equal(await p.locator('.v2-activity-body').isVisible(),false);
  await p.evaluate(()=>{indicator.dispose();transcript.dispose();});assert.equal(await p.locator('.v2-activity-body').count(),0);
 });
+
+test('broker metadata renders inside expanded tool details with inert values',async t=>{
+ const p=await fixture(t);
+ await p.evaluate(async()=>{
+  view.disconnect();const {createTranscriptRow,patchTranscriptRow}=await import('/v3-ui/chat/elements/mini-transcript/rows.js');
+  const context={broker_id:'broker-example-123',summary:'<img src=x onerror=alert(1)>',selection:'created',state:'open',provenance:{session_id:'00000000-0000-4000-8000-000000000001'}};
+  window.brokerRow={id:'broker-tool',category:'tools',label:'file_write',events:[{kind:'tool_call',payload:{arguments:{broker_id:'new'}}},{kind:'tool_result',payload:{output:JSON.stringify({status:'success',output:{broker_context:context,broker_job_id:'job-example',broker_release_id:'release-example'}})}}]};
+  window.brokerNode=createTranscriptRow(brokerRow);document.querySelector('#messages').append(brokerNode);
+  window.patchBroker=patchTranscriptRow;
+ });
+ await p.locator('.v2-mini-tool-disclosure > summary').click();
+ const details=p.locator('.v2-mini-broker');await details.waitFor({state:'visible'});
+ assert.match(await details.textContent(),/Broker ID: broker-example-123/);
+ assert.match(await details.textContent(),/Broker Job ID: job-example/);assert.match(await details.textContent(),/Broker Release ID: release-example/);
+ assert.equal(await details.locator('img').count(),0);
+ assert.match(await details.textContent(),/<img src=x onerror=alert\(1\)>/);
+ await p.evaluate(()=>{brokerRow.events.push({kind:'tool_result',payload:{output:'ordinary result'}});patchBroker(brokerNode,brokerRow);});
+ assert.equal(await details.isVisible(),false);
+});

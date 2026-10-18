@@ -40,6 +40,28 @@ export function normalizeRow(row) {
     result:payloadValue(result?.payload,['result','output',...(result?.payload?.error?['error']:[])]),
     status:result?(result.payload?.error?'error':'done'):'running'};
 }
+// Read bounded broker metadata through the tool transport envelope; source text is never searched.
+export function brokerDetails(result) {
+  let value=result;
+  for(let depth=0;depth<4;depth++) {
+    if(typeof value==='string') {
+      if(value.length>1024*1024)return null;
+      try {value=JSON.parse(value);}catch(_){return null;}
+    }
+    if(!value || typeof value!=='object' || Array.isArray(value))return null;
+    const context=value.broker_context;
+    if(context && typeof context==='object' && typeof context.broker_id==='string') {
+      const text=(entry,max=200)=>typeof entry==='string' && entry.length<=max?entry:null;
+      const id=text(context.broker_id,80);if(!id || !/^[A-Za-z0-9_-]{8,80}$/.test(id))return null;
+      return [['Broker ID',id],['Originating chat',text(context.provenance?.session_id,36)],
+        ['Work',text(context.summary)],['Selection',text(context.selection,32)],['State',text(context.state,32)],
+        ['Broker Job ID',text(value.broker_job_id??context.broker_job_id,80)],
+        ['Broker Release ID',text(value.broker_release_id??context.broker_release_id,80)]].filter(([,entry])=>entry!=null);
+    }
+    value=value.output??value.result;
+  }
+  return null;
+}
 // Use the available parser and sanitizer, falling back to literal text if either fails.
 function markdown(body,text) {
   body.replaceChildren();
@@ -68,6 +90,9 @@ export function createTranscriptRow(row) {
     const disclosure=el('details','','v2-mini-tool-disclosure');
     const head=el('summary');disclosure.append(head,content);node.append(disclosure,footer,raw);
     node._parts.head=head;
+    const broker=el('section','','v2-mini-broker');broker.hidden=true;
+    broker.append(el('div','Broker work','v2-mini-section-head'),el('pre'));
+    content.append(broker);node._parts.broker=broker;
     // Copy actions read the currently rendered values rather than a stale row snapshot.
     footer.append(copy('Copy arguments and result',()=>content.textContent));
     for(const [key,title] of [['args','Arguments'],['result','Result']]) {
@@ -103,6 +128,8 @@ export function patchTranscriptRow(node,row) {
   if(p.tool) {
     p.head.textContent=(value.status==='done'?'✓ ':value.status==='error'?'! ':'◷ ')+row.label;
     node.dataset.status=value.status;
+    const details=brokerDetails(value.result);p.broker.hidden=!details;
+    p.broker.lastElementChild.textContent=details?details.map(([label,text])=>label+': '+text).join('\n'):'';
     for(const key of ['args','result']) {
       p[key].section.hidden=value[key]===undefined;
       p[key].pre.textContent=printable(value[key]);
