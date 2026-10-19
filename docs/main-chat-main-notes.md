@@ -154,6 +154,39 @@ It retains Pause/Resume/History, hides generic Edit/Run now for managed intent,
 and prevents fixed-subscription recycle/cancel/delete. Change intent or requested
 timing in Main Notes. Individual tool policies remain on Abilities.
 
+## Session priority and the wavy avatar ring
+
+Main Chat leads pins in both session lists, using strict `main_chat === true`
+metadata. Rename and pin state do not change its identity; an ordinary chat named
+Main Chat remains ordinary. No engine or authorization behavior changed.
+
+| Owner | Contract |
+| --- | --- |
+| session-dropdown/list.js::label | Synchronizes the selected trigger's Main Chat wavy class versus ordinary pinned-circle class. Clears stale classes on selection changes; existing visibility/deletion guards remain. |
+| session-dropdown/list.js::render | Stable-partitions visible active rows, putting Main Chat first and retaining other supplied ordering and search snippet/session associations. Does not inject nonmatching results or reorder recycled rows. Main Chat's wavy class takes precedence over its pin. |
+| sessions/js/adapter.js::compareSessionsByPinnedOrder | Main Chat, pins, descending last_active_at, then stable ID tie-breaks. Bin-origin rows receive neither role nor pin priority. Inputs are not mutated. |
+| sessions/js/sessions-page.js::_applySort | Sorts a copy using the adapter for default recent order. Explicit column sorts retain Main Chat/pin priority, existing pinned sort_order and column handling within groups. |
+| sessions/js/sessions-page.js::_renderTitleCell | Chooses the wavy Main Chat class or existing pinned halo; retains escaped labels, avatar slots and family disclosure controls. |
+| shared/main-chat-avatar.css | Imported by both dropdown and Sessions styles. The static SVG mask on .session-row-agent-main::after draws a wavy ring at inset -3px, using --warning with yellow fallback. No animation; pointer-events:none keeps actions unobstructed and the avatar slot unchanged. |
+
+Config: `ui/chat/controls/session-dropdown/session-dropdown.json` ->
+`common.trigger.agent_icon` and `common.menu.agent_icons`, with desktop/mobile/widget
+overlays on reload, control avatar/ring visibility. Sessions column sorting is an
+existing browser-local preference. Priority and wave geometry have no new JSON
+settings. Ring color/amplitude are potential future preferences, not implemented
+configuration.
+
+Fixtures cover rename versus same-named ordinary chats, pinned/unpinned Main Chat,
+selection changes, existing pinned circles, dark/light and desktop/mobile dropdowns,
+and Sessions recent/title sorts. Fixture refresh preserves the tested selection.
+Release `f5eb894e-ffa0-46c1-a6da-c1449b0b5a9a`, commit
+`a8068ca9a65161b32bd548b8483d57249793e2e1`, passed 22 frontend files.
+Nine frozen/promoted files and all six served JS/CSS assets matched; readiness
+returned 200 and API/loop IDs/images/PIDs were retained. Superseded attempt
+`b6b8b8b2-4829-4907-8f3a-43ea38438e26` failed before publication on two
+fixture-selection assertions. No live interactive authenticated journey is claimed.
+Receipts: `build-jobs/checks/main-chat-list-priority-final-20261019/acceptance/`.
+
 ## Release evidence and maintenance
 
 Originating chat: 01a1357b-0ff4-7201-99ba-c1aaffdbbab9. The backend release is

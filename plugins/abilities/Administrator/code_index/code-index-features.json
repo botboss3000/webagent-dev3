@@ -1691,6 +1691,88 @@
           "purpose": "Agent-visible declaration describes automatic chat identity and private-read selection"
         }
       ]
+    },
+    {
+      "id": "main-chat-session-priority",
+      "aliases": [
+        "Main Chat first",
+        "wavy avatar ring",
+        "Main Chat above pinned sessions"
+      ],
+      "purpose": "Canonical Main Chat leads dropdown and Sessions lists regardless of title or pin flag. Shared static wavy avatar halo. Config: ui/chat/controls/session-dropdown/session-dropdown.json -> common.trigger.agent_icon and common.menu.agent_icons plus desktop/mobile/widget overlays control visibility; adopted on reload.",
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "ui/chat/controls/session-dropdown/session-dropdown.json",
+            "pointers": [
+              "/common/trigger/agent_icon",
+              "/common/menu/agent_icons",
+              "/desktop",
+              "/mobile",
+              "/widget"
+            ]
+          }
+        ],
+        "opportunities": []
+      },
+      "locations": [
+        {
+          "path": "ui/chat/controls/session-dropdown/list.js",
+          "start_line": 44,
+          "end_line": 61
+        },
+        {
+          "path": "ui/chat/controls/session-dropdown/list.js",
+          "start_line": 274,
+          "end_line": 308
+        },
+        {
+          "path": "ui/main-panel/agents/pages/sessions/js/adapter.js",
+          "start_line": 18,
+          "end_line": 20
+        },
+        {
+          "path": "ui/main-panel/agents/pages/sessions/js/sessions-page.js",
+          "start_line": 597,
+          "end_line": 643
+        },
+        {
+          "path": "ui/main-panel/agents/pages/sessions/js/sessions-page.js",
+          "start_line": 1115,
+          "end_line": 1155
+        },
+        {
+          "path": "ui/shared/main-chat-avatar.css",
+          "start_line": 1,
+          "end_line": 10
+        },
+        {
+          "path": "ui/chat/controls/session-dropdown/session-dropdown.css",
+          "start_line": 1,
+          "end_line": 10
+        },
+        {
+          "path": "ui/main-panel/agents/pages/sessions/sessions.css",
+          "start_line": 1,
+          "end_line": 8
+        },
+        {
+          "path": "ui/chat/controls/session-dropdown/session-dropdown.test.cjs",
+          "start_line": 93,
+          "end_line": 110
+        },
+        {
+          "path": "ui/main-panel/agents/pages/sessions/sessions-page.test.cjs",
+          "start_line": 8,
+          "end_line": 13
+        },
+        {
+          "path": "ui/main-panel/agents/pages/sessions/sessions-page.browser.test.mjs",
+          "start_line": 59,
+          "end_line": 79
+        }
+      ]
     }
   ]
 }
