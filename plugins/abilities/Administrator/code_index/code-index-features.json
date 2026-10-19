@@ -1910,8 +1910,9 @@
         },
         {
           "path": "ui/main-panel/agents/pages/identity/tool-output-policy.js",
-          "start_line": 226,
-          "end_line": 273
+          "start_line": 214,
+          "end_line": 261,
+          "purpose": "Render manager-scoped duplicate-result controls and the disabled experimental retention panel. Saves revisioned agent state; placeholder JSON is consumed downstream, not read by this UI."
         },
         {
           "path": "ui/shared/ability-row-controls.js",
