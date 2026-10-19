@@ -635,7 +635,8 @@ def inspect_source_patch_corrected(root, patch):
         if (name in paths or name.startswith("/") or "\\" in name
                 or any(ord(char) < 32 or ord(char) == 127 for char in name)
                 or any(not part or part in (".", "..") for part in parts)
-                or not (name in allowed_files or parts[0] in allowed_dirs and len(parts) > 1)):
+                or not (name in allowed_files or parts[0] in allowed_dirs and len(parts) > 1
+                        or monitoring_component.package_path("v3/"+name))):
             raise ValueError("source patch path denied")
         cursor = root
         for index, part in enumerate(parts):
@@ -4448,7 +4449,8 @@ class Broker:
                                  "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json"}
                 if (name_path and (not re.fullmatch(r"[A-Za-z0-9_./-]+", name_path)
                         or any(part in ("", ".", "..") for part in parts)
-                        or (parts[0] not in allowed_dirs and not release.inspection_path("v3/" + name_path)))):
+                        or (parts[0] not in allowed_dirs and name_path not in {"services","services/system-monitoring"}
+                            and not monitoring_component.package_path("v3/"+name_path) and not release.inspection_path("v3/" + name_path)))):
                     raise ValueError("source list path denied")
                 if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
                     raise ValueError("bounded source list page required")

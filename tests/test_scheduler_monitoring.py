@@ -73,4 +73,17 @@ class MonitoringTests(unittest.TestCase):
         (self.folder/"src/main.rs").write_text("fn main() {println!(\"changed\");}\n")
         runner.job_context.job=None
         with self.assertRaisesRegex(ValueError,"Owned frozen"):m.build(runner,"fixture",self.root,state,assets,executor,scheduler)
+    def test_checked_source_patch_admits_only_monitoring_service(self):
+        import subprocess
+        from unittest.mock import patch
+        import test_admin_build as fixtures
+        repo=self.root/"repo";repo.mkdir()
+        subprocess.run(["git","init","-q",str(repo)],check=True)
+        source=repo/"v3";source.mkdir()
+        for name,allowed in [("services/system-monitoring/src/main.rs",True),("services/unknown/src/main.rs",False),("services/system-monitoring-other/src/main.rs",False)]:
+            text="diff --git a/"+name+" b/"+name+"\nnew file mode 100644\n--- /dev/null\n+++ b/"+name+"\n@@ -0,0 +1 @@\n+fn main() {}\n"
+            with patch.object(fixtures.host,"SOURCE",repo):
+                if allowed:self.assertEqual(fixtures.host.inspect_source_patch(source,text),[name])
+                else:
+                    with self.assertRaisesRegex(ValueError,"source patch path denied"):fixtures.host.inspect_source_patch(source,text)
 if __name__=="__main__":unittest.main()
