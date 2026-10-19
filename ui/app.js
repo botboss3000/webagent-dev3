@@ -701,7 +701,7 @@ async function hardRefresh(signOut=false){
 $('header-refresh-browser').onclick=()=>{void hardRefresh();};
 function setupHeaderPullRefresh(){
   const indicator=$('ptr-indicator'),blue=$('ptr-blue'),red=$('ptr-red'),hint=$('ptr-hint');
-  const fullDash=98,normalAt=.5,hardAt=.85,pullZone=25;
+  const fullDash=98,normalAt=.5,hardAt=.85,pullZone=200;
   let dragging=false,startY=0,stage=0;
   function end(){
     if(!dragging)return;
