@@ -781,6 +781,17 @@ for directory,dirs,files in os.walk(root,followlinks=False,onerror=failed):
   if path.stat().st_mode&0o111:
    if not os.access(path,os.X_OK):raise RuntimeError('Runtime executable inaccessible')
    counts['executables']+=1
+# The mounted frozen source can be readable while the baked worker is not.
+# Check exact image bytes as the worker identity before any runtime is stopped.
+import hashlib
+runtime_files=("worker.py","ability_plugin_worker.py","sandbox.py","launch.py","promote.py")
+for name in runtime_files:
+ path=pathlib.Path("/opt/v3")/name
+ if path.is_symlink()or not path.is_file():raise RuntimeError("Baked runtime Python source identity")
+ body=path.read_bytes();frozen=(root/"v3"/name).read_bytes()
+ if hashlib.sha256(body).digest()!=hashlib.sha256(frozen).digest():raise RuntimeError("Baked runtime Python source differs from frozen candidate")
+ compile(body,str(path),"exec")
+counts["runtime_files"]=len(runtime_files)
 print(json.dumps(counts))"""
         images=job.get("images") if publication_id is None else {role:previous[role]["Image"]for role in ("api","loop")}
         if not images or set(images)!={"api","loop"}:raise ValueError("Runtime preflight requires both candidate images")
@@ -811,7 +822,7 @@ print(json.dumps(counts))"""
                 finally:subprocess.run(["docker","rm","-f",name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
                 value=json.loads(output)
                 if identity in {"application","worker_catalog"}and not isinstance(value.get("catalog_version"),str):raise ValueError("Candidate runtime catalog validator unavailable")
-                if identity=="worker"and not value.get("files"):raise ValueError("Worker runtime source unreadable")
+                if identity=="worker"and(not value.get("files")or value.get("runtime_files")!=5):raise ValueError("Worker runtime source unreadable or incomplete")
                 results.append({"role":role,"identity":identity,"uid":uid,"gid":gid,"status":"passed"})
         release.verify_publication(root,selected,manifest["candidate_sha256"])
         if publication_id and self.current_asset_id()!=publication_id:raise ValueError("Published source changed during runtime preflight")

@@ -1009,6 +1009,15 @@ class Executor:
         receipt={"inputs_sha256":inputs,"artifacts":hashes,"log":logs,"test_proof":self.test_proof(blob)}
         temporary=root/"verified.new";temporary.write_text(json.dumps(receipt));os.replace(temporary,root/"verified.json")
         return artifacts,logs
+    @staticmethod
+    def runtime_python_modes(dockerfile):
+        """Normalize only baked runtime scripts; frozen source and private modes stay intact."""
+        source="COPY v3/worker.py v3/ability_plugin_worker.py v3/sandbox.py v3/launch.py v3/promote.py /opt/v3/"
+        normalized=source.replace("COPY ","COPY --chmod=0755 ",1)
+        if dockerfile.splitlines().count(source)+dockerfile.splitlines().count(normalized)!=1:
+            raise ValueError("Reviewed runtime Python COPY contract required")
+        return dockerfile.replace(source,normalized)
+
     def package(self,blob,artifacts,entries,role=None,destination=None,recipe_transform=None):
         """Stream the runtime stage's declared artifact closure; retained tests stay only in the compiler cache."""
         files=entries(blob);dockerfile=files["v3/Dockerfile"][1].decode()
@@ -1037,6 +1046,7 @@ class Executor:
             dockerfile=recipe_transform(dockerfile,role)
         else:
             dockerfile=dockerfile[:start]+"FROM "+("scratch"if role=="loop"else RUST)+" AS tested_builder\nCOPY scheduler-out /out\n"+dockerfile[end:]
+        dockerfile=self.runtime_python_modes(dockerfile)
         files["v3/Dockerfile"]=(0o644,dockerfile.encode())
         stream=io.BytesIO()if destination is None else Path(destination).open("xb")
         try:

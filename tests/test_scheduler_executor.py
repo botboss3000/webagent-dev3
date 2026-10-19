@@ -121,6 +121,26 @@ class CacheTests(unittest.TestCase):
             if role=="loop":self.assertEqual(names,{"webagent-v3","core-inputs.txt","webagent-context-service","webagent-background-service","webagent-boot-service","webagent-assets-service","webagent-capability-service","webagent-provider-service"})
             else:
                 self.assertIn("optimization-cargo/registry/cache",names);self.assertIn("modules/descriptor.json",names)
+    def test_runtime_python_copy_normalization_keeps_private_archive_modes(self):
+        import io,tarfile
+        dockerfile=(Path(__file__).parents[1]/"Dockerfile").read_text()
+        files=fixtures.host.Runner.execution_entries(self.blob)
+        files["v3/Dockerfile"]=(0o644,dockerfile.encode())
+        for name in ("worker.py","ability_plugin_worker.py","sandbox.py","launch.py","promote.py"):
+            files["v3/"+name]=(0o700,b"pass\n")
+        blob=fixtures.host.release.archive(files,fixtures.host.context_digest);before=hashlib.sha256(blob).hexdigest()
+        output=self.worker.package(blob,self.artifacts,fixtures.host.Runner.execution_entries)
+        with tarfile.open(fileobj=io.BytesIO(output))as archive:
+            text=archive.extractfile("v3/Dockerfile").read().decode()
+            self.assertIn("COPY --chmod=0755 v3/worker.py v3/ability_plugin_worker.py v3/sandbox.py v3/launch.py v3/promote.py /opt/v3/",text)
+            self.assertEqual(archive.getmember("v3/worker.py").mode,0o700)
+            self.assertEqual(archive.extractfile("v3/worker.py").read(),b"pass\n")
+        self.assertEqual(hashlib.sha256(blob).hexdigest(),before)
+        self.assertEqual(module.Executor.runtime_python_modes(text),text)
+    def test_unknown_runtime_python_copy_contract_fails_closed(self):
+        for text in ("COPY v3/worker.py /other/", "COPY --chmod=0777 v3/worker.py /opt/v3/"):
+            with self.assertRaisesRegex(ValueError,"COPY contract"):module.Executor.runtime_python_modes(text)
+
     def test_exact_suite_proof_reuses_tests_but_changed_fixture_runs_them(self):
         from unittest.mock import patch
         stable=self.artifacts/"stable";stable.mkdir()
