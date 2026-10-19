@@ -1484,3 +1484,78 @@ class CompilerManifestRecoveryTests(unittest.TestCase):
         with patch.object(fixtures.host.subprocess,"run")as cleanup:
             self.assertEqual(fixtures.host.Runner.core_compile_inputs(self.runner),{"v3/src/main.rs"})
         cleanup.assert_not_called()
+
+class UIFixtureEvidenceReuseTests(unittest.TestCase):
+    def setUp(self):
+        import types
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
+        self.files={"v3/ui/a.js":(420,b"export const a=1;"),"v3/ui/a.test.mjs":(420,b"import './a.js';"),
+            "v3/ui/b.test.mjs":(420,b"import fs from 'node:fs'; fs.readFileSync(variable);"),"v3/ui/unrelated.js":(420,b"const other=1;")}
+        for path,(_,body)in self.files.items():
+            target=self.root/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(body)
+        self.calls=[];self.job={"job_id":"first"}
+        self.runner=types.SimpleNamespace(job_context=types.SimpleNamespace(job=self.job),
+            index_command=lambda argv,**kwargs:self.calls.append(argv),ui_test_timeout=lambda tests:120)
+        self.config={**fixtures.host.CONFIG,"scheduler":{**fixtures.host.CONFIG.get("scheduler",{}),"ui_test_image":"sha256:"+"1"*64}}
+    def run_tests(self,images=None):
+        evidence=fixtures.host.ui_policy_module.dependencies(self.files,["v3/ui/a.js"])
+        evidence["runtime_images"]=images or {"api":"sha256:"+"2"*64,"loop":"sha256:"+"3"*64}
+        with patch.object(fixtures.host,"CONFIG",self.config):
+            return fixtures.host.Runner.validate_selected_tests(self.runner,"fixture-job",self.root,evidence)
+    def test_unrelated_rebase_reuses_resolved_fixture_and_executes_unknown(self):
+        first=self.run_tests();self.job["ui_test_evidence"]=first
+        self.files["v3/ui/unrelated.js"]=(420,b"const other=2;")
+        second=self.run_tests()
+        self.assertEqual(second["reused_tests"],["v3/ui/a.test.mjs"])
+        self.assertEqual(second["executed_tests"],["v3/ui/b.test.mjs"])
+        self.assertNotIn("/candidate/v3/ui/a.test.mjs",self.calls[-1])
+        self.assertFalse(first["fixtures"]["v3/ui/a.test.mjs"]["reused"])
+        self.assertEqual(second["fixtures"]["v3/ui/a.test.mjs"]["verified_at"],first["fixtures"]["v3/ui/a.test.mjs"]["verified_at"])
+    def test_relevant_change_and_test_runtime_change_require_execution(self):
+        first=self.run_tests();self.job["ui_test_evidence"]=first
+        self.files["v3/ui/a.js"]=(420,b"export const a=2;")
+        second=self.run_tests();self.assertIn("v3/ui/a.test.mjs",second["executed_tests"])
+        self.files["v3/ui/a.js"]=(420,b"export const a=1;")
+        self.config["scheduler"]["ui_test_image"]="sha256:"+"4"*64
+        self.assertEqual(set(self.run_tests()["executed_tests"]),set(first["tests"]))
+    def test_exact_bindings_reuse_without_frontend_admission(self):
+        first=self.run_tests();self.job["ui_test_evidence"]=first;before=len(self.calls)
+        second=self.run_tests();self.assertTrue(second["reused"]);self.assertEqual(len(self.calls),before)
+    def test_failed_or_legacy_evidence_never_reuses(self):
+        first=self.run_tests();self.job["ui_test_evidence"]={**first,"status":"failed"}
+        self.assertFalse(self.run_tests()["reused"])
+        self.job["ui_test_evidence"]={"status":"passed","binding":first["binding"]}
+        self.assertFalse(self.run_tests()["reused"])
+    def test_execution_exception_records_no_new_success(self):
+        first=self.run_tests();self.job["ui_test_evidence"]=first
+        self.files["v3/ui/a.js"]=(420,b"changed")
+        self.runner.index_command=lambda *a,**kw:(_ for _ in ()).throw(PermissionError("cancelled"))
+        with self.assertRaises(PermissionError):self.run_tests()
+        self.assertIs(self.job["ui_test_evidence"],first)
+
+    def test_runtime_image_policy_and_fixture_changes_invalidate(self):
+        first=self.run_tests();self.job["ui_test_evidence"]=first
+        self.assertEqual(set(self.run_tests({"api":"sha256:"+"5"*64,"loop":"sha256:"+"3"*64})["executed_tests"]),set(first["tests"]))
+        self.files["v3/ui/a.test.mjs"]=(420,b"import './a.js'; // new assertions")
+        self.assertIn("v3/ui/a.test.mjs",self.run_tests()["executed_tests"])
+        self.files["v3/ui/a.test.mjs"]=(420,b"import './a.js';")
+        self.job["ui_test_evidence"]={**first,"fixtures":{p:{**row,"binding":"old recipe"}for p,row in first["fixtures"].items()}}
+        self.assertEqual(set(self.run_tests()["executed_tests"]),set(first["tests"]))
+
+class InstalledUIPolicyPublicationTests(unittest.TestCase):
+ def test_ui_policy_requires_exact_installed_bytes_and_operator(self):
+  import types
+  with tempfile.TemporaryDirectory()as temporary:
+   root=Path(temporary)
+   for name,body in [("host.py",b"installed host"),("ui_policy.py",b"installed policy")]:
+    (root/name).write_bytes(body)
+   broker=fixtures.host.Broker(root/"jobs",fixtures.FakeRunner())
+   blob=fixtures.context(extra={"v3/build-service/host.py":"installed host","v3/build-service/ui_policy.py":"installed policy"})
+   changed=["v3/build-service/ui_policy.py","v3/tests/test_ui_policy.py"]
+   protected=types.SimpleNamespace(st_mode=0o100644,st_uid=0,st_nlink=1)
+   with patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"service_dir":str(root)}),patch.object(fixtures.host.os,"fstat",return_value=protected):
+    self.assertTrue(broker.host_source_only(changed,blob,{"local_caller":True}))
+    self.assertFalse(broker.host_source_only(changed,blob,{}))
+    (root/"ui_policy.py").write_bytes(b"different policy")
+    self.assertFalse(broker.host_source_only(changed,blob,{"local_caller":True}))
+   broker.shutdown()

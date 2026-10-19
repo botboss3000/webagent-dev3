@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 import posixpath
 import re
 
-VERSION = 1
+VERSION = 2
 IMPORT = re.compile(r"(?:\bimport\s+(?:[^;]+?\s+from\s+)?|\bexport\s+[^;]+?\s+from\s+|\bimport\s*\()\s*['\"]([^'\"]+)['\"]")
 ASSET = re.compile(r"(?:src|href)\s*=\s*['\"]([^'\"]+)['\"]|(?:url\(|@import\s+)\s*['\"]?([^)'\"\s;]+)", re.I)
 DYNAMIC = re.compile(r"\bimport\s*\(\s*[^'\"\s]|\b(?:fetch|loadPartial|loadHTML)\s*\(")
@@ -26,6 +26,8 @@ def dependencies(files, changed):
                 target = posixpath.normpath(posixpath.join(posixpath.dirname(path), ref))
             elif ref.startswith("/"):
                 target = "v3/ui/" + ref.lstrip("/")
+            elif ref in {"node:test", "node:assert", "node:assert/strict"}:
+                continue
             else:
                 unknown.add(path); continue
             if not target.startswith("v3/ui/") or target not in files:
@@ -41,7 +43,7 @@ def dependencies(files, changed):
                 edges.add(target)
             else:
                 unknown.add(path)
-        if DYNAMIC.search(text):
+        if DYNAMIC.search(text) or re.search(r"\b(?:require|readFile|readFileSync|readdir|readdirSync|glob|open|stat|access)\s*\(|\b(?:process\.env|eval|Function|createServer)\b", text):
             unknown.add(path)
         graph[path] = edges
     affected = set(changed)
@@ -61,6 +63,25 @@ def dependencies(files, changed):
     tests = sorted(p for p in ui if p.endswith((".test.cjs", ".test.js", ".test.mjs")) and (conservative or posixpath.dirname(p) in {posixpath.dirname(a) for a in affected}))
     closure.update(tests)
     hashes = {p: hashlib.sha256(files[p][1]).hexdigest() for p in sorted(closure) if p in files}
-    payload = dict(version=VERSION, policy_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), affected=sorted(affected), dependencies=hashes, tests=tests, conservative=conservative)
+    # Select conservatively, but bind resolved fixtures to their transitive inputs.
+    # Unresolved fixture reads retain every candidate input, including shared assets.
+    test_inputs = {}
+    policy_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    for test in tests:
+        inputs = {test}; queue = [test]
+        while queue:
+            for dependency in graph.get(queue.pop(), set()):
+                if dependency not in inputs:
+                    inputs.add(dependency); queue.append(dependency)
+        unresolved = sorted(inputs & unknown)
+        if unresolved:
+            inputs = set(files)
+        inventory = {p: {"sha256": hashlib.sha256(files[p][1]).hexdigest(), "mode": files[p][0]}
+                     for p in sorted(inputs) if p in files}
+        proof = {"version": VERSION, "policy_sha256": policy_hash, "test": test,
+                 "dependencies": inventory, "unresolved": unresolved, "conservative": bool(unresolved)}
+        proof["sha256"] = hashlib.sha256(json.dumps(proof, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        test_inputs[test] = proof
+    payload = dict(version=VERSION, policy_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), affected=sorted(affected), dependencies=hashes, tests=tests, conservative=conservative, test_inputs=test_inputs)
     payload["sha256"] = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return payload

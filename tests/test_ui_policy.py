@@ -26,3 +26,26 @@ class UIDependencyPolicyTests(unittest.TestCase):
   files["v3/config/chat.json"]=(420,b"{}")
   result=policy.dependencies(files,["v3/config/chat.json"])
   self.assertIn("v3/config/chat.json",result["dependencies"])
+
+ def test_unknown_in_other_component_does_not_taint_resolved_fixture(self):
+  files=self.files(**{"chat/a.js":"export const a=1;","chat/a.test.mjs":"import test from 'node:test'; import './a.js';","other/loader.js":"import(variable)","other/x.js":"const x=1;"})
+  first=policy.dependencies(files,["v3/ui/chat/a.js"])
+  proof=first["test_inputs"]["v3/ui/chat/a.test.mjs"]
+  self.assertFalse(proof["conservative"])
+  files["v3/ui/other/x.js"]=(420,b"const x=2;")
+  second=policy.dependencies(files,["v3/ui/chat/a.js"])
+  self.assertEqual(proof["sha256"],second["test_inputs"]["v3/ui/chat/a.test.mjs"]["sha256"])
+  files["v3/ui/chat/a.js"]=(420,b"export const a=2;")
+  self.assertNotEqual(proof["sha256"],policy.dependencies(files,["v3/ui/chat/a.js"])["test_inputs"]["v3/ui/chat/a.test.mjs"]["sha256"])
+ def test_unknown_fixture_binds_shared_inputs_modes_and_inventory(self):
+  files=self.files(**{"chat/a.test.mjs":"import fs from 'node:fs';fs.readFileSync(variable);","x.js":"const x=1;"})
+  files["ui/shared/style.css"]=(420,b"body{}")
+  first=policy.dependencies(files,["v3/ui/x.js"])["test_inputs"]["v3/ui/chat/a.test.mjs"]
+  self.assertTrue(first["conservative"]);self.assertIn("ui/shared/style.css",first["dependencies"])
+  for change in [{"ui/shared/style.css":(420,b"body{color:red}")},{"v3/ui/new.json":(420,b"{}")},{"v3/ui/x.js":(448,b"const x=1;")}]:
+   second=policy.dependencies({**files,**change},["v3/ui/x.js"])["test_inputs"]["v3/ui/chat/a.test.mjs"]
+   self.assertNotEqual(first["sha256"],second["sha256"])
+ def test_imported_unknown_dependency_keeps_fixture_conservative(self):
+  files=self.files(**{"a.test.mjs":"import './helper.js';","helper.js":"fetch(variable)","other.js":"const a=1;"})
+  result=policy.dependencies(files,["v3/ui/helper.js"])
+  self.assertTrue(result["test_inputs"]["v3/ui/a.test.mjs"]["conservative"])

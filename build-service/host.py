@@ -1480,14 +1480,28 @@ print(json.dumps(counts))"""
         """Execute dependency-selected frontend fixtures in one isolated browser-capable worker."""
         tests=evidence["tests"]
         image=CONFIG.get("scheduler",{}).get("ui_test_image")
-        recipe="node:experimental-vm-modules:test-concurrency=1:network-none:v1"
-        binding=hashlib.sha256(canonical({"dependencies":evidence["sha256"],"runtime_images":evidence.get("runtime_images",{}),"image":image,"recipe":recipe})).hexdigest()
+        recipe="node:experimental-vm-modules:test-concurrency=1:network-none:fixture-inputs-v2"
+        import inspect
+        recipe_sha256=hashlib.sha256(inspect.getsource(Runner.validate_selected_tests).encode()).hexdigest()
+        environment={"uid":CONFIG["app_uid"],"gid":CONFIG["app_gid"]}
         job=getattr(self.job_context,"job",None)
-        if job and job.get("ui_test_evidence",{}).get("binding")==binding:
-            return {**job["ui_test_evidence"],"reused":True}
+        previous=(job or {}).get("ui_test_evidence",{})
+        prior=previous.get("fixtures",{}) if previous.get("status")=="passed" else {}
+        fixtures={};pending=[];reused=[]
+        for test in tests:
+            proof=evidence.get("test_inputs",{}).get(test)
+            dependency=proof["sha256"] if proof else evidence["sha256"]
+            binding=hashlib.sha256(canonical({"dependencies":dependency,"runtime_images":evidence.get("runtime_images",{}),"image":image,"recipe":recipe,"recipe_sha256":recipe_sha256,"environment":environment,"test":test})).hexdigest()
+            saved=prior.get(test,{})
+            if saved.get("status")=="passed" and saved.get("binding")==binding:
+                fixtures[test]={**saved,"reused":True};reused.append(test)
+            else:
+                fixtures[test]={"binding":binding,"status":"pending","reused":False,"conservative":proof.get("conservative",True)if proof else True}
+                pending.append(test)
         if tests:
             if not isinstance(image,str)or not re.fullmatch(r"sha256:[a-f0-9]{64}",image):raise ValueError("Protected pinned UI test runtime required")
-            if len(tests)>256 or any(not p.startswith("v3/ui/")or ".."in Path(p).parts or not(root/p).is_file()for p in tests):raise ValueError("Bounded selected frontend fixtures required")
+            if len(tests)>256 or len(set(tests))!=len(tests)or any(not p.startswith("v3/ui/")or ".."in Path(p).parts or not(root/p).is_file()for p in tests):raise ValueError("Bounded selected frontend fixtures required")
+        if pending:
             # No application credentials, mounts, authentication state or external network.
             self.index_command(["docker","run","--rm","--network","none","--init","--read-only","--cap-drop","ALL",
                 "--security-opt","no-new-privileges","--user",str(CONFIG["app_uid"])+":"+str(CONFIG["app_gid"]),
@@ -1496,8 +1510,12 @@ print(json.dumps(counts))"""
                 "--env","PLAYWRIGHT_MODULE=/opt/ui-tests/playwright-entry.cjs",
                 "--env","CHROMIUM_PATH=/opt/ui-tests/chromium","--env","BROWSER_EXECUTABLE=/opt/ui-tests/chromium",
                 "--mount","type=bind,src="+str(root)+",dst=/candidate,readonly","--workdir","/candidate/v3",
-                "--entrypoint","node",image,"--experimental-vm-modules","--test","--test-concurrency=1",*["/candidate/"+p for p in tests]],timeout=self.ui_test_timeout(tests),kind="ui_test")
-        return {"binding":binding,"image":image,"recipe":recipe,"tests":tests,"status":"passed"if tests else"not_applicable","reused":False}
+                "--entrypoint","node",image,"--experimental-vm-modules","--test","--test-concurrency=1",*["/candidate/"+p for p in pending]],timeout=self.ui_test_timeout(pending),kind="ui_test")
+            for test in pending:
+                fixtures[test].update(status="passed",verified_job_id=job_id,verified_at=time.time())
+        binding=hashlib.sha256(canonical({p:row["binding"]for p,row in fixtures.items()})).hexdigest()
+        return {"binding":binding,"image":image,"recipe":recipe,"tests":tests,"status":"passed"if tests else"not_applicable",
+                "reused":bool(tests)and not pending,"reused_tests":reused,"executed_tests":pending,"fixtures":fixtures}
 
     def validate_ui(self, job_id, changed, *, root=None):
         """Validate complete candidate assets and registered packages against the owning runtime before activation."""
@@ -3446,8 +3464,8 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        review_modules={"monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
-        allowed={"v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
+        allowed={"v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}

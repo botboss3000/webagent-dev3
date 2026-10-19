@@ -158,6 +158,7 @@ class UIPublication:
             test_result=({"status":"not_required","tests":[],"reason":"host-only broker candidate leaves UI assets unchanged"}
                          if host_only else self.broker.runner.validate_selected_tests(job["job_id"],destination,evidence))
             with self.broker.lock:
+                job.setdefault("ui_verification_history",[]).append({"attempt":attempt,"base_release_id":revision,"result":test_result})
                 job["ui_test_evidence"]=test_result
                 job["preparation"]["frontend_tests_seconds"]=clock()-test_started
                 job["preparation"].update(attempts=attempt,indexing_seconds=0 if manifest.get("publication_mode")=="post_deployment_indexing_v1"else indexed,
