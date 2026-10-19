@@ -4,7 +4,9 @@ pub(crate) async fn call(
     app:App,sid:String,run_id:String,generation:String,name:String,args:Value,pending_id:String,
     policy_version:u64,cancel:CancellationToken,
 )->Result<tools::outcome::Outcome> {
+    let start = std::time::Instant::now();
     tools::outcome::capture(Box::pin(call_inner(app,sid,run_id,generation,name,args,pending_id,policy_version,cancel))).await
+        .map_err(|error| super::failure::boundary(error, super::failure::Stage::Preparation, super::failure::Delivery::PossiblySent, start))
 }
 async fn call_inner(
     app:App,sid:String,run_id:String,generation:String,name:String,mut args:Value,pending_id:String,
@@ -51,7 +53,9 @@ pub(crate) async fn call_foreground(
 }
 async fn call_foreground_value(app:App,sid:String,run_id:String,generation:String,name:String,args:Value,pending_id:String,
  policy_version:u64,cancel:CancellationToken)->Result<Value> {
+    let start = std::time::Instant::now();
     Box::pin(call_foreground_inner(app,sid,run_id,generation,name,args,pending_id,policy_version,cancel)).await
+        .map_err(|error| super::failure::boundary(error, super::failure::Stage::Preparation, super::failure::Delivery::PossiblySent, start))
 }
 async fn call_foreground_inner(
     app:App,sid:String,run_id:String,generation:String,name:String,args:Value,pending_id:String,
@@ -61,7 +65,7 @@ async fn call_foreground_inner(
     let visibility=session_agent_abilities(&app,&sid).await?;
     let settings=crate::tool_execution::resolve(&visibility,&name)?;
     let total_budget=loop_runtime::Config::read(&app.runtime_path)?.tools.max_parallel_calls;
-    if cancel.is_cancelled() || app.shutoff().await? {anyhow::bail!("Tool cancelled before execution");}
+    if cancel.is_cancelled() || app.shutoff().await? {return Err(super::failure::Failure::new(super::failure::Stage::Preparation, super::failure::Code::Cancelled, super::failure::Delivery::NotSent).into());}
     // Optional-origin work holds a package lifetime lease through the effect.
     // Uninstall cannot complete while an already authorized external write is running.
     let binding_run=app.run(&run_id).await?;
@@ -113,8 +117,10 @@ async fn call_foreground_inner(
         #[cfg(test)] if name=="test_owner_purchase" {
             if let Some(claimed)=&claimed {return crate::actions::test_purchase(&scoped,&run,&claimed["action"],&clean).await;}
         }
+        let started=std::time::Instant::now();
         scoped.session_operation(&sid,cancel.clone(),
             call_raw(scoped.clone(),sid.clone(),run_id.clone(),generation.clone(),name.clone(),clean,execution_id,policy_version,cancel.clone())).await
+            .map_err(|error| super::failure::boundary(error,super::failure::Stage::Execution,super::failure::Delivery::PossiblySent,started))
     }.await;
     if let Some(claimed)=claimed {return crate::actions::finish(&app,&run,&claimed["action"],&result).await;}
     result

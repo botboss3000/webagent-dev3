@@ -390,6 +390,7 @@ fn transition(s: &Settings, run: &Value, kind: &str, recovery: bool) -> Option<V
         "call_id":identifier(&run["pending"]["call_id"]),"pending_state":pending_state,"uncertain":run["uncertain"]==true,
         "interruption_reason":match run["pending"]["interruption"]["reason"].as_str() {
             Some(v @ ("timeout"|"cancelled"|"transport_error"|"uncertain"))=>Some(v),_=>None},
+        "tool_failure":crate::tools::failure::project(&run["latest_tool_failure"]),
         "recovery_override":recovery}),
     )
 }

@@ -237,6 +237,7 @@ fn public_run(run: &Value) -> Value {
         "component_pause":if run["status"]=="paused"&&run["component_pause"]["version"]==1&&run["component_pause"]["component"].as_str().is_some_and(crate::engine_components::working_component) {json!({"version":1,"component":run["component_pause"]["component"],"reason":"component_unavailable"})}else{Value::Null},
         "code_index_retrieval":public_code_index_retrieval(run),
         "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],
+        "tool_failure":tools::failure::project(&run["latest_tool_failure"]),
         "attachments":run["attachments"].as_array().cloned().unwrap_or_default(),
         "model":public_run_model(run),
         "usage":usage::public(&run["usage"]),
@@ -290,6 +291,7 @@ fn run_diagnostics(run: &Value) -> Value {
     }).collect::<Vec<_>>();
     json!({"run_id":run["id"],"session_id":run["session_id"],"status":run["status"],
         "uncertain":run["uncertain"],"checkpoints":checkpoints,
+        "tool_failure":tools::failure::project(&run["latest_tool_failure"]),
         "context_summary":public_context_summary(run),
         "latest_context_assembly":public_assembly_attempt(&run["latest_context_assembly"]),
         "last_successful_assembly":public_context_summary(run),

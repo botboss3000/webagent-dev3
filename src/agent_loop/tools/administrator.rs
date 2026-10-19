@@ -67,22 +67,22 @@ async fn worker(app:&App,sid:&str,name:&str,args:&Value,trusted:Option<Value>,ca
     tools::execute_trusted(name,args,sid,&app.tool_socket,trusted,cancel).await
 }
 pub(crate) async fn host_fingerprint(app:&App,sid:&str,run_id:&str,name:&str)->Result<String> {
-    if app.shutoff().await? {bail!("Host build authority stopped");}
+    if app.shutoff().await? {return Err(super::failure::Failure::new(super::failure::Stage::Authorization, super::failure::Code::AuthorityStopped, super::failure::Delivery::NotSent).into());}
     let agent=session_agent_id(app,sid).await?;
     let mut scoped=app.clone();scoped.store=app.store.for_agent(&agent).await?;
     let run=scoped.run(run_id).await?;
-    if run["session_id"]!=sid {bail!("Host job run scope changed");}
-    if name=="performance_work" && !performance_run_live(&run){bail!("Performance run authority stopped");}
+    if run["session_id"]!=sid {return Err(super::failure::Failure::new(super::failure::Stage::Authorization, super::failure::Code::ScopeChanged, super::failure::Delivery::NotSent).into());}
+    if name=="performance_work" && !performance_run_live(&run){return Err(super::failure::Failure::new(super::failure::Stage::Authorization, super::failure::Code::AuthorityStopped, super::failure::Delivery::NotSent).into());}
     let (policy,revision,visibility,state)=ability_controls(&scoped,sid).await?;
     let mode=session_mode(&scoped,sid).await?;
     let access=crate::shared_chat::live_access(&scoped.store,crate::shared_chat::actor(&scoped),sid,&agent).await?;
-    if name=="performance_work" && !crate::optimization::available(){bail!("Optimization plugin authority withdrawn")}
+    if name=="performance_work" && !crate::optimization::available(){return Err(super::failure::Failure::new(super::failure::Stage::Authorization, super::failure::Code::AuthorityStopped, super::failure::Delivery::NotSent).into())}
     let work_finish=matches!(name,"v3_build_work_finish"|"build_work_finish");
     let policy_name=if work_finish {"build_work"} else {name};
     let work_permission=live_tool_decision(&scoped,&access,policy_name,
         &policy,&visibility,&state,&run["loaded_abilities"],mode["mode"]=="read_only").for_execution_mode(&mode).permission;
     if !access.principal.administrator() || !access.admitted() || work_permission==access::Permission::Deny {
-        bail!("Host build authority revoked");
+        return Err(super::failure::Failure::new(super::failure::Stage::Authorization, super::failure::Code::AuthorizationRejected, super::failure::Delivery::NotSent).into());
     }
     // Moving public names never removes the old broker authorization ceilings.
     let legacy = match name {
@@ -99,7 +99,7 @@ pub(crate) async fn host_fingerprint(app:&App,sid:&str,run_id:&str,name:&str)->R
             installation,true,true,mode["mode"]=="read_only",tools::is_read(legacy_name))
             .for_execution_mode(&mode).permission;
         if ceiling==access::Permission::Deny || (ceiling==access::Permission::Ask && work_permission!=access::Permission::Ask) {
-            bail!("Existing broker authorization requires approval or denies this operation");
+            return Err(super::failure::Failure::new(super::failure::Stage::Authorization, super::failure::Code::LegacyAuthorizationRejected, super::failure::Delivery::NotSent).into());
         }
     }
     if work_finish {
@@ -108,7 +108,7 @@ pub(crate) async fn host_fingerprint(app:&App,sid:&str,run_id:&str,name:&str)->R
         let ceiling=access.tool_decision_for_abilities("v3_worker_submit",&["v3_build".into()],
             installation,true,true,mode["mode"]=="read_only",false).for_execution_mode(&mode).permission;
         if ceiling==access::Permission::Deny || (ceiling==access::Permission::Ask && work_permission!=access::Permission::Ask) {
-            bail!("Existing deployment authorization requires approval or denies finish");
+            return Err(super::failure::Failure::new(super::failure::Stage::Authorization, super::failure::Code::DeploymentAuthorizationRejected, super::failure::Delivery::NotSent).into());
         }
     }
     // An Ask finish reaches this host only after explicit approval. Its queued job
@@ -239,7 +239,8 @@ async fn performance(app:&App,sid:&str,run_id:&str,args:&Value,cancel:Cancellati
 }
 async fn host(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:CancellationToken)->Result<Value> {
     let fingerprint_name=if name=="build_work" && matches!(args["action"].as_str(),Some("finish"|"decide")) {"build_work_finish"} else if name=="v3_build_work" && matches!(args["action"].as_str(),Some("finish"|"decide")) {"v3_build_work_finish"} else {name};
-    let fingerprint=host_fingerprint(app,sid,run_id,fingerprint_name).await?;
+    let started=std::time::Instant::now();
+    let fingerprint=host_fingerprint(app,sid,run_id,fingerprint_name).await.map_err(|error| super::failure::boundary(error, super::failure::Stage::Authorization, super::failure::Delivery::NotSent, started)).map_err(|error|super::failure::request(error,args))?;
     let trusted=json!({"user_id":crate::shared_chat::actor(app),"session_id":sid,
         "lease_until":now()+30,"access_fingerprint":fingerprint});
     if matches!(name,"v3_build_image"|"v3_worker_submit") || (matches!(name,"v3_build_work"|"build_work") && matches!(args["action"].as_str(),Some("finish"|"decide"|"check"))) {

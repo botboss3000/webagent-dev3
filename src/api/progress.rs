@@ -81,6 +81,7 @@ pub(crate) fn project(run: &Value) -> Value {
         "pending_approval": waiting,
         "pending_tool_state": pending,
         "uncertain_effect": run["uncertain"] == true,
+        "tool_failure": crate::tools::failure::project(&run["latest_tool_failure"]),
         "compaction_count": compaction_count(run),
         "checkpoint_decisions": checkpoint_decisions(run),
         // The closer is durable notification intent, not a delivery receipt.

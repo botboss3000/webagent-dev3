@@ -126,7 +126,8 @@ fn record_interrupted_tool(run: &mut Value, name: &str) -> Result<Option<Value>>
         run["error"]=json!("Read tool interrupted");
         Ok(Some(result))
     } else {
-        record_tool_interruption(run, "transport_error");
+        let reason=tools::failure::interruption_reason(&run["pending"]["failure"]);
+        record_tool_interruption(run, reason);
         run["uncertain"]=json!(true);
         run["status"]=json!("recovery");
         run["error"]=json!("Tool outcome unknown; review before continuing");
@@ -1654,6 +1655,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             if run["pending"]["digest"] != digest(&args) {
                 return Err(anyhow!("Tool argument digest mismatch"));
             }
+            run["pending"]["failure"] = Value::Null;
             run["pending"]["state"] = json!("executing");
             run["pending"]["human_approved"] = json!(run["pending"]["decision"] == "approve");
             run["pending"]["decision"] = json!("consumed");
@@ -1673,6 +1675,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             drop(_guard);
             // The loop's debug poll frame exceeds 1 MiB. Poll this already-authorized
             // call on its own ordinary executor stack; the one-child scope aborts on drop.
+            let tool_started=std::time::Instant::now();
             let mut tool_task=tokio::task::JoinSet::new();
             tool_task.spawn(tools::call(
                 app.clone(), sid.clone(), id.clone(), generation.clone(), name.clone(), args.clone(),
@@ -1682,7 +1685,8 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             ));
             let result=match tool_task.join_next().await {
                 Some(Ok(result))=>result,
-                Some(Err(_))|None=>Err(anyhow!("Tool execution task terminated")),
+                Some(Err(error))=>Err(tools::failure::task_error(Some(&error),tool_started)),
+                None=>Err(tools::failure::task_error(None,tool_started)),
             };
             let _guard = app.gate.lock().await;
             let mut run = app.run(&id).await?;
@@ -1754,7 +1758,8 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                         )
                         .await?;
                 }
-                Err(_) => {
+                Err(error) => {
+                    tools::failure::record(&mut run, &error, None);
                     if tools::is_read(&name) && preserve_restart_interruption(&app, &mut run).await? {
                         // Retain the pending read and its original call ID for startup retry.
                         return Ok(());

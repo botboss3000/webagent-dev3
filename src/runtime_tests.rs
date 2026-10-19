@@ -4323,6 +4323,7 @@ async fn diagnostics_route_is_authenticated_session_bound_and_redacted() {
     let sentinel = "secret tool arguments 8319";
     let mut run = app.run(&id).await.unwrap();
     run["pending"] = json!({"arguments":{"content":sentinel}});
+    run["latest_tool_failure"] = json!({"version":1,"stage":"authorization","code":"authorization_rejected","delivery":"not_sent","elapsed_ms":3,"recorded_at":0,"raw_error":sentinel});
     run["context_assembly_report"] = json!({"version":1,"scope":"logical_call_envelope",
         "envelope_bytes":8192,"max_bytes":262144,"history_json_bytes":1024,
         "instruction_json_bytes":4096,"schemas_json_bytes":2048,"turn":0,"call":0,
@@ -4362,7 +4363,9 @@ async fn diagnostics_route_is_authenticated_session_bound_and_redacted() {
     assert_eq!(body["reasoning_cleanup_logical_bytes_removed"],0);
     assert!(body["latest_context_assembly"].is_null());
     assert_eq!(body["last_successful_assembly"],body["context_summary"]);
-    assert_eq!(body.as_object().unwrap().len(), 10);
+    assert_eq!(body["tool_failure"]["code"], "authorization_rejected");
+    assert!(body["tool_failure"]["raw_error"].is_null());
+    assert_eq!(body.as_object().unwrap().len(), 11);
     assert!(body["ability_context"].is_null());
 }
 
@@ -4415,7 +4418,8 @@ async fn progress_route_is_session_bound_and_tracks_durable_states() {
     assert!(waiting_view["checkpoint_decisions"].as_array().unwrap().iter()
         .any(|receipt| receipt["checkpoint"] == "pre_tool"
             && receipt["decision"] == "pass"));
-    assert_eq!(waiting_view.as_object().unwrap().len(), 12);
+    assert!(waiting_view["tool_failure"].is_null());
+    assert_eq!(waiting_view.as_object().unwrap().len(), 13);
     assert!(waiting_view["closing"].is_null());
 
     run["status"] = json!("recovery");

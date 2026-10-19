@@ -803,3 +803,21 @@ async fn persist_fixture(pool: &SqlitePool, event: &Value) -> anyhow::Result<()>
         .await?;
     Ok(())
 }
+
+#[test]
+fn tool_failure_transition_is_content_free_and_obeys_capture_settings() {
+    let settings=enabled("session-1");
+    let mut run=json!({"id":"run-1","session_id":"session-1","status":"recovery","uncertain":true,"pending":{"name":"build_work","call_id":"call-1","id":"attempt-1","arguments":{"request_id":"github-fields-begin","secret":"SECRET_CANARY"}}});
+    let error: anyhow::Error=crate::tools::failure::Failure::new(crate::tools::failure::Stage::Authorization,crate::tools::failure::Code::LegacyAuthorizationRejected,crate::tools::failure::Delivery::NotSent).into();
+    crate::tools::failure::record(&mut run,&error,None);
+    let event=transition(&settings,&run,"run_status",false).unwrap();
+    assert_eq!(event["tool_failure"]["code"],"legacy_authorization_rejected");
+    assert_eq!(event["tool_failure"]["request_id"],"github-fields-begin");
+    assert!(!event.to_string().contains("SECRET_CANARY"));
+    let diagnostic=crate::run_diagnostics(&run);
+    assert_eq!(diagnostic["tool_failure"],event["tool_failure"]);
+    assert_eq!(crate::task_progress::project(&run)["tool_failure"],event["tool_failure"]);
+    let mut disabled=settings.clone();disabled.config.enabled=false;
+    assert!(transition(&disabled,&run,"run_status",false).is_none());
+    assert_eq!(run["status"],"recovery");assert_eq!(run["uncertain"],true);
+}

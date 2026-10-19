@@ -6,6 +6,7 @@ use tokio::task::JoinSet;
 // A result commit takes the same gate as tool authorization. Tool futures must
 // keep being polled while that commit waits, including the future holding the
 // gate. A parent-polled FuturesUnordered can deadlock at this boundary.
+#[cfg(test)]
 fn spawn_batch_calls<T, F>(calls: impl IntoIterator<Item = F>) -> JoinSet<T>
 where
     T: Send + 'static,
@@ -188,6 +189,7 @@ pub(super) async fn execute_parallel_batch(
         run["batch"][idx]["pre_tool_receipt"]=run["workflow"]["receipts"]["pre_tool"].clone();
         run["call_index"]=json!(saved_index);
         run["batch"][idx]["state"]=json!("executing");
+        run["batch"][idx]["pending"]["failure"]=Value::Null;
         run["batch"][idx]["pending"]["state"]=json!("executing");
         run["batch"][idx]["pending"]["human_approved"]=json!(pending["decision"]=="approve");
         run["batch"][idx]["pending"]["decision"]=json!("consumed");
@@ -198,25 +200,44 @@ pub(super) async fn execute_parallel_batch(
     app.save(&mut run).await?;
     if !dispatch.is_empty() {
         drop(guard);
-        let mut futures=spawn_batch_calls(dispatch.into_iter().map(|(idx,name,args,pending_id,policy_version)| {
+        let mut identities=std::collections::HashMap::new();
+        let mut futures=JoinSet::new();
+        for (idx,name,args,pending_id,policy_version) in dispatch {
             let task_app=app.clone();let task_sid=sid.clone();let task_run=id.to_owned();
             let task_cancel=cancel.clone();
             let task_generation=generation.to_owned();
-            async move {
+            let identity=(idx,name.clone(),pending_id.clone(),std::time::Instant::now());
+            let handle=futures.spawn(async move {
                 let result=tools::call(task_app,task_sid,task_run,task_generation,name.clone(),args,
                     pending_id.clone(),policy_version,task_cancel).await;
                 (idx,name,pending_id,result)
-            }
-        }));
-        while let Some(completed)=futures.join_next().await {
+            });
+            identities.insert(handle.id(),identity);
+        }
+        while let Some(completed)=futures.join_next_with_id().await {
             // Dropping the JoinSet aborts outstanding tasks. Durable executing
             // checkpoints remain authoritative for safe-read/uncertain-write recovery.
-            let (idx,name,pending_id,result)=completed
-                .map_err(|_|anyhow!("Parallel tool task interrupted; recovery required"))?;
+            let (idx,name,pending_id,result)=match completed {
+                Ok((task_id, result))=>{identities.remove(&task_id);result},
+                Err(error)=>{
+                    let started=identities.get(&error.id()).map(|(_,_,_,started)|*started).unwrap_or_else(std::time::Instant::now);
+                    let failure=tools::failure::task_error(Some(&error),started);
+                    if let Some((idx,_,pending_id,_))=identities.remove(&error.id()) {
+                        let _guard=app.gate.lock().await;
+                        let mut current=app.run(id).await?;
+                        if current["generation"]==generation && current["batch"][idx]["pending"]["id"]==pending_id {
+                            tools::failure::record(&mut current,&failure,Some(idx));
+                            app.save(&mut current).await?;
+                        }
+                    }
+                    return Err(failure);
+                },
+            };
             let _result_guard=app.gate.lock().await;
             let mut current=app.run(id).await?;
             if current["generation"]!=generation
                 || current["batch"][idx]["pending"]["id"]!=pending_id {continue;}
+            if let Err(error)=&result {tools::failure::record(&mut current,error,Some(idx));}
             let interrupted=match &result {
                 Ok(value)=>value["uncertain"]==true || matches!(value["status"].as_str(),Some("cancelled"|"timeout"|"uncertain")),
                 Err(_)=>true,
