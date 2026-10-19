@@ -526,3 +526,48 @@ Evidence: build-jobs/coordination/checks/0aff5b55dbbd9e373305015ef269e15defce4a2
 Documentation/index/review follow-up was separately authorized on 2026-10-17.
 Historical pending notes above retain their meaning at the time and are
 superseded by this completion evidence; index/review status needs its own receipts.
+
+## Exact results, RPC metadata and session recovery — 2026-10-19
+
+The existing context-assembly generation includes the pure exact-result planner:
+tool_results contract v1, context.prepare interface 2, implementation 0.2.1,
+webagent-context-assembly linked library or webagent-context-service live wrapper.
+Its descriptor declares service/implementation/contracts, Cargo inputs and
+context-compaction configuration, no runtime component dependencies, one concurrent
+request, 16 MiB framed request/response and 30 seconds. No per-ability connection
+or broker authority is added. The host retains configuration, credentials,
+permissions/scope, encrypted originals/state, final validation and run authority.
+Execution Metadata v1 and worker envelope v2 separate wire correlation from
+returned content using existing call/interaction identities and host transactions.
+
+Rejected strategies: per-tool output normalization, hiding unrelated results,
+placeholder chains/out-of-context primaries, recall moving primaries, and embedded
+placeholder fallback. Lifetime/budget eviction remains disabled independently.
+Compaction promotes the latest surviving full occurrence and preserves reset
+boundaries. See docs/context-assembly.md for functions/configuration and limits.
+
+Result/settings correction 983a9d77-6eff-497a-a105-eb74c4fa5be5 /
+f2103ed36905882b6f2b1bd1fb5317b4a17ca686 preceded RPC/acceptance release
+17ee81ba-d997-4a1c-9c10-69a7fc235470 / 55a36e852ce19c72f5d9e9c477a8654ad513cc62.
+The latter passed 987 workspace tests, five ignored, both early profiles and
+optimized linked/live checks. Fresh compaction/recall, three retained inputs,
+selective restoration and process replacement with retained core identities passed.
+Verified compiler artifacts were reused; packaging was rebuilt after independent
+broker repairs. This proves reuse/correctness, not cache billing or speedup.
+
+The historical post-compaction component_unavailable/available mismatch did not
+recur in fresh acceptance. Its cause remains unconfirmed; no causal resolution is
+attributed to RPC ID separation. The old isolated fixture remains manually paused
+with its history. Saved fresh acceptance completes the outstanding acceptance item.
+
+Host session-creation finalization/replay correction
+59ae0ffd-20b9-4adf-b870-5171d7d773ee / ee812b6f6c8935bee1ccd750e73fc5ceb6993b18
+passed 989 tests, five ignored, both profiles and linked/live checks. It preserves
+original request identity and ownership across separate authority-plane commits.
+No supporting pure planner changed or persistence authority moved to a service.
+The original database error was not logged. See docs/session-creation.md.
+
+Implementation tasks stay closed with no claims. This separately user-authorized
+context-session-maintenance-20261019 work owns documentation/feature-map/index and
+scoped reviews; its completion requires its own receipts. Earlier immutable
+handoffs preserve their then-pending status and are not retroactively rewritten.

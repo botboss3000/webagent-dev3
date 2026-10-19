@@ -1773,6 +1773,309 @@
           "end_line": 79
         }
       ]
+    },
+    {
+      "id": "context-exact-result-contract",
+      "aliases": [
+        "duplicate result equality",
+        "unchanged result reference"
+      ],
+      "purpose": "Exact input/scope identity, complete output equality, smaller direct references and bounded sequence transitions.",
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/prompts.json",
+            "pointers": [
+              "/tool_result_deduplication/placeholder"
+            ]
+          }
+        ],
+        "opportunities": []
+      },
+      "locations": [
+        {
+          "path": "crates/context-contracts/src/tool_results.rs",
+          "start_line": 67,
+          "end_line": 130
+        },
+        {
+          "path": "crates/context-contracts/src/tool_results.rs",
+          "start_line": 106,
+          "end_line": 133
+        },
+        {
+          "path": "crates/context-contracts/src/tool_results.rs",
+          "start_line": 133,
+          "end_line": 200
+        },
+        {
+          "path": "crates/context-assembly/src/tool_results.rs",
+          "start_line": 6,
+          "end_line": 85
+        }
+      ]
+    },
+    {
+      "id": "context-exact-result-host",
+      "aliases": [
+        "tool output suppression",
+        "duplicate context preparation"
+      ],
+      "purpose": "Host provenance and original reconstruction. Config: data/config/prompts.json -> tool_result_deduplication.placeholder; independent agent policy/tool inclusion metadata.",
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/prompts.json",
+            "pointers": [
+              "/tool_result_deduplication/placeholder"
+            ]
+          }
+        ],
+        "opportunities": []
+      },
+      "locations": [
+        {
+          "path": "src/context/tool_output.rs",
+          "start_line": 1319,
+          "end_line": 1357
+        },
+        {
+          "path": "src/context/tool_output.rs",
+          "start_line": 1349,
+          "end_line": 1386
+        },
+        {
+          "path": "src/context/tool_output.rs",
+          "start_line": 1387,
+          "end_line": 1466
+        },
+        {
+          "path": "src/context/tool_output.rs",
+          "start_line": 1497,
+          "end_line": 1532
+        },
+        {
+          "path": "src/engine_components.rs",
+          "start_line": 757,
+          "end_line": 821
+        }
+      ]
+    },
+    {
+      "id": "context-exact-result-controls",
+      "aliases": [
+        "Identity suppress identical results",
+        "tool result allowlist"
+      ],
+      "purpose": "Manager-fenced Identity and tool inclusion; experimental lifetime eviction disabled. Config: data/config/prompts.json -> tool_result_deduplication.placeholder.",
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "data/config/prompts.json",
+            "pointers": [
+              "/tool_result_deduplication/placeholder"
+            ]
+          }
+        ],
+        "opportunities": []
+      },
+      "locations": [
+        {
+          "path": "src/api/model_admin.rs",
+          "start_line": 248,
+          "end_line": 327
+        },
+        {
+          "path": "src/api/ability_admin.rs",
+          "start_line": 223,
+          "end_line": 239
+        },
+        {
+          "path": "src/api/live_configuration.rs",
+          "start_line": 57,
+          "end_line": 79
+        },
+        {
+          "path": "ui/main-panel/agents/pages/identity/tool-output-policy.js",
+          "start_line": 226,
+          "end_line": 273
+        },
+        {
+          "path": "ui/shared/ability-row-controls.js",
+          "start_line": 524,
+          "end_line": 529
+        },
+        {
+          "path": "src/storage/mod.rs",
+          "start_line": 550,
+          "end_line": 579
+        },
+        {
+          "path": "ui/shared/ability-row-controls.js",
+          "start_line": 472,
+          "end_line": 486
+        },
+        {
+          "path": "ui/main-panel/agents/pages/abilities/page.js",
+          "start_line": 191,
+          "end_line": 205
+        }
+      ]
+    },
+    {
+      "id": "context-rpc-execution-evidence",
+      "aliases": [
+        "RPC routing metadata",
+        "tool content domain IDs"
+      ],
+      "purpose": "Host-verified wire correlation is encrypted execution metadata outside model-facing content; existing identities and payload fields are preserved.",
+      "configuration": {
+        "status": "not_applicable",
+        "rationale": "Exact identity, host authority and immutable ownership correspondence are correctness constraints; configuration cannot relax them."
+      },
+      "locations": [
+        {
+          "path": "crates/context-contracts/src/execution.rs",
+          "start_line": 11,
+          "end_line": 34
+        },
+        {
+          "path": "src/agent_loop/tools/outcome.rs",
+          "start_line": 12,
+          "end_line": 30
+        },
+        {
+          "path": "src/storage/execution_metadata.rs",
+          "start_line": 4,
+          "end_line": 15
+        },
+        {
+          "path": "src/storage/activity.rs",
+          "start_line": 7,
+          "end_line": 30
+        },
+        {
+          "path": "src/agent_loop/tools/mod.rs",
+          "start_line": 253,
+          "end_line": 289
+        },
+        {
+          "path": "src/agent_loop/tools/dispatch.rs",
+          "start_line": 1,
+          "end_line": 12
+        },
+        {
+          "path": "src/agent_loop/tools/batch.rs",
+          "start_line": 228,
+          "end_line": 240
+        },
+        {
+          "path": "src/agent_loop/tools/batch.rs",
+          "start_line": 267,
+          "end_line": 286
+        },
+        {
+          "path": "src/background_tasks.rs",
+          "start_line": 255,
+          "end_line": 269
+        },
+        {
+          "path": "src/agent_loop/run.rs",
+          "start_line": 1700,
+          "end_line": 1721
+        }
+      ]
+    },
+    {
+      "id": "context-compaction-original-recall",
+      "aliases": [
+        "duplicate primary promotion",
+        "compacted original output recall"
+      ],
+      "purpose": "Compaction promotes the latest surviving full occurrence and expands summary evidence; recall does not move references. Historical pause causality remains unconfirmed.",
+      "configuration": {
+        "status": "not_applicable",
+        "rationale": "Exact identity, host authority and immutable ownership correspondence are correctness constraints; configuration cannot relax them."
+      },
+      "locations": [
+        {
+          "path": "crates/context-assembly/src/tool_results.rs",
+          "start_line": 53,
+          "end_line": 87
+        },
+        {
+          "path": "src/context/tool_output.rs",
+          "start_line": 1507,
+          "end_line": 1522
+        },
+        {
+          "path": "src/storage/activity.rs",
+          "start_line": 28,
+          "end_line": 44
+        },
+        {
+          "path": "plugins/abilities/Core/base/recall_adapter.rs",
+          "start_line": 154,
+          "end_line": 165
+        },
+        {
+          "path": "src/agent_loop/run.rs",
+          "start_line": 724,
+          "end_line": 737
+        },
+        {
+          "path": "src/agent_loop/run.rs",
+          "start_line": 820,
+          "end_line": 834
+        },
+        {
+          "path": "src/agent_loop/run.rs",
+          "start_line": 989,
+          "end_line": 1017
+        },
+        {
+          "path": "src/storage/session.rs",
+          "start_line": 567,
+          "end_line": 584
+        },
+        {
+          "path": "src/storage/conversation_history.rs",
+          "start_line": 504,
+          "end_line": 516
+        }
+      ]
+    },
+    {
+      "id": "session-creation-directory-recovery",
+      "aliases": [
+        "shared default session HTTP 500",
+        "saved session same request retry"
+      ],
+      "purpose": "Owner-plane creation commits before app-directory finalization; fresh/replay repair is idempotent, busy retry bounded, saved failure actionable503 and conflicting ownership preserved.",
+      "configuration": {
+        "status": "not_applicable",
+        "rationale": "Exact identity, host authority and immutable ownership correspondence are correctness constraints; configuration cannot relax them."
+      },
+      "locations": [
+        {
+          "path": "src/api/sessions.rs",
+          "start_line": 67,
+          "end_line": 122
+        },
+        {
+          "path": "src/storage/shared_chat.rs",
+          "start_line": 12,
+          "end_line": 39
+        },
+        {
+          "path": "src/api/sessions.rs",
+          "start_line": 913,
+          "end_line": 949
+        }
+      ]
     }
   ]
 }

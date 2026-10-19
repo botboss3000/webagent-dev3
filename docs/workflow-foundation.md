@@ -320,7 +320,13 @@ follow source-resource retention and staging is acknowledged after relay.
 
 ## Tool-output retention
 
-Live app defaults in data/config/tool-output-retention.json and revision-fenced Identity overrides reload each working model call. App-level data/config/prompts.json owns tool_output_retention guidance and placeholders. Expiration defaults off. Only successful native-designated perishable reads are eligible. A metadata-only ledger belongs to user-owned session/run documents, commits with existing run fences, and inherits at execution. Active context can replace expired output with bounded recall receipts; original encrypted interactions remain intact. Promotion has a separate character budget and never grants read permission. Compaction still applies; original source evidence must be reread after edits. Disabling expiration restores un-compacted available replay, with bounded recall for older segments.
+Lifetime/budget eviction is preserved as **Under development · Experimental — disabled**. The host validates saved data/config/tool-output-retention.json and revision-fenced agent overrides, then forces the effective policy off without deleting settings. Its former ledger/promotion/recall implementation is separate from active exact-duplicate suppression.
+
+Exact-duplicate suppression is a model-facing projection with an Identity toggle and per-tool inclusion. Config: data/config/prompts.json -> tool_result_deduplication.placeholder is required and validated each model boundary without code/default-text fallback. Calls always execute and save original encrypted output. Only later exact successful repeats of tool/canonical inputs/resolved scope may become smaller direct full-result references; unrelated calls never evict originals. Compaction promotes the latest survivor, expands original summary evidence and retains reset barriers. See [context assembly](context-assembly.md).
+
+RPC routing evidence is encrypted separately in interactions.execution_metadata, using existing session/run/call identities and the original result transaction. Staging stays outside model-facing run.input. Recall reads the original interaction item; payload IDs/timestamps remain part of exact equality. Configuration, permission/scope resolution and persistence remain host authority.
+
+Session creation commits owner-plane session/mode/receipt/event before app-directory finalization. New creation and identical receipt replay both finalize it. Busy retry is bounded; an unresolved saved-session failure is actionable HTTP 503, and conflicting ownership is never rewritten. See [session creation recovery](session-creation.md) for exact statuses and evidence.
 
 ### Retained build task reminders
 
