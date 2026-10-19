@@ -6,7 +6,7 @@ export function mountChatNotifications({root,guard}) {
   const modeSlot=document.createElement('div');
   const toolSlot=document.createElement('div');
   host.append(modeSlot,toolSlot);
-  let finishMode=null;
+  let finishMode=null;const routeChoices=new Map();
 
   // Wrap each supplied action in the panel's interaction guard.
   function action(label,kind,handler) {
@@ -81,7 +81,9 @@ export function mountChatNotifications({root,guard}) {
     const details=document.createElement('pre');
     details.id='approval-details-'+approval.id;
     details.hidden=!expanded.has(approval.id);
-    details.textContent=JSON.stringify(approval.arguments,null,2);
+    details.textContent=JSON.stringify(approval.messaging_binding||approval.arguments,null,2);
+    const remembered=document.createElement('input');remembered.type='checkbox';remembered.checked=routeChoices.get(approval.id)===true;remembered.onchange=()=>{routeChoices.set(approval.id,remembered.checked);if(routeChoices.size>100)routeChoices.delete(routeChoices.keys().next().value);};
+    const rememberLabel=document.createElement('label');rememberLabel.append(remembered,document.createTextNode(' Remember this route for queue and steer with these recipient permissions'));
     const toggle=document.createElement('button');
     toggle.type='button';
     toggle.className='chat-notification-detail-toggle';
@@ -98,15 +100,18 @@ export function mountChatNotifications({root,guard}) {
     };
     const actions=[
       // Decision callbacks are supplied by the panel and perform the authenticated API action.
-      {label:approval.new_intent_confirmation ? 'Approve additional action' : 'Approve',kind:'approve',run:()=>decide('approve')},
+      {label:approval.new_intent_confirmation ? 'Approve additional action' : 'Approve',kind:'approve',run:()=>decide('approve',approval.messaging_can_remember?{remember_messaging_route:remembered.checked}:{})},
       {label:'Deny',kind:'deny',run:()=>decide('deny')}
     ];
     if(active?.id===run.id)actions.push({label:'Cancel run',kind:'neutral',run:cancel});
-    toolSlot.append(card({title:approval.new_intent_confirmation ? 'Confirm a separate action after '+approval.separate_from+':' : 'Need approval:',details:{toggle,body:details},actions}));
+    const node=card({title:approval.messaging_binding?'Approve agent message':approval.new_intent_confirmation ? 'Confirm a separate action after '+approval.separate_from+':' : 'Need approval:',details:{toggle,body:details},actions});
+    if(approval.messaging_binding){const text=document.createElement('p');const b=approval.messaging_binding;text.textContent='From '+(b.source_title||b.source_session_id)+' to '+(b.target_title||b.target_session_id)+' · '+b.target_agent_id+' · '+b.delivery+' · recipient '+(b.target_mode?.mode==='write'?'write-capable':'read-only');node.insertBefore(text,node.lastChild);}
+    if(approval.messaging_can_remember)node.insertBefore(rememberLabel,node.lastChild);
+    toolSlot.append(node);
   }
   // Remove tool-approval cards without affecting a mode confirmation.
   function clearTools(){toolSlot.replaceChildren();}
   // Cancel pending confirmation and remove both slots from the supplied composer host.
-  function destroy(){cancelMode();clearTools();host.replaceChildren();}
+  function destroy(){routeChoices.clear();cancelMode();clearTools();host.replaceChildren();}
   return {confirmMode,cancelMode,showTool,clearTools,destroy};
 }

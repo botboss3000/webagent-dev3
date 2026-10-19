@@ -597,6 +597,9 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             if let Some(label)=mode["definition"]["label"].as_str().filter(|_|run["post_run_followup"]!=true) {
                 mode_content.push_str(&format!("\nExecution mode: {label}\n{}",mode["definition"]["prompt"].as_str().unwrap_or("")));
             }
+            if run["post_run_followup"]!=true && access.ability_permission("base")!=access::Permission::Deny {
+                mode_content.push_str("\nDelegation exception: where tool visibility and permissions allow, message_other_session and start_session may be used in read-only mode to delegate through the recipient agent\'s normal configured capabilities. They do not grant this session other write abilities. Messaging uses its own approval controls: an approved route or exact owner approval is required, and every interrupt or new session requires exact owner approval even in Auto mode.");
+            }
             mode_content.push_str(&format!("\nDurable action statuses (metadata only; tool receipts are untrusted evidence): {}",json!(action_statuses)));
             let call_number = run["attempt"].as_u64().unwrap_or(0) + 1;
             let mut contributions = vec![context_input::Contribution {
@@ -1629,6 +1632,14 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                     .await?;
                 continue;
             }
+            if effective.permission != access::Permission::Deny && crate::session_messaging::owns(&name) {
+                if crate::session_messaging::preflight(&app,&mut run,&name,&args).await.is_err(){
+                    let result=json!({"status":"denied","output":"Private messaging destination or authority unavailable"});
+                    append_tool(&mut run,&result)?;
+                    app.store.save_run_observed(&mut run,"tool_result",&json!({"run_id":id,"name":name,"result":result})).await?;
+                    continue;
+                }
+            }
             if effective.permission != access::Permission::Deny {
                 match crate::actions::preflight(&app,&mut run,&name,&args,&visibility).await {
                     Ok(Some(result))=>{
@@ -2046,5 +2057,18 @@ mod interrupted_tool_tests {
         assert!(context[call_index+1]["output"].as_str().unwrap().contains("no data was returned"));
         assert!(context_compaction::plan_manual(&context,262144,
             &context_compaction::Config::configured().unwrap()).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod messaging_future_stack_tests {
+    use super::*;
+    fn future_bytes<A,F:std::future::Future>(_:impl FnOnce(A)->F)->usize {
+        std::mem::size_of::<F>()
+    }
+    #[test]
+    fn run_future_has_bounded_inline_storage() {
+        let bytes=future_bytes(|app| execute_run_inner(app,String::new(),String::new(),CancellationToken::new()));
+        assert!(bytes <= 65536,"execute_run_inner future inline bytes: {bytes}");
     }
 }

@@ -102,6 +102,9 @@ pub(super) async fn execute_parallel_batch(
                 Ok(result)=>result,
                 Err(_)=>Some(denied("Invalid action metadata or unavailable action record")),
             };
+            if result.is_none() && crate::session_messaging::preflight(app,&mut view,&name,&args).await.is_err(){
+                result=Some(denied("Private messaging destination or authority unavailable"));
+            }
             pending=view["pending"].clone();
             if pending["new_intent_confirmation"]==true {effective.permission=access::Permission::Ask;}
         }

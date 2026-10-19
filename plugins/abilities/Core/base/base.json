@@ -16,6 +16,8 @@
     "calculate",
     "read_attachment",
     "session_search",
+    "message_other_session",
+    "start_session",
     "similar_sessions",
     "compact_context",
     "recall_compacted",

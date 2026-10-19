@@ -10,9 +10,10 @@ impl Store {
         let mut fence=template.clone();if !fence.is_object(){fence=json!({});}fence["session_id"]=json!(sid);
         self.require_participation(t,&fence).await
     }
-    async fn legacy_message_meta(&self,t:&mut sqlx::Transaction<'_,sqlx::Sqlite>,entry:&Value,eligible:bool)->Result<()> {
+    pub(super) async fn legacy_message_meta(&self,t:&mut sqlx::Transaction<'_,sqlx::Sqlite>,entry:&Value,eligible:bool)->Result<()> {
         let id=entry["id"].as_str().ok_or_else(||anyhow!("Followup id missing"))?;
         let mut meta=json!({"author_id":self.current_user_id(),"context_eligible":eligible,"queued":!eligible});
+        if entry["agent_message"].is_object(){meta["agent_message"]=entry["agent_message"].clone();meta["message_kind"]=json!("agent_message");meta["author_name"]=json!(format!("Message from {} · {}",entry["agent_message"]["source_agent_id"].as_str().unwrap_or("agent"),entry["agent_message"]["source_title"].as_str().unwrap_or("conversation")));}
         if eligible {meta["context_content"]=entry["context_content"].clone();}
         self.write_document(t,&format!("message_meta:{id}"),&meta).await
     }
@@ -113,7 +114,7 @@ impl Store {
         }
         Ok(())
     }
-    async fn queue_reserve(
+    pub(super) async fn queue_reserve(
         &self,
         t: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         s: &str,
@@ -250,6 +251,7 @@ impl Store {
                 return Err(anyhow!("Message delivery already claimed"));
             }
             let choice = body["choice"].as_str().unwrap();
+            if e["agent_message"].is_object(){e["messaging_route"]=Value::Null;}
             e["choice"] = json!(choice);
             e["revision"] = json!(expected + 1);
             if choice == "cancel" {
@@ -259,6 +261,11 @@ impl Store {
             if choice == "interrupt" {
                 e["interrupt_committed"] = json!(true);
                 let target:Option<String>=sqlx::query_scalar("SELECT id FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed') ORDER BY enqueue_seq DESC LIMIT 1").bind(s).fetch_optional(&mut *t).await?;
+                if e["agent_message"].is_object(){
+                    let id=target.as_deref().ok_or_else(||anyhow!("No active recipient run to interrupt"))?;
+                    let raw:Vec<u8>=sqlx::query_scalar("SELECT value FROM docs WHERE key=?").bind(format!("run:{id}")).fetch_one(&mut *t).await?;
+                    let target_run=self.unseal(&raw)?;e["interrupt_generation"]=target_run["generation"].clone();
+                }
                 e["target_run_id"] = json!(target);
             }
         } else {
@@ -366,7 +373,7 @@ impl Store {
         }
         Ok(())
     }
-    async fn followup_lease_guard(
+    pub(super) async fn followup_lease_guard(
         &self,
         t: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         run: &Value,
@@ -431,7 +438,7 @@ impl Store {
         }
         if picked.is_empty() {return Ok(false);}
         self.legacy_followup_fence(&mut t,s,run).await?;
-        for entry in &picked {self.legacy_followup_fence(&mut t,s,&entry["template"]).await?;}
+        for entry in &picked {self.legacy_followup_fence(&mut t,s,&entry["template"]).await?; self.validate_agent_delivery_tx(&mut t,entry).await?;}
         if let Some(parent)=origin.as_deref(){self.legacy_followup_fence(&mut t,s,parent).await?;}
 
         // The preflight template must still belong to the actual first consumer;
@@ -492,6 +499,7 @@ impl Store {
         }
         let item = json!({"role":"user","content":text});
         let mut next = run.clone();
+        if picked.iter().any(|e|e["agent_message"].is_object()){next["received_agent_message"]=json!(true);}
         if choice == "steer" || choice == "interrupt" {
             next["input"]
                 .as_array_mut()

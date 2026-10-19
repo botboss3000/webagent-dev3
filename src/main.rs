@@ -27,6 +27,7 @@ mod actions;
 mod background_tasks;
 mod background_followup;
 mod followup_queue;
+mod session_messaging;
 mod abilities;
 mod live_assets;
 mod engine_components;

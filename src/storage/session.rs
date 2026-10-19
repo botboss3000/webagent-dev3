@@ -508,7 +508,7 @@ impl Store {
                 || ["session_mode","session_ability_state","session_usage","manager_pending","session_naming",
                     "administrator_host","administrator_browser","administrator_notice"].iter()
                     .any(|prefix|candidate==format!("{prefix}:{sid}"))
-                || ["receipt:message","receipt:queue","receipt:session:patch","receipt:session:lifecycle","receipt:session:history","receipt:base",
+                || ["receipt:message","receipt:queue","receipt:agent_message","receipt:messaging_route","receipt:session:patch","receipt:session:lifecycle","receipt:session:history","receipt:base",
                     "receipt:voice","receipt:chat_controls","receipt:session_mode","administrator_receipt"].iter()
                     .any(|prefix|candidate.starts_with(&format!("{prefix}:{sid}:")))
                 || message_ids.iter().any(|id|candidate==format!("message_attachments:{id}"))
@@ -516,6 +516,7 @@ impl Store {
                 || ids.iter().any(|id|candidate.starts_with(&format!("receipt:run:{id}:")))
                 || ids.iter().any(|id|record["result"]["run_id"]==*id
                     || (candidate.starts_with("receipt:") && record["result"]["id"]==*id));
+            let owned=owned || (candidate.starts_with("messaging_route:") && (record["scope"]["source_session_id"]==sid || record["scope"]["target_session_id"]==sid));
             if owned {
                 if candidate.starts_with("run:") && record["uncertain"]==true {
                     uncertain_effects.push(json!({"run_id":record["id"],"pending":record["pending"],"batch":record["batch"]}));

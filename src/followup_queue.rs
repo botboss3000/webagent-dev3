@@ -33,13 +33,7 @@ pub(crate) async fn should_queue(app: &App, s: &str) -> Result<bool> {
             .iter()
             .any(|r| r["session_id"] == s && !terminal(status(r))))
 }
-pub(crate) async fn submit(
-    app: &App,
-    s: &str,
-    body: &Value,
-) -> std::result::Result<Value, ApiError> {
-    if crate::shared_chat::actor(app)!=app.store.current_user_id(){return Err(ApiError(StatusCode::FORBIDDEN,"Private delivery controls belong to the conversation owner".into()));}
-    let prepared = api::chat::prepare_followup(app, s, body).await?;
+pub(crate) fn prepared_entry(prepared:api::chat::PreparedMessage,choice:&str)->(Value,Vec<(String,Value)>) {
     let id = prepared.message["run_id"].as_str().unwrap().to_owned();
     let mut template = Value::Null;
     let mut review = Value::Null;
@@ -54,7 +48,18 @@ pub(crate) async fn submit(
             docs.push((key, value));
         }
     }
-    let e = json!({"id":id,"message_id":format!("user:{id}"),"session_id":s,"agent_id":template["agent_id"],"revision":0,"choice":"queue","status":if review.is_null(){"pending"}else{"reviewing"},"content":prepared.message["content"],"context_content":prepared.message.get("context_content").unwrap_or(&prepared.message["content"]),"attachments":prepared.result["attachments"],"template":template,"review":review,"review_status":if review.is_null(){"acceptable"}else{"pending_review"},"created_at":now(),"consuming_run_id":null});
+    let e = json!({"id":id,"message_id":format!("user:{id}"),"session_id":template["session_id"],"agent_id":template["agent_id"],"revision":0,"choice":choice,"status":if review.is_null(){"pending"}else{"reviewing"},"content":prepared.message["content"],"context_content":prepared.message.get("context_content").unwrap_or(&prepared.message["content"]),"attachments":prepared.result["attachments"],"agent_message":prepared.message["agent_message"],"template":template,"review":review,"review_status":if review.is_null(){"acceptable"}else{"pending_review"},"created_at":now(),"consuming_run_id":null});
+    (e,docs)
+}
+pub(crate) async fn submit(
+    app: &App,
+    s: &str,
+    body: &Value,
+) -> std::result::Result<Value, ApiError> {
+    if crate::shared_chat::actor(app)!=app.store.current_user_id(){return Err(ApiError(StatusCode::FORBIDDEN,"Private delivery controls belong to the conversation owner".into()));}
+    let prepared = api::chat::prepare_followup(app, s, body).await?;
+    let (e,docs)=prepared_entry(prepared,"queue");
+    let id=e["id"].as_str().unwrap().to_owned();
     let result = json!({"run_id":null,"submission_id":id,"message_id":e["message_id"],"delivery_state":"queued","queue_entry":public_entry(&e),"attachments":e["attachments"]});
     app.store
         .followup_submit(
@@ -69,6 +74,7 @@ pub(crate) async fn submit(
         .map_err(|e| conflict(&e.to_string()))
 }
 pub(crate) async fn interrupt_requested(app: &App, rid: &str) -> Result<bool> {
+    if let Some(r)=app.store.get(&format!("run:{rid}")).await? {if let Some(s)=r["session_id"].as_str(){crate::session_messaging::revalidate(app,s).await?;}}
     if let Some(run)=app.store.get(&format!("run:{rid}")).await? {if run["requester_user_id"].as_str().is_some_and(|actor|actor!=app.store.current_user_id()) || !app.store.participation_allows_run(&run).await? {return Ok(false);}}
     let Some(r) = app.store.get(&format!("run_view:{rid}")).await? else {
         return Ok(false);
@@ -207,6 +213,7 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
         if session["status"].as_str().unwrap_or("active") != "active" || app.store.participation_state(&s).await?["active"]!=true {
             continue;
         }
+        crate::session_messaging::revalidate(app,&s).await?;
         let q = app.store.followup_queue(&s).await?;
         for e in q["entries"].as_array().unwrap() {
             if e["review_status"] == "pending_review" {

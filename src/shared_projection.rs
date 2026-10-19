@@ -14,6 +14,7 @@ pub(crate) async fn messages(app: &App, rows: &mut [Value]) -> Result<()> {
             metadata = app.store.get(&format!("message_meta:{rid}")).await?;
         }
         if let Some(meta) = metadata {
+            row["agent_message"] = meta["agent_message"].clone();
             row["author_id"] = meta["author_id"].clone();
             row["author_name"] = meta["author_name"].clone();
             row["message_kind"] = meta

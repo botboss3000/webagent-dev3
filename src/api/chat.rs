@@ -686,6 +686,17 @@ pub(crate) async fn approval(State(app): State<App>, Path(id): Path<String>, Jso
         return Err(conflict("Credential authorization changed"));
     }
     if !app.store.participation_allows_run(&run).await? {return Err(conflict("Agent is inactive or participation changed"));}
+    if crate::session_messaging::owns(run["pending"]["name"].as_str().unwrap_or("")) {
+        if crate::shared_chat::actor(&app)!=app.store.current_user_id(){return Err(ApiError(StatusCode::FORBIDDEN,"Only the private owner can approve messaging".into()));}
+        let name=run["pending"]["name"].as_str().unwrap();
+        if decision=="approve" {let fresh=crate::session_messaging::binding(&app,&run,name,&run["pending"]["arguments"]).await.map_err(|_|conflict("Messaging destination changed"))?;
+        if fresh!=run["pending"]["messaging_binding"]{return Err(conflict("Messaging destination changed; request a fresh approval"));}}
+        if body.get("remember_messaging_route").is_some_and(|v|!v.is_boolean()){return Err(bad("Invalid remember route choice"));}
+        if body["remember_messaging_route"]==true {
+            if decision!="approve" || run["pending"]["messaging_can_remember"]!=true{return Err(bad("This approval cannot grant a route"));}
+
+        }
+    } else if body.get("remember_messaging_route").is_some(){return Err(bad("Messaging route choice is not applicable"));}
     let agent_id=run["agent_id"].as_str().unwrap_or("shared_default");
     let access=crate::shared_chat::live_access(&app.store,run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id()),sid,agent_id).await
         .map_err(|_|conflict("Access changed; approval is invalid"))?;
@@ -733,6 +744,7 @@ pub(crate) async fn approval(State(app): State<App>, Path(id): Path<String>, Jso
             "Policy or session mode changed; a new gate decision is required",
         ));
     }
+    if crate::session_messaging::owns(run["pending"]["name"].as_str().unwrap_or("")){run["pending"]["remember_messaging_route"]=json!(body["remember_messaging_route"]==true);}
     run["pending"]["decision"] = json!(decision);
     run["status"] = json!(if app.shutoff().await? {
         "stopped"

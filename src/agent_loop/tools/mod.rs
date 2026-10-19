@@ -146,6 +146,7 @@ pub(crate) fn native_schemas() -> Vec<Value> {
         schemas.extend(core_directory_decision::schemas());
         schemas.extend(core_utilities::schemas());
         schemas.extend(core_session::schemas());
+        schemas.extend(crate::session_messaging::schemas());
         schemas.extend(crate::main_chat::schemas());
         schemas.extend(core_skills::schemas());
         schemas.extend(core_context_assets::schemas());

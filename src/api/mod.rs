@@ -10,6 +10,7 @@ pub(crate) use conversation_history::*;
 mod promotions;
 pub(crate) mod chat;
 pub(crate) mod followup_queue;
+pub(crate) mod session_messaging;
 pub(crate) mod direct_messages;
 mod chat_controls;
 pub(crate) mod media_lane;

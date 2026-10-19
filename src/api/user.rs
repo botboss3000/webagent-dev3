@@ -354,6 +354,8 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{id}/usage", get(chat_usage))
         .route("/sessions/{id}/model", axum::routing::put(chat_model))
         .route("/sessions/{id}/mode", get(mode_get).put(mode_set))
+        .route("/sessions/{id}/messaging-routes",get(messaging_routes))
+        .route("/sessions/{id}/messaging-routes/{target}",post(messaging_route_revoke))
         .route("/sessions/{id}/abilities", get(abilities))
         .route("/sessions/{id}/abilities/{ability_id}", axum::routing::put(ability_set))
         .route("/sessions/{id}/state-inspect", get(state_inspect))
@@ -381,6 +383,16 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{id}/activity", get(activity))
         .route("/runs/{id}/{action}", post(command))
         .route("/approvals/{id}/decision", post(approval))
+}
+async fn messaging_routes(Extension(app):Extension<App>,Path(sid):Path<String>)->Response {
+    let app=match session_app(app,&sid).await{Ok(app)=>app,Err(e)=>return e.into_response()};
+    if let Err(e)=guard_access(&app,false,true){return e.into_response();}
+    crate::api::session_messaging::list(State(app),Path(sid)).await.into_response()
+}
+async fn messaging_route_revoke(Extension(app):Extension<App>,Path((sid,target)):Path<(String,String)>,Json(body):Json<Value>)->Response {
+    let app=match session_app(app,&sid).await{Ok(app)=>app,Err(e)=>return e.into_response()};
+    if let Err(e)=guard_access(&app,true,true){return e.into_response();}
+    crate::api::session_messaging::revoke(State(app),Path((sid,target)),Json(body)).await.into_response()
 }
 pub(crate) fn messaging_router() -> Router<App> {
     Router::new()

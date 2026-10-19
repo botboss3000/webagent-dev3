@@ -180,7 +180,9 @@ async fn call_raw_inner(
     if optimization_run["plugin_bindings"].get(&name).is_some() {
         return crate::ability_plugins::execute(&app,&sid,&name,&args,&pending_id,&optimization_run["plugin_bindings"][&name],cancel).await;
     }
-    if name=="promotion_propose" {
+    if crate::session_messaging::owns(&name) {
+        crate::session_messaging::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if name=="promotion_propose" {
         propose_promotion(&app,&sid,&pending_id,&run_id,&args,policy_version,cancel).await
     } else if matches!(name.as_str(),"prompt_slot_read"|"prompt_slot_write") {
         crate::api::sessions::execute_prompt_slot_receipted(&app,&name,&args,Some(&pending_id)).await

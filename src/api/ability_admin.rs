@@ -75,7 +75,7 @@ async fn catalog(app:&App,identity:&Value,id:&str,params:&HashMap<String,String>
     }
     let scoped=admin_agent_view(app,id).await?;
     let mut visibility=agent_abilities(&scoped).await?;
-    let policy=scoped.store.get("policy").await?.unwrap_or_else(policy_default);
+    let policy=crate::session_messaging::policy_defaults(scoped.store.get("policy").await?.unwrap_or_else(policy_default));
     let mut abilities=app.abilities.configuration_catalog(&policy,&visibility);
     let call_counts = app.store.for_user(caller).await?.tool_call_counts(id).await?;
     // The counts describe this caller's recorded model calls, including older sessions.

@@ -522,7 +522,7 @@ fn policy_default() -> Value {
     }
     for schema in tools::core_mode::schemas().into_iter()
         .chain(tools::core_search::schemas()).chain(tools::core_compaction::schemas())
-        .chain(tools::core_recall::schemas()).chain(tools::core_self_edit::schemas())
+        .chain(tools::core_recall::schemas()).chain(tools::core_self_edit::schemas()).chain(crate::session_messaging::schemas())
         .chain(crate::main_chat::schemas()).chain(tools::core_task::schemas()).chain(tools::core_tool_search::schemas()).chain(tools::core_decision::schemas()).chain(tools::core_directory_decision::schemas()).chain(modules::schemas()) {
         let name=schema["name"].as_str().unwrap();
         policy["rules"][name]=json!(if tools::is_read(name){"allow"}else{"require_approval"});
@@ -531,6 +531,7 @@ fn policy_default() -> Value {
         let name=schema["name"].as_str().unwrap();
         policy["rules"][name]=json!(if tools::is_read(name){"allow"}else{"require_approval"});
     }
+    for name in ["message_other_session","start_session"] {policy["rules"][name]=json!("allow");}
     #[cfg(test)] { policy["rules"]["test_owner_purchase"]=json!("require_approval"); }
     policy
 }
@@ -549,7 +550,7 @@ fn live_tool_decision(app:&App, access:&access_policy::LiveAccess, name:&str,
         visibility["settings"][id][key]=="cautious"
     }) {access::Permission::Ask}else{access::Permission::Auto};
     access.tool_decision_for_abilities(name,&ability_ids,installation.meet(caution),
-        available,visible,read_only,tools::is_read(name))
+        available,visible,read_only && !crate::session_messaging::owns(name),tools::is_read(name))
 }
 fn filter_ability_entry(app:&App, access:&access_policy::LiveAccess, entry:&mut Value,
     policy:&Value, visibility:&Value, state:&Value, loaded:&Value,
@@ -564,7 +565,7 @@ fn filter_ability_entry(app:&App, access:&access_policy::LiveAccess, entry:&mut 
         let (available,_)=app.abilities.tool_gate(name,visibility,state,loaded);
         let ability_ids=app.abilities.tool_abilities(name,visibility,state,loaded);
         access.tool_decision_for_abilities(name,&ability_ids,installation,
-            available,true,read_only,tools::is_read(name))
+            available,true,read_only && !crate::session_messaging::owns(name),tools::is_read(name))
             .permission!=access::Permission::Deny
     });
     !tools.is_empty()
@@ -640,6 +641,9 @@ async fn session_mode(app: &App, sid: &str) -> Result<Value> {
     Ok(value)
 }
 async fn effective_policy(app: &App, sid: &str) -> Result<(Value, u64)> {
+    effective_policy_for_mode(app,&session_mode(app,sid).await?).await
+}
+async fn effective_policy_for_mode(app:&App,mode:&Value)->Result<(Value,u64)> {
     let mut policy = app
         .store
         .get("policy")
@@ -652,11 +656,11 @@ async fn effective_policy(app: &App, sid: &str) -> Result<(Value, u64)> {
     for name in ["task_status","task_wait","task_cancel"] {
         if policy["rules"].get(name).is_none() {policy["rules"][name]=json!("allow");}
     }
-    let mode = session_mode(app, sid).await?;
+    policy=crate::session_messaging::policy_defaults(policy);
     if mode["mode"] == "read_only" {
         for schema in tools::schemas() {
             let name = schema["name"].as_str().unwrap_or("");
-            if !tools::is_read(name) {
+            if !tools::is_read(name) && !crate::session_messaging::owns(name) {
                 policy["rules"][name] = json!("deny");
             }
         }

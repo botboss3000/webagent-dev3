@@ -13,6 +13,7 @@ mod naming;
 mod background_tasks;
 mod background_followup;
 mod followup_queue;
+mod session_messaging;
 mod reasoning_cleanup;
 pub(crate) mod notifications;
 pub(crate) mod shared_chat;
@@ -641,6 +642,9 @@ impl Store {
             || key.starts_with("manager_review:")
             || key.starts_with("manager_pending:")
             || key.starts_with("followup_queue:")
+            || key.starts_with("messaging_route:")
+            || key.starts_with("receipt:agent_message:")
+            || key.starts_with("receipt:messaging_route:")
             || key.starts_with("receipt:queue:")
             || key.starts_with("user_agent_page_preferences:")
             || key.starts_with("user_app_page_preferences:")

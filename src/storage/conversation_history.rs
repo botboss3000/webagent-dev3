@@ -405,7 +405,7 @@ impl Store {
                     child_queue["entries"].as_array_mut().unwrap().push(json!({
                         "id":rid,"message_id":mid,"session_id":id,"agent_id":child["agent_id"],
                         "revision":0,"choice":"queue","status":"delivered","review_status":"acceptable",
-                        "content":entry["content"],"context_content":context,"attachments":files,
+                        "content":entry["content"],"context_content":context,"attachments":files,"agent_message":entry["agent_message"],
                         "consuming_run_id":consumer,"batch_id":entry["batch_id"]}));
                 }
                 self.queue_write_tx(&mut tx, &mut child_queue).await?;
