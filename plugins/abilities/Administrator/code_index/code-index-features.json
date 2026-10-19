@@ -2311,6 +2311,74 @@
           "purpose": "Polling, retry and stale response assertions"
         }
       ]
+    },
+    {
+      "id": "diagnostics-background-issues",
+      "aliases": [
+        "background toasts",
+        "toast recovery",
+        "app_background",
+        "issue resolution"
+      ],
+      "purpose": "Browser issue lifecycle, fixed-admin API and diagnostic archive. Config: plugins/diagnostics/diagnostics.json -> enabled, background_issues.enabled/show_toasts; config/diagnostics.json supplies source defaults. Guide: docs/diagnostics-background-issues.md.",
+      "locations": [
+        {
+          "path": "ui/shared/background-issues.js",
+          "start_line": 1,
+          "end_line": 49,
+          "purpose": "Independent episodes and bounded presentation/delivery"
+        },
+        {
+          "path": "src/diagnostics_plugin/background.rs",
+          "start_line": 1,
+          "end_line": 80,
+          "purpose": "Authenticated bounded observations and fixed-admin capture"
+        },
+        {
+          "path": "src/diagnostics_plugin/background.rs",
+          "start_line": 81,
+          "end_line": 104,
+          "purpose": "Recorder acknowledgement and route bounds"
+        },
+        {
+          "path": "ui/app.js",
+          "start_line": 230,
+          "end_line": 250,
+          "purpose": "Action/background notice coexistence"
+        },
+        {
+          "path": "ui/chat/core/panel.js",
+          "start_line": 150,
+          "end_line": 185,
+          "purpose": "Read acknowledgement and manager-state recovery"
+        },
+        {
+          "path": "src/plugin_packages/diagnostics/main.rs",
+          "start_line": 143,
+          "end_line": 173,
+          "purpose": "Archive initialization and retained-event uniqueness"
+        },
+        {
+          "path": "config/diagnostics.json",
+          "start_line": 1,
+          "end_line": 28,
+          "purpose": "Source configuration template"
+        }
+      ],
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "config/diagnostics.json",
+            "pointers": [
+              "/enabled",
+              "/background_issues/enabled",
+              "/background_issues/show_toasts"
+            ]
+          }
+        ],
+        "opportunities": []
+      }
     }
   ]
 }
