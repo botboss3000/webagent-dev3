@@ -84,7 +84,7 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
         return ApiError(StatusCode::UNAUTHORIZED, "Guest access is not enabled".into()).into_response();
     }
     let path=request.uri().path();
-    let resource=if path.starts_with("/api/v3/main-chat") || path.starts_with("/main-chat") || path.starts_with("/api/v3/main-notes") || path.starts_with("/main-notes") || path.starts_with("/api/v3/sessions") || path.starts_with("/sessions") || path.starts_with("/api/v3/runs") || path.starts_with("/runs") || path.ends_with("/user/status") {Some("chat")}
+    let resource=if path.ends_with("/main-chat")||path.contains("/main-notes") {Some("chat")} else if path.starts_with("/api/v3/main-chat") || path.starts_with("/main-chat") || path.starts_with("/api/v3/main-notes") || path.starts_with("/main-notes") || path.starts_with("/api/v3/sessions") || path.starts_with("/sessions") || path.starts_with("/api/v3/runs") || path.starts_with("/runs") || path.ends_with("/user/status") {Some("chat")}
         else if path.starts_with("/api/v3/agents/") || path.starts_with("/agents/") {Some("agents")} else {None};
     if let Some(page)=resource {
         if !app.store.read_access_policy().ok().is_some_and(|policy|registration::page_allowed(&policy,"main",page,&principal)) {

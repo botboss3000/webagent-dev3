@@ -42,8 +42,7 @@
       "service/tool-schemas.json",
       "service/page.json",
       "service/page.js",
-      "service/page.css",
-      "skills/main_notes_review.skill.md"
+      "service/page.css"
     ]
   }
 }

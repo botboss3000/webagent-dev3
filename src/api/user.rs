@@ -332,9 +332,9 @@ async fn user_status(Extension(app): Extension<App>,identity:Option<Extension<Va
 
 pub(crate) fn router() -> Router<App> {
     Router::new()
-        .route("/main-chat", get(crate::main_chat::read_api).put(crate::main_chat::configure_api))
-        .route("/main-notes", get(crate::main_chat::read_api).post(crate::main_chat::write_api))
-        .route("/main-notes/proposals/{id}", post(crate::main_chat::decide_api))
+        .route("/models/agents/{id}/main-chat",get(crate::main_chat::agent_read).put(crate::main_chat::agent_configure))
+        .route("/models/agents/{id}/main-notes",get(crate::main_chat::agent_read).post(crate::main_chat::agent_write))
+        .route("/models/agents/{agent}/main-notes/proposals/{id}",post(crate::main_chat::agent_decide))
         .route("/user/status", get(user_status))
         .route("/sessions", get(sessions).post(create_session))
         .route("/sessions/search", get(session_search))

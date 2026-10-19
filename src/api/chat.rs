@@ -375,7 +375,7 @@ pub(crate) async fn events(
                     let participation=app.store.participation_state(&id).await.ok()?;
                     let queue_state=crate::followup_queue::public(&app.store.followup_queue(&id).await.ok()?);
                     // Private notes revisions refresh the dedicated element without adding transcript messages.
-                    let notes_revision=if opening_main_owner(&app,&id,&user_id).await {app.store.main_chat_state().await.ok()?["revision"].clone()}else{Value::Null};
+                    let notes_revision=if opening_main_owner(&app,&id,&user_id).await {app.store.for_agent(&agent_id).await.ok()?.main_chat_state().await.ok()?["revision"].clone()}else{Value::Null};
                     let revision=digest(&json!([summary["metadata_revision"],participation["revision"],participation["generation"],queue_state["queue_state"]["revision"],notes_revision]));
                     if metadata_revision.as_ref() != Some(&revision) {
                         metadata_revision = Some(revision);

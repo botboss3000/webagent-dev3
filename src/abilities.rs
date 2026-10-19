@@ -2283,7 +2283,7 @@ mod tests {
         let base = catalog.abilities.iter().find(|entry| entry.id == "base").unwrap();
         let mut installed: Vec<_> = base.tools.iter().filter(|name| Catalog::supported(name)).map(String::as_str).collect();
         installed.sort();
-        assert_eq!(installed, ["calculate", "compact_context", "context_assets", "edit_own_prompt", "get_date", "get_task_checkpoint", "get_time", "list_skills", "list_tools", "load_skill", "load_tool", "message_other_session", "present_chat_component", "present_plan", "read_attachment", "read_own_prompt", "recall_compacted", "remove_own_skill", "save_own_skill", "search_this_session", "search_tools", "session_search", "set_execution_mode", "similar_sessions", "start_session", "task_cancel", "task_status", "task_wait", "update_task_checkpoint"]);
+        assert_eq!(installed, ["calculate", "compact_context", "context_assets", "edit_own_prompt", "get_date", "get_task_checkpoint", "get_time", "list_skills", "list_tools", "load_skill", "load_tool", "main_notes_read", "main_notes_write", "message_other_session", "present_chat_component", "present_plan", "read_attachment", "read_own_prompt", "recall_compacted", "remove_own_skill", "save_own_skill", "search_this_session", "search_tools", "session_search", "set_execution_mode", "similar_sessions", "start_session", "task_cancel", "task_status", "task_wait", "update_task_checkpoint"]);
         assert!(!catalog.abilities.iter().any(|ability| matches!(ability.id.as_str(), "v3_build"|"v3_workspace")));
         let coding=catalog.abilities.iter().find(|ability| ability.id=="codebase_admin").unwrap();
         assert_eq!(coding.tools, ["file_list","file_read","file_search","file_edit","file_write",

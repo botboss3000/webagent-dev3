@@ -33,6 +33,20 @@ pub(crate) fn published_root() -> Option<PathBuf> {
         || uuid::Uuid::parse_str(selected.file_name()?.to_str()?).is_err() { return None; }
     Some(selected.join("v3"))
 }
+/// Main Chat guidance has no compiled or last-good fallback. An installation
+/// JSON file, when present, is authoritative even when it omits these skills.
+pub(crate) fn main_chat_prompts(root:&std::path::Path)->Result<Value> {
+    let saved=root.join("config/prompts.json");
+    let source=published_root().unwrap_or_else(||PathBuf::from(".")).join("config/prompts.json");
+    fn section(path:&std::path::Path)->Result<Option<Value>> {
+        let meta=std::fs::symlink_metadata(path)?;
+        if !meta.is_file()||meta.file_type().is_symlink()||meta.len()>4*1024*1024{anyhow::bail!("Invalid Main Chat prompts");}
+        let value:Value=serde_json::from_slice(&std::fs::read(path)?)?;
+        Ok(value.get("main_chat_skills").cloned())
+    }
+    if saved.exists(){if let Some(value)=section(&saved)?{return Ok(value);}}
+    Ok(section(&source)?.unwrap_or(Value::Null))
+}
 /// Atomically acknowledge the revision actually held by an API or loop catalog.
 pub(crate) fn record_adoption(root:&std::path::Path,role:&str,catalog:&abilities::Catalog)->Result<()> {
     let Some(selected)=published_root()else{return Ok(());};

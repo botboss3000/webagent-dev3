@@ -120,11 +120,12 @@ pub(crate) async fn fingerprint(app:&App,sid:&str,agent_id:&str,loaded:&Value,se
  let own=scoped.for_user(requester).await?.list_own_skills().await?;
  let base=provider::Provider::instructions_for_snapshot(provider::DEFAULT_INSTRUCTIONS,&app.store.root,fresh.source_root())?;
  let slots=scoped.list_agent_prompt_slots(agent_id).await?;
+ let main_chat=Box::pin(crate::main_chat::guidance(app,agent_id,sid)).await?;
  let engines=crate::engine_components::catalog()?;
  let controls=crate::engine_components::controls(&app.store.root)?;
  Ok(crate::digest(&json!([fresh.version(),fresh.live_version(),policy,mode_revision,visibility,state,mode,
   loaded,selected,skills,optimization,access.context_fingerprint(),ledger.selectors,own["revision"],own,
-  base,slots,engines.revision,controls])))
+  base,slots,main_chat,engines.revision,controls])))
 }
 
 /// Resolve current host-owned prompt sources and submit only authorized bodies to the composer.
@@ -132,7 +133,12 @@ pub(crate) async fn prepare_capability(app:&App,run:&Value,schemas:&[Value],guid
  menu:String,sourcefingerprint:&str,cancel:&CancellationToken)->Result<PreparedCapability> {
  let (sid,agent,requester)=identity(app,run)?;let scoped=app.store.for_agent(&agent).await?;
  let fresh=catalog(app)?;
- let base_prompt=provider::Provider::instructions_for_snapshot(provider::DEFAULT_INSTRUCTIONS,&app.store.root,fresh.source_root())?;
+ let mut base_prompt=provider::Provider::instructions_for_snapshot(provider::DEFAULT_INSTRUCTIONS,&app.store.root,fresh.source_root())?;
+ // Automatic agent skills belong with current base instructions, ahead of history.
+ // They never become selected/transcript assets or accumulate across calls.
+ if let Some(skill)=Box::pin(crate::main_chat::guidance(app,&agent,&sid)).await? {
+  base_prompt.push_str("\n\n");base_prompt.push_str(&skill);
+ }
  let slots=scoped.list_agent_prompt_slots(&agent).await?;
  let live_slots=context_assembly::pinned_instructions("",&slots)?;
  let ledger=scoped.context_assets(&sid,&agent,&requester).await?;
@@ -310,6 +316,26 @@ mod tests {
   assert!(second.main.contains("second prompt sentinel"));
   assert!(!second.main.contains("first prompt sentinel"));
   assert_ne!(first_fence,source_fence(&app).unwrap());
+ }
+ /// Main Chat skills refresh with the base prompt, without modifying transcript documents.
+ #[cfg(feature="linked-context")]
+ #[tokio::test]
+ async fn main_chat_skill_is_live_prefix_without_transcript_accumulation() {
+  let (_root,app,run)=bridge_fixture().await;
+  let sid=run["session_id"].as_str().unwrap();
+  let before=app.store.get(&format!("session:{sid}")).await.unwrap();
+  app.store.main_chat_change(0,"skill-prefix","skill-prefix",vec![],|state|{
+   state["settings"]["enabled"]=json!(true);state["session_id"]=json!(sid);
+   state["skill_overrides"]=json!({"contribute":"working sentinel","review":"review prefix sentinel"});Ok(Value::Null)
+  }).await.unwrap();
+  let first=Box::pin(bridge_capability(&app,&run)).await;
+  assert!(first.main.contains("review prefix sentinel"));assert!(!first.main.contains("working sentinel"));
+  app.store.main_chat_change(1,"skill-updated","skill-updated",vec![],|state|{
+   state["skill_overrides"]["review"]=json!("updated prefix sentinel");Ok(Value::Null)
+  }).await.unwrap();
+  let second=Box::pin(bridge_capability(&app,&run)).await;
+  assert!(second.main.contains("updated prefix sentinel"));assert!(!second.main.contains("review prefix sentinel"));
+  assert_eq!(app.store.get(&format!("session:{sid}")).await.unwrap(),before);
  }
  /// Exercise activation, projection, compaction and unload through App/Store without persisting synthetic text.
  #[cfg(feature="linked-context")]

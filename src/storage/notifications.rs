@@ -71,12 +71,13 @@ impl Store {
         if count >= MAX_STAGED_ROWS {
             return Err(anyhow!("Notification staging capacity exhausted"));
         }
-        let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(format!("session:{sid}"))
-            .fetch_one(&mut **tx)
-            .await?;
-        let session = self.unseal(&raw)?;
-        let agent = session["agent_id"].as_str().unwrap_or("shared_default");
+        let agent=if kind=="main_notes.updated" {
+            self.agent_id.clone()
+        } else {
+            let raw:Vec<u8>=sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+                .bind(format!("session:{sid}")).fetch_one(&mut **tx).await?;
+            self.unseal(&raw)?["agent_id"].as_str().unwrap_or("shared_default").to_owned()
+        };
         let actor = if kind.starts_with("run.") {
             "runtime".to_owned()
         } else {

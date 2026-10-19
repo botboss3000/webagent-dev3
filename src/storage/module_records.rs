@@ -141,7 +141,7 @@ impl Store {
             let mut payload=payload;
             if row.get::<String,_>("type")=="main_notes.updated" {
                 if let Some(version)=payload["status"].as_str() {
-                    payload=self.main_chat_state().await?["changes"][version].clone();
+                    payload=self.for_agent(&row.get::<String,_>("agent_id")).await?.main_chat_state().await?["changes"][version].clone();
                 }
             }
             events.push(json!({"id":row.get::<String,_>("event_id"),"kind":row.get::<String,_>("type"),"causal_chain":chain,"outcome":settled["outcome"],"is_incomplete":settled["is_incomplete"],"is_voluntary_stop":settled["is_voluntary_stop"],"seq":row.get::<i64,_>("seq"),"event_id":row.get::<String,_>("event_id"),"type":row.get::<String,_>("type"),"session_id":row.get::<String,_>("session_id"),"run_id":row.get::<Option<String>,_>("run_id"),"agent_id":row.get::<String,_>("agent_id"),"payload":payload,"created_at":row.get::<i64,_>("created_at")}));

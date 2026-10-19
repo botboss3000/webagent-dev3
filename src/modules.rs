@@ -624,6 +624,23 @@ fn apply_completion_ack(envelope: &mut Value, completed_oid: Option<&str>) {
         }
     }
 }
+/// Private schedule namespaces are available only after host-side Notes binding
+/// checks. HTTP callers cannot manufacture this trusted execution-scope marker.
+fn main_notes_schedule_guard(op:&str,args:&Value,scope:&Value)->Result<()> {
+    if matches!(op,"schedule_task"|"remind_me"|"event_subscribe") {
+        let id=args["request_id"].as_str().unwrap_or("");
+        if id.starts_with("main-notes-review-") || id.starts_with("main-notes-action-")&&scope["main_notes_binding_verified"]!=true {
+            return Err(anyhow!("Main Notes schedules require coordinator binding"));
+        }
+    }
+    if op=="update_automation" {
+        let id=args["id"].as_str().unwrap_or("");
+        if id.starts_with("main-notes-review-") || id.starts_with("main-notes-action-")&&scope["main_notes_binding_verified"]!=true {
+            return Err(anyhow!("Main Notes schedules require coordinator binding"));
+        }
+    }
+    Ok(())
+}
 async fn perform(
     app: &App,
     id: &str,
@@ -634,6 +651,7 @@ async fn perform(
     internal: bool,
     scope: Value,
 ) -> Result<Value> {
+    if id=="automation"&&!internal{main_notes_schedule_guard(op,&args,&scope)?;}
     let _package_lease = if internal {
         None
     } else {
@@ -820,8 +838,8 @@ pub(crate) async fn tool_call(
         .await
         .map_err(|_| anyhow!("Agent unavailable"))?;
     if let Some(target) = args["id"].as_str() {
-        if target.starts_with("main-notes-action-") {
-            let notes=scoped.store.main_chat_state().await?;
+        if target.starts_with("main-notes-action-")||target.starts_with("main-notes-review-") {
+            let notes=scoped.store.for_agent(&agent).await?.main_chat_state().await?;
             if notes["session_id"]!=sid {return Err(anyhow!("Only Main Chat manages Main Notes schedules"));}
         }
         let state = scoped.store.module_state(id).await?;
@@ -833,16 +851,20 @@ pub(crate) async fn tool_call(
     }
     if let Some(binding)=args.get("main_notes_action").filter(|v|!v.is_null()) {
         if !matches!(name,"schedule_task"|"remind_me"|"update_automation") {return Err(anyhow!("Main Notes action binding requires a schedule operation"));}
-        let notes=scoped.store.main_chat_state().await?;
+        let notes=scoped.store.for_agent(&agent).await?.main_chat_state().await?;
         if notes["settings"]["enabled"]!=true||notes["session_id"]!=sid {return Err(anyhow!("Only Main Chat coordinates Main Notes schedules"));}
         let topic=binding["topic_id"].as_str().ok_or_else(||anyhow!("Topic ID required"))?.to_owned();
         let entry=binding["entry_id"].as_str().ok_or_else(||anyhow!("Entry ID required"))?.to_owned();
         let action=&notes["topics"][&topic]["entries"][&entry];
-        let action_id=format!("main-notes-action-{}",&digest(&json!([topic,entry]))[..40]);
+        let action_id=format!("main-notes-action-{}",&digest(&json!([agent,topic,entry]))[..40]);
         let updating=name=="update_automation";
         if updating&&args["id"]!=action_id {return Err(anyhow!("Schedule identity does not match the Main Notes action"));}
         let existing=if updating {scoped.store.module_state("automation").await?["state"]["definitions"][&action_id].clone()}else{Value::Null};
-        let trigger=if updating&&args["trigger"].is_null(){existing["trigger"].clone()}else{args["trigger"].clone()};
+        let trigger=if updating&&args["trigger"].is_null(){
+            if action["timing"]["kind"]=="delay"&&existing["trigger"]["kind"]=="once"&&existing["main_notes_intent"]==crate::main_chat::action_intent(&notes["topics"][&topic],action) {
+                action["timing"].clone()
+            }else{existing["trigger"].clone()}
+        }else{args["trigger"].clone()};
         let prompt=if updating&&args["prompt"].is_null(){existing["prompt"].clone()}else{args["prompt"].clone()};
         if action.is_null()||action["timing"].is_null()||action["timing"]!=trigger||action["text"]!=prompt {
             return Err(anyhow!("Schedule prompt and timing must match the current Main Notes action"));
@@ -862,6 +884,7 @@ pub(crate) async fn tool_call(
         return Err(anyhow!("Main Notes updates require their current action binding"));
     }
     let mut scope = execution_scope(&scoped, &agent, Some(sid), false).await?;
+    scope["main_notes_binding_verified"]=json!(args.get("main_notes_action").is_some_and(|v|!v.is_null()));
     if name == "remember_automation_state" {
         let run = app.run(rid).await?;
         if run["module_binding"]["id"] != "automation"
@@ -1031,8 +1054,11 @@ pub(crate) async fn binding_valid(app: &App, run: &Value) -> bool {
     }
     if binding["id"]=="automation" {
         let aid=binding["automation_id"].as_str().unwrap_or("");
-        if aid=="main-notes-review"||aid.starts_with("main-notes-action-") {
-            let Ok(notes)=app.store.main_chat_state().await else{return false};
+        if aid.starts_with("main-notes-review-")||aid.starts_with("main-notes-action-") {
+            let Some(agent)=run["agent_id"].as_str() else{return false};
+            let Ok(store)=app.store.for_agent(agent).await else{return false};
+            let Ok(notes)=store.main_chat_state().await else{return false};
+            if notes["session_id"]!=run["session_id"]{return false;}
             if notes["settings"]["enabled"]!=true {return false;}
             if aid.starts_with("main-notes-action-") {
                 let definition=app.store.module_state("automation").await.ok()
@@ -1103,8 +1129,10 @@ async fn admit(app: &App, id: &str, gen: &str, admission: &Value) -> Result<Valu
         &snapshot["state"]["definitions"][admission["automation_id"].as_str().unwrap_or("")];
     let occurrence = &snapshot["state"]["occurrences"][oid];
     let aid=admission["automation_id"].as_str().unwrap_or("");
-    if aid=="main-notes-review"||aid.starts_with("main-notes-action-") {
-        let notes=app.store.main_chat_state().await?;
+    if aid.starts_with("main-notes-review-")||aid.starts_with("main-notes-action-") {
+        let agent=definition["agent_id"].as_str().ok_or_else(||anyhow!("Missing Notes agent"))?;
+        let notes=app.store.for_agent(agent).await?.main_chat_state().await?;
+        if definition["destination"]["session_id"]!=notes["session_id"]{return Err(anyhow!("Main Chat destination changed"));}
         if notes["settings"]["enabled"]!=true {return Err(anyhow!("Main Chat is disabled"));}
         if aid.starts_with("main-notes-action-")&&!crate::main_chat::scheduled_entry_current(&notes,aid,&definition) {
             return Err(anyhow!("Automation proposal withdrawn"));
@@ -1411,13 +1439,20 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<(
     if id == "outbound_notifications" && !administrator(app).await {
         return Ok(());
     }
-    let notes=app.store.main_chat_state().await?;
-    if id=="automation"&&notes["settings"]["enabled"]==true {
-        if let Some(sid)=notes["session_id"].as_str() {
-            if app.store.module_state(id).await?["state"]["definitions"]["main-notes-review"].is_null() {
-                let scope=execution_scope(app,"shared_default",Some(sid),false).await?;
-                perform(app,id,"bootstrap_main",json!({"session_id":sid}),None,None,true,scope).await?;
+    let mut notes_by_agent=json!({});
+    if id=="automation" {
+        for agent in app.store.main_chat_agent_ids().await? {
+            let notes=app.store.for_agent(&agent).await?.main_chat_state().await?;
+            if notes["settings"]["enabled"]==true {
+                if let Some(sid)=notes["session_id"].as_str() {
+                    if let Ok(scope)=execution_scope(app,&agent,Some(sid),false).await {
+                        if perform(app,id,"bootstrap_main",json!({"session_id":sid,"id":crate::main_chat::review_id(&agent)}),None,None,true,scope).await.is_err() {
+                            tracing::warn!(operation="main_notes_subscription","Main Notes review subscription unavailable");
+                        }
+                    }
+                }
             }
+            notes_by_agent[agent]=notes;
         }
     }
     let initial = app.store.module_state(id).await?;
@@ -1513,10 +1548,14 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<(
             }
         }
     }
-    let mut changes:Vec<Value>=notes["changes"].as_object().into_iter().flatten().map(|(_,v)|v.clone())
-        .filter(|v|v["version"].as_u64().unwrap_or(0)>initial["state"]["main_notes_cursor"].as_u64().unwrap_or(0)).collect();
-    changes.sort_by_key(|v|v["version"].as_u64().unwrap_or(0));changes.truncate(128);
-    perform(app,id,"tick",json!({"events":page["events"],"cursor":page["next_seq"],"pruned_through":page["pruned_through"],"event_page":page,"agent_settings":settings,"agent_allowed":allowed,"main_chat_enabled":notes["settings"]["enabled"],"main_notes_changes":changes}),None,None,true,json!({"startup":startup,"event_scan_cursor":cursor})).await?;
+    let mut notes_inputs=json!({});
+    for (agent,notes) in notes_by_agent.as_object().into_iter().flatten() {
+        let cursor=initial["state"]["main_notes_cursors"][agent].as_u64().unwrap_or(0);
+        let mut changes:Vec<Value>=notes["changes"].as_object().into_iter().flatten().map(|(_,v)|v.clone()).filter(|v|v["version"].as_u64().unwrap_or(0)>cursor).collect();
+        changes.sort_by_key(|v|v["version"].as_u64().unwrap_or(0));changes.truncate(128);
+        notes_inputs[agent]=json!({"enabled":notes["settings"]["enabled"],"session_id":notes["session_id"],"changes":changes});
+    }
+    perform(app,id,"tick",json!({"events":page["events"],"cursor":page["next_seq"],"pruned_through":page["pruned_through"],"event_page":page,"agent_settings":settings,"agent_allowed":allowed,"main_notes_agents":notes_inputs}),None,None,true,json!({"startup":startup,"event_scan_cursor":cursor})).await?;
     if id == "outbound_notifications" {
         let reserve = perform(
             app,
@@ -2439,5 +2478,19 @@ mod automation_ability_host_tests {
             .unwrap();
         assert!(!result.status.success());
         assert!(result.stdout.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod main_notes_namespace_tests {
+    use super::*;
+    #[test]
+    fn reserved_schedules_require_host_binding() {
+        let args=json!({"request_id":"main-notes-action-intent"});
+        assert!(main_notes_schedule_guard("schedule_task",&args,&json!({})).is_err());
+        assert!(main_notes_schedule_guard("schedule_task",&args,&json!({"main_notes_binding_verified":true})).is_ok());
+        assert!(main_notes_schedule_guard("event_subscribe",&json!({"request_id":"main-notes-review-agent"}),&json!({"main_notes_binding_verified":true})).is_err());
+        assert!(main_notes_schedule_guard("update_automation",&json!({"id":"main-notes-action-intent"}),&json!({})).is_err());
+        assert!(main_notes_schedule_guard("schedule_task",&json!({"request_id":"ordinary"}),&json!({})).is_ok());
     }
 }
