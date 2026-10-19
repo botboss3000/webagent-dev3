@@ -206,6 +206,7 @@ export async function renderAbilities(host, request, options) {
         onPermissionChange: (_, mode) => saveToolPermission(mode),
         onVisibilityChange: (_, mode) => save(ability, 'tool', mode, toolRow.querySelector('.ac-tri'), tool.name),
       });
+      if (tool.supported === false) toolRow.querySelector('.ac-tool-name').style.color = 'var(--danger)';
       toolRow.title = [tool.supported ? '' : 'Unavailable in v3', effectiveLabel(effectiveTool)].filter(Boolean).join(' · ');
       tools.append(toolRow);
     }
@@ -241,8 +242,12 @@ export async function renderAbilities(host, request, options) {
       icon.append(iconGlyph);
       if (ability.color) icon.style.color = ability.color;
       const label = node('div', 'ac-ability-label');
-      label.append(node('div', 'conn-name ac-ability-name', ability.name),
-        node('div', 'ac-ability-desc', ability.description));
+      const name = node('div', 'conn-name ac-ability-name', ability.name);
+      // Port status is independent of visibility, credentials and caller permissions.
+      const incomplete = ['pending', 'placeholder', 'partial'].includes(ability.readiness) ||
+        ability.installed === false || (ability.tools || []).some(tool => tool.supported === false);
+      if (incomplete) name.style.color = 'var(--danger)';
+      label.append(name, node('div', 'ac-ability-desc', ability.description));
       const projected = projection(ability);
       const availability = node('span', 'ac-ability-status',
         [readinessLabel(ability), effectiveLabel(projected)].filter(Boolean).join(' · '));
