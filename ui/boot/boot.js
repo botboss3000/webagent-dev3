@@ -1,6 +1,6 @@
 "use strict";
 // Reuse the v2 renderer unchanged; the v3 scene owns its boot-only lifetime.
-window.WA_BG.whenReady('bullet-grid', function (renderer) {
+window.WA_BG?.whenReady('bullet-grid', function (renderer) {
   var canvas = document.querySelector('#boot-curtain canvas');
   if (canvas) renderer.start(canvas);
 });
@@ -44,8 +44,11 @@ window.WA_BG.whenReady('bullet-grid', function (renderer) {
       appReady:       function () { if (!this._splashPending) reveal(); },
       reveal:         reveal,
     };
-    // Safety net: never trap the user on the curtain if a boot step never reports.
-    setTimeout(reveal, 10000);
+    // A timer cannot establish readiness. Keep the animation while the app is
+    // still hidden; revealing it then would expose only an empty black page.
+    setTimeout(() => {
+      if (document.getElementById('app')?.hidden === false) liftCurtain();
+    }, 10000);
   })();
 
 window.addEventListener("error", () => window.__boot.reveal());

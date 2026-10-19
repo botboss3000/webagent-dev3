@@ -340,6 +340,7 @@ async function boot(){
   window.dispatchEvent(new Event('v3-identity-changed'));
   privateVisible(false);
   $('app').hidden=false;
+  window.__boot?.shellReady();
   await agentTabsQueue;
   await loadAgentTabs();
   await loadAgentRoster();

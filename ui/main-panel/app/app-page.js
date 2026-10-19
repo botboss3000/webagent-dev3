@@ -34,9 +34,26 @@ export async function start(mount) {
   if (!Array.isArray(pages) || pages.some(page => !/^[a-z][a-z0-9-]*$/.test(page.id) || !page.title)) throw Error('Invalid App catalog');
   mount.innerHTML = '<div class="app-page-framework"><div class="agent-card active agent-card-tabs-only"><div class="agent-card-tabs-wrap"><div class="agent-card-tabs" role="tablist" aria-label="App pages"></div></div></div><div class="agent-detail-panel"><div class="agent-detail-content"><div id="app-config-page" class="agent-detail-body"></div><section id="app-files-page" class="agent-detail-body" hidden><h2>File Manager</h2><p role="status">Checking V3 File Manager…</p></section></div></div></div>';
   for(const page of pages) if(!mount.querySelector('#'+page.panelId)){const panel=document.createElement('section');panel.id=page.panelId;panel.className='agent-detail-body';panel.hidden=true;mount.querySelector('.agent-detail-content').append(panel);}
-  if(me?.is_admin){await mountDashboard(mount.querySelector('#app-dashboard-page'));if(!active())return;}
-  if(me?.is_admin){await mountModules(mount.querySelector('#app-modules-page'));if(!active())return;mountFunctions(mount.querySelector('#app-functions-page'));mountAppSettings(mount.querySelector('#app-settings-page'));}
-  if(me?.is_admin){await mountUsers(mount.querySelector('#app-users-page'));if(!active())return;await mountPolicies(mount.querySelector('#app-user-policies-page'));if(!active())return;await mountPageAccess(mount.querySelector('#app-page-access-page'));if(!active())return;const dispose=await mountAppModels(mount.querySelector('#app-models-page'));if(!active()){dispose();return;}mount._appModelsDispose=dispose;}
+  // Hidden administration pages must not hold up the shell or conversation.
+  // Each selected panel mounts once per identity generation; stale model mounts
+  // dispose themselves rather than attaching to a replacement account view.
+  const panelMounts=new Map();
+  const panelLoaders={dashboard:mountDashboard,modules:mountModules,
+    functions:mountFunctions,settings:mountAppSettings,users:mountUsers,
+    'user-policies':mountPolicies,'page-access':mountPageAccess,models:mountAppModels};
+  function ensurePanel(id) {
+    if(!me?.is_admin||!panelLoaders[id]||panelMounts.has(id))return;
+    const descriptor=pages.find(page=>page.id===id);
+    const panel=mount.querySelector('#'+descriptor.panelId);
+    const pending=Promise.resolve().then(()=>active()?panelLoaders[id](panel):null).then(dispose=>{
+      if(id==='models'&&typeof dispose==='function'){
+        if(active())mount._appModelsDispose=dispose;else dispose();
+      }
+    }).catch(error=>{
+      if(active()){panel.textContent=descriptor.title+' could not load: '+error.message;panelMounts.delete(id);}
+    });
+    panelMounts.set(id,pending);
+  }
   const strip = mount.querySelector('[role=tablist]');
   const all = [configPage, ...pages];
   const status=document.createElement('p');status.setAttribute('role','status');status.className='app-preferences-status';mount.prepend(status);
@@ -110,6 +127,7 @@ export async function start(mount) {
       if (!tab.hidden&&!order.includes(page.id)) strip.append(tab);
     }
     if (route) { const url=new URL(location.href);url.searchParams.set('appView',id);if(url.href!==location.href)history.pushState({},'',url); }
+    ensurePanel(id);
     if (id==='files') void ensureFiles(); else if (filesMounted) stopFiles();
   }
   function sync() {

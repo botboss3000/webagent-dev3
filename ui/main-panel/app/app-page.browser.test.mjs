@@ -7,7 +7,7 @@ const root=path.resolve(new URL('../../..',import.meta.url).pathname);
 const source=await fs.readFile(new URL('./app-page.js',import.meta.url),'utf8');
 const adapted=source.replace(/^import .* from '\.\/pages\/(?:users|user-policies|page-access|settings|functions|modules|models|files)\/[^']+';$/gm,line=>line.replace(/from '[^']+'/,"from '/stubs.js'"));
 let preferences={page_ids:['config'],revision:0,configured:false};
-const stubs="export const mountUsers=async()=>{},mountPolicies=async()=>{},mountPageAccess=async()=>{},mountAppSettings=()=>{},mountFunctions=()=>{},mountModules=async()=>{},mountAppModels=async()=>()=>{},startView=async()=>{},stopView=()=>{},resetExplorerForRemount=()=>{};";
+const stubs="export const mountUsers=async(host)=>{document.body.dataset.usersMounts=String(Number(document.body.dataset.usersMounts||0)+1);host.textContent='Users fixture pending';await new Promise(()=>{});},mountPolicies=async()=>{},mountPageAccess=async()=>{},mountAppSettings=()=>{},mountFunctions=()=>{},mountModules=async()=>{},mountAppModels=async()=>()=>{},startView=async()=>{},stopView=()=>{},resetExplorerForRemount=()=>{};";
 const server=http.createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');res.setHeader('content-type','application/json');
  if(url.pathname==='/api/v3/auth/me'){res.end(JSON.stringify({is_admin:true,user_id:'fixture',csrf_token:'fixture'}));return;}
@@ -28,6 +28,14 @@ try{
   const page=await browser.newPage({viewport});const errors=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto('http://127.0.0.1:'+server.address().port+'/app?tab=app&appView=config');
   await page.getByRole('button',{name:'Star File Manager',exact:true}).waitFor();
+  // A hidden panel whose request never finishes cannot delay initial Config.
+  assert.equal(await page.locator('body').getAttribute('data-users-mounts'),null);
+  await page.getByRole('button',{name:'Open Users',exact:true}).click();
+  await page.getByText('Users fixture pending',{exact:true}).waitFor();
+  await page.locator('#app-tab-config').click();
+  await page.getByRole('button',{name:'Open Users',exact:true}).click();
+  assert.equal(await page.locator('body').getAttribute('data-users-mounts'),'1');
+  await page.locator('#app-tab-config').click();
   const star=page.getByRole('button',{name:'Star File Manager',exact:true});
   if(await star.getAttribute('aria-pressed')!=='true')await star.click();
   await page.waitForFunction(()=>document.querySelector('#app-tab-files')&&!document.querySelector('#app-tab-files').hidden);
