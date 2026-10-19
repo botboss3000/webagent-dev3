@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 const source = await fs.readFile(new URL('./tool-output-policy.js', import.meta.url), 'utf8');
-const {renderToolOutputPolicy} = await import('data:text/javascript;base64,' + Buffer.from(source.replace(/import \{requestTouchVibration\} from '[^']+';/, 'const requestTouchVibration=()=>{};')).toString('base64'));
+const rowSource = (await fs.readFile(new URL('./settings-row.js', import.meta.url), 'utf8')).replace(/import \{requestTouchVibration\} from '[^']+';/, 'const requestTouchVibration=()=>{};').replace('export function createSettingsRow', 'function createSettingsRow');
+const {renderToolOutputPolicy} = await import('data:text/javascript;base64,' + Buffer.from(rowSource + source.replace("import {createSettingsRow} from './settings-row.js';", '')).toString('base64'));
 
 // A small DOM fixture exercises the actual field/save implementation without replacing its logic.
 class Element {
-  constructor(tag) { this.tagName=tag; this.children=[]; this.listeners={}; this.style={}; this.dataset={}; this.attributes={}; }
+  constructor(tag) { this.tagName=tag; this.children=[]; this.listeners={}; this.style={}; this.dataset={}; this.attributes={}; this.classList={toggle(){}}; }
   append(...items) { this.children.push(...items); }
   setAttribute(name, value) { this.attributes[name]=value; }
   addEventListener(name, callback) { this.listeners[name]=callback; }

@@ -1,9 +1,10 @@
 'use strict';
+import {createSettingsRow} from './settings-row.js';
 
 // Identity owns agent thresholds; the app-wide JSON retains hard safety limits.
 export function renderCompaction(host, agent, persist) {
-  const title = document.createElement('h3');
-  title.textContent = 'Context compaction';
+  const row = createSettingsRow(host, {id:'context-compaction', title:'Context compaction'});
+  host = row.body;
   const hint = document.createElement('p');
   hint.className = 'ac-hint';
   hint.textContent = 'Older completed exchanges are summarized when the estimated whole model request reaches the trigger. The newest tail stays verbatim when a safe boundary permits. Changes apply at the next model call.';
@@ -16,7 +17,7 @@ export function renderCompaction(host, agent, persist) {
   const scope = document.createElement('p');
   scope.className = 'ac-hint';
   scope.textContent = 'The trigger counts instructions, tool definitions, history and the verbatim tail together. Only eligible older history is summarized. For example, at a 150,000-token trigger, 50,000 tokens of instructions, tools and retained recent history leave about 100,000 tokens eligible for compaction.';
-  host.append(title, hint, scope, fallback, estimate);
+  host.append(hint, scope, fallback, estimate);
   const fields = [
     ['trigger_tokens', 'Summary trigger', 'Estimated total request tokens, including instructions, tools and the verbatim tail'],
     ['tail_tokens', 'Verbatim tail', 'Recent estimated tokens to keep word for word'],
