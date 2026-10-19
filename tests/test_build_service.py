@@ -1559,3 +1559,34 @@ class InstalledUIPolicyPublicationTests(unittest.TestCase):
     (root/"ui_policy.py").write_bytes(b"different policy")
     self.assertFalse(broker.host_source_only(changed,blob,{"local_caller":True}))
    broker.shutdown()
+
+
+class RuntimeDocumentationRebaseTests(unittest.TestCase):
+ def attempt(self,live_extra,installed=None,built=None):
+  h=fixtures.host
+  with tempfile.TemporaryDirectory()as temporary:
+   root=Path(temporary);runner=fixtures.FakeRunner();broker=h.Broker(root/"jobs",runner)
+   base=fixtures.context(extra={"v3/src/main.rs":"fn main(){}","v3/docs/note.md":"old note","v3/ui/panel.js":"old ui"})
+   proposal=fixtures.context(extra={"v3/src/main.rs":"fn main(){}","v3/docs/note.md":"old note","v3/ui/panel.js":"old ui","v3/src/change.rs":"task change"})
+   live_files={"v3/src/main.rs":"fn main(){}","v3/docs/note.md":"old note","v3/ui/panel.js":"old ui",**live_extra}
+   live=fixtures.context(extra={n:v for n,v in live_files.items()if v is not None})
+   job={"job_id":str(uuid.uuid4()),"base_inputs_sha256":h.context_digest(base)[0],"inputs_sha256":h.context_digest(proposal)[0],"linked_stable":{"compiled_inputs":built if built is not None else {"v3/src/main.rs":"hash"}}}
+   folder=broker.state/job["job_id"];folder.mkdir();(folder/"base.tar").write_bytes(base);(folder/"task.tar").write_bytes(proposal)
+   runner.core_compile_inputs=lambda: installed if installed is not None else {"v3/src/main.rs"}
+   try:
+    result=broker._rebase_after_ui(job,proposal,tested_runtime=True,live_blob=live)
+    return h.release.entries(result,h.context_digest),job
+   finally:broker.shutdown()
+ def test_notes_and_ui_survive_rebase_with_both_compiler_attestations(self):
+  entries,job=self.attempt({"v3/docs/note.md":"new note","v3/ui/panel.js":"new ui"})
+  self.assertEqual(entries["v3/docs/note.md"][1],b"new note");self.assertEqual(entries["v3/ui/panel.js"][1],b"new ui");self.assertIn("v3/src/change.rs",entries);self.assertIn("built_inputs_sha256",job)
+ def test_embedded_note_or_missing_attestation_is_rejected(self):
+  for installed,built in [({"v3/src/main.rs","v3/docs/note.md"},{"v3/src/main.rs":"hash"}),({"v3/src/main.rs"},{"v3/src/main.rs":"hash","v3/docs/note.md":"hash"}),(set(),{"v3/src/main.rs":"hash"}),({"v3/src/main.rs"},{})]:
+   with self.subTest(installed=installed,built=built),self.assertRaisesRegex(ValueError,"runtime build inputs"):
+    self.attempt({"v3/docs/note.md":"new note"},installed,built)
+ def test_runtime_change_is_rejected_even_with_notes(self):
+  with self.assertRaisesRegex(ValueError,"runtime build inputs|Compiler-attested"):
+   self.attempt({"v3/docs/note.md":"new note","v3/src/main.rs":"fn main(){panic!()}"} )
+ def test_rename_and_deletion_of_unembedded_notes_are_safe(self):
+  entries,_=self.attempt({"v3/docs/note.md":None,"v3/docs/new.md":"renamed note"})
+  self.assertIn("v3/docs/new.md",entries);self.assertNotIn("v3/docs/note.md",entries)

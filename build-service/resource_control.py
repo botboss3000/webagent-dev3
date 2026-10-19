@@ -140,7 +140,10 @@ class Control:
                 key,amount=item.split("=",1);io_values[key]=io_values.get(key,0)+int(amount)
         memory_events=dict(line.split()for line in (group/"memory.events").read_text().splitlines())
         memory_limit=(group/"memory.max").read_text().strip();swap_limit=(group/"memory.swap.max").read_text().strip()
-        return {"memory_max":None if memory_limit=="max"else int(memory_limit),"swap_max":None if swap_limit=="max"else int(swap_limit),"oom_events":int(memory_events.get("oom",0)),"oom_kills":int(memory_events.get("oom_kill",0)),"io_read_bytes":io_values.get("rbytes",0),"io_write_bytes":io_values.get("wbytes",0),"memory":number("memory.current"),"peak_memory":number("memory.peak"),"swap":number("memory.swap.current"),"cpu_usec":cpu.get("usage_usec",0),"pids":number("pids.current"),"frozen":bool(events.get("frozen"))}
+        quota=(group/"cpu.max").read_text().split()if(group/"cpu.max").exists()else None
+        cpu_limits={"cpu_limit_millis":None if quota is None or quota[0]=="max"else int(quota[0])*1000/int(quota[1]),
+                    "cpu_periods":cpu.get("nr_periods"),"cpu_throttled_periods":cpu.get("nr_throttled"),"cpu_throttled_usec":cpu.get("throttled_usec")}
+        return {**cpu_limits,"memory_max":None if memory_limit=="max"else int(memory_limit),"swap_max":None if swap_limit=="max"else int(swap_limit),"oom_events":int(memory_events.get("oom",0)),"oom_kills":int(memory_events.get("oom_kill",0)),"io_read_bytes":io_values.get("rbytes",0),"io_write_bytes":io_values.get("wbytes",0),"memory":number("memory.current"),"peak_memory":number("memory.peak"),"swap":number("memory.swap.current"),"cpu_usec":cpu.get("usage_usec",0),"pids":number("pids.current"),"frozen":bool(events.get("frozen"))}
     def retention(self):
         """Load only the installed root-owned retention implementation selected by protected config."""
         import importlib.util
@@ -216,6 +219,7 @@ class Control:
             millis=args.get("cpu_millis")
             if type(millis)is not int or not 100<=millis<=max(1000,(os.cpu_count()or 1)*1000):raise ValueError("Bounded CPU allocation required")
             (group/"cpu.max").write_text(str(millis*100)+" 100000")
+            if self.stats(group)["cpu_limit_millis"]!=millis:raise ValueError("CPU quota readback differs from allocation")
         return {"container_id":identity,"phase":phase,**self.stats(group)}
 
 def serve(listener,stopping,config):

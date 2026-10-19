@@ -175,14 +175,14 @@ def engine_component_source_path(path):
         "v3/crates/provider-service/","v3/crates/provider-projection/","v3/crates/provider-contracts/",
         "v3/crates/engine-service/"))
 
-def generic_package_path(path,blob):
+def generic_package_path(path,blob,entries=None):
     """Classify registered engine and isolated ability inputs; authority and actual core dependencies still fence publication."""
     if monitoring_component.package_path(path):return True
-    if engine_components.package_path(path,release.entries(blob,context_digest)):return True
+    if entries is None:entries=release.entries(blob,context_digest)
+    if engine_components.package_path(path,entries):return True
     if not path.startswith(ABILITY_ROOT):return False
     parts=path[len(ABILITY_ROOT):].split("/")
     if len(parts)<3:return False
-    entries=release.entries(blob,context_digest)
     prefix=ABILITY_ROOT+"/".join(parts[:2])+"/"
     raw=entries.get(prefix+"plugin.json")
     if raw is None:return False
@@ -5027,19 +5027,25 @@ class Broker:
                 (part_dir / "task.tar").read_bytes(), merged, context_digest, allow_empty=part.get("operation")=="index_deploy")
             changed.update(paths)
         if tested_runtime:
-            before = {name: item for name, item in release.entries(blob, context_digest).items()
-                      if not hot_source_path(name)and not generic_package_path(name,blob)}
-            after = {name: item for name, item in release.entries(merged, context_digest).items()
-                     if not hot_source_path(name)and not generic_package_path(name,merged)}
+            old_ui = release.entries(blob, context_digest)
+            new_ui = release.entries(merged, context_digest)
+            core_inputs=self.runner.core_compile_inputs()if hasattr(self.runner,"core_compile_inputs")else set()
+            built_inputs=job.get("linked_stable",{}).get("compiled_inputs",{})
+            docs_attested=isinstance(core_inputs,set)and "v3/src/main.rs"in core_inputs and isinstance(built_inputs,dict)and "v3/src/main.rs"in built_inputs
+            def ordinary_note(name):
+                # Both installed and built compiler evidence must exclude a note.
+                return docs_attested and name.startswith("v3/docs/")and name.endswith(".md")and name not in core_inputs and name not in built_inputs
+            before = {name: item for name, item in old_ui.items()
+                      if not hot_source_path(name)and not ordinary_note(name)and not generic_package_path(name,blob,old_ui)}
+            after = {name: item for name, item in new_ui.items()
+                     if not hot_source_path(name)and not ordinary_note(name)and not generic_package_path(name,merged,new_ui)}
             if before != after:
                 delta={name for name in set(before)|set(after) if before.get(name)!=after.get(name)}
                 # Only a fully installed host-only broker source release may rebase
                 # a tested application image without rebuilding that image.
                 if not self.host_source_only(delta,merged,{"local_caller":True}):
                     raise ValueError("runtime build inputs changed during UI release")
-            old_ui = release.entries(blob, context_digest)
-            new_ui = release.entries(merged, context_digest)
-            if hasattr(self.runner,"core_compile_inputs")and any(old_ui.get(name)!=new_ui.get(name)for name in self.runner.core_compile_inputs()):
+            if any(old_ui.get(name)!=new_ui.get(name)for name in set(core_inputs)|set(built_inputs)):
                 raise ValueError("Compiler-attested runtime input changed during rebase")
             if any(old_ui.get(name) != new_ui.get(name) for name in RUST_UI_FIXTURES):
                 raise ValueError("Rust test fixture changed during image build")

@@ -129,3 +129,54 @@ class ControlTests(unittest.TestCase):
         c=control.Control({"instance":"development"})
         for name in ["webagent","webagent-dev-v2","webagent-dev-v3","../../system.slice"]:
             with self.assertRaises(PermissionError):c.resolve(name)
+
+
+class DeadlineCPUAdmissionTests(unittest.TestCase):
+ setUp=ResourceTests.setUp
+ tearDown=ResourceTests.tearDown
+ def add(self,name,phase):
+  self.scheduler.enter(name,{"job_id":name},phase,"profile-"+name,"test",timeout=.05)
+  self.scheduler.attached(name,"container")
+ def test_pressure_keeps_test_floor_and_bounded_total(self):
+  from unittest.mock import patch
+  with patch.object(m.os,"cpu_count",return_value=4):
+   self.scheduler.host["available"]=20*G;self.scheduler.host["total"]=24*G
+   self.sample.update(available=20*G,total=24*G);self.sample["pressure"]["cpu"]=90
+   self.add("test","test");self.add("browser","ui_test");self.add("compiler","compile_release")
+   self.scheduler.cpu_budget=.5
+   for _ in range(3):self.time+=6;self.scheduler.tick()
+   rows=self.scheduler.rows
+   self.assertGreaterEqual(rows["test"]["cpu_millis"],1000);self.assertGreaterEqual(rows["browser"]["cpu_millis"],1000)
+   self.assertLessEqual(sum(r["cpu_millis"]for r in rows.values()),3000)
+   self.assertGreaterEqual(rows["compiler"]["cpu_millis"],100)
+   self.assertTrue(rows["test"]["cpu_history"]);self.assertNotIn("manual_pause",rows["test"])
+ def test_cpu_admission_reports_wait_and_cancels_without_row(self):
+  from unittest.mock import patch
+  with patch.object(m.os,"cpu_count",return_value=2):
+   self.add("existing","test");job={"job_id":"waiting"}
+   with self.assertRaisesRegex(TimeoutError,"deadline_test_cpu_budget"):
+    self.scheduler.enter("new",job,"ui_test","browser","ui_test",timeout=.02)
+   self.assertEqual(job["last_resource_wait"]["resource"],"host_cpu");self.assertNotIn("new",self.scheduler.rows)
+   job={"job_id":"cancelled","revoked":True}
+   with self.assertRaises(PermissionError):self.scheduler.enter("cancelled",job,"test","tests","test",timeout=.01)
+   self.assertNotIn("cancelled",self.scheduler.rows)
+ def test_floor_is_applied_before_workload_and_failure_is_not_running(self):
+  self.add("test","test")
+  self.assertEqual(self.scheduler.rows["test"]["cpu_millis"],1000)
+  self.assertEqual([c["cpu_millis"]for c in self.runner.calls if c["operation"]=="cpu"][0],1000)
+  self.scheduler.finish("test",True)
+  self.scheduler.enter("bad",{"job_id":"bad"},"test","bad","test")
+  original=self.runner.resource_request
+  def reject(value):
+   if value["operation"]=="cpu":raise RuntimeError("helper failed")
+   return original(value)
+  self.runner.resource_request=reject
+  with self.assertRaisesRegex(RuntimeError,"helper failed"):self.scheduler.attached("bad","container")
+  self.assertEqual(self.scheduler.rows["bad"]["state"],"admitted")
+ def test_cpu_diagnostics_read_kernel_quota_and_throttle_counters(self):
+  group=Path(self.root.name)/"cgroup";group.mkdir()
+  values={"cpu.stat":"usage_usec 1234\nnr_periods 8\nnr_throttled 3\nthrottled_usec 900\n","cpu.max":"100000 100000","cgroup.events":"frozen 0\n","io.stat":"","memory.events":"oom 0\noom_kill 0\n","memory.max":"max","memory.swap.max":"max"}
+  for name,value in values.items():(group/name).write_text(value)
+  stats=control.Control.stats(group)
+  self.assertEqual(stats["cpu_limit_millis"],1000);self.assertEqual(stats["cpu_throttled_usec"],900);self.assertEqual(stats["cpu_throttled_periods"],3)
+  (group/"cpu.max").write_text("max 100000");self.assertIsNone(control.Control.stats(group)["cpu_limit_millis"])

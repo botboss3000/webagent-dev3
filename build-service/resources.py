@@ -109,6 +109,34 @@ class Resources:
         if len(active)>=self.policy.get("max_phases",4):return False
         remaining=sum(max(0,r["estimate"]-r.get("metrics",{}).get("memory",0))for r in active if r["state"]in {"admitted","running","parked"})
         return self.host["available"]-self.reserve()>=estimate+remaining and not any(r["state"]in {"recovery_required","waiting_intervention","memory_recovery_required"}for r in self.rows.values())
+    @staticmethod
+    def cpu_floor(phase):
+        """Reserve one core for deadline-sensitive assertions; other phases retain a small share."""
+        return 1000 if phase in {"test","ui_test","plugin_test"}else 100
+    def cpu_capacity(self):
+        return max(1,(os.cpu_count()or 1)-1)*1000
+    def cpu_fits(self,phase):
+        return self.cpu_floor(phase)+sum(self.cpu_floor(r["phase"])for r in self.rows.values()if r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"})<=self.cpu_capacity()
+    def allocate_cpu(self,name,millis):
+        """Record exact helper effects, retaining bounded allocation history separately from counters."""
+        row=self.rows[name]
+        result=self.runner.resource_request({"operation":"cpu","container":name,"cpu_millis":millis})
+        if result.get("container_id")!=row["container_id"]:raise ValueError("CPU allocation container identity changed")
+        if row.get("cpu_millis")!=millis:
+            row.setdefault("cpu_history",[]).append({"at":time.time(),"millis":millis,"pressure_percent":self.host["pressure"]["cpu"]})
+            row["cpu_history"]=row["cpu_history"][-32:]
+        row["cpu_millis"]=millis;row["cpu_floor_millis"]=self.cpu_floor(row["phase"])
+
+    def rebalance_cpu(self):
+        """Apply allocations under the admission lock, reserving floors for not-yet-running phases."""
+        active={n:r for n,r in self.rows.items()if r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}}
+        running={n:r for n,r in active.items()if r["state"]=="running"}
+        reserved=sum(self.cpu_floor(r["phase"])for r in active.values())
+        extra=max(0,min(self.cpu_capacity(),max(reserved,int(self.cpu_budget*1000)))-reserved)
+        weights={n:1+max(0,r["priority"])+min(2,int((self.clock()-r["started"])/900))for n,r in running.items()}
+        for name,row in running.items():
+            self.allocate_cpu(name,self.cpu_floor(row["phase"])+int(extra*weights[name]/sum(weights.values())))
+
     def enter(self,name,job,phase,profile,kind,timeout=None,hard_cap=None):
         """Wait for measured admission outside the broker lock; revocation still interrupts waiting."""
         ram_packaging=phase=="package"and kind=="package"and profile.endswith(":ram-v1")and bool(self.policy.get("package_tmpfs_bytes",0))
@@ -123,7 +151,7 @@ class Resources:
         estimate=hard_cap if hard_cap is not None else self.estimate(profile,kind);deadline=time.monotonic()+timeout if timeout is not None else None
         deadline_at=time.time()+timeout if timeout is not None else None
         progress=getattr(self.runner,"resource_progress",lambda _:None)
-        disk_wait=None;wait_started=time.monotonic();wait_since=time.time()
+        disk_wait=None;cpu_wait=False;wait_started=time.monotonic();wait_since=time.time()
         cancel_event=getattr(getattr(self.runner,"job_context",None),"event",None)
         def cancelled():return self.stop.is_set()or(cancel_event is not None and cancel_event.is_set())or job.get("revoked")or job.get("lease_until",float("inf"))<=time.time()
         with self.condition:
@@ -139,7 +167,9 @@ class Resources:
                 conflict=any(r.get("component")==component and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
                 task_id=job.get("task_id")
                 task_conflict=any(r.get("task_id")==task_id and task_id is not None and(ram_packaging or r.get("ram_packaging"))and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
-                nonlocal disk_wait
+                nonlocal disk_wait,cpu_wait
+                cpu_wait=not self.cpu_fits(phase)
+                if cpu_wait:disk_wait=None;return False
                 if conflict or task_conflict or not self.can_admit(estimate):disk_wait=None;return False
                 if not self.initialized or hard_cap is not None:
                     # The protected ancestor must fit the complete admitted ceilings too.
@@ -161,6 +191,8 @@ class Resources:
                     report();raise PermissionError("Build admission cancelled or authorization expired")
                 blockers=[{"job_id":r["job_id"],"phase":r["phase"],"state":r["state"]}for r in self.rows.values()if r.get("component")==component and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}][:16]
                 waiting={"phase":phase,"resource":component if blockers else"host_headroom","reason":"component_busy"if blockers else"headroom","owners":blockers,"since":wait_since,"elapsed_seconds":round(time.monotonic()-wait_started,1),"estimate_bytes":estimate,"available_bytes":self.host["available"],"reserve_bytes":self.reserve(),"deadline_at":deadline_at,"state":"waiting"}
+                if cpu_wait:
+                    waiting.update(resource="host_cpu",reason="deadline_test_cpu_budget",required_cpu_millis=self.cpu_floor(phase),capacity_cpu_millis=self.cpu_capacity(),owners=[{"job_id":r["job_id"],"phase":r["phase"],"state":r["state"]}for r in self.rows.values()if r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}][:16])
                 if kind=="ui_test":job["phase"]="waiting_frontend_admission"
                 if disk_wait and not disk_wait.get("admitted"):waiting.update(disk_wait);waiting.pop("admitted",None)
                 if job.get("resource_waiting")!=waiting:job["resource_waiting"]=waiting;report()
@@ -189,7 +221,12 @@ class Resources:
     def attached(self,name,identity):
         """Bind the new phase to its exact container identity before the monitor controls it."""
         with self.condition:
-            row=self.rows[name];row["container_id"]=identity;row["state"]="running";self.persist();self.condition.notify_all()
+            row=self.rows[name];row["container_id"]=identity
+            if self.enabled:
+                self.allocate_cpu(name,self.cpu_floor(row["phase"]))
+                # Lower existing allocations before the new workload begins.
+                self.rebalance_cpu()
+            row["state"]="running";self.persist();self.condition.notify_all()
     def elapsed_pause(self,name):
         """Adjust execution timers by confirmed frozen intervals, not queue or reclaim guesses."""
         with self.lock:
@@ -409,11 +446,8 @@ class Resources:
                 self.cpu_budget=max(.5,self.cpu_budget-.5);self.last_cpu_recovery=now
             elif now-self.last_cpu_recovery>=20:
                 self.cpu_budget=min(max(1,(os.cpu_count()or 1)-1),self.cpu_budget+.5);self.last_cpu_recovery=now
-            running=[n for n in names if self.rows[n]["state"]=="running"]
-            weights={n:1+max(0,self.rows[n]["priority"])+min(2,int((now-self.rows[n]["started"])/900))for n in running}
-            for name in running:
-                millis=max(100,int(1000*self.cpu_budget*weights[name]/sum(weights.values())))
-                self.runner.resource_request({"operation":"cpu","container":name,"cpu_millis":millis})
+            with self.condition:
+                self.rebalance_cpu();self.persist();self.condition.notify_all()
             self.last_cpu_adjust=now
         pressure=sample["pressure"]["memory"]>self.policy.get("memory_pressure_percent",5)
         if pressure:
