@@ -348,7 +348,7 @@ impl Catalog {
                 // until a freshly validated catalog reload adopts the new declaration.
                 // Retired coding abilities keep their backend files for operator
                 // commands and durable recovery, but are no longer catalog entries.
-                if group_id == "Administrator" && matches!(id.as_str(), "v3_build"|"v3_workspace")
+                if group_id == "Administrator" && matches!(id.as_str(), "v3_build"|"v3_workspace"|"terminal_control"|"computer_control"|"remote_tunnel"|"program_screenshot")
                     && !ability_path.join(format!("{id}.json")).exists() { continue; }
                 let manifest_path=ability_path.join(format!("{id}.json"));
                 if withdraw_missing {
@@ -2268,13 +2268,13 @@ mod tests {
         let catalog = crate::runtime_tests::native_catalog();
         let ordinary = catalog.abilities.iter()
             .filter(|entry| !matches!(entry.id.as_str(),"optimization"|"mcp")).collect::<Vec<_>>();
-        assert_eq!(ordinary.len(), 81);
+        assert_eq!(ordinary.len(), 77);
         assert_eq!(catalog.abilities.iter().filter(|entry|entry.id=="mcp").count(),1);
         assert!(!catalog.known("mcp"));
         assert_eq!(catalog.abilities.iter().filter(|entry| entry.id == "optimization").count(), 1);
         assert!(!catalog.known("optimization"));
-        assert_eq!(catalog.abilities.iter().filter(|entry| Catalog::executable(entry)).count(), 9);
-        assert_eq!(ordinary.iter().filter(|entry| entry.readiness == Readiness::Ready).count(), 8);
+        assert_eq!(catalog.abilities.iter().filter(|entry| Catalog::executable(entry)).count(), 7);
+        assert_eq!(ordinary.iter().filter(|entry| entry.readiness == Readiness::Ready).count(), 6);
         assert_eq!(catalog.abilities.iter().filter(|entry| entry.readiness == Readiness::Partial).count(), 2);
         let automation=catalog.abilities.iter().find(|entry|entry.id=="automation").unwrap();
         assert_eq!(automation.required_module.as_deref(),Some("automation"));
@@ -2289,7 +2289,8 @@ mod tests {
         assert_eq!(coding.tools, ["file_list","file_read","file_search","file_edit","file_write",
             "build_work","state_inspect","prompt_slot_read","prompt_slot_write","shell","python"]);
         assert!(catalog.abilities.iter().any(|ability| ability.id == "diagnostics"));
-        assert!(catalog.abilities.iter().any(|ability| ability.id == "terminal_control"));
+        assert!(["terminal_control", "computer_control", "remote_tunnel", "program_screenshot"]
+            .iter().all(|id| !catalog.known(id)));
     }
     #[test]
     fn web_access_loading_policy_and_visibility_gates() {
