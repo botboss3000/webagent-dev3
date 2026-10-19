@@ -848,7 +848,17 @@
         {
           "path": "ui/chat/core/recovery-details.js",
           "start_line": 2,
-          "end_line": 24
+          "end_line": 30
+        },
+        {
+          "path": "src/agent_loop/tools/failure.rs",
+          "start_line": 132,
+          "end_line": 191,
+          "purpose": "Typed projection supplies fixed labels; recovery consent remains runtime-owned.",
+          "configuration": {
+            "status": "not_applicable",
+            "rationale": "Fixed taxonomy, redaction, identifier bounds and conservative delivery observation are invariants; evidence never grants recovery authority."
+          }
         }
       ]
     },
@@ -2379,6 +2389,284 @@
         ],
         "opportunities": []
       }
+    },
+    {
+      "id": "tool-failure-evidence",
+      "aliases": [
+        "typed tool failure",
+        "content free failure",
+        "lost tool response"
+      ],
+      "purpose": "Fixed version-1 stage/code/delivery, timing and safe correlation preserve evidence without raw errors or replay authority.",
+      "configuration": {
+        "status": "not_applicable",
+        "rationale": "Fixed taxonomy, redaction, identifier bounds and conservative delivery observation are invariants; evidence never grants recovery authority."
+      },
+      "locations": [
+        {
+          "path": "src/agent_loop/tools/failure.rs",
+          "start_line": 1,
+          "end_line": 77,
+          "purpose": "Fixed enums, safe Display and record construction."
+        },
+        {
+          "path": "src/agent_loop/tools/failure.rs",
+          "start_line": 78,
+          "end_line": 131,
+          "purpose": "Transport timing, task panic/termination, whole-call boundaries and safe request correlation."
+        },
+        {
+          "path": "src/agent_loop/tools/failure.rs",
+          "start_line": 132,
+          "end_line": 191,
+          "purpose": "Legacy interruption fallback, identifier bounds and allowlisted projection."
+        },
+        {
+          "path": "src/agent_loop/tools/failure.rs",
+          "start_line": 192,
+          "end_line": 240,
+          "purpose": "Bind failure to exact single/batch pending call and persist latest evidence."
+        }
+      ]
+    },
+    {
+      "id": "tool-failure-boundaries",
+      "aliases": [
+        "broker authorization rejection",
+        "worker socket failure",
+        "parallel task failure"
+      ],
+      "purpose": "Capture authorization, transport and child-task failures while preserving existing single/parallel recovery checkpoints.",
+      "configuration": {
+        "status": "not_applicable",
+        "rationale": "Fixed taxonomy, redaction, identifier bounds and conservative delivery observation are invariants; evidence never grants recovery authority."
+      },
+      "locations": [
+        {
+          "path": "src/agent_loop/tools/administrator.rs",
+          "start_line": 69,
+          "end_line": 123,
+          "purpose": "Typed host policy, scope, legacy and deployment rejection before send."
+        },
+        {
+          "path": "src/agent_loop/tools/administrator.rs",
+          "start_line": 240,
+          "end_line": 253,
+          "purpose": "Host authorization boundary adds elapsed time and safe request correlation."
+        },
+        {
+          "path": "src/agent_loop/tools/dispatch.rs",
+          "start_line": 1,
+          "end_line": 59,
+          "purpose": "Shared dispatch preserves typed causes and execution metadata."
+        },
+        {
+          "path": "src/agent_loop/tools/dispatch.rs",
+          "start_line": 60,
+          "end_line": 127,
+          "purpose": "Pre-execution cancellation and execution-stage error boundary."
+        },
+        {
+          "path": "src/agent_loop/tools/mod.rs",
+          "start_line": 254,
+          "end_line": 302,
+          "purpose": "RPC connect/write/read and response validation retain distinct worker and host envelopes."
+        },
+        {
+          "path": "src/agent_loop/run.rs",
+          "start_line": 113,
+          "end_line": 136,
+          "purpose": "Existing read interruption and uncertain-write recovery decisions."
+        },
+        {
+          "path": "src/agent_loop/run.rs",
+          "start_line": 1655,
+          "end_line": 1696,
+          "purpose": "Clear fresh attempt evidence; classify single child task termination."
+        },
+        {
+          "path": "src/agent_loop/run.rs",
+          "start_line": 1758,
+          "end_line": 1784,
+          "purpose": "Persist failure before existing read and broker-finish reconciliation."
+        },
+        {
+          "path": "src/agent_loop/tools/batch.rs",
+          "start_line": 188,
+          "end_line": 263,
+          "purpose": "Correlate task IDs to matching generation/pending call and preserve durable recovery ordering."
+        },
+        {
+          "path": "src/agent_loop/run.rs",
+          "start_line": 1697,
+          "end_line": 1720,
+          "purpose": "Known logging gap: same-generation non-running path reconciles successful late results but currently omits typed errors."
+        },
+        {
+          "path": "src/agent_loop/recovery.rs",
+          "start_line": 1,
+          "end_line": 21,
+          "purpose": "Late reconciliation accepts conclusive successful values only; errors retain existing recovery state without saving new evidence."
+        }
+      ]
+    },
+    {
+      "id": "tool-failure-projections",
+      "aliases": [
+        "tool failure diagnostics API",
+        "safe run evidence"
+      ],
+      "purpose": "Authenticated run/diagnostics/progress views reproject stored failure evidence through the fixed allowlist.",
+      "configuration": {
+        "status": "not_applicable",
+        "rationale": "Fixed taxonomy, redaction, identifier bounds and conservative delivery observation are invariants; evidence never grants recovery authority."
+      },
+      "locations": [
+        {
+          "path": "src/app.rs",
+          "start_line": 235,
+          "end_line": 249,
+          "purpose": "Private run view exposes safe tool_failure beside existing pending state."
+        },
+        {
+          "path": "src/app.rs",
+          "start_line": 273,
+          "end_line": 333,
+          "purpose": "Session-matched diagnostics and progress handlers."
+        },
+        {
+          "path": "src/api/progress.rs",
+          "start_line": 67,
+          "end_line": 103,
+          "purpose": "Durable progress adds typed failure without inferring delivery."
+        }
+      ]
+    },
+    {
+      "id": "tool-failure-recorder",
+      "aliases": [
+        "failure capture categories",
+        "committed tool failure event"
+      ],
+      "purpose": "Committed fixed-admin events include safe failure metadata. Config: plugins/diagnostics/diagnostics.json -> enabled, capture_scope, categories.run/tool/recovery, retention.hours/max_rows. config/diagnostics.json seeds defaults only; installed settings are not a supported Code Index runtime alias.",
+      "configuration": {
+        "status": "configured",
+        "references": [
+          {
+            "path": "plugins/diagnostics/diagnostics.json",
+            "pointers": [
+              "/enabled",
+              "/capture_scope",
+              "/categories/run",
+              "/categories/tool",
+              "/categories/recovery",
+              "/retention/hours",
+              "/retention/max_rows"
+            ]
+          },
+          {
+            "path": "config/diagnostics.json",
+            "pointers": [
+              "/enabled",
+              "/capture_scope",
+              "/categories/run",
+              "/categories/tool",
+              "/categories/recovery",
+              "/retention/hours",
+              "/retention/max_rows"
+            ]
+          }
+        ]
+      },
+      "locations": [
+        {
+          "path": "src/diagnostics_plugin/mod.rs",
+          "start_line": 352,
+          "end_line": 402,
+          "purpose": "Committed transition adds safe metadata under existing recorder availability and category gates."
+        },
+        {
+          "path": "src/diagnostics_plugin/tests.rs",
+          "start_line": 807,
+          "end_line": 823,
+          "purpose": "Capture disable and redaction preserve recovery state."
+        }
+      ]
+    },
+    {
+      "id": "tool-failure-regressions",
+      "aliases": [
+        "failure redaction tests",
+        "transport fault injection",
+        "failure label tests"
+      ],
+      "purpose": "Tests cover typed boundaries, malformed transport, cancellation, task failure, durable reopen, session-bound projection and inert recovery labels.",
+      "configuration": {
+        "status": "not_applicable",
+        "rationale": "Fixed taxonomy, redaction, identifier bounds and conservative delivery observation are invariants; evidence never grants recovery authority."
+      },
+      "locations": [
+        {
+          "path": "src/agent_loop/tools/failure.rs",
+          "start_line": 244,
+          "end_line": 291,
+          "purpose": "Typed cause preservation, secret exclusion and parallel pending correlation."
+        },
+        {
+          "path": "src/agent_loop/tools/failure.rs",
+          "start_line": 345,
+          "end_line": 415,
+          "purpose": "Transport fault matrix and successful current protocol."
+        },
+        {
+          "path": "src/agent_loop/tools/failure.rs",
+          "start_line": 416,
+          "end_line": 458,
+          "purpose": "Pre-send cancellation and missing/refused sockets."
+        },
+        {
+          "path": "src/agent_loop/tools/failure.rs",
+          "start_line": 459,
+          "end_line": 522,
+          "purpose": "After-send uncertainty and payload-free panic/termination."
+        },
+        {
+          "path": "src/agent_loop/tools/failure.rs",
+          "start_line": 523,
+          "end_line": 583,
+          "purpose": "Host authority before send and durable run reopen without recorder."
+        },
+        {
+          "path": "src/runtime_tests.rs",
+          "start_line": 4317,
+          "end_line": 4370,
+          "purpose": "Authenticated diagnostics scope, shape and raw-error redaction."
+        },
+        {
+          "path": "src/runtime_tests.rs",
+          "start_line": 4372,
+          "end_line": 4419,
+          "purpose": "Durable progress shape and recovery state."
+        },
+        {
+          "path": "ui/chat/core/recovery-details.test.cjs",
+          "start_line": 1,
+          "end_line": 28,
+          "purpose": "Specific and legacy labels, unchanged decision callbacks and parallel references."
+        },
+        {
+          "path": "src/agent_loop/tools/failure.rs",
+          "start_line": 292,
+          "end_line": 344,
+          "purpose": "Temporary socket fixture injects transport faults without replaying real work."
+        },
+        {
+          "path": "src/runtime_tests.rs",
+          "start_line": 4420,
+          "end_line": 4456,
+          "purpose": "Progress endpoint retains durable recovery/completed state and bounded projections."
+        }
+      ]
     }
   ]
 }
