@@ -11,7 +11,7 @@ async fn host_jobs(app:&App)->Result<()> {
         let trusted=json!({"user_id":app.store.current_user_id(),"session_id":sid,
             "lease_until":now()+30,"access_fingerprint":record["access_fingerprint"]});
         let command=if valid{"administrator_host_lease"}else{"administrator_host_revoke"};
-        let _=tokio::time::timeout(Duration::from_secs(2),tools::execute_trusted(command,&json!({}),sid,
+        let _=tokio::time::timeout(Duration::from_secs(2),tools::execute_host_trusted(command,&json!({}),sid,
             &crate::tools::administrator::build_socket(&app),Some(trusted),CancellationToken::new())).await;
         if !valid{app.store.delete(&format!("administrator_host:{sid}")).await?;}
     }

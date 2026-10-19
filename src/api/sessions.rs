@@ -852,9 +852,14 @@ pub(crate) async fn background_task_metadata_api(State(app):State<App>,Path((sid
  if task["session_id"]!=sid || task["user_id"]!=app.store.current_user_id(){return Err(missing());}
  use webagent_background_contracts::{TaskSummary,State};
  let state=match task["status"].as_str(){Some("queued")=>State::Queued,Some("running")=>State::Running,Some("completed")=>State::Completed,Some("cancelled")=>State::Cancelled,Some("failed")=>State::Failed,_=>return Err(missing())};
- Ok(Json(serde_json::to_value(TaskSummary{version:1,task_id:id,session_id:sid,
+ let mut summary=serde_json::to_value(TaskSummary{version:1,task_id:id,session_id:sid,
   run_id:task["run_id"].as_str().ok_or_else(missing)?.into(),status:state,
-  created_at_ms:task["created_at_ms"].as_u64(),claimed_at_ms:task["claimed_at_ms"].as_u64(),completed_at_ms:task["completed_at_ms"].as_u64()}).map_err(anyhow::Error::from)?))
+  created_at_ms:task["created_at_ms"].as_u64(),claimed_at_ms:task["claimed_at_ms"].as_u64(),completed_at_ms:task["completed_at_ms"].as_u64()}).map_err(anyhow::Error::from)?;
+ if let Some(value)=task.get("execution_metadata") {
+  let metadata:webagent_context_contracts::execution::Metadata=serde_json::from_value(value.clone()).map_err(anyhow::Error::from)?;metadata.validate()?;
+  summary["execution_metadata"]=value.clone();
+ }
+ Ok(Json(summary))
 }
 
 #[cfg(test)]mod background_metadata_tests {
@@ -865,10 +870,12 @@ pub(crate) async fn background_task_metadata_api(State(app):State<App>,Path((sid
   let sid=crate::runtime_tests::conversation(&app).await;let id=format!("bg_{}", "a".repeat(64));
   let task=json!({"id":id,"session_id":sid,"user_id":app.store.current_user_id(),"run_id":"run",
    "status":"completed","revision":0,"created_at_ms":1,"claimed_at_ms":2,"completed_at_ms":3,
-   "arguments":{"private":"fixture-content"},"result":"fixture-content","claim_id":"fixture-claim"});
+   "arguments":{"private":"fixture-content"},"result":"fixture-content","claim_id":"fixture-claim",
+   "execution_metadata":{"version":1,"rpc_calls":[{"peer":"tool-worker","id":"routing"}]}});
   assert!(app.store.background_cas(&task,None).await.unwrap());
   let value=background_task_metadata_api(State(app.clone()),Path((sid.clone(),id.clone()))).await.unwrap().0;
-  assert_eq!(value["completed_at_ms"],3);assert_eq!(value.as_object().unwrap().len(),8);
+  assert_eq!(value["completed_at_ms"],3);assert_eq!(value.as_object().unwrap().len(),9);
+  assert_eq!(value["execution_metadata"],task["execution_metadata"]);
   for key in ["arguments","result","claim_id","authorization"]{assert!(value.get(key).is_none());}
   assert_eq!(background_task_metadata_api(State(app),Path(("other".into(),id))).await.err().unwrap().0,StatusCode::NOT_FOUND);
  }

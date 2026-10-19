@@ -228,7 +228,7 @@ pub(super) async fn execute_parallel_batch(
                 current["error"]=json!("Parallel write outcome unknown; review each call");
             } else {
                 current["batch"][idx]["result"]=match result {
-                    Ok(value)=>value,
+                    Ok(value)=>{current["batch"][idx]["execution_metadata"]=serde_json::to_value(&value.metadata)?;value.content},
                     Err(_)=>json!({"status":"error","output":"Read tool interrupted"}),
                 };
                 current["batch"][idx]["state"]=json!("done");
@@ -271,6 +271,9 @@ pub(super) async fn execute_parallel_batch(
             let item=run["batch"][idx].clone();
             run["pending"]=item["pending"].clone();
             run["workflow"]["receipts"]["pre_tool"]=item["pre_tool_receipt"].clone();
+            if !item["execution_metadata"].is_null(){
+                let metadata=serde_json::from_value(item["execution_metadata"].clone())?;tools::outcome::stage(&mut run,&metadata)?;
+            }
             append_tool(&mut run,&item["result"])?;
             let call_id=item["pending"]["call_id"].as_str().unwrap();
             let result_receipt=run["workflow"]["receipts"]["tool_result"].clone();

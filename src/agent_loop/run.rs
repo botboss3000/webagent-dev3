@@ -1707,6 +1707,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             if run["generation"] != generation {
                 return Ok(());
             }
+            let result=result.and_then(|outcome|{tools::outcome::stage(&mut run,&outcome.metadata)?;Ok(outcome.content)});
             if status(&run) != "running" {
                 if !terminal(status(&run)) && matches!(name.as_str(),"v3_build_work"|"build_work") && args["action"]=="finish"
                     && run["pending"]["state"]=="executing"

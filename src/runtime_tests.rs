@@ -415,6 +415,7 @@ async fn agent_proposal_is_visible_and_admin_can_promote_the_same_review() {
             let reply = json!({"id":call["id"],"status":"success","truncated":false,
                 "review_sha256":review_digest,"baseline_commit":baseline,
                 "status_output":" M src/main.rs","diff":"patch"});
+            let reply=test_rpc_reply(&call,reply);
             let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
             reader
                 .get_mut()
@@ -505,6 +506,7 @@ async fn agent_proposal_is_visible_and_admin_can_promote_the_same_review() {
         let call: Value = serde_json::from_str(&line).unwrap();
         let reply = json!({"id":call["id"],"status":"success",
             "patch_sha256":call["patch_sha256"],"paths":["src/main.rs"]});
+            let reply=test_rpc_reply(&call,reply);
             let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
         reader
             .get_mut()
@@ -586,6 +588,7 @@ async fn proposal_respects_policy_and_rejects_stale_review() {
         let reply = json!({"id":call["id"],"status":"success","truncated":false,
             "review_sha256":"b".repeat(64),"baseline_commit":"c".repeat(40),
             "diff":"patch"});
+            let reply=test_rpc_reply(&call,reply);
         let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
         reader
             .get_mut()
@@ -673,6 +676,7 @@ async fn promotion_requires_auth_and_csrf_and_reuses_durable_receipt() {
         let reply = json!({"id":call["id"],"status":"success","truncated":false,
             "review_sha256":review_digest,"baseline_commit":baseline,
             "diff":"patch"});
+            let reply=test_rpc_reply(&call,reply);
             let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
         reader
             .get_mut()
@@ -689,6 +693,7 @@ async fn promotion_requires_auth_and_csrf_and_reuses_durable_receipt() {
         assert_eq!(call["patch"], "patch");
         let reply = json!({"id":call["id"],"status":"success",
             "patch_sha256":call["patch_sha256"],"paths":["src/main.rs"]});
+            let reply=test_rpc_reply(&call,reply);
             let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
         reader
             .get_mut()
@@ -765,6 +770,7 @@ async fn admin_cannot_promote_a_stale_agent_proposal() {
         let changed = hex::encode(Sha256::digest(format!("{baseline}\0new").as_bytes()));
         let reply = json!({"id":call["id"],"status":"success","truncated":false,
             "review_sha256":changed,"baseline_commit":baseline,"diff":"new"});
+            let reply=test_rpc_reply(&call,reply);
         let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
         reader
             .get_mut()
@@ -964,6 +970,7 @@ async fn source_review_route_requires_auth_policy_and_existing_session() {
         assert_eq!(call["workspace"], expected_sid);
         let reply = json!({"id":call["id"],"status":"success",
             "status_output":" M src/main.rs","diff":"patch","truncated":false});
+            let reply=test_rpc_reply(&call,reply);
             let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
         reader
             .get_mut()
@@ -1355,6 +1362,7 @@ async fn agent_loop_creates_reviewable_proposal_without_dispatching_broker() {
             if call["name"] == "administrator_quiesce" {
                 assert_eq!(call["arguments"], json!({}));
                 let reply = json!({"id":call["id"],"status":"success"});
+            let reply=test_rpc_reply(&call,reply);
             let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
                 reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
                 continue;
@@ -1365,6 +1373,7 @@ async fn agent_loop_creates_reviewable_proposal_without_dispatching_broker() {
             let reply = json!({"id":call["id"],"status":"success","truncated":false,
                 "baseline_commit":baseline,"review_sha256":worker_digest,
                 "status_output":" M src/main.rs","diff":"patch"});
+            let reply=test_rpc_reply(&call,reply);
             let reply=if call["name"]=="source_review"{json!({"id":reply["id"],"status":"success","output":reply})}else{reply};
             reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
             return;
@@ -5226,6 +5235,7 @@ async fn parallel_batch_overlaps_reads_denies_write_by_policy_and_preserves_resu
         for (mut reader,request) in requests.into_iter().rev() {
             let reply=json!({"id":request["id"],"status":"success",
                 "output":{"path":request["arguments"]["path"]}});
+            let reply=test_rpc_reply(&request,reply);
             reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
         }
     });
@@ -5315,6 +5325,7 @@ async fn parallel_writes_need_independent_approvals_and_reconcile_uncertain_call
             let status=if request["arguments"]["path"]=="/workspaces/parallel-approval/two" {"uncertain"} else {"success"};
             let reply=json!({"id":request["id"],"status":status,
                 "output":{"path":request["arguments"]["path"]}});
+            let reply=test_rpc_reply(&request,reply);
             reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
         }
     });
@@ -5440,6 +5451,7 @@ async fn switching_waiting_parallel_writes_to_auto_runs_without_approval() {
             let mut line=String::new();reader.read_line(&mut line).await.unwrap();
             let request:Value=serde_json::from_str(&line).unwrap();
             let reply=json!({"id":request["id"],"status":"success","output":"written"});
+            let reply=test_rpc_reply(&request,reply);
             reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
         }
     });
@@ -5502,6 +5514,7 @@ async fn parallel_batch_overflow_queues_reads_despite_legacy_reject() {
             assert!(paths.insert(request["arguments"]["path"].as_str().unwrap().to_owned()));
             assert!(tokio::time::timeout(Duration::from_millis(100),listener.accept()).await.is_err());
             let reply=json!({"id":request["id"],"status":"success","output":request["arguments"]["path"]});
+            let reply=test_rpc_reply(&request,reply);
             reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
         }
         assert_eq!(paths.len(),3);
@@ -5570,6 +5583,7 @@ async fn parallel_batch_read_completes_before_independent_write_approval() {
         assert!(!worker_app.store.events(&worker_sid,0).await.unwrap().iter()
             .any(|event|event["kind"]=="approval_required"));
         let reply=json!({"id":request["id"],"status":"success","output":"read completed"});
+            let reply=test_rpc_reply(&request,reply);
         reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
     });
     let policy=current_workflow_policy(&app).await.unwrap();
@@ -6387,6 +6401,7 @@ async fn background_execution_journey(behavior: &str) {
                 },
             }
             let reply=json!({"id":request["id"],"status":"success","output":"BACKGROUND_JOURNEY_EVIDENCE"});
+            let reply=test_rpc_reply(&request,reply);
             tokio::time::timeout(Duration::from_secs(5),reader.get_mut().write_all(format!("{reply}\n").as_bytes())).await.unwrap().unwrap();
             drop(reader);
             if wake {
@@ -6397,6 +6412,7 @@ async fn background_execution_journey(behavior: &str) {
                 assert_eq!(request["arguments"]["path"],"followup-read");
                 assert!(request["arguments"].get("_execution_mode").is_none());
                 let reply=json!({"id":request["id"],"status":"success","output":"FOLLOWUP_READ_EVIDENCE"});
+            let reply=test_rpc_reply(&request,reply);
                 tokio::time::timeout(Duration::from_secs(5),reader.get_mut().write_all(format!("{reply}\n").as_bytes())).await.unwrap().unwrap();
                 return (false,2);
             }
@@ -7387,6 +7403,7 @@ async fn workspace_host_uses_scoped_host_socket_and_rejects_missing_envelope() {
         assert!(call["trusted"]["lease_until"].as_u64().unwrap()>now());
         assert_eq!(call["name"],"source_review");
         let reply=json!({"id":call["id"],"status":"success","diff":"unwrapped"});
+            let reply=test_rpc_reply(&call,reply);
         reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
     });
     let result=tools::administrator::workspace_host(&app,&sid,"source_review",&json!({}),None,CancellationToken::new()).await;
@@ -7426,4 +7443,9 @@ async fn background_component_pause_survives_modern_persisted_view() {
   let expected=component.map(|id|json!({"version":1,"component":id,"reason":"component_unavailable"})).unwrap_or(Value::Null);
   assert_eq!(projected[0]["component_pause"],expected);assert_eq!(projected[0]["status"],"paused");
  }
+}
+
+/// Synthetic peers distinguish the protected host's existing protocol from worker protocol 2.
+fn test_rpc_reply(request:&Value,mut reply:Value)->Value {
+ if request["version"]==2 {let id=reply.as_object_mut().unwrap().remove("id").unwrap();json!({"version":2,"id":id,"result":reply})}else{reply}
 }

@@ -778,3 +778,33 @@ print("SEEDED" if result["baseline_commit"] else "FAILED")
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkerRpcEnvelopeTests(unittest.IsolatedAsyncioTestCase):
+    async def client_response(self, version, payload):
+        import json
+        import struct
+        reader = mock.Mock()
+        reader.readline = mock.AsyncMock(return_value=json.dumps({"version": version, "id": "routing", "workspace": str(uuid.uuid4())}).encode() + b"\n")
+        async def disconnected(_):
+            await asyncio.sleep(3600)
+        reader.read = disconnected
+        writer = mock.Mock()
+        writer.get_extra_info.return_value.getsockopt.return_value = struct.pack("3i", 1, 1100, 1100)
+        writer.drain = mock.AsyncMock()
+        writer.wait_closed = mock.AsyncMock()
+        with mock.patch.object(worker, "execute", new=mock.AsyncMock(return_value=payload)) as execute:
+            await worker.client(reader, writer)
+        return json.loads(writer.write.call_args.args[0]), execute.call_count
+
+    async def test_wire_envelope_preserves_root_and_nested_domain_ids(self):
+        payload = {"status": "success", "id": "domain", "output": {"id": "nested", "timestamp": 7}}
+        reply, calls = await self.client_response(2, payload)
+        self.assertEqual(calls, 1)
+        self.assertEqual(reply, {"version": 2, "id": "routing", "result": payload})
+
+    async def test_old_protocol_is_rejected_before_execution(self):
+        reply, calls = await self.client_response(1, {"status": "success"})
+        self.assertEqual(calls, 0)
+        self.assertEqual(reply["result"]["status"], "failed")
+        self.assertIn("protocol 2 required", reply["result"]["output"])

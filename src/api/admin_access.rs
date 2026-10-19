@@ -83,7 +83,7 @@ pub(crate) async fn quiesce_session_resources(app:&App,sid:&str)->Result<(),ApiE
         let trusted=json!({"user_id":app.store.current_user_id(),"session_id":sid,
             "lease_until":crate::now()+30,"access_fingerprint":job["access_fingerprint"]});
         let result=tokio::time::timeout(std::time::Duration::from_secs(2),
-            crate::tools::execute_trusted("administrator_host_revoke",&json!({}),sid,
+            crate::tools::execute_host_trusted("administrator_host_revoke",&json!({}),sid,
                 &crate::tools::administrator::build_socket(&app),Some(trusted),
                 crate::CancellationToken::new())).await;
         failed |= !matches!(result,Ok(Ok(ref value)) if value["status"]=="success");
@@ -483,7 +483,7 @@ mod tests {
             let mut reader=BufReader::new(stream);let mut line=String::new();
             reader.read_line(&mut line).await.unwrap();let request:Value=serde_json::from_str(&line).unwrap();
             assert_eq!(request["name"],"administrator_quiesce");assert_eq!(request["workspace"],expected);
-            let response=format!("{}\n",json!({"id":request["id"],"status":"success"}));
+            let response=format!("{}\n",json!({"version":2,"id":request["id"],"result":{"status":"success"}}));
             reader.get_mut().write_all(response.as_bytes()).await.unwrap();
         });
         quiesce_session_resources(&app,&sid).await.unwrap();worker.await.unwrap();

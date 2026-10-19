@@ -735,6 +735,8 @@ async def client(reader, writer):
     try:
         raw = await asyncio.wait_for(reader.readline(), 10)
         request = json.loads(raw)
+        if request.get("version") != 2:
+            raise ValueError("Worker RPC protocol 2 required; no operation dispatched")
         task = asyncio.create_task(execute(request))
         disconnected = asyncio.create_task(reader.read(1))
         done, _ = await asyncio.wait([task, disconnected], return_when=asyncio.FIRST_COMPLETED)
@@ -754,8 +756,8 @@ async def client(reader, writer):
         if disconnected:
             disconnected.cancel()
     try:
-        response["id"] = request.get("id")
-        writer.write((json.dumps(response) + "\n").encode())
+        envelope = {"version": 2, "id": request.get("id"), "result": response}
+        writer.write((json.dumps(envelope) + "\n").encode())
         await writer.drain()
     except (BrokenPipeError, ConnectionResetError):
         pass

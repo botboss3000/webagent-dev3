@@ -15,7 +15,7 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
             self.skipTest("run as application uid 1100 inside v3 container")
         app_pid = next(int(p.name) for p in Path("/proc").iterdir() if p.name.isdigit() and (p / "comm").read_text().strip() == "webagent-v3")
         reader, writer = await asyncio.open_unix_connection(SOCKET)
-        request = {"id": "isolation-test", "workspace": str(uuid.uuid4()),
+        request = {"version": 2, "id": "isolation-test", "workspace": str(uuid.uuid4()),
                    "name": "python", "arguments": {"code": (
                        "import os,json; "
                        "result={'uid':os.getuid(),'groups':os.getgroups()}; "
@@ -32,7 +32,10 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
                    "timeout_seconds": 10}
         writer.write((json.dumps(request) + "\n").encode())
         await writer.drain()
-        response = json.loads(await reader.readline())
+        envelope = json.loads(await reader.readline())
+        self.assertEqual(envelope["version"], 2)
+        self.assertEqual(envelope["id"], request["id"])
+        response = envelope["result"]
         writer.close()
         await writer.wait_closed()
         self.assertEqual(response["status"], "success", response)
@@ -51,7 +54,7 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
         if os.getuid() == 1100:
             self.skipTest("run separately as checkout-owner uid 1000")
         reader, writer = await asyncio.open_unix_connection(SOCKET)
-        writer.write((json.dumps({"id":"forbidden","name":"shell",
+        writer.write((json.dumps({"version":2,"id":"forbidden","name":"shell",
             "workspace":str(uuid.uuid4()),"arguments":{"command":"printf bypass"}}) + "\n").encode())
         try:
             await writer.drain()

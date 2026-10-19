@@ -261,7 +261,7 @@ async fn run_task(app:&App,mut task:Value)->Result<()> {
     };
     cancel.cancel();
     task["status"]=json!(if result.is_ok(){"completed"}else{"cancelled"});
-    task["result"]=result.unwrap_or_else(|_|json!({"status":"cancelled"}));
+    task["result"]=match result {Ok(outcome)=>{task["execution_metadata"]=serde_json::to_value(&outcome.metadata)?;outcome.content},Err(_)=>json!({"status":"cancelled"})};
     task["completed_at"]=json!(now());task["completed_at_ms"]=json!(timestamp_ms());task["lease_until"]=json!(0);
     app.store.background_cas(&task,Some(current_revision)).await?;
     crate::wake::notify(app).await;

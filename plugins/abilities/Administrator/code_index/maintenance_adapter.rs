@@ -38,7 +38,7 @@ pub(crate) async fn execute(app:&App,sid:&str,run_id:&str,args:&Value,cancel:Can
     }
     let trusted=||json!({"user_id":crate::shared_chat::actor(app),"session_id":sid,"lease_until":crate::now()+30,"access_fingerprint":fingerprint});
     let socket=crate::tools::administrator::build_socket(app);
-    let future=crate::tools::execute_trusted(name,&args,sid,&socket,Some(trusted()),cancel.clone());
+    let future=crate::tools::execute_host_trusted(name,&args,sid,&socket,Some(trusted()),cancel.clone());
     tokio::pin!(future);
     loop{tokio::select!{
         result=&mut future=>{
@@ -47,16 +47,16 @@ pub(crate) async fn execute(app:&App,sid:&str,run_id:&str,args:&Value,cancel:Can
             return Ok(result)
         },
         _=cancel.cancelled()=>{
-            let _=crate::tools::execute_trusted("administrator_host_revoke",&json!({}),sid,&socket,Some(trusted()),CancellationToken::new()).await;
+            let _=crate::tools::execute_host_trusted("administrator_host_revoke",&json!({}),sid,&socket,Some(trusted()),CancellationToken::new()).await;
             bail!("Maintenance interrupted; inspect the original request before retrying")
         },
         _=tokio::time::sleep(Duration::from_secs(5))=>{
             let current=crate::tools::administrator::host_fingerprint(app,sid,run_id,name).await;
             if current.as_ref().ok()!=Some(&fingerprint){
-                let _=crate::tools::execute_trusted("administrator_host_revoke",&json!({}),sid,&socket,Some(trusted()),CancellationToken::new()).await;
+                let _=crate::tools::execute_host_trusted("administrator_host_revoke",&json!({}),sid,&socket,Some(trusted()),CancellationToken::new()).await;
                 bail!("Maintenance authority revoked")
             }
-            crate::tools::execute_trusted("administrator_host_lease",&json!({}),sid,&socket,Some(trusted()),cancel.clone()).await?;
+            crate::tools::execute_host_trusted("administrator_host_lease",&json!({}),sid,&socket,Some(trusted()),cancel.clone()).await?;
         }
     }}
 }

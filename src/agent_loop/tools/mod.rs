@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+pub(crate) mod outcome;
 // Single and parallel turns share the same Rust dispatch for native and worker tools.
 #[path = "../../../plugins/abilities/Web/web_access/adapter.rs"]
 pub(crate) mod web_access;
@@ -242,6 +243,15 @@ pub(crate) async fn execute_trusted(
     name:&str,args:&Value,session:&str,socket:&std::path::Path,
     trusted:Option<Value>,cancel:CancellationToken,
 )->Result<Value> {
+    execute_rpc(name,args,session,socket,trusted,cancel,false).await
+}
+/// Explicit protected-host protocol; this endpoint is not the low-level worker.
+pub(crate) async fn execute_host_trusted(name:&str,args:&Value,session:&str,socket:&std::path::Path,
+ trusted:Option<Value>,cancel:CancellationToken)->Result<Value> {
+ execute_rpc(name,args,session,socket,trusted,cancel,true).await
+}
+async fn execute_rpc(name:&str,args:&Value,session:&str,socket:&std::path::Path,
+ trusted:Option<Value>,cancel:CancellationToken,host:bool)->Result<Value> {
     uuid::Uuid::parse_str(session).context("invalid workspace identifier")?;
     if cancel.is_cancelled() {
         bail!("tool execution cancelled");
@@ -254,8 +264,9 @@ pub(crate) async fn execute_trusted(
         .unwrap_or(120)
         .clamp(1, 600);
     let request_id = uuid::Uuid::new_v4().to_string();
-    let request = json!({"id":request_id,"name":name,
+    let mut request = json!({"id":request_id,"name":name,
         "arguments":args,"workspace":session,"timeout_seconds":timeout,"trusted":trusted});
+    if !host {request["version"]=json!(webagent_context_contracts::execution::WORKER_PROTOCOL);}
     let mut encoded = serde_json::to_vec(&request)?;
     if encoded.len() > 1024 * 1024 {
         bail!("tool input exceeds limit");
@@ -270,10 +281,9 @@ pub(crate) async fn execute_trusted(
             reader.read_line(&mut response).await?;
             if response.is_empty() { bail!("tool worker disconnected"); }
             let value = serde_json::from_str::<Value>(&response)?;
-            if value["id"].as_str() != Some(request_id.as_str()) {
-                bail!("tool response identifier mismatch");
-            }
-            Ok(value)
+            let content=if host {webagent_context_contracts::execution::host_reply(value,&request_id)?}
+                else {webagent_context_contracts::execution::worker_reply(value,&request_id)?};
+            outcome::rpc(if host {"build-host"}else{"tool-worker"},&request_id)?;Ok(content)
         } => result
     }
 }

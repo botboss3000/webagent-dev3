@@ -9,7 +9,7 @@ pub async fn workspace_host(app:&App,sid:&str,name:&str,args:&Value,_trusted:Opt
     let socket=build_socket(app);
     let fingerprint=digest(&json!([app.store.current_user_id(),sid,name,args]));
     let authority=||json!({"user_id":app.store.current_user_id(),"session_id":sid,"lease_until":now()+30,"access_fingerprint":fingerprint});
-    let future=tools::execute_trusted(name,args,sid,&socket,Some(authority()),cancel.clone());
+    let future=tools::execute_host_trusted(name,args,sid,&socket,Some(authority()),cancel.clone());
     tokio::pin!(future);
     loop {tokio::select!{
         result=&mut future=>{
@@ -21,11 +21,11 @@ pub async fn workspace_host(app:&App,sid:&str,name:&str,args:&Value,_trusted:Opt
             return Ok(reply);
         },
         _=cancel.cancelled()=>{
-            let _=tools::execute_trusted("administrator_host_revoke",&json!({}),sid,&socket,Some(authority()),CancellationToken::new()).await;
+            let _=tools::execute_host_trusted("administrator_host_revoke",&json!({}),sid,&socket,Some(authority()),CancellationToken::new()).await;
             bail!("Workspace operation interrupted; inspect its receipt");
         },
         _=tokio::time::sleep(Duration::from_secs(10))=>{
-            tools::execute_trusted("administrator_host_lease",&json!({}),sid,&socket,Some(authority()),cancel.clone()).await?;
+            tools::execute_host_trusted("administrator_host_lease",&json!({}),sid,&socket,Some(authority()),cancel.clone()).await?;
         }
     }}
 }
@@ -160,12 +160,12 @@ async fn performance_cancel_existing(
     let mut args=forwarded.clone();args["action"]=json!("cancel");
     let socket_path=build_socket(app);let socket=&socket_path;
     let _=tokio::time::timeout(Duration::from_secs(3),
-        tools::execute_trusted("performance_work",&args,sid,socket,Some(trusted.clone()),
+        tools::execute_host_trusted("performance_work",&args,sid,socket,Some(trusted.clone()),
             CancellationToken::new())).await;
     args["action"]=json!("status");
     for _ in 0..3 {
         if let Ok(Ok(receipt))=tokio::time::timeout(Duration::from_secs(2),
-            tools::execute_trusted("performance_work",&args,sid,socket,Some(trusted.clone()),
+            tools::execute_host_trusted("performance_work",&args,sid,socket,Some(trusted.clone()),
                 CancellationToken::new())).await {
             if receipt["status"]=="success" && !performance_pending(&receipt) {
                 return receipt;
@@ -248,7 +248,7 @@ async fn host(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,cancel:Cancell
     }
     let mut forwarded=if name=="v3_build_work" {build_work_arguments(args)?} else {args.clone()};
     if let Some(object)=forwarded.as_object_mut(){object.retain(|_,value|!value.is_null());}
-    tools::execute_trusted(name,&forwarded,sid,&build_socket(app),Some(trusted),cancel).await
+    tools::execute_host_trusted(name,&forwarded,sid,&build_socket(app),Some(trusted),cancel).await
 }
 
 fn workspace_worker_arguments(args:&Value)->Result<Value> {

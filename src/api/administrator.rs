@@ -168,7 +168,7 @@ async fn build_notice_broker(
     });
     let response = tokio::time::timeout(
         Duration::from_secs(3),
-        tools::execute_trusted(
+        tools::execute_host_trusted(
             name,
             &arguments,
             sid,

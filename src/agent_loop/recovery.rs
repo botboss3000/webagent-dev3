@@ -58,7 +58,7 @@ async fn build_result(app:&App,run:&Value)->Result<Option<Value>> {
     if job_id.is_none() {
         // The broker may have admitted finish just before the loop stopped.
         // Resolve its task receipt; never submit another finish.
-        let status=tools::execute_trusted("v3_build_work",&json!({"action":"status","task_id":task}),sid,
+        let status=tools::execute_host_trusted("v3_build_work",&json!({"action":"status","task_id":task}),sid,
             socket,Some(trusted.clone()),CancellationToken::new()).await?;
         if status["status"]!="success" {bail!("Build task receipt unavailable");}
         let item=status["output"]["own"].as_array().and_then(|items|items.iter()
@@ -77,7 +77,7 @@ async fn build_result(app:&App,run:&Value)->Result<Option<Value>> {
         if job_id.is_none() {return Ok(None);}
     }
     let job_id=job_id.unwrap();
-    let response=tools::execute_trusted("v3_worker_job",&json!({"job_id":job_id}),sid,
+    let response=tools::execute_host_trusted("v3_worker_job",&json!({"job_id":job_id}),sid,
         socket,Some(trusted.clone()),CancellationToken::new()).await?;
     if response["status"]!="success" {bail!("Build job receipt unavailable");}
     let job=&response["output"];
@@ -88,7 +88,7 @@ async fn build_result(app:&App,run:&Value)->Result<Option<Value>> {
     let mut output=json!({"task_id":task,"job_id":job_id,"status":state,
         "phase":job["phase"],"reason":job["reason"],"log":job["log"],"synchronization":job["synchronization"]});
     if state=="completed" {
-        let health=tools::execute_trusted("v3_build_status",&json!({}),sid,
+        let health=tools::execute_host_trusted("v3_build_status",&json!({}),sid,
             socket,Some(trusted),CancellationToken::new()).await?;
         if health["status"]!="success" {return Ok(None);}
         let containers=&health["output"]["containers"];

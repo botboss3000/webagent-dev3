@@ -138,7 +138,7 @@ async fn broker(app: &App, name: &str, arguments: Value) -> Api {
         "lease_until": now() + 30,
         "access_fingerprint": digest(&json!(["v3_build_dashboard", user_id])),
     });
-    let response = tools::execute_trusted(
+    let response = tools::execute_host_trusted(
         name,
         &arguments,
         DASHBOARD_SESSION,

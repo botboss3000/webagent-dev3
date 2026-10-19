@@ -9,6 +9,7 @@ pub(crate) mod search;
 pub(crate) mod own_skills;
 pub(crate) mod base_task;
 mod activity;
+mod execution_metadata;
 mod naming;
 mod background_tasks;
 mod background_followup;
@@ -290,6 +291,10 @@ pub(crate) async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<S
             .execute(&pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS reasoning_cleanup(segment_id TEXT PRIMARY KEY,session_id TEXT NOT NULL,payload BLOB NOT NULL)")
             .execute(&pool).await?;
+        let interaction_columns=sqlx::query("PRAGMA table_info(interactions)").fetch_all(&pool).await?;
+        if !interaction_columns.iter().any(|row|row.get::<String,_>("name")=="execution_metadata") {
+            sqlx::query("ALTER TABLE interactions ADD COLUMN execution_metadata BLOB").execute(&pool).await?;
+        }
         let columns = sqlx::query("PRAGMA table_info(run_index)").fetch_all(&pool).await?;
         if !columns.iter().any(|r| r.get::<String,_>("name") == "enqueue_seq") {
             sqlx::query("ALTER TABLE run_index ADD COLUMN enqueue_seq INTEGER").execute(&pool).await?;
@@ -1856,6 +1861,9 @@ impl Store {
         }
         persisted.as_object_mut().unwrap().remove("_context_assets_write");
         persisted.as_object_mut().unwrap().remove("_context_assets_operation");
+        if let Some(id)=run["input"].as_array().and_then(|items|items.last()).filter(|item|item["type"]=="function_call_output").and_then(|item|item["call_id"].as_str()) {
+            if let Some(map)=persisted["_tool_execution_metadata"].as_object_mut(){map.remove(id);}
+        }
         persisted["run_revision"]=json!(expected+1);
         self.write_document(&mut tx,&format!("run:{rid}"),&persisted).await?;
         // Large model and tool outputs live in interactions and the run checkpoint.
@@ -1883,6 +1891,9 @@ impl Store {
                     .ok_or_else(|| anyhow!("Tool output has no call ID"))?;
                 self.insert_interaction(&mut tx, sid, rid, &format!("tool:{call_id}"), item)
                     .await?;
+                if let Some(metadata)=run["_tool_execution_metadata"].get(call_id) {
+                    self.attach_execution_metadata(&mut tx,sid,rid,call_id,metadata).await?;
+                }
             }
         }
         if kind == "working_message" && run["module_silent"]!=true {
@@ -2057,6 +2068,7 @@ impl Store {
         if let Some(revision)=persisted.get("context_assets_revision") {run["context_assets_revision"]=revision.clone();}
         run.as_object_mut().unwrap().remove("_context_assets_write");
         run.as_object_mut().unwrap().remove("_context_assets_operation");
+        if let Some(map)=persisted.get("_tool_execution_metadata"){run["_tool_execution_metadata"]=map.clone();}
         run["run_revision"]=json!(expected+1);
         if matches!(run["status"].as_str(),Some("completed"|"cancelled"|"failed")) {self.reconcile_requester_slots().await?;}
         Ok(())

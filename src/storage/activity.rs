@@ -19,7 +19,8 @@ fn event(row: &SqliteRow, store: &Store, sid: &str) -> Result<Value> {
         },
         _ => ("diagnostic",item),
     };
-    Ok(json!({"seq":seq,"event_id":format!("interaction:{seq}"),"session_id":sid,"run_id":run,"kind":kind,"payload":payload,
+    let execution_metadata=row.get::<Option<Vec<u8>>,_>("execution_metadata").map(|bytes|store.unseal(&bytes)).transpose()?;
+    Ok(json!({"execution_metadata":execution_metadata,"seq":seq,"event_id":format!("interaction:{seq}"),"session_id":sid,"run_id":run,"kind":kind,"payload":payload,
         "created_at":row.get::<i64,_>("created_at")*1000,"boundary_quality":if row.get::<Option<String>,_>("boundary_item_id").is_some(){"recorded"}else{"legacy_unverified"}}))
 }
 impl Store {
@@ -93,7 +94,7 @@ impl Store {
     /// Page only one caller-owned run's encrypted interactions. The API checks
     /// administrator and session authority before exposing this private log.
     pub async fn private_run_activity(&self,sid:&str,rid:&str,after:i64)->Result<Value> {
-        let rows=sqlx::query("SELECT i.seq,i.run_id,i.item,i.created_at,b.boundary_item_id FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.run_id=? AND i.seq>? ORDER BY i.seq LIMIT 101")
+        let rows=sqlx::query("SELECT i.seq,i.run_id,i.item,i.execution_metadata,i.created_at,b.boundary_item_id FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.run_id=? AND i.seq>? ORDER BY i.seq LIMIT 101")
             .bind(sid).bind(rid).bind(after).fetch_all(&self.pool).await?;
         let more=rows.len()>100;
         let page=&rows[..rows.len().min(100)];
@@ -104,7 +105,7 @@ impl Store {
     }
     pub async fn private_activity(&self,sid:&str,after:i64)->Result<Value> {
         let mut tx=self.pool.begin().await?;
-        let rows=sqlx::query("SELECT i.seq,i.run_id,i.item,i.created_at,b.boundary_item_id FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.seq>? ORDER BY i.seq LIMIT 201")
+        let rows=sqlx::query("SELECT i.seq,i.run_id,i.item,i.execution_metadata,i.created_at,b.boundary_item_id FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.seq>? ORDER BY i.seq LIMIT 201")
             .bind(sid).bind(after).fetch_all(&mut *tx).await?;
         let more=rows.len()>200;
         let page=&rows[..rows.len().min(200)];

@@ -3,8 +3,8 @@ use crate::*;
 pub(crate) async fn call(
     app:App,sid:String,run_id:String,generation:String,name:String,args:Value,pending_id:String,
     policy_version:u64,cancel:CancellationToken,
-)->Result<Value> {
-    Box::pin(call_inner(app,sid,run_id,generation,name,args,pending_id,policy_version,cancel)).await
+)->Result<tools::outcome::Outcome> {
+    tools::outcome::capture(Box::pin(call_inner(app,sid,run_id,generation,name,args,pending_id,policy_version,cancel))).await
 }
 async fn call_inner(
     app:App,sid:String,run_id:String,generation:String,name:String,mut args:Value,pending_id:String,
@@ -29,7 +29,7 @@ async fn call_inner(
         if !crate::tool_execution::background_capable(&name) {
             return Ok(json!({"status":"denied","output":"Post-run follow-up permits vetted reads only"}));
         }
-        return call_foreground(app,sid,run_id,generation,name,args,pending_id,policy_version,cancel).await;
+        return call_foreground_value(app,sid,run_id,generation,name,args,pending_id,policy_version,cancel).await;
     }
     if crate::background_tasks::owns(&name) {
         return crate::background_tasks::control(&app,&sid,&run_id,&name,&args,cancel).await;
@@ -40,13 +40,17 @@ async fn call_inner(
         }
         return crate::background_tasks::submit(&app,&sid,&run_id,&generation,&name,&args,&pending_id,policy_version,&settings).await;
     }
-    call_foreground(app,sid,run_id,generation,name,args,pending_id,policy_version,cancel).await
+    call_foreground_value(app,sid,run_id,generation,name,args,pending_id,policy_version,cancel).await
 }
 
 pub(crate) async fn call_foreground(
     app:App,sid:String,run_id:String,generation:String,name:String,args:Value,pending_id:String,
     policy_version:u64,cancel:CancellationToken,
-)->Result<Value> {
+)->Result<tools::outcome::Outcome> {
+    tools::outcome::capture(call_foreground_value(app,sid,run_id,generation,name,args,pending_id,policy_version,cancel)).await
+}
+async fn call_foreground_value(app:App,sid:String,run_id:String,generation:String,name:String,args:Value,pending_id:String,
+ policy_version:u64,cancel:CancellationToken)->Result<Value> {
     Box::pin(call_foreground_inner(app,sid,run_id,generation,name,args,pending_id,policy_version,cancel)).await
 }
 async fn call_foreground_inner(
