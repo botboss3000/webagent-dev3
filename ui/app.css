@@ -204,3 +204,29 @@ body.chat-resizing,body.chat-resizing *{cursor:col-resize!important;user-select:
    Keep its painted surface at the largest viewport height while #app resizes. */
 html { background: transparent !important; }
 body { min-height: 100vh; min-height: 100lvh; }
+
+/* Paint the full screen, but keep the shell's controls clear of system bars
+   and landscape cutouts. Insets are zero when the browser owns those areas.
+   This is a layout invariant; installed display mode stays standalone. */
+/* The v3 shell owns spacing; shared desktop body gutters would overflow it. */
+body { padding: 0; }
+:root {
+  --app-safe-top: env(safe-area-inset-top, 0px);
+  --app-safe-right: env(safe-area-inset-right, 0px);
+  --app-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --app-safe-left: env(safe-area-inset-left, 0px);
+}
+#app {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: var(--app-safe-top) var(--app-safe-right) var(--app-safe-bottom) var(--app-safe-left);
+}
+/* The keyboard covers the home-indicator region on browsers retaining its inset. */
+body.kb-open #app { padding-bottom: 0; }
+#notice { top: calc(12px + var(--app-safe-top)); max-width: calc(90vw - var(--app-safe-left) - var(--app-safe-right)); }
+body #app-restricted-overlay {
+  padding-top: max(clamp(24px, 6vw, 72px), var(--app-safe-top));
+  padding-right: max(20px, var(--app-safe-right));
+  padding-bottom: max(clamp(24px, 6vw, 72px), var(--app-safe-bottom));
+  padding-left: max(20px, var(--app-safe-left));
+}

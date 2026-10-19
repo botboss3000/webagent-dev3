@@ -1,0 +1,16 @@
+{
+  "id": "/app",
+  "name": "WebAgent",
+  "short_name": "WebAgent",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "icons": [
+    {
+      "src": "/ui/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
