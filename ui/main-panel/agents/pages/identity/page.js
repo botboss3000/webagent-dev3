@@ -65,7 +65,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   };
   if(agent.can_manage)await renderEmbedSettings(content,request,{agentId});
   renderSharedChat(content, agent, persist, request, {agentId});
-  await renderMainChat(content, request);
+  await renderMainChat(content, request, {agentId,canManage:agent.can_manage});
   renderCompaction(content, agent, persist);
   renderToolOutputPolicy(content, agent, persist);
   const title = document.createElement('h3'); title.textContent = 'Chat modes'; content.append(title);
