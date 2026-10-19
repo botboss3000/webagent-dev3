@@ -4852,7 +4852,7 @@ class Broker:
                     cap=executor_module.compiler_cap(args.get("compiler_memory_cap"),CONFIG.get("scheduler",{}))
                     if cap is None and self.resources.enabled:cap=CONFIG.get("scheduler",{}).get("compiler_memory_default_bytes",5*1024**3)
                     if args.get("compiler_memory_cap")is not None and (trusted.get("local_caller")is not True or not self.resources.enabled):raise PermissionError("Enforced compiler cap requires local operator")
-                    plugin_only=ui_only and any((path.startswith(ABILITY_ROOT) and path not in INDEX_METADATA_FILES) or generic_package_path(path,candidate) or generic_package_path(path,base_blob) or path.startswith("v3/config/") or path=="v3/src/agent_loop/tools/administrator-schemas.json" for path in changed)
+                    plugin_only=ui_only and not monitoring_component.only_paths(changed) and any((path.startswith(ABILITY_ROOT) and path not in INDEX_METADATA_FILES) or generic_package_path(path,candidate) or generic_package_path(path,base_blob) or path.startswith("v3/config/") or path=="v3/src/agent_loop/tools/administrator-schemas.json" for path in changed)
                     host_only = self.host_source_only(current_changed,candidate,trusted)
                     lease_until, fingerprint = self._incoming_lease(trusted)
                     job_id = str(uuid.uuid4())
@@ -5135,7 +5135,7 @@ class Broker:
         job["synchronization"] = self._sync_report(blob, blob, ())
         with self.lock:
             self._batch_lease(job)
-            job.update(status="completed", phase="finished", reason="Installed host service source published; application images unchanged" if job["operation"]=="host_service_deploy" else "Ability assets and packages published; application images unchanged" if job["operation"]=="plugin_deploy" else "UI assets served from frozen release",
+            job.update(status="completed", phase="finished", reason="Installed host service source published; application images unchanged" if job["operation"]=="host_service_deploy" else "Ability assets and packages published; application images unchanged" if job["operation"]=="plugin_deploy" else "Standalone monitoring artifact published; activation deferred" if monitoring_component.only_paths(job.get("changed_paths",[])) else "UI assets served from frozen release",
                        finished_at=time.time())
             job.setdefault("phase_history", []).append(
                 {"phase": "finished", "at": job["finished_at"]})

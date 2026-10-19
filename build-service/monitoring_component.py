@@ -12,6 +12,10 @@ def package_path(path):
     """Recognize only this registered source subtree; generated artifacts are never source."""
     return path.startswith(PREFIX)
 
+def only_paths(paths):
+    """A service-only artifact publication needs no model-callable ability runtime."""
+    return bool(paths)and all(package_path(path)for path in paths)
+
 def inventory(folder):
     """Confine compiler inputs and reject ambient Cargo configuration, links and generated output."""
     if folder.is_symlink()or not folder.is_dir():raise ValueError("Monitoring source directory required")
