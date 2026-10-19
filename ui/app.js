@@ -1,3 +1,4 @@
+import {createBackgroundIssues} from './shared/background-issues.js';
 // Port of V2 private-access shell; authentication remains exclusively V3.
 const privateResponse=await fetch('/v3-ui/private-access/private-access-page/private-access-page.html');
 if(!privateResponse.ok)throw Error('Private access page failed to load');
@@ -234,16 +235,18 @@ function updateMainPageState(){
 let csrf='',state={},poll;
 const ids=new Map();
 const keyId=key=>{if(!ids.has(key))ids.set(key,crypto.randomUUID());return ids.get(key);};
-let noticeSource='';
+let noticeSource='',actionNotice='',backgroundNotices=[];
+const paintNotices=()=>{$('notice').textContent=[actionNotice,...backgroundNotices].filter(Boolean).join(' · ');};
+const issues=createBackgroundIssues({request:(...args)=>api(...args),render:messages=>{backgroundNotices=messages;paintNotices();}});
 const note=(text,source='')=>{
   const visibleText=text==='Sign in required'?'':text;
-  $('notice').textContent=visibleText;
+  actionNotice=visibleText;paintNotices();
   noticeSource=visibleText?source:'';
 };
 const clearNoticeFrom=source=>{if(noticeSource===source)note('');};
 async function api(path,method='GET',body){const response=await fetch('/api/v3'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...(method==='GET'?{}:{'x-csrf-token':csrf})},...(body===undefined?{}:{body:JSON.stringify(body)})});const data=await response.json().catch(()=>({}));if(!response.ok){if(response.status===401&&path!=='/auth/login')out();const error=Error(data.error||data.message||'Request failed ('+response.status+')');error.status=response.status;throw error;}return data;}
 const guard=fn=>async event=>{event?.preventDefault();try{await fn(event);note('');}catch(error){note(error.message);}};
-const chat = await mountChatPanel({request:api, guard, note, clearNoticeFrom, keyId, forgetKey:key=>ids.delete(key), refresh, getState:()=>state, getAgentId:()=>agentId, getIdentity:()=>accountMe});
+const chat = await mountChatPanel({request:api, guard, note, clearNoticeFrom, issues, keyId, forgetKey:key=>ids.delete(key), refresh, getState:()=>state, getAgentId:()=>agentId, getIdentity:()=>accountMe});
 await loadMainPages();
 
 function disposeSessionsPage(){++sessionsGeneration;sessionsPage?.destroy();sessionsPage=null;$('tab-agents').classList.remove('sessions-view');}
@@ -256,7 +259,7 @@ async function showSessions(routeMode='push'){
   const generation=++sessionsGeneration;
   const mounted=await mountSessionsPage($('sessions-section'),{request:api,userId:accountMe?.user_id||accountMe?.user,roster:agentRoster,getSessionId:()=>chat.sessionId,isCurrent:()=>generation===sessionsGeneration&&sessionsScope&&activeMainPage==='agents',
     open:async id=>{await chat.open(id);if(mobileLayout.matches)showMobileView('chat');},
-    changed:()=>{window.dispatchEvent(new Event('v3:sessions-changed'));void chat.sessions().catch(error=>note(error.message));}});
+    changed:()=>{window.dispatchEvent(new Event('v3:sessions-changed'));void chat.sessions().catch(()=>{});}});
   if(generation===sessionsGeneration)sessionsPage=mounted;else mounted?.destroy();
 }
 // Agent pages resolve tenant authority independently; members see effective read-only abilities.
@@ -358,7 +361,7 @@ async function loadGuestPolicy(){try{const policy=await api('/auth/access-mode')
 $('guest-login').onclick=async()=>{const btn=$('guest-login');btn.disabled=true;try{const result=await api('/auth/guest-login','POST',{});csrf=result.csrf_token;await boot();}catch(error){$('registration-status').textContent=error.message;}finally{btn.disabled=false;}};
 // Authentication loss is a state transition, not a refresh event. Late 401s
 // must not reset an open sign-in form or recursively refresh identity consumers.
-function out(){if(document.body.classList.contains('app-restricted'))return;disposeSessionsPage();widget?.hide();accountMe=null;agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
+function out(){if(document.body.classList.contains('app-restricted'))return;issues.stop();disposeSessionsPage();widget?.hide();accountMe=null;agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
 async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;$('shutoff').querySelector('span').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}if(!$('rules').children.length)for(const [tool,rule]of Object.entries(state.policy?.rules||{})){const label=document.createElement('label');label.textContent=tool;const select=document.createElement('select');select.name=tool;for(const value of ['allow','deny','require_approval']){const option=document.createElement('option');option.value=value;option.textContent=value.replaceAll('_',' ');select.append(option);}select.value=rule;label.append(select);$('rules').append(label);}chat.runs(state.runs||[]);}
 // Explicit role administration replaces the legacy default-model form for every agent.
 async function boot(){
@@ -367,7 +370,7 @@ async function boot(){
   await initChatConfig().catch(() => {});
   if(await authorizeEmbedPopup({request:api,me}))return;
   widget?.configure();
-  renderAccount(me);
+  renderAccount(me);issues.start();
   window.dispatchEvent(new Event('v3-identity-changed'));
   privateVisible(false);
   $('app').hidden=false;
@@ -395,7 +398,7 @@ async function boot(){
   if(initialTab==='account')showAccountPanel('replace');
   window.__boot?.appReady();
   clearInterval(poll);
-  poll=setInterval(()=>refresh().then(()=>clearNoticeFrom('status-poll')).catch(error=>note(error.message,'status-poll')),3000);
+  poll=setInterval(()=>refresh().then(()=>issues.resolve('status_poll')).catch(error=>issues.fail('status_poll',error)),3000);
 }
 async function mountAgentModels(){
   selectionTable?.destroy();

@@ -20,5 +20,9 @@
     "retention_hours": 24,
     "max_snapshot_bytes": 16777216,
     "max_retained_bytes": 268435456
+  },
+  "background_issues": {
+    "enabled": true,
+    "show_toasts": true
   }
 }

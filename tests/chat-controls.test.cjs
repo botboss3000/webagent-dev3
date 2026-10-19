@@ -21,7 +21,7 @@ class Element {
   close(value=''){this.returnValue=value;this.open=false;this.emit('close');}
   emit(type,details={}){return Promise.all((this.listeners[type]||[]).map(fn=>fn({target:this,preventDefault(){},...details})));}
 }
-async function fixture(){
+async function fixture(issues){
   const nodes=new Map(['chat-mode-btn','chat-model-changer','chat-notifications'].map(id=>[id,new Element('button')]));
   nodes.get('chat-model-changer').name=new Element('span');
   const body=new Element(),document=new Element(),window=new Element();
@@ -42,7 +42,7 @@ async function fixture(){
   const notifications=notificationModule.namespace.mountChatNotifications({root:{querySelector:s=>nodes.get(s.slice(1))},guard:fn=>fn});
   const controls=module.namespace.mountSessionControls({root:{querySelector:s=>nodes.get(s.slice(1))},client,
     guard:fn=>async(...args)=>{try{return await fn(...args);}catch(e){errors.push(e.message);}},
-    notifications,note:()=>{},ensureSession:async()=>controls.open('created')});
+    notifications,issues,note:()=>{},ensureSession:async()=>controls.open('created')});
   return {controls,nodes,body,state,calls,errors,client};
 }
 const tick=()=>new Promise(setImmediate);
@@ -92,4 +92,10 @@ test('write failure reloads authoritative state and restores usable controls',as
   assert.equal(f.errors.length,1);assert.equal(f.nodes.get('chat-model-changer').disabled,false);
   assert.equal(f.nodes.get('chat-model-changer').name.textContent,'Standard · A');
   f.controls.destroy();
+});
+
+test('diagnostics does not let failed control refresh reuse cached state for a mode write',async()=>{
+ const logged=[];const f=await fixture({fail:(operation,error,session)=>logged.push({operation,message:error.message,session}),resolve(){}});await f.controls.open('session-a');
+ f.client.controls=async()=>{throw Error('Controls unavailable');};await f.nodes.get('chat-mode-btn').emit('click');
+ assert.equal(f.calls.filter(call=>call[0]==='mode').length,0);assert.deepEqual(f.errors,['Controls unavailable']);assert.deepEqual(logged,[{operation:'session_controls',message:'Controls unavailable',session:'session-a'}]);f.controls.destroy();
 });

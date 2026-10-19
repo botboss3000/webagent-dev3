@@ -1,7 +1,7 @@
 // @code-index {"version":1,"feature":"chat-run-controls","aliases":["chat footer","run controls","model selection"],"purpose":"Locates session-scoped execution-mode and next-turn model controls Control visibility/layout: data/config/chat.json -> chat_common.{active_footer,idle_footer}.chat_pill.controls.{mode,model_changer,stop,continue}; run state is session-owned. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/active_footer/chat_pill/controls","/chat_common/idle_footer/chat_pill/controls"],"profile_overrides":true}],"opportunities":[]}}
 // V2 cycle/picker presentation with session-scoped, revision-fenced Rust writes.
 /** Purpose: Mount execution-mode and model controls for the current conversation. The optional onState callback receives refreshed control data so panel.js can gate composer features. The panel drives open/updateRuns/disconnect/destroy; this module reads client.controls and writes client.mode/client.model. */
-export function mountSessionControls({root,client,guard,note,ensureSession,notifications,onState=()=>{},canWrite=()=>true}) {
+export function mountSessionControls({root,client,guard,note,issues,ensureSession,notifications,onState=()=>{},canWrite=()=>true}) {
     // Resolve controls within this chat root rather than the whole document.
   const $=id=>root.querySelector('#'+id);
   const mode=$('chat-mode-btn'), model=$('chat-model-changer');
@@ -35,8 +35,8 @@ export function mountSessionControls({root,client,guard,note,ensureSession,notif
     const sid=session,epoch=generation;
     const pending=client.controls(sid).then(data=>{
       if(sid!==session||epoch!==generation)return;
-      state=data;onState(data);paint();
-    }).catch(error=>{if(error.status===404){if(sid===session&&epoch===generation){state=null;onState(null);paint();}return;}throw error;}).finally(()=>{if(inflight===pending)inflight=null;});
+      state=data;onState(data);paint();issues?.resolve('session_controls',sid);
+    }).catch(error=>{if(sid!==session||epoch!==generation)return;if(issues)issues.fail('session_controls',error,sid);if(error.status===404){if(sid===session&&epoch===generation){state=null;onState(null);paint();}return;}throw error;}).finally(()=>{if(inflight===pending)inflight=null;});
     inflight=pending;
     return pending;
   }
@@ -124,7 +124,7 @@ export function mountSessionControls({root,client,guard,note,ensureSession,notif
         // Fence older requests, reset conversation state, clear pending mode confirmation, and load controls for the newly opened session.
     async open(id){generation++;session=id;state=null;inflight=null;active=null;busy=false;close();notifications.cancelMode();paint();await load();},
         // Track the current actionable run for display and refresh controls when the session is idle.
-    updateRuns(items){active=items.find(run=>['queued','running','waiting_approval','waiting_gate'].includes(run.status));paint();if(session&&!busy)void load().catch(error=>note(error.message));},
+    updateRuns(items){active=items.find(run=>['queued','running','waiting_approval','waiting_gate'].includes(run.status));paint();if(session&&!busy)void load().catch(error=>{if(!issues)note(error.message);});},
         // Invalidate pending loads and clear session, run, busy, picker, and confirmation state.
     disconnect(){generation++;session='';state=null;inflight=null;active=null;busy=false;close();notifications.cancelMode();paint();},
         // Disconnect session state, remove abort-scoped listeners, and remove the portal picker.

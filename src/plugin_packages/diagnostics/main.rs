@@ -56,13 +56,14 @@ async fn handle(mut stream: UnixStream, pool: SqlitePool, root: &Path) -> Result
                 Some("run") => c.categories.run,
                 Some("tool") => c.categories.tool,
                 Some("recovery") => c.categories.recovery,
+                Some("app_background") => c.background_issues.enabled,
                 _ => false,
             };
             if !allowed {
                 bail!("Category withdrawn")
             }
             if request["operation"] == "event" {
-                sqlx::query("INSERT INTO diagnostics(ts,category,run_id,session_id,payload) VALUES(?,?,?,?,?)").bind(now() as i64).bind(event["category"].as_str()).bind(event["run_id"].as_str()).bind(event["session_id"].as_str()).bind(event.to_string()).execute(&pool).await?;
+                sqlx::query("INSERT OR IGNORE INTO diagnostics(ts,category,run_id,session_id,payload) VALUES(?,?,?,?,?)").bind(now() as i64).bind(event["category"].as_str()).bind(event["run_id"].as_str()).bind(event["session_id"].as_str()).bind(event.to_string()).execute(&pool).await?;
             } else {
                 let size = request["bytes"]
                     .as_u64()
@@ -163,6 +164,7 @@ async fn open(root: &Path) -> anyhow::Result<SqlitePool> {
   "CREATE INDEX IF NOT EXISTS diagnostics_ts ON diagnostics(ts)",
   "CREATE INDEX IF NOT EXISTS diagnostics_run ON diagnostics(run_id,id)",
   "CREATE INDEX IF NOT EXISTS diagnostics_session ON diagnostics(session_id,id)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS diagnostics_background_event ON diagnostics(json_extract(payload,'$.issue_id'),json_extract(payload,'$.event')) WHERE category='app_background'",
   "CREATE TABLE IF NOT EXISTS context_snapshots(attempt_id TEXT PRIMARY KEY,ts INTEGER NOT NULL,expires_at INTEGER NOT NULL,session_id TEXT NOT NULL,run_id TEXT NOT NULL,bytes INTEGER NOT NULL,sealed BLOB NOT NULL)",
   "CREATE INDEX IF NOT EXISTS context_snapshots_age ON context_snapshots(ts)",
   "CREATE TABLE IF NOT EXISTS diagnostic_processes(role TEXT PRIMARY KEY,ts INTEGER NOT NULL,payload TEXT NOT NULL)",
@@ -224,5 +226,43 @@ mod tests {
         let task = tokio::spawn(async move { handle(server, p, &path).await });
         client.write_u32(136 * 1024 * 1024 + 1).await.unwrap();
         assert!(task.await.unwrap().is_err());
+    }
+
+    async fn submit_background(pool: &SqlitePool, root: &Path, digest: &str, event: &str) -> bool {
+        let (mut client,server)=UnixStream::pair().unwrap();
+        let p=pool.clone();let path=root.to_path_buf();
+        let task=tokio::spawn(async move {handle(server,p,&path).await});
+        let bytes=serde_json::to_vec(&serde_json::json!({"version":1,"operation":"event","event":{
+            "owner":"admin","category":"app_background","config_digest":digest,"issue_id":"retry-fixture","event":event
+        }})).unwrap();
+        client.write_u32(bytes.len() as u32).await.unwrap();
+        client.write_all(&bytes).await.unwrap();
+        let accepted=task.await.unwrap().is_ok();
+        if accepted {assert_eq!(client.read_u8().await.unwrap(),1);}
+        accepted
+    }
+    #[tokio::test]
+    async fn background_protocol_is_retry_safe_and_visibility_independent() {
+        let root=tempfile::tempdir().unwrap();
+        let pool=open(root.path()).await.unwrap();
+        let mut c=config::Config::disabled();c.enabled=true;c.background_issues.show_toasts=false;
+        let path=root.path().join("diagnostics.json");
+        std::fs::write(&path,serde_json::to_vec(&c).unwrap()).unwrap();
+        let (_,digest)=config::Config::read(&path).unwrap();
+        for event in ["issue_opened","issue_opened","issue_resolved","issue_resolved"] {
+            assert!(submit_background(&pool,root.path(),&digest,event).await);
+        }
+        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM diagnostics WHERE category='app_background'").fetch_one(&pool).await.unwrap();
+        assert_eq!(count,2);
+        assert!(!submit_background(&pool,root.path(),"stale-digest","issue_opened").await);
+        c.enabled=false;std::fs::write(&path,serde_json::to_vec(&c).unwrap()).unwrap();
+        let (_,digest)=config::Config::read(&path).unwrap();
+        assert!(!submit_background(&pool,root.path(),&digest,"issue_opened").await);
+        c.enabled=true;c.background_issues.enabled=false;
+        std::fs::write(&path,serde_json::to_vec(&c).unwrap()).unwrap();
+        let (_,digest)=config::Config::read(&path).unwrap();
+        assert!(!submit_background(&pool,root.path(),&digest,"issue_opened").await);
+        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM diagnostics").fetch_one(&pool).await.unwrap();
+        assert_eq!(count,2);
     }
 }

@@ -9,7 +9,7 @@ import { createAdministratorNotices } from './administrator-notices.js';
  * Errors from the initial session request propagate; stream recovery retries are bounded.
  */
 // @code-index {"version":1,"feature":"chat-transport-recovery","aliases":["chat client","chat event stream","session transport recovery"],"purpose":"Locates the v3 chat transport and sequence-based stream recovery","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider bounded retry timing and backoff configuration; preserve recovery and publication invariants."]}}
-export function createChatClient({request, note, clearNoticeFrom = () => {}, createStream, EventSourceClass = EventSource,
+export function createChatClient({request, note, issues, clearNoticeFrom = () => {}, createStream, EventSourceClass = EventSource,
   setTimeoutFn = globalThis.setTimeout, clearTimeoutFn = globalThis.clearTimeout}) {
   const administratorNotices = createAdministratorNotices({ request });
   let source = null, epoch = 0, current = null;
@@ -64,12 +64,13 @@ export function createChatClient({request, note, clearNoticeFrom = () => {}, cre
           state.snapshotChanged(data);
         } while (state.again && valid(state));
         state.failures = 0;
-        clearNoticeFrom('chat-sync');
-      } catch {
+        if(issues)issues.resolve('chat_sync',state.id);else clearNoticeFrom('chat-sync');
+      } catch(error) {
         if (!valid(state)) return;
+        issues?.fail('chat_sync',error,state.id);
         if (++state.failures <= 3) {
           state.retry = setTimeoutFn(() => {state.retry = null; void recover(state);}, 1000 * 2 ** (state.failures-1));
-        } else note("Couldn't sync chat history", 'chat-sync');
+        } else if(!issues)note("Couldn't sync chat history", 'chat-sync');
       } finally { state.inFlight = null; }
     })();
     return state.inFlight;

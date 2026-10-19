@@ -44,7 +44,7 @@ test('other session completion does not fetch current snapshot',async()=>{
 test('transcript inserts recovered gaps in order without replacing existing rows',()=>{
  const source=fs.readFileSync(path.join(__dirname,'panel.js'),'utf8'),code=source.slice(source.indexOf('function message(item)'),source.indexOf('// Base presentation'));
  const children=[],target={children,insertBefore(row,before){const index=children.indexOf(before);children.splice(index<0?children.length:index,0,row);}};
- const context=vm.createContext({$:()=>target,createMessage:item=>({dataset:{publicId:item.id,seq:String(item.seq)}}),resolveAsset:undefined,gutterRuns:new Map(),client:{},session:'a',historyLastSeq:0,historyAction(){},note(){},stats:{},readObserver:{observe(){}},paintActivity(){},updateAdmission(){}});
+ const context=vm.createContext({$:()=>target,createMessage:item=>({dataset:{publicId:item.id,seq:String(item.seq)}}),resolveAsset:undefined,gutterRuns:new Map(),client:{},issues:null,session:'a',historyLastSeq:0,historyAction(){},note(){},stats:{},readObserver:{observe(){}},paintActivity(){},updateAdmission(){}});
  vm.runInContext(code,context);for(const seq of [9,5,9,2])context.message(msg(seq));assert.deepEqual(children.map(x=>Number(x.dataset.seq)),[2,5,9]);assert.equal(context.historyLastSeq,9);
 });
 
@@ -72,4 +72,22 @@ test('panel snapshot merge refuses different history revisions and other session
  const context=vm.createContext({session:'a',historyRevision:2,historyLastSeq:4,historyChanged:s=>changes.push(s),message:item=>published.push(item),followups:{update:data=>updates.push(data)},runs(){}});vm.runInContext(code,context);
  assert.equal(context.syncSnapshot({session:{id:'a',history_revision:1},messages:[msg(8)]}),false);assert.equal(context.syncSnapshot({session:{id:'b',history_revision:2},messages:[msg(9)]}),false);assert.equal(published.length,0);assert.equal(updates.length,0);
  assert.equal(context.syncSnapshot({session:{id:'a',history_revision:2},last_seq:7,messages:[msg(7)],queue:[]}),true);assert.equal(context.historyLastSeq,7);assert.equal(published.length,1);assert.equal(updates.length,1);
+});
+
+test('actual activity render failure stays open through message and resolves on successful render',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'panel.js'),'utf8');
+ const paint=source.slice(source.indexOf('const paintActivity='),source.indexOf('  const client = createChatClient'));
+ const message=source.slice(source.indexOf('function message(item)'),source.indexOf('// Base presentation'));
+ const children=[],target={children,insertBefore(row){children.push(row);}};let broken=true;const active=new Set(),events=[];
+ const context=vm.createContext({$:()=>target,activity:{render(){if(broken)throw Error('render failed');}},activityRuns:[],createMessage:item=>({dataset:{publicId:item.id,seq:String(item.seq)}}),resolveAsset:undefined,gutterRuns:new Map(),client:{},issues:{fail(operation){active.add(operation);events.push('opened');},resolve(operation){if(active.delete(operation))events.push('resolved');}},session:'a',historyLastSeq:0,historyAction(){},note(){},stats:{},readObserver:{observe(){}},updateAdmission(){}});
+ vm.runInContext(paint+message+';this.paint=paintActivity;',context);context.message(msg(1));assert.deepEqual([...active],['activity_display']);assert.deepEqual(events,['opened']);broken=false;context.paint();assert.deepEqual([...active],[]);assert.deepEqual(events,['opened','resolved']);
+});
+
+test('background history reopen reports matching recovery and ignores a superseded response',async()=>{
+ const source=fs.readFileSync(path.join(__dirname,'panel.js'),'utf8'),code=source.slice(source.indexOf('async function reopenHistory('),source.indexOf('/** Rewinds rebuild'));
+ const events=[],pending=[];const context=vm.createContext({session:'a',sessionGeneration:0,issues:{fail:(operation,error,id)=>events.push(['failed',id]),resolve:(operation,id)=>events.push(['resolved',id])},note(){}});
+ context.open=()=>{context.sessionGeneration++;return new Promise((resolve,reject)=>pending.push({resolve,reject}));};vm.runInContext(code,context);
+ const first=context.reopenHistory('a');pending[0].reject(Error('offline'));await first;assert.deepEqual(events,[['failed','a']]);
+ const stale=context.reopenHistory('a');context.session='b';context.sessionGeneration++;pending[1].resolve();await stale;assert.deepEqual(events,[['failed','a']]);
+ context.session='a';const recovery=context.reopenHistory('a');pending[2].resolve();await recovery;assert.deepEqual(events,[['failed','a'],['resolved','a']]);
 });

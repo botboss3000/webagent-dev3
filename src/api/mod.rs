@@ -111,6 +111,7 @@ pub(super) fn router(app: App) -> Router {
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth));
     // Model handlers enforce tenant authority themselves; all retain browser auth and CSRF.
     let api = Router::new()
+        .merge(diagnostics::background_router())
         .route("/modules/{id}/assets/{asset}",get(crate::ui_pages::module_asset))
         .route("/modules/{id}/status",get(crate::modules::status_api))
         .route("/modules/{id}/call",post(crate::modules::call_api))

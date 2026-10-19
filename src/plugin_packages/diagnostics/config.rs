@@ -12,6 +12,23 @@ pub(crate) struct Config {
     pub assembly_successes: bool,
     pub retention: Retention,
     pub full_context: FullContext,
+    #[serde(default)]
+    pub background_issues: BackgroundIssues,
+}
+/// Background capture is independently selectable; toast visibility never disables logging.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BackgroundIssues {
+    pub enabled: bool,
+    pub show_toasts: bool,
+}
+impl Default for BackgroundIssues {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            show_toasts: true,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -99,3 +99,6 @@ impl crate::Store {
         Ok(())
     }
 }
+
+#[cfg(not(diagnostics_plugin))]
+pub(crate) fn background_router() -> axum::Router<crate::App> { axum::Router::new() }

@@ -1,6 +1,7 @@
 //! Admin-only evidence. No global server/HTTP content or public-user events.
 mod bridge;
 mod config;
+mod background;
 #[cfg(test)]
 mod tests;
 use crate::{context_assembly::Prepared, context_input::Request, Store};
@@ -82,6 +83,11 @@ fn settings() -> Option<Settings> {
     RECORDER.get()?.settings.read().ok().map(|s| s.clone())
 }
 fn permits(settings: &Settings, category: &str) -> bool {
+    if category == "app_background" {
+        return settings.error.is_none()
+            && settings.config.active()
+            && settings.config.background_issues.enabled;
+    }
     settings.error.is_none()
         && settings.config.active()
         && match category {
@@ -694,7 +700,7 @@ fn status_value(r: &Recorder) -> Value {
         error: Some("configuration_lock_unavailable"),
     });
     json!({"role":r.role,"capture_scope":"fixed_admin","enabled":s.config.active() && bridge::available(),"plugin_available":bridge::available(),"config_digest":s.digest,"configuration_error":s.error,
-  "categories":s.config.categories,"assembly_successes":s.config.assembly_successes,"full_context":s.config.full_context,
+  "background_issues":s.config.background_issues,"categories":s.config.categories,"assembly_successes":s.config.assembly_successes,"full_context":s.config.full_context,
   "retention":s.config.retention,"queue_depth":r.tx.max_capacity()-r.tx.capacity(),
   "snapshot_queue_depth":r.snapshots.max_capacity()-r.snapshots.capacity(),"snapshot_queue_estimated_bytes":SNAPSHOT_QUEUE_BYTES-r.budget.available_permits(),
   "dropped":r.dropped.load(Ordering::Relaxed),"write_errors":r.write_errors.load(Ordering::Relaxed),"skipped_snapshots":r.skipped.load(Ordering::Relaxed)})
@@ -741,7 +747,7 @@ async fn read(
     if filter.category.as_deref().is_some_and(|c| {
         !matches!(
             c,
-            "provider" | "context_assembly" | "run" | "tool" | "recovery"
+            "provider" | "context_assembly" | "run" | "tool" | "recovery" | "app_background"
         )
     }) || filter
         .level
@@ -866,4 +872,9 @@ pub(crate) fn router() -> Router<crate::App> {
         .route("/admin/diagnostics", get(read))
         .route("/admin/diagnostics/status", get(status))
         .layer(axum::middleware::map_response(no_store))
+}
+
+/// Browser-authenticated diagnostics routes; caller identity is supplied by core middleware.
+pub(crate) fn background_router() -> Router<crate::App> {
+    background::router()
 }

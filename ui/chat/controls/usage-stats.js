@@ -7,7 +7,7 @@ export function formatCount(value) {
     : value >= 1000 ? (value / 1000).toFixed(1) + 'k' : String(value);
 }
 /** Purpose: Mount the stats strip and context panel from server-reported usage and measured dispatch data. Generation checks prevent stale session responses from replacing current values. panel.js drives open/refresh/show/disconnect/destroy; this module reads client.usage/contextConfig and writes saveContextConfig. */
-export function mountUsageStats({root,client,note}) {
+export function mountUsageStats({root,client,note,issues}) {
     // Resolve statistics controls inside the supplied chat root.
   const $ = id => root.querySelector('#' + id);
   const anchor = $('chat-pill-stats'), abort = new AbortController();
@@ -130,8 +130,8 @@ export function mountUsageStats({root,client,note}) {
     const sid=session,epoch=generation;
     const request=client.usage(sid).then(value=>{
       if(sid!==session || epoch!==generation)return;
-      data=value;lastLoad=Date.now();paint();
-    }).catch(error=>{if(sid===session&&epoch===generation)note('Usage unavailable: '+error.message);})
+      data=value;lastLoad=Date.now();paint();issues?.resolve('usage',sid);
+    }).catch(error=>{if(sid===session&&epoch===generation)issues?issues.fail('usage',error,sid):note('Usage unavailable: '+error.message);})
       .finally(()=>{if(pending===request)pending=null;});
     pending=request;return request;
   }
