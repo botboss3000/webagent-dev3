@@ -1,16 +1,15 @@
+import {createSettingsRow} from './settings-row.js';
 'use strict';
 // Agent-local closing style. Rust retains the fixed flag and notification contract.
 export function renderClosing(content, agent, persist) {
   const settings = agent.closing_message;
   if (!settings) return;
-  const section = document.createElement('section');
-  section.className = 'agent-closing-message-settings';
-  const title = document.createElement('h3');
-  title.textContent = 'Final response';
+  const {body:section} = createSettingsRow(content, {id:'final-response', title:'Final response'});
+  section.classList.add('agent-closing-message-settings');
   const hint = document.createElement('p');
   hint.className = 'ac-hint';
   hint.textContent = 'The agent chooses a completion flag and a short private notification when it finishes. The final reply is promoted automatically. Notification guidance is optional.';
-  section.append(title, hint);
+  section.append(hint);
   const list = document.createElement('div');
   list.className = 'ac-list agent-closing-message-list';
   section.append(list);
@@ -76,5 +75,4 @@ export function renderClosing(content, agent, persist) {
     row.append(label, save, status);
     list.append(row);
   }
-  content.append(section);
 }

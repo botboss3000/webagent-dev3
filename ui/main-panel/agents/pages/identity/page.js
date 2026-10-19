@@ -1,3 +1,4 @@
+import {createSettingsRow} from './settings-row.js';
 import {renderMainChat} from './main-chat.js';
 
 'use strict';
@@ -68,17 +69,17 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   await renderMainChat(content, request, {agentId,canManage:agent.can_manage});
   renderCompaction(content, agent, persist);
   renderToolOutputPolicy(content, agent, persist);
-  const title = document.createElement('h3'); title.textContent = 'Chat modes'; content.append(title);
+  const {body:modeBody}=createSettingsRow(content,{id:'chat-modes',title:'Chat modes'});
   const hint = document.createElement('p'); hint.className = 'ac-hint';
-  hint.textContent = 'Default mode applies to new conversations. Read-only modes cannot execute mutating tools. Each mode adds its own instruction before model calls; existing permissions and approvals still apply.'; content.append(hint);
+  hint.textContent = 'Default mode applies to new conversations. Read-only modes cannot execute mutating tools. Each mode adds its own instruction before model calls; existing permissions and approvals still apply.'; modeBody.append(hint);
   let modes = structuredClone(agent.execution_modes);
   const defaultLabel = document.createElement('label'); defaultLabel.className = 'ac-label'; defaultLabel.textContent = 'Default mode';
   const select = document.createElement('select'); select.className = 'ac-input'; select.dataset.field = 'default_execution_mode'; select.disabled = !agent.can_manage;
   const notice = document.createElement('p'); notice.className = 'ac-hint'; notice.setAttribute('role','status');
   const fill = () => { select.replaceChildren(); modes.filter(m=>!m._deleted&&!m._new).forEach(m=>{ const option=document.createElement('option'); option.value=m.id; option.textContent=m.label; select.append(option); }); select.value=agent.default_execution_mode; };
-  fill(); defaultLabel.append(select); content.append(defaultLabel,notice);
+  fill(); defaultLabel.append(select); modeBody.append(defaultLabel,notice);
   select.addEventListener('change',async()=>{select.disabled=true;try {await persist({default_execution_mode:select.value});notice.textContent='Default mode saved';} catch(error){notice.textContent='Save failed: '+error.message;} finally {fill();select.disabled=!agent.can_manage;} });
-  const editor=document.createElement('div'); editor.style.cssText='display:flex;flex-direction:column;gap:8px;padding:10px 0';content.append(editor);
+  const editor=document.createElement('div'); editor.style.cssText='display:flex;flex-direction:column;gap:8px;padding:10px 0';modeBody.append(editor);
   const renderModes=()=>{
     editor.replaceChildren();
     modes.forEach(mode=>{

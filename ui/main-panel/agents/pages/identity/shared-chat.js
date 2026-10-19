@@ -1,6 +1,7 @@
+import {createSettingsRow} from './settings-row.js';
 // Shared-chat policy uses Identity's serialized, revision-fenced persistence.
 export function renderSharedChat(host,agent,persist,request,{agentId}) {
-  const section=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Shared conversations';section.append(summary);host.append(section);
+  const {body:section}=createSettingsRow(host,{id:'shared-conversations',title:'Shared conversations'});
   const hint=document.createElement('p');hint.className='ac-hint';hint.textContent='Policies apply immediately to all chats. Joined users see the whole transcript. The initial agent state applies only to new chats. Viewing is silent and read-only; joining is announced.';section.append(hint);
   const form=document.createElement('form');section.append(form);
   const fields={};
