@@ -281,8 +281,12 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     menu.append(rowList);
     const source = status === 'active' ? items : binItems;
     const rows = query.trim() ? hits.map(hit => ({item:source.find(s => s.id === hit.session_id),hit})).filter(r => r.item) : source.map(item => ({item}));
-    // Float canonical Main Chat without changing the server's pinned/recent or search order.
-    if (status === 'active') rows.sort((a,b) => Number(b.item.main_chat === true) - Number(a.item.main_chat === true));
+    // Rank Main Chats by activity; preserve supplied pinned/ordinary and search order below them.
+    if (status === 'active') rows.sort((a,b) => {
+      const am=a.item.main_chat===true,bm=b.item.main_chat===true;
+      if(am!==bm)return am?-1:1;
+      return am?(b.item.last_active_at||0)-(a.item.last_active_at||0)||String(a.item.id).localeCompare(String(b.item.id)):0;
+    });
     for (const {item,hit} of rows) {
       const row = document.createElement('div'); row.className = 'session-row' + (item.id === selected ? ' selected' : '') + (item.pinned ? ' pinned' : '') + (status === 'recycled' ? ' recycled' : '');
       row.dataset.id = item.id; row.dataset.agent = item.agent_id; row.tabIndex = 0;

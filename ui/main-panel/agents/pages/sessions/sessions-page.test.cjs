@@ -11,3 +11,10 @@ test('Main Chat precedes pins independently of name, pin state and activity; ord
  assert.deepEqual(rows.slice().sort(compareSessionsByPinnedOrder).map(r=>r.id),['main','pin-new','pin-old','recent','old']);
  rows[2].pinned=true;assert.equal(rows.slice().sort(compareSessionsByPinnedOrder)[0].id,'main');
 });
+
+test('multiple Main Chats use activity and stable ID ties independently of pin flags and bin rows',async()=>{
+ const {compareSessionsByPinnedOrder}=await modulePromise;
+ const rows=[{id:'main-old',main_chat:true,pinned:true,last_active_at:1},{id:'ordinary-new',last_active_at:1000},{id:'main-z',main_chat:true,last_active_at:9},{id:'pin',pinned:true,last_active_at:50},{id:'main-a',main_chat:true,last_active_at:9},{id:'bin',main_chat:true,pinned:true,_origin:'bin',last_active_at:2}];
+ assert.deepEqual(rows.slice().sort(compareSessionsByPinnedOrder).map(r=>r.id),['main-a','main-z','main-old','pin','ordinary-new','bin']);
+ assert.deepEqual(rows.map(r=>r.id),['main-old','ordinary-new','main-z','pin','main-a','bin']);
+});

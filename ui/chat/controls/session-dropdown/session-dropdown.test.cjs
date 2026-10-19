@@ -93,9 +93,9 @@ test('renamed Main Chat keeps rename and hides delete across trigger, menu and b
 for (const mobile of [false,true]) test(`Main Chat outranks pins and keeps a wavy halo after rename and selection (${mobile?'mobile':'desktop'})`,async t=>{
  const p=await fixture(t,{mobile});await p.evaluate(()=>{
   window.fixtureSelected='main';
-  items=[{...items[0],id:'pin',pinned:true,last_active_at:900},{...items[1],id:'recent',title:'Main Chat',last_active_at:999},{...items[2],id:'main',title:'Renamed coordinator',main_chat:true,last_active_at:1}];list.update(items,'main');
+  items=[{...items[0],id:'pin',pinned:true,last_active_at:900},{...items[1],id:'recent',title:'Main Chat',last_active_at:999},{...items[2],id:'main',title:'Renamed coordinator',agent_id:'one',main_chat:true,pinned:true,last_active_at:1},{...items[3],id:'main-new',title:'Second agent coordinator',agent_id:'two',main_chat:true,last_active_at:8}];list.update(items,'main');
  });await openList(p);
- assert.deepEqual(await p.locator('.session-dropdown-rows .session-row').evaluateAll(rows=>rows.map(r=>r.dataset.id)),['main','pin','recent']);
+ assert.deepEqual(await p.locator('.session-dropdown-rows .session-row').evaluateAll(rows=>rows.map(r=>r.dataset.id)),['main-new','main','pin','recent']);
  for(const light of [false,true]){
   await p.evaluate(light=>document.body.classList.toggle('light-mode',light),light);
   const ring=await p.locator('[data-id="main"] .session-row-agent-icon').evaluate(n=>{const s=getComputedStyle(n,'::after');return {mask:s.maskImage||s.webkitMaskImage,width:s.width,height:s.height,pointer:s.pointerEvents,background:s.backgroundColor};});

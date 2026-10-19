@@ -605,6 +605,8 @@ function _applySort(sessions) {
     const am = a.main_chat === true && a._origin !== 'bin';
     const bm = b.main_chat === true && b._origin !== 'bin';
     if (am !== bm) return am ? -1 : 1;
+    // Main Chats keep their own recent-activity order even under an explicit column sort.
+    if (am && bm) return compareSessionsByPinnedOrder(a, b);
     // An explicit column sort still floats pinned sessions first — but a binned row
     // loses that pinned ordering status (the pin flag stays set so restore brings it
     // back): bin rows sort purely by the chosen column.

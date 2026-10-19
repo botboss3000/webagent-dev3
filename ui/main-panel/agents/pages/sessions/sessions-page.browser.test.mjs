@@ -59,13 +59,13 @@ let browser;try{
   const host=document.getElementById('sessions-section');host.innerHTML=await(await fetch('/ui/main-panel/agents/pages/sessions/sessions.html')).text();
   const {mountSessions}=await import('/ui/main-panel/agents/pages/sessions/js/sessions-page.js');
   const main={id:'main-protected',title:'Renamed coordinator',agent_id:'one',status:'active',metadata_revision:3,main_chat:true,can_delete:false,message_count:0};
-  window.protectedPage=mountSessions(host,{request:async()=>({sessions:[{...main,id:'pin',main_chat:false,can_delete:true,pinned:true,title:'A pinned',last_active_at:900},{...main,id:'recent',main_chat:false,can_delete:true,title:'Main Chat',last_active_at:999},main],next_offset:null}),userId:'protected-fixture',roster:[{id:'one',name:'One'}],getSessionId:()=>null,open:()=>{},changed:()=>{}});
+  window.protectedPage=mountSessions(host,{request:async()=>({sessions:[{...main,id:'pin',main_chat:false,can_delete:true,pinned:true,title:'A pinned',last_active_at:900},{...main,id:'recent',main_chat:false,can_delete:true,title:'Main Chat',last_active_at:999},main,{...main,id:'main-other',agent_id:'two',title:'Z another agent',last_active_at:100}],next_offset:null}),userId:'protected-fixture',roster:[{id:'one',name:'One'}],getSessionId:()=>null,open:()=>{},changed:()=>{}});
   const {createSessionAdapter}=await import('/ui/main-panel/agents/pages/sessions/js/adapter.js');let writes=0;const adapter=createSessionAdapter({request:async()=>{writes++;},roster:[],userId:'protected',changed:()=>{}});adapter.project(main);let blocked=false;try{await adapter.mutate(main.id,'recycle');}catch(error){blocked=error.message.includes('cannot be deleted');}window.protectedResult={blocked,writes};
  });
  await page.locator('tr[data-session-id="main-protected"]').waitFor();
- assert.deepEqual(await page.locator('#sessions-table-body tr[data-session-id]').evaluateAll(rows=>rows.map(r=>r.dataset.sessionId)),['main-protected','pin','recent']);
+ assert.deepEqual(await page.locator('#sessions-table-body tr[data-session-id]').evaluateAll(rows=>rows.map(r=>r.dataset.sessionId)),['main-other','main-protected','pin','recent']);
  await page.locator('th[data-sort-key="title"]').click();
- assert.deepEqual(await page.locator('#sessions-table-body tr[data-session-id]').evaluateAll(rows=>rows.map(r=>r.dataset.sessionId)),['main-protected','pin','recent']);
+ assert.deepEqual(await page.locator('#sessions-table-body tr[data-session-id]').evaluateAll(rows=>rows.map(r=>r.dataset.sessionId)),['main-other','main-protected','pin','recent']);
  assert.equal(await page.locator('tr[data-session-id="main-protected"] .session-row-agent-main').count(),1);
  assert.equal(await page.locator('tr[data-session-id="pin"] .sess-title-agent-warning').count(),1);
  const mask=await page.locator('tr[data-session-id="main-protected"] .session-row-agent-main').evaluate(n=>getComputedStyle(n,'::after').maskImage);assert.match(mask,/data:image\/svg\+xml/);
