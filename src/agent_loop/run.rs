@@ -701,14 +701,6 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                     loop_runtime::Config::read(&app.runtime_path)?.context
                         .ceiling(&system_selection)?.min(workflow_policy.max_context_bytes));
             }
-            // The worker may return more than a model or summarizer can accept.
-            // Preserve the encrypted tool interaction and bound only provider replay.
-            if context_compaction::project_tool_results(
-                run["input"].as_array_mut().unwrap(), compaction_config.tool_result_preview_bytes)?
-            {
-                context_accounting.reset();
-                app.save(&mut run).await?;
-            }
             // Project replay only: retain the original journal/input and live policy authority.
             let retention_policy=match crate::tool_output::effective(&app.store,&agent_id).await {
                 Ok(policy)=>policy,
@@ -729,7 +721,10 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                     source:"native_context_policy".into(),lifetime:context_input::Lifetime::Call,
                     content:retention_prompts.guidance.clone(),turn:run["turns"].as_u64().unwrap_or(0),call:call_number});
             }
-            let retention_input=crate::tool_output::project(&run,&retention_policy,&retention_prompts.placeholder)?;
+            let retention_input=match crate::tool_output::dedup_prepare(&app,&mut run,compaction_config.tool_result_preview_bytes,&cancel).await {
+                Ok(input)=>Some(input),
+                Err(error)=>{crate::tool_output::pause_dedup(&app,&mut run,&error).await?;return Ok(());}
+            };
             if retention_input.is_some() {context_accounting.reset();}
             let capability=match crate::context_assets::prepare_capability(&app,&run,&gate_schemas,guidance_blocks,menu,&assembled_asset_key,&cancel).await {
                 Ok(value)=>value,Err(_)=>{pause_context_preparation(&app,&mut run).await?;return Ok(());}
@@ -823,7 +818,8 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                     }
                 };
                 let selection=provider::ProviderSelection::parse(&system_run["provider_selection"],DEFAULT_AGENT_MODEL)?;
-                let prompt = match compaction_config.prompt(&plan) {
+                let summary_source=crate::tool_output::dedup_summary_source(&app,&run,&plan.source).await?;
+                let prompt = match compaction_config.prompt_source(&summary_source,true) {
                     Ok(prompt) => prompt,
                     Err(_) => {
                         run["status"] = json!("paused");
@@ -992,6 +988,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                 // event and session checkpoint under its existing ownership fences.
                 // Original interactions stay intact; continue reassembles before dispatch.
                 run["input"] = json!(compacted);
+                run["tool_result_projection"]["rebase"]=json!(true);
                 context_accounting.reset();
                 run["compactions"] = json!(run["compactions"].as_u64().unwrap_or(0) + 1);
                 run["manual_compaction_requested"] = json!(false);
@@ -1106,7 +1103,8 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                 continue;
             }
             crate::tool_output::advance(&mut current)?;
-            if crate::tool_output::effective(&app.store,&agent_id).await?!=retention_policy
+            if match crate::tool_output::dedup_config_fingerprint(&app,&agent_id,&sid).await {Ok(value)=>current["tool_result_projection"]["config_fingerprint"]!=value,Err(_)=>true}
+                || crate::tool_output::effective(&app.store,&agent_id).await?!=retention_policy
                 || crate::tool_output::Prompts::read_at(&app.store.root,app.abilities.source_root())?!=retention_prompts {
                 drop(sender);drop(dispatch_guard);let _=collector.await;continue;
             }

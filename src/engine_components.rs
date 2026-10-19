@@ -115,7 +115,7 @@ pub(crate) fn load(root:&std::path::Path,revision:&str)->Result<Catalog>{
 /// Immutable snapshots reject malformed revisions while deliberate absence is valid removal.
 pub(crate) fn catalog()->Result<Arc<Catalog>>{
  let Some(root)=live_assets::published_root() else {
-  let descriptor:Descriptor=serde_json::from_value(json!({"schema_version":1,"id":"context-assembly","group":"engine-loop","interface_version":2,"implementation_version":"0.2.0","operation":"context.prepare","modes":["live","linked"],"runtime_requirements":[],"build":{"package":"webagent-context-service","source_inputs":["crates/context-service","crates/context-assembly","crates/context-contracts","Cargo.toml","Cargo.lock","config/context-compaction.json"],"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/webagent-context-service","limits":{"max_request_bytes":16777216,"max_response_bytes":16777216,"timeout_ms":30000,"max_concurrency":1}}))?;
+  let descriptor:Descriptor=serde_json::from_value(json!({"schema_version":1,"id":"context-assembly","group":"engine-loop","interface_version":2,"implementation_version":"0.2.1","operation":"context.prepare","modes":["live","linked"],"runtime_requirements":[],"build":{"package":"webagent-context-service","source_inputs":["crates/context-service","crates/context-assembly","crates/context-contracts","Cargo.toml","Cargo.lock","config/context-compaction.json"],"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/webagent-context-service","limits":{"max_request_bytes":16777216,"max_response_bytes":16777216,"timeout_ms":30000,"max_concurrency":1}}))?;
   descriptor.validate()?;
   let mut embedded=Catalog{revision:"embedded".into(),root:None,entries:BTreeMap::from([(CONTEXT.into(),descriptor),(BACKGROUND.into(),serde_json::from_value(json!({"schema_version":1,"id":"background-dispatch","group":"engine-loop","interface_version":2,"implementation_version":"0.2.0","operation":"background.plan","modes":["live","linked"],"runtime_requirements":[],"build":{"package":"webagent-background-service","source_inputs":["crates/background-service","crates/background-dispatch","crates/background-contracts","crates/engine-service","Cargo.toml","Cargo.lock"],"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/webagent-background-service","limits":{"max_request_bytes":65536,"max_response_bytes":65536,"timeout_ms":1000,"max_concurrency":1}}))?)]),withdrawn:Default::default()};
   for operation in ["assets.plan","capability.prepare","provider.project"] {
@@ -362,7 +362,7 @@ fn smoke_service(package:&str)->Result<Service> {
 /// Read proof identity from captured descriptors without linking replaceable implementations.
 #[cfg(any(feature="live-context",test))]
 fn smoke_implementation(root:&std::path::Path,id:&str)->Result<String> {
- if !matches!(id,ASSETS|CAPABILITY|PROJECTION){anyhow::bail!("Offline component identity");}
+ if !matches!(id,CONTEXT|ASSETS|CAPABILITY|PROJECTION){anyhow::bail!("Offline component identity");}
  let path=root.join("plugins/engine").join(id).join("component.json");
  let info=std::fs::symlink_metadata(&path)?;
  if !info.is_file()||info.file_type().is_symlink()||info.len()>65536{anyhow::bail!("Offline descriptor identity");}
@@ -519,6 +519,22 @@ pub(crate) async fn context_smoke()->Result<Value> {
   if !matches!(prepared,PreparedResult::Ready{..}){anyhow::bail!("Offline smoke unexpectedly compacted");}
   cases.push(serde_json::to_value(prepared)?);
  }
+ use webagent_context_contracts::tool_results as duplicate;
+ let body="public identical output ".repeat(100);
+ let observations=["first","second","third"].into_iter().map(|id|duplicate::Observation{
+  call_id:id.into(),tool:"file_read".into(),inputs:json!({"path":"public.rs"}),scope:json!({"session":"offline"}),
+  output:body.clone(),success:true,included:true}).collect();
+ let duplicate_request=duplicate::Request{version:1,observations,state:Default::default(),enabled:true,
+  template:Some("Executed {current_call_id}; complete content equals {reference_call_id} ({tool}).".into()),rebase:false};
+ #[cfg(feature="linked-context")]let duplicate_plan=webagent_context_assembly::tool_results::project(&duplicate_request)?;
+ #[cfg(feature="live-context")]let duplicate_plan:duplicate::Plan={
+  let response=process.call("offline-context-smoke",&json!({"tool_result_projection":duplicate_request}),&CancellationToken::new()).await?;
+  checked_pure_response(&duplicate_request,&response,"tool_result_projection",&smoke_implementation(std::path::Path::new("."),CONTEXT)?,duplicate::validate_plan)?
+ };
+ duplicate::validate_plan(&duplicate_request,&duplicate_plan)?;
+ if duplicate_plan.replacements.len()!=2||duplicate_plan.state.assignments["third"].primary!="first"{anyhow::bail!("Duplicate projection smoke mismatch");}
+ // Keep the two-case release proof envelope; compare the new operation inside its first case.
+ cases[0]["tool_result_projection"]=serde_json::to_value(duplicate_plan)?;
  #[cfg(feature="live-context")]
  {
   process.release("offline-context-smoke").await?;
@@ -737,6 +753,35 @@ fn validated<'a>(request:context_input::Request<'a>,state:&mut context_accountin
   }
  }
 }
+/// Plan duplicate references through the existing context component and validate originals in the host.
+pub(crate) async fn tool_results_plan(app:&App,run:&Value,input:&webagent_context_contracts::tool_results::Request,
+ cancel:&CancellationToken)->Result<webagent_context_contracts::tool_results::Plan> {
+ if !available(&app.store.root){anyhow::bail!("Context component unavailable for result projection");}
+ let catalog=catalog()?;let revision=catalog.revision.clone();
+ #[cfg(feature="linked-context")]
+ let plan=webagent_context_assembly::tool_results::project(input)?;
+ #[cfg(feature="live-context")]
+ let plan={
+  let descriptor=catalog.entries.get(CONTEXT).ok_or_else(||anyhow!("Context component missing"))?;
+  let service=service(&catalog,descriptor)?;
+  let run_key=format!("{}:{}",run["id"].as_str().unwrap_or(""),run["generation"].as_str().unwrap_or(""));
+  let result=async {
+   let response=service.call(&run_key,&json!({"tool_result_projection":input}),cancel).await?;
+   checked_pure_response(input,&response,"tool_result_projection",&descriptor.implementation_version,
+    webagent_context_contracts::tool_results::validate_plan)
+  }.await;
+  match result {Ok(plan)=>plan,Err(error)=>{
+   *service.connection.lock().await=None;
+   *FAILURE_UNTIL.get_or_init(||StdMutex::new(None)).lock().unwrap_or_else(|e|e.into_inner())=Some(std::time::Instant::now()+Duration::from_secs(5));
+   return Err(error);
+  }}
+ };
+ let _=run;
+ webagent_context_contracts::tool_results::validate_plan(input,&plan)?;
+ if cancel.is_cancelled(){anyhow::bail!("Context projection cancelled");}
+ require_component_snapshot(&app.store.root,CONTEXT,&revision)?;Ok(plan)
+}
+
 /// Pin the validated generation before IO and keep borrowed durable inputs at the host.
 pub(crate) async fn prepare<'a>(app:&App,run:&Value,request:context_input::Request<'a>,state:&mut context_accounting::ContextAccounting,cancel:&tokio_util::sync::CancellationToken)->Result<context_assembly::Prepared<'a>> {
  if !available(&app.store.root){anyhow::bail!("Engine component unavailable");}
@@ -1055,6 +1100,12 @@ fn offline_smoke_uses_frozen_descriptor_versions() {
   std::fs::write(&path,serde_json::to_vec(&descriptor).unwrap()).unwrap();
   assert_eq!(smoke_implementation(root.path(),ASSETS).unwrap(),version);
  }
+ let context_path=root.path().join("plugins/engine").join(CONTEXT).join("component.json");
+ std::fs::create_dir_all(context_path.parent().unwrap()).unwrap();
+ let context_descriptor=std::fs::read("plugins/engine/context-assembly/component.json").unwrap();
+ let context_identity:Descriptor=serde_json::from_slice(&context_descriptor).unwrap();
+ std::fs::write(&context_path,&context_descriptor).unwrap();
+ assert_eq!(smoke_implementation(root.path(),CONTEXT).unwrap(),context_identity.implementation_version);
  descriptor["implementation_version"]=json!("");
  std::fs::write(&path,serde_json::to_vec(&descriptor).unwrap()).unwrap();
  assert!(smoke_implementation(root.path(),ASSETS).is_err());

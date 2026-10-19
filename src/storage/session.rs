@@ -574,7 +574,7 @@ impl Store {
             if previous["history_revision"].as_u64().unwrap_or(0)
                 > object.get("history_revision").and_then(Value::as_u64).unwrap_or(0) {
                 // A pre-Undo snapshot must not restore the discarded compaction context.
-                for field in ["history_revision", "checkpoint_input", "checkpoint_through", "tool_context_state"] {
+                for field in ["history_revision", "checkpoint_input", "checkpoint_through", "tool_context_state", "tool_result_projection"] {
                     if let Some(value) = previous.get(field) { object.insert(field.into(), value.clone()); }
                 }
             }

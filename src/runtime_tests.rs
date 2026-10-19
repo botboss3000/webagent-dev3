@@ -43,6 +43,8 @@ pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
     std::fs::write(control_dir.join("dispatch.lock"), b"").unwrap();
     std::fs::write(control_dir.join("shutoff"), b"0").unwrap();
     let store = Store::open(root.path()).await.unwrap();
+    std::fs::create_dir_all(root.path().join("config")).unwrap();
+    std::fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config/prompts.json"), root.path().join("config/prompts.json")).unwrap();
     store.put("policy", &policy_default()).await.unwrap();
     store
         .put("settings", &json!({"model":"fixture"}))
@@ -6717,7 +6719,7 @@ async fn live_context_default_stack_journey() {
         "closing_reporting":"LIVE_CLOSING","jev_guidance":"LIVE_JEV_SOURCE_FIRST"}).to_string()).unwrap();
     // A saved sibling override must survive adoption of a changed source main prompt.
     std::fs::create_dir_all(root.path().join("config")).unwrap();
-    std::fs::write(root.path().join("config/prompts.json"),json!({"jev_guidance":"LIVE_JEV_SAVED"}).to_string()).unwrap();
+    std::fs::write(root.path().join("config/prompts.json"),json!({"jev_guidance":"LIVE_JEV_SAVED","tool_result_deduplication":serde_json::from_slice::<Value>(&std::fs::read(root.path().join("config/prompts.json")).unwrap()).unwrap()["tool_result_deduplication"]}).to_string()).unwrap();
     app.abilities=Arc::new(abilities::Catalog::load(&abilities).unwrap());
     let slot=Box::pin(app.store.upsert_prompt_slot("live_refresh","LIVE_SLOT_FIRST",None,None,None,0)).await.unwrap();
     let slot_revision=slot["revision"].as_i64().unwrap();
@@ -6804,7 +6806,7 @@ async fn live_context_default_stack_journey() {
 }
 
 #[tokio::test]
-async fn tool_output_control_can_accompany_final_reply_without_an_extra_call() {
+async fn experimental_lifetime_controls_stay_disabled_without_an_extra_call() {
     use axum::routing::post;
     let (root, mut app) = fixture().await;
     std::fs::create_dir_all(root.path().join("config")).unwrap();
@@ -6818,8 +6820,6 @@ async fn tool_output_control_can_accompany_final_reply_without_an_extra_call() {
         |AxumState(requests): AxumState<Arc<Mutex<Vec<Value>>>>,Json(body):Json<Value>| async move {
             requests.lock().await.push(body);
             let event=json!({"type":"response.completed","response":{"status":"completed","output":[
-                {"type":"function_call","call_id":"retain-important","name":"manage_tool_context",
-                    "arguments":json!({"action":"promote","call_ids":["read-important"],"reason":"Needed for the next change"}).to_string()},
                 {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Kept the relevant source."}]}
             ]}});
             ([("content-type","text/event-stream")],format!("data: {event}\n\n"))
@@ -6842,15 +6842,14 @@ async fn tool_output_control_can_accompany_final_reply_without_an_extra_call() {
     execute_run(app.clone(),id.clone(),"retention-final".into(),CancellationToken::new()).await.unwrap();
     let run=app.run(&id).await.unwrap();
     assert_eq!(run["status"],"completed");
-    assert!(run["tool_context_state"]["entries"].as_array().unwrap().iter()
-        .any(|e|e["call_id"]=="read-important" && e["promoted"]==true));
+    assert!(run["tool_context_state"]["entries"].as_array().unwrap().is_empty());
     let session=app.store.get(&format!("session:{sid}")).await.unwrap().unwrap();
     assert_eq!(session["tool_context_state"],run["tool_context_state"]);
     let (messages,_)=app.store.chat_snapshot(&sid).await.unwrap();
     assert_eq!(messages.iter().filter(|m|m["role"]=="assistant").count(),1);
     let requests=requests.lock().await;
     assert_eq!(requests.len(),1);
-    assert!(requests[0]["tools"].as_array().unwrap().iter().any(|t|t["name"]=="manage_tool_context"));
+    assert!(!requests[0]["tools"].as_array().unwrap().iter().any(|t|t["name"]=="manage_tool_context"));
     server.abort();
 }
 #[tokio::test]

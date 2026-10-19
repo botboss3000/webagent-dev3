@@ -866,14 +866,16 @@ mod tests {
     fn configured_base_instructions_loads_and_recovers_from_file_changes() {
         let path = "config/prompts.json";
         let original = std::fs::read(path).expect("read original prompts file");
-        struct RestorePrompts(Vec<u8>);
+        let original_permissions = std::fs::metadata(path).expect("read prompt permissions").permissions();
+        struct RestorePrompts(Vec<u8>, std::fs::Permissions);
         impl Drop for RestorePrompts {
             /// Restore the original prompt fixture even if the prompt-cache assertion unwinds.
             fn drop(&mut self) {
                 let _ = std::fs::write("config/prompts.json", &self.0);
+                let _ = std::fs::set_permissions("config/prompts.json", self.1.clone());
             }
         }
-        let restore = RestorePrompts(original.clone());
+        let restore = RestorePrompts(original.clone(), original_permissions.clone());
         let good = json!({
             "base_instructions": "BASE_MARKER",
             "closing_reporting": "CLOSING_MARKER",
@@ -895,6 +897,7 @@ mod tests {
         drop(restore);
         Provider::configured_base_instructions();
         assert_eq!(std::fs::read(path).expect("verify restored prompts file"), original);
+        assert_eq!(std::fs::metadata(path).expect("verify restored prompt permissions").permissions(), original_permissions);
     }
     /// Verify upstream account/token text cannot escape through fixed failure labels.
     #[test]

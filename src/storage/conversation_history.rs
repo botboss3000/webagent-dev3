@@ -508,6 +508,7 @@ impl Store {
             session["checkpoint_input"] = json!([]);
             session["checkpoint_through"] = json!(0);
             session["tool_context_state"] = Value::Null;
+            session["tool_result_projection"] = Value::Null;
             let retained: i64 =
                 sqlx::query_scalar("SELECT COALESCE(MAX(seq),0) FROM chat WHERE session_id=?")
                     .bind(sid)

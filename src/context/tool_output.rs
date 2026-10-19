@@ -153,6 +153,8 @@ pub async fn effective(store: &crate::store::Store, agent_id: &str) -> Result<Po
         policy = serde_json::from_value(override_value)?;
     }
     policy.validate()?;
+    // Lifetime/budget eviction remains experimental and is not active. Preserve saved settings.
+    policy.enabled = false;
     Ok(policy)
 }
 
@@ -467,6 +469,7 @@ pub fn record(run: &mut Value, result: &Value) -> Result<usize> {
         "name":pending["name"],
         "arguments":pending["arguments"]
     });
+    record_dedup_origin(run, &call, result)?;
     let before = state_ref(run).0.len();
     register(run, &call, result, &policy);
     let name = pending["name"].as_str().unwrap_or("");
@@ -704,6 +707,9 @@ pub fn project(run: &Value, policy: &Policy, placeholder: &str) -> Result<Option
 /// name and digest; after compaction removes both items, a unique eligible ledger
 /// entry remains the only permitted source of origin identity.
 pub fn origin_run_id<'a>(run: &'a Value, id: &str) -> Option<&'a str> {
+    if let Some(origin)=run["tool_result_projection"]["origins"].get(id) {
+        return origin["run_id"].as_str();
+    }
     let input = run.get("input")?.as_array()?;
     let calls: Vec<_> = input
         .iter()
@@ -748,6 +754,9 @@ pub fn origin_run_id<'a>(run: &'a Value, id: &str) -> Option<&'a str> {
 /// Verify an archived result against the unique source digest retained in the
 /// current run's metadata ledger before exposing any page of that result.
 pub fn verify_origin_output(run: &Value, id: &str, name: &str, raw: &str) -> bool {
+    if let Some(origin)=run["tool_result_projection"]["origins"].get(id) {
+        return origin["tool"]==name && origin["sha256"]==webagent_context_contracts::tool_results::fingerprint(raw);
+    }
     if !perishable_read(name) {
         return false;
     }
@@ -1302,4 +1311,402 @@ mod tests {
         std::fs::write(&path, r#"{"tool_output_retention":{"guidance":false}}"#).unwrap();
         assert!(Prompts::read(dir.path()).is_err());
     }
+}
+
+// Exact duplicate suppression is independent of the disabled experimental lifetime policy.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct DedupPolicy { pub enabled: bool }
+impl Default for DedupPolicy { fn default() -> Self { Self { enabled: true } } }
+
+pub const DEDUP_DEFAULT_TOOLS: &[&str] = &[
+    "file_read", "file_list", "file_search", "v3_source_read", "v3_source_list",
+    "code_index_lookup", "code_index_coverage", "code_index_trace", "code_index_progress",
+];
+
+pub fn dedup_included(settings: &Value, name: &str) -> bool {
+    settings["tool_result_deduplication"].get(name).and_then(Value::as_bool)
+        .unwrap_or_else(|| DEDUP_DEFAULT_TOOLS.contains(&name))
+}
+
+pub async fn dedup_policy(store: &crate::store::Store, agent: &str) -> Result<DedupPolicy> {
+    let scoped = store.for_agent(agent).await?;
+    let raw: Vec<u8> = sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?")
+        .bind(agent).fetch_one(&scoped.agent_pool).await?;
+    let metadata = scoped.unseal(&raw)?;
+    match metadata.get("tool_result_deduplication") {
+        Some(value) => {
+            // Older releases mixed per-tool overrides into this policy object.
+            // The request DTO remains strict; persisted policy reads select only its enabled field.
+            let fields=value.as_object().context("Invalid duplicate-result agent policy")?;
+            Ok(serde_json::from_value(json!({"enabled":fields.get("enabled").cloned().unwrap_or(json!(true))}))?)
+        },
+        None => Ok(DedupPolicy::default()),
+    }
+}
+
+/// Read only the actual live JSON file. No embedded defaults or alternate text are consulted.
+pub fn dedup_template(root: &Path) -> Result<String> {
+    let path=root.join("config/prompts.json");
+    let info=fs::symlink_metadata(&path).context("prompts.json is required for duplicate-result suppression")?;
+    if !info.is_file() || info.file_type().is_symlink() || info.len()>4*1024*1024 {bail!("Invalid prompts.json file");}
+    let prompts:Value=serde_json::from_slice(&fs::read(path)?)?;
+    let text=prompts["tool_result_deduplication"]["placeholder"].as_str()
+        .context("prompts.json: tool_result_deduplication.placeholder is required")?;
+    webagent_context_contracts::tool_results::validate_template(text)?;
+    Ok(text.to_owned())
+}
+
+fn dedup_scope(run: &Value) -> Value {
+    json!({"session":run["session_id"],"agent":run["agent_id"],
+        "requester":run["requester_user_id"],"workspace":run["workspace_id"]})
+}
+
+/// Capture immutable provenance before native tool completion clears its pending identity.
+fn record_dedup_origin(run: &mut Value, call: &Value, output: &Value) -> Result<()> {
+    let Some(id)=call_id(call) else {return Ok(());};
+    let id=id.to_owned();
+    // Native controls retain only call_id in pending state. Resolve their name
+    // from the host-recorded model call before freezing provenance.
+    let name=call["name"].as_str().filter(|name|!name.is_empty()).or_else(||
+        run["input"].as_array().and_then(|input|input.iter().find(|item|
+            item["type"]=="function_call" && call_id(item)==Some(id.as_str())))
+            .and_then(|item|item["name"].as_str()).filter(|name|!name.is_empty()));
+    let Some(name)=name else {return Ok(());};
+    let origin=json!({"run_id":rid(run),"tool":name,"scope":dedup_scope(run),"sha256":webagent_context_contracts::tool_results::fingerprint(&output.to_string()),"previewed":false});
+    if !run["tool_result_projection"].is_object() {run["tool_result_projection"]=json!({});}
+    if !run["tool_result_projection"]["origins"].is_object(){run["tool_result_projection"]["origins"]=json!({});}
+    let origins=run["tool_result_projection"]["origins"].as_object_mut().context("Projection origins missing")?;
+    if let Some(existing)=origins.get(&id) {
+        if existing!=&origin {bail!("Tool-result provenance changed");}
+    } else {origins.insert(id,origin);}
+    Ok(())
+}
+
+/// Build model-only replacements from journal originals. Every reconstructed origin stays session scoped.
+pub async fn dedup_prepare(app: &crate::App, run: &mut Value, preview_bytes: usize,
+    cancel: &tokio_util::sync::CancellationToken) -> Result<Vec<Value>> {
+    use webagent_context_contracts::tool_results as contract;
+    let sid=run["session_id"].as_str().context("Projection session missing")?.to_owned();
+    let agent=run["agent_id"].as_str().unwrap_or("shared_default").to_owned();
+    let policy=dedup_policy(&app.store,&agent).await?;
+    let template=if policy.enabled {Some(dedup_template(&app.store.root)?)} else {None};
+    if !run["tool_result_projection"].is_object() {
+        let session=app.store.get(&format!("session:{sid}")).await?;
+        run["tool_result_projection"]=session.as_ref().and_then(|s|s.get("tool_result_projection"))
+            .filter(|v|v.is_object()).cloned().unwrap_or_else(||json!({}));
+    }
+    let before=run["tool_result_projection"].clone();
+    let mut document=before.clone();
+    if !document["origins"].is_object(){document["origins"]=json!({});}
+    let seed=document["initialized"]!=true;
+    let state:contract::State=match document.get("planner") {
+        Some(v)=>serde_json::from_value(v.clone())?,None=>contract::State::default(),
+    };
+    let rebase=document["rebase"]==true;
+    let (_,_,settings,_)=crate::ability_controls(app,&sid).await?;
+    let input=run["input"].as_array().context("Projection input missing")?.clone();
+    let calls:HashMap<_,_>=input.iter().filter(|item|item["type"]=="function_call")
+        .filter_map(|item|call_id(item).map(|id|(id.to_owned(),item))).collect();
+    if calls.len()!=input.iter().filter(|item|item["type"]=="function_call").count() {bail!("Ambiguous tool-result call identity");}
+    let mut observations=Vec::new();
+    let mut scopes:HashMap<String,Value>=HashMap::new();
+    let mut originals=HashMap::new();
+    for item in input.iter().filter(|item|item["type"]=="function_call_output") {
+        let Some(id)=call_id(item) else {continue;};
+        let Some(call)=calls.get(id) else {continue;};
+        let Some(name)=call["name"].as_str() else {continue;};
+        let origin=document["origins"].get(id).cloned();
+        let (source_run,raw)=if let Some(origin)=&origin {
+            let source=origin["run_id"].as_str().context("Projection origin run missing")?;
+            if origin["sha256"]==hash_output(&item["output"]) {
+                (source.to_owned(),output_text(&item["output"]))
+            } else {
+                let result=app.store.tool_result(&sid,source,id).await?.context("Original tool output unavailable")?;
+                (source.to_owned(),result["output"].as_str().context("Original result text missing")?.to_owned())
+            }
+        } else if let Some((source,result))=app.store.tool_result_origin(&sid,id).await? {
+            (source,result["output"].as_str().context("Original result text missing")?.to_owned())
+        } else {
+            if is_compacted_preview(&item["output"],id) {bail!("Original tool output unavailable for preview reconstruction");}
+            (rid(run).to_owned(),output_text(&item["output"]))
+        };
+        let source_scope=if source_run==rid(run) {dedup_scope(run)} else if let Some(scope)=scopes.get(&source_run) {scope.clone()} else {
+            let source=app.run(&source_run).await?;
+            if source["session_id"]!=sid || source["agent_id"].as_str().unwrap_or("shared_default")!=agent {
+                bail!("Tool-result origin is outside this conversation");
+            }
+            let scope=dedup_scope(&source);scopes.insert(source_run.clone(),scope.clone());scope
+        };
+        let sha=contract::fingerprint(&raw);
+        let scope=origin.as_ref().map(|value|value["scope"].clone()).unwrap_or(source_scope);
+        if let Some(origin)=&origin {
+            if origin["sha256"]!=sha {bail!("Original tool output failed provenance verification");}
+            if origin["tool"]!=name {
+                // Recover previously saved native-control origins only from the
+                // authorized immutable call journal; mismatched names stay fatal.
+                let recorded=if origin["tool"].is_null() {
+                    app.store.tool_call_record(&sid,&source_run,id).await?
+                } else {None};
+                if !recorded.is_some_and(|call|call["call_id"]==id && call["name"]==name) {
+                    bail!("Original tool output failed provenance verification");
+                }
+            }
+        }
+        let old_preview=origin.as_ref().is_some_and(|value|value["previewed"]==true) || (seed && output_text(&item["output"])!=raw);
+        document["origins"][id]=json!({"run_id":source_run,"tool":name,"scope":scope,"sha256":sha,"previewed":old_preview});
+        observations.push(contract::Observation {call_id:id.to_owned(),tool:name.to_owned(),inputs:call_arguments(call),
+            scope,success:successful_output(&json!(raw)),output:raw.clone(),included:dedup_included(&settings,name)&&!old_preview});
+        originals.insert(id.to_owned(),raw);
+    }
+    // Output completion may be asynchronous; canonical model-call order owns first/full selection.
+    let call_order:HashMap<_,_>=input.iter().enumerate().filter(|(_,item)|item["type"]=="function_call")
+        .filter_map(|(position,item)|call_id(item).map(|id|(id.to_owned(),position))).collect();
+    observations.sort_by_key(|item|call_order[&item.call_id]);
+    let request=contract::Request {version:contract::VERSION,observations,state,enabled:policy.enabled&&!seed,
+        template:template.clone(),rebase};
+    let plan=crate::engine_components::tool_results_plan(app,run,&request,cancel).await?;
+    contract::validate_plan(&request,&plan)?;
+    let mut projected=input;
+    for item in projected.iter_mut().filter(|item|item["type"]=="function_call_output") {
+        let Some(id)=call_id(item).map(str::to_owned) else {continue;};
+        if let Some(text)=plan.replacements.get(&id) {item["output"]=json!(text);continue;}
+        let controlled=plan.state.assignments.get(&id).is_some_and(|entry|entry.template.is_some());
+        if controlled {
+            item["output"]=json!(originals.get(&id).context("Full primary output unavailable")?);
+        } else {
+            crate::context_compaction::project_tool_results(std::slice::from_mut(item),preview_bytes)?;
+        }
+    }
+    document["config_fingerprint"]=json!(crate::digest(&json!([policy,template,settings["tool_result_deduplication"]])));
+    document["planner"]=serde_json::to_value(&plan.state)?;
+    document["initialized"]=json!(true);document["rebase"]=json!(false);
+    if rebase {
+        let present:HashSet<_>=request.observations.iter().map(|item|item.call_id.as_str()).collect();
+        document["origins"].as_object_mut().context("Projection origins missing")?.retain(|id,_|present.contains(id.as_str()));
+    }
+    if document!=before {
+        document["revision"]=json!(before["revision"].as_u64().unwrap_or(0).checked_add(1).context("Projection revision overflow")?);
+        run["tool_result_projection"]=document;
+        app.save(run).await?;
+    }
+    Ok(projected)
+}
+
+/// Preserve component-withdrawal recovery while keeping configuration/reconstruction errors actionable.
+pub async fn pause_dedup(app:&crate::App,run:&mut Value,error:&anyhow::Error)->Result<()> {
+    if !crate::engine_components::available(&app.store.root) {
+        return crate::engine_components::pause(app,run).await;
+    }
+    run["status"]=json!("paused");run["component_pause"]=Value::Null;
+    run["error"]=json!(format!("Tool result context paused: {error}"));
+    app.save(run).await
+}
+
+/// Expand model-only references for summarization; callers retain the original verified folding plan.
+pub async fn dedup_summary_source(app: &crate::App, run: &Value, source: &[Value]) -> Result<Vec<Value>> {
+    let sid=run["session_id"].as_str().context("Summary session missing")?;
+    let mut full=source.to_vec();
+    for item in &mut full {
+        if item["type"]!="function_call_output" {continue;}
+        let Some(id)=call_id(item) else {continue;};
+        if let Some(origin)=run["tool_result_projection"]["origins"].get(id) {
+            let origin=origin["run_id"].as_str().context("Summary origin missing")?;
+            let result=app.store.tool_result(sid,origin,id).await?.context("Summary original unavailable")?;
+            item["output"]=result["output"].clone();
+        }
+    }
+    Ok(full)
+}
+
+
+pub async fn dedup_config_fingerprint(app:&crate::App,agent:&str,sid:&str)->Result<String> {
+    let policy=dedup_policy(&app.store,agent).await?;
+    let template=if policy.enabled {Some(dedup_template(&app.store.root)?)} else {None};
+    let (_,_,settings,_)=crate::ability_controls(app,sid).await?;
+    Ok(crate::digest(&json!([policy,template,settings["tool_result_deduplication"]])))
+}
+
+#[cfg(test)] mod dedup_tests {
+    use super::*;
+    const TEMPLATE:&str="Call {current_call_id} equals {reference_call_id} from {tool}.";
+    #[test] fn duplicate_prompt_has_no_fallback_and_reloads_the_actual_live_file() {
+        let root=tempfile::tempdir().unwrap();assert!(dedup_template(root.path()).is_err());
+        fs::create_dir(root.path().join("config")).unwrap();let path=root.path().join("config/prompts.json");
+        fs::write(&path,"{}").unwrap();assert!(dedup_template(root.path()).is_err());
+        fs::write(&path,json!({"tool_result_deduplication":{"placeholder":TEMPLATE}}).to_string()).unwrap();
+        assert_eq!(dedup_template(root.path()).unwrap(),TEMPLATE);
+        let changed="Changed {current_call_id} equals {reference_call_id}";
+        fs::write(&path,json!({"tool_result_deduplication":{"placeholder":changed}}).to_string()).unwrap();
+        assert_eq!(dedup_template(root.path()).unwrap(),changed);
+        for value in [json!(null),json!(false),json!(""),json!("{unknown}")] {
+            fs::write(&path,json!({"tool_result_deduplication":{"placeholder":value}}).to_string()).unwrap();
+            assert!(dedup_template(root.path()).is_err());
+        }
+    }
+    #[tokio::test] async fn lifetime_policy_is_disabled_without_discarding_saved_configuration() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let path=app.store.root.join("config/tool-output-retention.json");
+        let saved=json!({"enabled":true,"scope":"selected","tools":["file_read"],"lifetime_calls":17});
+        fs::write(&path,saved.to_string()).unwrap();
+        let policy=effective(&app.store,"shared_default").await.unwrap();
+        assert!(!policy.enabled);assert_eq!(policy.lifetime_calls,17);
+        assert_eq!(serde_json::from_slice::<Value>(&fs::read(path).unwrap()).unwrap(),saved);
+    }
+    #[test] fn allowlist_is_explicit_and_does_not_grant_permission() {
+        assert!(dedup_included(&json!({}),"file_read"));
+        assert!(!dedup_included(&json!({}),"file_write"));
+        assert!(!dedup_included(&json!({"tool_result_deduplication":{"file_read":false}}),"file_read"));
+        assert!(dedup_included(&json!({"tool_result_deduplication":{"file_write":true}}),"file_write"));
+    }
+
+    async fn journal(app:&crate::App,run:&mut Value,id:&str,path:&str,body:&Value) {
+        let call=json!({"type":"function_call","call_id":id,"name":"file_read","arguments":json!({"path":path}).to_string()});
+        run["input"].as_array_mut().unwrap().push(call.clone());
+        app.store.save_run(run,"model_output",&json!({"output":[call.clone()]})).await.unwrap();
+        record_dedup_origin(run,&call,body).unwrap();
+        run["input"].as_array_mut().unwrap().push(json!({"type":"function_call_output","call_id":id,"output":body.to_string()}));
+        app.store.save_run(run,"tool_result",&json!({})).await.unwrap();
+    }
+    /// Native control pending state has no name; retain exact identity and recover old paused runs safely.
+    #[tokio::test]
+    async fn native_control_provenance_uses_recorded_calls_and_recovers_null_names() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let sid=crate::runtime_tests::conversation(&app).await;
+        let rid=crate::runtime_tests::queued(&app,&sid).await;
+        let mut run=app.run(&rid).await.unwrap();let cancel=tokio_util::sync::CancellationToken::new();
+        dedup_prepare(&app,&mut run,8192,&cancel).await.unwrap();
+        for (turn,name) in ["set_closer_status","publish_main_message"].into_iter().enumerate() {
+            run["turns"]=json!(turn+1);
+            let id=format!("native-{name}");
+            let call=json!({"type":"function_call","call_id":id,"name":name,"arguments":"{}"});
+            run["input"].as_array_mut().unwrap().push(call.clone());
+            app.store.save_run(&mut run,"model_output",&json!({"output":[call]})).await.unwrap();
+            run["pending"]=json!({"call_id":id});
+            let body=json!({"status":"ok","output":"Native control recorded"});
+            record(&mut run,&body).unwrap();
+            assert_eq!(run["tool_result_projection"]["origins"][&id]["tool"],name);
+            run["input"].as_array_mut().unwrap().push(json!({"type":"function_call_output","call_id":id,"output":body.to_string()}));
+            app.store.save_run(&mut run,"tool_result",&json!({})).await.unwrap();
+            let projected=dedup_prepare(&app,&mut run,8192,&cancel).await.unwrap();
+            assert_eq!(projected.last().unwrap()["output"],body.to_string());
+            assert_eq!(app.store.tool_result(&sid,&rid,&id).await.unwrap().unwrap()["output"],body.to_string());
+            // Simulate the already-deployed defect in a persisted run, then resume it.
+            run["tool_result_projection"]["origins"][&id]["tool"]=Value::Null;
+            app.save(&mut run).await.unwrap();run=app.run(&rid).await.unwrap();
+            let recovered=dedup_prepare(&app,&mut run,8192,&cancel).await.unwrap();
+            assert_eq!(recovered,projected);
+            assert_eq!(run["tool_result_projection"]["origins"][&id]["tool"],name);
+            let valid=run.clone();
+            run["tool_result_projection"]["origins"][&id]["tool"]=json!("file_write");
+            assert!(dedup_prepare(&app,&mut run,8192,&cancel).await.is_err());
+            run=valid.clone();
+            run["tool_result_projection"]["origins"][&id]["tool"]=Value::Null;
+            run["tool_result_projection"]["origins"][&id]["sha256"]=json!("0".repeat(64));
+            assert!(dedup_prepare(&app,&mut run,8192,&cancel).await.is_err());
+            run=valid.clone();
+            run["tool_result_projection"]["origins"][&id]["tool"]=Value::Null;
+            run["input"].as_array_mut().unwrap().iter_mut().find(|item|
+                item["type"]=="function_call" && item["call_id"]==id).unwrap()["name"]=json!("file_write");
+            assert!(dedup_prepare(&app,&mut run,8192,&cancel).await.is_err());
+            run=valid;
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_projection_preserves_journal_prefix_restart_and_compaction_primary() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let sid=crate::runtime_tests::conversation(&app).await;
+        let rid=crate::runtime_tests::queued(&app,&sid).await;
+        let mut run=app.run(&rid).await.unwrap();let cancel=tokio_util::sync::CancellationToken::new();
+        dedup_prepare(&app,&mut run,8192,&cancel).await.unwrap();
+        let body=json!({"status":"success","content":"public fixture ".repeat(1200)});
+        journal(&app,&mut run,"first","a.rs",&body).await;
+        let first=dedup_prepare(&app,&mut run,8192,&cancel).await.unwrap();
+        assert_eq!(first.last().unwrap()["output"],body.to_string());
+        journal(&app,&mut run,"second","a.rs",&body).await;
+        let second=dedup_prepare(&app,&mut run,8192,&cancel).await.unwrap();
+        assert_eq!(&second[..first.len()],first.as_slice());
+        let placeholder:Value=serde_json::from_str(second.last().unwrap()["output"].as_str().unwrap()).unwrap();
+        assert_eq!(placeholder["reference_call_id"],"first");
+        assert_eq!(app.store.tool_result(&sid,&rid,"second").await.unwrap().unwrap()["output"],body.to_string());
+        let mut restarted=app.run(&rid).await.unwrap();
+        assert_eq!(dedup_prepare(&app,&mut restarted,8192,&cancel).await.unwrap(),second);
+        restarted["input"].as_array_mut().unwrap().retain(|item|item["call_id"]!="first");
+        restarted["tool_result_projection"]["rebase"]=json!(true);
+        app.save(&mut restarted).await.unwrap();
+        let compacted=dedup_prepare(&app,&mut restarted,8192,&cancel).await.unwrap();
+        assert_eq!(compacted.last().unwrap()["output"],body.to_string());
+        assert_eq!(app.store.tool_result_origin(&sid,"first").await.unwrap().unwrap().1["output"],body.to_string());
+        journal(&app,&mut restarted,"third","a.rs",&body).await;
+        let third=dedup_prepare(&app,&mut restarted,8192,&cancel).await.unwrap();
+        let placeholder:Value=serde_json::from_str(third.last().unwrap()["output"].as_str().unwrap()).unwrap();
+        assert_eq!(placeholder["reference_call_id"],"second");
+        let before=third.clone();journal(&app,&mut restarted,"other","b.rs",&json!({"status":"success","content":"other"})).await;
+        let other=dedup_prepare(&app,&mut restarted,8192,&cancel).await.unwrap();assert_eq!(&other[..before.len()],before.as_slice());
+    }
+
+
+    #[tokio::test]
+    async fn migration_preview_stays_stable_and_new_duplicates_reference_only_a_full_body() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let sid=crate::runtime_tests::conversation(&app).await;
+        let rid=crate::runtime_tests::queued(&app,&sid).await;
+        let mut run=app.run(&rid).await.unwrap();let cancel=tokio_util::sync::CancellationToken::new();
+        let body=json!({"status":"success","content":"public original content ".repeat(1000)});
+        journal(&app,&mut run,"seeded-preview","a.rs",&body).await;
+        let seeded=dedup_prepare(&app,&mut run,8192,&cancel).await.unwrap();
+        assert_ne!(seeded.last().unwrap()["output"],body.to_string());
+        journal(&app,&mut run,"first-full","a.rs",&body).await;
+        let full=dedup_prepare(&app,&mut run,8192,&cancel).await.unwrap();
+        assert_eq!(&full[..seeded.len()],seeded.as_slice());
+        assert_eq!(full.last().unwrap()["output"],body.to_string());
+        journal(&app,&mut run,"later-placeholder","a.rs",&body).await;
+        let duplicate=dedup_prepare(&app,&mut run,8192,&cancel).await.unwrap();
+        let receipt:Value=serde_json::from_str(duplicate.last().unwrap()["output"].as_str().unwrap()).unwrap();
+        assert_eq!(receipt["reference_call_id"],"first-full");
+        let reference=duplicate.iter().find(|item|item["type"]=="function_call_output"&&item["call_id"]=="first-full").unwrap();
+        assert_eq!(reference["output"],body.to_string());
+    }
+
+    #[tokio::test]
+    async fn projection_pause_retains_input_and_only_marks_component_unavailability_for_restore() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let sid=crate::runtime_tests::conversation(&app).await;
+        let rid=crate::runtime_tests::queued(&app,&sid).await;
+        let mut run=app.run(&rid).await.unwrap();let input=run["input"].clone();
+        pause_dedup(&app,&mut run,&anyhow::anyhow!("prompts.json: placeholder is required")).await.unwrap();
+        assert_eq!(run["status"],"paused");assert_eq!(run["input"],input);
+        assert!(run["error"].as_str().unwrap().contains("prompts.json"));
+        assert!(!crate::engine_components::retained_pause(&run));
+        let mut controls=crate::engine_components::controls(&app.store.root).unwrap();
+        controls.disabled.push("context-assembly".into());
+        crate::engine_components::save_controls(&app.store.root,&controls).unwrap();
+        pause_dedup(&app,&mut run,&anyhow::anyhow!("component withdrawn during projection")).await.unwrap();
+        assert_eq!(run["input"],input);assert!(crate::engine_components::retained_pause(&run));
+        assert_eq!(run["component_pause"]["component"],"context-assembly");
+    }
+
+    #[tokio::test]
+    async fn parallel_result_completion_uses_recorded_call_order() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let sid=crate::runtime_tests::conversation(&app).await;
+        let rid=crate::runtime_tests::queued(&app,&sid).await;
+        let mut run=app.run(&rid).await.unwrap();let cancel=tokio_util::sync::CancellationToken::new();
+        dedup_prepare(&app,&mut run,8192,&cancel).await.unwrap();
+        let body=json!({"status":"success","content":"same public output ".repeat(500)});
+        journal(&app,&mut run,"first-parallel","a.rs",&body).await;
+        journal(&app,&mut run,"second-parallel","a.rs",&body).await;
+        let all=run["input"].as_array().unwrap().clone();
+        let mut input:Vec<Value>=all.iter().filter(|item|item["type"]!="function_call_output").cloned().collect();
+        input.extend(all.iter().rev().filter(|item|item["type"]=="function_call_output").cloned());
+        run["input"]=json!(input);app.save(&mut run).await.unwrap();
+        let projected=dedup_prepare(&app,&mut run,8192,&cancel).await.unwrap();
+        let second=projected.iter().find(|item|item["type"]=="function_call_output"&&item["call_id"]=="second-parallel").unwrap();
+        let receipt:Value=serde_json::from_str(second["output"].as_str().unwrap()).unwrap();
+        assert_eq!(receipt["reference_call_id"],"first-parallel");
+        let first=projected.iter().find(|item|item["type"]=="function_call_output"&&item["call_id"]=="first-parallel").unwrap();
+        assert_eq!(first["output"],body.to_string());
+    }
+
 }

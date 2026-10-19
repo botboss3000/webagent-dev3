@@ -30,7 +30,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
     Aes256Gcm, Nonce,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use serde_json::{json, Value};
@@ -540,6 +540,19 @@ impl Store {
     pub async fn agent_abilities(&self) -> Result<Value> {
         self.agent_abilities_for(&self.agent_id).await
     }
+    /// Separate tool overrides from the agent policy; project legacy flat values without writing on reads.
+    pub(crate) fn tool_result_overrides(metadata:&Value)->Result<Value> {
+        let tools=if let Some(value)=metadata.get("tool_result_deduplication_tools") {
+            value.as_object().context("Invalid duplicate-result tool overrides")?.clone()
+        } else {
+            let mut legacy=metadata["tool_result_deduplication"].as_object().cloned().unwrap_or_default();
+            legacy.remove("enabled");legacy
+        };
+        if tools.len()>1024 || tools.values().any(|value|!value.is_boolean()) {
+            bail!("Invalid duplicate-result tool overrides");
+        }
+        Ok(Value::Object(tools))
+    }
     /// Project current encrypted agent metadata and disabled connections into effective ability controls.
     pub async fn agent_abilities_for(&self, agent_id: &str) -> Result<Value> {
         if agent_id != self.agent_id {return Err(anyhow!("Agent view mismatch"));}
@@ -556,7 +569,8 @@ impl Store {
         }
         Ok(json!({"revision":metadata["ability_revision"].as_i64().unwrap_or(0),"visibility":visibility,
             "skill_visibility":metadata["skill_modes"],"tool_modes":metadata["tool_modes"],"settings":metadata["ability_settings"],
-            "tool_execution":metadata["tool_execution"].as_object().cloned().unwrap_or_default()}))
+            "tool_execution":metadata["tool_execution"].as_object().cloned().unwrap_or_default(),
+            "tool_result_deduplication":Self::tool_result_overrides(&metadata)?}))
     }
     /// CAS encrypted visibility settings, connection state and their audit receipt in one agent transaction.
     pub async fn save_agent_abilities(&self, value: &Value, expected_revision: u64) -> Result<()> {
@@ -585,6 +599,11 @@ impl Store {
         metadata["tool_modes"]=value["tool_modes"].clone();
         metadata["ability_settings"]=value["settings"].clone();
         if let Some(execution)=value.get("tool_execution") {metadata["tool_execution"]=execution.clone();}
+        if let Some(settings)=value.get("tool_result_deduplication") {
+            let fields=settings.as_object().context("Invalid duplicate-result tool settings")?;
+            if fields.len()>1024 || fields.values().any(|value|!value.is_boolean()){bail!("Invalid duplicate-result tool settings");}
+            metadata["tool_result_deduplication_tools"]=settings.clone();
+        }
         metadata["ability_revision"]=json!(expected_revision + 1);
         // Visibility and its encrypted audit receipt have one agent-owned commit.
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
@@ -1981,6 +2000,19 @@ impl Store {
                 .bind(&session_key)
                 .execute(&mut *tx)
                 .await?;
+        }
+        // Projection assignments share the canonical run lease/history transaction, never the tool journal.
+        if let Some(state)=run.get("tool_result_projection") {
+            let session_key=format!("session:{sid}");
+            if let Some(raw)=sqlx::query_scalar::<_,Vec<u8>>("SELECT value FROM docs WHERE key=?")
+                .bind(&session_key).fetch_optional(&mut *tx).await? {
+                let mut session=self.unseal(&raw)?;
+                if state["revision"].as_u64().unwrap_or(0)>=session["tool_result_projection"]["revision"].as_u64().unwrap_or(0) {
+                    session["tool_result_projection"]=state.clone();
+                    sqlx::query("UPDATE docs SET value=? WHERE key=?").bind(self.encode_user_record(&session)?)
+                        .bind(&session_key).execute(&mut *tx).await?;
+                }
+            }
         }
         // Session metadata shares the existing run lease/revision transaction.
         if let Some(state)=run.get("tool_context_state") {

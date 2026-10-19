@@ -103,6 +103,7 @@ async fn catalog(app:&App,identity:&Value,id:&str,params:&HashMap<String,String>
                 tool["execution_override"]=if rights["can_manage"]==true {visibility["tool_execution"][&name].clone()}else{Value::Null};
                 tool["execution"]=serde_json::to_value(crate::tool_execution::resolve(&visibility,&name)?).map_err(anyhow::Error::from)?;
                 tool["advanced_policies"]=crate::tool_execution::advanced_policies(&name);
+                tool["result_deduplication"]=json!(crate::tool_output::dedup_included(&visibility,&name));
                 tool["duplicate_protection_capable"]=json!(crate::actions::supported(&name));
                 tool["background_capable"]=json!(crate::tool_execution::background_capable(&name));
                 tool["max_supported_concurrency"]=json!(crate::tool_execution::max_supported_concurrency(&name));
@@ -218,6 +219,22 @@ pub(crate) async fn tool_set(State(app):State<App>,Extension(identity):Extension
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct ResultDeduplicationBody { expected_revision:u64, included:bool }
+pub(crate) async fn result_deduplication_set(State(app):State<App>,Extension(identity):Extension<Value>,Path((id,ability,tool)):Path<(String,String,String)>,Json(body):Json<ResultDeduplicationBody>)->Api {
+    let _guard=app.gate.lock().await;authority(&app,&identity,&id,true).await?;
+    if !app.abilities.known(&ability)||!app.abilities.has_tool(&ability,&tool){return Err(bad("Unknown ability or tool"));}
+    let mut scoped=admin_agent_view(&app,&id).await?;
+    scoped.store=scoped.store.for_user(identity["_user_id"].as_str().ok_or_else(denied)?).await?;
+    let mut value=agent_abilities(&scoped).await?;
+    if value["revision"]!=body.expected_revision{return Err(conflict("Agent ability revision changed"));}
+    if !value["tool_result_deduplication"].is_object(){value["tool_result_deduplication"]=json!({});}
+    value["tool_result_deduplication"][&tool]=json!(body.included);
+    value["revision"]=json!(body.expected_revision.checked_add(1).ok_or_else(||bad("Agent ability revision overflow"))?);
+    scoped.store.save_agent_abilities(&value,body.expected_revision).await.map_err(update_error)?;
+    crate::wake::notify(&app).await;Ok(Json(value))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ExecutionBody {expected_revision:u64,settings:Value}
 pub(crate) async fn execution_set(State(app):State<App>,Extension(identity):Extension<Value>,Path((id,ability,tool)):Path<(String,String,String)>,Json(body):Json<ExecutionBody>)->Api {
     let _guard=app.gate.lock().await;authority(&app,&identity,&id,true).await?;
@@ -306,6 +323,17 @@ mod tests {
         assert!(grant_ceiling(&app,&identity,&json!({}),&json!({}),&json!({"base":"deny"}),&json!({}),true).await.is_err());
         assert!(grant_ceiling(&app,&identity,&json!({"codebase_admin":"auto"}),&json!({}),&json!({}),&json!({}),false).await.is_err());
         assert!(grant_ceiling(&app,&identity,&json!({"codebase_admin":"deny"}),&json!({}),&unchanged,&json!({}),false).await.is_ok());
+    }
+    #[tokio::test]
+    async fn duplicate_result_tool_inclusion_is_independent_and_revision_fenced() {
+        let (_root,app)=crate::runtime_tests::fixture().await;let identity=json!({"_user_id":app.store.current_user_id()});
+        let before=app.store.agent_abilities().await.unwrap();let revision=before["revision"].as_u64().unwrap();
+        let path=("shared_default".into(),"codebase_admin".into(),"file_read".into());
+        result_deduplication_set(State(app.clone()),Extension(identity.clone()),Path(path.clone()),Json(ResultDeduplicationBody{expected_revision:revision,included:false})).await.unwrap();
+        let saved=app.store.agent_abilities().await.unwrap();assert_eq!(saved["tool_result_deduplication"]["file_read"],false);
+        for key in ["tool_execution","tool_modes","visibility"]{assert_eq!(saved[key],before[key]);}
+        assert_eq!(result_deduplication_set(State(app.clone()),Extension(identity.clone()),Path(path),Json(ResultDeduplicationBody{expected_revision:revision,included:true})).await.unwrap_err().0,StatusCode::CONFLICT);
+        assert!(result_deduplication_set(State(app),Extension(identity),Path(("shared_default".into(),"codebase_admin".into(),"unknown-tool".into())),Json(ResultDeduplicationBody{expected_revision:revision+1,included:true})).await.is_err());
     }
     #[tokio::test]
     async fn tool_execution_is_authorized_validated_persisted_and_revision_fenced() {

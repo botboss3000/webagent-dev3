@@ -23,6 +23,14 @@ fn event(row: &SqliteRow, store: &Store, sid: &str) -> Result<Value> {
         "created_at":row.get::<i64,_>("created_at")*1000,"boundary_quality":if row.get::<Option<String>,_>("boundary_item_id").is_some(){"recorded"}else{"legacy_unverified"}}))
 }
 impl Store {
+    /// Resolve one immutable execution inside the already-authorized session, rejecting ambiguous IDs.
+    pub async fn tool_result_origin(&self, sid:&str, call_id:&str) -> Result<Option<(String,Value)>> {
+        let rows=sqlx::query("SELECT run_id,item FROM interactions WHERE session_id=? AND step=? ORDER BY seq DESC LIMIT 2")
+            .bind(sid).bind(format!("tool:{call_id}")).fetch_all(&self.pool).await?;
+        if rows.len()>1 {anyhow::bail!("Ambiguous tool-result origin");}
+        rows.into_iter().next().map(|row|Ok((row.get::<String,_>("run_id"),self.unseal(&row.get::<Vec<u8>,_>("item"))?))).transpose()
+    }
+
     /// Exact encrypted interaction lookup for bounded current-run result recall.
     pub async fn tool_result(&self, sid:&str, rid:&str, call_id:&str) -> Result<Option<Value>> {
         let row:Option<Vec<u8>>=sqlx::query_scalar(

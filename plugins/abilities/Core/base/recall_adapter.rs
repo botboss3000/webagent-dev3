@@ -181,13 +181,16 @@ async fn work(app: &App, sid: &str, run_id: &str, args: &Value) -> Result<Value>
     } else if let Some(call_id) = parsed.tool_call_id.as_deref() {
         let run=current.app.run(run_id).await?;
         // Origin comes from the session-owned retention ledger, never a model-supplied run ID.
-        let origin=crate::tool_output::origin_run_id(&run,call_id).unwrap_or(run_id);
+        let known=crate::tool_output::origin_run_id(&run,call_id);
+        let discovered=if known.is_none(){current.app.store.tool_result_origin(sid,call_id).await?}else{None};
+        let origin=known.or_else(||discovered.as_ref().map(|(id,_)|id.as_str())).unwrap_or(run_id);
         let origin_run=current.app.run(origin).await?;
         if origin_run["session_id"]!=sid || origin_run["agent_id"]!=run["agent_id"] {
             bail!("Tool recall origin is unavailable");
         }
         let name=current.app.store.tool_call_name(sid,origin,call_id).await?;
-        let permitted = name.as_deref().is_some_and(crate::tool_output::eligible);
+        let permitted = name.as_deref().is_some_and(|name|crate::tool_output::eligible(name)
+            || run["tool_result_projection"]["origins"][call_id]["tool"]==name);
         let result = if permitted {
             let name = name.as_deref().unwrap();
             let agent=session_agent_id(&current.app,sid).await?;
@@ -199,7 +202,7 @@ async fn work(app: &App, sid: &str, run_id: &str, args: &Value) -> Result<Value>
                 != crate::access::Permission::Deny {
                 if let Some(record)=current.app.store.tool_result(sid,origin,call_id).await? {
                     let raw = record["output"].as_str().context("Tool result unavailable")?;
-                    if origin != run_id
+                    if origin != run_id && discovered.is_none()
                         && !crate::tool_output::verify_origin_output(&run,call_id,name,raw)
                     {
                         bail!("Archived tool result does not match retained provenance");

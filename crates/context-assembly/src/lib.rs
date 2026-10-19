@@ -5,3 +5,5 @@ pub mod protocol;
 
 /// Build-owned identity of the algorithm linked into this executable; live service metadata cannot replace it.
 pub const IMPLEMENTATION_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub mod tool_results;

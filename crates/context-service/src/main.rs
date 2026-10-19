@@ -8,7 +8,7 @@ use webagent_context_assembly::{protocol::PrepareRequest,context_accounting::Con
 const LIMIT:usize=16*1024*1024;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Call {version:u32,id:String,run_key:String,#[serde(default)]operation:Option<String>,#[serde(default)]input:Option<PrepareRequest>}
+struct Call {version:u32,id:String,run_key:String,#[serde(default)]operation:Option<String>,#[serde(default)]input:Option<Value>}
 #[derive(Serialize)]
 struct Reply {version:u32,id:String,result:Value}
 struct Cached {state:ContextAccounting,len:usize,prefix:String}
@@ -60,6 +60,20 @@ fn serve()->Result<()> {
   }
   if call.operation.as_deref().is_some_and(|op|op!="prepare"){bail!("context operation rejected");}
   let input=call.input.ok_or_else(||anyhow::anyhow!("context request missing"))?;
+  // Compatible optional context operation: pure planning shares the existing confined generation.
+  // No alternate socket, executable, state store or execution authority is accepted.
+  if let Some(projection)=input.get("tool_result_projection") {
+   if input.as_object().is_none_or(|object|object.len()!=1){bail!("context projection arguments");}
+   let request:webagent_context_assembly::tool_results::Request=serde_json::from_value(projection.clone())?;
+   let result=match webagent_context_assembly::tool_results::project(&request) {
+    Ok(plan)=>json!({"status":"success","implementation_version":webagent_context_assembly::IMPLEMENTATION_VERSION,"tool_result_projection":plan}),
+    Err(_)=>json!({"status":"failure","code":"invalid_tool_result_projection","stage":"tool_results"}),
+   };
+   let bytes=serde_json::to_vec(&Reply{version:1,id:call.id,result})?;
+   if bytes.len()+1>LIMIT{bail!("context projection response limit");}
+   writer.write_all(&bytes)?;writer.write_all(b"\n")?;writer.flush()?;continue;
+  }
+  let input:PrepareRequest=serde_json::from_value(input)?;
   if caches.len()>=128&&!caches.contains_key(&call.run_key){if let Some(key)=caches.keys().next().cloned(){caches.remove(&key);}}
   let cached=caches.entry(call.run_key.clone()).or_insert_with(||Cached{state:ContextAccounting::default(),len:0,prefix:String::new()});
   if input.history.len()<cached.len||cached.len>0&&hex::encode(Sha256::digest(serde_json::to_vec(&input.history[..cached.len])?))!=cached.prefix {cached.state.reset();}

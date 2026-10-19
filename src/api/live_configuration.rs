@@ -1,5 +1,6 @@
 //! Revision-fenced administrator updates to existing application configuration.
 use super::*;
+use anyhow::Context;
 use std::path::Path as FsPath;
 const IDS:[&str;9]=["app_settings","chat","prompts","context_compaction","loop_runtime","tool_output_retention","access_policy","message_visibility","closing_status"];
 /// Map a known configuration owner to its existing runtime path; never accept a caller filesystem path.
@@ -55,6 +56,8 @@ pub(crate) fn validate(id:&str,value:&Value)->Result<()> {
 /// Validate base strings and optional naming, manager, and retention sections without exposing their values.
 pub(crate) fn validate_prompts(value:&Value)->Result<()>{
     let object=value.as_object().ok_or_else(||anyhow!("Invalid prompts"))?;
+    let placeholder=value["tool_result_deduplication"]["placeholder"].as_str().context("Required duplicate-result placeholder missing")?;
+    webagent_context_contracts::tool_results::validate_template(placeholder)?;
     for key in ["base_instructions","closing_reporting","jev_guidance"] {
         if value[key].as_str().is_none_or(|s|s.trim().is_empty()||s.len()>65536){anyhow::bail!("Invalid base prompt");}
     }
