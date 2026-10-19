@@ -81,14 +81,39 @@ pub(crate) async fn create_session(State(app): State<App>, Json(body): Json<Valu
         if receipt["digest"] != digest(&body) {
             return Err(conflict("Request identifier reused with different input"));
         }
+        finish_session_creation(&app.store,&receipt["result"]).await?;
         return Ok(Json(receipt["result"].clone()));
     }
     let prepared=prepare_session(&app,&body).await?;
     let mut docs=prepared.docs;
     docs.push((receipt_key,json!({"digest":digest(&body),"result":prepared.result})));
     app.store.atomic_docs_event(docs,prepared.result["id"].as_str().unwrap(),"session_created",&prepared.result).await?;
-    app.store.register_shared_session(app.store.current_user_id(),prepared.result["id"].as_str().unwrap(),prepared.result["agent_id"].as_str().unwrap()).await?;
+    finish_session_creation(&app.store,&prepared.result).await?;
     Ok(Json(prepared.result))
+}
+/// Finalize the app-directory projection on fresh creation and receipt replay.
+/// The owner-plane commit is already durable: never create a second session to recover it.
+async fn finish_session_creation(store:&Store,result:&Value)->std::result::Result<(),ApiError> {
+    let sid=result["id"].as_str().ok_or_else(||anyhow::anyhow!("Session creation receipt has no session ID"))?;
+    let agent=result["agent_id"].as_str().ok_or_else(||anyhow::anyhow!("Session creation receipt has no agent ID"))?;
+    let mut retry_busy=true;
+    loop {
+        match store.register_shared_session(store.current_user_id(),sid,agent).await {
+            Ok(())=>return Ok(()),
+            Err(error)=>{
+                let code=error.downcast_ref::<sqlx::Error>().and_then(|e|e.as_database_error())
+                    .and_then(|e|e.code()).map(|v|v.into_owned());
+                let busy=code.as_deref().and_then(|v|v.parse::<u32>().ok())
+                    .is_some_and(|v|matches!(v&255,5|6));
+                if busy&&retry_busy {retry_busy=false;tokio::time::sleep(std::time::Duration::from_millis(20)).await;continue;}
+                // Only fixed classifications reach logs; SQL text and session content stay private.
+                tracing::warn!(operation="session_directory_registration",error_kind=if busy {"sqlite_busy"}else if code.is_some(){"sqlite_database"}else{"storage"},"Saved session directory finalization incomplete");
+                diagnostics::backend_error();
+                return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE,
+                    "Session saved, but directory registration is unavailable. Retry with the same client_request_id.".into()));
+            }
+        }
+    }
 }
 pub(crate) struct PreparedSession {
     pub docs: Vec<(String,Value)>,
@@ -879,4 +904,46 @@ pub(crate) async fn background_task_metadata_api(State(app):State<App>,Path((sid
   for key in ["arguments","result","claim_id","authorization"]{assert!(value.get(key).is_none());}
   assert_eq!(background_task_metadata_api(State(app),Path(("other".into(),id))).await.err().unwrap().0,StatusCode::NOT_FOUND);
  }
+}
+
+#[cfg(test)]
+mod session_creation_recovery_tests {
+    use super::*;
+    #[tokio::test]
+    async fn saved_shared_default_creation_retries_directory_without_duplicate_session_or_event() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        app.store.shared_schema().await.unwrap();
+        // Fail only the app-plane finalization after the owner-plane commit succeeds.
+        sqlx::query("CREATE TRIGGER fixture_directory_failure BEFORE INSERT ON shared_sessions BEGIN SELECT RAISE(ABORT,'fixture directory unavailable'); END")
+            .execute(&app.store.app_pool).await.unwrap();
+        let body=json!({"client_request_id":"directory-recovery","agent_id":"shared_default","title":"Preserved title"});
+        let error=create_session(State(app.clone()),Json(body.clone())).await.unwrap_err();
+        assert_eq!(error.0,StatusCode::SERVICE_UNAVAILABLE);
+        assert!(error.1.contains("same client_request_id"));
+        let receipt=app.store.get("receipt:session:directory-recovery").await.unwrap().unwrap();
+        let original=receipt["result"].clone();let sid=original["id"].as_str().unwrap();
+        assert_eq!(app.store.get(&key("session",sid)).await.unwrap().unwrap()["title"],"Preserved title");
+        assert!(app.store.shared_directory(sid).await.unwrap().is_none());
+        sqlx::query("DROP TRIGGER fixture_directory_failure").execute(&app.store.app_pool).await.unwrap();
+        let retried=create_session(State(app.clone()),Json(body.clone())).await.unwrap().0;
+        assert_eq!(retried,original);
+        let directory=app.store.shared_directory(sid).await.unwrap().unwrap();
+        assert_eq!(directory["owner_id"],app.store.current_user_id());assert_eq!(directory["agent_id"],"shared_default");
+        assert_eq!(create_session(State(app.clone()),Json(body.clone())).await.unwrap().0,original);
+        let events:i64=sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE session_id=? AND kind='session_created'").bind(sid).fetch_one(&app.store.pool).await.unwrap();
+        assert_eq!(events,1);
+        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key LIKE 'session:%'").fetch_one(&app.store.pool).await.unwrap();assert_eq!(count,1);
+        let mut changed=body;changed["title"]=json!("Changed retry");
+        assert_eq!(create_session(State(app.clone()),Json(changed)).await.unwrap_err().0,StatusCode::CONFLICT);
+    }
+    #[tokio::test]
+    async fn saved_session_finalization_preserves_conflicting_directory_authority() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let body=json!({"client_request_id":"directory-conflict","title":"Original"});
+        let created=create_session(State(app.clone()),Json(body.clone())).await.unwrap().0;let sid=created["id"].as_str().unwrap();
+        sqlx::query("UPDATE shared_sessions SET owner_id='other-owner' WHERE session_id=?").bind(sid).execute(&app.store.app_pool).await.unwrap();
+        assert_eq!(create_session(State(app.clone()),Json(body.clone())).await.unwrap_err().0,StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(app.store.shared_directory(sid).await.unwrap().unwrap()["owner_id"],"other-owner");
+        assert_eq!(app.store.get("receipt:session:directory-conflict").await.unwrap().unwrap()["result"],created);
+    }
 }
