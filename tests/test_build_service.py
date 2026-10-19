@@ -1424,3 +1424,39 @@ class ContinuationReconciliationTests(unittest.TestCase):
         result=self.call("build_work",request)
         self.assertEqual(result["ownership"],committed);self.assertEqual(self.broker.scheduler.store.get(item["key"]),committed)
         self.assertEqual(json.loads(path.read_text())["state"],"done")
+
+class CompilerManifestRecoveryTests(unittest.TestCase):
+    """Unhealthy API recovery reads immutable compiler evidence without mounting state."""
+    def fixture(self,manifest="/build/src/main.rs\n/build/src/context/tool_output.rs\n"):
+        self.calls=[];self.inspect_count=0
+        self.identity={"Id":"a"*64,"Image":"sha256:"+"b"*64}
+        def command(argv,timeout,private_raw):
+            self.calls.append(argv)
+            if argv[1]=="exec":raise RuntimeError("container restarting")
+            return manifest
+        self.runner=types.SimpleNamespace(command=command,inspect=lambda name:dict(self.identity))
+    def test_fallback_preserves_exact_image_and_required_manifest(self):
+        self.fixture()
+        with patch.object(fixtures.host.subprocess,"run")as cleanup:
+            result=fixtures.host.Runner.core_compile_inputs(self.runner)
+        self.assertEqual(result,{"v3/src/main.rs","v3/src/context/tool_output.rs"})
+        argv=self.calls[1];self.assertIn("--read-only",argv);self.assertNotIn("--mount",argv);self.assertNotIn("-v",argv)
+        self.assertEqual(argv[argv.index("--network")+1],"none")
+        self.assertEqual(argv[-2],self.identity["Image"]);self.assertEqual(argv[-1],"/usr/local/lib/webagent/core-inputs.txt")
+        self.assertEqual(argv[argv.index("--entrypoint")+1],"/bin/cat");cleanup.assert_called_once()
+    def test_changed_identity_or_missing_main_manifest_fails_closed(self):
+        self.fixture("/build/config/example.json\n")
+        with patch.object(fixtures.host.subprocess,"run"):
+            with self.assertRaisesRegex(ValueError,"manifest unavailable"):fixtures.host.Runner.core_compile_inputs(self.runner)
+        self.fixture()
+        def inspect(name):
+            self.inspect_count+=1
+            return {**self.identity,"Id":("c"*64 if self.inspect_count>1 else self.identity["Id"])}
+        self.runner.inspect=inspect
+        with patch.object(fixtures.host.subprocess,"run"):
+            with self.assertRaisesRegex(ValueError,"runtime changed"):fixtures.host.Runner.core_compile_inputs(self.runner)
+    def test_available_live_manifest_uses_no_fallback(self):
+        self.fixture();self.runner.command=lambda *a,**kw:"/build/src/main.rs\n"
+        with patch.object(fixtures.host.subprocess,"run")as cleanup:
+            self.assertEqual(fixtures.host.Runner.core_compile_inputs(self.runner),{"v3/src/main.rs"})
+        cleanup.assert_not_called()

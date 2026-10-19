@@ -751,6 +751,24 @@ class CapturedBackendRestorationTests(ConcurrentUIEntryTests):
         self.assertFalse(any(c[0]in {"remove","build","create","promote"}for c in self.runner.calls[start:]))
         self.assertNotIn("NEVER-EXPOSE-THIS",json.dumps(result)+json.dumps(self.broker.jobs[job]["publication_recovery"]))
 
+    def test_restarting_certified_candidate_is_stopped_before_quarantine(self):
+        job=self.failed();api=fixtures.host.TARGETS[0];identity=self.runner.containers[api]["Id"]
+        self.runner.containers[api]["State"]["Status"]="restarting"
+        start=len(self.runner.calls);result=self.restore(job);self.verify_originals(job)
+        failed=self.runner.containers[api+"-failed-build-"+job]
+        self.assertEqual(failed["Id"],identity);self.assertEqual(failed["State"]["Status"],"exited")
+        calls=self.runner.calls[start:];stop=next(i for i,c in enumerate(calls)if c[0]=="stop"and c[1]==api)
+        rename=next(i for i,c in enumerate(calls)if c[0]=="rename"and c[1]==api)
+        self.assertLess(stop,rename);self.assertTrue(result["effects_reconciled"])
+        self.assertEqual(self.restore(job),result)
+
+    def test_unattested_restarting_candidate_remains_untouched(self):
+        job=self.failed();api=fixtures.host.TARGETS[0];value=self.runner.containers[api]
+        value["State"]["Status"]="restarting";value["Config"]["Labels"]={};value["Id"]=uuid.uuid4().hex+uuid.uuid4().hex
+        start=len(self.runner.calls)
+        with self.assertRaisesRegex(ValueError,"Unrecognized replacement"):self.restore(job)
+        self.assertFalse(any(c[0]in {"stop","rename","start"}for c in self.runner.calls[start:]))
+
     def test_each_activation_boundary_can_restore(self):
         for point in ("stop_loop","api_create","loop_create","after_api_create"):
             with self.subTest(point=point):

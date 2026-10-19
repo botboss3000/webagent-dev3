@@ -1577,7 +1577,19 @@ print(json.dumps(counts))"""
     def core_compile_inputs(self):
         """Preserve normalized installed compiler inputs, including embedded documentation."""
         import posixpath
-        raw=self.command(["docker","exec",TARGETS[0],"cat","/usr/local/lib/webagent/core-inputs.txt"],timeout=10,private_raw=True)
+        try:
+            raw=self.command(["docker","exec",TARGETS[0],"cat","/usr/local/lib/webagent/core-inputs.txt"],timeout=10,private_raw=True)
+        except (RuntimeError,subprocess.TimeoutExpired):
+            # Recovery must not depend on a healthy application process. Read only
+            # the same immutable image's attestation, with no runtime state mounted.
+            current=self.inspect(TARGETS[0]);image=current.get("Image");identity=current.get("Id")
+            if not isinstance(image,str)or not re.fullmatch(r"sha256:[a-f0-9]{64}",image)or not isinstance(identity,str)or not re.fullmatch(r"[a-f0-9]{64}",identity):raise ValueError("Exact compiler-attestation image unavailable")
+            name="webagent-compiler-manifest-"+uuid.uuid4().hex
+            argv=["docker","run","--rm","--name",name,"--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges","--pids-limit","16","--memory","64m","--memory-swap","64m","--cpus","1","--user",str(CONFIG["app_uid"])+":"+str(CONFIG["app_gid"]),"--entrypoint","/bin/cat",image,"/usr/local/lib/webagent/core-inputs.txt"]
+            try:raw=self.command(argv,timeout=10,private_raw=True)
+            finally:subprocess.run(["docker","rm","-f",name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
+            observed=self.inspect(TARGETS[0])
+            if observed.get("Id")!=identity or observed.get("Image")!=image:raise ValueError("Compiler-attestation runtime changed")
         paths=set()
         for path in raw.splitlines():
             if path.startswith("/build/"):path=path[len("/build/"):]

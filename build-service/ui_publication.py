@@ -359,7 +359,7 @@ class UIPublication:
                 marked=all(labels.get(k)==v for k,v in {"webagent.release.job":job["job_id"],"webagent.release.role":role,"webagent.release.instance":self.broker.runner.source_config["instance"]}.items())
                 if candidate.get("Image")!=job.get("images",{}).get(role)or not(certified or marked)or not re.fullmatch(r"[a-f0-9]{64}",candidate.get("Id","")):
                     raise ValueError("Unrecognized replacement container; explicit reconciliation required")
-                if candidate.get("State",{}).get("Status")not in {"running","exited","created"}:raise ValueError("Failed replacement state requires reconciliation")
+                if candidate.get("State",{}).get("Status")not in {"running","restarting","exited","created"}:raise ValueError("Failed replacement state requires reconciliation")
             value={"id":old["Id"],"image":old["Image"],"failed_name":failed,"candidate_id":candidate["Id"]if candidate else None}
             if plan and plan["roles"].get(role)!=value:raise ValueError("Captured restoration identities changed")
             roles[role]=value;observed[role]=(name,backup,failed,values,old_name,candidate)
@@ -376,7 +376,7 @@ class UIPublication:
             recovery["restore"].pop("intent",None);self.broker._save(job)
         # All roles/configurations are checked before the first mutation.
         for role,(name,backup,failed,values,old_name,candidate)in observed.items():
-            if candidate and candidate["State"]["Status"]=="running":
+            if candidate and candidate["State"]["Status"]in {"running","restarting"}:
                 effect(role,"stop_failed",candidate["Id"],lambda v=candidate:runner.stop(v["Id"]))
             if candidate and values[name]and values[name]["Id"]==candidate["Id"]:
                 effect(role,"quarantine_failed",candidate["Id"],lambda v=candidate,n=failed:runner.rename(v["Id"],n))
