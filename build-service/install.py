@@ -192,7 +192,7 @@ def install(tree=None):
         publish(service, "index-scanner.py", scanner, 0o644)
         publish(service,"index-maintenance.py",maintenance,0o644)
         extra={"index-maintenance.py":hashlib.sha256(maintenance).hexdigest()}
-        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","index_queue.py","index_coordinator.py","review_store.py","review_policy.py","post_deployment.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","boot_host.py","scheduler-defaults.json"):
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","index_queue.py","index_coordinator.py","review_store.py","review_policy.py","post_deployment.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","monitoring_component.py","boot_host.py","scheduler-defaults.json"):
             body=read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
             if name.endswith(".py"):compile(body,name,"exec")
             elif name.endswith(".json"):json.loads(body)
@@ -424,7 +424,7 @@ def snapshot_context(context):
                 inspection = name in INSPECTION_CONTEXT
                 source = V3 / name.removeprefix("v3/") if name.startswith("v3/") else SHARED_SOURCE / name
                 if name.startswith("v3/data/config/gates/") and not source.exists():source=V3/"config/gates"/source.name
-                if name in {"v3/build-service","v3/crates","v3/plugins/engine"} and not source.exists()and not source.is_symlink():continue
+                if name in {"v3/build-service","v3/crates","v3/plugins/engine","v3/services/system-monitoring"} and not source.exists()and not source.is_symlink():continue
                 parent_path, leaf = source.parent, source.name
                 try:
                     parent = directory(parent_path)

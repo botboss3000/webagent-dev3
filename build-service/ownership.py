@@ -101,6 +101,9 @@ class Components:
                 # These Python suites validate broker/index contracts, not the Rust engine.
                 output.add("module:broker")
                 if any(overlap(path,p)for p in self.compile_inputs):output.add("module:engine")
+            elif path.startswith("services/system-monitoring/"):
+                output.add("module:service:system-monitoring")
+                if any(overlap(path,p)for p in self.compile_inputs):output.add("module:engine")
             elif path.startswith("ui/"):
                 if not self.ui_file_reservations:output.add("module:ui:"+ (parts[1]if len(parts)>1 else "shell"))
                 # Compiler attestations override UI eligibility, including subtree claims.

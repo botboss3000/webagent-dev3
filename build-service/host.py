@@ -45,6 +45,7 @@ scheduler_module=importlib.util.module_from_spec(_scheduler_spec);_scheduler_spe
 resource_module=scheduler_module.sibling("resources")
 executor_module=scheduler_module.sibling("executor")
 engine_components=scheduler_module.sibling("engine_components")
+monitoring_component=scheduler_module.sibling("monitoring_component")
 index_queue_module=scheduler_module.sibling("index_queue")
 index_coordinator_module=scheduler_module.sibling("index_coordinator")
 ui_policy_module=scheduler_module.sibling("ui_policy")
@@ -69,7 +70,7 @@ BRIDGE_SOCKET = Path(CONFIG["runtime_root"])/"python.sock"
 BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
 CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
-    "v3/src", "v3/crates", "v3/ui", "v3/plugins/engine", "v3/plugins/abilities", "v3/plugins/gates", "v3/worker.py",
+    "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/plugins/abilities", "v3/plugins/gates", "v3/worker.py",
     "v3/sandbox.py", "v3/ability_plugin_worker.py", "v3/launch.py", "v3/promote.py", "v3/ui-baseline.json", "v3/tests",
     "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service",
     "v3/data/config/gates/message_visibility_v1.json",
@@ -176,6 +177,7 @@ def engine_component_source_path(path):
 
 def generic_package_path(path,blob):
     """Classify registered engine and isolated ability inputs; authority and actual core dependencies still fence publication."""
+    if monitoring_component.package_path(path):return True
     if engine_components.package_path(path,release.entries(blob,context_digest)):return True
     if not path.startswith(ABILITY_ROOT):return False
     parts=path[len(ABILITY_ROOT):].split("/")
@@ -1111,6 +1113,8 @@ print(json.dumps(counts))"""
         engine_outputs=self.build_engine_artifacts(job_id,source_root=Path((getattr(self.job_context,"job",None)or{}).get("release_root",ASSET_ROOT/"releases"/job_id)))
         destination = release.stage_assets(Path(asset_root)if asset_root is not None else ASSET_ROOT, job_id, blob, context_digest)
         engine_components.seal(destination,engine_outputs,ASSET_ROOT)
+        monitoring_outputs=monitoring_component.build(self,job_id,Path((getattr(self.job_context,"job",None)or{}).get("release_root",destination)),STATE,ASSET_ROOT,executor_module,scheduler_module)
+        monitoring_component.seal(destination,monitoring_outputs,ASSET_ROOT)
         if base_release_id is None:engine_components.seal_catalog(destination,job_id,ASSET_ROOT)
         else:engine_components.seal_catalog(destination,job_id,ASSET_ROOT,base_release_id=base_release_id)
         self.readable_assets(destination)
@@ -3441,8 +3445,8 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        review_modules={"buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
-        allowed={"v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
+        allowed={"v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
