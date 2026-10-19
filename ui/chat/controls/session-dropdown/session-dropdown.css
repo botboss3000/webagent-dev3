@@ -1,3 +1,4 @@
+@import url("/v3-ui/shared/main-chat-avatar.css");
 /* @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown rows","session footer"],"purpose":"Keeps configured rows scrollable and the optional footer reachable. Config: ui/chat/controls/session-dropdown/session-dropdown.json -> common.menu.default_rows and common.footer with surface overlays.","span_lines":12,"configuration":{"status":"configured","references":[{"path":"ui/chat/controls/session-dropdown/session-dropdown.json","pointers":["/common/menu/default_rows","/common/footer"]}],"opportunities":[]}} */
 #session-dropdown-menu:not([hidden]) { display:flex; flex-direction:column; overflow:hidden; }
 #session-dropdown-menu[data-state="open"] { max-height:min(var(--session-menu-open-height, 66vh),var(--session-dropdown-max-height, 66vh)); }

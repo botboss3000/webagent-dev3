@@ -26,7 +26,7 @@ async function fixture(t,{mobile=false}={}) {
   window.config=cfg.sessionDropdownConfig('chat_desktop');window.selectedCalls=[];window.writes=[];window.refreshes=0;
   const root=document.querySelector('#session-dropdown');
   window.items=Array.from({length:18},(_,i)=>({id:'s'+i,title:'Session '+i,agent_id:'shared_default',last_active_at:123,metadata_revision:1,status:'active'}));
-  window.controller=mountSessionDropdown(root,{refresh:async()=>{refreshes++;list.update(items,'s0');},select:id=>selectedCalls.push(id),guard:fn=>fn,resetSearch:()=>list.reset()});
+  window.controller=mountSessionDropdown(root,{refresh:async()=>{refreshes++;list.update(items,window.fixtureSelected||'s0');},select:id=>selectedCalls.push(id),guard:fn=>fn,resetSearch:()=>list.reset()});
   window.list=createSessionList(root,{guard:fn=>fn,refresh:async()=>{refreshes++;},select:id=>selectedCalls.push(id),client:{sessions:async status=>({sessions:status==='active'?items:[{...items[0],id:'bin',status:'recycled'}]}),patch:async(id,body)=>{writes.push({id,body});return {session:{...items[0],title:body.title}};}},screenSettings:()=>{const d=document.createElement('details');d.className='display-settings';d.innerHTML='<summary>Screen display</summary>';return d;}});
   list.configure(config);list.update(items,'s0');
  });
@@ -88,4 +88,23 @@ test('renamed Main Chat keeps rename and hides delete across trigger, menu and b
  assert.equal(await p.locator('#session-dropdown-delete').isVisible(),false);
  await p.locator('#session-dropdown-kebab').click();assert.equal(await p.getByRole('button',{name:'Recycle session',exact:true}).count(),0);assert.equal(await p.getByRole('button',{name:'Rename session',exact:true}).count(),1);await p.keyboard.press('Escape');
  await openList(p);await p.getByRole('button',{name:'Enable checkbox mode',exact:true}).click();assert.equal(await p.locator('.session-row[data-id="s0"] .session-row-checkbox').isDisabled(),true);await p.locator('.session-row[data-id="s0"]').click();assert.equal(await p.evaluate(()=>writes.length),0);
+});
+
+for (const mobile of [false,true]) test(`Main Chat outranks pins and keeps a wavy halo after rename and selection (${mobile?'mobile':'desktop'})`,async t=>{
+ const p=await fixture(t,{mobile});await p.evaluate(()=>{
+  window.fixtureSelected='main';
+  items=[{...items[0],id:'pin',pinned:true,last_active_at:900},{...items[1],id:'recent',title:'Main Chat',last_active_at:999},{...items[2],id:'main',title:'Renamed coordinator',main_chat:true,last_active_at:1}];list.update(items,'main');
+ });await openList(p);
+ assert.deepEqual(await p.locator('.session-dropdown-rows .session-row').evaluateAll(rows=>rows.map(r=>r.dataset.id)),['main','pin','recent']);
+ for(const light of [false,true]){
+  await p.evaluate(light=>document.body.classList.toggle('light-mode',light),light);
+  const ring=await p.locator('[data-id="main"] .session-row-agent-icon').evaluate(n=>{const s=getComputedStyle(n,'::after');return {mask:s.maskImage||s.webkitMaskImage,width:s.width,height:s.height,pointer:s.pointerEvents,background:s.backgroundColor};});
+  assert.match(ring.mask,/data:image\/svg\+xml/);assert.equal(ring.pointer,'none');assert.notEqual(ring.background,'rgba(0, 0, 0, 0)');assert.ok(parseFloat(ring.width)>18);assert.ok(parseFloat(ring.height)>18);
+  assert.equal(await p.locator('[data-id="pin"] .session-row-agent-warning').count(),1);
+  assert.equal(await p.locator('#session-dropdown-icon.session-row-agent-main').count(),1);
+ }
+ await p.evaluate(()=>{items=items.map(item=>item.id==='main'?{...item,pinned:true,title:'Renamed again'}:item);list.update(items,'main');});
+ assert.equal(await p.locator('[data-id="main"] .session-row-agent-warning').count(),0);
+ assert.equal(await p.locator('[data-id="main"] .session-row-agent-main').count(),1);
+ await p.evaluate(()=>list.update(items,'pin'));assert.equal(await p.locator('#session-dropdown-icon.session-row-agent-main').count(),0);assert.equal(await p.locator('#session-dropdown-icon.session-row-agent-warning').count(),1);
 });

@@ -15,7 +15,8 @@ export const _formatRelativeTime = value => {
 export const _fmtTime = value => value ? _formatRelativeTime(value) : '—';
 export const _isSessionRead = row => !row.is_unread;
 export function positionKebabPopup(popup,button){const r=button.getBoundingClientRect();popup.style.position='fixed';popup.style.zIndex='10000';popup.style.top=Math.max(4,Math.min(r.bottom,innerHeight-popup.offsetHeight-4))+'px';popup.style.left=Math.max(4,Math.min(r.right-popup.offsetWidth,innerWidth-popup.offsetWidth-4))+'px';}
-export const compareSessionsByPinnedOrder = (a,b) => Number(!!b.pinned&&b._origin!=='bin')-Number(!!a.pinned&&a._origin!=='bin')||(b.last_active_at||0)-(a.last_active_at||0)||String(a.id).localeCompare(String(b.id));
+// Canonical Main Chat outranks pins; remaining rows retain activity and stable-ID ordering.
+export const compareSessionsByPinnedOrder = (a,b) => Number(b.main_chat===true&&b._origin!=='bin')-Number(a.main_chat===true&&a._origin!=='bin')||Number(!!b.pinned&&b._origin!=='bin')-Number(!!a.pinned&&a._origin!=='bin')||(b.last_active_at||0)-(a.last_active_at||0)||String(a.id).localeCompare(String(b.id));
 export function createSessionAdapter({request, roster, userId, changed, isAlive=()=>true}) {
   const receipts=new Map(), rows=new Map();
   const iso=seconds=>seconds>0?new Date(seconds*1000).toISOString():null;

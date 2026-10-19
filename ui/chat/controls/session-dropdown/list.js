@@ -51,7 +51,8 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
       node.hidden = config.trigger?.[{icon:'agent_icon',label:'session_name',kebab:'row_actions'}[id] || id] === false || (id === 'kebab' && config.trigger?.row_actions !== true) || (id === 'delete' && (config.trigger?.delete !== true || protectedSession(item)));
       node.style.display = node.hidden ? 'none' : '';
     }
-    root.querySelector('#session-dropdown-icon').classList.toggle('session-row-agent-warning', !!item?.pinned);
+    root.querySelector('#session-dropdown-icon').classList.toggle('session-row-agent-warning', !!item?.pinned && item?.main_chat !== true);
+    root.querySelector('#session-dropdown-icon').classList.toggle('session-row-agent-main', item?.main_chat === true);
     const statusEl = root.querySelector('#session-dropdown-status');
     statusEl.replaceChildren(); if (item) statusEl.append(statusNode(item));
     root.querySelector('#session-dropdown-delete').disabled = !item || item.status === 'recycled' || protectedSession(item);
@@ -280,6 +281,8 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
     menu.append(rowList);
     const source = status === 'active' ? items : binItems;
     const rows = query.trim() ? hits.map(hit => ({item:source.find(s => s.id === hit.session_id),hit})).filter(r => r.item) : source.map(item => ({item}));
+    // Float canonical Main Chat without changing the server's pinned/recent or search order.
+    if (status === 'active') rows.sort((a,b) => Number(b.item.main_chat === true) - Number(a.item.main_chat === true));
     for (const {item,hit} of rows) {
       const row = document.createElement('div'); row.className = 'session-row' + (item.id === selected ? ' selected' : '') + (item.pinned ? ' pinned' : '') + (status === 'recycled' ? ' recycled' : '');
       row.dataset.id = item.id; row.dataset.agent = item.agent_id; row.tabIndex = 0;
@@ -289,7 +292,7 @@ export function createSessionList(root, {guard, refresh, select, client, recycle
         row.append(b);
       }
       const title = document.createElement('span'); title.className = 'session-row-title';
-      if (config.menu?.agent_icons !== false) { const avatar = document.createElement('span'); avatar.className = 'session-row-agent-icon' + (item.pinned ? ' session-row-agent-warning' : ''); avatar.innerHTML = icon('bot'); title.append(avatar); }
+      if (config.menu?.agent_icons !== false) { const avatar = document.createElement('span'); avatar.className = 'session-row-agent-icon' + (item.main_chat === true ? ' session-row-agent-main' : item.pinned ? ' session-row-agent-warning' : ''); avatar.innerHTML = icon('bot'); title.append(avatar); }
       const text = document.createElement('span'); text.className = 'session-row-title-label'; text.textContent = item.title || 'New Session'; text.hidden = config.menu?.session_name === false; title.append(text); row.append(title);
       if (hit) { const snippet = document.createElement('span'); snippet.className = 'session-row-msg-hit'; snippet.textContent = hit.snippet; snippet.title = hit.snippet; row.append(snippet); }
       if (config.menu?.status !== false) row.append(statusNode(item));

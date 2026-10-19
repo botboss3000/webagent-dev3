@@ -597,15 +597,14 @@ const _SORT_KEY_MAP = {
 function _applySort(sessions) {
   const spec = _SORT_KEY_MAP[_sortColumn] || _SORT_KEY_MAP.last_active;
   const dir = _sortAsc ? 1 : -1;
-  // The default "recent" view IS the shared session-list order — pinned rows first,
-  // then newest activity — and it is applied through the SAME comparator the chat
-  // session picker and the session activity chart above this table rank by (see
-  // ui/shared/js/session-ordering.js), so the table and the chart cannot drift.
-  // That comparator intentionally blends coarse recency with repeated use, so the
-  // first few rows do not reshuffle on every message.
+  // Main Chat first, then pins and recent activity. Explicit column sorts keep
+  // the same Main Chat/pinned priority before sorting the remaining groups.
   const defaultRecent = _sortColumn === 'last_active' && !_sortAsc;
   return sessions.slice().sort((a, b) => {
     if (defaultRecent) return compareSessionsByPinnedOrder(a, b);
+    const am = a.main_chat === true && a._origin !== 'bin';
+    const bm = b.main_chat === true && b._origin !== 'bin';
+    if (am !== bm) return am ? -1 : 1;
     // An explicit column sort still floats pinned sessions first — but a binned row
     // loses that pinned ordering status (the pin flag stays set so restore brings it
     // back): bin rows sort purely by the chosen column.
@@ -1135,7 +1134,7 @@ function _renderTitleCell(row, colId, depth, isSession, isAuto, childrenOf) {
     // their title, while ordinary session avatars remain passive identity marks.
     const kids = childrenOf ? (childrenOf.get(row.session_id) || []) : [];
     const childCount = kids.length;
-    const avatarClasses = 'session-row-agent-icon sess-title-agent-slot' + (row.pinned ? ' sess-title-agent-warning' : '');
+    const avatarClasses = 'session-row-agent-icon sess-title-agent-slot' + (row.main_chat === true ? ' session-row-agent-main' : row.pinned ? ' sess-title-agent-warning' : '');
     if (childCount > 0 && !row._cross) {
       const open = _expandedGroups.has(row.session_id);
       inner = '<button type="button" class="' + avatarClasses + ' sess-title-agent-toggle" data-session-id="' + _esc(row.session_id) + '" title="' + (open ? 'Collapse' : 'Expand') + ' ' + childCount + ' subagent' + (childCount === 1 ? '' : 's') + '" aria-label="' + (open ? 'Collapse' : 'Expand') + ' ' + childCount + ' subagent' + (childCount === 1 ? '' : 's') + '" aria-expanded="' + (open ? 'true' : 'false') + '">' + _agentIconHtml(row.agent_icon, row.agent_engine, '12px') + '</button>' + inner;
