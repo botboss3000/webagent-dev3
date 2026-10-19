@@ -13,6 +13,7 @@ import { purgeAllBrowserData } from './browser-data-reset.js';
 import { createFloatingChat,createChatLauncher } from './chat/widget/window.js';
 import { mountNativeWidget } from './chat/widget/native.js';
 import { authorizeEmbedPopup } from './embed/authorize.js';
+import { mountChatResize } from './shared/chat-resize.js';
 import { initChatConfig } from './chat/controls/chat-config.js';
 import { mountChatPanel } from './chat/core/panel.js';
 
@@ -640,6 +641,7 @@ const mobileLayout=matchMedia('(max-width:800px)');
 let mobileView=initialTab==='account'?'main':new URL(location.href).searchParams.has('session_id')?'chat':'main';
 let desktopChatVisible=true;
 const widget=mountNativeWidget({chat,createFloatingChat,createChatLauncher,onChange:()=>syncLayout(),onDock:()=>{desktopChatVisible=true;syncLayout();},note});
+mountChatResize({enabled:()=>!mobileLayout.matches&&!widget.floating&&desktopChatVisible});
 function updateChatControl(visible){$('chat-toggle-btn').classList.toggle('active',visible);$('chat-toggle-btn').setAttribute('aria-expanded',String(visible));}
 function showMobileView(view){mobileView=view;$('app').dataset.mobileView=view;updateChatControl(view==='chat');updateMainPageState();}
 function syncLayout(){

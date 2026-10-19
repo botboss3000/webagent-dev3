@@ -129,7 +129,16 @@ body {
 #tab-account .account-signin-row button{flex-shrink:0}
 #tab-account #account-sessions:empty{min-height:20px}
 #tab-account form{max-width:100%}
-#chat-resize-handle{flex:0 0 4px}
+#chat-resize-handle{flex:0 0 14px;position:relative;cursor:col-resize;touch-action:none;-webkit-tap-highlight-color:transparent;z-index:10}
+#chat-resize-handle::before{content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:2px;height:36px;border-radius:2px;background:var(--border);pointer-events:none;transition:height .15s,background .15s}
+#chat-resize-handle::after{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(100px circle at 50% var(--resize-y,50%),color-mix(in srgb,var(--accent) 28%,transparent),transparent 65%);opacity:0;transition:opacity .15s}
+#chat-resize-handle:hover::before,#chat-resize-handle.resizing::before,#chat-resize-handle:focus-visible::before{height:56px;background:var(--accent)}
+#chat-resize-handle:hover::after,#chat-resize-handle.resizing::after,#chat-resize-handle:focus-visible::after{opacity:1}
+#chat-resize-handle:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+body.chat-resizing,body.chat-resizing *{cursor:col-resize!important;user-select:none!important}
+#stage:has(> #chat-resize-handle:not([hidden])) > #main-panel{flex:1 1 0}
+#stage > #chat-panel{flex:0 0 var(--chat-panel-width,45%)}
+@media(prefers-reduced-motion:reduce){#chat-resize-handle::before,#chat-resize-handle::after{transition:none}}
 #chat-panel{display:flex!important;position:relative!important;inset:auto!important;flex:1 1 45%;width:auto!important;min-width:0;min-height:0;flex-direction:column!important}
 #chat-panel[hidden],#chat-resize-handle[hidden]{display:none!important}
 #agents-grid{min-height:100%}
