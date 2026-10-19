@@ -150,6 +150,33 @@ async function loadAgentRoster(){
 }
 let mainPages=[];
 let activeMainPage='';
+const protectedPageStarts=new Map();
+const protectedAsset=path=>typeof path==='string'&&path.startsWith('/api/v3/modules/');
+function startProtectedPage(page){
+  if(!accountMe||!page||!protectedAsset(page.entry)||protectedPageStarts.has(page.id))return;
+  const mount=$('tab-'+page.id);
+  // Optional package assets require authentication. A rejected import must not
+  // abort the shell before sign-in, or hide unrelated pages after sign-in.
+  const pending=(async()=>{
+    for(const href of page.css||[]){
+      if(!protectedAsset(href))continue;
+      const link=document.createElement('link');link.rel='stylesheet';link.href=href;
+      document.head.insertBefore(link,document.querySelector('link[href^="/v3-ui/app.css"]'));
+    }
+    if(protectedAsset(page.html)){
+      const response=await fetch(page.html,{credentials:'same-origin'});
+      if(!response.ok)throw Error(page.label+' page unavailable');
+      mount.innerHTML=await response.text();
+    }
+    const module=await import(page.entry);
+    if(typeof module.start!=='function')throw Error(page.label+' page has no start function');
+    await module.start(mount);
+  })().catch(error=>{
+    mount.textContent=page.label+' could not load: '+error.message;
+    protectedPageStarts.delete(page.id);
+  });
+  protectedPageStarts.set(page.id,pending);
+}
 async function loadMainPages(){
   const response=await fetch('/api/v3/pages/catalog',{credentials:'same-origin',cache:'no-store'});
   if(!response.ok)throw Error('Main page catalog unavailable');
@@ -159,6 +186,7 @@ async function loadMainPages(){
   activeMainPage=mainPages.some(page=>page.id===initialTab)?initialTab:mainPages[0].id;
   for(const page of mainPages){
     for(const href of page.css||[]){
+      if(protectedAsset(href))continue;
       const link=document.createElement('link');
       link.rel='stylesheet';link.href=href;
       document.head.insertBefore(link,document.querySelector('link[href^="/v3-ui/app.css"]'));
@@ -178,13 +206,13 @@ async function loadMainPages(){
     const mount=document.createElement('div');
     mount.id='tab-'+page.id;mount.className='tab-content';mount.hidden=page.id!==activeMainPage;
     $('main-panel').append(mount);
-    if(page.html){
+    if(page.html&&!protectedAsset(page.html)){
       const partial=await fetch(page.html,{credentials:'same-origin'});
       if(!partial.ok)throw Error(page.label+' page unavailable');
       mount.innerHTML=await partial.text();
     }
     if(page.id==='agents')await mountAgents();
-    if(page.entry){
+    if(page.entry&&!protectedAsset(page.entry)){
       const module=await import(page.entry);
       if(typeof module.start!=='function')throw Error(page.label+' page has no start function');
       await module.start(mount);
@@ -327,7 +355,9 @@ syncAgentTabs();
 wirePageTabDrag(document.querySelector('#agents-detail-region .agent-card-tabs'), { getOrder: () => agentTabOrder, save: saveAgentTabs, prefix: 'agent-tab-' });
 async function loadGuestPolicy(){try{const policy=await api('/auth/access-mode');$('guest-login').hidden=!policy.guest_access;document.querySelector('.private-access-approval').hidden=!!policy.guest_access;}catch{$('guest-login').hidden=true;}}
 $('guest-login').onclick=async()=>{const btn=$('guest-login');btn.disabled=true;try{const result=await api('/auth/guest-login','POST',{});csrf=result.csrf_token;await boot();}catch(error){$('registration-status').textContent=error.message;}finally{btn.disabled=false;}};
-function out(){disposeSessionsPage();widget?.hide();agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
+// Authentication loss is a state transition, not a refresh event. Late 401s
+// must not reset an open sign-in form or recursively refresh identity consumers.
+function out(){if(document.body.classList.contains('app-restricted'))return;disposeSessionsPage();widget?.hide();accountMe=null;agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
 async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;$('shutoff').querySelector('span').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}if(!$('rules').children.length)for(const [tool,rule]of Object.entries(state.policy?.rules||{})){const label=document.createElement('label');label.textContent=tool;const select=document.createElement('select');select.name=tool;for(const value of ['allow','deny','require_approval']){const option=document.createElement('option');option.value=value;option.textContent=value.replaceAll('_',' ');select.append(option);}select.value=rule;label.append(select);$('rules').append(label);}chat.runs(state.runs||[]);}
 // Explicit role administration replaces the legacy default-model form for every agent.
 async function boot(){
@@ -341,6 +371,7 @@ async function boot(){
   privateVisible(false);
   $('app').hidden=false;
   window.__boot?.shellReady();
+  startProtectedPage(mainPages.find(page=>page.id===activeMainPage));
   await agentTabsQueue;
   await loadAgentTabs();
   await loadAgentRoster();
@@ -523,6 +554,7 @@ function showMainPage(id,routeMode='push'){
   closeMobileNav();
   activeMainPage=id;
   updateMainPageState();
+  startProtectedPage(mainPages.find(page=>page.id===id));
   if(id!=='agents')disposeSessionsPage();else if(sessionsScope&&accountMe)void showSessions('replace').catch(error=>note(error.message));
   if(id==='account')loadAccountControls();
   const route=new URL(location.href);
