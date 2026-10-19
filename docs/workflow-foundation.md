@@ -482,3 +482,15 @@ modules directory. Content-free, peer-checked dispatcher wake hints use the
 runtime control socket. Neither grants permission or replaces durable recovery.
 The independent outbound package consumes canonical lifecycle metadata through
 the existing administrator read contract; no conversation text is exported.
+
+## Native cross-session message ownership
+
+The owner user plane stores native messaging_route:, receipt:agent_message: and
+receipt:messaging_route: documents alongside followup_queue: and message_meta:.
+Admission atomically commits the new-session/first-message pair where applicable,
+public origin, queue entry, optional directed grant and exact-call receipt. The
+app directory is repaired after commit and before consumption; transient repair
+never authorizes duplicate admission. Consuming transactions recheck access, mode,
+lifecycle and route. Agent-origin input does not supply fresh human intent. See
+[Native session messaging](session-messaging.md) for contracts, function boundaries,
+retention/deletion behavior and the exact verified release.
