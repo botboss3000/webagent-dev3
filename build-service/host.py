@@ -3465,7 +3465,7 @@ class Broker:
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
         review_modules={"ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
-        allowed={"v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        allowed={"v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
@@ -3473,14 +3473,14 @@ class Broker:
         try:files=release.entries(blob,context_digest)
         except (ValueError,tarfile.TarError):return False
         selected=sorted(n for n in review_modules if "v3/build-service/"+n in changed)+["host.py"]+[name for name in ("ownership.py","boot_host.py")if "v3/build-service/"+name in changed]
-        for name in selected:
+        for name in selected+(["index-maintenance.py"]if "v3/plugins/abilities/Administrator/code_index/maintenance.py"in changed else[]):
             path=Path(CONFIG["service_dir"])/("bootstrap.py"if name=="install.py"else name)
             fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
             try:
                 meta=os.fstat(fd)
                 if not stat.S_ISREG(meta.st_mode)or meta.st_uid!=0 or meta.st_mode&0o022 or meta.st_nlink!=1:raise PermissionError("Protected installed broker code required")
                 with os.fdopen(fd,"rb",closefd=False)as stream:installed=stream.read(2*1024*1024+1)
-                candidate=files.get("v3/build-service/"+name)
+                candidate=files.get("v3/plugins/abilities/Administrator/code_index/maintenance.py"if name=="index-maintenance.py"else"v3/build-service/"+name)
                 if candidate is None or candidate[1]!=installed:return False
             finally:os.close(fd)
         return True

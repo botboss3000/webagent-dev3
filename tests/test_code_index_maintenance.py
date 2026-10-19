@@ -254,3 +254,86 @@ class LosslessHistoryTests(unittest.TestCase):
   def denied():raise PermissionError("revoked")
   with self.assertRaises(PermissionError):self.db.compact_history(denied)
   self.assertFalse(list(self.folder.glob("history-backup-*")))
+
+
+class ScopedInventoryTests(unittest.TestCase):
+ def setUp(self):
+  self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name)/"source";self.root.mkdir();self.cache=Path(self.tmp.name)/"cache";self.scanner=ledger.load_scanner()
+  self.write("wanted.py","def wanted(): return 1\n");self.write("other.py","def other(): return 2\n");self.write("config/settings.json",'{"value":1}')
+  feature={"id":"wanted-feature","aliases":["wanted"],"purpose":"Fixture feature","locations":[{"path":"wanted.py","start_line":1,"end_line":1,"configuration":{"status":"configured","references":[{"path":"config/settings.json","pointers":["/value"]}]}}]}
+  self.map={"version":1,"features":[feature]};self.write(self.scanner.FEATURE_MAP_PATH,json.dumps(self.map))
+ def tearDown(self):self.tmp.cleanup()
+ def write(self,path,body):
+  target=self.root/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(body)
+ def scan(self,scope="wanted.py",cache=None):
+  return ledger.source_inventory(self.scanner,self.root,scope,cache)
+ def test_scope_matches_full_units_and_dependencies_without_parsing_unrelated(self):
+  from unittest.mock import patch
+  full,full_units,_=self.scan("")
+  with patch.object(self.scanner,"scan_data",wraps=self.scanner.scan_data)as parse:
+   files,units,info=self.scan()
+  self.assertEqual([x["path"]for x in files],["wanted.py"]);self.assertEqual(units["wanted.py"],full_units["wanted.py"])
+  self.assertEqual(files[0]["dependencies"],next(x for x in full if x["path"]=="wanted.py")["dependencies"])
+  self.assertEqual({c.args[0]for c in parse.call_args_list},{"wanted.py","config/settings.json"})
+  self.assertEqual(info["freshness_scope"],"wanted.py");self.assertEqual(info["gaps"],0)
+ def test_cache_reuse_and_config_hash_refresh(self):
+  first,_,_=self.scan(cache=self.cache)
+  files,_,info=self.scan(cache=self.cache);self.assertEqual(info["parsed_files"],0);self.assertGreater(info["reused_files"],0)
+  self.write("config/settings.json",'{"value":2}')
+  changed,_,_=self.scan(cache=self.cache);self.assertNotEqual(first[0]["dependencies"],changed[0]["dependencies"])
+  self.assertEqual(first[0]["sha256"],changed[0]["sha256"])
+ def test_every_map_target_is_validated_even_outside_scope(self):
+  self.map["features"][0]["locations"].append({"path":"other.py","start_line":50,"end_line":50})
+  self.write(self.scanner.FEATURE_MAP_PATH,json.dumps(self.map))
+  with self.assertRaisesRegex(ValueError,"feature map target is stale"):self.scan()
+ def test_unsupported_map_targets_and_symlinks_still_reject(self):
+  self.write("note.md","note");self.map["features"][0]["locations"][0]["path"]="note.md";self.write(self.scanner.FEATURE_MAP_PATH,json.dumps(self.map))
+  with self.assertRaisesRegex(ValueError,"unindexed"):self.scan()
+  self.map["features"][0]["locations"][0]["path"]="wanted.py";self.write(self.scanner.FEATURE_MAP_PATH,json.dumps(self.map))
+  (self.root/"wanted.py").unlink();(self.root/"wanted.py").symlink_to("other.py")
+  with self.assertRaises((ValueError,OSError)):self.scan()
+ def test_dependency_race_does_not_replace_saved_seed(self):
+  from unittest.mock import patch
+  self.scan(cache=self.cache);before=(self.cache/"index.sqlite").read_bytes();read=self.scanner.read_source;calls=0
+  def raced(fd,path):
+   nonlocal calls
+   if path=="config/settings.json":
+    calls+=1
+    if calls==2:self.write(path,'{"value":3}')
+   return read(fd,path)
+  with patch.object(self.scanner,"read_source",side_effect=raced),self.assertRaisesRegex(ValueError,"dependency changed"):self.scan(cache=self.cache)
+  self.assertEqual((self.cache/"index.sqlite").read_bytes(),before)
+ def test_deleted_scope_reconciles_without_certifying_unrelated_source(self):
+  self.scan(cache=self.cache);(self.root/"wanted.py").unlink();self.map["features"]=[];self.write(self.scanner.FEATURE_MAP_PATH,json.dumps(self.map))
+  files,units,info=self.scan(cache=self.cache);self.assertEqual(files,[]);self.assertEqual(units,{})
+  self.assertEqual(info["unindexed_count"],0);self.assertEqual(info["freshness_scope"],"wanted.py")
+ def test_markers_and_empty_files_are_preserved(self):
+  self.map["features"]=[];self.write(self.scanner.FEATURE_MAP_PATH,json.dumps(self.map))
+  self.write("wanted.py",'# @code-index {"version":1,"feature":"inline","aliases":["inline"],"purpose":"Fixture marker","span_lines":1}\ndef wanted(): return 1\n')
+  _,units,_=self.scan();self.assertTrue(any(u["unit_id"]=="feature:inline"for u in units["wanted.py"]))
+  self.write("wanted.py","");files,units,info=self.scan();self.assertEqual(files[0]["line_count"],0);self.assertEqual(info["gaps"],0)
+ def test_runtime_configuration_reference_never_reads_excluded_data(self):
+  from unittest.mock import patch
+  self.map["features"][0]["locations"][0]["configuration"]["references"]=[{"path":"data/private.json","pointers":["/value"]}]
+  self.write(self.scanner.FEATURE_MAP_PATH,json.dumps(self.map));self.write("data/private.json",'{"value":"private"}')
+  with patch.object(self.scanner,"read_source",wraps=self.scanner.read_source)as read:
+   files,_,_=self.scan()
+  self.assertFalse(any(c.args[1]=="data/private.json"for c in read.call_args_list))
+  self.assertFalse(any(d["path"].startswith("data/")for d in files[0]["dependencies"]))
+ def test_deadline_and_dependency_byte_limits_preserve_saved_seed(self):
+  from unittest.mock import patch
+  self.scan(cache=self.cache);before=(self.cache/"index.sqlite").read_bytes()
+  with patch.object(ledger.time,"monotonic",side_effect=[0,31]),self.assertRaisesRegex(ValueError,"deadline"):
+   self.scan(cache=self.cache)
+  self.assertEqual((self.cache/"index.sqlite").read_bytes(),before)
+  with patch.object(self.scanner,"MAX_TOTAL_BYTES",1),self.assertRaisesRegex(ValueError,"bounds"):self.scan(cache=self.cache)
+  self.assertEqual((self.cache/"index.sqlite").read_bytes(),before)
+ def test_scoped_cache_still_requires_complete_published_freshness(self):
+  import shutil,uuid
+  self.scan(cache=self.cache)
+  candidate=Path(self.tmp.name)/"candidate";shutil.copytree(self.root,candidate/"v3")
+  manifest=self.scanner.build_published(candidate,candidate/".code-index",str(uuid.uuid4()),"a"*64,private_seeds=[self.cache])
+  self.assertEqual(manifest["gaps"],0);self.assertEqual(manifest["stale_count"],0);self.assertEqual(manifest["unindexed_count"],0)
+  self.assertGreaterEqual(manifest["indexing"]["reused_files"],1)
+  # The unscanned file must be parsed and validated during full publication.
+  self.assertGreaterEqual(manifest["indexing"]["parsed_files"],1)

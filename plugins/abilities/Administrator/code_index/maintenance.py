@@ -59,6 +59,105 @@ def decode_event(value):
     return json.loads(body)
 
 
+def scoped_inventory_scan(scanner,conn,rootfd,scope):
+    """Parse a private scope while validating complete map targets and fresh configuration bindings.
+
+    Unrelated source is not parsed or certified. The private cache may contain
+    other scopes; their old rows never establish this scope's freshness.
+    """
+    deadline=time.monotonic()+30;witness={};total=0
+    def bounded():
+        if time.monotonic()>deadline:raise ValueError("Parser deadline exceeded")
+    def read(path,optional=False):
+        nonlocal total
+        bounded()
+        if path not in witness:
+            try:data=scanner.read_source(rootfd,path)
+            except FileNotFoundError:
+                if not optional:raise
+                data=None
+            witness[path]=data;total+=len(data)if data is not None else 0
+            if total>scanner.MAX_TOTAL_BYTES or len(witness)>scanner.MAX_FILES:raise ValueError("Inventory dependency bounds exceeded")
+        return witness[path]
+    def enumerate_scope():
+        try:return scanner.source_files(rootfd,scope,deadline)
+        except FileNotFoundError:
+            read(scope,optional=True)
+            return []
+        except ValueError as error:
+            # Unsupported ordinary documentation had no parser units in full inventories either.
+            if str(error)!="Unsupported source suffix":raise
+            read(scope)
+            return []
+    paths=enumerate_scope();records={path:read(path)for path in paths};features=[]
+    for path,data in records.items():
+        features.extend(scanner._marker_rows(path,data.decode("utf-8"),scanner.sha(data)))
+    map_path=scanner.FEATURE_MAP_PATH;raw=read(map_path,optional=True)
+    if raw is not None:
+        map_hash=scanner.sha(raw)
+        for row in scanner._map_rows(raw):
+            target=row[3]
+            if Path(target).suffix.lower()not in scanner.SUFFIXES:raise ValueError("feature map target is unindexed")
+            data=read(target);target_hash=scanner.sha(data);lines=data.decode("utf-8").splitlines();suffix=Path(target).suffix.lower()
+            if(row[10]and row[10]!=target_hash)or row[5]>len(lines)or not any(scanner._has_code_line(line,suffix)for line in lines[row[4]-1:row[5]]):
+                raise ValueError("feature map target is stale")
+            if target in records:features.append(row[:10]+(target_hash,map_hash,row[12]))
+    config_paths=set()
+    for row in features:
+        for ref in json.loads(row[12]).get("references",[]):config_paths.add(ref["path"])
+    # Runtime configuration locations are descriptive references, never source-read authority.
+    config_paths={path for path in config_paths if not any(part in scanner.EXCLUDED for part in scanner.relative_parts(path))}
+    for path in sorted(config_paths):
+        data=read(path,optional=True)
+        if data is not None:records.setdefault(path,data)
+    recipe=scanner.sha(Path(scanner.__file__).read_bytes()+json.dumps(scanner.parser_versions(),sort_keys=True).encode())
+    conn.execute("CREATE TABLE IF NOT EXISTS file_recipes(path TEXT PRIMARY KEY,recipe TEXT NOT NULL)")
+    known={row[0]:row[1]for row in conn.execute("SELECT f.path,f.sha256 FROM files f JOIN file_recipes r ON r.path=f.path WHERE r.recipe=?",(recipe,))}
+    scans=[];reused=0;lines=0
+    for path,data in records.items():
+        bounded()
+        if known.get(path)==scanner.sha(data):reused+=1;continue
+        item=scanner.scan_data(path,data);lines+=item["line_count"]
+        if lines>scanner.MAX_TOTAL_LINES:raise ValueError("Index line count exceeds limit")
+        scans.append(item)
+    bounded()
+    if enumerate_scope()!=paths:raise ValueError("Source enumeration changed during scan")
+    for path,data in witness.items():
+        bounded()
+        try:current=scanner.read_source(rootfd,path)
+        except FileNotFoundError:current=None
+        if current!=data:raise ValueError("Source or dependency changed before inventory commit")
+    revision=conn.execute("SELECT revision FROM meta WHERE id=1").fetchone()[0];batch=uuid.uuid4().hex
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for item in scans:scanner.store_scan(conn,item)
+        selected=set(paths);prefix=scope.rstrip("/")
+        removed=[r[0]for r in conn.execute("SELECT path FROM files")if(r[0]==prefix or r[0].startswith(prefix+"/"))and r[0]not in selected]
+        removed+=sorted(path for path in config_paths if witness[path]is None)
+        conn.executemany("DELETE FROM files WHERE path=?",[(p,)for p in set(removed)])
+        for path in set(paths)|set(removed):
+            conn.execute("DELETE FROM feature_locations WHERE file_path=?",(path,))
+            conn.execute("DELETE FROM feature_configurations WHERE file_path=?",(path,))
+        if len(features)>scanner.MAX_FILES+scanner.MAX_FEATURES*scanner.MAX_FEATURE_LOCATIONS:raise ValueError("Code Index feature row limit exceeded")
+        conn.executemany("INSERT INTO feature_locations VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",[row[:12]for row in features])
+        for row in sorted(features,key=lambda row:row[9]=="map"):
+            conn.execute("INSERT OR REPLACE INTO feature_configurations VALUES(?,?,?,?,?)",(row[0],row[3],row[4],row[5],row[12]))
+        conn.executemany("INSERT OR REPLACE INTO file_recipes VALUES(?,?)",[(path,recipe)for path in records])
+        conn.execute("DELETE FROM file_recipes WHERE path NOT IN (SELECT path FROM files)")
+        if conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]>scanner.MAX_FILES or conn.execute("SELECT COALESCE(SUM(line_count),0)FROM files").fetchone()[0]>scanner.MAX_TOTAL_LINES:
+            raise ValueError("Stored index bounds exceeded")
+        conn.execute("UPDATE meta SET revision=revision+1 WHERE id=1")
+        conn.execute("INSERT INTO batches VALUES(?,?,'completed',?,?,?,?,'',?)",(batch,scope,len(paths),len(scans),scanner.now(),scanner.now(),revision+1))
+        conn.execute("DELETE FROM batches WHERE batch_id NOT IN(SELECT batch_id FROM batches ORDER BY started_at DESC LIMIT 100)")
+        conn.commit()
+    except BaseException:conn.rollback();raise
+    # Verify physical line coverage only for the requested scope, including empty files.
+    for path in paths:
+        row=conn.execute("SELECT line_count,sha256 FROM files WHERE path=?",(path,)).fetchone()
+        covered=conn.execute("SELECT COUNT(*)FROM lines WHERE file_path=? AND line_no BETWEEN 1 AND ?",(path,row["line_count"]if row else 0)).fetchone()[0]
+        if row is None or row["sha256"]!=scanner.sha(records[path])or covered!=row["line_count"]:raise ValueError("Maintenance scan is not fresh")
+    return {"indexed_files":len(scans),"reused_files":reused,"batch_id":batch,"revision":revision+1,"freshness_scope":scope,"validated_dependency_files":len(witness)-len(paths)}
+
 def source_inventory(scanner,root,scope,index_folder=None,published_seed=None):
     """Scan exact source and return scope-filtered units with freshness evidence."""
     fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
@@ -79,9 +178,12 @@ def source_inventory(scanner,root,scope,index_folder=None,published_seed=None):
                 conn.deserialize(private);conn.row_factory=sqlite3.Row
         conn.execute("PRAGMA trusted_schema=OFF");conn.execute("PRAGMA foreign_keys=ON")
         conn.executescript(scanner.DDL)
-        scan=scanner.scan(conn,fd,{"action":"scan","scope":"","limit":1,"offset":0})
-        report=scanner.coverage(conn,fd,{"action":"report","scope":scope,"limit":1,"offset":0})
-        if any(report[k]for k in ("gaps","stale_count","unindexed_count")):raise ValueError("Maintenance scan is not fresh")
+        scope="/".join(scanner.relative_parts(scope,True))
+        if scope:scan=scoped_inventory_scan(scanner,conn,fd,scope)
+        else:
+            scan=scanner.scan(conn,fd,{"action":"scan","scope":"","limit":1,"offset":0})
+            report=scanner.coverage(conn,fd,{"action":"report","limit":1,"offset":0})
+            if any(report[k]for k in ("gaps","stale_count","unindexed_count")):raise ValueError("Maintenance scan is not fresh")
         files=[dict(row)for row in conn.execute("SELECT * FROM files ORDER BY path")if not scope or row["path"]==scope or row["path"].startswith(scope.rstrip("/")+"/")]
         for file in files:file["dependencies"]=scanner.maintenance_dependencies(conn,file["path"])
         units={f["path"]:scanner.maintenance_units(conn,f)for f in files}
@@ -108,7 +210,7 @@ def source_inventory(scanner,root,scope,index_folder=None,published_seed=None):
                 try:os.fsync(directory)
                 finally:os.close(directory)
             finally:Path(path).unlink(missing_ok=True)
-        return files,units,{"parsed_files":scan.get("indexed_files"),"reused_files":scan.get("reused_files"),"index_sha256":index_hash,"batch_id":scan["batch_id"],"revision":scan["revision"],"verified_at":int(time.time()),"gaps":0,"stale_count":0,"unindexed_count":0}
+        return files,units,{"freshness_scope":scope,"validated_dependency_files":scan.get("validated_dependency_files"),"parsed_files":scan.get("indexed_files"),"reused_files":scan.get("reused_files"),"index_sha256":index_hash,"batch_id":scan["batch_id"],"revision":scan["revision"],"verified_at":int(time.time()),"gaps":0,"stale_count":0,"unindexed_count":0}
     finally:conn.close();os.close(fd)
 
 class Ledger:

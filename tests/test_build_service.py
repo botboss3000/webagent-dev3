@@ -1590,3 +1590,21 @@ class RuntimeDocumentationRebaseTests(unittest.TestCase):
  def test_rename_and_deletion_of_unembedded_notes_are_safe(self):
   entries,_=self.attempt({"v3/docs/note.md":None,"v3/docs/new.md":"renamed note"})
   self.assertIn("v3/docs/new.md",entries);self.assertNotIn("v3/docs/note.md",entries)
+
+
+class InstalledInventoryEnginePublicationTests(unittest.TestCase):
+ def test_maintenance_requires_exact_installed_engine_and_operator(self):
+  with tempfile.TemporaryDirectory()as tmp:
+   root=Path(tmp);(root/"host.py").write_bytes(b"host");(root/"index-maintenance.py").write_bytes(b"engine")
+   broker=fixtures.host.Broker(root/"jobs",fixtures.FakeRunner())
+   path="v3/plugins/abilities/Administrator/code_index/maintenance.py"
+   blob=fixtures.context(extra={"v3/build-service/host.py":"host",path:"engine"})
+   protected=types.SimpleNamespace(st_mode=0o100644,st_uid=0,st_nlink=1)
+   try:
+    with patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"service_dir":str(root)}),patch.object(fixtures.host.os,"fstat",return_value=protected):
+     self.assertTrue(broker.host_source_only([path],blob,{"local_caller":True}))
+     self.assertFalse(broker.host_source_only([path],blob,{}))
+     (root/"index-maintenance.py").write_bytes(b"other")
+     self.assertFalse(broker.host_source_only([path],blob,{"local_caller":True}))
+     self.assertFalse(broker.host_source_only([path,"v3/worker.py"],blob,{"local_caller":True}))
+   finally:broker.shutdown()
