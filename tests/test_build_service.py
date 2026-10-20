@@ -158,6 +158,23 @@ class HostSourceReleaseTests(unittest.TestCase):
       with self.assertRaises(PermissionError):broker.host_source_only(["v3/build-service/host.py"],blob.getvalue(),{"local_caller":True})
    finally:broker.shutdown()
 
+class InstalledWorkspacePublicationTests(unittest.TestCase):
+ def test_workspace_publication_requires_exact_protected_code(self):
+  import types
+  with tempfile.TemporaryDirectory()as temporary:
+   root=Path(temporary);(root/"host.py").write_bytes(b"host");(root/"workspace.py").write_bytes(b"workspace")
+   blob=fixtures.context(extra={"v3/build-service/host.py":"host","v3/build-service/workspace.py":"workspace"})
+   broker=fixtures.host.Broker(root/"jobs",fixtures.FakeRunner());changed=["v3/build-service/workspace.py","v3/tests/test_admin_workspace.py"]
+   protected=types.SimpleNamespace(st_mode=0o100644,st_uid=0,st_nlink=1)
+   try:
+    with patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"service_dir":str(root)}),patch.object(fixtures.host.os,"fstat",return_value=protected):
+     self.assertTrue(broker.host_source_only(changed,blob,{"local_caller":True}))
+     self.assertFalse(broker.host_source_only(changed,blob,{}))
+     self.assertFalse(broker.host_source_only(changed+["v3/worker.py"],blob,{"local_caller":True}))
+     (root/"workspace.py").write_bytes(b"different")
+     self.assertFalse(broker.host_source_only(changed,blob,{"local_caller":True}))
+   finally:broker.shutdown()
+
 class InstalledOwnershipPublicationTests(unittest.TestCase):
  def test_changed_ownership_requires_exact_protected_executable(self):
   """A broker-only ownership update requires installed bytes and cannot admit application changes."""

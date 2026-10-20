@@ -6,7 +6,7 @@ MEMORY_KEYS={"compiler_memory_default_bytes","compiler_memory_min_bytes","compil
 # @code-index {"version":1,"feature":"compiler-memory-policy","aliases":["compiler memory defaults","task memory overrides","live memory growth"],"purpose":"Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/compiler_memory_default_bytes","/compiler_memory_min_bytes","/compiler_memory_max_bytes","/allow_live_memory_increase"]}]}}
 def memory_policy(policy):
  """Select the protected compiler policy; existing job ceilings remain pinned."""
- return {k:policy.get(k,{"compiler_memory_default_bytes":5*1024**3,"compiler_memory_min_bytes":1024**3,"compiler_memory_max_bytes":10*1024**3,"allow_live_memory_increase":False}[k])for k in sorted(MEMORY_KEYS)}
+ return {k:policy.get(k,{"compiler_memory_default_bytes":12*1024**3,"compiler_memory_min_bytes":1024**3,"compiler_memory_max_bytes":16*1024**3,"allow_live_memory_increase":False}[k])for k in sorted(MEMORY_KEYS)}
 def memory_policy_digest(policy):
  """Bind broker/helper adoption to the same root-owned policy revision."""
  import hashlib
@@ -47,7 +47,7 @@ def validate(value):
  if ram%os.sysconf("SC_PAGE_SIZE")or scratch%os.sysconf("SC_PAGE_SIZE"):raise ValueError("RAM packaging budgets must be memory-page aligned")
  if bool(ram)!=bool(scratch)or(ram and(scratch<256*1024**2 or scratch>ram-1024**3 or policy["mode"]!="enforce"or policy["reserve_percent"]<15)):raise ValueError("RAM packaging requires bounded scratch, enforced admission and fifteen percent host reserve")
  limits=memory_policy(policy);minimum=limits["compiler_memory_min_bytes"];default=limits["compiler_memory_default_bytes"];maximum=limits["compiler_memory_max_bytes"]
- if any(type(n)is not int or n%os.sysconf("SC_PAGE_SIZE")for n in (minimum,default,maximum))or not 1024**3<=minimum<=default<=maximum<=10*1024**3:raise ValueError("Invalid compiler memory policy")
+ if any(type(n)is not int or n%os.sysconf("SC_PAGE_SIZE")for n in (minimum,default,maximum))or not 1024**3<=minimum<=default<=maximum<=16*1024**3:raise ValueError("Invalid compiler memory policy")
  if type(limits["allow_live_memory_increase"])is not bool:raise ValueError("Invalid live memory policy")
  if limits["allow_live_memory_increase"]and(policy["mode"]!="enforce"or policy["reserve_percent"]<15):raise ValueError("Live memory increases require enforced admission and fifteen percent host reserve")
  if type(policy.get("package_cache_enabled",False))is not bool:raise ValueError("Invalid package cache policy")

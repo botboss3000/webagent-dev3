@@ -65,7 +65,7 @@ class CacheTests(unittest.TestCase):
         """Create terminal phase evidence and an exact captured source for a private cache fixture."""
         import threading
         previous=str(uuid.uuid4());state=self.root/(previous+".json")
-        state.write_text(__import__("json").dumps({"job_id":previous,"status":"failed"}))
+        state.write_text(__import__("json").dumps({"job_id":previous,"status":"failed","compiler_recipe":module.COMPILER_RECIPE}))
         folder=self.root/previous;folder.mkdir();(folder/"candidate.tar").write_bytes(self.blob)
         execution=self.root/"execution"/previous
         fixtures.host.release.extract(execution/"source",self.blob,fixtures.host.context_digest)
@@ -87,6 +87,31 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(self.job["cargo_cache_reuse"],previous)
         self.assertEqual((output/"target/debug/deps/dependency.rlib").read_bytes(),b"compatible dependency objects")
         self.assertFalse((output/"artifacts").exists())
+    def test_missing_or_different_compiler_recipe_never_seeds_old_objects(self):
+        import json
+        previous,_=self.previous_cargo_cache();receipt=self.root/(previous+".json")
+        for recipe in (None,module.RUST+":single-job:debug0:complete-tests-v6"):
+            value={"job_id":previous,"status":"failed"}
+            if recipe is not None:value["compiler_recipe"]=recipe
+            receipt.write_text(json.dumps(value));output=self.output()
+            self.assertFalse(self.worker.seed_cargo_cache(self.job,self.blob,output))
+            self.assertFalse((output/"cargo").exists());self.assertFalse((output/"target").exists())
+    def test_rejected_verified_resume_does_not_relabel_old_compiler_cache(self):
+        import json
+        from unittest.mock import patch
+        old_recipe=module.RUST+":single-job:debug0:complete-tests-v6"
+        self.job["compiler_recipe"]=old_recipe
+        self.worker.runner.execution_application_blob=fixtures.host.Runner.execution_application_blob
+        receipt={"inputs_sha256":fixtures.host.context_digest(self.worker.runner.execution_application_blob(self.blob))[0],"artifacts":self.worker.artifact_hashes(self.artifacts),"test_proof":{"executor_sha256":"old executor"},"log":"old tests"}
+        (self.artifacts.parent.parent/"verified.json").write_text(json.dumps(receipt))
+        with patch.object(self.worker,"validate_compiler_recipe",return_value=False):
+            with self.assertRaisesRegex(ValueError,"Retained verification"):
+                self.worker.engine(self.job,self.blob,None,lambda blob:fixtures.host.context_digest(blob)[0])
+        self.assertEqual(self.job["compiler_recipe"],old_recipe)
+    def test_completed_artifact_recipe_names_parallel_compiler(self):
+        import json
+        receipt=next((self.root/"engine-artifacts").glob("*.json"))
+        self.assertEqual(json.loads(receipt.read_text())["recipe"],module.RUST+":jobs3:debug0:complete-tests-v7")
     def test_dependency_cache_rejects_changed_embedded_input_and_incomplete_phase(self):
         """Measured phase completion alone cannot override the compiler input closure."""
         self.previous_cargo_cache()

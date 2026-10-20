@@ -126,17 +126,27 @@ class MemoryTests(unittest.TestCase):
 
 class PolicyTests(unittest.TestCase):
     """Protected JSON bounds never become arbitrary runtime arguments."""
-    def test_source_defaults_are_five_gib_and_overrides_are_bounded(self):
-        values=config.scheduler_defaults();self.assertEqual(values["compiler_memory_default_bytes"],5*G)
+    def test_source_defaults_are_twelve_gib_and_overrides_are_bounded(self):
+        values=config.scheduler_defaults();self.assertEqual(values["compiler_memory_default_bytes"],12*G)
+        self.assertEqual(values["compiler_memory_min_bytes"],G);self.assertEqual(values["compiler_memory_max_bytes"],16*G)
+        self.assertFalse(values["allow_live_memory_increase"])
+        self.assertEqual(executor.compiler_cap(16*G,values),16*G)
         self.assertEqual(executor.compiler_cap(8*G,values),8*G)
-        for value in (True,0,512*1024**2,10*G+4096,5*G+1):
+        for value in (True,0,512*1024**2,16*G+4096,5*G+1):
             with self.assertRaises(ValueError):executor.compiler_cap(value,values)
+    def test_policy_fallbacks_agree_on_new_bounds(self):
+        expected={"compiler_memory_default_bytes":12*G,"compiler_memory_min_bytes":G,"compiler_memory_max_bytes":16*G,"allow_live_memory_increase":False}
+        self.assertEqual(config.memory_policy({}),expected)
+        self.assertEqual(resources.Resources.memory_policy(type("Policy",(),{"policy":{}})())["values"],expected)
+        with patch.dict(control.os.environ,{"WEBAGENT_BUILD_CONFIG":""}):
+            self.assertEqual(control.Control({"instance":"development","scheduler":{}}).memory_policy()["values"],expected)
+        self.assertEqual(executor.compiler_cap(16*G),16*G)
     def test_package_ceiling_is_not_changed_by_compiler_bounds(self):
         self.assertEqual(executor.package_cap(4026531840),4026531840)
         with self.assertRaises(ValueError):executor.package_cap(5*G)
     def test_config_rejects_invalid_policy_and_reserve_bypass(self):
         base=config.defaults()
-        for patch_policy in ({"compiler_memory_default_bytes":True},{"compiler_memory_default_bytes":11*G},{"compiler_memory_min_bytes":6*G},{"compiler_memory_max_bytes":4*G},{"allow_live_memory_increase":True},{"compiler_memory_max_bytes":10*G+1}):
+        for patch_policy in ({"compiler_memory_default_bytes":True},{"compiler_memory_default_bytes":17*G},{"compiler_memory_min_bytes":13*G},{"compiler_memory_max_bytes":11*G},{"allow_live_memory_increase":True},{"compiler_memory_max_bytes":16*G+1}):
             with self.subTest(policy=patch_policy):
                 with self.assertRaises(ValueError):config.validate({**base,"scheduler":{**base["scheduler"],**patch_policy}})
     def test_lifecycle_rejects_nonroot_and_nonmemory_changes(self):

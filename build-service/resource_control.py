@@ -46,7 +46,7 @@ class Control:
             keys=cfg.MEMORY_KEYS
             if {k:v for k,v in current.items()if k!="scheduler"}!={k:v for k,v in self.config.items()if k!="scheduler"}or {k:v for k,v in current["scheduler"].items()if k not in keys}!={k:v for k,v in self.config["scheduler"].items()if k not in keys}:raise PermissionError("Non-memory installation change requires maintenance")
         policy=current.get("scheduler",{})
-        defaults={"compiler_memory_default_bytes":5*1024**3,"compiler_memory_min_bytes":1024**3,"compiler_memory_max_bytes":10*1024**3,"allow_live_memory_increase":False}
+        defaults={"compiler_memory_default_bytes":12*1024**3,"compiler_memory_min_bytes":1024**3,"compiler_memory_max_bytes":16*1024**3,"allow_live_memory_increase":False}
         values={k:policy.get(k,v)for k,v in sorted(defaults.items())}
         return {"values":values,"sha256":hashlib.sha256(json.dumps(values,sort_keys=True,separators=(",",":")).encode()).hexdigest()}
 

@@ -56,6 +56,16 @@ class Tests(unittest.IsolatedAsyncioTestCase):
   self.assertTrue(workspace.append_cargo_tail(output,b"x"*9000+b"\nerror: final failure\n"))
   self.assertLessEqual(len(output),workspace.CARGO_LOG_LIMIT)
   self.assertTrue(output.endswith(b"error: final failure\n"))
+ async def test_supervised_cargo_uses_three_compilers_without_incremental_state(self):
+  from unittest.mock import AsyncMock,patch
+  import types
+  stream=asyncio.StreamReader();stream.feed_eof()
+  process=types.SimpleNamespace(stdout=stream,returncode=0,wait=AsyncMock(return_value=0))
+  with patch.object(workspace.asyncio,"create_subprocess_exec",AsyncMock(return_value=process))as spawn:
+   await self.original(self.source,["cargo","check","--locked"],5)
+  env=spawn.call_args.kwargs["env"]
+  self.assertEqual(env["CARGO_BUILD_JOBS"],"3");self.assertEqual(env["CARGO_INCREMENTAL"],"0")
+  self.assertEqual(env["CARGO_TARGET_DIR"],str(self.source/"target/.v3-target"))
  async def test_fixed_jobs_cache_exclusion_and_fences(self):
   calls=[]
   async def fake(root,argv,timeout):

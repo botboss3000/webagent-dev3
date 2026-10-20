@@ -1896,6 +1896,7 @@ class RunnerSpaceTests(unittest.TestCase):
             self.assertEqual("ok", runner.cargo_task(Path(root)/"source", Path(root) / "checks", "test", 60))
         argv = command.call_args.args[0]
         self.assertEqual(["cargo", "test", "--locked", "--", "--test-threads=1"], argv[-5:])
+        self.assertIn("CARGO_BUILD_JOBS=3",argv)
 
     def test_preflight_accepts_adequate_space_without_pruning(self):
         runner = host.Runner()

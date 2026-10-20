@@ -145,7 +145,7 @@ class Resources:
         compiler=phase in {"compile_test","compile_release","compile_linked","plugin_compile","plugin_test"}and kind in {"engine","plugin"}
         allowed_cap=(self.policy.get("package_cache_prepare_memory_bytes") if cache_preparation else
                      self.policy.get("package_ram_bytes") if ram_packaging or cache_packaging else 4026531840)
-        if hard_cap is not None and(type(hard_cap)is not int or hard_cap%os.sysconf("SC_PAGE_SIZE")or not((compiler and 1024**3<=hard_cap<=10*1024**3)or(phase=="package"and kind=="package"and hard_cap==allowed_cap))):raise ValueError("Unsupported enforced phase memory cap")
+        if hard_cap is not None and(type(hard_cap)is not int or hard_cap%os.sysconf("SC_PAGE_SIZE")or not((compiler and 1024**3<=hard_cap<=16*1024**3)or(phase=="package"and kind=="package"and hard_cap==allowed_cap))):raise ValueError("Unsupported enforced phase memory cap")
         if ram_packaging and(hard_cap is None or self.policy.get("reserve_percent",10)<15):raise ValueError("RAM packaging requires full budget and host reserve")
         # tmpfs is unreclaimable without swap: reserve its full process/cache/scratch ceiling, even after small successful samples.
         estimate=hard_cap if hard_cap is not None else self.estimate(profile,kind);deadline=time.monotonic()+timeout if timeout is not None else None
@@ -322,7 +322,7 @@ class Resources:
     def memory_policy(self):
         """Expose only protected scalar bounds and their canonical broker/helper binding."""
         import hashlib
-        keys={"compiler_memory_default_bytes":5*1024**3,"compiler_memory_min_bytes":1024**3,"compiler_memory_max_bytes":10*1024**3,"allow_live_memory_increase":False}
+        keys={"compiler_memory_default_bytes":12*1024**3,"compiler_memory_min_bytes":1024**3,"compiler_memory_max_bytes":16*1024**3,"allow_live_memory_increase":False}
         values={k:self.policy.get(k,v)for k,v in sorted(keys.items())}
         return {"values":values,"sha256":hashlib.sha256(json.dumps(values,sort_keys=True,separators=(",",":")).encode()).hexdigest()}
 
