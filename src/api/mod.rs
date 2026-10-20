@@ -21,7 +21,9 @@ mod voice;
 mod ability_admin;
 mod service_admin;
 mod administrator;
+#[path = "../../crates/modules/models/host/api/platform_catalog.rs"]
 mod model_catalog;
+#[path = "../../crates/modules/models/host/api/account_catalog.rs"]
 mod account_models;
 mod agent_pages;
 mod app_pages;

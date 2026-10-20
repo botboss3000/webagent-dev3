@@ -62,11 +62,11 @@ mod workflow;
 #[path = "gates/protocol.rs"] mod gate_protocol;
 mod promotion;
 mod usage;
-#[path = "models/provider/mod.rs"] mod provider;
-#[path = "models/selection.rs"] mod model_selection;
-#[path = "models/platform_catalog.rs"] mod platform_catalog;
-#[path = "models/account_catalog.rs"] mod account_catalog;
-#[path = "api/model_admin.rs"] mod model_selection_api;
+#[path = "../crates/modules/models/host/provider/mod.rs"] mod provider;
+#[path = "../crates/modules/models/host/selection.rs"] mod model_selection;
+#[path = "../crates/modules/models/host/platform_catalog.rs"] mod platform_catalog;
+#[path = "../crates/modules/models/host/account_catalog.rs"] mod account_catalog;
+#[path = "../crates/modules/models/host/api/selection.rs"] mod model_selection_api;
 #[cfg(test)]
 mod runtime_tests;
 #[path = "storage/mod.rs"] mod store;
@@ -116,7 +116,7 @@ include!("app.rs");
 include!("ability_state.rs");
 mod api;
 use api::*;
-mod manager;
+#[path = "../crates/modules/manager/host/mod.rs"] mod manager;
 #[path = "engine/loop/mod.rs"] mod agent_loop;
 use agent_loop::*;
 // Choose one role for this process. The API serves requests; the loop owns

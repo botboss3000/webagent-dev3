@@ -25,124 +25,30 @@ const MAX_FRAME: usize = 16 * 1024 * 1024;
 const LEGACY_DEFAULT_INSTRUCTIONS: &str = "You are WebAgent, a helpful assistant. Use only the tools made available to you. When asked what abilities or tools are available, check list_abilities; an empty loaded list does not mean the catalog is empty. When a task needs workspace access, search list_abilities using a few task words (or no query for the full permitted catalog), then load_ability to reveal its tools. For development source work, file tools, approved shell and Python commands start in /live-checkout, the independent V3 source root. Use Codebase Admin file tools without task_id for explicit direct/live file edits and runtime configuration. For application source changes intended for a build or release, supply one stable task_id to file tools; they automatically create an isolated broker task. Inspect that task before editing, use its latest input digest for writes, and use build_work review/check/preflight. Only explicit authorized build_work finish deploys; task edits alone never deploy. V2 source is outside this container mount. Their reach is determined by container OS permissions; an empty session workspace does not mean source is unavailable. In read-only mode explain that edits require a write-capable mode. When ranking many candidate tools, files, or abilities, prefer search_tools or score_directory_with_jev when a Decision model is assigned, instead of loading full catalogs or listings into context.";
 pub const DEFAULT_INSTRUCTIONS: &str = "You are WebAgent, a helpful assistant. Use only the tools made available to you. Visible and activated abilities already supply their configured guidance and tools; use them directly without loading again. list_abilities shows inactive discoverable abilities by default; include_available=true shows the full permitted catalog with availability states. Load only a discoverable ability needed for the task. Tool and skill visibility are independent: use list_tools/load_tool for exact discoverable tools or search_tools for ranked discovery and list_skills/load_skill for discoverable guidance. For development source work, file tools, approved shell and Python commands start in /live-checkout, the independent V3 source root. Use Codebase Admin file tools without task_id for explicit direct/live file edits and runtime configuration. For application source changes intended for a build or release, supply one stable task_id to file tools; they automatically create an isolated broker task. Inspect that task before editing, use its latest input digest for writes, and use build_work review/check/preflight. Only explicit authorized build_work finish deploys; task edits alone never deploy. V2 source is outside this container mount. Their reach is determined by container OS permissions; an empty session workspace does not mean source is unavailable. In read-only mode explain that edits require a write-capable mode. When ranking many candidate tools, files, or abilities, prefer search_tools or score_directory_with_jev when a Decision model is assigned, instead of loading full catalogs or listings into context.";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderId {
-    OpenaiSubscription,
-    Deepseek,
-    OpenaiApi,
-    Openrouter,
-    Abacus,
-    Gemini,
-    Groq,
-    Together,
-    Mistral,
-    Fireworks,
-    Xai,
-    Perplexity,
-    Deepinfra,
-    Typesafe,
-}
+pub use webagent_models::provider::{ProviderId, ProviderSelection};
 
-
-impl ProviderId {
-    // @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Map host-selected providers into the pure projection contract without granting endpoint or credential selection.","span_lines":28,"configuration":{"status":"not_applicable","rationale":"Provider identity and compatibility reconstruction are fixed protocol invariants."}}
-    /// Bind the projection contract to the already selected installation provider.
-    /// No component result may select another provider, endpoint or credential family.
-    pub(crate) fn projection_id(self) -> webagent_provider_contracts::ProviderIdV1 {
-        use webagent_provider_contracts::ProviderIdV1 as P;
-        match self {
-            Self::OpenaiSubscription => P::OpenaiSubscription,
-            Self::Deepseek => P::Deepseek,
-            Self::OpenaiApi => P::OpenaiApi,
-            Self::Openrouter => P::Openrouter,
-            Self::Abacus => P::Abacus,
-            Self::Gemini => P::Gemini,
-            Self::Groq => P::Groq,
-            Self::Together => P::Together,
-            Self::Mistral => P::Mistral,
-            Self::Fireworks => P::Fireworks,
-            Self::Xai => P::Xai,
-            Self::Perplexity => P::Perplexity,
-            Self::Deepinfra => P::Deepinfra,
-            Self::Typesafe => P::Typesafe,
-        }
-    }
-    /// Installation-owned endpoints only. Client catalog payloads cannot override these.
-    pub fn chat_endpoint(self) -> Option<&'static str> {
-        match self {
-            Self::OpenaiSubscription | Self::Typesafe => None,
-            Self::Deepseek => Some("https://api.deepseek.com/chat/completions"),
-            Self::OpenaiApi => Some("https://api.openai.com/v1/chat/completions"),
-            Self::Openrouter => Some("https://openrouter.ai/api/v1/chat/completions"),
-            Self::Abacus => Some("https://routellm.abacus.ai/v1/chat/completions"),
-            Self::Gemini => Some("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"),
-            Self::Groq => Some("https://api.groq.com/openai/v1/chat/completions"),
-            Self::Together => Some("https://api.together.xyz/v1/chat/completions"),
-            Self::Mistral => Some("https://api.mistral.ai/v1/chat/completions"),
-            Self::Fireworks => Some("https://api.fireworks.ai/inference/v1/chat/completions"),
-            Self::Xai => Some("https://api.x.ai/v1/chat/completions"),
-            Self::Perplexity => Some("https://api.perplexity.ai/chat/completions"),
-            Self::Deepinfra => Some("https://api.deepinfra.com/v1/openai/chat/completions"),
-        }
+// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Map host-selected providers into the pure projection contract without granting endpoint or credential selection.","span_lines":28,"configuration":{"status":"not_applicable","rationale":"Provider identity and compatibility reconstruction are fixed protocol invariants."}}
+/// Bind the projection contract to the already selected installation provider.
+/// No component result may select another provider, endpoint or credential family.
+pub(crate) fn projection_id(provider: ProviderId) -> webagent_provider_contracts::ProviderIdV1 {
+    use webagent_provider_contracts::ProviderIdV1 as P;
+    match provider {
+        ProviderId::OpenaiSubscription => P::OpenaiSubscription,
+        ProviderId::Deepseek => P::Deepseek,
+        ProviderId::OpenaiApi => P::OpenaiApi,
+        ProviderId::Openrouter => P::Openrouter,
+        ProviderId::Abacus => P::Abacus,
+        ProviderId::Gemini => P::Gemini,
+        ProviderId::Groq => P::Groq,
+        ProviderId::Together => P::Together,
+        ProviderId::Mistral => P::Mistral,
+        ProviderId::Fireworks => P::Fireworks,
+        ProviderId::Xai => P::Xai,
+        ProviderId::Perplexity => P::Perplexity,
+        ProviderId::Deepinfra => P::Deepinfra,
+        ProviderId::Typesafe => P::Typesafe,
     }
 }
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ProviderSelection {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limits: Option<crate::model_selection::ModelLimits>,
-    pub provider: ProviderId,
-    pub model: String,
-}
-
-impl ProviderSelection {
-    /// Model-only legacy settings select the original subscription adapter.
-    /// Explicit invalid provider values must never silently select a transport.
-    pub fn parse(value: &Value, default_model: &str) -> Result<Self> {
-        if !value.is_object() {
-            bail!("Invalid provider selection");
-        }
-        let provider = match value.get("provider") {
-            None => ProviderId::OpenaiSubscription,
-            Some(value) => serde_json::from_value(value.clone())
-                .map_err(|_| anyhow!("Unsupported provider identifier"))?,
-        };
-        let model = match value.get("model") {
-            None => default_model,
-            Some(value) => value.as_str().ok_or_else(|| anyhow!("Invalid model"))?,
-        };
-        if !crate::platform_catalog::valid_model(model) {
-            bail!("Invalid model");
-        }
-        let limits: Option<crate::model_selection::ModelLimits> = value.get("limits")
-            .filter(|v| !v.is_null()).map(|v| serde_json::from_value(v.clone())).transpose()?;
-        if let Some(limits) = &limits { limits.validate_for(provider, model)?; }
-        Ok(Self {
-            limits,
-            provider,
-            model: model.to_owned(),
-        })
-    }
-
-    /// Convert validated model input tokens to the existing four-byte estimate, rejecting overflow; this is not provider tokenization.
-    pub fn input_budget_bytes(&self) -> Result<Option<usize>> {
-        let input = if let Some(limits) = &self.limits {
-            limits.validate_for(self.provider, &self.model)?;
-            Some(limits.input_tokens)
-        } else if matches!(self.provider, ProviderId::OpenaiSubscription | ProviderId::OpenaiApi) {
-            crate::model_selection::effective_limits(self.provider, &self.model).map(|(context, _)| context-8_192)
-        } else { None };
-        // Match the existing compaction estimate. This is not a provider tokenizer.
-        input.map(|n| n.checked_mul(4).ok_or_else(|| anyhow!("Model input budget overflow"))).transpose()
-    }
-
-    /// Serialize the pinned provider/model/limits identity for durable selection plans.
-    pub fn value(&self) -> Value {
-        serde_json::to_value(self).expect("Provider selection serialization")
-    }
-}
-
 /// Sanitized transport error; no provider payload, token or user input escapes.
 #[derive(Debug)]
 pub struct ProviderFailure {
@@ -1160,42 +1066,4 @@ mod tests {
         );
     }
 
-    /// Verify only an omitted provider selects subscription compatibility; explicit unsupported values fail.
-    #[test]
-    fn legacy_selection_defaults_only_missing_provider() {
-        let selection =
-            ProviderSelection::parse(&json!({"model":"legacy-model"}), "default").unwrap();
-        assert_eq!(selection.provider, ProviderId::OpenaiSubscription);
-        assert_eq!(
-            selection.value(),
-            json!({"provider":"openai_subscription","model":"legacy-model"})
-        );
-        assert_eq!(
-            ProviderSelection::parse(&json!({}), "default")
-                .unwrap()
-                .model,
-            "default"
-        );
-        for provider in [json!("other"), json!(null), json!(7), json!("")] {
-            assert!(ProviderSelection::parse(
-                &json!({"provider":provider,"model":"valid"}),
-                "default"
-            )
-            .is_err());
-        }
-    }
-}
-
-#[cfg(test)]
-mod upstream_id_tests {
-    /// Accept vendor/model identifiers while rejecting whitespace, control characters and URL query syntax.
-    #[test]
-    fn selection_accepts_namespaced_models_without_accepting_controls() {
-        use super::ProviderSelection;
-        use serde_json::json;
-        assert!(ProviderSelection::parse(&json!({"provider":"deepseek","model":"organization/model-name"}), "default").is_ok());
-        for model in ["model\n", "model name", "model?token=x"] {
-            assert!(ProviderSelection::parse(&json!({"provider":"deepseek","model":model}), "default").is_err());
-        }
-    }
 }

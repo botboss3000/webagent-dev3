@@ -2364,6 +2364,7 @@ impl Store {
         Ok(())
     }
 }
+#[path = "../../crates/modules/manager/host/repository.rs"]
 mod message_admission;
 #[cfg(test)]
 mod tests {

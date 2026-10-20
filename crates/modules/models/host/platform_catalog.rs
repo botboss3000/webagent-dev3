@@ -74,10 +74,7 @@ impl Roster {
         self.validate()
     }
 }
-pub fn valid_model(model:&str)->bool {
-    !model.is_empty() && model.len()<=128 && model.bytes().all(|b|
-        b.is_ascii_alphanumeric() || matches!(b,b'-'|b'.'|b'_'|b'/'|b':'))
-}
+pub use webagent_models::valid_model;
 
 #[cfg(test)]
 mod tests {

@@ -1,21 +1,6 @@
-//! Agent-owned settings, independent of the legacy V2 manager.
+//! Host-owned encrypted settings and live installation prompt storage.
 use anyhow::{bail, Result};
-use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct IncomingMessage {
-    pub enabled: bool,
-    #[serde(default)]
-    pub criteria: String,
-}
-impl IncomingMessage {
-    pub fn validate(&self) -> Result<()> {
-        if self.criteria.len() > 8192 || (self.enabled && self.criteria.trim().is_empty()) {
-            bail!("Acceptance criteria are required when enabled and must be at most 8192 bytes");
-        }
-        Ok(())
-    }
-}
+pub use webagent_manager::configuration::IncomingMessage;
 pub async fn incoming(store: &crate::store::Store, agent: &str) -> Result<IncomingMessage> {
     Ok(snapshot(store, agent).await?.0)
 }
@@ -95,7 +80,7 @@ fn save_prompt_inner(
     let mut prompts: serde_json::Value = serde_json::from_slice(
         original
             .as_deref()
-            .unwrap_or(include_bytes!("../../config/prompts.json")),
+            .unwrap_or(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/prompts.json"))),
     )?;
     let object = prompts
         .as_object_mut()

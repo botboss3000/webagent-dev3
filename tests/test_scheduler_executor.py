@@ -481,7 +481,7 @@ class VerificationEvidenceTests(unittest.TestCase):
         from unittest.mock import patch
         import json
         (self.root/"dependency-metadata.json").write_text("{}")
-        self.job["changed_paths"]=["v3/src/models/provider/mod.rs"];self.runner.execution_source_digest=lambda root:"captured-fixture"
+        self.job["changed_paths"]=["v3/crates/modules/models/host/provider/mod.rs"];self.runner.execution_source_digest=lambda root:"captured-fixture"
         with patch.object(self.worker,"metadata_receipt",return_value={"packages":[]}),patch.object(self.worker,"phase",side_effect=RuntimeError("behavior regression")):
             with self.assertRaisesRegex(ValueError,"behavior regression"):self.worker.focused_tests(self.job,self.root,self.root)
         proof=self.job["focused_verification"];self.assertEqual(proof["required_suite"],"workspace");self.assertEqual(proof["runs"][0]["status"],"failed")
@@ -512,7 +512,9 @@ class HostFocusedVerificationTests(unittest.TestCase):
             plan=self.worker.focused_test_plan([path],{})
             self.assertEqual([row["id"] for row in plan],[row["id"] for row in module.HOST_FOCUSED_REGISTRY])
     def test_each_registry_selects_only_relevant_host_checks(self):
-        plan=self.worker.focused_test_plan(["v3/src/models/provider/mod.rs"],{})
+        plan=self.worker.focused_test_plan(["v3/crates/modules/models/host/provider/mod.rs"],{})
+        self.assertEqual([p["id"]for p in plan],["host-prompt-restoration"])
+        plan=self.worker.focused_test_plan(["v3/crates/modules/models/src/provider.rs"],{})
         self.assertEqual([p["id"]for p in plan],["host-prompt-restoration"])
         plan=self.worker.focused_test_plan(["v3/plugins/engine/context-assets/component.json"],{})
         self.assertEqual([p["id"]for p in plan],["host-offline-descriptor-identity"])

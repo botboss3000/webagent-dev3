@@ -62,7 +62,7 @@ def test_filter(value):
 HOST_FOCUSED_POLICY="registered-host-v2"
 HOST_FOCUSED_REGISTRY=(
  {"id":"host-prompt-restoration","test":"provider::tests::configured_base_instructions_loads_and_recovers_from_file_changes",
-  "paths":("src/engine/","src/models/provider/","config/prompts.json","src/agent_loop/","src/context/","src/engine_components.rs","src/main.rs","Cargo.toml","Cargo.lock","build.rs","crates/context-contracts/","crates/context-assembly/","crates/context-service/","plugins/engine/context-assembly/")},
+  "paths":("src/engine/","src/models/provider/","crates/modules/models/","config/prompts.json","src/agent_loop/","src/context/","src/engine_components.rs","src/main.rs","Cargo.toml","Cargo.lock","build.rs","crates/context-contracts/","crates/context-assembly/","crates/context-service/","plugins/engine/context-assembly/")},
  {"id":"host-offline-descriptor-identity","test":"engine_components::offline_smoke_uses_frozen_descriptor_versions",
   "paths":("src/engine/","src/engine_components.rs","src/context/","src/agent_loop/","src/main.rs","Cargo.toml","Cargo.lock","build.rs","crates/context-contracts/","crates/context-assembly/","crates/context-service/","crates/engine-service/","crates/context-assets/","crates/assets-contracts/","crates/assets-service/","crates/capability-contracts/","crates/capability-context/","crates/capability-service/","crates/provider-contracts/","crates/provider-projection/","crates/provider-service/","crates/background-contracts/","crates/background-dispatch/","crates/background-service/","crates/boot-contracts/","crates/boot-supervisor/","crates/boot-service/","plugins/engine/")},
 )

@@ -129,7 +129,7 @@ impl<'a> CallDraft<'a> {
         }
         let request = webagent_provider_contracts::RequestV1::Project {
             version:webagent_provider_contracts::CONTRACT_VERSION,
-            provider:self.selection.provider.projection_id(),
+            provider:projection_id(self.selection.provider),
             model:self.selection.model.clone(),
             instructions:self.instructions.to_owned(),
             input:std::mem::take(&mut self.input),
@@ -155,7 +155,7 @@ impl<'a> CallDraft<'a> {
     ) -> Result<ValidatedCall<'a>> {
         match &request {
             webagent_provider_contracts::RequestV1::Project { provider, model, instructions, .. }
-                if *provider == self.selection.provider.projection_id()
+                if *provider == projection_id(self.selection.provider)
                     && model == &self.selection.model && instructions == self.instructions => {},
             _ => return Err(typed_failure(crate::model_selection::FailureKind::Protocol,
                 false, "Provider projection request identity changed")),

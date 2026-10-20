@@ -2229,6 +2229,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-manager"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "webagent-models"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "webagent-provider-contracts"
 version = "0.1.0"
 dependencies = [
@@ -2416,6 +2434,8 @@ dependencies = [
  "webagent-context-assets",
  "webagent-context-contracts",
  "webagent-engine",
+ "webagent-manager",
+ "webagent-models",
  "webagent-provider-contracts",
  "webagent-provider-projection",
 ]

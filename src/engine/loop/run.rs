@@ -567,7 +567,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             let menu=format!("{}\n{}\n{}",abilities::Catalog::model_index(&entries,&schemas),
                 crate::tool_execution::guidance(&visibility,&names)?,crate::optimization_prompt::guidance(&run));
             let profile_request=webagent_provider_contracts::RequestV1::Profile {
-                version:1,provider:selection.provider.projection_id(),model:selection.model.clone()
+                version:1,provider:crate::provider::projection_id(selection.provider),model:selection.model.clone()
             };
             let profile=match crate::engine_components::provider_project(&app.store.root,&profile_request,&cancel).await {
                 Ok(webagent_provider_contracts::ResultV1::Profile{profile,..})=>profile,

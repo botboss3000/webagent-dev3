@@ -42,3 +42,12 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod bound_tests {
+    #[test]
+    fn oversized_valid_json_is_rejected_before_protocol_admission() {
+        let text=format!("{}{}"," ".repeat(257),r#"{"verdict":"acceptable"}"#);
+        assert!(super::parse(&text).is_err());
+    }
+}

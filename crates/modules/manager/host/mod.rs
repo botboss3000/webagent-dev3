@@ -1,14 +1,14 @@
 //! Independent V3 manager. Reviews are not agent runs and never enter agent history.
 use crate::*;
+#[path = "configuration.rs"]
 pub mod config;
-mod gates;
+use webagent_manager::{incoming_message, verdict};
 mod review;
 mod scheduler;
 #[cfg(test)]
 mod tests;
-mod verdict;
 pub(crate) use scheduler::scheduler;
-pub(crate) use verdict::Verdict;
+pub(crate) use webagent_manager::Verdict;
 // The review remains in the conversation owner's store, but account/model grants
 // belong to the trusted requester persisted by message admission.
 async fn review_scope(app: &App, record: &Value) -> Result<App> {

@@ -43,7 +43,7 @@ pub(super) async fn judge(app: &App, record: &mut Value) -> Result<Verdict> {
     // Deltas are private and discarded; a judge cannot publish a working message.
     let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
     let call_id = format!("manager:{}", record["id"].as_str().unwrap_or(""));
-    let instructions = gates::incoming_message::instructions(&pinned.criteria);
+    let instructions = incoming_message::instructions(&pinned.criteria);
     let call = async {
         let selection = &selection;
         let tokens = &tokens;
@@ -53,7 +53,7 @@ pub(super) async fn judge(app: &App, record: &mut Value) -> Result<Verdict> {
                     let engine_controls = crate::engine_components::controls(&app.store.root)?.revision;
         let prepared = crate::provider::CallDraft::new(
             selection,
-            gates::incoming_message::input(&record["message"]),
+            incoming_message::input(&record["message"]),
             Vec::new(),
             &call_id,
             &instructions,
