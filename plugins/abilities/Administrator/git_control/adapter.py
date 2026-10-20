@@ -122,6 +122,7 @@ def ref(v):
  return v
 # Public dummy credential used by regression fixtures, not a path exemption.
 _DUMMY_CREDENTIALS={
+ b"SECRET_CANARY",
  b"abcdefghijklmnop12345", b"another-secret", b"discovery-key", b"first-secret",
  b"fixture-audio-key", b"fixture-no-network-key", b"fixture-only",
  b"fixture-password", b"fixture-token", b"isolated-key", b"must-not-project",
