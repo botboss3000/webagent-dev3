@@ -3,6 +3,7 @@ use crate::*;
 pub(crate) mod config;
 /// Validate administrator naming settings with the same parser used by queued jobs.
 pub(crate) fn validate_settings(value:&Value)->Result<()> {config::Config::parse(value).map(|_|())}
+pub(crate) fn validate_source_settings(value:&Value)->Result<()> {config::Config::parse_complete(value).map(|_|())}
 /// Build a Unicode-safe placeholder title from normalized first-message text when model naming is unavailable.
 pub(crate) fn fallback(text: &str) -> String {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -359,7 +360,7 @@ mod acceptance_tests {
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         app.provider = provider::Provider::for_test(format!("http://{addr}/responses"));
-        let mut settings = config::Config::default();
+        let mut settings = config::Config::defaults().unwrap();
         settings.request_timeout_seconds = 1;
         settings.attempts_per_job = 1;
         settings.max_job_attempts = 1;
@@ -385,7 +386,7 @@ mod acceptance_tests {
     #[tokio::test]
     async fn settings_snapshot_retry_cap_and_next_job_reload() {
         let (root, app) = fixture().await;
-        let mut settings = config::Config::default();
+        let mut settings = config::Config::defaults().unwrap();
         settings.prompt = "First naming prompt".into();
         settings.max_job_attempts = 2;
         settings.recovery_retry_delay_seconds = 7;
@@ -425,7 +426,7 @@ mod acceptance_tests {
     #[tokio::test]
     async fn configured_role_plan_is_independent_and_claim_fenced() {
         let (root, app) = fixture().await;
-        let mut settings = config::Config::default();
+        let mut settings = config::Config::defaults().unwrap();
         settings.model_role = model_selection::ModelRole::Standard;
         write_settings(root.path(), &settings);
         let sid = create(&app, None).await;
@@ -538,6 +539,96 @@ mod acceptance_tests {
             .await
             .unwrap()
             .unwrap()
+    }
+
+    /// Invalid optional naming settings cannot undo terminal publication or overwrite a locked title.
+    #[tokio::test]
+    async fn invalid_naming_configuration_preserves_terminal_commit_once_and_locked_title() {
+        let (root, app) = fixture().await;
+        let sid = create(&app, None).await;
+        let mut run = accept(&app, &sid, "Keep the completed reply").await;
+        let locked = create(&app, Some(json!("My locked title"))).await;
+        let mut locked_run = accept(&app, &locked, "Keep this title too").await;
+        let before_locked = saved(&app, &locked).await["auto_naming"].clone();
+        let invalid = br#"{"base_instructions":"keep","session_naming":{"prompt":"private-invalid-marker","max_job_attempts":0}}"#;
+        std::fs::write(root.path().join("config/prompts.json"), invalid).unwrap();
+
+        for (id, terminal) in [(&sid, &mut run), (&locked, &mut locked_run)] {
+            finish(&app, terminal).await;
+            assert_eq!(app.run(terminal["id"].as_str().unwrap()).await.unwrap()["status"], "completed");
+            let before = app.store.chat_snapshot(id).await.unwrap();
+            let replies: Vec<_> = before.0.iter().filter(|row| row["role"] == "assistant").collect();
+            assert_eq!(replies.len(), 1);
+            assert_eq!(replies[0]["content"], "One final reply");
+            assert_eq!(replies[0]["run_id"], terminal["id"]);
+            let session = saved(&app, id).await;
+            finish(&app, terminal).await;
+            assert_eq!(app.store.chat_snapshot(id).await.unwrap(), before);
+            assert_eq!(saved(&app, id).await, session);
+            assert!(app.store.get(&format!("session_naming:{id}")).await.unwrap().is_none());
+        }
+        let skipped = saved(&app, &sid).await;
+        assert_eq!(skipped["title"], "New: Keep the completed reply");
+        assert_eq!(skipped["auto_naming"]["stage"], "skipped");
+        assert_eq!(skipped["auto_naming"]["last_error"], "Title configuration unavailable");
+        assert_eq!(skipped["auto_naming"]["claim"], Value::Null);
+        assert_eq!(skipped["auto_naming"]["lease_until"], 0);
+        assert_eq!(skipped["auto_naming"]["attempts"], 0);
+        assert!(app.store.naming_claim(&sid, true).await.unwrap().is_none());
+        assert_eq!(saved(&app, &locked).await["title"], "My locked title");
+        assert_eq!(saved(&app, &locked).await["auto_naming"], before_locked);
+        assert_eq!(std::fs::read(root.path().join("config/prompts.json")).unwrap(), invalid);
+    }
+
+    /// Legacy configuration loading observes participation/lease fences before retiring unavailable work.
+    #[tokio::test]
+    async fn legacy_naming_configuration_skip_preserves_participation_and_claim_fences() {
+        let (root, app) = fixture().await;
+        for recovery in [false, true] {
+            // Start with a valid job, then model its legacy unsnapshotted state.
+            write_settings(root.path(), &config::Config::defaults().unwrap());
+            let sid = create(&app, None).await;
+            let mut run = accept(&app, &sid, "Legacy title fallback").await;
+            finish(&app, &mut run).await;
+            assert!(app.store.get(&format!("session_naming:{sid}")).await.unwrap().is_some());
+            let mut session = saved(&app, &sid).await;
+            session["auto_naming"]["config"] = Value::Null;
+            session["auto_naming"]["claim"] = json!("legacy-claim");
+            let generation = session["auto_naming"]["participation_generation"].as_u64().unwrap();
+            session["participation"]["generation"] = json!(generation + 1);
+            app.store.put(&format!("session:{sid}"), &session).await.unwrap();
+            std::fs::write(root.path().join("config/prompts.json"), b"{private-invalid-marker").unwrap();
+            assert!(app.store.naming_claim(&sid, recovery).await.unwrap().is_none());
+            assert_eq!(saved(&app, &sid).await, session);
+            assert!(app.store.get(&format!("session_naming:{sid}")).await.unwrap().is_some());
+            session["participation"]["generation"] = json!(generation);
+            if recovery {
+                session["auto_naming"]["stage"] = json!("generating");
+                session["auto_naming"]["lease_until"] = json!(now() + 300);
+                app.store.put(&format!("session:{sid}"), &session).await.unwrap();
+                assert!(app.store.naming_claim(&sid, true).await.unwrap().is_none());
+                assert_eq!(saved(&app, &sid).await, session);
+                assert!(app.store.get(&format!("session_naming:{sid}")).await.unwrap().is_some());
+            }
+            session["auto_naming"]["lease_until"] = json!(0);
+            app.store.put(&format!("session:{sid}"), &session).await.unwrap();
+            assert!(app.store.naming_claim(&sid, recovery).await.unwrap().is_none());
+            let skipped = saved(&app, &sid).await;
+            assert_eq!(skipped["auto_naming"]["stage"], "skipped");
+            assert_eq!(skipped["auto_naming"]["last_error"], "Title configuration unavailable");
+            assert_eq!(skipped["auto_naming"]["claim"], Value::Null);
+            assert_eq!(skipped["auto_naming"]["lease_until"], 0);
+            assert_eq!(skipped["auto_naming"]["attempts"], session["auto_naming"]["attempts"]);
+            assert_eq!(skipped["title"], session["title"]);
+            assert_eq!(skipped["auto_naming"]["source"], session["auto_naming"]["source"]);
+            assert_eq!(skipped["metadata_revision"].as_u64().unwrap(),
+                session["metadata_revision"].as_u64().unwrap() + 1);
+            assert!(app.store.get(&format!("session_naming:{sid}")).await.unwrap().is_none());
+            assert!(!app.store.naming_renew(&sid, "legacy-claim").await.unwrap());
+            assert!(!app.store.naming_finish(&sid, "legacy-claim", Some("Stale title")).await.unwrap());
+            assert!(app.store.naming_claim(&sid, true).await.unwrap().is_none());
+            assert_eq!(saved(&app, &sid).await, skipped);
+        }
     }
 
     /// Verify first-message fallback/title state is atomic and explicit custom names remain protected.
@@ -679,7 +770,7 @@ mod acceptance_tests {
     #[tokio::test]
     async fn live_provider_uses_first_user_input_and_retries_blank_without_publishing() {
         let (root, mut app) = fixture().await;
-        let mut settings = config::Config::default();
+        let mut settings = config::Config::defaults().unwrap();
         settings.prompt = "Configured title instruction".into();
         settings.attempts_per_job = 2;
         settings.retry_delay_ms = 0;

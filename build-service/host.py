@@ -4932,8 +4932,9 @@ class Broker:
                     package_changed=[path for path in changed if not hot_source_path(path) and (
                         generic_package_path(path,candidate) or generic_package_path(path,base_blob))]
                     docs_changed=any(path.startswith("v3/docs/")and path.endswith(".md")for path in changed)
+                    external_defaults_changed=any(path in {"v3/config/prompts.json","v3/config/tool-output-retention.json"}for path in changed)
                     core_inputs=set();docs_attested=False
-                    if package_changed or docs_changed or any(path.startswith("v3/ui/")for path in changed):
+                    if package_changed or docs_changed or external_defaults_changed or any(path.startswith("v3/ui/")for path in changed):
                         try:
                             core_inputs=self.runner.core_compile_inputs()
                             docs_attested=isinstance(core_inputs,set)and "v3/src/main.rs"in core_inputs
@@ -4946,7 +4947,7 @@ class Broker:
                         (generic_package_path(path,candidate) or generic_package_path(path,base_blob))
                         and not native_package_migration(path,base_blob)))
                         and path not in core_inputs and not path.startswith(("v3/crates/context-contracts/","v3/crates/background-contracts/","v3/crates/boot-contracts/","v3/crates/assets-contracts/","v3/crates/capability-contracts/","v3/crates/provider-contracts/"))for path in changed)
-                    if (package_changed or docs_changed)and not docs_attested:ui_only=False
+                    if (package_changed or docs_changed or external_defaults_changed)and not docs_attested:ui_only=False
                     if CONFIG.get("scheduler",{}).get("concurrent_ui_preparation",False)and any(path.startswith("v3/ui/")for path in changed)and not docs_attested:ui_only=False
                     engine_changed=any(engine_component_source_path(path)for path in changed)
                     if engine_changed and not self.runner.engine_hot_swappable():ui_only=False

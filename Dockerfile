@@ -78,6 +78,8 @@ COPY --from=tested_builder /out/compiler/copyright /usr/share/doc/mold/copyright
 COPY --from=tested_builder /out/compiler/LICENSE.gz /usr/share/doc/mold/LICENSE.gz
 RUN install -d -m 0755 /usr/local/share/webagent && printf 'mold\n' > /usr/local/share/webagent/compiler-linker
 COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inputs.txt
+COPY --chmod=0444 v3/config/prompts.json v3/config/tool-output-retention.json /usr/local/share/webagent/defaults/
+RUN chmod 0755 /usr/local/share/webagent/defaults
 # Distribution artifacts are installed only by explicit module administration.
 COPY --from=tested_builder /out/modules /usr/local/lib/webagent/modules
 COPY --from=tested_builder /out/webagent-mcp /usr/local/bin/webagent-mcp
@@ -120,6 +122,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && groupadd -g 1100 v3 && useradd -u 1100 -g 1100 -M -s /usr/sbin/nologin v3loop
 COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
 COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inputs.txt
+COPY --chmod=0444 v3/config/prompts.json v3/config/tool-output-retention.json /usr/local/share/webagent/defaults/
+RUN chmod 0755 /usr/local/share/webagent/defaults
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/engine /opt/v3/plugins/engine
 COPY --from=tested_builder /out/webagent-context-service /usr/local/lib/webagent/engine/context-assembly/webagent-context-service

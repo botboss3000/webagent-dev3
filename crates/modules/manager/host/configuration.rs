@@ -77,11 +77,10 @@ fn save_prompt_inner(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    let mut prompts: serde_json::Value = serde_json::from_slice(
-        original
-            .as_deref()
-            .unwrap_or(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/prompts.json"))),
-    )?;
+    let mut prompts: serde_json::Value = match original.as_deref() {
+        Some(bytes)=>serde_json::from_slice(bytes)?,
+        None=>serde_json::from_slice(&crate::live_assets::prompt_defaults()?)?,
+    };
     let object = prompts
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("Invalid prompts file"))?;

@@ -95,7 +95,11 @@ impl Store {
             };
             self.unseal(&raw)?
         };
-        let settings = crate::session_naming::config::Config::load(&self.root);
+        let settings = match crate::session_naming::config::Config::load(&self.root) {
+            Ok(settings) => settings,
+            // Optional title generation must not roll back the completed run.
+            Err(_) => return self.skip_naming_configuration(tx, sid, &mut session).await,
+        };
         let plan = if settings.model_role == crate::model_selection::ModelRole::System {
             first["system_selection_plan"].clone()
         } else { Value::Null };
@@ -114,6 +118,24 @@ impl Store {
                 .await?;
         }
         self.naming_save(tx, sid, &mut session, true).await
+    }
+    /// Retire an eligible naming job without replacing missing/invalid live settings.
+    /// Database, encryption and event failures still fail the caller's transaction.
+    async fn skip_naming_configuration(
+        &self,
+        tx: &mut Tx<'_>,
+        sid: &str,
+        session: &mut Value,
+    ) -> Result<()> {
+        session["auto_naming"]["stage"] = json!("skipped");
+        session["auto_naming"]["claim"] = Value::Null;
+        session["auto_naming"]["lease_until"] = json!(0);
+        session["auto_naming"]["last_error"] = json!("Title configuration unavailable");
+        sqlx::query("DELETE FROM docs WHERE key=?")
+            .bind(format!("session_naming:{sid}"))
+            .execute(&mut **tx)
+            .await?;
+        self.naming_save(tx, sid, session, true).await
     }
     pub(crate) async fn naming_candidates(&self, recovery: bool) -> Result<Vec<String>> {
         let rows = sqlx::query("SELECT s.value FROM docs AS job JOIN docs AS s ON s.key='session:' || substr(job.key,16) WHERE job.key LIKE 'session_naming:%' ORDER BY job.key")
@@ -141,7 +163,16 @@ impl Store {
         }
         // Legacy pending jobs gain one durable snapshot on their first claim.
         if session["auto_naming"]["config"].is_null() {
-            session["auto_naming"]["config"] = json!(crate::session_naming::config::Config::load(&self.root));
+            let settings = match crate::session_naming::config::Config::load(&self.root) {
+                Ok(settings) => settings,
+                Err(_) => {
+                    self.skip_naming_configuration(&mut tx, sid, &mut session).await?;
+                    tx.commit().await?;
+                    self.cache.lock().unwrap().invalidate(&[format!("session:{sid}")]);
+                    return Ok(None);
+                }
+            };
+            session["auto_naming"]["config"] = json!(settings);
         }
         let settings = crate::session_naming::config::Config::for_session(&session)?;
         if session["auto_naming"]["attempts"].as_u64().unwrap_or(0) >= settings.max_job_attempts {

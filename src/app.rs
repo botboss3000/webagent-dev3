@@ -870,12 +870,26 @@ async fn run_process() -> Result<()> {
         let catalog=abilities::Catalog::load_snapshot(&path.join("plugins/abilities"))?;
         let engine=crate::engine_components::load(&path,"candidate")?;
         let prompts:Value=serde_json::from_slice(&std::fs::read(path.join("config/prompts.json"))?)?;
-        crate::api::live_configuration::validate_prompts(&prompts)?;
+        crate::api::live_configuration::validate_source_prompts(&prompts)?;
         for (file,id)in [("app-settings.json","app_settings"),("chat.json","chat"),("context-compaction.json","context_compaction"),("tool-output-retention.json","tool_output_retention"),("access-policy.json","access_policy")] {
-            let value:Value=serde_json::from_slice(&std::fs::read(path.join("config").join(file))?)?;
+            let bytes=std::fs::read(path.join("config").join(file))?;
+            if id=="tool_output_retention" {
+                crate::tool_output::Policy::parse(&bytes)
+                    .map_err(|_|anyhow!("Candidate retention validation failed"))?;
+            }
+            let value:Value=serde_json::from_slice(&bytes)?;
             crate::api::live_configuration::validate(id,&value)?;
         }
-        println!("{}",json!({"catalog_version":catalog.version(),"abilities":catalog.ids().len(),"engine_components":engine.entries.len()}));
+        // Composition is read-only: no model preparation, credential access or provider dispatch.
+        let state_root=PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_|"/state".into()));
+        let effective=provider::Provider::instructions_for_snapshot("",&state_root,Some(&path))
+            .map_err(|_|anyhow!("Effective prompt validation failed"))?;
+        // This reader uses mounted state/current fallback, independently of the candidate source above.
+        let mounted_retention=crate::tool_output::Policy::read(&state_root)
+            .map_err(|_|anyhow!("Mounted retention validation failed"))?;
+        println!("{}",json!({"catalog_version":catalog.version(),"abilities":catalog.ids().len(),"engine_components":engine.entries.len(),
+            "effective_prompt_digest":digest(&json!(effective)),
+            "mounted_retention_digest":digest(&json!(mounted_retention))}));
         return Ok(());
     }
     let root = PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
@@ -901,21 +915,9 @@ async fn run_process() -> Result<()> {
             .map_err(|_|anyhow!("Another v3 loop owns this state"))?;
         Some(lock)
     } else {None};
-    // Seed mutable prompt configuration once; both roles reload it per turn.
-    std::fs::create_dir_all(root.join("config"))?;
-    match OpenOptions::new().write(true).create_new(true).open(root.join("config/prompts.json")) {
-        Ok(mut file) => file.write_all(include_bytes!("../config/prompts.json"))?,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
-        Err(error) => return Err(error.into()),
-    }
+    live_assets::initialize_defaults(&root)?;
     if crate::session_naming::config::initialize(&root).is_err() {
         tracing::warn!("Naming prompt initialization unavailable; preserving existing prompts");
-    }
-    // Mutable retention defaults reload at model-call boundaries.
-    match OpenOptions::new().write(true).create_new(true).open(root.join("config/tool-output-retention.json")) {
-        Ok(mut file) => {file.write_all(include_bytes!("../config/tool-output-retention.json"))?;file.sync_all()?;},
-        Err(error) if error.kind()==std::io::ErrorKind::AlreadyExists=>{},
-        Err(error)=>return Err(error.into()),
     }
     let store = Store::open(&root).await?;
     diagnostics::init(&root, &store, &role).await;
@@ -956,7 +958,6 @@ async fn run_process() -> Result<()> {
         .unwrap_or_else(|_| "/opt/v3/plugins/abilities".to_owned());
     let catalog = abilities::Catalog::load(&PathBuf::from(abilities_root))?;
     store.ensure_agent_connections(&catalog.ids()).await?;
-    live_assets::initialize_prompt_baseline(&root)?;
     let app = App {
         runtime: Arc::new(RwLock::new(runtime)), runtime_path, compaction_config_path,
         browser_login_bridge: browser_login::Bridge::configure(

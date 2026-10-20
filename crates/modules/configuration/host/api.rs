@@ -47,6 +47,11 @@ pub(crate) fn validate(id:&str,value:&Value)->Result<()> {
     }Ok(())
 }
 /// Validate base strings and optional naming, manager, and retention sections without exposing their values.
+/// Published source sections cannot borrow missing naming fields from the current publication.
+pub(crate) fn validate_source_prompts(value:&Value)->Result<()> {
+    if let Some(naming)=value.get("session_naming") {crate::session_naming::validate_source_settings(naming)?;}
+    validate_prompts(value)
+}
 pub(crate) fn validate_prompts(value:&Value)->Result<()>{
     let object=value.as_object().ok_or_else(||anyhow!("Invalid prompts"))?;
     let placeholder=value["tool_result_deduplication"]["placeholder"].as_str().context("Required duplicate-result placeholder missing")?;

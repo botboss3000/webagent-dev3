@@ -1647,3 +1647,29 @@ class EngineModulePathTests(unittest.TestCase):
   self.assertTrue(fixtures.host.hot_source_path("v3/src/engine/tools/administrator-schemas.json"))
   self.assertFalse(fixtures.host.hot_source_path("v3/src/engine/loop/run.rs"))
   self.assertFalse(fixtures.host.hot_source_path("v3/src/engine/tools/dispatch.rs"))
+
+class ExternalDefaultRoutingTests(unittest.TestCase):
+ """Real isolated finish classification requires installed compiler evidence for external defaults."""
+ setUp=fixtures.BuildTests.setUp
+ tearDown=fixtures.BuildTests.tearDown
+ call=fixtures.BuildTests.call
+ wait=fixtures.BuildTests.wait
+ def route_default(self,name,evidence):
+  if getattr(self,"_route_started",False):self.tearDown();self.setUp()
+  self._route_started=True
+  if evidence is False:self.runner.core_compile_inputs=lambda:(_ for _ in()).throw(ValueError("manifest unavailable"))
+  else:self.runner.core_compile_inputs=lambda:evidence
+  task=self.call("v3_build_work",{"action":"begin","task_id":"external-default-"+uuid.uuid4().hex,"summary":"External default fixture","mode":"isolated"})
+  path=Path(task["workspace_path"])/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text("{}")
+  digest=self.call("v3_build_work",{"action":"status","task_id":task["task_id"]})["own"][0]["workspace_inputs_sha256"]
+  result=self.call("v3_build_work",{"action":"finish","task_id":task["task_id"],"expected_inputs_sha256":digest})
+  return self.wait(result)["operation"]
+ def test_defaults_publish_only_when_current_compiler_excludes_them(self):
+  for name in ("config/prompts.json","config/tool-output-retention.json"):
+   with self.subTest(name=name):
+    self.assertEqual(self.route_default(name,{"v3/src/main.rs"}),"plugin_deploy")
+    self.assertEqual(self.route_default(name,{"v3/src/main.rs","v3/"+name}),"build_deploy")
+ def test_unavailable_or_unrecognized_evidence_never_grants_default_publication(self):
+  for evidence in (False,set(),{"v3/docs/note.md"}):
+   with self.subTest(evidence=evidence):
+    self.assertEqual(self.route_default("config/prompts.json",evidence),"build_deploy")

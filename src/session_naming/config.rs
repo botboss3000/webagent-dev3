@@ -13,15 +13,13 @@ pub(crate) struct Config {
     pub recovery_retry_delay_seconds: u64,
     pub max_job_attempts: u64,
 }
-impl Default for Config {
-    fn default() -> Self {
-        let bytes=crate::live_assets::prompt_defaults().unwrap_or_else(|_|include_bytes!("../../config/prompts.json").to_vec());
-        let shipped: Value = serde_json::from_slice(&bytes)
-            .expect("Valid shipped prompts");
-        serde_json::from_value(shipped["session_naming"].clone()).expect("Valid shipped naming settings")
-    }
-}
 impl Config {
+    pub(crate) fn defaults()->Result<Self> {
+        let prompts:Value=serde_json::from_slice(&crate::live_assets::prompt_defaults()?)?;
+        let result:Self=serde_json::from_value(prompts["session_naming"].clone())
+            .map_err(|_|anyhow!("Missing or invalid naming defaults"))?;
+        result.validate()?;Ok(result)
+    }
     fn validate(&self) -> Result<()> {
         if self.prompt.trim().is_empty() || self.prompt.len() > 8192
             || !matches!(self.model_role, model_selection::ModelRole::System
@@ -34,36 +32,29 @@ impl Config {
         { return Err(anyhow!("Invalid session naming settings")); }
         Ok(())
     }
+    /// Source/default sections are complete snapshots and never inherit another publication.
+    pub(super) fn parse_complete(value:&Value)->Result<Self> {
+        let result:Self=serde_json::from_value(value.clone())
+            .map_err(|_|anyhow!("Invalid complete naming configuration"))?;
+        result.validate()?;Ok(result)
+    }
     pub(super) fn parse(value: &Value) -> Result<Self> {
         // Accept the earlier prompt-only format; missing settings use shipped defaults.
         let supplied = if value.is_string() { json!({"prompt":value}) } else { value.clone() };
-        let mut resolved = serde_json::to_value(Self::default())?;
+        if let Ok(result)=serde_json::from_value::<Self>(supplied.clone()) {result.validate()?;return Ok(result);}
+        let mut resolved = serde_json::to_value(Self::defaults()?)?;
         let fields = supplied.as_object().ok_or_else(|| anyhow!("Invalid naming section"))?;
         for (key, value) in fields { resolved[key] = value.clone(); }
         let result: Self = serde_json::from_value(resolved)?;
         result.validate()?;
         Ok(result)
     }
-    pub(crate) fn load(root: &std::path::Path) -> Self {
-        let loaded = (|| -> Result<Self> {
-            let path = root.join("config/prompts.json");
-            if std::fs::metadata(&path)?.len() > 4 * 1024 * 1024 {
-                return Err(anyhow!("Prompts file exceeds bound"));
-            }
-            let prompts=crate::live_assets::resolved_prompts(root)?;
-            if prompts.get("session_naming").is_none() { return Ok(Self::default()); }
-            Self::parse(&prompts["session_naming"])
-        })();
-        match loaded {
-            Ok(config) => config,
-            Err(_) => {
-                tracing::warn!("Session naming configuration unavailable; using shipped defaults");
-                Self::default()
-            }
-        }
+    pub(crate) fn load(root: &std::path::Path) -> Result<Self> {
+        let prompts=crate::live_assets::resolved_prompts(root)?;
+        Self::parse(prompts.get("session_naming").ok_or_else(||anyhow!("Missing naming configuration"))?)
     }
     pub(crate) fn for_session(session: &Value) -> Result<Self> {
-        if session["auto_naming"]["config"].is_null() { return Ok(Self::default()); }
+        if session["auto_naming"]["config"].is_null() { return Self::defaults(); }
         let result: Self = serde_json::from_value(session["auto_naming"]["config"].clone())?;
         result.validate()?;
         Ok(result)
@@ -81,11 +72,13 @@ pub(crate) fn initialize(root: &std::path::Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    let mut prompts: Value = serde_json::from_slice(original.as_deref()
-        .unwrap_or(include_bytes!("../../config/prompts.json")))?;
+    let mut prompts: Value = match original.as_deref() {
+        Some(bytes)=>serde_json::from_slice(bytes)?,
+        None=>serde_json::from_slice(&crate::live_assets::prompt_defaults()?)?,
+    };
     let object = prompts.as_object_mut().ok_or_else(|| anyhow!("Invalid prompts file"))?;
     if object.contains_key("session_naming") && original.is_some() { return Ok(()); }
-    object.insert("session_naming".into(), serde_json::to_value(Config::default())?);
+    object.insert("session_naming".into(), serde_json::to_value(Config::defaults()?)?);
     let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
     if let Ok(metadata) = std::fs::metadata(&path) {
         temporary.as_file().set_permissions(metadata.permissions())?;
@@ -115,7 +108,7 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         initialize(root.path()).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), before);
-        assert_eq!(Config::load(root.path()), Config::default());
+        assert_eq!(Config::load(root.path()).unwrap(), Config::defaults().unwrap());
     }
     #[test]
     fn reload_validate_and_seed_without_replacing_other_prompts() {
@@ -128,28 +121,28 @@ mod tests {
         let mut file: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(file["base_instructions"], "keep");
         assert_eq!(file["manager_incoming_message"]["a"], "keep criteria");
-        assert_eq!(Config::load(root.path()), Config::default());
+        assert_eq!(Config::load(root.path()).unwrap(), Config::defaults().unwrap());
         file["session_naming"]["prompt"] = json!("Custom title prompt");
         file["session_naming"]["max_job_attempts"] = json!(2);
         std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
         initialize(root.path()).unwrap();
-        let first = Config::load(root.path());
+        let first = Config::load(root.path()).unwrap();
         assert_eq!(first.prompt, "Custom title prompt");
         assert_eq!(first.max_job_attempts, 2);
         file["session_naming"]["prompt"] = json!("Later prompt");
         std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
-        assert_eq!(Config::load(root.path()).prompt, "Later prompt");
+        assert_eq!(Config::load(root.path()).unwrap().prompt, "Later prompt");
         assert_eq!(first.prompt, "Custom title prompt");
         for (key, value) in [("prompt", json!("")), ("model_role", json!("voice")),
             ("attempts_per_job", json!(0)), ("retry_delay_ms", json!(-1)),
             ("request_timeout_seconds", json!(301)), ("recovery_retry_delay_seconds", json!(0)),
             ("max_job_attempts", json!(21)), ("typo", json!(1))] {
-            let mut invalid = serde_json::to_value(Config::default()).unwrap();
+            let mut invalid = serde_json::to_value(Config::defaults().unwrap()).unwrap();
             invalid[key] = value;
             assert!(Config::parse(&invalid).is_err(), "{key}");
         }
         std::fs::write(&path, b"malformed").unwrap();
-        assert_eq!(Config::load(root.path()), Config::default());
+        assert!(Config::load(root.path()).is_err());
         assert!(initialize(root.path()).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"malformed");
         assert_eq!(Config::parse(&json!("Prompt-only")).unwrap().prompt, "Prompt-only");

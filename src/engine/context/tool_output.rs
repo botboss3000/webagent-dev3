@@ -60,22 +60,26 @@ impl Default for Policy {
 }
 
 impl Policy {
-    /// Read the live root policy. A missing file uses disabled defaults.
+    /// Validate original file bytes before JSON object normalization can discard duplicate fields.
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > MAX_POLICY_BYTES {
+            bail!("Tool output retention policy exceeds limit");
+        }
+        let policy: Self = serde_json::from_slice(bytes)?;
+        policy.validate()?;
+        Ok(policy)
+    }
+    /// Read the live root policy, falling back to external installation defaults.
     pub fn read(root: &Path) -> Result<Self> {
         let path = root.join("config/tool-output-retention.json");
         let bytes = match fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
+                return Self::parse(&crate::live_assets::retention_defaults()?);
             }
             Err(error) => return Err(error.into()),
         };
-        if bytes.len() > MAX_POLICY_BYTES {
-            bail!("Tool output retention policy exceeds limit");
-        }
-        let policy: Self = serde_json::from_slice(&bytes)?;
-        policy.validate()?;
-        Ok(policy)
+        Self::parse(&bytes)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -1259,6 +1263,34 @@ mod tests {
             ),
             0
         );
+    }
+
+    #[test]
+    fn raw_policy_parser_and_live_reader_share_field_bounds_and_byte_limits() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config/tool-output-retention.json");
+        fs::create_dir(path.parent().unwrap()).unwrap();
+        let valid = br#"{"enabled":false}"#;
+        assert_eq!(Policy::parse(valid).unwrap(), Policy::default());
+        fs::write(&path, valid).unwrap();
+        assert_eq!(Policy::read(root.path()).unwrap(), Policy::parse(valid).unwrap());
+        let mut at_limit = vec![b' '; MAX_POLICY_BYTES - 2];
+        at_limit.extend_from_slice(b"{}");
+        assert!(Policy::parse(&at_limit).is_ok());
+        let mut oversized = at_limit;
+        oversized.push(b' ');
+        assert!(serde_json::from_slice::<Value>(&oversized).is_ok());
+        for bytes in [
+            br#"{"enabled":false,"enabled":true}"#.to_vec(),
+            br#"{"unexpected":"PRIVATE_POLICY_MARKER"}"#.to_vec(),
+            br#"{"lifetime_calls":0}"#.to_vec(),
+            br#"{"enabled":"false"}"#.to_vec(),
+            oversized,
+        ] {
+            assert!(Policy::parse(&bytes).is_err());
+            fs::write(&path, &bytes).unwrap();
+            assert!(Policy::read(root.path()).is_err());
+        }
     }
 
     #[test]
