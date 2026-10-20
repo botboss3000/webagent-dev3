@@ -291,27 +291,7 @@ mod tests {
     }
 }
 
-// Page audiences are a global ceiling; administrative APIs retain their role gate.
-pub(crate) fn validate_pages(pages:&Value)->Result<()> {
-    let scopes=pages.as_object().ok_or_else(||anyhow!("Invalid page policy"))?;
-    for (scope,entries) in scopes {
-        if !matches!(scope.as_str(),"main"|"app") {return Err(anyhow!("Invalid page scope"));}
-        let entries=entries.as_object().ok_or_else(||anyhow!("Invalid page entries"))?;
-        if entries.len()>128 {return Err(anyhow!("Too many page policies"));}
-        for (id,audience) in entries {
-            if !access::valid_agent_id(id) || !matches!(audience.as_str(),Some("everyone"|"registered"|"admin")) {return Err(anyhow!("Invalid page audience"));}
-        }
-    }
-    Ok(())
-}
-pub(crate) fn page_allowed(policy:&Value, scope:&str, id:&str, principal:&access::Principal)->bool {
-    if !principal.active() {return false;}
-    if principal.administrator() {return true;} // protected administration recovery
-    if scope=="app" && matches!(id,"settings"|"users"|"user-policies"|"page-access") {return false;}
-    match policy["pages"][scope][id].as_str().unwrap_or("everyone") {
-        "everyone"=>true,"registered"=>principal.role!=access::Role::Guest,_=>false,
-    }
-}
+pub(crate) use access::configuration::{page_allowed, validate_configuration, validate_pages};
 
 #[cfg(test)]
 mod advanced_policy_tests {
@@ -342,17 +322,4 @@ mod advanced_policy_tests {
         let after=app.store.live_access("admin","shared_default").await.unwrap();
         assert_ne!(before.revision.policy,after.revision.policy);
     }
-}
-
-pub(crate) fn validate_configuration(value:&Value)->Result<()> {
-        if !value.is_object() || !matches!(value["registration"].as_str(), Some("open"|"restricted")) {
-            return Err(anyhow!("Invalid access-policy.json registration policy"));
-        }
-        if value.get("revision").is_some_and(|v|v.as_u64().is_none_or(|n|n==0)) {return Err(anyhow!("Invalid policy revision"));}
-        if let Some(tiers)=value.get("tiers") {
-            let map=tiers.as_object().ok_or_else(||anyhow!("Invalid policy tiers"))?;
-            for (id,definition) in map {let tier:access::Tier=serde_json::from_value(definition.clone())?;tier.validate()?;if tier.id!=*id {return Err(anyhow!("Tier identity mismatch"));}}
-        }
-        if let Some(pages)=value.get("pages") {validate_pages(pages)?;}
-    Ok(())
 }

@@ -2163,6 +2163,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-access"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "webagent-assets-contracts"
 version = "0.1.0"
 dependencies = [
@@ -2374,6 +2383,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "webagent-access",
  "webagent-assets-contracts",
  "webagent-background-contracts",
  "webagent-background-dispatch",

@@ -1,4 +1,6 @@
 //! Phase 3 access decisions. Visibility and availability never grant permission.
+pub mod configuration;
+
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

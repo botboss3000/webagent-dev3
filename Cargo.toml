@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service"]
-default-members = [".", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service"]
+members = ["crates/modules/access", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service"]
+default-members = ["crates/modules/access", ".", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service"]
 resolver = "2"
 
 [features]
@@ -14,6 +14,7 @@ linked-context = ["dep:webagent-context-assembly", "dep:webagent-background-disp
 live-context = []
 
 [dependencies]
+webagent-access = { path = "crates/modules/access" }
 webagent-assets-contracts={path="crates/assets-contracts"}
 webagent-capability-contracts={path="crates/capability-contracts"}
 webagent-provider-contracts={path="crates/provider-contracts"}
