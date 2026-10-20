@@ -237,9 +237,74 @@ pub(crate) fn record(run: &mut Value, error: &anyhow::Error, index: Option<usize
     }
     run["latest_tool_failure"] = value;
 }
+
+/// Permit one content-free diagnostic attachment to an otherwise immutable terminal
+/// checkpoint. The storage revision/generation/lease fences still apply; no control,
+/// input, approval, result or execution metadata can change through this exception.
+pub(crate) fn diagnostic_only_update(previous: &Value, next: &Value) -> bool {
+    if !matches!(previous["status"].as_str(), Some("cancelled" | "failed"))
+        || previous["pending"]["state"] != "executing"
+        || !previous["pending"]["failure"].is_null()
+    {
+        return false;
+    }
+    let failure = &next["pending"]["failure"];
+    if !failure.is_object() || project(failure) != *failure
+        || next["latest_tool_failure"] != *failure
+    {
+        return false;
+    }
+    for (field, source) in [
+        ("session_id", &previous["session_id"]),
+        ("run_id", &previous["id"]),
+        ("pending_id", &previous["pending"]["id"]),
+        ("call_id", &previous["pending"]["call_id"]),
+        ("tool", &previous["pending"]["name"]),
+    ] {
+        let expected = identifier(source);
+        if expected.is_null() || failure[field] != expected { return false; }
+    }
+    let mut expected = previous.clone();
+    expected["pending"]["failure"] = failure.clone();
+    expected["latest_tool_failure"] = failure.clone();
+    expected == *next
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn late_single_tool_terminal_diagnostic_exception_rejects_every_other_mutation() {
+        let previous = json!({"id":"run","session_id":"session","generation":"generation",
+            "status":"cancelled","uncertain":false,"input":[],"run_revision":3,
+            "pending":{"id":"attempt","call_id":"call","name":"file_list","state":"executing"}});
+        let error = Failure::new(Stage::ResponseRead,Code::DisconnectedResponse,Delivery::PossiblySent).into();
+        let mut next = previous.clone();
+        record(&mut next,&error,None);
+        assert!(diagnostic_only_update(&previous,&next));
+        for (pointer,value) in [
+            ("/status",json!("running")),("/uncertain",json!(true)),
+            ("/generation",json!("replacement")),("/run_revision",json!(4)),
+            ("/input",json!([{"type":"function_call_output"}])),
+            ("/pending/id",json!("replacement")),("/pending/state",json!("requested")),
+            ("/pending/failure/code",json!("private error")),
+            ("/pending/failure/pending_id",json!("other")),
+        ] {
+            let mut invalid=next.clone();*invalid.pointer_mut(pointer).unwrap()=value;
+            if pointer.starts_with("/pending/failure/") {
+                invalid["latest_tool_failure"]=invalid["pending"]["failure"].clone();
+            }
+            assert!(!diagnostic_only_update(&previous,&invalid),"{pointer}");
+        }
+        let mut invalid=next.clone();invalid["pending"]["failure"]["raw_error"]=json!("private error");
+        invalid["latest_tool_failure"]=invalid["pending"]["failure"].clone();
+        assert!(!diagnostic_only_update(&previous,&invalid));
+        assert!(!diagnostic_only_update(&next,&next),"diagnostics cannot overwrite prior evidence");
+        let mut completed=previous.clone();completed["status"]=json!("completed");
+        let mut completed_next=next.clone();completed_next["status"]=json!("completed");
+        assert!(!diagnostic_only_update(&completed,&completed_next));
+    }
+
     #[test]
     fn typed_boundaries_preserve_cause_without_secret_text() {
         let start = Instant::now();

@@ -7453,3 +7453,214 @@ async fn background_component_pause_survives_modern_persisted_view() {
 fn test_rpc_reply(request:&Value,mut reply:Value)->Value {
  if request["version"]==2 {let id=reply.as_object_mut().unwrap().remove("id").unwrap();json!({"version":2,"id":id,"result":reply})}else{reply}
 }
+
+/// Acknowledge only normal resource-shutdown controls while the effect peer is held.
+async fn late_single_control_reply(stream: tokio::net::UnixStream) {
+    use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};
+    let mut reader=BufReader::new(stream);
+    let mut line=String::new();reader.read_line(&mut line).await.unwrap();
+    let request:Value=serde_json::from_str(&line).unwrap();
+    assert!(matches!(request["name"].as_str(),Some("administrator_quiesce"|"administrator_host_revoke")));
+    let reply=test_rpc_reply(&request,json!({"id":request["id"],"status":"success","output":{}}));
+    reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+}
+
+/// Hold a real authorized worker request across the normal API control boundary.
+/// API and loop processes have separate active-token maps; closing the peer then
+/// produces a deterministic late transport error instead of a timing-dependent cancel.
+async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success: bool) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let (root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let _ = session_mode_set(State(app.clone()), Path(sid.clone()), Json(SessionModeBody {
+        mode: "auto".into(), expected_revision: Some(0), confirm_write: true,
+    })).await.unwrap();
+    activate_codebase(&app, &sid).await;
+    if name == "build_work" {
+        let mut policy = policy_default();
+        for tool in ["build_work","v3_build_work","v3_worker_submit"] {
+            policy["rules"][tool] = json!("allow");
+        }
+        app.store.put("policy",&policy).await.unwrap();
+        // The protected host retains the legacy build-ability ceilings.
+        let mut tier = app.store.entitlement_tier("operator").await.unwrap().unwrap();
+        let revision = tier.revision;
+        tier.ability_permissions.insert("v3_build".into(),access::Permission::Auto);
+        app.store.save_entitlement_tier(tier,revision).await.unwrap();
+        let revision = app.store.capability_levels("shared_default").await.unwrap().revision;
+        let mut level = app.store.live_access("admin","shared_default").await.unwrap().capability_level;
+        level.ability_permissions.insert("v3_build".into(),access::Permission::Auto);
+        app.store.save_capability_level("shared_default",level,revision).await.unwrap();
+    }
+    let id = queued(&app, &sid).await;
+    let args = if name == "build_work" {
+        json!({"action":"finish","task_id":"late-build-fixture","expected_inputs_sha256":"0".repeat(64)})
+    } else if name == "file_write" {
+        json!({"path":format!("/workspaces/{sid}/fixture.txt"),"content":"fixture"})
+    } else { json!({"path":"."}) };
+    let mut run = app.run(&id).await.unwrap();
+    run["phase"] = json!("tools");
+    run["turns"] = json!(1);
+    run["loaded_abilities"] = json!(["codebase_admin"]);
+    let call = json!({"type":"function_call","call_id":"late-call","name":name,"arguments":args.to_string()});
+    run["calls"] = json!([call.clone()]);
+    run["input"].as_array_mut().unwrap().push(call.clone());
+    app.store.save_run_observed(&mut run,"model_output",&json!({"output":[call]})).await.unwrap();
+    running(&app, &id, "late-generation").await;
+    if name == "build_work" {
+        tools::administrator::host_fingerprint(&app,&sid,&id,"build_work_finish").await.unwrap();
+    }
+    let socket = if name == "build_work" { &app.build_socket } else { &app.tool_socket };
+    let listener = tokio::net::UnixListener::bind(socket).unwrap();
+    let quiesce = if name == "build_work" {
+        let listener = tokio::net::UnixListener::bind(&app.tool_socket).unwrap();
+        Some(tokio::spawn(async move {
+            late_single_control_reply(listener.accept().await.unwrap().0).await;
+        }))
+    } else { None };
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let (release, held) = tokio::sync::oneshot::channel();
+    let worker = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let request: Value = serde_json::from_str(&line).unwrap();
+        sent.send(request.clone()).unwrap();
+        let mut held = held;
+        loop {
+            tokio::select! {
+                released = &mut held => { released.unwrap(); break; },
+                accepted = listener.accept() => {
+                    late_single_control_reply(accepted.unwrap().0).await;
+                }
+            }
+        }
+        if success {
+            let reply = json!({"version":2,"id":request["id"],"result":{"status":"success","output":"known effect"}});
+            reader.get_mut().write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+        }
+    });
+    let loop_app = app.clone(); let loop_id = id.clone();
+    let task = tokio::spawn(async move {
+        execute_run(loop_app,loop_id,"late-generation".into(),CancellationToken::new()).await
+    });
+    let request = tokio::time::timeout(Duration::from_secs(10),received).await.unwrap().unwrap();
+    let executing = app.run(&id).await.unwrap();
+    assert_eq!(executing["pending"]["state"],"executing");
+    let _ = command(State(app.clone()),Path((id.clone(),action.into())),
+        Json(json!({"client_request_id":"late-control"}))).await.unwrap();
+    let mut before = app.run(&id).await.unwrap();
+    if mutation == "generation" { before["generation"] = json!("replacement-generation"); }
+    if mutation == "pending" { before["pending"]["id"] = json!("replacement-pending"); }
+    if mutation == "requested" { before["pending"]["state"] = json!("requested"); }
+    if mutation != "none" { app.store.put(&key("run",&id),&before).await.unwrap(); }
+    release.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10),task).await.unwrap().unwrap().unwrap();
+    worker.await.unwrap();
+    if let Some(quiesce) = quiesce { quiesce.await.unwrap(); }
+    let after = app.run(&id).await.unwrap();
+    if mutation != "none" {
+        assert_eq!(after,before,"stale attempt must not mutate the replacement checkpoint");
+    } else if success {
+        assert_eq!(after["status"],"cancelled");
+        assert_eq!(after["uncertain"],false);
+        assert!(after["pending"].is_null());
+        assert_eq!(after["call_index"],1);
+        assert_eq!(after["input"].as_array().unwrap().iter().filter(|v|v["type"]=="function_call_output").count(),1);
+    } else {
+        let failure = &after["pending"]["failure"];
+        assert_eq!(failure["code"],"disconnected_response");
+        assert_eq!(failure["stage"],"response_read");
+        assert_eq!(failure["delivery"],"possibly_sent");
+        assert_eq!(failure["transport_request_id"],request["id"]);
+        assert_eq!(failure["pending_id"],executing["pending"]["id"]);
+        assert_eq!(failure["call_id"],"late-call");
+        assert_eq!(failure["run_id"],id);
+        assert_eq!(failure["session_id"],sid);
+        assert!(failure["elapsed_ms"].is_u64());
+        assert_eq!(&after["latest_tool_failure"],failure);
+        let mut expected = before.clone();
+        expected["pending"]["failure"] = failure.clone();
+        expected["latest_tool_failure"] = failure.clone();
+        expected["run_revision"] = after["run_revision"].clone();
+        if name == "build_work" {
+            assert_eq!(after["status"],"stopped");
+            assert_eq!(after["uncertain"],false);
+            assert_eq!(after["pending"]["external_job"]["kind"],"v3_build");
+            assert_eq!(after["pending"]["external_job"]["task_id"],"late-build-fixture");
+            assert_eq!(after["call_index"],0);
+            expected["status"] = json!("stopped");
+            expected["uncertain"] = json!(false);
+            expected["pending"]["external_job"] = after["pending"]["external_job"].clone();
+            expected["updated_at"] = after["updated_at"].clone();
+        }
+        assert_eq!(after,expected,"late evidence cannot alter control, inputs, approval or retry state");
+        let reopened = Store::open(root.path()).await.unwrap();
+        let durable = reopened.get(&key("run",&id)).await.unwrap().unwrap();
+        assert_eq!(durable["pending"]["failure"],*failure);
+        assert_eq!(public_run(&durable)["tool_failure"],*failure);
+    }
+    let (chat, _) = app.store.chat_snapshot(&sid).await.unwrap();
+    assert_eq!(chat.iter().filter(|v|v["role"]=="assistant").count(),0);
+}
+
+#[tokio::test]
+async fn late_single_tool_failure_survives_stop_pause_and_reopen() {
+    for name in ["file_list","file_write"] {
+        for action in ["cancel","pause"] {
+            late_single_tool_case(name,action,"none",false).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn late_single_tool_rejects_stale_attempts_and_keeps_known_write_result() {
+    for mutation in ["generation","pending","requested"] {
+        late_single_tool_case("file_write","pause",mutation,false).await;
+        late_single_tool_case("file_write","pause",mutation,true).await;
+    }
+    late_single_tool_case("file_write","cancel","none",true).await;
+}
+
+#[tokio::test]
+async fn late_single_tool_broker_finish_keeps_receipt_reconciliation() {
+    for action in ["cancel","pause"] {
+        late_single_tool_case("build_work",action,"none",false).await;
+    }
+}
+
+/// Terminal storage accepts a safe diagnostic attachment, never a state/result edit.
+#[tokio::test]
+async fn late_single_tool_terminal_storage_keeps_control_fences() {
+    let (_root,app)=fixture().await;
+    let sid=conversation(&app).await;
+    let id=queued(&app,&sid).await;
+    running(&app,&id,"terminal-diagnostic").await;
+    let mut run=app.run(&id).await.unwrap();
+    run["pending"]=json!({"id":"terminal-attempt","call_id":"terminal-call","name":"file_list","state":"executing"});
+    app.save(&mut run).await.unwrap();
+    let _ = command(State(app.clone()),Path((id.clone(),"cancel".into())),
+        Json(json!({"client_request_id":"terminal-diagnostic-control"}))).await.unwrap();
+    let previous=app.run(&id).await.unwrap();
+    let mut next=previous.clone();
+    let error=tools::failure::Failure::new(tools::failure::Stage::ResponseRead,
+        tools::failure::Code::DisconnectedResponse,tools::failure::Delivery::PossiblySent).into();
+    tools::failure::record(&mut next,&error,None);
+    for (pointer,value) in [
+        ("/status",json!("running")),("/error",json!("changed")),
+        ("/uncertain",json!(true)),("/generation",json!("replacement")),
+        ("/lease_epoch",json!(999)),("/run_revision",json!(999)),
+        ("/pending/state",json!("requested")),("/pending/id",json!("replacement")),
+        ("/input",json!([{"type":"function_call_output","call_id":"terminal-call","output":"invented"}])),
+    ] {
+        let mut invalid=next.clone();
+        *invalid.pointer_mut(pointer).unwrap()=value;
+        assert!(app.store.save_run(&mut invalid,"run_status",&json!({})).await.is_err(),"{pointer}");
+        assert_eq!(app.run(&id).await.unwrap(),previous);
+    }
+    let mut wrong_event=next.clone();
+    assert!(app.store.save_run(&mut wrong_event,"tool_result",&json!({})).await.is_err());
+    app.store.save_run_observed(&mut next,"run_status",&json!({"run_id":id})).await.unwrap();
+    assert_eq!(app.run(&id).await.unwrap()["latest_tool_failure"],next["latest_tool_failure"]);
+}

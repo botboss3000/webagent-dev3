@@ -1672,6 +1672,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                 return Ok(());
             }
             app.save(&mut run).await?;
+            let pending_id = run["pending"]["id"].as_str().unwrap().to_owned();
             drop(_guard);
             // The loop's debug poll frame exceeds 1 MiB. Poll this already-authorized
             // call on its own ordinary executor stack; the one-child scope aborts on drop.
@@ -1679,7 +1680,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             let mut tool_task=tokio::task::JoinSet::new();
             tool_task.spawn(tools::call(
                 app.clone(), sid.clone(), id.clone(), generation.clone(), name.clone(), args.clone(),
-                run["pending"]["id"].as_str().unwrap().to_owned(),
+                pending_id.clone(),
                 run["pending"]["policy_version"].as_u64().unwrap_or(0),
                 cancel.clone(),
             ));
@@ -1690,10 +1691,16 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
             };
             let _guard = app.gate.lock().await;
             let mut run = app.run(&id).await?;
-            if run["generation"] != generation {
+            if run["generation"] != generation || run["pending"]["id"] != pending_id
+                || run["pending"]["state"] != "executing" {
                 return Ok(());
             }
             let result=result.and_then(|outcome|{tools::outcome::stage(&mut run,&outcome.metadata)?;Ok(outcome.content)});
+            // Stop/pause can commit while this child is completing. Retain evidence
+            // for this exact attempt before reconciliation; observation never resumes it.
+            if let Err(error) = &result {
+                tools::failure::record(&mut run, error, None);
+            }
             if status(&run) != "running" {
                 if !terminal(status(&run)) && matches!(name.as_str(),"v3_build_work"|"build_work") && args["action"]=="finish"
                     && run["pending"]["state"]=="executing"
@@ -1710,6 +1717,13 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                         || app.shutoff().await?;
                     run["status"]=json!(if restricted {"stopped"}else{"waiting_external"});
                     app.save(&mut run).await?;
+                    return Ok(());
+                }
+                if result.is_err() {
+                    // Keep control timestamps and all result/replay state unchanged,
+                    // including terminal cancellation. Storage permits only safe evidence.
+                    let public = public_run(&run);
+                    app.store.save_run_observed(&mut run, "run_status", &public).await?;
                     return Ok(());
                 }
                 // An already committed result can resolve uncertainty without restarting the run.
@@ -1758,8 +1772,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                         )
                         .await?;
                 }
-                Err(error) => {
-                    tools::failure::record(&mut run, &error, None);
+                Err(_) => {
                     if tools::is_read(&name) && preserve_restart_interruption(&app, &mut run).await? {
                         // Retain the pending read and its original call ID for startup retry.
                         return Ok(());

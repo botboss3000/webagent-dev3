@@ -1821,7 +1821,10 @@ impl Store {
                 || previous["lease_epoch"] != run["lease_epoch"]
                 || previous["run_revision"].as_u64().unwrap_or(0)!=expected
                 || (matches!(previous["status"].as_str(),Some("completed"|"cancelled"|"failed"))
-                    && previous!=*run)
+                    && previous!=*run
+                    // A late tool error may add validated evidence only. Terminal
+                    // state/results stay immutable and every existing fence still applies.
+                    && !(kind=="run_status" && crate::tools::failure::diagnostic_only_update(&previous,run)))
                 || (previous["status"]!="running" && run["status"]=="running"
                     && previous["lease_epoch"].as_i64().unwrap_or(0)>0)
             {
