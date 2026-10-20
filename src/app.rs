@@ -65,22 +65,7 @@ fn now() -> u64 {
 fn uuid() -> String {
     Uuid::new_v4().to_string()
 }
-// DISPATCH-DIGEST-STREAM: hash the exact JSON representation without allocating
-// a temporary JSON tree or serialized history-sized byte buffer.
-fn digest<T: serde::Serialize + ?Sized>(value: &T) -> String {
-    struct HashWriter(Sha256);
-    impl std::io::Write for HashWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            use sha2::Digest;
-            self.0.update(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-    }
-    let mut writer = HashWriter(Sha256::new());
-    serde_json::to_writer(&mut writer, value).expect("JSON digest serialization");
-    hex::encode(writer.0.finalize())
-}
+use webagent_configuration::digest;
 fn key(prefix: &str, id: &str) -> String {
     format!("{prefix}:{id}")
 }

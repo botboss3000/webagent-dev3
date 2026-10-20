@@ -473,6 +473,10 @@ class HostFocusedVerificationTests(unittest.TestCase):
         plan=self.worker.focused_test_plan(changed+["v3/src/engine_components.rs"],metadata)
         self.assertEqual([p["test"]for p in plan if "test"in p],[r["test"]for r in module.HOST_FOCUSED_REGISTRY])
         self.assertEqual([p["package"]for p in plan if "test"not in p],["component0","component1","component2"])
+    def test_moved_engine_sources_retain_host_regressions(self):
+        for path in ["v3/src/engine/loop/run.rs", "v3/src/engine/context/tool_output.rs", "v3/src/engine/components.rs"]:
+            plan=self.worker.focused_test_plan([path],{})
+            self.assertEqual([row["id"] for row in plan],[row["id"] for row in module.HOST_FOCUSED_REGISTRY])
     def test_each_registry_selects_only_relevant_host_checks(self):
         plan=self.worker.focused_test_plan(["v3/src/models/provider/mod.rs"],{})
         self.assertEqual([p["id"]for p in plan],["host-prompt-restoration"])

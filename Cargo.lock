@@ -2301,6 +2301,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-engine"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "webagent-engine-service"
 version = "0.1.0"
 dependencies = [
@@ -2318,6 +2325,19 @@ dependencies = [
  "webagent-background-contracts",
  "webagent-background-dispatch",
  "webagent-engine-service",
+]
+
+[[package]]
+name = "webagent-configuration"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fs2",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -2391,9 +2411,11 @@ dependencies = [
  "webagent-boot-supervisor",
  "webagent-capability-context",
  "webagent-capability-contracts",
+ "webagent-configuration",
  "webagent-context-assembly",
  "webagent-context-assets",
  "webagent-context-contracts",
+ "webagent-engine",
  "webagent-provider-contracts",
  "webagent-provider-projection",
 ]

@@ -1,7 +1,7 @@
 //! Revision-fenced administrator updates to existing application configuration.
 use super::*;
 use anyhow::Context;
-use std::path::Path as FsPath;
+use webagent_configuration::{digest, read};
 const IDS:[&str;9]=["app_settings","chat","prompts","context_compaction","loop_runtime","tool_output_retention","access_policy","message_visibility","closing_status"];
 /// Map a known configuration owner to its existing runtime path; never accept a caller filesystem path.
 fn path(app:&App,id:&str)->Result<PathBuf>{
@@ -17,13 +17,6 @@ fn path(app:&App,id:&str)->Result<PathBuf>{
         "closing_status"=>app.store.root.join("config/gates/closing_status_v1.json"),
         _=>anyhow::bail!("Unknown configuration")
     })
-}
-/// Read a bounded configuration object while rejecting symlinks and non-regular files.
-fn read(path:&FsPath)->Result<Value>{
-    let metadata=std::fs::symlink_metadata(path)?;
-    if !metadata.is_file()||metadata.file_type().is_symlink()||metadata.len()>4*1024*1024 {anyhow::bail!("Invalid configuration file");}
-    let value:Value=serde_json::from_slice(&std::fs::read(path)?)?;
-    if !value.is_object(){anyhow::bail!("Configuration must be an object");}Ok(value)
 }
 /// Reuse each owner's domain validator before an administrator save.
 pub(crate) fn validate(id:&str,value:&Value)->Result<()> {
@@ -89,27 +82,13 @@ pub(crate) async fn put_config(State(app):State<App>,Path(id):Path<String>,Json(
     let expected=required(&body,"expected_digest",64)?;
     let value=&body["config"];validate(&id,value).map_err(|_|bad("Invalid configuration"))?;
     let _guard=app.gate.lock().await;
-    let saved=(||->Result<bool> {
-    // Cross-process writers are fenced under the existing configuration lock.
     let lock_path=match id.as_str(){
         "prompts"=>app.store.root.join("config/.prompts.lock"),
         "access_policy"=>app.store.root.join("config/access-policy.lock"),
         _=>path.with_extension("json.publication.lock"),
     };
-    let lock=OpenOptions::new().create(true).truncate(false).read(true).write(true).open(lock_path)?;
-    lock.lock_exclusive()?;
-    let old=read(&path)?;
-    if digest(&old)!=expected{return Ok(false);}
-    let mut output=tempfile::NamedTempFile::new_in(path.parent().ok_or_else(||anyhow!("Missing config directory"))?)?;
-    output.as_file().set_permissions(std::fs::metadata(&path)?.permissions())?;
-    serde_json::to_writer_pretty(&mut output,value).map_err(anyhow::Error::from)?;
-    output.write_all(b"\n")?;output.as_file().sync_all()?;
-    if read(&path)?!=old{return Ok(false);}
-    output.persist(&path).map_err(anyhow::Error::from)?;
-    File::open(path.parent().unwrap())?.sync_all()?;
-    Ok(true)
-    })()?;
-    if !saved{return Err(conflict("Configuration changed; reload before saving"));}
+    let saved=webagent_configuration::update_if_current(&path,&lock_path,&expected,None,|_|Ok(value.clone()))?;
+    if saved.is_none(){return Err(conflict("Configuration changed; reload before saving"));}
     if id=="loop_runtime"{crate::wake::notify(&app).await;}
     Ok(Json(json!({"id":id,"digest":digest(value),"restart_required":false})))
 }

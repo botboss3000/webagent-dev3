@@ -27,7 +27,9 @@ mod agent_pages;
 mod app_pages;
 mod file_manager;
 mod build_dashboard;
+#[path = "../../crates/modules/configuration/host/app_settings.rs"]
 mod app_settings;
+#[path = "../../crates/modules/configuration/host/api.rs"]
 pub(crate) mod live_configuration;
 mod loop_settings;
 mod engine_components;

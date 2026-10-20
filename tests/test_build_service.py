@@ -1624,3 +1624,9 @@ class InstalledInventoryEnginePublicationTests(unittest.TestCase):
      self.assertFalse(broker.host_source_only([path],blob,{"local_caller":True}))
      self.assertFalse(broker.host_source_only([path,"v3/worker.py"],blob,{"local_caller":True}))
    finally:broker.shutdown()
+
+class EngineModulePathTests(unittest.TestCase):
+ def test_native_schema_keeps_asset_publication_after_move(self):
+  self.assertTrue(fixtures.host.hot_source_path("v3/src/engine/tools/administrator-schemas.json"))
+  self.assertFalse(fixtures.host.hot_source_path("v3/src/engine/loop/run.rs"))
+  self.assertFalse(fixtures.host.hot_source_path("v3/src/engine/tools/dispatch.rs"))

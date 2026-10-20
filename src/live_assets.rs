@@ -6,12 +6,12 @@ pub(crate) fn native_schema_overrides(root:&std::path::Path)->Result<std::collec
     let mut overrides=std::collections::BTreeMap::new();
     if !root.ends_with("plugins/abilities"){return Ok(overrides);}
     let Some(source)=root.parent().and_then(std::path::Path::parent)else{return Ok(overrides);};
-    let path=source.join("src/agent_loop/tools/administrator-schemas.json");
+    let path=source.join("src/engine/tools/administrator-schemas.json");
     if !path.exists(){return Ok(overrides);}
     let bytes=std::fs::read(path)?;
     if bytes.len()>512*1024{anyhow::bail!("Native schema asset exceeds limit");}
     let live:Vec<Value>=serde_json::from_slice(&bytes)?;
-    let baseline:Vec<Value>=serde_json::from_str(include_str!("agent_loop/tools/administrator-schemas.json"))?;
+    let baseline:Vec<Value>=serde_json::from_str(include_str!("engine/tools/administrator-schemas.json"))?;
     if live.len()!=baseline.len(){anyhow::bail!("Native schema interface change requires engine release");}
     for (current,compiled)in live.iter().zip(baseline.iter()){
         let mut a=current.clone();let mut b=compiled.clone();

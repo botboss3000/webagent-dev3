@@ -1192,21 +1192,11 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                             "output":result.to_string()}));
                     }
                     let output=&output;
-                    let mut calls = output
-                        .iter()
-                        .filter(|v| v["type"] == "function_call" && v["name"]!=crate::tool_output::CONTROL_NAME)
-                        .cloned()
-                        .collect::<Vec<_>>();
+                    let mut calls = engine_output::tool_calls(output,crate::tool_output::CONTROL_NAME);
                     for item in output {
                         run["input"].as_array_mut().unwrap().push(item.clone());
                     }
-                    let text = output
-                        .iter()
-                        .filter(|v| v["type"] == "message")
-                        .flat_map(|v| v["content"].as_array().into_iter().flatten())
-                        .filter_map(|v| v["text"].as_str())
-                        .collect::<Vec<_>>()
-                        .join("");
+                    let text = engine_output::text(output);
                     let publication_policy = current_workflow_policy(&app).await?;
                     workflow::record(&mut run, &publication_policy,
                         &workflow::Input::ModelOutput { output_digest:digest(&json!(output)) },
@@ -1248,11 +1238,8 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                     }
                     if calls.is_empty() {
                         if text.trim().is_empty() {
-                            let reasoning_only = !output.is_empty()
-                                && output.iter().all(|item| item["type"] == "reasoning");
                             let continuations = run["reasoning_only_completions"].as_u64().unwrap_or(0);
-                            let context_only=output.iter().any(|item|item["name"]==crate::tool_output::CONTROL_NAME);
-                            if (reasoning_only || context_only) && continuations < 2 {
+                            if engine_output::continuation(output,crate::tool_output::CONTROL_NAME) && continuations < 2 {
                                 run["reasoning_only_completions"] = json!(continuations + 1);
                                 run["phase"] = json!("model");
                                 app.store.save_run_observed(&mut run, "model_output", &json!({"output":output})).await?;
@@ -1349,11 +1336,7 @@ async fn execute_run_inner(app:App,id:String,generation:String,cancel:Cancellati
                         }
                     }
                     let auto_promote=run["promotion_mode"]=="auto";
-                    if auto_promote && output.iter().filter(|item|item["type"]=="message")
-                        .any(|item|item["content"].as_array()
-                            .map(|parts|parts.iter().filter_map(|part|part["text"].as_str())
-                                .map(str::len).sum::<usize>()>16384)
-                            .unwrap_or(false)) {
+                    if auto_promote && engine_output::message_exceeds(output,16384) {
                         // Keep the provider output private and pause explicitly. A
                         // rejected public row must not leave a half-saved model turn.
                         run["status"]=json!("paused");

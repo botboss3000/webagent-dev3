@@ -1,5 +1,5 @@
 //! Trusted host launch authority; shared pre-exec confinement precedes replaceable code.
-#[path = "engine_sandbox.rs"]
+#[path = "engine/sandbox.rs"]
 mod engine_sandbox;
 use anyhow::{bail, Result};
 use sha2::{Digest, Sha256};

@@ -21,7 +21,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 ABILITIES = ("codebase_admin", "code_index", "git_control", "terminal_control", "v3_workspace", "v3_build", "diagnostics", "remote_tunnel")
-SCHEMAS = json.loads((ROOT / "src/agent_loop/tools/administrator-schemas.json").read_text())
+SCHEMAS = json.loads((ROOT / "src/engine/tools/administrator-schemas.json").read_text())
 TOOLS = {s["name"] for s in SCHEMAS} | {"workspace_seed", "file_read", "file_write", "file_list", "shell", "python"}
 FORBIDDEN_APPROVALS = {"promotion_propose", "propose_promotion", "v3_worker_submit"}
 
