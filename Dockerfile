@@ -15,8 +15,8 @@ COPY v3/plugins ./plugins
 # Runtime tests load the installed ability catalog and chat configuration.
 COPY v3/plugins/abilities ./plugins/abilities
 COPY v3/ui ./ui
-# Bound compiler concurrency on the shared 7 GiB development host.
-ENV CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+# Bound compiler concurrency to three workers on the development host.
+ENV CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 # Keep Cargo downloads and artifacts across source changes; publish the tested
 # binary outside the cache mount so both runtime targets copy one exact build.
 RUN --mount=type=cache,id=webagent-v3-registry,target=/usr/local/cargo/registry,sharing=locked \

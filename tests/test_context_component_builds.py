@@ -123,7 +123,7 @@ class ComponentBuildTests(unittest.TestCase):
     def test_packaged_services_and_reviewed_compiler_stage_are_complete(self):
         docker=(ROOT/"Dockerfile").read_text()
         stage=docker[docker.index("FROM rust:"):docker.index("FROM debian:",docker.index("FROM rust:"))]
-        self.assertEqual(hashlib.sha256(stage.encode()).hexdigest(),executor.SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256)
+        self.assertEqual(hashlib.sha256(stage.encode()).hexdigest(),executor.PARALLEL_COMPILER_STAGE_SHA256)
         for identity,(binary,*_)in NEW.items():
             self.assertIn(binary,executor.BINARIES)
             self.assertIn(f"install -Dm755 /build/target/release/{binary} /out/{binary}",docker)
