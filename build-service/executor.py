@@ -16,7 +16,12 @@ def check_argv(task,profile=None):
     return (["cargo","check","--locked","--offline",*FEATURE_PROFILES[selected]]if task=="check"else["cargo","test","--locked","--offline","--no-run"])
 
 RUST="rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f"
-COMPILER_RECIPE=RUST+":jobs3:debug0:complete-tests-v7"
+COMPILER_RECIPE=RUST+":jobs3:debug0:mold1.10.1:complete-tests-v8"
+RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"
+MOLD_VERSION="1.10.1+dfsg-1"
+MOLD_SHA256="f85b0102cabeaee34b76ab195aacfa9ff9442d670948c88f6f353dd666ea5b64"
+MOLD_COMPILER_DOCKERFILE_SHA256="129a45c426d4683ab5a563ebdf764bf829826a415305dce15ab36c780a3ba815"
+MOLD_COMPILER_STAGE_SHA256="046c3f98cc75313c2dd6fee391328f5beea8dd537745429542e7c4710bd7e635"
 BUILDKIT="moby/buildkit:v0.25.1@sha256:79cc6476ab1a3371c9afd8b44e7c55610057c43e18d9b39b68e2b0c2475cc1b6"
 COMPILER_STAGE_SHA256="474b034d7a843ebf324b654a785b5a5b23135804ef39c662f92fcb3e160dfeaf"
 # Coordinated Automation extraction removes only its root-bin distribution closure.
@@ -73,9 +78,12 @@ class Executor:
     def __init__(self,runner,resources,config):
         """Bind fixed build recipes to the broker resource controller and reviewed installation."""
         self.runner=runner;self.resources=resources;self.config=config
+    def compiler_recipe(self):
+        """Bind every object/output certificate to the actual immutable linker image."""
+        return COMPILER_RECIPE+":"+self.runner.compiler_runtime()["image"]
     def preflight_packaging(self,job,blob):
         """Pin all local execution images and verify OCI dependencies before compiler admission."""
-        references={"compiler":RUST,"packager":BUILDKIT}
+        references={"compiler":self.runner.compiler_runtime(job)["image"],"toolchain":RUST,"packager":BUILDKIT}
         cache=getattr(self.runner,"package_cache",None)
         if cache is None or not cache.enabled:
             files=self.runner.execution_entries(blob)
@@ -120,6 +128,7 @@ class Executor:
 
     def _phase_workload(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False):
         """Launch one identified container and preserve counters before removing a terminal container."""
+        image=self.runner.compiler_runtime(job)["image"]
         jobhex=uuid.UUID(job["job_id"]).hex
         name="webagent-build-"+self.config["instance"]+"-"+jobhex+"-"+phase+"-"+uuid.uuid4().hex[:8]
         output.mkdir(parents=True,exist_ok=True)
@@ -133,9 +142,9 @@ class Executor:
             "--cap-drop","ALL","--security-opt","no-new-privileges","--pids-limit","256","--user",str(self.config["service_uid"])+":"+str(self.config["service_gid"]),
             "--network","bridge"if network else"none","--mount","type=bind,src="+str(source)+",dst=/build"+(""if phase=="test"else",readonly"),
             "--mount","type=bind,src="+str(output)+",dst=/output","-w","/build",
-            "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=3","-e","CARGO_INCREMENTAL=0",
-            "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",RUST,"sleep","infinity"]
-        if cap is not None:create[create.index(RUST):create.index(RUST)]=["--memory",str(cap),"--memory-swap",str(cap)]
+            "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=3","-e","CARGO_INCREMENTAL=0","--env","RUSTFLAGS="+RUSTFLAGS,
+            "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",image,"sleep","infinity"]
+        if cap is not None:create[create.index(image):create.index(image)]=["--memory",str(cap),"--memory-swap",str(cap)]
         try:
             self.runner.command(create,timeout=30,private_raw=True)
             # Only the protected helper binds exact name, labels and cgroup parent;
@@ -420,7 +429,7 @@ class Executor:
     def test_proof(self,blob):
         import platform
         return {"policy":"exact-source-tests-v1","source_sha256":self.verification_source(blob),"toolchain":RUST,
-            "architecture":platform.machine(),"kernel":platform.release(),"executor_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "compiler_recipe":self.compiler_recipe(),"architecture":platform.machine(),"kernel":platform.release(),"executor_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "identities":{k:self.config.get(k)for k in ("service_uid","service_gid","app_uid","app_gid","worker_uid","worker_gid")}}
 
     def verification_binding(self,job,blob,task,profile):
@@ -597,7 +606,7 @@ class Executor:
         for path in sorted(cache.glob("*.json"),key=lambda p:p.stat().st_mtime,reverse=True)[:64]:
             if path.is_symlink():raise ValueError("Engine cache receipt symlink")
             value=json.loads(path.read_text())
-            if value["recipe"]!=COMPILER_RECIPE or value["rust_inputs"]!=rust:continue
+            if value["recipe"]!=self.compiler_recipe() or value["rust_inputs"]!=rust:continue
             if any(name not in files or hashlib.sha256(files[name][1]).hexdigest()!=sha for name,sha in value["compiled_inputs"].items()):continue
             if not re.fullmatch(r"[a-f0-9-]{36}",value["job_id"]):raise ValueError("Engine cache job identity invalid")
             source=Path(self.config["state_root"])/"execution"/value["job_id"]/"output/artifacts"
@@ -730,7 +739,7 @@ class Executor:
                 raise ValueError("Compiler cache symlink")
             if not receipt.is_file()or not captured.is_file():continue
             state=json.loads(receipt.read_text())
-            if state["job_id"]!=previous.name or state["status"]not in {"failed","completed"}or state.get("compiler_recipe")!=COMPILER_RECIPE:continue
+            if state["job_id"]!=previous.name or state["status"]not in {"failed","completed"}or state.get("compiler_recipe")!=self.compiler_recipe():continue
             old_blob=self.runner.execution_application_blob(captured.read_bytes())
             old=self.runner.execution_entries(old_blob)
             if self.rust_inputs(old)!=self.rust_inputs(files):continue
@@ -759,7 +768,7 @@ class Executor:
             if relative is not None:
                 if relative not in files:raise ValueError("Compiled local input absent from captured source")
                 inputs[relative]=hashlib.sha256(files[relative][1]).hexdigest()
-        value={"recipe":COMPILER_RECIPE,"rust_inputs":self.rust_inputs(files),"compiled_inputs":inputs,
+        value={"recipe":self.compiler_recipe(),"rust_inputs":self.rust_inputs(files),"compiled_inputs":inputs,
             "artifacts":hashes,"job_id":job["job_id"]}
         if log is not None:value.update(test_proof=self.test_proof(blob),test_log=log[-1024*1024:])
         if not inputs:raise ValueError("Compiled input closure missing")
@@ -786,7 +795,7 @@ class Executor:
             if path.is_symlink()or not path.is_file()or path.stat().st_size>16*1024*1024:
                 raise ValueError('Compiler dependency receipt identity invalid')
             value=json.loads(path.read_bytes())
-            if value.get('recipe')!=COMPILER_RECIPE:continue
+            if value.get('recipe')!=self.compiler_recipe():continue
             jid=value.get('job_id','')
             if not re.fullmatch(r'[a-f0-9-]{36}',jid):raise ValueError('Compiler dependency job identity invalid')
             prefix='optimization-cargo/registry/'
@@ -850,7 +859,7 @@ class Executor:
         start=text.index("FROM rust:");end=text.index("FROM debian:",start)
         recipe=hashlib.sha256(text[start:end].encode()).hexdigest()
         if recipe in {COMPILER_STAGE_SHA256,CONTEXT_COMPILER_STAGE_SHA256}:return True
-        if recipe not in {EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256,PARALLEL_COMPILER_STAGE_SHA256}:
+        if recipe not in {EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256,PARALLEL_COMPILER_STAGE_SHA256,MOLD_COMPILER_STAGE_SHA256}:
             raise ValueError("Compiler Dockerfile recipe changed; migrate the reviewed attributable engine recipe")
         cargo=tomllib.loads(files["v3/Cargo.toml"][1].decode())
         if any(target.get("name")=="webagent-automation"for target in cargo.get("bin",[]))or "v3/src/plugin_packages/automation/main.rs"in files:
@@ -860,7 +869,7 @@ class Executor:
         """Select the additional mandatory outputs from exact reviewed source, never stale binaries."""
         text=self.runner.execution_entries(blob)["v3/Dockerfile"][1].decode()
         stage=text[text.index("FROM rust:"):text.index("FROM debian:",text.index("FROM rust:"))]
-        return hashlib.sha256(stage.encode()).hexdigest()in {CONTEXT_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256,PARALLEL_COMPILER_STAGE_SHA256}
+        return hashlib.sha256(stage.encode()).hexdigest()in {CONTEXT_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256,PARALLEL_COMPILER_STAGE_SHA256,MOLD_COMPILER_STAGE_SHA256}
 
     def retain_test_manifest(self,output,artifacts):
         """Retain Cargo-attested tests and exact debug support; never substitute optimized binaries."""
@@ -946,7 +955,7 @@ class Executor:
             if self.artifact_hashes(output/"artifacts")!=receipt["artifacts"]:raise ValueError("Retained artifact changed")
             if receipt.get("test_proof")!=self.test_proof(blob):raise ValueError("Retained verification recipe/environment changed; reconcile through a successor")
             return output/"artifacts",receipt["log"]
-        job["compiler_recipe"]=COMPILER_RECIPE
+        job["compiler_recipe"]=self.compiler_recipe()
         blob=self.runner.execution_application_blob(blob)
         root.mkdir(parents=True,exist_ok=True);extract(source,blob);application=source/"v3";output.mkdir(exist_ok=True)
         cached=self.cached_engine(blob,output)
@@ -974,6 +983,7 @@ class Executor:
             job["linked_stable"]=json.loads((artifacts/"stable/smoke.json").read_text())
             job["optimized_mode_equivalence"]=json.loads((artifacts/"stable/mode-equivalence.json").read_text())
             job["compiler_artifact_reuse"]=old["job_id"]
+            job["linker_proof"]=self.metadata_receipt(artifacts/"stable/linker-proof.json")
             return artifacts,logs
         seeded=self.seed_cargo_cache(job,blob,output)
         cargo=output/"cargo";cargo.mkdir(exist_ok=True)
@@ -1017,6 +1027,19 @@ class Executor:
         core=self.core_dependencies(metadata,output/"target")
         (artifacts/"core-inputs.txt").write_text("\n".join(sorted(core))+"\n")
         if "v3/src/main.rs"not in {self.local_dependency(name)for name in dependencies}:raise ValueError("Compiler dependency attestation missing")
+        logs+=self.phase(job,"engine_metadata","dependency",application,output,
+            ["sh","-c","set -e\nreadelf -p .comment /output/stable/webagent-v3 > /output/linked-comment.txt\nreadelf -p .comment /output/target/release/webagent-v3 > /output/live-comment.txt\nmkdir -p /output/compiler\ninstall -m755 /usr/bin/mold /output/compiler/mold\ninstall -m644 /usr/share/doc/mold/copyright /usr/share/doc/mold/LICENSE.gz /output/compiler/"],"engine:rust1.90:mold-proof",60)
+        comments={}
+        for mode in ("linked","live"):
+            body=(output/(mode+"-comment.txt")).read_bytes()
+            if len(body)>32768 or not re.search(rb"\bmold 1\.10\.1\b",body):raise ValueError("Optimized "+mode+" root ELF lacks required Mold linker comment")
+            comments[mode]=body.decode("utf-8","strict")
+        if hashlib.sha256((output/"compiler/mold").read_bytes()).hexdigest()!=MOLD_SHA256:raise ValueError("Packaged Mold executable differs from compiler")
+        shutil.copytree(output/"compiler",artifacts/"compiler")
+        job["linker_proof"]={"compiler_recipe":self.compiler_recipe(),"comments":comments,
+            "linked_sha256":hashlib.sha256((artifacts/"stable/webagent-v3").read_bytes()).hexdigest(),
+            "live_sha256":hashlib.sha256((artifacts/"webagent-v3").read_bytes()).hexdigest(),"mold_sha256":MOLD_SHA256}
+        (artifacts/"stable/linker-proof.json").write_text(json.dumps(job["linker_proof"],sort_keys=True)+"\n")
         hashes=self.artifact_hashes(artifacts);self.retain_engine(job,blob,dependencies,hashes,logs)
         receipt={"inputs_sha256":inputs,"artifacts":hashes,"log":logs,"test_proof":self.test_proof(blob)}
         temporary=root/"verified.new";temporary.write_text(json.dumps(receipt));os.replace(temporary,root/"verified.json")

@@ -16,7 +16,7 @@ class ImageCheckpointTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name)
-        for name in ("executor.py","packaging_cache.py","image_reuse.py"):
+        for name in ("executor.py","packaging_cache.py","image_reuse.py","compiler.Dockerfile"):
             (self.root/name).write_text("protected "+name)
         self.job={"job_id":"a"*36,"images":{}}
         self.image="sha256:"+"b"*64
@@ -37,7 +37,7 @@ class ImageCheckpointTests(unittest.TestCase):
             source_config={"state_root":str(self.root),"service_dir":str(self.root)},
             execution_application_blob=lambda blob:blob,
             context_digest=lambda blob:(hashlib.sha256(blob).hexdigest(),1),
-            executor=SimpleNamespace(artifact_hashes=lambda folder:{
+            executor=SimpleNamespace(compiler_recipe=lambda:"fixture-mold-image",artifact_hashes=lambda folder:{
                 p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.iterdir()}),
             command=command)
         self.job["image_receipts"]={"api":reuse.record(self.runner,self.job,self.blob,"api",self.image,"c"*64)}
@@ -173,6 +173,7 @@ class PackagingPreflightTests(unittest.TestCase):
         runner.resources=SimpleNamespace(enabled=True);runner.job_context=SimpleNamespace(job=job)
         runner.package_cache=SimpleNamespace(enabled=True,ready=lambda blob:{"api":{},"loop":{}})
         runner.retention_enabled=True;runner.resource_progress=lambda job:None
+        runner.compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64}
         def retain(reference,identity):
             if reference==worker_module.BUILDKIT:raise RuntimeError("Protected resource operation unavailable")
             return {"retained":True,"image":"sha256:"+"a"*64}
@@ -189,10 +190,10 @@ class PackagingPreflightTests(unittest.TestCase):
         def retain(reference,identity):
             calls.append(reference);return {"retained":True,"image":"sha256:"+"a"*64}
         def ready(blob):
-            self.assertEqual(calls,[module.RUST,module.BUILDKIT]);return {"api":{"manifest_digest":"api"},"loop":{"manifest_digest":"loop"}}
-        runner=SimpleNamespace(retention_enabled=True,retain_image=retain,package_cache=SimpleNamespace(enabled=True,ready=ready),resource_progress=lambda _:None)
+            self.assertEqual(calls,["sha256:"+"7"*64,module.RUST,module.BUILDKIT]);return {"api":{"manifest_digest":"api"},"loop":{"manifest_digest":"loop"}}
+        runner=SimpleNamespace(compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64},retention_enabled=True,retain_image=retain,package_cache=SimpleNamespace(enabled=True,ready=ready),resource_progress=lambda _:None)
         proof=module.Executor(runner,None,{}).preflight_packaging(job,b"source")
-        self.assertEqual(set(proof["images"]),{"compiler","packager"})
+        self.assertEqual(set(proof["images"]),{"compiler","toolchain","packager"})
         self.assertEqual(set(job["dependency_bases"]),{"api","loop"})
 
 class PackagingRetryBrokerTests(unittest.TestCase):
@@ -215,7 +216,7 @@ class PackagingRetryBrokerTests(unittest.TestCase):
         item.update(status="closed",job_id=identity,inputs_sha256=self.broker.scheduler_digest(blob))
         self.broker.jobs[identity]=job
         service=self.root/"service";service.mkdir()
-        for name in ("executor.py","packaging_cache.py","image_reuse.py"):(service/name).write_text("verified fixture")
+        for name in ("executor.py","packaging_cache.py","image_reuse.py","compiler.Dockerfile"):(service/name).write_text("verified fixture")
         self.runner.source_config={**self.runner.source_config,"state_root":str(self.broker.state),"service_dir":str(service)}
         self.runner.context_digest=self.fixture.fixtures.host.context_digest
         self.runner.execution_application_blob=self.fixture.fixtures.host.Runner.execution_application_blob

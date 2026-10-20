@@ -60,6 +60,7 @@ class MonitoringTests(unittest.TestCase):
             self.assertEqual((phase,kind,network),("plugin_compile","plugin",False))
             if command[1]=="build":
                 target=cache/"target/release";target.mkdir(parents=True);(target/m.BINARY).write_bytes(b"compiled")
+        runner.executor.compiler_recipe.return_value="fixture-mold-image"
         runner.executor.phase.side_effect=phase
         executor=types.SimpleNamespace(RUST="pinned-fixture",Executor=types.SimpleNamespace(compiler_dependencies=lambda target:["/build/src/main.rs"],local_dependency=lambda name:"v3/src/main.rs"))
         scheduler=types.SimpleNamespace(Scheduler=types.SimpleNamespace(write_record=lambda path,value:path.write_text(json.dumps(value))))

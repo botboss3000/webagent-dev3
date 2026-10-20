@@ -253,7 +253,7 @@ class CompletionEvidenceTests(unittest.TestCase):
         rows=defaultdict(dict)
         r=types.SimpleNamespace(enabled=True,enter=Mock(),attached=Mock(),lock=threading.RLock(),rows=rows,diagnostic_check=lambda _:False)
         stats={"container_id":identity,"memory_max":cap,"swap_max":0,"oom_events":0,"oom_kills":0,"peak_memory":1234}
-        runner=types.SimpleNamespace(command=Mock(side_effect=["created","started",primary if primary else "compiled"]),job_context=types.SimpleNamespace(),resource_progress=Mock())
+        runner=types.SimpleNamespace(compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64},command=Mock(side_effect=["created","started",primary if primary else "compiled"]),job_context=types.SimpleNamespace(),resource_progress=Mock())
         runner.resource_request=Mock(side_effect=[{"container_id":identity,"state":"created","phase":"compile_test"},stats,final if isinstance(final,Exception)else {**stats,**final}])
         worker=executor.Executor(runner,r,{"instance":"development","service_uid":1000,"service_gid":1000});worker.finish_phase=Mock()
         job={"job_id":str(uuid.uuid4()),"compiler_memory_cap":cap}

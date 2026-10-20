@@ -99,7 +99,7 @@ class EngineTests(unittest.TestCase):
         for invalid in ("--ignored","name;command","name with spaces","name/other","x"*161):
             with self.assertRaises(ValueError):executor.test_filter(invalid)
         with tempfile.TemporaryDirectory()as temporary:
-            runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in ("execution_entries","execution_application_blob","execution_source_digest")})
+            runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in ("execution_entries","execution_application_blob","execution_source_digest")},compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64})
             worker=executor.Executor(runner,None,{"state_root":temporary});worker.phase=Mock(return_value="checked");worker.dependencies=Mock(return_value="offline ready\n")
             job={"job_id":str(uuid.uuid4()),"test_filter":"engine_components::"};blob=fixtures.context(extra={"v3/src/main.rs":"fn main() {}"})
             worker.check(job,blob,"test",60,lambda path,data:fixtures.host.release.extract(path,data,fixtures.host.context_digest))
@@ -118,7 +118,7 @@ class EngineTests(unittest.TestCase):
         for scenario in ("success","oom","unenforced"):
             with self.subTest(scenario=scenario),tempfile.TemporaryDirectory()as temporary:
                 resources=types.SimpleNamespace(enabled=True,enter=Mock(),attached=Mock(),lock=threading.RLock(),rows=defaultdict(dict),diagnostic_check=lambda _:False)
-                runner=types.SimpleNamespace(command=Mock(side_effect=["a"*64,"started","compiler succeeded"]),job_context=types.SimpleNamespace(),resource_progress=Mock())
+                runner=types.SimpleNamespace(compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64},command=Mock(side_effect=["a"*64,"started","compiler succeeded"]),job_context=types.SimpleNamespace(),resource_progress=Mock())
                 observed={"container_id":"a"*64,"memory_max":cap if scenario!="unenforced"else None,"swap_max":0,"oom_events":0,"oom_kills":0,"peak_memory":1024}
                 runner.resource_request=Mock(side_effect=[{"container_id":"a"*64,"state":"created","phase":"compile_test"},observed,{**observed,"oom_events":1 if scenario=="oom"else 0,"oom_kills":1 if scenario=="oom"else 0}])
                 worker=executor.Executor(runner,resources,{"instance":"development","service_uid":1000,"service_gid":1000});worker.finish_phase=Mock();job={"job_id":str(uuid.uuid4()),"compiler_memory_cap":cap}
@@ -140,7 +140,7 @@ class EngineTests(unittest.TestCase):
         import test_admin_build as fixtures
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory()as temporary:
-            runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in ("execution_entries","execution_application_blob","execution_source_digest")})
+            runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in ("execution_entries","execution_application_blob","execution_source_digest")},compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64})
             worker=executor.Executor(runner,None,{"state_root":temporary});worker.phase=Mock(return_value="checked");worker.dependencies=Mock(return_value="offline ready\n")
             blob=fixtures.context(extra={"v3/src/main.rs":"fn main() {}"})
             extract=lambda path,data:fixtures.host.release.extract(path,data,fixtures.host.context_digest)

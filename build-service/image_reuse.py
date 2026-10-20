@@ -35,7 +35,7 @@ def source_receipt(runner, job, blob):
 
 def recipe_receipt(runner):
     """Bind resumption to installed packaging implementation, not caller text."""
-    names = ("executor.py", "packaging_cache.py", "image_reuse.py")
+    names = ("executor.py", "packaging_cache.py", "image_reuse.py", "compiler.Dockerfile")
     root = Path(runner.source_config["service_dir"])
     result = {}
     for name in names:
@@ -43,6 +43,7 @@ def recipe_receipt(runner):
         if path.is_symlink() or not path.is_file():
             raise ValueError("Installed packaging recipe unavailable")
         result[name] = digest(path.read_bytes())
+    result["compiler_runtime"]=digest(runner.executor.compiler_recipe().encode())
     return result
 
 

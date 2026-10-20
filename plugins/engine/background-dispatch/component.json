@@ -1,5 +1,4 @@
 {
-  "artifact_sha256": "f988bf2e438d716293d67f336438bdbd508e34a553ddc73eeaf4c6aa96cfb3de",
   "build": {
     "features": [],
     "package": "webagent-background-service",

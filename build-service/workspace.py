@@ -130,12 +130,19 @@ def append_cargo_tail(output,chunk):
  if len(output)<=CARGO_LOG_LIMIT:return False
  del output[:-CARGO_LOG_LIMIT]
  return True
+COMPILER_LINKER_MARKER=Path("/usr/local/share/webagent/compiler-linker")
+def cargo_rustflags():
+ try:info=COMPILER_LINKER_MARKER.lstat()
+ except FileNotFoundError:return "-C debuginfo=0"
+ if not stat.S_ISREG(info.st_mode)or info.st_size!=5 or COMPILER_LINKER_MARKER.read_bytes()!=b"mold\n":
+  raise Rejected("Baked Cargo linker capability invalid")
+ return "-C debuginfo=0 -C link-arg=-fuse-ld=mold"
 async def run_cargo(root,argv,timeout):
  worker=Path(__file__).resolve().parent.parent/"worker.py"
  if not worker.is_file() or worker.is_symlink():raise Rejected("Trusted Cargo supervisor unavailable")
  env={"PATH":"/opt/rust/bin:/usr/bin:/bin","LANG":"C.UTF-8","HOME":str(root),"TMPDIR":str(root),
       "CARGO_HOME":str(root/".cache/.cargo"),"CARGO_TARGET_DIR":str(root/"target/.v3-target"),
-      "CARGO_BUILD_JOBS":"3","CARGO_INCREMENTAL":"0","RUSTFLAGS":"-C debuginfo=0"}
+      "CARGO_BUILD_JOBS":"3","CARGO_INCREMENTAL":"0","RUSTFLAGS":cargo_rustflags()}
  process=await asyncio.create_subprocess_exec("/usr/bin/python3","-I",str(worker),"--runner",json.dumps(argv),
   cwd=root,env=env,start_new_session=True,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.STDOUT)
  output=bytearray();truncated=False

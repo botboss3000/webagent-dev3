@@ -192,11 +192,11 @@ def install(tree=None):
         publish(service, "index-scanner.py", scanner, 0o644)
         publish(service,"index-maintenance.py",maintenance,0o644)
         extra={"index-maintenance.py":hashlib.sha256(maintenance).hexdigest()}
-        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","index_queue.py","index_coordinator.py","review_store.py","review_policy.py","post_deployment.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","monitoring_component.py","boot_host.py","scheduler-defaults.json"):
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","index_queue.py","index_coordinator.py","review_store.py","review_policy.py","post_deployment.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","compiler.Dockerfile","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","monitoring_component.py","boot_host.py","scheduler-defaults.json"):
             body=read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
             if name.endswith(".py"):compile(body,name,"exec")
             elif name.endswith(".json"):json.loads(body)
-            elif name=="ui-test.Dockerfile":body.decode("utf-8","strict")
+            elif name in {"ui-test.Dockerfile","compiler.Dockerfile"}:body.decode("utf-8","strict")
             else:raise ValueError("Unknown protected installation input")
             publish(service,name,body,0o644)
             extra[name]=hashlib.sha256(body).hexdigest()

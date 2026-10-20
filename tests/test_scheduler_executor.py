@@ -11,7 +11,7 @@ class CacheTests(unittest.TestCase):
         self.extra={"v3/src/main.rs":"fn main() {}","v3/config/embedded.json":"compiled value",
             "v3/plugins/abilities/Core/example/example.skill.md":"guidance"}
         self.blob=fixtures.context(extra=self.extra)
-        self.worker=module.Executor(types.SimpleNamespace(execution_entries=fixtures.host.Runner.execution_entries),None,{"state_root":str(self.root)})
+        self.worker=module.Executor(types.SimpleNamespace(execution_entries=fixtures.host.Runner.execution_entries,compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64}),None,{"state_root":str(self.root)})
         self.artifacts=self.root/"execution"/self.job["job_id"]/"output/artifacts";self.artifacts.mkdir(parents=True)
         (self.artifacts/"webagent-v3").write_bytes(b"verified compiler output")
         registry=self.artifacts/"optimization-cargo/registry";registry.mkdir(parents=True);(registry/"cache").write_bytes(b"verified registry")
@@ -65,7 +65,7 @@ class CacheTests(unittest.TestCase):
         """Create terminal phase evidence and an exact captured source for a private cache fixture."""
         import threading
         previous=str(uuid.uuid4());state=self.root/(previous+".json")
-        state.write_text(__import__("json").dumps({"job_id":previous,"status":"failed","compiler_recipe":module.COMPILER_RECIPE}))
+        state.write_text(__import__("json").dumps({"job_id":previous,"status":"failed","compiler_recipe":self.worker.compiler_recipe()}))
         folder=self.root/previous;folder.mkdir();(folder/"candidate.tar").write_bytes(self.blob)
         execution=self.root/"execution"/previous
         fixtures.host.release.extract(execution/"source",self.blob,fixtures.host.context_digest)
@@ -75,6 +75,7 @@ class CacheTests(unittest.TestCase):
         cargo=execution/"output/cargo";cargo.mkdir();(cargo/"registry-cache").write_bytes(b"locked registry bytes")
         self.worker.runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)
             for name in ("execution_entries","execution_application_blob","execution_source_digest","execution_source_digest_blob")})
+        self.worker.runner.compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64}
         self.worker.resources=types.SimpleNamespace(lock=threading.RLock(),rows={name:{
             "job_id":previous,"phase":name,"state":"finished","profile":profile}
             for name,profile in {"compile_test":"engine:rust1.90:compile_test",
@@ -111,7 +112,8 @@ class CacheTests(unittest.TestCase):
     def test_completed_artifact_recipe_names_parallel_compiler(self):
         import json
         receipt=next((self.root/"engine-artifacts").glob("*.json"))
-        self.assertEqual(json.loads(receipt.read_text())["recipe"],module.RUST+":jobs3:debug0:complete-tests-v7")
+        self.assertEqual(json.loads(receipt.read_text())["recipe"],self.worker.compiler_recipe())
+        self.assertIn(":mold1.10.1:",self.worker.compiler_recipe())
     def test_dependency_cache_rejects_changed_embedded_input_and_incomplete_phase(self):
         """Measured phase completion alone cannot override the compiler input closure."""
         self.previous_cargo_cache()
@@ -144,6 +146,8 @@ class CacheTests(unittest.TestCase):
         for name in ("core-inputs.txt",*module.BINARIES):
             (self.artifacts/name).write_bytes(b"verified output")
         folder=self.artifacts/"modules";folder.mkdir();(folder/"descriptor.json").write_bytes(b"verified module")
+        compiler=self.artifacts/"compiler";compiler.mkdir()
+        for name in ("mold","copyright","LICENSE.gz"):(compiler/name).write_bytes(b"verified compiler support")
         for role in ("api","loop"):
             path=self.root/(role+".tar")
             self.assertEqual(self.worker.package(blob,self.artifacts,fixtures.host.Runner.execution_entries,role,path),path)
@@ -155,6 +159,7 @@ class CacheTests(unittest.TestCase):
             if role=="loop":self.assertEqual(names,{"webagent-v3","core-inputs.txt","webagent-context-service","webagent-background-service","webagent-boot-service","webagent-assets-service","webagent-capability-service","webagent-provider-service"})
             else:
                 self.assertIn("optimization-cargo/registry/cache",names);self.assertIn("modules/descriptor.json",names)
+                self.assertTrue({"compiler/mold","compiler/copyright","compiler/LICENSE.gz"}<=names)
     def test_runtime_python_copy_normalization_keeps_private_archive_modes(self):
         import io,tarfile
         dockerfile=(Path(__file__).parents[1]/"Dockerfile").read_text()
@@ -178,9 +183,9 @@ class CacheTests(unittest.TestCase):
     def test_exact_suite_proof_reuses_tests_but_changed_fixture_runs_them(self):
         from unittest.mock import patch
         stable=self.artifacts/"stable";stable.mkdir()
-        for name in ("smoke.json","mode-equivalence.json"):(stable/name).write_text("{}")
+        for name in ("smoke.json","mode-equivalence.json","linker-proof.json"):(stable/name).write_text("{}")
         self.worker.runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in
-            ("execution_entries","execution_application_blob","execution_source_digest","execution_source_digest_blob")})
+            ("execution_entries","execution_application_blob","execution_source_digest","execution_source_digest_blob")},compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64})
         hashes=self.worker.artifact_hashes(self.artifacts)
         self.worker.retain_engine(self.job,self.blob,{"src/main.rs","config/embedded.json"},hashes,"test result: ok. 2 passed; 0 failed\n")
         for candidate,reuse in [(self.blob,True),(self.candidate({"v3/config/runtime-fixture.json":"changed"}),False)]:
@@ -241,7 +246,7 @@ class RealFeatureProfileTests(unittest.TestCase):
 
 class NativeBuilderPhaseTests(unittest.TestCase):
     """The real builder must provision verified bytes and test before publishing a binary."""
-    def exercise(self, *, fail_tests=False, alter_registry=False):
+    def exercise(self, *, fail_tests=False, alter_registry=False, fail_proof=False):
         import json
         from unittest.mock import patch
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
@@ -255,26 +260,32 @@ class NativeBuilderPhaseTests(unittest.TestCase):
             registry=cache/'cargo/registry';registry.mkdir(parents=True);(registry/'crate').write_bytes(b'verified crate')
             phases.append('provision');return {'hashes':module.Executor.artifact_hashes(registry)}
         def phase(job, phase, kind, source, cache, argv, profile, timeout):
-            self.assertEqual(job['job_id'],job_id);self.assertEqual(kind,'plugin');self.assertIn('--locked',argv);self.assertIn('--offline',argv);phases.append(phase)
+            self.assertEqual(job['job_id'],job_id);phases.append(phase)
+            if phase=='engine_metadata':
+                self.assertEqual(kind,'dependency');self.assertEqual(argv[:3],['readelf','-p','.comment'])
+                return 'GNU ld fixture'if fail_proof else '  [ 0] mold 1.10.1 (compatible with GNU ld)'
+            self.assertEqual(kind,'plugin');self.assertIn('--locked',argv);self.assertIn('--offline',argv)
             if phase=='plugin_test' and fail_tests:raise ValueError('native test failed')
             if phase=='plugin_compile':
                 binary=cache/'target/release/fixture_runner';binary.parent.mkdir(parents=True);binary.write_bytes(b'tested executable')
                 if alter_registry:(cache/'cargo/registry/crate').write_bytes(b'altered crate')
-        runner.executor=types.SimpleNamespace(dependencies=lambda job,source,cache,**kw:provision(cache),phase=phase,artifact_hashes=module.Executor.artifact_hashes)
+        runner.executor=types.SimpleNamespace(compiler_recipe=lambda:"fixture-mold-image",dependencies=lambda job,source,cache,**kw:provision(cache),phase=phase,artifact_hashes=module.Executor.artifact_hashes)
         with patch.object(fixtures.host,'ASSET_ROOT',assets),patch.object(fixtures.host,'STATE',state):
-            if fail_tests or alter_registry:
-                with self.assertRaisesRegex(ValueError,'native test failed' if fail_tests else 'changed verified dependency'):
+            if fail_tests or alter_registry or fail_proof:
+                with self.assertRaisesRegex(ValueError,'native test failed' if fail_tests else 'lacks Mold'if fail_proof else 'changed verified dependency'):
                     runner.build_ability_artifacts(job_id)
                 self.assertEqual(list((assets/'artifacts').glob('*/fixture_runner')) if (assets/'artifacts').exists() else [],[])
             else:
                 result=runner.build_ability_artifacts(job_id);self.assertEqual(len(result),1);self.assertFalse(result[0]['reused'])
         return phases
     def test_verified_registry_and_complete_tests_precede_native_compile(self):
-        self.assertEqual(self.exercise(),['provision','plugin_test','plugin_compile'])
+        self.assertEqual(self.exercise(),['provision','plugin_test','plugin_compile','engine_metadata'])
     def test_native_test_failure_never_publishes_an_artifact(self):
         self.assertEqual(self.exercise(fail_tests=True),['provision','plugin_test'])
     def test_compiler_registry_mutation_never_publishes_an_artifact(self):
-        self.assertEqual(self.exercise(alter_registry=True),['provision','plugin_test','plugin_compile'])
+        self.assertEqual(self.exercise(alter_registry=True),['provision','plugin_test','plugin_compile','engine_metadata'])
+    def test_new_native_gnu_linker_comment_never_publishes(self):
+        self.assertEqual(self.exercise(fail_proof=True),['provision','plugin_test','plugin_compile','engine_metadata'])
 
 
 class FrozenSourcePermissionsTests(unittest.TestCase):
@@ -437,7 +448,7 @@ class VerificationEvidenceTests(unittest.TestCase):
     def setUp(self):
         import json
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
-        self.runner=types.SimpleNamespace(execution_entries=fixtures.host.Runner.execution_entries,resource_progress=lambda job:None)
+        self.runner=types.SimpleNamespace(execution_entries=fixtures.host.Runner.execution_entries,resource_progress=lambda job:None,compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64})
         self.worker=module.Executor(self.runner,None,{"state_root":str(self.root)})
         self.blob=fixtures.context(extra={"v3/src/main.rs":"fn main() {}","v3/config/fixture.json":"{}"})
         self.job={"job_id":str(uuid.uuid4()),"compiler_memory_cap":5*1024**3}
@@ -494,7 +505,7 @@ class HostFocusedVerificationTests(unittest.TestCase):
         self.source=self.root/"source";self.output=self.root/"output";self.output.mkdir()
         self.blob=fixtures.context(extra={"v3/src/main.rs":"fn main() {}","v3/config/prompts.json":"{}"})
         fixtures.host.release.extract(self.source,self.blob,fixtures.host.context_digest)
-        self.runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in ("execution_source_digest","execution_application_blob","execution_entries")},resource_progress=lambda job:None)
+        self.runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in ("execution_source_digest","execution_application_blob","execution_entries")},resource_progress=lambda job:None,compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64})
         self.worker=module.Executor(self.runner,None,{"state_root":str(self.root/"state")});self.calls=[]
         self.job={"job_id":str(uuid.uuid4()),"inputs_sha256":fixtures.host.context_digest(self.blob)[0],"changed_paths":["v3/src/engine_components.rs"]}
         (self.output/"dependency-metadata.json").write_text('{"packages":[]}')

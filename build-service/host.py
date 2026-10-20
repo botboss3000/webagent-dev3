@@ -745,6 +745,59 @@ class Runner:
         self.cancel = threading.Event()
         self.job_context = threading.local()
 
+    def compiler_runtime(self,job=None,prepare=False):
+        """Use only the reviewed, prepared Mold image; never fall back to GNU ld."""
+        recipe=Path(CONFIG["service_dir"])/"compiler.Dockerfile"
+        if recipe.is_symlink()or not recipe.is_file():raise ValueError("Protected compiler recipe unavailable")
+        body=recipe.read_bytes();recipe_sha=hashlib.sha256(body).hexdigest()
+        if recipe_sha!=executor_module.MOLD_COMPILER_DOCKERFILE_SHA256:raise ValueError("Protected compiler recipe changed")
+        folder=STATE/"compiler-runtime"/recipe_sha
+        if folder.is_symlink()or folder.parent.is_symlink():raise ValueError("Compiler runtime directory symlink")
+        folder.mkdir(mode=0o700,parents=True,exist_ok=True);receipt=folder/"receipt.json"
+        with self.plugin_build_lock("compiler-runtime-"+recipe_sha):
+            if receipt.is_symlink():raise ValueError("Compiler runtime receipt symlink")
+            missing=False
+            if prepare and receipt.exists():
+                if receipt.stat().st_size>256*1024:raise ValueError("Compiler runtime receipt exceeds bound")
+                previous=json.loads(receipt.read_bytes())
+                if previous.get("recipe_sha256")!=recipe_sha or previous.get("mold_sha256")!=executor_module.MOLD_SHA256 or previous.get("mold_version")!=executor_module.MOLD_VERSION or previous.get("rustflags")!=executor_module.RUSTFLAGS or not re.fullmatch(r"sha256:[a-f0-9]{64}",previous.get("image","")):raise ValueError("Compiler runtime receipt changed")
+                try:existing=json.loads(self.command(["docker","image","inspect",previous["image"]],timeout=15,private_raw=True))
+                except RuntimeError:missing=True
+                else:
+                    if len(existing)!=1 or existing[0].get("Id")!=previous["image"]or existing[0].get("Config",{}).get("Labels",{}).get("webagent.compiler.recipe")!=recipe_sha:raise ValueError("Prepared compiler image identity changed")
+            if not receipt.exists()or missing:
+                if missing:scheduler_module.Scheduler.write_record(folder/("receipt-"+job["job_id"]+".previous.json"),previous)
+                if not prepare or not job:raise ValueError("Verified Mold compiler runtime unavailable; run supported dependency preparation")
+                root=STATE/"checks"/job["job_id"]/"compiler-runtime";root.mkdir(mode=0o700,parents=True,exist_ok=False)
+                (root/"Dockerfile").write_bytes(body);image_file=root/"image.id"
+                with self.executor.packager(job,"generic")as builder:
+                    log=self.command(["docker","buildx","build","--builder",builder,"--load","--platform","linux/amd64","--provenance=false","--progress=plain","--label","webagent.compiler.recipe="+recipe_sha,"--iidfile",str(image_file),str(root)],timeout=900)
+                job["log"]=job.get("log","")+log
+                image=image_file.read_text().strip()
+                if not re.fullmatch(r"sha256:[a-f0-9]{64}",image):raise ValueError("Compiler image identity invalid")
+                container="webagent-compiler-proof-"+uuid.uuid4().hex
+                self.command(["docker","create","--name",container,"--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges","--entrypoint","true",image],timeout=30)
+                try:
+                    for name,source in (("before.tsv","/usr/local/share/webagent/compiler/before.tsv"),("after.tsv","/usr/local/share/webagent/compiler/after.tsv"),("version.txt","/usr/local/share/webagent/compiler/version.txt"),("mold","/usr/bin/mold")):
+                        target=root/name;self.command(["docker","cp",container+":"+source,str(target)],timeout=30)
+                        if target.is_symlink()or not target.is_file()or target.stat().st_nlink!=1 or target.stat().st_size>32*1024*1024:raise ValueError("Compiler image proof identity invalid")
+                    before=(root/"before.tsv").read_text();after=(root/"after.tsv").read_text();version=(root/"version.txt").read_text()
+                    if set(before.splitlines())-set(after.splitlines())or set(after.splitlines())-set(before.splitlines())!={"mold\t"+executor_module.MOLD_VERSION}:raise ValueError("Compiler preparation changed unrelated package versions")
+                    if hashlib.sha256((root/"mold").read_bytes()).hexdigest()!=executor_module.MOLD_SHA256 or not version.startswith("mold 1.10.1 "):raise ValueError("Compiler Mold identity changed")
+                finally:self.command(["docker","rm",container],timeout=30)
+                value={"recipe_sha256":recipe_sha,"image":image,"mold_version":executor_module.MOLD_VERSION,"mold_sha256":executor_module.MOLD_SHA256,"rustflags":executor_module.RUSTFLAGS,"before_packages":before,"after_packages":after,"version_output":version}
+                if recipe.read_bytes()!=body:raise ValueError("Protected compiler recipe changed during preparation")
+                scheduler_module.Scheduler.write_record(receipt,value)
+            if receipt.stat().st_size>256*1024:raise ValueError("Compiler runtime receipt exceeds bound")
+            value=json.loads(receipt.read_bytes())
+            if value.get("recipe_sha256")!=recipe_sha or value.get("mold_version")!=executor_module.MOLD_VERSION or value.get("mold_sha256")!=executor_module.MOLD_SHA256 or value.get("rustflags")!=executor_module.RUSTFLAGS or not re.fullmatch(r"sha256:[a-f0-9]{64}",value.get("image","")):raise ValueError("Compiler runtime receipt changed")
+            try:actual=json.loads(self.command(["docker","image","inspect",value["image"]],timeout=15,private_raw=True))
+            except RuntimeError as error:raise ValueError("Prepared compiler image unavailable; run supported dependency preparation without refresh")from error
+            if len(actual)!=1 or actual[0].get("Id")!=value["image"]or actual[0].get("Config",{}).get("Labels",{}).get("webagent.compiler.recipe")!=recipe_sha:raise ValueError("Prepared compiler image unavailable or changed; run supported dependency preparation without refresh")
+            self.retain_image(value["image"],job["job_id"]if job else None)
+            if job:job["compiler_runtime"]=value;self.resource_progress(job)
+            return value
+
     def retain_image(self,image,job_id=None):
         """Pin exact dependencies before create/run and register outputs before later phases."""
         if getattr(self,"retention_enabled",False):
@@ -796,6 +849,17 @@ for name in runtime_files:
  compile(body,str(path),"exec")
 counts["runtime_files"]=len(runtime_files)
 print(json.dumps(counts))"""
+        if job.get("compiler_runtime"):
+            program+="""
+import subprocess
+marker=pathlib.Path("/usr/local/share/webagent/compiler-linker")
+if marker.is_symlink()or not marker.is_file()or marker.stat().st_size!=5 or marker.read_bytes()!=b"mold\\n":raise RuntimeError("Baked compiler linker capability invalid")
+for name in ("mold","ld.mold"):
+ path=pathlib.Path("/usr/bin")/name
+ if path.is_symlink()or not path.is_file()or hashlib.sha256(path.read_bytes()).hexdigest()!="MOLD_BINARY_HASH":raise RuntimeError("Baked compiler linker differs from verified compiler")
+ if not subprocess.check_output([str(path),"--version"],text=True).startswith("mold 1.10.1 "):raise RuntimeError("Baked compiler linker cannot execute")
+if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--version","-x","c","/dev/null","-o","/tmp/mold-linker-probe"],stderr=subprocess.STDOUT,text=True):raise RuntimeError("Compiler driver does not select Mold")
+""".replace("MOLD_BINARY_HASH",executor_module.MOLD_SHA256)
         images=job.get("images") if publication_id is None else {role:previous[role]["Image"]for role in ("api","loop")}
         if not images or set(images)!={"api","loop"}:raise ValueError("Runtime preflight requires both candidate images")
         results=[];plans=[]
@@ -1301,13 +1365,24 @@ print(json.dumps(counts))"""
     def plugin_artifact_verified(self,artifact,entry,key):
         """Reuse a compiler result only when its immutable input key and stored output digest agree."""
         binary=artifact/entry;receipt=artifact/"compiler-receipt.json"
-        if not binary.is_file()or not receipt.is_file():return False
+        if artifact.is_symlink()or binary.is_symlink()or receipt.is_symlink():raise ValueError("Plugin cache identity invalid")
+        if not binary.exists()and not receipt.exists():return False
+        if not binary.is_file()or not receipt.is_file():raise ValueError("Plugin cache incomplete; reconcile immutable artifact before retry")
         if binary.is_symlink()or receipt.is_symlink()or binary.stat().st_nlink!=1 or binary.stat().st_size>32*1024*1024:
             raise ValueError("Plugin cache identity invalid")
+        if receipt.stat().st_nlink!=1 or receipt.stat().st_size>65536:raise ValueError("Plugin cache receipt identity or bound invalid")
         value=json.loads(receipt.read_bytes())
-        if value!={"input_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"recipe":executor_module.RUST+":release:locked:offline:debug0"}:
+        if not isinstance(value,dict):raise ValueError("Plugin cache receipt object required")
+        recipe=value.get("recipe");legacy=executor_module.RUST+":release:locked:offline:debug0"
+        mold=isinstance(recipe,str)and re.fullmatch(re.escape(executor_module.COMPILER_RECIPE)+r":sha256:[a-f0-9]{64}:native-release:locked:offline",recipe)is not None
+        expected={"input_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"recipe":recipe}
+        if mold:
+            comment=value.get("linker_comment")
+            if not isinstance(comment,str)or len(comment)>32768 or not re.search(r"\bmold 1\.10\.1\b",comment):raise ValueError("Plugin Mold linker proof invalid")
+            expected["linker_comment"]=comment
+        if recipe!=legacy and not mold or value!=expected:
             raise ValueError("Plugin cache output differs from verified compilation")
-        return True
+        return value
 
     @contextlib.contextmanager
     def plugin_build_lock(self,key):
@@ -1372,14 +1447,16 @@ print(json.dumps(counts))"""
             legacy_key=hashlib.sha256(canonical({"build":build,"entrypoint":entry,"inputs":inputs})).hexdigest()
             with self.plugin_build_lock(key):
                 artifact=ASSET_ROOT/"artifacts"/key;binary=artifact/entry
-                if self.plugin_artifact_verified(artifact,entry,key):
-                    outputs.append({"package":manifest["id"],"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":True});continue
+                proof=self.plugin_artifact_verified(artifact,entry,key)
+                if proof:
+                    outputs.append({"package":manifest["id"],"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":True,"compiler_recipe":proof["recipe"],"linker":"mold"if"linker_comment"in proof else"legacy-default"});continue
                 legacy=ASSET_ROOT/"artifacts"/legacy_key/entry
-                if self.plugin_artifact_verified(legacy.parent,entry,legacy_key):
+                proof=self.plugin_artifact_verified(legacy.parent,entry,legacy_key)
+                if proof:
                     artifact.mkdir(parents=True,exist_ok=True);temporary=artifact/("."+entry+".new")
                     shutil.copyfile(legacy,temporary);temporary.chmod(0o555);os.replace(temporary,binary)
-                    scheduler_module.Scheduler.write_record(artifact/"compiler-receipt.json",{"input_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"recipe":executor_module.RUST+":release:locked:offline:debug0"})
-                    outputs.append({"package":package.name,"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":True,"migrated_from":legacy_key})
+                    scheduler_module.Scheduler.write_record(artifact/"compiler-receipt.json",{**proof,"input_key":key})
+                    outputs.append({"package":package.name,"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":True,"migrated_from":legacy_key,"compiler_recipe":proof["recipe"],"linker":"mold"if"linker_comment"in proof else"legacy-default"})
                     continue
                 cache=STATE/"plugin-builds"/key;cache.mkdir(parents=True,exist_ok=True)
                 # Only the declared application package enters the builder. No credentials,
@@ -1400,6 +1477,9 @@ print(json.dumps(counts))"""
                     self.executor.phase(active,"plugin_compile","plugin",source,cache,
                         ["cargo","build","--release","--locked","--offline","--bin",entry],
                         "plugin:rust1.90:"+manifest["id"],600)
+                    linker_comment=self.executor.phase(active,"engine_metadata","dependency",source,cache,
+                        ["readelf","-p",".comment","/output/target/release/"+entry],
+                        "plugin:rust1.90:"+manifest["id"]+":mold-proof",60)
                     if self.executor.artifact_hashes(cache/"cargo/registry")!=registry["hashes"]:
                         raise ValueError("Native compilation changed verified dependency registry")
                 else:
@@ -1407,17 +1487,22 @@ print(json.dumps(counts))"""
                         "--user",str(CONFIG["service_uid"])+":"+str(CONFIG["service_gid"]),"--pids-limit","128","--memory","2g","--cpus","1",
                         "--tmpfs","/tmp:rw,size=128m,mode=1777","--mount","type=bind,src="+str(source)+",dst=/package,readonly",
                         "--mount","type=bind,src="+str(cache)+",dst=/output","-w","/package",
-                        "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=3","-e","CARGO_PROFILE_RELEASE_DEBUG=0",
-                        "rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f",
+                        "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=3","-e","CARGO_PROFILE_RELEASE_DEBUG=0","-e","RUSTFLAGS="+executor_module.RUSTFLAGS,
+                        self.compiler_runtime()["image"],
                         "cargo","build","--release","--locked","--offline","--bin",entry],timeout=600)
+                    linker_comment=self.command(["docker","run","--rm","--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
+                        "--user",str(CONFIG["service_uid"])+":"+str(CONFIG["service_gid"]),"--pids-limit","128","--memory","2g","--cpus","1",
+                        "--mount","type=bind,src="+str(cache)+",dst=/output,readonly","--entrypoint","readelf",
+                        self.compiler_runtime()["image"],"-p",".comment","/output/target/release/"+entry],timeout=60)
+                if len(linker_comment)>32768 or not re.search(r"\bmold 1\.10\.1\b",linker_comment):raise ValueError("New native executable lacks Mold linker proof")
                 if any(hashlib.sha256((source/name).read_bytes()).hexdigest()!=inputs[name]for name in names):
                     raise ValueError("Plugin build inputs changed")
                 output=cache/"target/release"/entry
                 if output.is_symlink()or not output.is_file()or output.stat().st_size>32*1024*1024:raise ValueError("Invalid plugin artifact")
                 artifact.mkdir(parents=True,exist_ok=True);temporary=artifact/("."+entry+".new")
                 shutil.copyfile(output,temporary);temporary.chmod(0o555);os.replace(temporary,binary)
-                scheduler_module.Scheduler.write_record(artifact/"compiler-receipt.json",{"input_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"recipe":executor_module.RUST+":release:locked:offline:debug0"})
-                outputs.append({"package":manifest["id"],"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":False})
+                scheduler_module.Scheduler.write_record(artifact/"compiler-receipt.json",{"input_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"recipe":self.executor.compiler_recipe()+":native-release:locked:offline","linker_comment":linker_comment})
+                outputs.append({"package":manifest["id"],"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":False,"compiler_recipe":self.executor.compiler_recipe()+":native-release:locked:offline","linker":"mold"})
         return outputs
 
     # @code-index {"version":1,"feature":"ui-verification-runtime","aliases":["ui verification runtime"],"purpose":"Run selected fixtures in an isolated measured browser worker; reuse exact evidence. Config: build-service/scheduler-defaults.json -> ui_test_image, component_indexing.","span_lines":70,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/ui_test_image","/component_indexing"]}],"opportunities":[]}}
@@ -1782,7 +1867,7 @@ print(json.dumps(counts))"""
         # Full Rust tests intentionally edit and restore their manifest-local
         # configuration. Supply a disposable application-only copy: neither
         # frozen task inputs nor inspection database backups are writable.
-        image = "rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f"
+        image = self.compiler_runtime()["image"]
         command = ["cargo", "check", "--locked"] if task == "check" else ["cargo", "test", "--locked", "--", "--test-threads=1"]
         check_dir.mkdir(parents=True, exist_ok=True)
         scratch = None
@@ -1799,7 +1884,7 @@ print(json.dumps(counts))"""
                                  *source_mount,
                                  "--mount", "type=bind,src=" + str(check_dir) + ",dst=/check",
                                  "-e", "CARGO_HOME=/check/cargo", "-e", "CARGO_TARGET_DIR=/check/target",
-                                 "-e", "CARGO_BUILD_JOBS=3", "-w", working, image, *command],
+                                 "-e", "CARGO_BUILD_JOBS=3", "-e", "RUSTFLAGS="+executor_module.RUSTFLAGS, "-w", working, image, *command],
                                 timeout=timeout)
         finally:
             if scratch is not None:
@@ -2819,7 +2904,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait") if key in job}
         for key in ("publication_wait","resource_waiting"):
             if view.get(key,{}).get("state","waiting")=="waiting"and view.get(key,{}).get("since"):
                 view[key]={**view[key],"elapsed_seconds":round(max(0,time.time()-view[key]["since"]),3)}
@@ -3464,7 +3549,7 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        review_modules={"workspace.py","ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
+        review_modules={"workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
         allowed={"v3/tests/test_admin_workspace.py","v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
@@ -3764,6 +3849,7 @@ class Broker:
         self.runner.job_context.job=job;self.runner.job_context.event=event
         try:
             self._lease(job)
+            job["compiler_runtime"]=self.runner.compiler_runtime(job,prepare=True)
             job["dependency_bases"]=self.package_cache.prewarm(job,blob,refresh=job["dependency_refresh"])
             self._lease(job)
             job["log"] = scrub(job.get("log", "") + self.package_cache.verify_consumption(job,blob), self.runner.secrets)

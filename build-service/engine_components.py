@@ -82,7 +82,7 @@ def build_one(runner,job_id,root,state,assets,executor,scheduler,identity):
     if not declaration.exists():return []
     value=descriptor(declaration);application=root/"v3";inputs=closure(application,identity)
     recipe_version="v1"if identity in {"boot-supervisor","background-dispatch"}or(identity==ID and value["interface_version"]==1)else"v2"
-    recipe=executor.RUST+":engine-"+("context"if identity==ID else identity)+"-"+recipe_version+":release:locked:offline:debug0"
+    recipe=runner.executor.compiler_recipe()+":engine-"+("context"if identity==ID else identity)+"-"+recipe_version+":release:locked:offline:debug0"
     key=hashlib.sha256(json.dumps({"inputs":inputs,"recipe":recipe,"build":value["build"]},sort_keys=True).encode()).hexdigest()
     with runner.plugin_build_lock(key):
         artifact=assets/"artifacts"/key;binary=artifact/binary_name;receipt=artifact/"engine-receipt.json"

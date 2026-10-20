@@ -1,5 +1,4 @@
 {
-  "artifact_sha256": "a76da94230c6d203b5342d47a7a814f83dd21e68c4351388a70bbe32c00c10c2",
   "build": {
     "features": [],
     "package": "webagent-boot-service",

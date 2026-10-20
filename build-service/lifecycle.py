@@ -57,6 +57,7 @@ def install(args):
   digest.update(p.name.encode()+b"\0"+p.read_bytes())
  digest.update(b"scheduler-defaults.json\0"+(reviewed/"scheduler-defaults.json").read_bytes())
  digest.update(b"ui-test.Dockerfile\0"+(reviewed/"ui-test.Dockerfile").read_bytes())
+ digest.update(b"compiler.Dockerfile\0"+(reviewed/"compiler.Dockerfile").read_bytes())
  digest.update((reviewed.parent/"plugins/abilities/Administrator/code_index/adapter.py").read_bytes())
  digest.update((reviewed.parent/"plugins/abilities/Administrator/code_index/maintenance.py").read_bytes())
  release=digest.hexdigest();value["service_dir"]=str(install_root/"releases"/release);cfg.validate(value)

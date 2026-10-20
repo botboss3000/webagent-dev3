@@ -52,14 +52,14 @@ def build(runner,job_id,root,state,assets,executor,scheduler):
     folder=root/PREFIX
     if not folder.exists():return []
     inputs=inventory(folder)
-    key=hashlib.sha256(json.dumps({"inputs":inputs,"recipe":RECIPE,"toolchain":executor.RUST},sort_keys=True).encode()).hexdigest()
+    key=hashlib.sha256(json.dumps({"inputs":inputs,"recipe":RECIPE,"toolchain":runner.executor.compiler_recipe()},sort_keys=True).encode()).hexdigest()
     with runner.plugin_build_lock(key):
         artifact=assets/"artifacts"/key;binary=artifact/BINARY;receipt=artifact/"monitoring-receipt.json"
         reused=False
         if receipt.exists():
             if receipt.is_symlink()or binary.is_symlink()or not binary.is_file():raise ValueError("Monitoring artifact identity")
             record=json.loads(receipt.read_bytes())
-            if record.get("inputs")!=inputs or record.get("recipe")!=RECIPE or record.get("artifact_sha256")!=hashlib.sha256(binary.read_bytes()).hexdigest():raise ValueError("Monitoring artifact changed")
+            if record.get("inputs")!=inputs or record.get("recipe")!=RECIPE or record.get("compiler_recipe")!=runner.executor.compiler_recipe()or record.get("artifact_sha256")!=hashlib.sha256(binary.read_bytes()).hexdigest():raise ValueError("Monitoring artifact changed")
             reused=True
         else:
             job=getattr(runner.job_context,"job",None)
@@ -83,7 +83,7 @@ def build(runner,job_id,root,state,assets,executor,scheduler):
             output=cache/"target/release"/BINARY
             if output.is_symlink()or not output.is_file()or output.stat().st_size>32*1024*1024:raise ValueError("Monitoring output identity")
             artifact.mkdir(parents=True,exist_ok=True);shutil.copyfile(output,binary);binary.chmod(0o555)
-            scheduler.Scheduler.write_record(receipt,{"inputs":inputs,"recipe":RECIPE,"compiled_inputs":compiled,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest()})
+            scheduler.Scheduler.write_record(receipt,{"inputs":inputs,"recipe":RECIPE,"compiler_recipe":runner.executor.compiler_recipe(),"compiled_inputs":compiled,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest()})
     return [{"component":"system-monitoring","build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":reused}]
 
 def seal(destination,outputs,assets):

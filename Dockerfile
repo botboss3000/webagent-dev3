@@ -1,5 +1,16 @@
 FROM cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38 AS preview_tunnel
 FROM rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f AS tested_builder
+RUN mkdir -p /usr/local/share/webagent/compiler \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\n' | LC_ALL=C sort > /usr/local/share/webagent/compiler/before.tsv \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends --no-upgrade mold=1.10.1+dfsg-1 \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\n' | LC_ALL=C sort > /usr/local/share/webagent/compiler/after.tsv \
+    && test -z "$(comm -23 /usr/local/share/webagent/compiler/before.tsv /usr/local/share/webagent/compiler/after.tsv)" \
+    && test "$(comm -13 /usr/local/share/webagent/compiler/before.tsv /usr/local/share/webagent/compiler/after.tsv)" = "$(printf 'mold\t1.10.1+dfsg-1')" \
+    && printf '%s  /usr/bin/mold\n' 'f85b0102cabeaee34b76ab195aacfa9ff9442d670948c88f6f353dd666ea5b64' | sha256sum --check - \
+    && mold --version > /usr/local/share/webagent/compiler/version.txt \
+    && cc -fuse-ld=mold -Wl,--version -x c /dev/null -o /tmp/mold-linker-probe | grep -F "mold 1.10.1" \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY v3/Cargo.toml v3/Cargo.lock ./
 COPY v3/build.rs ./build.rs
@@ -16,7 +27,7 @@ COPY v3/plugins ./plugins
 COPY v3/plugins/abilities ./plugins/abilities
 COPY v3/ui ./ui
 # Bound compiler concurrency to three workers on the development host.
-ENV CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+ENV CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"
 # Keep Cargo downloads and artifacts across source changes; publish the tested
 # binary outside the cache mount so both runtime targets copy one exact build.
 RUN --mount=type=cache,id=webagent-v3-registry,target=/usr/local/cargo/registry,sharing=locked \
@@ -25,9 +36,14 @@ RUN --mount=type=cache,id=webagent-v3-registry,target=/usr/local/cargo/registry,
     && cargo build --release --locked --offline --bin webagent-v3 \
     && install -Dm755 /build/target/release/webagent-v3 /out/stable/webagent-v3 \
     && /out/stable/webagent-v3 --context-smoke \
+    && readelf -p .comment /out/stable/webagent-v3 | grep -F "mold 1.10.1" \
     && cargo clean --release --package webagent-v3 --locked --offline \
     && cargo build --workspace --release --locked --no-default-features --features webagent-v3/live-context \
     && /build/target/release/webagent-v3 --context-smoke \
+    && readelf -p .comment /build/target/release/webagent-v3 | grep -F "mold 1.10.1" \
+    && install -Dm755 /usr/bin/mold /out/compiler/mold \
+    && install -Dm644 /usr/share/doc/mold/copyright /out/compiler/copyright \
+    && install -Dm644 /usr/share/doc/mold/LICENSE.gz /out/compiler/LICENSE.gz \
     && install -Dm755 /build/target/release/webagent-context-service /out/webagent-context-service \
     && install -Dm755 /build/target/release/webagent-boot-service /out/webagent-boot-service \
     && install -Dm755 /build/target/release/webagent-background-service /out/webagent-background-service \
@@ -56,6 +72,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-cert
     && useradd -u 1101 -g 1100 -M -s /usr/sbin/nologin v3tools
 COPY --from=preview_tunnel /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
+COPY --from=tested_builder /out/compiler/mold /usr/bin/mold
+COPY --from=tested_builder /out/compiler/mold /usr/bin/ld.mold
+COPY --from=tested_builder /out/compiler/copyright /usr/share/doc/mold/copyright
+COPY --from=tested_builder /out/compiler/LICENSE.gz /usr/share/doc/mold/LICENSE.gz
+RUN install -d -m 0755 /usr/local/share/webagent && printf 'mold\n' > /usr/local/share/webagent/compiler-linker
 COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inputs.txt
 # Distribution artifacts are installed only by explicit module administration.
 COPY --from=tested_builder /out/modules /usr/local/lib/webagent/modules

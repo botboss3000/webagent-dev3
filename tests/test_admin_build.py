@@ -39,6 +39,8 @@ def context(version="one", extra=None):
 
 
 class FakeRunner:
+    def compiler_runtime(self,*args,**kwargs):
+        return {"image":"sha256:"+"7"*64}
     def engine_execution_modes(self,expected_revision=None):
         """Legacy publication fixtures model live execution in both consumers."""
         return {"api":"live","loop":"live"}
@@ -1891,12 +1893,14 @@ class InheritedSocketTests(unittest.IsolatedAsyncioTestCase):
 class RunnerSpaceTests(unittest.TestCase):
     def test_task_cargo_test_uses_binary_test_target(self):
         runner = host.Runner()
-        with tempfile.TemporaryDirectory() as root, patch.object(runner, "command", return_value="ok") as command:
+        with tempfile.TemporaryDirectory() as root, patch.object(runner, "command", return_value="ok") as command, patch.object(runner,"compiler_runtime",return_value={"image":"sha256:"+"7"*64}):
             host.release.extract(Path(root)/"source",context(),host.context_digest)
             self.assertEqual("ok", runner.cargo_task(Path(root)/"source", Path(root) / "checks", "test", 60))
         argv = command.call_args.args[0]
         self.assertEqual(["cargo", "test", "--locked", "--", "--test-threads=1"], argv[-5:])
         self.assertIn("CARGO_BUILD_JOBS=3",argv)
+        self.assertIn("RUSTFLAGS=-C debuginfo=0 -C link-arg=-fuse-ld=mold",argv)
+        self.assertIn("sha256:"+"7"*64,argv)
 
     def test_preflight_accepts_adequate_space_without_pruning(self):
         runner = host.Runner()
