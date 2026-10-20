@@ -100,8 +100,17 @@ class CacheTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"symlink"):
             self.worker.seed_cargo_cache(self.job,self.blob,self.output())
         link.unlink();(folder/"source/v3/src/main.rs").write_text("changed source")
-        with self.assertRaisesRegex(ValueError,"source changed"):
-            self.worker.seed_cargo_cache(self.job,self.blob,self.output())
+        output=self.output()
+        self.assertFalse(self.worker.seed_cargo_cache(self.job,self.blob,output))
+        self.assertFalse((output/"cargo").exists());self.assertFalse((output/"target").exists())
+        self.assertEqual(self.job["cargo_cache_rejections"],[{"job_id":previous,"reason":"previous_execution_source_differs_from_candidate"}])
+    def test_rebased_candidate_skips_previous_cache_without_copying_it(self):
+        previous,folder=self.previous_cargo_cache();output=self.output()
+        path=folder/"source/v3/ui/chat/chat.css";path.parent.mkdir(parents=True);path.write_text("original UI snapshot")
+        self.assertFalse(self.worker.seed_cargo_cache(self.job,self.blob,output))
+        self.assertNotIn("cargo_cache_reuse",self.job)
+        self.assertFalse((output/"cargo").exists());self.assertFalse((output/"target").exists())
+        self.assertEqual(self.job["cargo_cache_rejections"],[{"job_id":previous,"reason":"previous_execution_source_differs_from_candidate"}])
     def test_runtime_roles_package_only_declared_artifacts_and_stream_to_disk(self):
         """Loop contexts exclude API registry and retained tests; API keeps its required closure."""
         import tarfile

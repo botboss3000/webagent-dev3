@@ -22,9 +22,10 @@ ENV CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFI
 RUN --mount=type=cache,id=webagent-v3-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=webagent-v3-target,target=/build/target,sharing=locked \
     cargo test --workspace --locked -- --test-threads=1 \
-    && cargo build --release --locked --offline --bin webagent-v3 --target-dir /build/linked-target \
-    && install -Dm755 /build/linked-target/release/webagent-v3 /out/stable/webagent-v3 \
+    && cargo build --release --locked --offline --bin webagent-v3 \
+    && install -Dm755 /build/target/release/webagent-v3 /out/stable/webagent-v3 \
     && /out/stable/webagent-v3 --context-smoke \
+    && cargo clean --release --package webagent-v3 --locked --offline \
     && cargo build --workspace --release --locked --no-default-features --features webagent-v3/live-context \
     && /build/target/release/webagent-v3 --context-smoke \
     && install -Dm755 /build/target/release/webagent-context-service /out/webagent-context-service \

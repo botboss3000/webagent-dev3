@@ -29,8 +29,10 @@ class ComponentBuildTests(unittest.TestCase):
                 path.write_text(json.dumps(changed))
                 with self.assertRaises(ValueError):engine.descriptor(path)
             value=json.loads((ROOT/"plugins/engine/context-assembly/component.json").read_text())
-            self.assertEqual(value["interface_version"],2);self.assertEqual(value["implementation_version"],"0.2.0")
+            self.assertEqual(value["interface_version"],2)
             path.write_text(json.dumps(value));engine.descriptor(path)
+            invalid={**value,"implementation_version":"not-semver"};path.write_text(json.dumps(invalid))
+            with self.assertRaises(ValueError):engine.descriptor(path)
             value["interface_version"]=1;path.write_text(json.dumps(value));engine.descriptor(path)
             value["interface_version"]=3;path.write_text(json.dumps(value))
             with self.assertRaises(ValueError):engine.descriptor(path)
@@ -121,7 +123,7 @@ class ComponentBuildTests(unittest.TestCase):
     def test_packaged_services_and_reviewed_compiler_stage_are_complete(self):
         docker=(ROOT/"Dockerfile").read_text()
         stage=docker[docker.index("FROM rust:"):docker.index("FROM debian:",docker.index("FROM rust:"))]
-        self.assertEqual(hashlib.sha256(stage.encode()).hexdigest(),executor.CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256)
+        self.assertEqual(hashlib.sha256(stage.encode()).hexdigest(),executor.SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256)
         for identity,(binary,*_)in NEW.items():
             self.assertIn(binary,executor.BINARIES)
             self.assertIn(f"install -Dm755 /build/target/release/{binary} /out/{binary}",docker)

@@ -22,6 +22,7 @@ COMPILER_STAGE_SHA256="474b034d7a843ebf324b654a785b5a5b23135804ef39c662f92fcb3e1
 EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256="9a6fa4db4b7a122990056f005117a0c4e0944243e02a2ee42b9957ec12f65908"
 CONTEXT_COMPILER_STAGE_SHA256="04d76d4efb9fe52ecc1f7ef778aef9a0c096fea97b22011e628d6891bf2fa072"
 CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256="a47b7c8928469f1d9dc535cf9d1df9c6b256052c84f10bd238f36a3b9541597d"
+SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256="1b281eed8db8d8ee5fe71e5efab39e1684fe1256f9ad6e12fdeb179d472403cc"
 NEW_CONTEXT_BINARIES={"webagent-assets-service","webagent-capability-service","webagent-provider-service"}
 BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-outbound-notifications","webagent-context-service","webagent-background-service","webagent-boot-service","webagent-boot-host","webagent-assets-service","webagent-capability-service","webagent-provider-service"]
 # Official non-test debug ELFs needed by actual subprocess integration tests.
@@ -594,7 +595,7 @@ class Executor:
         for path in sorted(cache.glob("*.json"),key=lambda p:p.stat().st_mtime,reverse=True)[:64]:
             if path.is_symlink():raise ValueError("Engine cache receipt symlink")
             value=json.loads(path.read_text())
-            if value["recipe"]!=RUST+":single-job:debug0:complete-tests-v5"or value["rust_inputs"]!=rust:continue
+            if value["recipe"]!=RUST+":single-job:debug0:complete-tests-v6"or value["rust_inputs"]!=rust:continue
             if any(name not in files or hashlib.sha256(files[name][1]).hexdigest()!=sha for name,sha in value["compiled_inputs"].items()):continue
             if not re.fullmatch(r"[a-f0-9-]{36}",value["job_id"]):raise ValueError("Engine cache job identity invalid")
             source=Path(self.config["state_root"])/"execution"/value["job_id"]/"output/artifacts"
@@ -667,12 +668,16 @@ class Executor:
         return value
     @staticmethod
     def linked_recipe():
-        """Keep linked outputs and dep-info in their fixed separate compiler target directory."""
-        return ["cargo","build","--release","--locked","--offline","--bin","webagent-v3","--target-dir","/output/linked-target"]
-    def linked_dependencies(self,target,files):
+        """Share optimized dependency objects while keeping the linked executable as a frozen artifact."""
+        return ["cargo","build","--release","--locked","--offline","--bin","webagent-v3"]
+    @staticmethod
+    def live_recipe():
+        """Discard linked root outputs and dep-info, preserving compatible dependency objects and debug tests."""
+        return ["sh","-c","set -e\ncargo clean --release --package webagent-v3 --locked --offline\ncargo build --workspace --release --locked --offline --no-default-features --features webagent-v3/live-context"]
+    def linked_dependencies(self,metadata,target,files):
         """Attest linked implementation inputs separately from the deployed live dependency closure."""
         captured={}
-        for name in self.compiler_dependencies(target):
+        for name in self.core_dependencies(metadata,target):
             relative=self.local_dependency(name)
             if relative is None:continue
             if relative not in files:raise ValueError("Linked compiler input absent from captured source")
@@ -728,7 +733,9 @@ class Executor:
             old=self.runner.execution_entries(old_blob)
             if self.rust_inputs(old)!=self.rust_inputs(files):continue
             if self.runner.execution_source_digest(previous/"source")!=self.runner.execution_source_digest_blob(old_blob):
-                raise ValueError("Previous compiler source changed")
+                # A final UI rebase can differ from the original compiler snapshot; never seed mismatching bytes.
+                job.setdefault("cargo_cache_rejections",[]).append({"job_id":previous.name,"reason":"previous_execution_source_differs_from_candidate"})
+                continue
             target=previous/"output/target";cargo=previous/"output/cargo"
             if not target.is_dir()or not cargo.is_dir():continue
             dependencies=self.compiler_dependencies(target)
@@ -750,7 +757,7 @@ class Executor:
             if relative is not None:
                 if relative not in files:raise ValueError("Compiled local input absent from captured source")
                 inputs[relative]=hashlib.sha256(files[relative][1]).hexdigest()
-        value={"recipe":RUST+":single-job:debug0:complete-tests-v5","rust_inputs":self.rust_inputs(files),"compiled_inputs":inputs,
+        value={"recipe":RUST+":single-job:debug0:complete-tests-v6","rust_inputs":self.rust_inputs(files),"compiled_inputs":inputs,
             "artifacts":hashes,"job_id":job["job_id"]}
         if log is not None:value.update(test_proof=self.test_proof(blob),test_log=log[-1024*1024:])
         if not inputs:raise ValueError("Compiled input closure missing")
@@ -777,7 +784,7 @@ class Executor:
             if path.is_symlink()or not path.is_file()or path.stat().st_size>16*1024*1024:
                 raise ValueError('Compiler dependency receipt identity invalid')
             value=json.loads(path.read_bytes())
-            if value.get('recipe')!=RUST+':single-job:debug0:complete-tests-v5':continue
+            if value.get('recipe')!=RUST+':single-job:debug0:complete-tests-v6':continue
             jid=value.get('job_id','')
             if not re.fullmatch(r'[a-f0-9-]{36}',jid):raise ValueError('Compiler dependency job identity invalid')
             prefix='optimization-cargo/registry/'
@@ -841,7 +848,7 @@ class Executor:
         start=text.index("FROM rust:");end=text.index("FROM debian:",start)
         recipe=hashlib.sha256(text[start:end].encode()).hexdigest()
         if recipe in {COMPILER_STAGE_SHA256,CONTEXT_COMPILER_STAGE_SHA256}:return True
-        if recipe not in {EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256}:
+        if recipe not in {EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256}:
             raise ValueError("Compiler Dockerfile recipe changed; migrate the reviewed attributable engine recipe")
         cargo=tomllib.loads(files["v3/Cargo.toml"][1].decode())
         if any(target.get("name")=="webagent-automation"for target in cargo.get("bin",[]))or "v3/src/plugin_packages/automation/main.rs"in files:
@@ -851,7 +858,7 @@ class Executor:
         """Select the additional mandatory outputs from exact reviewed source, never stale binaries."""
         text=self.runner.execution_entries(blob)["v3/Dockerfile"][1].decode()
         stage=text[text.index("FROM rust:"):text.index("FROM debian:",text.index("FROM rust:"))]
-        return hashlib.sha256(stage.encode()).hexdigest()in {CONTEXT_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256}
+        return hashlib.sha256(stage.encode()).hexdigest()in {CONTEXT_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256}
 
     def retain_test_manifest(self,output,artifacts):
         """Retain Cargo-attested tests and exact debug support; never substitute optimized binaries."""
@@ -977,15 +984,17 @@ class Executor:
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Tests left changed application inputs")
         logs+=self.phase(job,"compile_linked","engine",application,output,self.linked_recipe(),"engine:rust1.90:linked-release")
         stable=output/"stable";stable.mkdir(exist_ok=True)
-        shutil.copyfile(output/"linked-target/release/webagent-v3",stable/"webagent-v3");(stable/"webagent-v3").chmod(0o555)
+        shutil.copyfile(output/"target/release/webagent-v3",stable/"webagent-v3");(stable/"webagent-v3").chmod(0o555)
         logs+=self.phase(job,"linked_smoke","test",application,output,self.smoke_recipe("linked"),"engine:rust1.90:linked-smoke",60)
         proof=self.linked_smoke(self.smoke_artifact(stable/"linked-smoke-result.json"))
-        linked_inputs=self.linked_dependencies(output/"linked-target",self.runner.execution_entries(blob))
+        logs+=self.phase(job,"engine_metadata","dependency",application,output,["sh","-c","cargo metadata --locked --offline --format-version 1 > /output/linked-metadata.json"],"engine:rust1.90:linked-metadata")
+        linked_metadata=self.metadata_receipt(output/"linked-metadata.json")
+        linked_inputs=self.linked_dependencies(linked_metadata,output/"target",self.runner.execution_entries(blob))
         (stable/"dependencies.json").write_text(json.dumps(linked_inputs,sort_keys=True)+"\n")
-        job["linked_stable"]={"mode":"linked","target_directory":"linked-target","compiled_inputs":linked_inputs,"artifact_sha256":hashlib.sha256((stable/"webagent-v3").read_bytes()).hexdigest(),"smoke":proof,"retained_artifact":"stable/webagent-v3","deployed":False}
+        job["linked_stable"]={"mode":"linked","target_directory":"target","compiled_inputs":linked_inputs,"artifact_sha256":hashlib.sha256((stable/"webagent-v3").read_bytes()).hexdigest(),"smoke":proof,"retained_artifact":"stable/webagent-v3","deployed":False}
         (stable/"smoke.json").write_text(json.dumps(job["linked_stable"],sort_keys=True)+"\n")
         getattr(self.runner,"resource_progress",lambda _:None)(job)
-        logs+=self.phase(job,"compile_release","engine",application,output,["cargo","build","--workspace","--release","--locked","--offline","--no-default-features","--features","webagent-v3/live-context"],"engine:rust1.90:release")
+        logs+=self.phase(job,"compile_release","engine",application,output,self.live_recipe(),"engine:rust1.90:release")
         logs+=self.phase(job,"live_smoke","test",application,output,self.smoke_recipe("live"),"engine:rust1.90:live-smoke",90)
         live_proof=self.live_smoke(self.smoke_artifact(stable/"live-smoke-result.json"),proof)
         job["optimized_mode_equivalence"]={"status":"passed","linked":proof,"live":live_proof}

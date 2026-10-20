@@ -40,15 +40,36 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):worker.linked_smoke('{"mode":"linked","equivalence":false}')
         self.assertIn("test result: ok",persisted[-1]["log"]);self.assertIn("[redacted]",persisted[-1]["log"])
         worker.persist_phase_log(job,"x"*(2*1024*1024));self.assertLessEqual(len(job["log"].encode()),1024*1024)
-    def test_linked_target_and_dependency_attestation_are_separate_from_live(self):
-        from unittest.mock import Mock
-        argv=executor.Executor.linked_recipe();self.assertEqual(argv[argv.index("--target-dir")+1],"/output/linked-target")
+    def test_optimized_modes_share_target_and_live_cleans_only_root_release(self):
+        linked=executor.Executor.linked_recipe()
+        self.assertNotIn("--target-dir",linked);self.assertNotIn("--no-default-features",linked)
+        self.assertIn("--release",linked)
+        live=executor.Executor.live_recipe();self.assertEqual(live[:2],["sh","-c"])
+        self.assertEqual(live[2].splitlines(),[
+            "set -e",
+            "cargo clean --release --package webagent-v3 --locked --offline",
+            "cargo build --workspace --release --locked --offline --no-default-features --features webagent-v3/live-context"])
+        docker=(ROOT/"Dockerfile").read_text()
+        self.assertNotIn("/build/linked-target",docker)
+        self.assertLess(docker.index("/out/stable/webagent-v3 --context-smoke"),docker.index("cargo clean --release --package webagent-v3"))
+        self.assertLess(docker.index("cargo clean --release --package webagent-v3"),docker.index("cargo build --workspace --release"))
+    def test_linked_dependency_attestation_excludes_debug_and_unresolved_services(self):
         worker=executor.Executor(None,None,{})
-        worker.compiler_dependencies=Mock(return_value={"src/main.rs","crates/context-assembly/src/lib.rs"})
         files={"v3/src/main.rs":(0o644,b"main"),"v3/crates/context-assembly/src/lib.rs":(0o644,b"implementation")}
-        self.assertIn("v3/crates/context-assembly/src/lib.rs",worker.linked_dependencies(Path("linked-target"),files));self.assertEqual(worker.compiler_dependencies.call_args.args[0],Path("linked-target"))
-        worker.compiler_dependencies.return_value={"src/main.rs"}
-        with self.assertRaisesRegex(ValueError,"attestation"):worker.linked_dependencies(Path("linked-target"),files)
+        def package(identity,name):return {"id":identity,"name":name,"source":None,"targets":[{"name":name,"kind":["bin"]}]}
+        metadata={"packages":[package("root","webagent-v3"),package("implementation","context-assembly"),package("service","context-service")],"resolve":{"nodes":[{"id":"root","deps":[{"pkg":"implementation","dep_kinds":[{"kind":None}]}]},{"id":"implementation","deps":[]},{"id":"service","deps":[]}]}}
+        with tempfile.TemporaryDirectory()as temporary:
+            target=Path(temporary);release=target/"release/deps";release.mkdir(parents=True)
+            debug=target/"debug/deps";debug.mkdir(parents=True)
+            (release/"webagent_v3-aa.d").write_text("target: src/main.rs\n")
+            implementation=release/"context_assembly-aa.d";implementation.write_text("target: crates/context-assembly/src/lib.rs\n")
+            (release/"context_service-aa.d").write_text("target: crates/context-service/src/main.rs\n")
+            (debug/"fixture-aa.d").write_text("target: src/test_only.rs\n")
+            self.assertEqual(set(worker.linked_dependencies(metadata,target,files)),set(files))
+            self.assertIn("src/test_only.rs",worker.compiler_dependencies(target))
+            self.assertIn("crates/context-service/src/main.rs",worker.compiler_dependencies(target))
+            implementation.unlink()
+            with self.assertRaisesRegex(ValueError,"attestation"):worker.linked_dependencies(metadata,target,files)
     # Require live-service lifecycle evidence and exact prepared-case equivalence with linked mode.
     def test_live_optimized_smoke_requires_lifecycle_and_equal_prepared_cases(self):
         linked={"mode":"linked","equivalence":True,"interface_version":2,"prepared":[{"envelope":"fixture1"},{"envelope":"fixture2"}],"background_prepared":[{},{}],"boot_prepared":[{},{}],"assets_prepared":[{},{}],"capability_prepared":[{},{}],"provider_prepared":[{},{}],"service_started":False}
@@ -73,16 +94,21 @@ class EngineTests(unittest.TestCase):
                 self.assertIn("progress",result.exception.log);self.assertNotIn("fixture-sensitive-marker",result.exception.log)
     def test_filtered_diagnosis_passes_only_a_bounded_name_to_runtime(self):
         import uuid
+        import test_admin_build as fixtures
         from unittest.mock import Mock
         for invalid in ("--ignored","name;command","name with spaces","name/other","x"*161):
             with self.assertRaises(ValueError):executor.test_filter(invalid)
         with tempfile.TemporaryDirectory()as temporary:
-            runner=types.SimpleNamespace(execution_application_blob=lambda blob:blob,execution_source_digest=lambda _:"same")
-            worker=executor.Executor(runner,None,{"state_root":temporary});worker.phase=Mock(return_value="checked");job={"job_id":str(uuid.uuid4()),"test_filter":"engine_components::"}
-            worker.check(job,b"fixture","test",60,lambda path,blob:path.mkdir(parents=True))
+            runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in ("execution_entries","execution_application_blob","execution_source_digest")})
+            worker=executor.Executor(runner,None,{"state_root":temporary});worker.phase=Mock(return_value="checked");worker.dependencies=Mock(return_value="offline ready\n")
+            job={"job_id":str(uuid.uuid4()),"test_filter":"engine_components::"};blob=fixtures.context(extra={"v3/src/main.rs":"fn main() {}"})
+            worker.check(job,blob,"test",60,lambda path,data:fixtures.host.release.extract(path,data,fixtures.host.context_digest))
             runtime=worker.phase.call_args_list[-1].args[5]
             self.assertEqual(runtime,["cargo","test","--locked","--offline","engine_components::","--","--test-threads=1","--nocapture"])
-            self.assertNotIn("engine_components::",worker.phase.call_args_list[1].args[5])
+            self.assertNotIn("engine_components::",worker.phase.call_args_list[0].args[5])
+            certificate=json.loads((Path(temporary)/"verification-certificates"/(job["verification_key"]+".json")).read_text())
+            self.assertEqual(certificate["binding"]["source_sha256"],worker.verification_source(blob))
+            self.assertEqual(certificate["binding"]["test_filter"],"engine_components::")
     # Bind compiler memory evidence to its container and reject unenforced limits or OOM outcomes.
     def test_cap_requires_kernel_enforcement_and_oom_cannot_pass(self):
         import threading,uuid
@@ -111,14 +137,18 @@ class EngineTests(unittest.TestCase):
             with self.assertRaises(ValueError):executor.compiler_cap(value)
     def test_check_and_test_compile_recipes_have_separate_runtime_profiles(self):
         import types,uuid
+        import test_admin_build as fixtures
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory()as temporary:
-            runner=types.SimpleNamespace(execution_application_blob=lambda blob:blob,execution_source_digest=lambda _:"same")
-            worker=executor.Executor(runner,None,{"state_root":temporary});worker.phase=Mock(return_value="checked")
-            worker.check({"job_id":str(uuid.uuid4())},b"fixture","test",60,lambda path,blob:path.mkdir(parents=True))
-            self.assertEqual([(call.args[1],call.args[6])for call in worker.phase.call_args_list],[("dependency","engine:rust1.90:dependency"),("compile_test","engine:rust1.90:compile_test"),("test","engine:rust1.90:test")])
-            worker.phase.reset_mock();worker.check({"job_id":str(uuid.uuid4())},b"fixture","check",60,lambda path,blob:path.mkdir(parents=True))
+            runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in ("execution_entries","execution_application_blob","execution_source_digest")})
+            worker=executor.Executor(runner,None,{"state_root":temporary});worker.phase=Mock(return_value="checked");worker.dependencies=Mock(return_value="offline ready\n")
+            blob=fixtures.context(extra={"v3/src/main.rs":"fn main() {}"})
+            extract=lambda path,data:fixtures.host.release.extract(path,data,fixtures.host.context_digest)
+            job={"job_id":str(uuid.uuid4())};worker.check(job,blob,"test",60,extract)
+            self.assertEqual([(call.args[1],call.args[6])for call in worker.phase.call_args_list],[("compile_test","engine:rust1.90:compile_test"),("test","engine:rust1.90:test")])
+            worker.phase.reset_mock();check_job={"job_id":str(uuid.uuid4())};worker.check(check_job,blob,"check",60,extract)
             self.assertEqual(worker.phase.call_args_list[-1].args[6],"engine:rust1.90:check")
+            self.assertNotEqual(job["verification_key"],check_job["verification_key"])
     def test_job_view_exposes_bounded_waiting_cause_and_deadline(self):
         import test_admin_build as fixtures
         from unittest.mock import Mock
