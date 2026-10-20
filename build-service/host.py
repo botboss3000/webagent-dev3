@@ -1638,12 +1638,12 @@ print(json.dumps(counts))"""
         """
         program=("import socket,json; s=socket.socket(socket.AF_UNIX); s.settimeout(10); "
             "s.connect('/run/v3/worker/tools.sock'); "
-            "s.sendall(json.dumps({'id':'diagnostics-protocol','name':'diagnostics_protocol',"
+            "s.sendall(json.dumps({'version':2,'id':'diagnostics-protocol','name':'diagnostics_protocol',"
             "'workspace':'"+LOCAL_WORKSPACE+"','arguments':{}}).encode()+bytes([10])); "
             "print(s.makefile('rb').readline(4096).decode())")
         try:
             reply=json.loads(self.command(["docker","exec","--user",str(CONFIG["app_uid"]),TARGETS[0],"python3","-I","-B","-c",program],timeout=15,private_raw=True))
-            return reply.get("status")=="success" and reply.get("output")=={"protocol":1,"interface":1,"stateful":True}
+            return reply.get("version")==2 and reply.get("id")=="diagnostics-protocol" and reply.get("result")=={"status":"success","output":{"protocol":1,"interface":1,"stateful":True}}
         except Exception:return False
     def plugin_hot_swappable(self):
         for name in TARGETS:
@@ -1656,13 +1656,13 @@ print(json.dumps(counts))"""
         # Ask the installed worker contract, not a filename or source-byte guess.
         program=("import socket,json; s=socket.socket(socket.AF_UNIX); s.settimeout(10); "
             "s.connect('/run/v3/worker/tools.sock'); "
-            "s.sendall(json.dumps({'id':'plugin-protocol','name':'ability_plugins_protocol',"
+            "s.sendall(json.dumps({'version':2,'id':'plugin-protocol','name':'ability_plugins_protocol',"
             "'workspace':'"+LOCAL_WORKSPACE+"','arguments':{}}).encode()+bytes([10])); "
             "print(s.makefile('rb').readline(4096).decode())")
         try:
             reply=json.loads(self.command(["docker","exec","--user",str(CONFIG["app_uid"]),
-                TARGETS[0],"python3","-I","-B","-c",program],timeout=15))
-            return reply.get("status")=="success" and reply.get("output")=={"protocol":1,"catalog":1,"dispatch":1}
+                TARGETS[0],"python3","-I","-B","-c",program],timeout=15,private_raw=True))
+            return reply.get("version")==2 and reply.get("id")=="plugin-protocol" and reply.get("result")=={"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}}
         except (OSError,RuntimeError,ValueError):return False
 
     def boot_adoption(self):

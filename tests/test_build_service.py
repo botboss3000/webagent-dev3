@@ -213,7 +213,7 @@ class DiagnosticsProbeTests(unittest.TestCase):
  def test_environment_redaction_does_not_corrupt_private_protocol_boolean(self):
   """A container env value can equal JSON true; parse this fixed private frame."""
   runner=fixtures.host.Runner();runner.secrets=["true"]
-  reply=json.dumps({"status":"success","output":{"protocol":1,"interface":1,"stateful":True}})
+  reply=json.dumps({"version":2,"id":"diagnostics-protocol","result":{"status":"success","output":{"protocol":1,"interface":1,"stateful":True}}})
   def command(argv,**kwargs):
    return reply if kwargs.get("private_raw") else fixtures.host.scrub(reply,runner.secrets)
   with patch.object(runner,"command",side_effect=command) as called:
@@ -221,6 +221,22 @@ class DiagnosticsProbeTests(unittest.TestCase):
    self.assertTrue(called.call_args.kwargs["private_raw"])
 
 class CodebasePublicationMetadataTests(unittest.TestCase):
+ def test_worker_capability_probe_envelopes_are_fenced(self):
+  runner=fixtures.host.Runner()
+  runner.inspect=lambda name:{"Mounts":[{"Destination":"/opt/v3/assets","Source":str(fixtures.host.ASSET_ROOT),"RW":False}],"Config":{"Env":["V3_UI_ROOT=/opt/v3/assets/current/v3/ui"]}}
+  probes=((runner.plugin_hot_swappable,"plugin-protocol",{"protocol":1,"catalog":1,"dispatch":1}),(runner.diagnostics_hot_swappable,"diagnostics-protocol",{"protocol":1,"interface":1,"stateful":True}))
+  for probe,request_id,output in probes:
+   def command(argv,**kwargs):
+    self.assertIn("'version':2",argv[-1])
+    self.assertIn(request_id,argv[-1])
+    self.assertTrue(kwargs.get("private_raw"))
+    compile(argv[-1],"<worker capability probe>","exec")
+    return json.dumps({"version":2,"id":request_id,"result":{"status":"success","output":output}})
+   with patch.object(runner,"command",side_effect=command):
+    self.assertTrue(probe())
+   for invalid in ({"status":"success","output":output},{"version":1,"id":request_id,"result":{"status":"success","output":output}},{"version":2,"id":"wrong-id","result":{"status":"success","output":output}},{"version":2,"id":request_id,"result":{"status":"success","output":{}}}):
+    with patch.object(runner,"command",return_value=json.dumps(invalid)):
+     self.assertFalse(probe())
  def fixture(self,temporary):
   import shutil
   folder=Path(temporary)/"package"
