@@ -349,76 +349,7 @@ pub(crate) async fn provider_start(State(_app): State<App>) -> Api {
     Err(conflict("Use the selected agent's Models page to authorize a connection"))
 }
 /// A device authorization belongs to one connection. Never copy subscription tokens.
-pub(crate) async fn provider_start_for(app: App, credential_ref: String, connection_id: Option<String>) -> Api {
-    let mut login = app.login.write().await;
-    if login.as_ref().is_some_and(|v| v["status"] == "pending") {
-        return Err(conflict("Authorization already pending"));
-    }
-    let mut device = app.provider.device_start().await?;
-    device["status"] = json!("pending");
-    device["connection_id"] = json!(connection_id);
-    let expires_at = device["expires_at"].as_u64().unwrap_or_else(|| now() + 900);
-    let answer =
-        json!({"verification_url":device["verification_url"],"user_code":device["user_code"],"expires_at":expires_at});
-    *login = Some(device.clone());
-    drop(login);
-    tokio::spawn(async move {
-        let expires = expires_at;
-        let interval = device["interval"].as_u64().unwrap_or(5).max(5);
-        loop {
-            tokio::select! {_=app.stop.cancelled()=>break,_=tokio::time::sleep(Duration::from_secs(interval))=>{}}
-            let current = app.login.read().await.clone();
-            if current.as_ref().is_none_or(|v| {
-                v["device_auth_id"] != device["device_auth_id"] || v["status"] != "pending"
-            }) {
-                break;
-            }
-            if now() > expires {
-                if let Some(v) = app.login.write().await.as_mut() {
-                    v["status"] = json!("expired");
-                }
-                break;
-            }
-            match app.provider.device_poll(&device).await {
-                Ok(Some(tokens)) => {
-                    // Serialize with catalog edits: revocation or replacing a connection
-                    // during OAuth cannot authorize the changed record after the fact.
-                    let _catalog_guard = app.gate.lock().await;
-                    let allowed = match &connection_id {
-                        Some(id) => app.store.model_catalog().await.ok().and_then(|c| c.connections.get(id).cloned())
-                            .is_some_and(|c| !c.revoked && c.credential_ref == credential_ref),
-                        None => true,
-                    };
-                    let _guard = app.refresh.lock().await;
-                    let mut login = app.login.write().await;
-                    if login.as_ref().is_some_and(|v| {
-                        v["device_auth_id"] == device["device_auth_id"] && v["status"] == "pending"
-                    }) {
-                        if allowed && app.store.put(&credential_ref, &tokens).await.is_ok() {
-                            if let Some(v) = login.as_mut() {
-                                v["status"] = json!("connected");
-                            }
-                        } else if let Some(v) = login.as_mut() {
-                            v["status"] = json!("failed");
-                        }
-                    }
-                    break;
-                }
-                Ok(None) => {}
-                Err(_) => {
-                    let mut login = app.login.write().await;
-                    if let Some(v) = login.as_mut() {
-                        if v["device_auth_id"] == device["device_auth_id"] {
-                            v["status"] = json!("failed");
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-    });
-    Ok(Json(answer))
-}
+pub(crate) async fn provider_start_for(app:App,credential_ref:String,connection_id:Option<String>)->Api { app.models_runtime().provider_start_for(credential_ref,connection_id).await.map_err(Into::into) }
 pub(crate) async fn provider_logout(State(_app): State<App>) -> Api {
     // Revocation belongs to the owner-scoped catalog, never a global token deletion.
     Err(conflict("Use the selected agent's Models page to revoke a connection"))

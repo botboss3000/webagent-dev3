@@ -45,7 +45,7 @@ pub(super) fn normalize(id: &str, row: &Value, fallback: &Value) -> Value {
 }
 
 // Fixed public endpoints carry no provider credentials. Failures degrade to live metadata.
-#[cfg(not(test))]
+#[cfg(not(any(test,feature="test-support")))]
 pub(super) async fn metadata(client: &reqwest::Client) -> (Value, Value) {
     use futures_util::StreamExt;
     use std::{sync::OnceLock, time::{Duration, Instant}};
@@ -71,7 +71,7 @@ pub(super) async fn metadata(client: &reqwest::Client) -> (Value, Value) {
     let b = b.unwrap_or_else(||old.map(|(_,_,b)|b.clone()).unwrap_or(Value::Null));
     *cache = Some((Instant::now(),a.clone(),b.clone())); (a,b)
 }
-#[cfg(test)]
+#[cfg(any(test,feature="test-support"))]
 pub(super) async fn metadata(_: &reqwest::Client) -> (Value, Value) { (Value::Null,Value::Null) }
 
 pub(super) fn lookup(id: &str, provider: ProviderId, catalogs: &(Value,Value)) -> Value {

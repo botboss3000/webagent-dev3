@@ -40,9 +40,9 @@ impl Provider {
             bail!("Invalid speech configuration");
         }
         let fixed = "https://api.openai.com/v1/audio/speech";
-        #[cfg(not(test))]
+        #[cfg(not(any(test,feature="test-support")))]
         let endpoint = fixed;
-        #[cfg(test)]
+        #[cfg(any(test,feature="test-support"))]
         let endpoint = self.responses_endpoint.as_deref().unwrap_or(fixed);
         let request = self
             .client
@@ -112,9 +112,9 @@ impl Provider {
         } else {
             (format!("{base}audio/transcriptions"), Value::Null)
         };
-        #[cfg(not(test))]
+        #[cfg(not(any(test,feature="test-support")))]
         let endpoint = fixed.as_str();
-        #[cfg(test)]
+        #[cfg(any(test,feature="test-support"))]
         let endpoint = self.responses_endpoint.as_deref().unwrap_or(&fixed);
         let request = self
             .client

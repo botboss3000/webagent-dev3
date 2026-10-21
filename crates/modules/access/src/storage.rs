@@ -29,7 +29,7 @@ impl<'a,C:RecordCodec> Repository<'a,C> {
     pub(crate) fn current_user_id(&self)->&str {self.actor_id}
     pub(crate) fn seal(&self,value:&Value)->Result<Vec<u8>> {self.codec.seal(value)}
     pub(crate) fn unseal(&self,value:&[u8])->Result<Value> {self.codec.unseal(value)}
-    pub(crate) async fn account_by_id(&self,id:&str)->Result<Option<Value>> {
+    pub async fn account_by_id(&self,id:&str)->Result<Option<Value>> {
         let row=sqlx::query("SELECT value FROM user_accounts WHERE user_id=?").bind(id).fetch_optional(self.app_pool).await?;
         row.map(|r|self.unseal(&r.get::<Vec<u8>,_>("value"))).transpose()
     }

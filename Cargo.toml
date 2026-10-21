@@ -58,6 +58,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
 
 [dev-dependencies]
+webagent-models = { path = "crates/modules/models", features = ["test-support"] }
 webagent-context-assets={path="crates/context-assets"}
 webagent-capability-context={path="crates/capability-context"}
 webagent-provider-projection={path="crates/provider-projection"}

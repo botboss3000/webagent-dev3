@@ -2248,9 +2248,25 @@ dependencies = [
 name = "webagent-models"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "futures-util",
+ "reqwest",
  "serde",
  "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "webagent-access",
+ "webagent-configuration",
+ "webagent-context-contracts",
+ "webagent-provider-contracts",
+ "webagent-provider-projection",
 ]
 
 [[package]]

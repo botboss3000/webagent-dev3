@@ -745,25 +745,7 @@ impl App {
         provider::ProviderSelection::parse(&value, DEFAULT_AGENT_MODEL)
     }
     /// Rehydrate published platform metadata at admission, then freeze it for this run.
-    async fn pin_model_plan(&self, plan:&mut model_selection::SelectionPlan)->Result<()> {
-        for candidate in &mut plan.candidates {
-            if let Some(previous)=&candidate.platform {
-                let source=account_catalog::Source{origin:account_catalog::Origin::Platform,
-                    entry_id:account_catalog::platform_id(&previous.roster_id,&previous.entry.id)};
-                let pin=self.store.pin_platform_source(shared_chat::actor(self),&source).await?;
-                if pin.entry.transport!=candidate.transport {return Err(anyhow!("Adopted platform transport changed"));}
-                let capability=match plan.role {model_selection::ModelRole::ImageIn=>"image_in",model_selection::ModelRole::ImageOut=>"image_out",model_selection::ModelRole::Voice=>"voice",model_selection::ModelRole::Decision=>"decision",_=>"text"};
-                if !pin.entry.capabilities.contains(capability) {return Err(anyhow!("Published model lacks role capability"));}
-                candidate.upstream_model=pin.entry.upstream_model.clone();candidate.platform=Some(pin);
-            } else if !match &self.chat_access {
-                Some(access)=>shared_chat::live_access(&self.store,shared_chat::actor(self),&access.session_id,&plan.agent_id).await?,
-                None=>self.store.live_access(shared_chat::actor(self),&plan.agent_id).await?,
-            }.model_allowed(&candidate.upstream_model) {
-                return Err(anyhow!("BYO model outside tier"));
-            }
-        }
-        Ok(())
-    }
+    async fn pin_model_plan(&self, plan:&mut model_selection::SelectionPlan)->Result<()> { self.models_runtime().pin_model_plan(plan,shared_chat::actor(self),self.chat_access.as_ref().map(|a|a.session_id.as_str()),&ModelSessionAuthority(&self.store)).await }
     async fn run_model_authorized(&self,run:&Value)->bool {
         match self.run_candidate(run).await {
             Ok(_) => true,
@@ -777,71 +759,10 @@ impl App {
             }
         }
     }
-    async fn run_candidate(&self, run: &Value) -> Result<Option<model_selection::Candidate>> {
-        if !crate::modules::binding_valid(self,run).await {return Err(anyhow!("Module admission revoked"));}
-        // Recovery cannot invent a role for an old run that never pinned one.
-        let Some(value) = run.get("selection_plan").filter(|v| !v.is_null()) else {
-            return Err(anyhow!("Legacy run has no pinned role; start a new message after configuring Standard"));
-        };
-        let plan: model_selection::SelectionPlan = serde_json::from_value(value.clone())?;
-        let state: model_selection::FailoverState = serde_json::from_value(run["failover_state"].clone())?;
-        if !matches!(plan.version,1|2) || plan.agent_id != run["agent_id"].as_str().unwrap_or("") {
-            return Err(anyhow!("Invalid pinned model plan identity"));
-        }
-        let catalog = self.store.model_catalog().await?;
-        // Membership, account ceiling and roster revocation remain live even for recovered plans.
-        let candidate = plan.candidates.get(state.candidate_index).ok_or_else(||anyhow!("Candidate missing"))?;
-        let requester=run["requester_user_id"].as_str().unwrap_or(self.store.current_user_id());
-        let access=shared_chat::live_access(&self.store,requester,run["session_id"].as_str().unwrap_or(""),&plan.agent_id).await?;
-        if !access.admitted() || (candidate.platform.is_none() && !access.model_allowed(&candidate.upstream_model)) {
-            return Err(anyhow!("Model grant revoked"));
-        }
-        if catalog.agent_models.get(&plan.agent_id).is_none_or(|m|!m.entry_ids.contains(&candidate.entry_id)) {
-            return Err(anyhow!("Candidate grant revoked"));
-        }
-        let candidate=plan.authorize_candidate(state.candidate_index, &catalog.entries, &catalog.connections)?.clone();
-        if let Some(pin)=&candidate.platform {
-            let live=catalog.platform_sources.get(&candidate.entry_id).ok_or_else(||anyhow!("Platform provenance removed"))?;
-            if live.roster_id!=pin.roster_id || live.entry.id!=pin.entry.id {return Err(anyhow!("Platform provenance changed"));}
-            self.store.platform_dispatch_tokens(requester,&plan.agent_id,pin).await?;
-        } else if catalog.platform_sources.contains_key(&candidate.entry_id) {return Err(anyhow!("Platform provenance missing from plan"));}
-        Ok(Some(candidate))
-    }
-    async fn tokens_for(&self, selection: &provider::ProviderSelection, run: &Value) -> Result<Value> {
-        let candidate = self.run_candidate(run).await?;
-        if let Some(candidate) = &candidate {
-            if selection.model != candidate.upstream_model || selection.provider != candidate.transport.provider_id() {
-                return Err(anyhow!("Pinned model selection mismatch"));
-            }
-        }
-        if let Some(pin)=candidate.as_ref().and_then(|candidate|candidate.platform.as_ref()) {
-            return self.store.platform_dispatch_tokens(run["requester_user_id"].as_str().unwrap_or(self.store.current_user_id()),run["agent_id"].as_str().unwrap_or(""),pin).await;
-        }
-        let reference = candidate.as_ref().map(|c| c.credential_ref.as_str()).unwrap_or("provider_tokens");
-        if selection.provider == provider::ProviderId::OpenaiSubscription {
-            self.tokens_at(reference).await.map_err(|_| provider::typed_failure(model_selection::FailureKind::InvalidCredentials,
-                false, "Assigned provider authorization unavailable; reconnect this connection"))
-        } else {
-            if candidate.is_none() { return Err(anyhow!("API providers require an explicit connection")); }
-            let tokens = self.store.get(reference).await?.ok_or_else(|| provider::typed_failure(model_selection::FailureKind::InvalidCredentials, false, "Save an API key for this connection"))?;
-            if tokens["api_key"].as_str().is_none_or(|s| s.is_empty()) { return Err(provider::typed_failure(model_selection::FailureKind::InvalidCredentials, false, "Provider API key unavailable")); }
-            Ok(tokens)
-        }
-    }
+    async fn run_candidate(&self, run: &Value) -> Result<Option<model_selection::Candidate>> { if !crate::modules::binding_valid(self,run).await {return Err(anyhow!("Module admission revoked"));} self.models_runtime().run_candidate(run,&ModelSessionAuthority(&self.store)).await }
+    async fn tokens_for(&self, selection: &provider::ProviderSelection, run: &Value) -> Result<Value> { if !crate::modules::binding_valid(self,run).await {return Err(anyhow!("Module admission revoked"));} self.models_runtime().tokens_for(selection,run,&ModelSessionAuthority(&self.store)).await }
 
-    pub(crate) async fn tokens_at(&self, reference: &str) -> Result<Value> {
-        let _lock = self.refresh.lock().await;
-        let mut tokens = self
-            .store
-            .get(reference)
-            .await?
-            .ok_or_else(|| anyhow!("Connect your ChatGPT subscription first"))?;
-        if tokens["expires_at"].as_f64().unwrap_or(0.) < now() as f64 + 60. {
-            tokens = self.provider.refresh(&tokens).await?;
-            self.store.put(reference, &tokens).await?;
-        }
-        Ok(tokens)
-    }
+    pub(crate) async fn tokens_at(&self, reference: &str) -> Result<Value> { self.models_runtime().tokens_at(reference).await }
 }
 // Exit fixed offline smoke before state initialization; otherwise initialize the selected role at the shared v3 root.
 async fn run_process() -> Result<()> {
@@ -1062,4 +983,26 @@ async fn run_process() -> Result<()> {
     app.store.agent_pool.close().await;
     app.store.app_pool.close().await;
     Ok(())
+}
+
+struct ModelSessionAuthority<'a>(&'a Store);
+impl webagent_models::runtime::SessionAuthority for ModelSessionAuthority<'_> {
+    fn live_access<'a>(&'a self,user:&'a str,session:&'a str,agent:&'a str)
+        ->impl std::future::Future<Output=Result<access_policy::LiveAccess>>+Send+'a {
+        shared_chat::live_access(self.0,user,session,agent)
+    }
+}
+impl App {
+    fn models_runtime(&self)->webagent_models::runtime::Runtime<'_,Store> {
+        webagent_models::runtime::Runtime::new(self.store.models_repository(),&self.provider.0,
+            &self.gate,&self.refresh,&self.login,&self.stop)
+    }
+}
+impl From<webagent_models::api::Error> for ApiError {
+    fn from(error:webagent_models::api::Error)->Self {
+        match error {
+            webagent_models::api::Error::Public(status,message)=>Self(status,message),
+            webagent_models::api::Error::Internal(error)=>error.into(),
+        }
+    }
 }

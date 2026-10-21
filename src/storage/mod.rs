@@ -3793,3 +3793,16 @@ impl Store {
             &self.agent_id,&self.user_id,self)
     }
 }
+
+impl webagent_models::storage::RuntimeStorage for Store {
+    fn credential_get<'a>(&'a self,key:&'a str)->impl std::future::Future<Output=Result<Option<Value>>>+Send+'a {self.get(key)}
+    fn credential_put<'a>(&'a self,key:&'a str,value:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a {self.put(key,value)}
+    fn agent_pool<'a>(&'a self,agent:&'a str)->impl std::future::Future<Output=Result<SqlitePool>>+Send+'a {
+        async move {Ok(self.for_agent(agent).await?.agent_pool)}
+    }
+}
+impl Store {
+    pub(crate) fn models_repository(&self)->webagent_models::storage::Repository<'_,Self> {
+        webagent_models::storage::Repository::new(&self.root,&self.app_pool,&self.agent_pool,&self.agent_id,&self.user_id,self)
+    }
+}

@@ -1,8 +1,9 @@
 //! Ephemeral call preparation, not proof of live authorization.
 //! No state is persisted or cloneable; callers revalidate authority at dispatch.
 use super::*;
+use crate::transport::Projection;
 
-pub(crate) struct CallDraft<'a> {
+pub struct CallDraft<'a> {
     selection: &'a ProviderSelection,
     input: Vec<Value>,
     tools: Vec<Value>,
@@ -10,11 +11,11 @@ pub(crate) struct CallDraft<'a> {
     instructions: &'a str,
 }
 
-pub(crate) struct ValidatedCall<'a> {
+pub struct ValidatedCall<'a> {
     request: PreparedRequest<'a>,
 }
 
-pub(crate) struct ReadyCall<'a> {
+pub struct ReadyCall<'a> {
     transport: ReadyTransport<'a>,
 }
 
@@ -50,7 +51,7 @@ enum ReadyTransport<'a> {
 // @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Host projection preparation precedes credential binding and network dispatch. Config: config/engine-components.json -> disabled; provider descriptor -> versions and limits.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/interface_version","/implementation_version","/limits"]}],"opportunities":[]}}
 impl<'a> CallDraft<'a> {
     /// Own the ephemeral input/schema vectors while borrowing the host-selected route and instructions.
-    pub(crate) fn new(
+    pub fn new(
         selection: &'a ProviderSelection,
         input: Vec<Value>,
         tools: Vec<Value>,
@@ -68,17 +69,17 @@ impl<'a> CallDraft<'a> {
 
     /// Resolve provider projection before the caller reacquires its dispatch gate.
     /// No credentials reach the component; live authority must still be rechecked.
-    pub(crate) async fn prepare(
+    pub async fn prepare<P:Projection>(
         mut self,
-        root: &std::path::Path,
-        cancel: &CancellationToken,
-    ) -> Result<ValidatedCall<'a>> {
+        projection:&P,
+        cancel:&CancellationToken,
+    )->Result<ValidatedCall<'a>> {
         let request = self.projection_request()?;
         if cancel.is_cancelled() {
             return Err(typed_failure(crate::model_selection::FailureKind::Cancelled,
                 false, "Provider request cancelled"));
         }
-        let projection = crate::engine_components::provider_project(root, &request, cancel).await
+        let projection = projection.project(&request,cancel).await
             .map_err(|_| typed_failure(
                 if cancel.is_cancelled() { crate::model_selection::FailureKind::Cancelled }
                 else { crate::model_selection::FailureKind::Protocol },
@@ -87,14 +88,16 @@ impl<'a> CallDraft<'a> {
     }
 
     /// Linked fixtures use the same planner and contract; live builds require the registered service.
-    #[cfg(any(feature = "linked-context", test))]
-    pub(crate) fn validate(mut self) -> Result<ValidatedCall<'a>> {
+    pub fn validate_with(mut self, project:impl FnOnce(&webagent_provider_contracts::RequestV1)->Result<webagent_provider_contracts::ResultV1>)->Result<ValidatedCall<'a>> {
         let request = self.projection_request()?;
-        let projection = webagent_provider_projection::project(&request)
+        let projection = project(&request)
             .map_err(|_| typed_failure(crate::model_selection::FailureKind::MalformedRequest,
                 false, "Invalid Provider request"))?;
         self.validate_prepared(request, projection)
     }
+    #[cfg(test)]
+    pub fn validate(self)->Result<ValidatedCall<'a>> {self.validate_with(webagent_provider_projection::project)}
+
 
     /// Normalize host-only metadata and budget inputs before sending private context over the pipe.
     fn projection_request(&mut self) -> Result<webagent_provider_contracts::RequestV1> {
@@ -119,7 +122,7 @@ impl<'a> CallDraft<'a> {
         if let Some(budget) = self.selection.input_budget_bytes()? {
             #[derive(serde::Serialize)]
             struct Envelope<'a> { instructions: &'a str, input: &'a [Value], tools: &'a [Value] }
-            let bytes = crate::context_accounting::json_size(&Envelope {
+            let bytes = webagent_context_contracts::context_accounting::json_size(&Envelope {
                 instructions:self.instructions, input:&self.input, tools:&self.tools,
             })?;
             if bytes > budget {
@@ -212,7 +215,7 @@ pub(super) fn compatible_body(selection: &ProviderSelection, messages: Vec<Value
 impl<'a> ValidatedCall<'a> {
     /// Bind only the selected transport's credentials after the caller rechecks live authority.
     /// This synchronous step preserves cancellation/credential error precedence; it starts no network request.
-    pub(crate) fn bind_credentials(
+    pub fn bind_credentials(
         self,
         tokens: &'a Value,
         cancel: &CancellationToken,
@@ -246,7 +249,7 @@ impl<'a> ValidatedCall<'a> {
 
 impl Provider {
     /// Consumes one locally prepared call. Live authority remains with the caller.
-    pub(crate) async fn dispatch(
+    pub async fn dispatch(
         &self,
         call: ReadyCall<'_>,
         delta: mpsc::Sender<String>,
@@ -272,6 +275,7 @@ impl Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+use crate::transport::Projection;
     use crate::model_selection::FailureKind;
 
     /// Extract the classified failure expected by preparation and dispatch-boundary fixtures.
@@ -538,6 +542,7 @@ mod tests {
 #[cfg(test)]
 mod limit_tests {
  use super::*;
+use crate::transport::Projection;
  /// Verify configured limits bound the complete input and select the compatible output-token field.
  #[test]
  fn limits_bound_all_call_inputs_and_compatible_output() {
@@ -562,6 +567,7 @@ mod limit_tests {
 #[cfg(test)]
 mod shared_message_wire_tests {
  use super::*;
+use crate::transport::Projection;
  /// Verify first and recovered user messages omit host metadata without altering opaque reasoning or tool argument/result strings.
  #[test]
  fn subscription_first_and_recovered_user_messages_strip_internal_metadata() {

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 // @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Linked compatibility fixture delegates projection to the same planner and materializer as the registered service; the host retains compatible transport execution.","span_lines":20,"configuration":{"status":"not_applicable","rationale":"Provider identity and compatibility reconstruction are fixed protocol invariants."}}
 /// Compatibility fixture for the linked planner; production translation is a registered component.
 /// Calls provider-projection::project, shared materialize_owned and host compatible_body; starts no network request.
-#[cfg(any(feature = "linked-context", test))]
+#[cfg(test)]
 pub(super) fn request_body(model: &str, input: Vec<Value>, tools: Vec<Value>, instructions: &str) -> Result<Value> {
     let request = webagent_provider_contracts::RequestV1::Project {
         version:webagent_provider_contracts::CONTRACT_VERSION,
@@ -82,9 +82,9 @@ impl Provider {
         }
         let base=provider.chat_endpoint().ok_or_else(||anyhow!("Subscription discovery is unavailable"))?;
         let fixed=base.strip_suffix("chat/completions").ok_or_else(||anyhow!("Discovery unavailable"))?.to_owned()+"models";
-        #[cfg(not(test))]
+        #[cfg(not(any(test,feature="test-support")))]
         let endpoint=fixed.as_str();
-        #[cfg(test)]
+        #[cfg(any(test,feature="test-support"))]
         let endpoint=self.responses_endpoint.as_deref().unwrap_or(&fixed);
         let read=async {
             let response=self.client.get(endpoint).bearer_auth(required(tokens,"api_key")?)
@@ -123,9 +123,9 @@ impl Provider {
         delta: mpsc::Sender<String>,
         cancel: CancellationToken,
     ) -> Result<Value> {
-        #[cfg(not(test))]
+        #[cfg(not(any(test,feature="test-support")))]
         let endpoint = fixed_endpoint;
-        #[cfg(test)]
+        #[cfg(any(test,feature="test-support"))]
         let endpoint = self.responses_endpoint.as_deref().unwrap_or(fixed_endpoint);
         let request = self.client.post(endpoint).bearer_auth(api_key).header("Accept","text/event-stream").json(&body);
         let response = tokio::select! {

@@ -141,3 +141,7 @@ mod upstream_id_tests {
         }
     }
 }
+
+pub use crate::transport::{Provider,ProviderFailure,CallDraft,typed_failure,projection_id};
+
+#[cfg(test)] pub use crate::transport::DEFAULT_INSTRUCTIONS;

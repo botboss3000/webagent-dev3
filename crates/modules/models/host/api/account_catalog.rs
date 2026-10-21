@@ -1,42 +1,16 @@
 //! Account model preferences. Browser auth/CSRF are supplied by the owning router.
+pub use webagent_models::api::account_catalog::{DefaultUpdate};
 use crate::State;
 use crate::{App,Api,account_catalog::Preferences};
 use axum::{Extension,Json};
 use serde_json::Value;
-pub async fn read(State(app):State<App>,Extension(identity):Extension<Value>)->Api {
-    let user=identity["_user_id"].as_str().unwrap_or("");
-    Ok(Json(app.store.account_model_choices(user).await?))
-}
-pub async fn save(State(app):State<App>,Extension(identity):Extension<Value>,Json(input):Json<Preferences>)->Api {
-    let _guard=app.gate.lock().await;
-    let user=identity["_user_id"].as_str().unwrap_or("");
-    let current=app.store.account_model_preferences(user).await?;
-    if input.revision!=current.revision {return Err(crate::conflict("Account catalog changed; reload before saving"));}
-    app.store.save_account_model_preferences(user,&input).await
-        .map_err(|_|crate::bad("Model preferences invalid or no longer entitled"))?;
-    Ok(Json(app.store.account_model_choices(user).await?))
-}
+pub async fn read(State(app):State<App>,Extension(identity):Extension<Value>)->Api { webagent_models::api::account_catalog::read(&app.models_runtime(),identity).await.map_err(Into::into) }
+pub async fn save(State(app):State<App>,Extension(identity):Extension<Value>,Json(input):Json<Preferences>)->Api { webagent_models::api::account_catalog::save(&app.models_runtime(),identity,input).await.map_err(Into::into) }
 
 /// A narrow write avoids replaying aliases or selections from an unrelated editor.
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DefaultUpdate {
-    expected_revision: u64,
-    default_entry_id: Option<String>,
-}
+
 pub async fn set_default(State(app):State<App>, Extension(identity):Extension<Value>,
-    Json(input):Json<DefaultUpdate>)->Api {
-    let _guard=app.gate.lock().await;
-    let user=identity["_user_id"].as_str().unwrap_or("");
-    let mut preferences=app.store.account_model_preferences(user).await?;
-    if input.expected_revision!=preferences.revision {
-        return Err(crate::conflict("Account catalog changed; reload before saving"));
-    }
-    preferences.default_entry_id=input.default_entry_id;
-    app.store.save_account_model_preferences(user,&preferences).await
-        .map_err(|_|crate::bad("Default model is no longer available"))?;
-    Ok(Json(app.store.account_model_choices(user).await?))
-}
+    Json(input):Json<DefaultUpdate>)->Api { webagent_models::api::account_catalog::set_default(&app.models_runtime(),identity,input).await.map_err(Into::into) }
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,9 +33,4 @@ mod tests {
 
 /// Source rehydration and persistence own the security boundary, not a client catalog replay.
 pub async fn adopt(State(app):State<App>,Extension(identity):Extension<Value>,
-    axum::extract::Path(agent):axum::extract::Path<String>,Json(input):Json<crate::account_catalog::Adoption>)->Api {
-    let _guard=app.gate.lock().await;
-    let user=identity["_user_id"].as_str().unwrap_or("");
-    Ok(Json(app.store.adopt_byo_source(user,&agent,&input).await
-        .map_err(|_|crate::bad("Adoption rejected; verify source, authority and roster revision"))?))
-}
+    axum::extract::Path(agent):axum::extract::Path<String>,Json(input):Json<crate::account_catalog::Adoption>)->Api { webagent_models::api::account_catalog::adopt(&app.models_runtime(),identity,agent,input).await.map_err(Into::into) }

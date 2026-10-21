@@ -7,3 +7,26 @@ edition = "2021"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tracing = "0.1"
+
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+futures-util = "0.3"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+uuid = { version = "1", features = ["v4"] }
+base64 = "=0.22.1"
+webagent-access = { path = "../access" }
+webagent-configuration = { path = "../configuration" }
+webagent-provider-contracts = { path = "../../provider-contracts" }
+webagent-context-contracts = { path = "../../context-contracts" }
+
+[features]
+test-support = []
+
+[dev-dependencies]
+tempfile = "3"
+webagent-provider-projection = { path = "../../provider-projection" }
+
+aes-gcm = "0.10"
