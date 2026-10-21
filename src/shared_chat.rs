@@ -1,5 +1,7 @@
 //! Shared conversation access keeps actor and storage-owner identities separate.
-use crate::{store::Store, App};
+use crate::{store::Store, App, key};
+use tokio_util::sync::CancellationToken;
+use std::time::Duration;
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -82,72 +84,7 @@ async fn resolve_internal(
     user: &str,
     lifecycle: bool,
     deleted_receipt: bool,
-) -> Result<SessionAccess> {
-    let account = app
-        .store
-        .account_by_id(user)
-        .await?
-        .ok_or_else(|| anyhow!("Account not found"))?;
-    if !crate::access::Principal::from_account(&account)?.active() || account["is_approved"] != true
-    {
-        bail!("Account unavailable");
-    }
-    let mut directory = app.store.shared_directory(sid).await?;
-    if directory.is_none() {
-        let owner = app.store.for_user(user).await?;
-        if let Some(session) = owner.get(&format!("session:{sid}")).await? {
-            app.store
-                .register_shared_session(
-                    user,
-                    sid,
-                    session["agent_id"].as_str().unwrap_or("shared_default"),
-                )
-                .await?;
-            directory = app.store.shared_directory(sid).await?;
-        }
-    }
-    let directory = directory.ok_or_else(|| anyhow!("Session not found"))?;
-    let owner = directory["owner_id"]
-        .as_str()
-        .ok_or_else(|| anyhow!("Invalid directory"))?;
-    let agent = directory["agent_id"]
-        .as_str()
-        .ok_or_else(|| anyhow!("Invalid directory"))?;
-    let kind = if owner == user {
-        AccessKind::Owner
-    } else if app.store.shared_is_participant(sid, user).await? {
-        AccessKind::Participant
-    } else if policy(&app.store, agent).await?.admin_view && staff(&app.store, user, agent).await? {
-        AccessKind::Observer
-    } else {
-        bail!("Session not found");
-    };
-    let live = live_access(&app.store, user, sid, agent).await?;
-    if !live.principal.active()
-        || !live.agent_enabled
-        || (kind != AccessKind::Observer && !live.admitted())
-    {
-        return Err(SessionAuthorityDenied.into());
-    }
-    let storage = app.store.for_user(owner).await?;
-    let session = storage
-        .get(&format!("session:{sid}"))
-        .await?
-        .ok_or_else(|| anyhow!("Session not found"))?;
-    if (session["status"] == "deleted" && !deleted_receipt) || (!lifecycle && session["status"] != "active") {
-        bail!("Session unavailable");
-    }
-    if lifecycle && kind != AccessKind::Owner {
-        bail!("Owner access required");
-    }
-    Ok(SessionAccess {
-        actor_id: user.into(),
-        owner_id: owner.into(),
-        session_id: sid.into(),
-        agent_id: agent.into(),
-        kind,
-    })
-}
+) -> Result<SessionAccess> {resolve_store_internal(&app.store,sid,user,lifecycle,deleted_receipt).await}
 pub async fn scope(app: App, sid: &str) -> Result<App> {
     let actor = actor(&app).to_owned();
     let access = resolve(&app, sid, &actor).await?;
@@ -234,4 +171,130 @@ pub(crate) async fn uses_shared_queue(app:&App,sid:&str)->Result<bool>{
     let session=app.store.get(&format!("session:{sid}")).await?.ok_or_else(||anyhow::anyhow!("Session not found"))?;
     let agent=session["agent_id"].as_str().unwrap_or("shared_default");
     Ok(policy(&app.store,agent).await?.shareable || app.store.shared_participants(sid).await?.iter().any(|member|member["user_id"]!=app.store.current_user_id()))
+}
+
+async fn resolve_store_internal(
+    store: &Store,
+    sid: &str,
+    user: &str,
+    lifecycle: bool,
+    deleted_receipt: bool,
+) -> Result<SessionAccess> {
+    let account = store
+        .account_by_id(user)
+        .await?
+        .ok_or_else(|| anyhow!("Account not found"))?;
+    if !crate::access::Principal::from_account(&account)?.active() || account["is_approved"] != true
+    {
+        bail!("Account unavailable");
+    }
+    let mut directory = store.shared_directory(sid).await?;
+    if directory.is_none() {
+        let owner = store.for_user(user).await?;
+        if let Some(session) = owner.get(&format!("session:{sid}")).await? {
+            store
+                .register_shared_session(
+                    user,
+                    sid,
+                    session["agent_id"].as_str().unwrap_or("shared_default"),
+                )
+                .await?;
+            directory = store.shared_directory(sid).await?;
+        }
+    }
+    let directory = directory.ok_or_else(|| anyhow!("Session not found"))?;
+    let owner = directory["owner_id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Invalid directory"))?;
+    let agent = directory["agent_id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Invalid directory"))?;
+    let kind = if owner == user {
+        AccessKind::Owner
+    } else if store.shared_is_participant(sid, user).await? {
+        AccessKind::Participant
+    } else if policy(&store, agent).await?.admin_view && staff(&store, user, agent).await? {
+        AccessKind::Observer
+    } else {
+        bail!("Session not found");
+    };
+    let live = live_access(&store, user, sid, agent).await?;
+    if !live.principal.active()
+        || !live.agent_enabled
+        || (kind != AccessKind::Observer && !live.admitted())
+    {
+        return Err(SessionAuthorityDenied.into());
+    }
+    let storage = store.for_user(owner).await?;
+    let session = storage
+        .get(&format!("session:{sid}"))
+        .await?
+        .ok_or_else(|| anyhow!("Session not found"))?;
+    if (session["status"] == "deleted" && !deleted_receipt) || (!lifecycle && session["status"] != "active") {
+        bail!("Session unavailable");
+    }
+    if lifecycle && kind != AccessKind::Owner {
+        bail!("Owner access required");
+    }
+    Ok(SessionAccess {
+        actor_id: user.into(),
+        owner_id: owner.into(),
+        session_id: sid.into(),
+        agent_id: agent.into(),
+        kind,
+    })
+}
+pub(crate) async fn resolve_store(store:&Store,sid:&str,user:&str)->Result<SessionAccess>{resolve_store_internal(store,sid,user,false,false).await}
+
+pub(crate) async fn guard_operation<T>(store:&Store,sid:&str,cancel:CancellationToken,operation:impl std::future::Future<Output=Result<T>>)->Result<T> {
+        let initial=store.get(&key("session",sid)).await?
+            .filter(|session|session["status"]=="active")
+            .ok_or_else(||anyhow::Error::from(crate::store::session::RecycledSession))?;
+        let epoch=initial["execution_epoch"].as_u64().unwrap_or(0);
+        tokio::pin!(operation);
+        let mut poll=tokio::time::interval(Duration::from_millis(100));
+        loop {
+            tokio::select! {
+                result=&mut operation=>{
+                    let available=store.get(&key("session",sid)).await
+                        .is_ok_and(|session|session.is_some_and(|s|s["status"]=="active"
+                            && s["execution_epoch"].as_u64().unwrap_or(0)==epoch));
+                    if !available {cancel.cancel();return Err(crate::store::session::RecycledSession.into());}
+                    return result;
+                },
+                _=poll.tick()=>{
+                    let available=store.get(&key("session",sid)).await
+                        .is_ok_and(|session|session.is_some_and(|s|s["status"]=="active"
+                            && s["execution_epoch"].as_u64().unwrap_or(0)==epoch));
+                    if !available {
+                        cancel.cancel();
+                        // Poll cancellation cleanup before dropping a worker socket.
+                        let _=tokio::time::timeout(Duration::from_secs(5),&mut operation).await;
+                        return Err(crate::store::session::RecycledSession.into());
+                    }
+                }
+            }
+        }
+    }
+
+impl webagent_engine::runtime::ports::SessionBinding for SessionAccess {
+ fn can_write(&self)->bool{SessionAccess::can_write(self)}
+ fn session_id(&self)->&str{&self.session_id}
+}
+#[derive(Clone)]
+pub(crate) struct EngineChat;
+impl webagent_engine::runtime::ports::ChatAuthority<Store> for EngineChat {
+ type Binding=SessionAccess;
+ fn resolve<'a>(&'a self,store:&'a Store,sid:&'a str,user:&'a str)->impl std::future::Future<Output=Result<Self::Binding>>+Send+'a{resolve_store(store,sid,user)}
+ fn live_access<'a>(&'a self,store:&'a Store,user:&'a str,sid:&'a str,agent:&'a str)->impl std::future::Future<Output=Result<webagent_access::authority::LiveAccess>>+Send+'a{live_access(store,user,sid,agent)}
+ fn operation<'a,T:Send+'a,F:std::future::Future<Output=Result<T>>+Send+'a>(&'a self,store:&'a Store,sid:&'a str,cancel:CancellationToken,operation:F)->impl std::future::Future<Output=Result<T>>+Send+'a{guard_operation(store,sid,cancel,operation)}
+ fn agent_id<'a>(&'a self,store:&'a Store,sid:&'a str)->impl std::future::Future<Output=Result<String>>+Send+'a {async move {
+  let session=store.get(&format!("session:{sid}")).await?.ok_or_else(||anyhow!("Session not found"))?;
+  if session["status"]!="active" {return Err(crate::store::session::RecycledSession.into());}
+  Ok(session["agent_id"].as_str().unwrap_or("shared_default").to_owned())
+ }}
+ fn messaging_owns(name:&str)->bool {crate::session_messaging::owns(name)}
+ fn messaging_policy_defaults(policy:Value)->Value {crate::session_messaging::policy_defaults(policy)}
+
+ fn participation_allows_run<'a>(&'a self,store:&'a Store,run:&'a Value)->impl std::future::Future<Output=Result<bool>>+Send+'a {store.participation_allows_run(run)}
 }

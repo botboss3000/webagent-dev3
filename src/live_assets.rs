@@ -2,62 +2,57 @@
 use crate::*;
 use std::sync::{Mutex as SyncMutex, OnceLock};
 /// Permit published native descriptions while rejecting changes to compiled tool contracts.
-pub(crate) fn native_schema_overrides(root:&std::path::Path)->Result<std::collections::BTreeMap<String,(String,String)>>{
-    let mut overrides=std::collections::BTreeMap::new();
-    if !root.ends_with("plugins/abilities"){return Ok(overrides);}
-    let Some(source)=root.parent().and_then(std::path::Path::parent)else{return Ok(overrides);};
-    let path=source.join("src/engine/tools/administrator-schemas.json");
-    if !path.exists(){return Ok(overrides);}
-    let bytes=std::fs::read(path)?;
-    if bytes.len()>512*1024{anyhow::bail!("Native schema asset exceeds limit");}
-    let live:Vec<Value>=serde_json::from_slice(&bytes)?;
-    let baseline:Vec<Value>=serde_json::from_str(include_str!("engine/tools/administrator-schemas.json"))?;
-    if live.len()!=baseline.len(){anyhow::bail!("Native schema interface change requires engine release");}
-    for (current,compiled)in live.iter().zip(baseline.iter()){
-        let mut a=current.clone();let mut b=compiled.clone();
-        let description=a.as_object_mut().ok_or_else(||anyhow!("Invalid native schema"))?.remove("description").ok_or_else(||anyhow!("Missing native description"))?;
-        let original=b.as_object_mut().ok_or_else(||anyhow!("Invalid native schema"))?.remove("description").ok_or_else(||anyhow!("Missing native description"))?;
-        if a!=b{anyhow::bail!("Native schema interface change requires engine release");}
-        let description=description.as_str().filter(|s|!s.is_empty()&&s.len()<=8192).ok_or_else(||anyhow!("Invalid native description"))?;
-        let original=original.as_str().ok_or_else(||anyhow!("Invalid compiled description"))?;
-        if description!=original{overrides.insert(current["name"].as_str().ok_or_else(||anyhow!("Missing native name"))?.to_owned(),(original.to_owned(),description.to_owned()));}
-    }Ok(overrides)
+/// Load all native Administrator schema metadata from an authoritative external file.
+/// Supported execution identities and runtime argument/authority checks remain fixed Rust code.
+pub(crate) fn native_schema_snapshot_at(source:Option<&std::path::Path>)->Result<Vec<Value>> {
+ use std::io::Read;
+ let selected=default_source(source)?;
+ let path=match selected {
+  Some(root)=>root.join("config/administration/native-tools.json"),
+  None=>if cfg!(test) {PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/administration/native-tools.json")}
+   else {PathBuf::from("/usr/local/share/webagent/defaults/native-tools.json")},
+ };
+ let meta=std::fs::symlink_metadata(&path)?;
+ if !meta.is_file()||meta.file_type().is_symlink()||meta.len()>512*1024 {anyhow::bail!("Invalid native schema file");}
+ let mut bytes=Vec::new();std::fs::File::open(path)?.take(512*1024+1).read_to_end(&mut bytes)?;
+ if bytes.len()>512*1024 {anyhow::bail!("Native schemas exceed limit");}
+ let schemas:Vec<Value>=serde_json::from_slice(&bytes).map_err(|_|anyhow!("Invalid native schemas"))?;
+ let mut ids=std::collections::BTreeSet::new();
+ if schemas.len()!=42 {anyhow::bail!("Invalid native schema set");}
+ for schema in &schemas {
+  let name=schema["name"].as_str().ok_or_else(||anyhow!("Invalid native schema identity"))?;
+  let Some(object)=schema.as_object() else {anyhow::bail!("Invalid native schema");};
+  if !crate::tools::administrator::supported_schema_name(name)||!ids.insert(name)
+   ||schema["type"]!="function"||object.get("strict").is_some_and(|value|!value.is_boolean())
+   ||schema["description"].as_str().is_none_or(|text|text.trim().is_empty()||text.len()>8192)
+   ||object.keys().any(|key|!matches!(key.as_str(),"type"|"name"|"description"|"strict"|"parameters"))
+   ||schema["parameters"]["type"]!="object"||!schema["parameters"]["properties"].is_object()
+   ||!schema["parameters"]["required"].is_array()||!schema["parameters"]["additionalProperties"].is_boolean() {
+   anyhow::bail!("Invalid native schema interface");
+  }
+  let properties=schema["parameters"]["properties"].as_object().unwrap();
+  let required=schema["parameters"]["required"].as_array().unwrap();
+  let mut required_names=std::collections::BTreeSet::new();
+  if required.len()>256||properties.len()>256||required.iter().any(|key|key.as_str().is_none_or(|key|!properties.contains_key(key)||!required_names.insert(key))) {
+   anyhow::bail!("Invalid native schema parameters");
+  }
+ }
+ Ok(crate::tools::normalize_native_schemas(schemas))
 }
-/// Resolve only a broker-owned UUID release beneath the configured current asset pointer.
+/// Preserve unconfigured local fixture/install fallback; immutable publication snapshots require their own complete file.
+pub(crate) fn native_schemas_for_catalog(root:&std::path::Path,publication:bool)->Result<Vec<Value>> {
+ let selected=root.ends_with("plugins/abilities").then(||root.parent().and_then(std::path::Path::parent)).flatten();
+ let selected=selected.filter(|source|publication||std::env::var_os("V3_UI_ROOT").is_some()||source.join("config/administration/native-tools.json").exists());
+ native_schema_snapshot_at(selected)
+}
+
 pub(crate) fn published_root() -> Option<PathBuf> {
     published_root_at(&PathBuf::from(std::env::var_os("V3_UI_ROOT")?)).ok()
 }
-fn published_root_at(ui:&std::path::Path)->Result<PathBuf> {
-    if !ui.ends_with("current/v3/ui") { anyhow::bail!("Invalid published configuration root"); }
-    let assets=ui.parent().and_then(std::path::Path::parent).and_then(std::path::Path::parent)
-        .ok_or_else(||anyhow!("Invalid published configuration root"))?;
-    let selected=assets.join("current").canonicalize()?;
-    if selected.parent()!=Some(assets.join("releases").as_path())
-        || selected.file_name().and_then(|s|s.to_str()).is_none_or(|s|uuid::Uuid::parse_str(s).is_err()) {
-        anyhow::bail!("Invalid published configuration revision");
-    }
-    Ok(selected.join("v3"))
-}
+fn published_root_at(ui:&std::path::Path)->Result<PathBuf> {webagent_configuration::prompts::published_root_at(ui)}
 /// Explicit call snapshots and configured publication are authoritative; only an unconfigured installation uses packaged defaults.
-fn default_source(source:Option<&std::path::Path>)->Result<Option<PathBuf>> {
-    if let Some(source)=source {return Ok(Some(source.to_owned()));}
-    std::env::var_os("V3_UI_ROOT").map(|ui|published_root_at(&PathBuf::from(ui))).transpose()
-}
-fn read_default_template(source:Option<&std::path::Path>,name:&str,limit:u64)->Result<Vec<u8>> {
-    use std::io::Read;
-    let path=match default_source(source)? {
-        Some(root)=>root.join("config").join(name),
-        None=>if cfg!(test) {PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config").join(name)}
-            else {PathBuf::from("/usr/local/share/webagent/defaults").join(name)},
-    };
-    let info=std::fs::symlink_metadata(&path)?;
-    if !info.is_file()||info.file_type().is_symlink()||info.len()>limit {anyhow::bail!("Invalid default configuration file");}
-    let mut bytes=Vec::new();std::fs::File::open(path)?.take(limit+1).read_to_end(&mut bytes)?;
-    if bytes.len()as u64>limit {anyhow::bail!("Default configuration exceeds limit");}
-    let value:Value=serde_json::from_slice(&bytes).map_err(|_|anyhow!("Invalid default configuration JSON"))?;
-    if !value.is_object(){anyhow::bail!("Default configuration must be an object");}
-    Ok(bytes)
-}
+fn default_source(source:Option<&std::path::Path>)->Result<Option<PathBuf>> {webagent_configuration::prompts::default_source(source)}
+
 /// Main Chat guidance has no compiled or last-good fallback. An installation
 /// JSON file, when present, is authoritative even when it omits these skills.
 pub(crate) fn main_chat_prompts(root:&std::path::Path)->Result<Value> {
@@ -88,47 +83,17 @@ pub(crate) fn record_adoption(root:&std::path::Path,role:&str,catalog:&abilities
 }
 /// Read authoritative published defaults, or immutable packaged defaults when publication is not configured.
 pub(crate) fn prompt_defaults() -> Result<Vec<u8>> {prompt_defaults_at(None)}
-pub(crate) fn prompt_defaults_at(source:Option<&std::path::Path>)->Result<Vec<u8>> {
-    read_default_template(source,"prompts.json",4*1024*1024)
-}
-pub(crate) fn retention_defaults()->Result<Vec<u8>> {
-    read_default_template(None,"tool-output-retention.json",64*1024)
-}
-fn seed_file(path:&std::path::Path,bytes:&[u8])->Result<bool> {
-    let directory=path.parent().ok_or_else(||anyhow!("Missing configuration directory"))?;
-    let mut file=tempfile::NamedTempFile::new_in(directory)?;
-    file.write_all(bytes)?;file.as_file().sync_all()?;
-    match file.persist_noclobber(path) {
-        Ok(_)=>{std::fs::File::open(directory)?.sync_all()?;Ok(true)},
-        Err(error)if error.error.kind()==std::io::ErrorKind::AlreadyExists=>Ok(false),
-        Err(error)=>Err(error.error.into()),
-    }
-}
+pub(crate) fn prompt_defaults_at(source:Option<&std::path::Path>)->Result<Vec<u8>> {webagent_configuration::prompts::prompt_defaults_at(source,&fallback_directory())}
+pub(crate) fn retention_defaults()->Result<Vec<u8>> {webagent_configuration::prompts::retention_defaults_at(None,&fallback_directory())}
+
 /// Publish first-start files and provenance from one pinned snapshot, without replacing saved configuration.
 pub(crate) fn initialize_defaults(root:&std::path::Path)->Result<()> {initialize_defaults_at(root,None)}
 fn initialize_defaults_at(root:&std::path::Path,source:Option<&std::path::Path>)->Result<()> {
-    let source=default_source(source)?;
-    let prompts=prompt_defaults_at(source.as_deref())?;
-    let retention=read_default_template(source.as_deref(),"tool-output-retention.json",64*1024)?;
-    let defaults:Value=serde_json::from_slice(&prompts)?;
-    crate::api::live_configuration::validate_source_prompts(&defaults)?;
-    crate::tool_output::Policy::parse(&retention)?;
-    let directory=root.join("config");std::fs::create_dir_all(&directory)?;
-    let lock=std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true)
-        .open(directory.join(".prompts.lock"))?;
-    fs2::FileExt::lock_exclusive(&lock)?;
-    let seeded=seed_file(&directory.join("prompts.json"),&prompts)?;
-    fn hashes(value:&Value)->Value {
-        match value.as_object() {
-            Some(object)=>json!(object.iter().map(|(k,v)|(k.clone(),hashes(v))).collect::<std::collections::BTreeMap<_,_>>()),
-            None=>json!(digest(value)),
-        }
-    }
-    // Unknown provenance on an existing installation must preserve every saved leaf as an override.
-    let baseline=json!({"schema_version":1,"defaults":if seeded {hashes(&defaults)}else{json!({})}});
-    seed_file(&directory.join(".prompt-defaults-baseline.json"),&serde_json::to_vec(&baseline)?)?;
-    seed_file(&directory.join("tool-output-retention.json"),&retention)?;
-    Ok(())
+ webagent_configuration::prompts::initialize_defaults_at(root,source,&fallback_directory(),|prompts,retention| {
+  crate::api::live_configuration::validate_source_prompts(prompts)?;
+  crate::tool_output::Policy::parse(retention)?;
+  Ok(())
+ })
 }
 /// Resolve the current installation defaults and saved prompt overrides.
 pub(crate) fn resolved_prompts(root:&std::path::Path)->Result<Value> {
@@ -136,19 +101,7 @@ pub(crate) fn resolved_prompts(root:&std::path::Path)->Result<Value> {
 }
 /// Resolve prompts for a pinned model-call source revision. Reads config/prompts.json and saved leaf provenance.
 pub(crate) fn resolved_prompts_at(root:&std::path::Path,source:Option<&std::path::Path>)->Result<Value> {
-    let mut defaults:Value=serde_json::from_slice(&prompt_defaults_at(source)?)?;
-    let live_path=root.join("config/prompts.json");
-    let live:Value=match std::fs::read(live_path) {
-        Ok(bytes)=>serde_json::from_slice(&bytes)?,
-        Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(defaults),
-        Err(e)=>return Err(e.into()),
-    };
-    let baseline:Value=std::fs::read(root.join("config/.prompt-defaults-baseline.json")).ok()
-        .and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
-    if !live.is_object(){anyhow::bail!("Invalid live prompts");}
-    let baseline=baseline.get("defaults").unwrap_or(&baseline);
-    merge_prompt_overrides(&mut defaults,&live,baseline);
-    Ok(defaults)
+ webagent_configuration::prompts::resolved_prompts_at(root,source,&fallback_directory())
 }
 /// Keep saved values that differ from migration defaults; let unchanged leaves inherit published updates.
 fn merge_prompt_overrides(defaults:&mut Value,live:&Value,baseline:&Value) {
@@ -290,4 +243,78 @@ pub(crate) fn catalog(fallback:&Arc<abilities::Catalog>) -> Arc<abilities::Catal
   assert_eq!(std::fs::read(dir.join("prompts.json")).unwrap(),saved);assert_eq!(std::fs::read(baseline).unwrap(),bytes);
  }
 
+}
+
+/// The root test crate supplies its own source fixture directory explicitly.
+fn fallback_directory()->PathBuf {
+ if cfg!(test) {PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config")}
+ else {PathBuf::from("/usr/local/share/webagent/defaults")}
+}
+
+#[cfg(test)]
+pub(crate) mod native_schema_file_tests {
+ use super::*;
+ pub(crate) fn source_fixture(with_abilities_directory:bool)->tempfile::TempDir {
+  let root=tempfile::tempdir().unwrap();
+  std::fs::create_dir_all(root.path().join("config/administration")).unwrap();
+  if with_abilities_directory {std::fs::create_dir_all(root.path().join("plugins/abilities")).unwrap();}
+  // Checked-in public source bytes only; no copied resolver, catalog or handler authority.
+  std::fs::copy(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/administration/native-tools.json"),root.path().join("config/administration/native-tools.json")).unwrap();
+  root
+ }
+ pub(crate) fn change_parameter(root:&std::path::Path) {
+  let path=root.join("config/administration/native-tools.json");
+  let mut schemas:Vec<Value>=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+  let schema=schemas.iter_mut().find(|s|s["name"]=="code_index_scan").unwrap();
+  assert_ne!(schema["parameters"]["properties"]["limit"]["maximum"],123);
+  schema["parameters"]["properties"]["limit"]["maximum"]=json!(123);
+  std::fs::write(&path,serde_json::to_vec(&schemas).unwrap()).unwrap();
+ }
+ #[test]
+ fn parameter_only_change_versions_existing_and_missing_ability_roots_and_rejects_stale_snapshot() {
+  for with_directory in [true,false] {
+   let root=source_fixture(with_directory);let plugins=root.path().join("plugins/abilities");
+   let catalog=crate::abilities::Catalog::load_current(&plugins).unwrap();
+   assert!(catalog.native_snapshot_current().unwrap());
+   change_parameter(root.path());
+   let fresh=crate::abilities::Catalog::load_current(&plugins).unwrap();
+   assert_ne!(catalog.version(),fresh.version(),"native parameters must identify the catalog even with a missing abilities directory");
+   assert!(!catalog.native_snapshot_current().unwrap());assert!(fresh.native_snapshot_current().unwrap());
+   let schema=fresh.all_schemas().into_iter().find(|s|s["name"]=="code_index_scan").unwrap();
+   assert_eq!(schema["parameters"]["properties"]["limit"]["maximum"],123);
+  }
+ }
+ #[test]
+ fn unsupported_handler_and_invalid_authoritative_files_fail_closed() {
+  let root=source_fixture(true);let path=root.path().join("config/administration/native-tools.json");
+  let original=std::fs::read(&path).unwrap();let schemas:Vec<Value>=serde_json::from_slice(&original).unwrap();
+  let mut unknown=schemas.clone();unknown[0]["name"]=json!("unsupported_native_handler");
+  let mut duplicate=schemas.clone();duplicate[1]["name"]=duplicate[0]["name"].clone();
+  let mut wrong_type=schemas.clone();wrong_type[0]["strict"]=json!(1);
+  let mut invalid_required=schemas.clone();invalid_required[0]["parameters"]["required"]=json!(["not_declared"]);
+  for bytes in [serde_json::to_vec(&unknown).unwrap(),serde_json::to_vec(&duplicate).unwrap(),serde_json::to_vec(&wrong_type).unwrap(),serde_json::to_vec(&invalid_required).unwrap(),b"not-json".to_vec(),b"{}".to_vec(),vec![b' ';512*1024+1]] {
+   std::fs::write(&path,&bytes).unwrap();
+   assert!(native_schema_snapshot_at(Some(root.path())).is_err());
+   assert!(crate::abilities::Catalog::load_snapshot(&root.path().join("plugins/abilities")).is_err());
+   assert_eq!(std::fs::read(&path).unwrap(),bytes);
+  }
+  std::fs::remove_file(&path).unwrap();assert!(native_schema_snapshot_at(Some(root.path())).is_err());
+  std::os::unix::fs::symlink("missing-target",&path).unwrap();assert!(native_schema_snapshot_at(Some(root.path())).is_err());
+  std::fs::remove_file(&path).unwrap();std::fs::create_dir(&path).unwrap();assert!(native_schema_snapshot_at(Some(root.path())).is_err());
+ }
+ #[test]
+ fn actual_native_catalog_retains_owner_action_and_nullable_normalization() {
+  let root=source_fixture(true);let raw:Vec<Value>=serde_json::from_slice(&std::fs::read(root.path().join("config/administration/native-tools.json")).unwrap()).unwrap();
+  let raw_build=raw.iter().find(|s|s["name"]=="build_work").unwrap();
+  assert_eq!(raw_build["parameters"]["properties"]["sync_decision"]["type"],"string");
+  let catalog=crate::abilities::Catalog::load_current(&root.path().join("plugins/abilities")).unwrap();let schemas=catalog.all_schemas();
+  let build=schemas.iter().find(|s|s["name"]=="build_work").unwrap();
+  assert_eq!(build["parameters"]["properties"]["sync_decision"]["type"],json!(["string","null"]));
+  assert!(build["parameters"]["properties"]["sync_decision"]["enum"].as_array().unwrap().contains(&Value::Null));
+  assert_eq!(build["parameters"]["properties"]["action"]["type"],"string");
+  let protected=schemas.iter().find(|s|s["name"]=="prompt_slot_write").unwrap();
+  let action=&protected["parameters"]["properties"]["_action"];
+  assert_eq!(action["type"],json!(["object","null"]));assert_eq!(action["required"],json!(["id"]));assert_eq!(action["additionalProperties"],false);
+  assert_eq!(action["properties"]["id"]["maxLength"],128);assert_eq!(action["properties"]["separate_from"]["type"],json!(["string","null"]));
+ }
 }

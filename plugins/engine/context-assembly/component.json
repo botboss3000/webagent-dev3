@@ -8,8 +8,7 @@
       "crates/context-assembly",
       "crates/context-contracts",
       "Cargo.toml",
-      "Cargo.lock",
-      "config/context-compaction.json"
+      "Cargo.lock"
     ],
     "toolchain": "1.90.0"
   },

@@ -1,5 +1,5 @@
 //! Interpret normalized provider output without authorizing or publishing it.
-use serde_json::Value;
+use serde_json::{json,Value};
 
 pub fn tool_calls(output: &[Value], control_name: &str) -> Vec<Value> {
     output.iter().filter(|item| item["type"] == "function_call" && item["name"] != control_name)
@@ -77,5 +77,16 @@ mod tests {
             json!({"type":"message","content":false})];
         assert!(!message_exceeds(&output,4));
         assert!(!message_exceeds(&[],0));
+    }
+}
+
+/// Project only safe model identity fields for public run views.
+pub fn public_run_model(run: &Value) -> Value {
+    if run["model"].is_object(){return json!({"entry_id":run["model"]["entry_id"],"model":run["model"]["model"]});}
+    let index=run["failover_state"]["candidate_index"].as_u64().unwrap_or(0) as usize;
+    let candidate=run["selection_plan"]["candidates"].as_array().and_then(|items|items.get(index));
+    match candidate {
+        Some(value)=>json!({"entry_id":value["entry_id"],"model":value["upstream_model"]}),
+        None=>json!({"entry_id":null,"model":run["provider_selection"]["model"]}),
     }
 }

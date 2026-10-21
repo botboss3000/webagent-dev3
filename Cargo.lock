@@ -2345,7 +2345,35 @@ dependencies = [
 name = "webagent-engine"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "fs2",
+ "futures-util",
+ "hex",
+ "serde",
  "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "webagent-access",
+ "webagent-assets-contracts",
+ "webagent-background-contracts",
+ "webagent-background-dispatch",
+ "webagent-boot-contracts",
+ "webagent-boot-supervisor",
+ "webagent-capability-context",
+ "webagent-capability-contracts",
+ "webagent-configuration",
+ "webagent-context-assembly",
+ "webagent-context-assets",
+ "webagent-context-contracts",
+ "webagent-models",
+ "webagent-provider-contracts",
+ "webagent-provider-projection",
 ]
 
 [[package]]
@@ -2379,6 +2407,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "uuid",
 ]
 
 [[package]]

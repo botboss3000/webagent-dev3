@@ -156,9 +156,10 @@ fn error(error:anyhow::Error)->ApiError {ApiError(StatusCode::CONFLICT,error.to_
 
 /// Stable agent qualification keeps subscriptions/actions distinct across agents.
 pub(crate) fn review_id(agent:&str)->String {format!("main-notes-review-{}",&digest(&json!(agent))[..40])}
-fn fallback(app:&App,name:&str)->Option<String> {
+fn fallback(app:&App,name:&str)->Option<String> {fallback_store(&app.store,name)}
+fn fallback_store(store:&Store,name:&str)->Option<String> {
     // Only JSON is authoritative. Missing/malformed guidance never gates runtime tools.
-    crate::live_assets::main_chat_prompts(&app.store.root).ok()
+    crate::live_assets::main_chat_prompts(&store.root).ok()
         .and_then(|v|v[name].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned))
 }
 fn skill_view(app:&App,state:&Value)->Value {
@@ -166,12 +167,13 @@ fn skill_view(app:&App,state:&Value)->Value {
     for name in ["contribute","review"]{skills[name]=json!({"override":state["skill_overrides"][name],"fallback":fallback(app,name)});}
     skills
 }
-pub(crate) async fn guidance(app:&App,agent:&str,sid:&str)->Result<Option<String>> {
-    let store=app.store.for_agent(agent).await?;
+pub(crate) async fn guidance(app:&App,agent:&str,sid:&str)->Result<Option<String>> {guidance_store(&app.store,agent,sid).await}
+pub(crate) async fn guidance_store(store:&Store,agent:&str,sid:&str)->Result<Option<String>> {
+    let store=store.for_agent(agent).await?;
     let state=Box::pin(store.main_chat_state()).await?;
     if state["settings"]["enabled"]!=true{return Ok(None);}
     let name=if state["session_id"]==sid{"review"}else{"contribute"};
-    Ok(state["skill_overrides"][name].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned).or_else(||fallback(app,name)))
+    Ok(state["skill_overrides"][name].as_str().filter(|s|!s.trim().is_empty()).map(str::to_owned).or_else(||fallback_store(&store,name)))
 }
 async fn agent_scope(app:&App,identity:&Value,id:&str,manage:bool)->std::result::Result<(App,Value),ApiError> {
     let actor=identity["_user_id"].as_str().ok_or_else(||ApiError(StatusCode::FORBIDDEN,"Agent access unavailable".into()))?;

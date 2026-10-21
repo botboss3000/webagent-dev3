@@ -519,7 +519,7 @@ class HostFocusedVerificationTests(unittest.TestCase):
         self.assertEqual([p["test"]for p in plan if "test"in p],[r["test"]for r in module.HOST_FOCUSED_REGISTRY])
         self.assertEqual([p["package"]for p in plan if "test"not in p],["component0","component1","component2"])
     def test_moved_engine_sources_retain_host_regressions(self):
-        for path in ["v3/src/engine/loop/run.rs", "v3/src/engine/context/tool_output.rs", "v3/src/engine/components.rs"]:
+        for path in ["v3/src/engine/loop/run.rs", "v3/src/engine/context/tool_output.rs", "v3/src/engine/components.rs", "v3/crates/modules/engine/src/runtime/run.rs", "v3/crates/modules/engine/host/mod.rs"]:
             plan=self.worker.focused_test_plan([path],{})
             self.assertEqual([row["id"] for row in plan],[row["id"] for row in module.HOST_FOCUSED_REGISTRY])
     def test_each_registry_selects_only_relevant_host_checks(self):
@@ -538,7 +538,7 @@ class HostFocusedVerificationTests(unittest.TestCase):
         self.assertEqual(len(proof["runs"]),2)
         for run,call in zip(proof["runs"],self.calls):
             self.assertEqual(run["matched"],1);self.assertTrue(run["inputs_unchanged"]);self.assertEqual(run["feature_profile"],"default")
-            self.assertIn("--exact",call[5]);self.assertIn("--bin",call[5]);self.assertGreater(call[7],0);self.assertLessEqual(call[7],120)
+            self.assertIn("--exact",call[5]);self.assertIn("--lib"if run.get("target_kind")=="lib"else"--bin",call[5]);self.assertGreater(call[7],0);self.assertLessEqual(call[7],120)
             self.assertGreaterEqual(run["seconds"],0);self.assertEqual(run["status"],"passed")
         self.assertFalse((self.root/"state/verification-certificates").exists())
     def test_zero_and_ignored_only_results_fail_before_next_check(self):
@@ -591,11 +591,31 @@ class HostFocusedVerificationTests(unittest.TestCase):
 
     def test_retained_host_binary_uses_exact_test_with_no_compiler(self):
         from unittest.mock import patch
-        manifest={"tests":[{"file":"tests/webagent_v3-0123456789abcdef","target_name":"webagent-v3","source_path":"/build/src/main.rs"}]}
+        manifest={"tests":[{"file":"tests/webagent_v3-0123456789abcdef","target_name":"webagent-v3","source_path":"/build/src/main.rs"},{"file":"tests/webagent_engine-fedcba9876543210","target_name":"webagent_engine","source_path":"/build/crates/modules/engine/src/lib.rs","kind":["lib"],"package_id":"path+file:///build/crates/modules/engine#webagent-engine@0.1.0"}]}
         with patch.object(self.worker,"test_manifest",return_value=manifest):self.worker.focused_tests(self.job,self.source/"v3",self.output,retained=self.output/"artifacts")
         self.assertEqual(len(self.calls),2)
-        for call in self.calls:self.assertEqual(call[5][0],"/output/artifacts/tests/webagent_v3-0123456789abcdef");self.assertIn("--exact",call[5]);self.assertNotIn("cargo",call[5])
+        for call,expected in zip(self.calls,["webagent_v3-0123456789abcdef","webagent_engine-fedcba9876543210"]):self.assertEqual(call[5][0],"/output/artifacts/tests/"+expected);self.assertIn("--exact",call[5]);self.assertNotIn("cargo",call[5])
         self.assertEqual(self.job["focused_verification"]["reuse"],"verified_retained_test_binaries")
+
+    def test_registered_engine_library_rejects_missing_wrong_or_ambiguous_retained_target(self):
+        from unittest.mock import patch
+        root={"file":"tests/webagent_v3-0123456789abcdef","target_name":"webagent-v3","source_path":"/build/src/main.rs"}
+        library={"file":"tests/webagent_engine-fedcba9876543210","target_name":"webagent_engine","source_path":"/build/crates/modules/engine/src/lib.rs","kind":["lib"],"package_id":"path+file:///build/crates/modules/engine#webagent-engine@0.1.0"}
+        for rows in [[],[{**library,"kind":["bin"]}],[{**library,"package_id":"path+file:///build/crates/foreign#webagent-engine@0.1.0"}],[library,dict(library)]]:
+            self.calls=[]
+            with patch.object(self.worker,"test_manifest",return_value={"tests":[root,*rows]}):
+                with self.assertRaisesRegex(ValueError,"Registered retained host test binary unavailable"):self.worker.focused_tests(self.job,self.source/"v3",self.output,retained=self.output/"artifacts")
+            self.assertEqual(len(self.calls),1)
+            self.assertEqual(self.job["focused_verification"]["status"],"failed")
+
+    def test_registered_engine_library_rejects_zero_matches(self):
+        def phase(*args):
+            self.calls.append(args)
+            return "test result: ok. 0 passed; 0 failed" if "--lib" in args[5] else "test result: ok. 1 passed; 0 failed"
+        self.worker.phase=phase
+        with self.assertRaisesRegex(ValueError,"Zero matched assertions"):self.run_focus()
+        self.assertEqual(len(self.calls),2)
+        self.assertEqual(self.job["focused_verification"]["runs"][-1]["package"],"webagent-engine")
 
     def test_invalid_retained_manifest_is_not_left_running(self):
         from unittest.mock import patch

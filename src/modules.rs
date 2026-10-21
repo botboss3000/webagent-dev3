@@ -28,11 +28,12 @@ pub(crate) fn is_read(name: &str) -> bool {
             | "status"
     )
 }
-fn package_lock(app: &App, id: &str, exclusive: bool) -> Result<File> {
+fn package_lock(app: &App, id: &str, exclusive: bool) -> Result<File> {package_lock_store(&app.store,id,exclusive)}
+fn package_lock_store(store: &Store, id: &str, exclusive: bool) -> Result<File> {
     if !IDS.contains(&id) {
         return Err(anyhow!("Unknown module"));
     }
-    let dir = app.store.root.join("modules");
+    let dir = store.root.join("modules");
     std::fs::create_dir_all(&dir)?;
     use std::os::unix::fs::OpenOptionsExt;
     let file = OpenOptions::new()
@@ -407,15 +408,16 @@ fn write_health(
     std::fs::rename(temp, file)?;
     Ok(())
 }
-pub(crate) async fn binding_lease(app: &App, run: &Value) -> Result<Option<File>> {
+pub(crate) async fn binding_lease(app: &App, run: &Value) -> Result<Option<File>> {binding_lease_store(&app.store,run).await}
+pub(crate) async fn binding_lease_store(store: &Store, run: &Value) -> Result<Option<File>> {
     if run["module_binding"].is_null() {
         return Ok(None);
     }
     let id = run["module_binding"]["id"]
         .as_str()
         .ok_or_else(|| anyhow!("Invalid module binding"))?;
-    let lease = package_lock(app, id, false)?;
-    if !binding_valid(app, run).await {
+    let lease = package_lock_store(store, id, false)?;
+    if !binding_valid_store(store, run).await {
         return Err(anyhow!("Module admission revoked"));
     }
     Ok(Some(lease))
@@ -1047,7 +1049,8 @@ pub(crate) async fn call_api(
     })?;
     Ok(Json(result))
 }
-pub(crate) async fn binding_valid(app: &App, run: &Value) -> bool {
+pub(crate) async fn binding_valid(app: &App, run: &Value) -> bool {binding_valid_store(&app.store,run).await}
+pub(crate) async fn binding_valid_store(store: &Store, run: &Value) -> bool {
     let binding = &run["module_binding"];
     if binding.is_null() {
         return true;
@@ -1056,12 +1059,12 @@ pub(crate) async fn binding_valid(app: &App, run: &Value) -> bool {
         let aid=binding["automation_id"].as_str().unwrap_or("");
         if aid.starts_with("main-notes-review-")||aid.starts_with("main-notes-action-") {
             let Some(agent)=run["agent_id"].as_str() else{return false};
-            let Ok(store)=app.store.for_agent(agent).await else{return false};
+            let Ok(store)=store.for_agent(agent).await else{return false};
             let Ok(notes)=store.main_chat_state().await else{return false};
             if notes["session_id"]!=run["session_id"]{return false;}
             if notes["settings"]["enabled"]!=true {return false;}
             if aid.starts_with("main-notes-action-") {
-                let definition=app.store.module_state("automation").await.ok()
+                let definition=store.module_state("automation").await.ok()
                     .map(|s|s["state"]["definitions"][aid].clone()).unwrap_or(Value::Null);
                 let current=crate::main_chat::scheduled_entry_current(&notes,aid,&definition);
                 // A completed action may publish its final model reply. A further
@@ -1074,8 +1077,7 @@ pub(crate) async fn binding_valid(app: &App, run: &Value) -> bool {
         return false;
     };
     generation(id).is_ok_and(|g| binding["generation"] == g)
-        && app
-            .store
+        && store
             .get(&format!("module_install:{id}"))
             .await
             .ok()

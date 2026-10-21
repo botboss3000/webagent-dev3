@@ -1,20 +1,15 @@
-//! Core compatibility seam: resolve provider metadata, then borrow inputs into the library.
-#[cfg(any(feature="linked-context",test))] use anyhow::Result;
+//! Root compatibility names for the Engine context assembly adapter.
+pub use webagent_engine::context::assembly::{Failure,failure_code,compaction_error,Envelope,Prepared,pinned_instructions,model_metadata};
+#[cfg(all(feature="linked-context",not(test)))] pub use webagent_engine::context::assembly::prepare_incremental;
+#[cfg(test)] use anyhow::Result;
 #[cfg(test)] use serde_json::{json,Value};
 #[cfg(test)] use crate::{context_compaction,provider};
-#[cfg(any(feature="linked-context",test))] use crate::context_input::Request;
-#[cfg(test)] use crate::context_input::CallIdentity;
-pub use webagent_context_contracts::context_assembly::{Failure,failure_code,compaction_error,Envelope,Prepared,pinned_instructions};
-/// Resolve only reporting metadata; credentials and provider execution stay in the core.
-pub fn model_metadata(selection:&crate::provider::ProviderSelection)->webagent_context_contracts::context_input::ModelMetadata {
- let value=selection.value();
- webagent_context_contracts::context_input::ModelMetadata {provider:value["provider"].as_str().unwrap_or("").into(),model:selection.model.clone(),
- transport:match selection.provider {crate::provider::ProviderId::OpenaiSubscription=>"responses",_=>"chat_completions"}.into()}
-}
+#[cfg(test)] use crate::context_input::{Request,CallIdentity};
+
 #[cfg(test)]
 /// Preserve the existing test/diagnostics convenience path with fresh disposable accounting.
 pub fn prepare<'a>(request:Request<'a>)->Result<Prepared<'a>> {prepare_incremental(request,&mut crate::context_accounting::ContextAccounting::default())}
-#[cfg(any(feature="linked-context",test))]
+#[cfg(test)]
 /// Bridge the core provider selection to the linked algorithm without copying private history.
 pub fn prepare_incremental<'a>(request:Request<'a>,state:&mut crate::context_accounting::ContextAccounting)->Result<Prepared<'a>> {
  let model=model_metadata(request.selection);

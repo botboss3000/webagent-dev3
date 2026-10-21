@@ -1,11 +1,7 @@
 //! Durable followup admission and safe delivery at Rust execution boundaries.
 use crate::*;
 fn successor_id(app: &App, sid: &str, entry: &Value) -> Result<String> {
-    let id=entry["id"].as_str().ok_or_else(||anyhow!("Followup entry id missing"))?;
-    if let Ok(id)=::uuid::Uuid::parse_str(id) {return Ok(id.to_string());}
-    let hash=digest(&json!(["webagent-private-followup-successor-v1",app.store.current_user_id(),sid,id]));
-    // A stable UUID preserves retries and legacy route expectations.
-    Ok(::uuid::Uuid::parse_str(&hash[..32])?.to_string())
+    webagent_engine::runtime::followup::successor_id(app.store.current_user_id(),sid,entry)
 }
 pub(crate) fn public_entry(e: &Value) -> Value {
     json!({"id":e["id"],"message_id":e["message_id"],"revision":e["revision"],"choice":e["choice"],"status":if e["status"]=="pending"&&e["interrupt_committed"]==true {json!("interrupting")}else{e["status"].clone()},"content":e["content"],"attachments":e["attachments"],"consuming_run_id":e["consuming_run_id"],"batch_id":e["batch_id"],"review_status":e["review_status"]})
@@ -74,68 +70,13 @@ pub(crate) async fn submit(
         .map_err(|e| conflict(&e.to_string()))
 }
 pub(crate) async fn interrupt_requested(app: &App, rid: &str) -> Result<bool> {
-    if let Some(r)=app.store.get(&format!("run:{rid}")).await? {if let Some(s)=r["session_id"].as_str(){crate::session_messaging::revalidate(app,s).await?;}}
-    if let Some(run)=app.store.get(&format!("run:{rid}")).await? {if run["requester_user_id"].as_str().is_some_and(|actor|actor!=app.store.current_user_id()) || !app.store.participation_allows_run(&run).await? {return Ok(false);}}
-    let Some(r) = app.store.get(&format!("run_view:{rid}")).await? else {
-        return Ok(false);
-    };
-    let q = app
-        .store
-        .followup_queue(r["session_id"].as_str().unwrap_or(""))
-        .await?;
-    Ok(q["entries"].as_array().unwrap().iter().any(|e| {
-        e["choice"] == "interrupt"
-            && e["status"] == "pending"
-            && e["review_status"] == "acceptable"
-            && (e["target_run_id"].is_null() || e["target_run_id"] == rid)
-    }))
+    app.engine().interrupt_requested(rid).await
 }
 pub(crate) async fn apply_steering(app: &App, run: &mut Value) -> Result<bool> {
-    if run["requester_user_id"].as_str().is_some_and(|actor|actor!=app.store.current_user_id()){return Ok(false);}
-    if interrupt_requested(app, run["id"].as_str().unwrap()).await? {
-        return Ok(false);
-    }
-    let s = run["session_id"].as_str().unwrap().to_owned();
-    app.store.followup_consume(&s, "steer", run, None).await
+    app.engine().apply_steering(run).await
 }
 pub(crate) async fn finish_interrupt(app: &App, run: &mut Value) -> Result<bool> {
-    if run["requester_user_id"].as_str().is_some_and(|actor|actor!=app.store.current_user_id()){return Ok(false);}
-    if run["uncertain"] == true || matches!(status(run), "recovery" | "waiting_external") {
-        return Ok(false);
-    }
-    let s = run["session_id"].as_str().unwrap().to_owned();
-    let q = app.store.followup_queue(&s).await?;
-    let Some(e) = q["entries"].as_array().unwrap().iter().find(|e| {
-        e["choice"] == "interrupt"
-            && e["status"] == "pending"
-            && e["review_status"] == "acceptable"
-            && (e["target_run_id"].is_null() || e["target_run_id"] == run["id"])
-    }) else {
-        return Ok(false);
-    };
-    if app.shutoff().await? {
-        return Ok(false);
-    }
-    let mut next = e["template"].clone();
-    if app.run_candidate(&next).await.is_err() {
-        app.store
-            .followup_hold(
-                &s,
-                "Interrupted work is held because the model is unavailable",
-            )
-            .await?;
-        return Ok(false);
-    }
-    next["id"] = json!(successor_id(app,&s,&e)?);
-    next["created_at"] = json!(now());
-    next["updated_at"] = json!(now());
-    next["input"] = run["input"].clone();
-    next["context_hydration_pending"] = json!(false);
-    next["interrupted_run_id"] = run["id"].clone();
-    next["input"].as_array_mut().ok_or_else(||anyhow!("Missing interrupted context"))?.push(json!({"role":"developer","content":"Previous run interrupted by user. Retained tool results describe completed work; interruption does not undo effects. Unknown writes require reconciliation before retry."}));
-    app.store
-        .followup_consume(&s, "interrupt", &mut next, Some(run))
-        .await
+    app.engine().finish_interrupt(run).await
 }
 async fn review_entry(app: App, s: String, e: Value) -> Result<()> {
     static REVIEW_LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);

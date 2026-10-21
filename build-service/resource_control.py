@@ -70,6 +70,33 @@ class Control:
             "TasksAccounting=yes"],check=True,timeout=5,stdout=subprocess.DEVNULL)
         return {"admitted":True,"slice":self.slice,"cpu_budget":cpus,"memory_budget":budget,"reserve":reserve,"swap_budget":swap}
 
+    def seal(self,args,group,phase,identity):
+        """Seal only an already enforced zero-swap cap into its exact transient unit."""
+        if phase not in {"compile_test","compile_release","compile_linked","plugin_compile","plugin_test","package"}:
+            raise PermissionError("Only capped compiler and package phases may be sealed")
+        unit="docker-"+identity+".scope"
+        if group.name!=unit:raise PermissionError("Seal scope identity changed")
+        value=inspect(args["container"]);host=value.get("HostConfig",{})
+        if value.get("Id")!=identity or host.get("CgroupParent")!=self.slice:
+            raise PermissionError("Seal Docker identity changed")
+        cap=host.get("Memory")
+        if type(cap)is not int or cap<=0 or type(host.get("MemorySwap"))is not int or host["MemorySwap"]!=cap:
+            raise PermissionError("Seal requires an existing finite zero-swap Docker cap")
+        before=self.stats(group)
+        if before["memory_max"]!=cap or before["swap_max"]!=0:
+            raise PermissionError("Seal requires an existing enforced zero-swap kernel cap")
+        subprocess.run(["systemctl","set-property","--runtime",unit,"MemorySwapMax=0"],
+            check=True,timeout=3,stdout=subprocess.DEVNULL)
+        result=subprocess.run(["systemctl","show",unit,"--property=MemorySwapMax","--value"],
+            capture_output=True,check=True,timeout=3)
+        if result.stdout.decode().strip()!="0":raise ValueError("Zero-swap unit seal not confirmed")
+        again,again_phase,again_id=self.resolve(args["container"])
+        if (again,again_phase,again_id)!=(group,phase,identity):raise PermissionError("Seal target changed")
+        observed=self.stats(group)
+        if observed["memory_max"]!=cap or observed["swap_max"]!=0:
+            raise PermissionError("Seal changed or lost the existing kernel cap")
+        return {"container_id":identity,"phase":phase,"unit_swap_max":0,**observed}
+
     def increase_memory(self,args,group,phase,identity):
         """Increase one exact compiler limit via Docker; no arbitrary cgroup target or swap growth."""
         if phase not in PARKABLE:raise PermissionError("Only compiler memory may increase")
@@ -188,10 +215,13 @@ class Control:
             if self.config.get("scheduler",{}).get("task_aware_cleanup"):
                 self.retention().pin(value["Image"],str(__import__("uuid").UUID(match[1])),value)
             return {"container_id":value["Id"],"state":value["State"]["Status"],"phase":match[2]}
-        if operation not in {"stats","freeze","thaw","reclaim","cpu","memory"}:raise ValueError("Unsupported resource operation")
+        if operation not in {"stats","freeze","thaw","reclaim","cpu","memory","seal"}:raise ValueError("Unsupported resource operation")
         group,phase,identity=self.resolve(args.get("container",""))
         if operation!="stats"and args.get("expected_id")!=identity:raise PermissionError("Container identity changed")
         if operation!="stats"and self.config.get("scheduler",{}).get("mode")!="enforce":raise PermissionError("Resource control disabled")
+        if operation=="seal":
+            if set(args)!={"operation","container","expected_id"}:raise ValueError("Exact seal arguments required")
+            with self.memory_lock:return self.seal(args,group,phase,identity)
         if operation=="memory":
             if set(args)!={"operation","container","memory_bytes","previous_bytes","reserved_bytes","policy_sha256","expected_id","lease_until"}:raise ValueError("Exact memory update arguments required")
             with self.memory_lock:return self.increase_memory(args,group,phase,identity)

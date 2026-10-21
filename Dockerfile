@@ -78,7 +78,7 @@ COPY --from=tested_builder /out/compiler/copyright /usr/share/doc/mold/copyright
 COPY --from=tested_builder /out/compiler/LICENSE.gz /usr/share/doc/mold/LICENSE.gz
 RUN install -d -m 0755 /usr/local/share/webagent && printf 'mold\n' > /usr/local/share/webagent/compiler-linker
 COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inputs.txt
-COPY --chmod=0444 v3/config/prompts.json v3/config/tool-output-retention.json /usr/local/share/webagent/defaults/
+COPY --chmod=0444 v3/config/prompts.json v3/config/tool-output-retention.json v3/config/engine-components.json v3/config/administration/native-tools.json /usr/local/share/webagent/defaults/
 RUN chmod 0755 /usr/local/share/webagent/defaults
 # Distribution artifacts are installed only by explicit module administration.
 COPY --from=tested_builder /out/modules /usr/local/lib/webagent/modules
@@ -98,6 +98,7 @@ COPY --from=tested_builder /out/webagent-assets-service /usr/local/lib/webagent/
 COPY --from=tested_builder /out/webagent-capability-service /usr/local/lib/webagent/engine/capability-context/webagent-capability-service
 COPY --from=tested_builder /out/webagent-provider-service /usr/local/lib/webagent/engine/provider-projection/webagent-provider-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
+RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
 # Git invokes this fixed helper directly as the unprivileged tool worker.
 RUN chmod 0555 /opt/v3/plugins/abilities/Administrator/git_control/askpass.py
 COPY v3 /opt/v3/source-template
@@ -122,7 +123,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && groupadd -g 1100 v3 && useradd -u 1100 -g 1100 -M -s /usr/sbin/nologin v3loop
 COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
 COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inputs.txt
-COPY --chmod=0444 v3/config/prompts.json v3/config/tool-output-retention.json /usr/local/share/webagent/defaults/
+COPY --chmod=0444 v3/config/prompts.json v3/config/tool-output-retention.json v3/config/engine-components.json v3/config/administration/native-tools.json /usr/local/share/webagent/defaults/
 RUN chmod 0755 /usr/local/share/webagent/defaults
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/engine /opt/v3/plugins/engine
@@ -133,6 +134,7 @@ COPY --from=tested_builder /out/webagent-assets-service /usr/local/lib/webagent/
 COPY --from=tested_builder /out/webagent-capability-service /usr/local/lib/webagent/engine/capability-context/webagent-capability-service
 COPY --from=tested_builder /out/webagent-provider-service /usr/local/lib/webagent/engine/provider-projection/webagent-provider-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
+RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
 ENV V3_PROCESS_ROLE=loop V3_STATE_ROOT=/state V3_WORKSPACE_ROOT=/workspaces
 WORKDIR /state
 USER 1100:1100

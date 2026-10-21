@@ -12,23 +12,31 @@ POLICY={"mode":"enforce","reserve_percent":15,"package_ram_bytes":9_999_998_976,
 
 class RamPackagingTests(unittest.TestCase):
     """Exercise mount and proof gates before allowing the workload to run."""
-    def run_case(self,mount="tmpfs",cap=9_999_998_976,error=None,cached=False):
+    def run_case(self,mount="tmpfs",cap=9_999_998_976,error=None,cached=False,seal_error=None,uncapped=False,final_swap=0):
         """Use real executor ordering and mocked fixed Docker/kernel boundaries."""
         identity="a"*64;calls=[];cleanup=[];job={"job_id":str(uuid.uuid4()),"task_id":"fixture","package_memory_cap":4026531840}
         r=types.SimpleNamespace(enabled=True,lock=threading.RLock(),rows={})
         def enter(name,*args,**kwargs):
             """Capture admission before any container effect."""
             calls.append(("admit",args,kwargs));r.rows[name]={}
-        r.enter=enter;r.attached=lambda *args:None
+        r.enter=enter;r.attached=lambda *args:calls.append(("attached",args))
         def command(argv,**kwargs):
             """Capture exact mounts and return only the requested filesystem type."""
             calls.append(("command",argv));return mount if argv[:2]==["docker","exec"]else ""
+        stats_count=0
         def request(args):
             """Return independently bound identity and enforced memory/swap proof."""
+            nonlocal stats_count
+            calls.append(("resource",dict(args)))
             if args["operation"]=="identity":return {"container_id":identity,"state":"created","phase":"package"}
-            return {"container_id":identity,"memory_max":cap,"swap_max":0,"oom_events":0,"oom_kills":0,"peak_memory":123}
+            if args["operation"]=="seal":
+                if seal_error is not None:raise seal_error
+                return {"container_id":identity,"unit_swap_max":0}
+            stats_count+=1
+            return {"container_id":identity,"memory_max":cap,"swap_max":final_swap if stats_count>1 else 0,"oom_events":0,"oom_kills":0,"peak_memory":123}
         runner=types.SimpleNamespace(command=command,resource_request=request,job_context=types.SimpleNamespace())
-        worker=executor.Executor(runner,r,{"instance":"development","scheduler":POLICY});worker.finish_phase=lambda *args:cleanup.append(args)
+        if uncapped:job["package_memory_cap"]=None
+        worker=executor.Executor(runner,r,{"instance":"development","scheduler":{}if uncapped else POLICY});worker.finish_phase=lambda *args:cleanup.append(args)
         caught=None;executed=False
         with patch.object(executor.subprocess,"run"):
             try:
@@ -41,6 +49,10 @@ class RamPackagingTests(unittest.TestCase):
         """RAM scratch is fixed, swap-free and included in the protected container ceiling."""
         error,executed,calls,cleanup,job=self.run_case();self.assertIsNone(error);self.assertTrue(executed)
         self.assertEqual(calls[0][2]["hard_cap"],9_999_998_976)
+        events=[item[0]if item[0]=="attached"else item[1]["operation"]for item in calls if item[0]in {"attached","resource"}]
+        self.assertEqual(events,["identity","seal","attached","stats","stats"])
+        seal=next(item[1]for item in calls if item[0]=="resource"and item[1]["operation"]=="seal")
+        self.assertEqual(seal["expected_id"],"a"*64)
         create=next(c[1]for c in calls if c[0]=="command"and c[1][:2]==["docker","create"])
         self.assertIn("/var/lib/buildkit:rw,exec,nosuid,nodev,size=7999995904,mode=0700",create)
         self.assertEqual(create[create.index("--memory")+1],"9999998976")
@@ -67,6 +79,23 @@ class RamPackagingTests(unittest.TestCase):
         self.assertEqual(str(error),"No space left on device");self.assertEqual(len(cleanup),1);self.assertFalse(cleanup[0][2])
         self.assertEqual(job["package_cap_outcomes"][0]["outcome"],"failed")
         self.assertEqual(sum(c[0]=="command"and c[1][:2]==["docker","create"]for c in calls),1)
+
+    def test_seal_failure_prevents_packaging_workload_and_cleans_up(self):
+        error,executed,calls,cleanup,job=self.run_case(seal_error=RuntimeError("fixture seal denied"))
+        self.assertEqual(str(error),"fixture seal denied");self.assertFalse(executed)
+        self.assertFalse(any(item[0]=="attached"for item in calls))
+        self.assertFalse(any(item[0]=="command"and item[1][:2]==["docker","exec"]for item in calls))
+        self.assertEqual(len(cleanup),1);self.assertFalse(cleanup[0][2])
+        self.assertEqual(job["package_failures"][0]["stage"],"admission_seal")
+    def test_uncapped_packaging_never_requests_seal(self):
+        error,executed,calls,cleanup,job=self.run_case(uncapped=True)
+        self.assertIsNone(error);self.assertTrue(executed)
+        self.assertFalse(any(item[0]=="resource"and item[1]["operation"]=="seal"for item in calls))
+    def test_final_unlimited_swap_still_rejects_success(self):
+        error,executed,calls,cleanup,job=self.run_case(final_swap=None)
+        self.assertIsNotNone(error);self.assertTrue(executed);self.assertFalse(cleanup[0][2])
+        self.assertEqual(job["package_cap_outcomes"][0]["outcome"],"failed")
+
 
 class RamAdmissionTests(unittest.TestCase):
     """Reserve the full RAM ceiling rather than calibrating down to small prior samples."""

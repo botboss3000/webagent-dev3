@@ -102,3 +102,14 @@ impl crate::Store {
 
 #[cfg(not(diagnostics_plugin))]
 pub(crate) fn background_router() -> axum::Router<crate::App> { axum::Router::new() }
+
+impl webagent_engine::runtime::ports::RunObservation for crate::Store {
+ fn committed(&self,run:&serde_json::Value,kind:&str,override_save:bool) {committed(self,run,kind,override_save)}
+}
+
+pub(crate) struct EngineModelDiagnostics;
+impl Clone for EngineModelDiagnostics {fn clone(&self)->Self {Self}}
+impl webagent_engine::runtime::ports::ModelDiagnostics<crate::Store> for EngineModelDiagnostics {
+ fn provider_enabled(&self,store:&crate::Store)->bool {provider_enabled(store)}
+ fn failure(&self,store:&crate::Store,evidence:&serde_json::Value,error:&anyhow::Error,action:&str) {failure(store,evidence,error,action)}
+}

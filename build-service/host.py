@@ -4932,7 +4932,7 @@ class Broker:
                     package_changed=[path for path in changed if not hot_source_path(path) and (
                         generic_package_path(path,candidate) or generic_package_path(path,base_blob))]
                     docs_changed=any(path.startswith("v3/docs/")and path.endswith(".md")for path in changed)
-                    external_defaults_changed=any(path in {"v3/config/prompts.json","v3/config/tool-output-retention.json"}for path in changed)
+                    external_defaults_changed=any(path in {"v3/config/prompts.json","v3/config/tool-output-retention.json","v3/config/administration/native-tools.json"}for path in changed)
                     core_inputs=set();docs_attested=False
                     if package_changed or docs_changed or external_defaults_changed or any(path.startswith("v3/ui/")for path in changed):
                         try:

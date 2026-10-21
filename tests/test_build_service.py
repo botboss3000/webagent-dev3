@@ -1645,6 +1645,7 @@ class InstalledInventoryEnginePublicationTests(unittest.TestCase):
 class EngineModulePathTests(unittest.TestCase):
  def test_native_schema_keeps_asset_publication_after_move(self):
   self.assertTrue(fixtures.host.hot_source_path("v3/src/engine/tools/administrator-schemas.json"))
+  self.assertTrue(fixtures.host.hot_source_path("v3/config/administration/native-tools.json"))
   self.assertFalse(fixtures.host.hot_source_path("v3/src/engine/loop/run.rs"))
   self.assertFalse(fixtures.host.hot_source_path("v3/src/engine/tools/dispatch.rs"))
 
@@ -1665,11 +1666,12 @@ class ExternalDefaultRoutingTests(unittest.TestCase):
   result=self.call("v3_build_work",{"action":"finish","task_id":task["task_id"],"expected_inputs_sha256":digest})
   return self.wait(result)["operation"]
  def test_defaults_publish_only_when_current_compiler_excludes_them(self):
-  for name in ("config/prompts.json","config/tool-output-retention.json"):
+  for name in ("config/prompts.json","config/tool-output-retention.json","config/administration/native-tools.json"):
    with self.subTest(name=name):
     self.assertEqual(self.route_default(name,{"v3/src/main.rs"}),"plugin_deploy")
     self.assertEqual(self.route_default(name,{"v3/src/main.rs","v3/"+name}),"build_deploy")
  def test_unavailable_or_unrecognized_evidence_never_grants_default_publication(self):
-  for evidence in (False,set(),{"v3/docs/note.md"}):
-   with self.subTest(evidence=evidence):
-    self.assertEqual(self.route_default("config/prompts.json",evidence),"build_deploy")
+  for name in ("config/prompts.json","config/administration/native-tools.json"):
+   for evidence in (False,set(),{"v3/docs/note.md"}):
+    with self.subTest(name=name,evidence=evidence):
+     self.assertEqual(self.route_default(name,evidence),"build_deploy")

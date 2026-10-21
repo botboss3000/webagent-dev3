@@ -10,13 +10,13 @@ resolver = "2"
 
 [features]
 default = ["linked-context"]
-linked-context = ["dep:webagent-context-assembly", "dep:webagent-background-dispatch", "dep:webagent-boot-supervisor", "dep:webagent-context-assets", "dep:webagent-capability-context", "dep:webagent-provider-projection"]
-live-context = []
+linked-context = ["webagent-engine/linked-context", "dep:webagent-context-assembly", "dep:webagent-background-dispatch", "dep:webagent-boot-supervisor", "dep:webagent-context-assets", "dep:webagent-capability-context", "dep:webagent-provider-projection"]
+live-context = ["webagent-engine/live-context"]
 
 [dependencies]
 webagent-access = { path = "crates/modules/access" }
 webagent-configuration = { path = "crates/modules/configuration" }
-webagent-engine = { path = "crates/modules/engine" }
+webagent-engine = { path = "crates/modules/engine", default-features = false }
 webagent-manager = { path = "crates/modules/manager" }
 webagent-models = { path = "crates/modules/models" }
 webagent-assets-contracts={path="crates/assets-contracts"}
@@ -58,6 +58,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
 
 [dev-dependencies]
+webagent-engine = { path="crates/modules/engine", default-features=false, features=["test-support"] }
 webagent-models = { path = "crates/modules/models", features = ["test-support"] }
 webagent-context-assets={path="crates/context-assets"}
 webagent-capability-context={path="crates/capability-context"}

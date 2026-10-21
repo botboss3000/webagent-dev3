@@ -244,20 +244,27 @@ class BrokerMemoryTests(unittest.TestCase):
 
 class CompletionEvidenceTests(unittest.TestCase):
     """Final attestation failures must release the exact container without masking workload failures."""
-    def run_phase(self,final,primary=None):
+    def run_phase(self,final,primary=None,phase="compile_test",cap=5*G,seal_error=None):
         from unittest.mock import Mock
         from collections import defaultdict
         import types
         temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup)
-        identity="a"*64;cap=5*G
+        identity="a"*64;events=[]
         rows=defaultdict(dict)
-        r=types.SimpleNamespace(enabled=True,enter=Mock(),attached=Mock(),lock=threading.RLock(),rows=rows,diagnostic_check=lambda _:False)
+        r=types.SimpleNamespace(enabled=True,enter=Mock(),attached=lambda *args:events.append("attached"),lock=threading.RLock(),rows=rows,diagnostic_check=lambda _:False)
         stats={"container_id":identity,"memory_max":cap,"swap_max":0,"oom_events":0,"oom_kills":0,"peak_memory":1234}
         runner=types.SimpleNamespace(compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64},command=Mock(side_effect=["created","started",primary if primary else "compiled"]),job_context=types.SimpleNamespace(),resource_progress=Mock())
-        runner.resource_request=Mock(side_effect=[{"container_id":identity,"state":"created","phase":"compile_test"},stats,final if isinstance(final,Exception)else {**stats,**final}])
-        worker=executor.Executor(runner,r,{"instance":"development","service_uid":1000,"service_gid":1000});worker.finish_phase=Mock()
+        replies=iter([{"container_id":identity,"state":"created","phase":phase},stats,stats,final if isinstance(final,Exception)else {**stats,**final}])
+        def request(args):
+            events.append(args["operation"])
+            if args["operation"]=="seal"and seal_error is not None:raise seal_error
+            value=next(replies)
+            if isinstance(value,Exception):raise value
+            return value
+        runner.resource_request=Mock(side_effect=request)
+        worker=executor.Executor(runner,r,{"instance":"development","service_uid":1000,"service_gid":1000});worker.finish_phase=Mock();worker.admission_events=events
         job={"job_id":str(uuid.uuid4()),"compiler_memory_cap":cap}
-        args=(job,"compile_test","engine",Path(temporary.name),Path(temporary.name)/"out",["cargo","check"],"memory-fixture",10)
+        args=(job,phase,"plugin"if phase.startswith("plugin_")else"engine",Path(temporary.name),Path(temporary.name)/"out",["cargo","check"],"memory-fixture",10)
         return worker,job,args
     def test_lost_completion_stats_still_cleans_up_and_cannot_pass(self):
         worker,job,args=self.run_phase(RuntimeError("stats unavailable"))
@@ -266,7 +273,7 @@ class CompletionEvidenceTests(unittest.TestCase):
         self.assertFalse(worker.finish_phase.call_args.args[2])
         self.assertEqual(job["compiler_cap_outcomes"][0]["outcome"],"failed")
     def test_changed_identity_cap_and_swap_are_rejected_after_cleanup(self):
-        for change in ({"container_id":"b"*64},{"memory_max":6*G},{"swap_max":1}):
+        for change in ({"container_id":"b"*64},{"memory_max":6*G},{"swap_max":1},{"swap_max":None}):
             with self.subTest(change=change):
                 worker,job,args=self.run_phase(change)
                 with self.assertRaisesRegex(RuntimeError,"completion evidence"):worker.phase(*args)
@@ -282,6 +289,28 @@ class CompletionEvidenceTests(unittest.TestCase):
         self.assertTrue(worker.finish_phase.call_args.args[2])
         result=job["compiler_cap_outcomes"][0]
         self.assertEqual((result["final_memory_max"],result["peak_memory"],result["oom_kills"]),(5*G,1234,0))
+
+    def test_each_capped_compiler_path_seals_once_after_attach_before_stats(self):
+        for phase in ["compile_test","compile_release","compile_linked","plugin_compile","plugin_test"]:
+            with self.subTest(phase=phase):
+                worker,job,args=self.run_phase({},phase=phase)
+                self.assertEqual(worker.phase(*args),"compiled")
+                self.assertEqual(worker.admission_events,["identity","seal","attached","stats","stats"])
+                seal=next(call.args[0]for call in worker.runner.resource_request.call_args_list if call.args[0]["operation"]=="seal")
+                self.assertEqual(set(seal),{"operation","container","expected_id"})
+                self.assertEqual(seal["expected_id"],"a"*64)
+    def test_uncapped_phase_sends_no_seal(self):
+        worker,job,args=self.run_phase({},cap=None)
+        worker.phase(*args)
+        self.assertNotIn("seal",worker.admission_events)
+
+    def test_seal_failure_prevents_compiler_workload_and_still_cleans_up(self):
+        worker,job,args=self.run_phase({},seal_error=RuntimeError("fixture seal denied"))
+        with self.assertRaisesRegex(RuntimeError,"fixture seal denied"):worker.phase(*args)
+        self.assertNotIn("attached",worker.admission_events)
+        self.assertFalse(any(call.args[0][:2]==["docker","exec"]for call in worker.runner.command.call_args_list))
+        worker.finish_phase.assert_called_once();self.assertFalse(worker.finish_phase.call_args.args[2])
+
 
 class PolicyRecoveryTests(unittest.TestCase):
     """A lost acknowledgment reconciles the durable receipt before another target is admitted."""
@@ -360,3 +389,57 @@ class LedgerCapacityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"storage budget"):
                 with ledger.connect()as db:db.execute("INSERT INTO capacity_fixture VALUES(?)",(b"x"*65536,))
             with ledger.connect()as db:self.assertEqual(db.execute("SELECT COUNT(*) FROM capacity_fixture").fetchone()[0],0)
+
+class RootSwapSealTests(unittest.TestCase):
+    """An admission seal records no new budget and accepts only an existing exact cap."""
+    def setUp(self):
+        import types
+        self.identity="a"*64;self.group=Path("/fixed/docker-"+self.identity+".scope")
+        self.c=control.Control({"instance":"development","scheduler":{"mode":"enforce"}})
+        self.args={"operation":"seal","container":"fixed","expected_id":self.identity}
+        self.value={"Id":self.identity,"HostConfig":{"CgroupParent":self.c.slice,"Memory":5*G,"MemorySwap":5*G}}
+        self.stats={"memory_max":5*G,"swap_max":0}
+        self.patches=[patch.object(control.os,"geteuid",return_value=0),patch.object(self.c,"resolve",return_value=(self.group,"compile_test",self.identity)),patch.object(control,"inspect",return_value=self.value),patch.object(self.c,"stats",side_effect=lambda _:dict(self.stats)),patch.object(control.subprocess,"run",return_value=types.SimpleNamespace(stdout=b"0\n"))]
+        self.mocks=[p.start()for p in self.patches];self.command=self.mocks[-1]
+    def tearDown(self):
+        for p in reversed(self.patches):p.stop()
+    def test_exact_scope_property_and_readback_for_all_capped_phases(self):
+        for phase in ["compile_test","compile_release","compile_linked","plugin_compile","plugin_test","package"]:
+            self.command.reset_mock()
+            with patch.object(self.c,"resolve",return_value=(self.group,phase,self.identity)):
+                result=self.c.handle(self.args)
+            self.assertEqual(result["unit_swap_max"],0)
+            self.assertEqual([call.args[0]for call in self.command.call_args_list],[
+                ["systemctl","set-property","--runtime","docker-"+self.identity+".scope","MemorySwapMax=0"],
+                ["systemctl","show","docker-"+self.identity+".scope","--property=MemorySwapMax","--value"]])
+    def test_wrong_identity_extra_argument_and_uncapped_phase_never_write(self):
+        for args in [{**self.args,"expected_id":"b"*64},{**self.args,"memory_bytes":5*G}]:
+            with self.assertRaises((PermissionError,ValueError)):self.c.handle(args)
+        for phase in ["test","dependency","ui_test","engine_metadata"]:
+            with patch.object(self.c,"resolve",return_value=(self.group,phase,self.identity)):
+                with self.assertRaises(PermissionError):self.c.handle(self.args)
+        self.command.assert_not_called()
+    def test_unknown_or_unequal_docker_cap_and_kernel_swap_reject_before_write(self):
+        for cap,swap in [(0,0),(None,None),(True,True),(5*G,-1),(5*G,6*G)]:
+            self.value["HostConfig"].update(Memory=cap,MemorySwap=swap)
+            with self.assertRaises(PermissionError):self.c.handle(self.args)
+        self.value["HostConfig"].update(Memory=5*G,MemorySwap=5*G)
+        for change in [{"memory_max":None},{"memory_max":6*G},{"swap_max":None},{"swap_max":1}]:
+            with patch.object(self.c,"stats",return_value={**self.stats,**change}):
+                with self.assertRaises(PermissionError):self.c.handle(self.args)
+        with patch.object(self.c,"stats",side_effect=FileNotFoundError("memory.swap.max")):
+            with self.assertRaises(FileNotFoundError):self.c.handle(self.args)
+        self.command.assert_not_called()
+    def test_set_property_failure_and_wrong_readback_do_not_claim_success(self):
+        import types
+        with patch.object(control.subprocess,"run",side_effect=control.subprocess.CalledProcessError(1,"systemctl")):
+            with self.assertRaises(control.subprocess.CalledProcessError):self.c.handle(self.args)
+        with patch.object(control.subprocess,"run",return_value=types.SimpleNamespace(stdout=b"max\n")):
+            with self.assertRaisesRegex(ValueError,"not confirmed"):self.c.handle(self.args)
+    def test_postcommand_identity_phase_group_and_kernel_changes_reject(self):
+        for changed in [(self.group,"compile_test","b"*64),(self.group,"package",self.identity),(Path("/other"),"compile_test",self.identity)]:
+            with patch.object(self.c,"resolve",side_effect=[(self.group,"compile_test",self.identity),changed]):
+                with self.assertRaises(PermissionError):self.c.handle(self.args)
+        for change in [{"memory_max":6*G},{"swap_max":None},{"swap_max":1}]:
+            with patch.object(self.c,"stats",side_effect=[self.stats,{**self.stats,**change}]):
+                with self.assertRaises(PermissionError):self.c.handle(self.args)

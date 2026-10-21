@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-pub(crate) mod outcome;
+pub(crate) use webagent_engine::tools::outcome;
 // Single and parallel turns share the same Rust dispatch for native and worker tools.
 #[path = "../../../plugins/abilities/Web/web_access/adapter.rs"]
 pub(crate) mod web_access;
@@ -104,6 +104,11 @@ pub fn schemas() -> Vec<Value> {
     let mut schemas=native_schemas();schemas.extend(crate::ability_plugins::current_schemas());schemas
 }
 pub(crate) fn native_schemas() -> Vec<Value> {
+ let mut schemas=native_schemas_without_administrator();
+ schemas.extend(administrator::schemas());
+ schemas
+}
+pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
     static SCHEMAS: OnceLock<Vec<Value>> = OnceLock::new();
     let mut schemas=SCHEMAS.get_or_init(|| { let mut schemas: Vec<Value> = [
         ("file_list", "List a directory by absolute container path or relative live-checkout path", json!({"path":{"type":"string"}}), vec![]),
@@ -142,7 +147,6 @@ pub(crate) fn native_schemas() -> Vec<Value> {
             }
         }
         schemas.extend(crate::background_tasks::schemas());
-        schemas.extend(administrator::schemas());
         schemas.extend(web_access::schemas());
         schemas.extend(core_decision::schemas());
         schemas.extend(core_directory_decision::schemas());
@@ -163,6 +167,18 @@ pub(crate) fn native_schemas() -> Vec<Value> {
         #[cfg(test)] schemas.push(json!({"type":"function","name":"test_owner_purchase","description":"Development-only owner authorization fixture",
             "authorization":{"kind":"credential_owner","credential_kind":"test"},
             "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}));
+        normalize_native_schemas(schemas)
+    }).clone();
+    // Optional package schemas are live; a cached core catalog cannot resurrect removed tools.
+    schemas.extend(crate::modules::schemas());
+    schemas.extend(crate::mcp::schemas());
+    schemas
+}
+
+pub use webagent_engine::tools::transport::{execute,execute_trusted,execute_host_trusted};
+
+/// Apply existing fixed action/nullable-optional transformations before catalog identity is computed.
+pub(crate) fn normalize_native_schemas(mut schemas:Vec<Value>)->Vec<Value>{
         for schema in &mut schemas {
             if crate::actions::supported(schema["name"].as_str().unwrap_or("")) {
                 schema["parameters"]["properties"]["_action"]=json!({"type":["object","null"],
@@ -188,115 +204,5 @@ pub(crate) fn native_schemas() -> Vec<Value> {
                 }
             }
         }
-        schemas
-    }).clone();
-    // Optional package schemas are live; a cached core catalog cannot resurrect removed tools.
-    schemas.extend(crate::modules::schemas());
-    schemas.extend(crate::mcp::schemas());
     schemas
-}
-
-pub async fn execute(
-    name: &str,
-    args: &Value,
-    session: &str,
-    socket: &std::path::Path,
-    cancel: CancellationToken,
-) -> Result<Value> {
-    if !matches!(
-        name,
-        "file_list"
-            | "file_read"
-            | "file_search"
-            | "file_write"
-            | "file_edit"
-            | "workspace_seed"
-            | "source_review"
-            | "source_patch"
-            | "shell"
-            | "python"
-            | "code_index_maintenance"
-            | "code_index_scan"
-            | "code_index_lookup"
-            | "code_index_coverage"
-            | "code_index_trace"
-            | "code_index_progress"
-            | "git_tool"
-            | "resolve_conflict"
-            | "commit_and_push"
-            | "terminal_open"
-            | "terminal_read"
-            | "terminal_send"
-            | "terminal_wait"
-            | "terminal_list"
-            | "terminal_close"
-            | "v3_workspace_status"
-            | "v3_workspace_action"
-            | "v3_cargo_task"
-    ) {
-        bail!("unknown tool");
-    }
-    execute_trusted(name,args,session,socket,None,cancel).await
-}
-
-// Only Rust supplies trusted browser/host metadata; it is not a model schema.
-pub(crate) async fn execute_trusted(
-    name:&str,args:&Value,session:&str,socket:&std::path::Path,
-    trusted:Option<Value>,cancel:CancellationToken,
-)->Result<Value> {
-    execute_rpc(name,args,session,socket,trusted,cancel,false).await
-}
-/// Explicit protected-host protocol; this endpoint is not the low-level worker.
-pub(crate) async fn execute_host_trusted(name:&str,args:&Value,session:&str,socket:&std::path::Path,
- trusted:Option<Value>,cancel:CancellationToken)->Result<Value> {
- execute_rpc(name,args,session,socket,trusted,cancel,true).await
-}
-async fn execute_rpc(name:&str,args:&Value,session:&str,socket:&std::path::Path,
- trusted:Option<Value>,cancel:CancellationToken,host:bool)->Result<Value> {
-    use failure::{Code, Delivery, Failure, Stage};
-    let start = std::time::Instant::now();
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let fail = |stage, code, delivery, io: Option<&std::io::Error>| {
-        let mut error=Failure::transport(stage, code, delivery, start, &request_id, io);
-        error.request_id=args["request_id"].as_str().filter(|id|!id.is_empty()&&id.len()<=128&&id.bytes().all(|b|b.is_ascii_alphanumeric()||b"_-:.".contains(&b))).map(str::to_owned);
-        error
-    };
-    uuid::Uuid::parse_str(session).map_err(|_| fail(Stage::Preparation, Code::InvalidRequest, Delivery::NotSent, None))?;
-    if cancel.is_cancelled() { return Err(fail(Stage::Preparation, Code::Cancelled, Delivery::NotSent, None).into()); }
-    let mut stream = UnixStream::connect(socket).await.map_err(|error| {
-        let code = match error.kind() { std::io::ErrorKind::NotFound => Code::SocketUnavailable, std::io::ErrorKind::ConnectionRefused => Code::ConnectionRefused, _ => Code::IoFailure };
-        fail(Stage::Connect, code, Delivery::NotSent, Some(&error))
-    })?;
-    let timeout = args["timeout_seconds"].as_u64().unwrap_or(120).clamp(1, 600);
-    let mut request = json!({"id":request_id,"name":name,"arguments":args,"workspace":session,"timeout_seconds":timeout,"trusted":trusted});
-    if !host {request["version"]=json!(webagent_context_contracts::execution::WORKER_PROTOCOL);}
-    let mut encoded = serde_json::to_vec(&request).map_err(|_| fail(Stage::Preparation, Code::InvalidRequest, Delivery::NotSent, None))?;
-    if encoded.len() > 1024 * 1024 { return Err(fail(Stage::Preparation, Code::InvalidRequest, Delivery::NotSent, None).into()); }
-    encoded.push(b'\n');
-    // Cancellation may race a partial write. Delivery is deliberately conservative.
-    tokio::select! {
-        _ = cancel.cancelled() => Err(fail(Stage::RequestWrite, Code::Cancelled, Delivery::PossiblySent, None).into()),
-        result = stream.write_all(&encoded) => result.map_err(|error| anyhow::Error::from(fail(Stage::RequestWrite, Code::IoFailure, Delivery::PossiblySent, Some(&error)))),
-    }?;
-    let mut reader = BufReader::new(stream).take(2 * 1024 * 1024);
-    let mut response = String::new();
-    tokio::select! {
-        _ = cancel.cancelled() => Err(fail(Stage::ResponseRead, Code::Cancelled, Delivery::PossiblySent, None).into()),
-        result = reader.read_line(&mut response) => result.map_err(|error| {
-            let (stage,code,delivery)=if error.kind()==std::io::ErrorKind::InvalidData {(Stage::ResponseValidation,Code::MalformedResponse,Delivery::ResponseReceived)}else{(Stage::ResponseRead,Code::IoFailure,Delivery::PossiblySent)};
-            anyhow::Error::from(fail(stage,code,delivery,Some(&error)))
-        }),
-    }?;
-    if response.is_empty() { return Err(fail(Stage::ResponseRead, Code::DisconnectedResponse, Delivery::PossiblySent, None).into()); }
-    let value: Value = serde_json::from_str(&response).map_err(|_| {
-        let code=if response.len()>=2*1024*1024&&!response.ends_with('\n'){Code::ResponseTooLarge}else{Code::MalformedResponse};
-        fail(Stage::ResponseValidation,code,Delivery::ResponseReceived,None)
-    })?;
-    if value["id"].as_str() != Some(request_id.as_str()) { return Err(fail(Stage::ResponseValidation, Code::ResponseIdMismatch, Delivery::ResponseReceived, None).into()); }
-    let content=if host {webagent_context_contracts::execution::host_reply(value,&request_id)}
-        else {webagent_context_contracts::execution::worker_reply(value,&request_id)}
-        .map_err(|_|fail(Stage::ResponseValidation,Code::MalformedResponse,Delivery::ResponseReceived,None))?;
-    outcome::rpc(if host {"build-host"}else{"tool-worker"},&request_id)
-        .map_err(|_|fail(Stage::ResponseValidation,Code::InternalError,Delivery::ResponseReceived,None))?;
-    Ok(content)
 }

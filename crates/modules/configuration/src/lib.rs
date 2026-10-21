@@ -127,3 +127,5 @@ mod tests {
         assert!([json!(1),json!(2)].contains(&read(&path).unwrap()["value"]));
     }
 }
+
+pub mod prompts;

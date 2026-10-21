@@ -20,6 +20,9 @@ class PackagingEvidenceTests(unittest.TestCase):
             def command(self,args,**kwargs):return (("WARNING: disposable stderr fixture\n"if warning else "")+identity)if args[1]=="create"else ""
             def resource_request(self,args):
                 if args["operation"]=="identity":return recovered if recovered is not None else {"container_id":identity,"state":"created","phase":"package"}
+                if args["operation"]=="seal":
+                    if args["expected_id"]!=identity:raise AssertionError("Wrong seal identity")
+                    return {"container_id":identity,"unit_swap_max":0}
                 self.count+=1
                 if initial or completion and self.count>1:raise RuntimeError("fixture initial failure"if initial else"fixture completion failure")
                 return {"container_id":identity,"memory_max":4026531840,"swap_max":0,"oom_events":int(oom and self.count>1),"oom_kills":int(oom and self.count>1),"peak_memory":123}
@@ -91,6 +94,8 @@ class CompilerIdentityTests(unittest.TestCase):
                 pass
         class Runner:
             job_context=types.SimpleNamespace()
+            def compiler_runtime(self,_job):
+                return {"image":"sha256:"+"7"*64}
             commands=[]
             def command(self,args,**kwargs):
                 """Return a warning-bearing create stream without any Docker effect."""
@@ -100,6 +105,9 @@ class CompilerIdentityTests(unittest.TestCase):
                 """Keep creation identity independent of kernel counter reads."""
                 if args["operation"]=="identity":
                     return reply if reply is not None else {"container_id":identity,"state":"created","phase":"compile_test"}
+                if args["operation"]=="seal":
+                    if args["expected_id"]!=identity:raise AssertionError("Wrong seal identity")
+                    return {"container_id":identity,"unit_swap_max":0}
                 return {"container_id":identity,"memory_max":4026531840,"swap_max":0,"oom_events":0,"oom_kills":0,"peak_memory":123}
         runner=Runner();executor=module.Executor(runner,Resources(),{"instance":"development","service_uid":1000,"service_gid":1000})
         cleanup=[];executor.finish_phase=lambda *args:cleanup.append(args)

@@ -1,5 +1,9 @@
 //! Compiled Administrator contracts. Model arguments never choose identity,
 //! agent, workspace, credentials, host origin, or a Docker command.
+pub(crate) fn supported_schema_name(name:&str)->bool {
+    matches!(name,"code_index_scan"|"code_index_lookup"|"code_index_coverage"|"code_index_trace"|"code_index_progress"|"git_tool"|"resolve_conflict"|"commit_and_push"|"terminal_open"|"terminal_read"|"terminal_send"|"terminal_wait"|"terminal_list"|"terminal_close"|"v3_workspace_status"|"v3_workspace_action"|"v3_workspace_receipt"|"v3_cargo_task"|"v3_build_work"|"v3_source_list"|"v3_source_read"|"v3_source_prepare"|"v3_source_apply_prepared"|"v3_source_apply"|"v3_source_receipt"|"v3_build_status"|"v3_build_worker_restart"|"v3_build_image"|"v3_worker_submit"|"v3_worker_job"|"read_diagnostics"|"login_as_current_user"|"login_as_current_user_v3"|"dev_browser_url"|"dev_browser_action"|"dev_browser_record"|"start_tunnel"|"get_tunnel_url"|"repository_access"|"build_work"|"performance_work"|"code_index_maintenance")
+}
+
 use crate::*;
 use anyhow::{bail,Result};
 use serde_json::{json,Value};
@@ -32,11 +36,13 @@ pub async fn workspace_host(app:&App,sid:&str,name:&str,args:&Value,_trusted:Opt
 pub fn build_socket(app:&App)->std::path::PathBuf {app.build_socket.clone()}
 
 pub fn schemas()->Vec<Value> {
-    serde_json::from_str(include_str!("administrator-schemas.json"))
-        .expect("compiled Administrator schemas")
+    crate::live_assets::native_schema_snapshot_at(None).unwrap_or_else(|_| {
+        tracing::error!("Native Administrator schemas unavailable; withdrawing model-facing schemas");
+        Vec::new()
+    })
 }
 pub fn owns(name:&str)->bool {
-    matches!(name, "file_list"|"file_read"|"file_search"|"file_edit"|"file_write") || schemas().iter().any(|s|s["name"]==name)
+    matches!(name, "file_list"|"file_read"|"file_search"|"file_edit"|"file_write") || supported_schema_name(name)
 }
 fn request_id(args:&Value)->Result<&str> {
     let value=args["request_id"].as_str().unwrap_or("");

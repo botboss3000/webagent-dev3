@@ -8,6 +8,7 @@ compile_error!("Choose an engine mode: linked-context or live-context");
 use webagent_access as access;
 use webagent_engine::output as engine_output;
 #[path = "../crates/modules/access/host/policy.rs"] mod access_policy;
+#[path = "../crates/modules/engine/host/mod.rs"] mod engine_runtime;
 #[path = "../crates/modules/access/host/capabilities.rs"] mod capabilities;
 #[path = "../crates/modules/access/host/repository.rs"] mod access_store;
 #[path = "storage/agent.rs"] mod agent_storage;

@@ -104,16 +104,7 @@ fn resource(agent: &str, name: &str) -> String {
         format!("agent:{agent}")
     }
 }
-async fn ledger(app: &App, run: &Value) -> Result<Store> {
-    let requester = run["requester_user_id"]
-        .as_str()
-        .unwrap_or(app.store.current_user_id());
-    if requester == app.store.current_user_id() {
-        Ok(app.store.clone())
-    } else {
-        app.store.for_user(requester).await
-    }
-}
+async fn ledger(app: &App, run: &Value) -> Result<Store> { ledger_on(&app.store,run).await }
 pub(crate) async fn prepare(
     app: &App,
     run: &Value,
@@ -121,350 +112,25 @@ pub(crate) async fn prepare(
     args: &Value,
     pending_id: &str,
     visibility: &Value,
-) -> Result<Option<Value>> {
-    if !supported(name) {
-        if args.get("_action").is_some() {
-            bail!("Tool does not support action metadata");
-        }
-        return Ok(None);
-    }
-    let store = ledger(app, run).await?;
-    let clean = strip(args);
-    let meta: Option<Metadata> = args
-        .get("_action")
-        .filter(|v| !v.is_null())
-        .map(|v| serde_json::from_value(v.clone()))
-        .transpose()?;
-    if meta.as_ref().is_some_and(|m| {
-        !valid_id(&m.id) || m.separate_from.as_ref().is_some_and(|id| !valid_id(id))
-    }) {
-        bail!("Invalid action identity");
-    }
-    let id = meta
-        .as_ref()
-        .map(|m| m.id.clone())
-        .unwrap_or_else(|| format!("action-{pending_id}"));
-    // Existing IDs remain authoritative even after configuration is switched off.
-    let existing = store.action_get(&id).await?;
-    let settings = crate::tool_execution::resolve(visibility, name)?;
-
-    let sid = run["session_id"]
-        .as_str()
-        .ok_or_else(|| anyhow!("Missing action session"))?;
-    let rid = run["id"]
-        .as_str()
-        .ok_or_else(|| anyhow!("Missing action run"))?;
-    let agent = run["agent_id"].as_str().unwrap_or("shared_default");
-    let mut effect = identity(name, &clean);
-    // Empty optional prompt metadata is equivalent across both prompt adapters.
-    if effect["family"] == "prompt" && effect["order_index"].is_null() && effect["lock"].is_null() {
-        if let Some(object) = effect.as_object_mut() {
-            object.remove("order_index");
-            object.remove("lock");
-        }
-    }
-    let candidate = json!({"schema_version":1,"id":id,"requester":store.current_user_id(),"tool":name,
-        "resource":resource(agent,name),"agent_id":agent,"session_id":sid,"run_id":rid,
-        "origin":app.store.action_origin(sid,rid).await?,"arguments":clean,"arguments_digest":digest(&clean),
-        "intent_key":digest(&effect),"provider_key":format!("wa-{}",digest(&json!([store.current_user_id(),resource(agent,name),id]))),
-        "pending_id":pending_id,"created_at":now()});
-    if settings.duplicate_protection == Some(Protection::Off)
-        && existing.is_none()
-        && store
-            .action_match(
-                field(&candidate, "resource")?,
-                field(&candidate, "intent_key")?,
-            )
-            .await?
-            .is_none()
-    {
-        return Ok(None);
-    }
-    Ok(Some(
-        store
-            .action_prepare(
-                &candidate,
-                meta.as_ref().and_then(|m| m.separate_from.as_deref()),
-            )
-            .await?,
-    ))
-}
+) -> Result<Option<Value>> { prepare_on(&app.store,run,name,args,pending_id,visibility).await }
 pub(crate) async fn preflight(
     app: &App,
     run: &mut Value,
     name: &str,
     args: &Value,
     visibility: &Value,
-) -> Result<Option<Value>> {
-    let pid = run["pending"]["action_pending_id"]
-        .as_str()
-        .or_else(|| run["pending"]["id"].as_str())
-        .unwrap_or("")
-        .to_owned();
-    let Some(prepared) = prepare(app, run, name, args, &pid, visibility).await? else {
-        return Ok(None);
-    };
-    let mut prepared = prepared;
-    if matches!(
-        prepared["action"]["state"].as_str(),
-        Some("uncertain" | "running")
-    ) {
-        if let Some(resolved) = reconcile(app, run, &prepared["action"]).await? {
-            prepared["action"] = resolved;
-        }
-    }
-    let action = &prepared["action"];
-    match prepared["kind"].as_str() {
-        Some("conflict") => Ok(Some(
-            json!({"status":"denied","output":"Action ID conflicts with its saved intent/arguments","action":summary(action)}),
-        )),
-        Some("duplicate") => {
-            let mut value = if action["arguments_digest"] != digest(&strip(args))
-                && action["tool"] == "test_owner_purchase"
-            {
-                json!({"status":"new_intent_required","action":summary(action),"output":"Similar action found with different commercial details. Distinguish new intent and obtain specific authorization; no execution occurred."})
-            } else {
-                response(action)
-            };
-            value["duplicate_notice"]=json!("Matching intent found. This is the prior action, not authorization for an additional action.");
-            value["requested_action_id"] = args["_action"]["id"].clone();
-            Ok(Some(value))
-        }
-        _ => {
-            run["pending"]["action_id"] = action["id"].clone();
-            run["pending"]["action_pending_id"] = action["pending_id"].clone();
-            run["pending"]["new_intent_confirmation"] =
-                action["requires_new_intent_approval"].clone();
-            run["pending"]["separate_from"] = action["separate_from"].clone();
-            if matches!(
-                action["state"].as_str(),
-                Some("running" | "completed" | "uncertain")
-            ) {
-                Ok(Some(response(action)))
-            } else {
-                Ok(None)
-            }
-        }
-    }
-}
-pub(crate) async fn claim(app: &App, run: &Value, pending: &Value) -> Result<Option<Value>> {
-    let Some(id) = pending["action_id"].as_str() else {
-        return Ok(None);
-    };
-    let store = ledger(app, run).await?;
-    Ok(Some(
-        store
-            .action_claim(id, pending["human_approved"] == true)
-            .await?,
-    ))
-}
+) -> Result<Option<Value>> { preflight_on(&app.store,run,name,args,visibility).await }
+pub(crate) async fn claim(app: &App, run: &Value, pending: &Value) -> Result<Option<Value>> { claim_on(&app.store,run,pending).await }
 pub(crate) async fn finish(
     app: &App,
     run: &Value,
     action: &Value,
     result: &Result<Value>,
-) -> Result<Value> {
-    let store = ledger(app, run).await?;
-    let (state, value, retry_safe) = match result {
-        Ok(v) if v["status"] == "success" && v["uncertain"] != true => {
-            ("completed", v.clone(), false)
-        }
-        Ok(v) if v["status"] == "denied" && v["uncertain"] != true => {
-            ("confirmed_failed", v.clone(), true)
-        }
-        _ => (
-            "uncertain",
-            result.as_ref().ok().cloned().unwrap_or(Value::Null),
-            false,
-        ),
-    };
-    let receipt = if state == "completed" && action["tool"] != "test_owner_purchase" {
-        app.store
-            .action_agent_receipt(
-                action["agent_id"].as_str().unwrap_or("shared_default"),
-                action["tool"].as_str().unwrap_or(""),
-                action["pending_id"].as_str().unwrap_or(""),
-            )
-            .await?
-            .unwrap_or(Value::Null)
-    } else {
-        value["receipt"].clone()
-    };
-    let changed = store
-        .action_finish(
-            field(action, "id")?,
-            field(action, "claim")?,
-            state,
-            &value,
-            &receipt,
-            retry_safe,
-        )
-        .await?;
-    let saved = store
-        .action_get(field(action, "id")?)
-        .await?
-        .ok_or_else(|| anyhow!("Missing action outcome"))?;
-    if !changed {
-        return Ok(response(&saved));
-    }
-    if state == "uncertain" {
-        return Ok(
-            json!({"status":"uncertain","uncertain":true,"action":summary(&saved),"output":"Action outcome requires reconciliation; no blind retry"}),
-        );
-    }
-    let mut value = value;
-    value["action"] = summary(&saved);
-    value["receipt"] = saved["receipt"].clone();
-    Ok(value)
-}
-pub(crate) async fn reconcile(app: &App, run: &Value, action: &Value) -> Result<Option<Value>> {
-    let name = action["tool"].as_str().unwrap_or("");
-    #[cfg(test)]
-    if name == "test_owner_purchase" {
-        if action["arguments"]["simulate"] == "unverifiable" {
-            return Ok(None);
-        }
-        let Some(result) = app
-            .store
-            .test_provider_lookup(field(action, "provider_key")?)
-            .await?
-        else {
-            return Ok(None);
-        };
-        let store = ledger(app, run).await?;
-        store
-            .action_finish(
-                field(action, "id")?,
-                action["claim"].as_str().unwrap_or(""),
-                "completed",
-                &result,
-                &result["receipt"],
-                false,
-            )
-            .await?;
-        return store.action_get(field(action, "id")?).await;
-    }
-    let Some(receipt) = app
-        .store
-        .action_agent_receipt(
-            action["agent_id"].as_str().unwrap_or("shared_default"),
-            name,
-            action["pending_id"].as_str().unwrap_or(""),
-        )
-        .await?
-    else {
-        return Ok(None);
-    };
-    if name == "prompt_slot_write" && receipt["arguments_digest"] != action["arguments_digest"] {
-        bail!("Action reconciliation receipt mismatch");
-    }
-    // The self-edit receipt key is native-owned and bound to the original pending
-    // identity. Its mutation and result commit together in the agent transaction.
-    let result = &receipt["result"];
-    if result["status"] != "success" {
-        return Ok(None);
-    }
-    let store = ledger(app, run).await?;
-    store
-        .action_finish(
-            field(action, "id")?,
-            action["claim"].as_str().unwrap_or(""),
-            "completed",
-            result,
-            &receipt,
-            false,
-        )
-        .await?;
-    store.action_get(field(action, "id")?).await
-}
-pub(crate) async fn not_dispatched(app: &App, run: &Value, pending: &Value) -> Result<()> {
-    if let Some(id) = pending["action_id"].as_str() {
-        ledger(app, run).await?.action_not_dispatched(id).await?;
-    }
-    Ok(())
-}
-pub(crate) async fn recover_results(app: &App, run: &mut Value) -> Result<bool> {
-    let store = ledger(app, run).await?;
-    let has_batch = run["batch"].is_array();
-    let pending = if has_batch {
-        run["batch"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .filter(|(_, i)| matches!(i["state"].as_str(), Some("executing" | "uncertain")))
-            .map(|(n, i)| (Some(n), i["pending"].clone()))
-            .collect::<Vec<_>>()
-    } else {
-        vec![(None, run["pending"].clone())]
-    };
-    let mut resolved = true;
-    for (index, pending) in pending {
-        let name = pending["name"].as_str().unwrap_or("");
-        if tools::is_read(name) {
-            continue;
-        }
-        let Some(id) = pending["action_id"].as_str() else {
-            resolved = false;
-            continue;
-        };
-        let Some(mut action) = store.action_get(id).await? else {
-            resolved = false;
-            continue;
-        };
-        if action["state"] == "uncertain" {
-            action = reconcile(app, run, &action).await?.unwrap_or(action);
-        }
-        if !matches!(
-            action["state"].as_str(),
-            Some("completed" | "confirmed_failed")
-        ) {
-            resolved = false;
-            continue;
-        }
-        let result = if action["state"] == "completed" {
-            response(&action)
-        } else {
-            let mut result = action["result"].clone();
-            result["action"] = summary(&action);
-            result
-        };
-        if let Some(index) = index {
-            run["batch"][index]["state"] = json!("done");
-            run["batch"][index]["result"] = result;
-        } else {
-            crate::agent_loop::append_tool(run, &result)?;
-        }
-    }
-    if resolved {
-        if let Some(items) = run["batch"].as_array_mut() {
-            for item in items {
-                if item["state"] == "executing"
-                    && tools::is_read(item["pending"]["name"].as_str().unwrap_or(""))
-                {
-                    item["state"] = json!("requested");
-                    item["pending"]["state"] = json!("requested");
-                }
-            }
-        }
-    }
-    Ok(resolved)
-}
-pub(crate) async fn interrupt_run(app: &App, run: &Value) -> Result<()> {
-    let store = ledger(app, run).await?;
-    for pending in std::iter::once(&run["pending"]).chain(
-        run["batch"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|i| &i["pending"]),
-    ) {
-        if let Some(id) = pending["action_id"].as_str() {
-            store.action_interrupt(id).await?;
-        }
-    }
-    Ok(())
-}
+) -> Result<Value> { finish_on(&app.store,run,action,result).await }
+pub(crate) async fn reconcile(app: &App, run: &Value, action: &Value) -> Result<Option<Value>> { reconcile_on(&app.store,run,action).await }
+pub(crate) async fn not_dispatched(app: &App, run: &Value, pending: &Value) -> Result<()> { not_dispatched_on(&app.store,run,pending).await }
+pub(crate) async fn recover_results(app: &App, run: &mut Value) -> Result<bool> { recover_results_on(&app.store,run).await }
+pub(crate) async fn interrupt_run(app: &App, run: &Value) -> Result<()> { interrupt_run_on(&app.store,run).await }
 pub(crate) async fn lookup(app: &App, run: &Value, id: &str) -> Result<Value> {
     if !valid_id(id) {
         bail!("Invalid action ID");
@@ -509,37 +175,7 @@ pub(crate) async fn lookup(app: &App, run: &Value, id: &str) -> Result<Value> {
     };
     Ok(response(&action))
 }
-pub(crate) async fn statuses(app: &App, run: &Value) -> Result<Vec<Value>> {
-    let store = ledger(app, run).await?;
-    let agent = run["agent_id"].as_str().unwrap_or("shared_default");
-    let sid = run["session_id"]
-        .as_str()
-        .ok_or_else(|| anyhow!("Missing action session"))?;
-    let (policy, _, visibility, state) = ability_controls(app, sid).await?;
-    let access =
-        crate::shared_chat::live_access(&app.store, store.current_user_id(), sid, agent).await?;
-    let mut records = Vec::new();
-    for action in store.action_list(&format!("agent:{agent}")).await? {
-        let name = action["tool"].as_str().unwrap_or("");
-        if access.admitted()
-            && live_tool_decision(
-                app,
-                &access,
-                name,
-                &policy,
-                &visibility,
-                &state,
-                &run["loaded_abilities"],
-                false,
-            )
-            .permission
-                != access::Permission::Deny
-        {
-            records.push(summary(&action));
-        }
-    }
-    Ok(records)
-}
+pub(crate) async fn statuses(app: &App, run: &Value) -> Result<Vec<Value>> {app.engine().action_statuses(run).await}
 
 #[cfg(test)]
 pub(crate) async fn test_purchase(
@@ -1137,4 +773,387 @@ mod loop_tests {
         );
         server.abort();
     }
+}
+
+async fn ledger_on(base: &Store, run: &Value) -> Result<Store> {
+    let requester = run["requester_user_id"]
+        .as_str()
+        .unwrap_or(base.current_user_id());
+    if requester == base.current_user_id() {
+        Ok(base.clone())
+    } else {
+        base.for_user(requester).await
+    }
+}
+
+pub(crate) async fn prepare_on(
+    base: &Store,
+    run: &Value,
+    name: &str,
+    args: &Value,
+    pending_id: &str,
+    visibility: &Value,
+) -> Result<Option<Value>> {
+    if !supported(name) {
+        if args.get("_action").is_some() {
+            bail!("Tool does not support action metadata");
+        }
+        return Ok(None);
+    }
+    let store = ledger_on(base, run).await?;
+    let clean = strip(args);
+    let meta: Option<Metadata> = args
+        .get("_action")
+        .filter(|v| !v.is_null())
+        .map(|v| serde_json::from_value(v.clone()))
+        .transpose()?;
+    if meta.as_ref().is_some_and(|m| {
+        !valid_id(&m.id) || m.separate_from.as_ref().is_some_and(|id| !valid_id(id))
+    }) {
+        bail!("Invalid action identity");
+    }
+    let id = meta
+        .as_ref()
+        .map(|m| m.id.clone())
+        .unwrap_or_else(|| format!("action-{pending_id}"));
+    // Existing IDs remain authoritative even after configuration is switched off.
+    let existing = store.action_get(&id).await?;
+    let settings = crate::tool_execution::resolve(visibility, name)?;
+
+    let sid = run["session_id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Missing action session"))?;
+    let rid = run["id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Missing action run"))?;
+    let agent = run["agent_id"].as_str().unwrap_or("shared_default");
+    let mut effect = identity(name, &clean);
+    // Empty optional prompt metadata is equivalent across both prompt adapters.
+    if effect["family"] == "prompt" && effect["order_index"].is_null() && effect["lock"].is_null() {
+        if let Some(object) = effect.as_object_mut() {
+            object.remove("order_index");
+            object.remove("lock");
+        }
+    }
+    let candidate = json!({"schema_version":1,"id":id,"requester":store.current_user_id(),"tool":name,
+        "resource":resource(agent,name),"agent_id":agent,"session_id":sid,"run_id":rid,
+        "origin":base.action_origin(sid,rid).await?,"arguments":clean,"arguments_digest":digest(&clean),
+        "intent_key":digest(&effect),"provider_key":format!("wa-{}",digest(&json!([store.current_user_id(),resource(agent,name),id]))),
+        "pending_id":pending_id,"created_at":now()});
+    if settings.duplicate_protection == Some(Protection::Off)
+        && existing.is_none()
+        && store
+            .action_match(
+                field(&candidate, "resource")?,
+                field(&candidate, "intent_key")?,
+            )
+            .await?
+            .is_none()
+    {
+        return Ok(None);
+    }
+    Ok(Some(
+        store
+            .action_prepare(
+                &candidate,
+                meta.as_ref().and_then(|m| m.separate_from.as_deref()),
+            )
+            .await?,
+    ))
+}
+
+pub(crate) async fn preflight_on(
+    base: &Store,
+    run: &mut Value,
+    name: &str,
+    args: &Value,
+    visibility: &Value,
+) -> Result<Option<Value>> {
+    let pid = run["pending"]["action_pending_id"]
+        .as_str()
+        .or_else(|| run["pending"]["id"].as_str())
+        .unwrap_or("")
+        .to_owned();
+    let Some(prepared) = prepare_on(base, run, name, args, &pid, visibility).await? else {
+        return Ok(None);
+    };
+    let mut prepared = prepared;
+    if matches!(
+        prepared["action"]["state"].as_str(),
+        Some("uncertain" | "running")
+    ) {
+        if let Some(resolved) = reconcile_on(base, run, &prepared["action"]).await? {
+            prepared["action"] = resolved;
+        }
+    }
+    let action = &prepared["action"];
+    match prepared["kind"].as_str() {
+        Some("conflict") => Ok(Some(
+            json!({"status":"denied","output":"Action ID conflicts with its saved intent/arguments","action":summary(action)}),
+        )),
+        Some("duplicate") => {
+            let mut value = if action["arguments_digest"] != digest(&strip(args))
+                && action["tool"] == "test_owner_purchase"
+            {
+                json!({"status":"new_intent_required","action":summary(action),"output":"Similar action found with different commercial details. Distinguish new intent and obtain specific authorization; no execution occurred."})
+            } else {
+                response(action)
+            };
+            value["duplicate_notice"]=json!("Matching intent found. This is the prior action, not authorization for an additional action.");
+            value["requested_action_id"] = args["_action"]["id"].clone();
+            Ok(Some(value))
+        }
+        _ => {
+            run["pending"]["action_id"] = action["id"].clone();
+            run["pending"]["action_pending_id"] = action["pending_id"].clone();
+            run["pending"]["new_intent_confirmation"] =
+                action["requires_new_intent_approval"].clone();
+            run["pending"]["separate_from"] = action["separate_from"].clone();
+            if matches!(
+                action["state"].as_str(),
+                Some("running" | "completed" | "uncertain")
+            ) {
+                Ok(Some(response(action)))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+}
+
+pub(crate) async fn claim_on(base: &Store, run: &Value, pending: &Value) -> Result<Option<Value>> {
+    let Some(id) = pending["action_id"].as_str() else {
+        return Ok(None);
+    };
+    let store = ledger_on(base, run).await?;
+    Ok(Some(
+        store
+            .action_claim(id, pending["human_approved"] == true)
+            .await?,
+    ))
+}
+
+pub(crate) async fn finish_on(
+    base: &Store,
+    run: &Value,
+    action: &Value,
+    result: &Result<Value>,
+) -> Result<Value> {
+    let store = ledger_on(base, run).await?;
+    let (state, value, retry_safe) = match result {
+        Ok(v) if v["status"] == "success" && v["uncertain"] != true => {
+            ("completed", v.clone(), false)
+        }
+        Ok(v) if v["status"] == "denied" && v["uncertain"] != true => {
+            ("confirmed_failed", v.clone(), true)
+        }
+        _ => (
+            "uncertain",
+            result.as_ref().ok().cloned().unwrap_or(Value::Null),
+            false,
+        ),
+    };
+    let receipt = if state == "completed" && action["tool"] != "test_owner_purchase" {
+        base
+            .action_agent_receipt(
+                action["agent_id"].as_str().unwrap_or("shared_default"),
+                action["tool"].as_str().unwrap_or(""),
+                action["pending_id"].as_str().unwrap_or(""),
+            )
+            .await?
+            .unwrap_or(Value::Null)
+    } else {
+        value["receipt"].clone()
+    };
+    let changed = store
+        .action_finish(
+            field(action, "id")?,
+            field(action, "claim")?,
+            state,
+            &value,
+            &receipt,
+            retry_safe,
+        )
+        .await?;
+    let saved = store
+        .action_get(field(action, "id")?)
+        .await?
+        .ok_or_else(|| anyhow!("Missing action outcome"))?;
+    if !changed {
+        return Ok(response(&saved));
+    }
+    if state == "uncertain" {
+        return Ok(
+            json!({"status":"uncertain","uncertain":true,"action":summary(&saved),"output":"Action outcome requires reconciliation; no blind retry"}),
+        );
+    }
+    let mut value = value;
+    value["action"] = summary(&saved);
+    value["receipt"] = saved["receipt"].clone();
+    Ok(value)
+}
+
+pub(crate) async fn reconcile_on(base: &Store, run: &Value, action: &Value) -> Result<Option<Value>> {
+    let name = action["tool"].as_str().unwrap_or("");
+    #[cfg(test)]
+    if name == "test_owner_purchase" {
+        if action["arguments"]["simulate"] == "unverifiable" {
+            return Ok(None);
+        }
+        let Some(result) = base
+            .test_provider_lookup(field(action, "provider_key")?)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let store = ledger_on(base, run).await?;
+        store
+            .action_finish(
+                field(action, "id")?,
+                action["claim"].as_str().unwrap_or(""),
+                "completed",
+                &result,
+                &result["receipt"],
+                false,
+            )
+            .await?;
+        return store.action_get(field(action, "id")?).await;
+    }
+    let Some(receipt) = base
+        .action_agent_receipt(
+            action["agent_id"].as_str().unwrap_or("shared_default"),
+            name,
+            action["pending_id"].as_str().unwrap_or(""),
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
+    if name == "prompt_slot_write" && receipt["arguments_digest"] != action["arguments_digest"] {
+        bail!("Action reconciliation receipt mismatch");
+    }
+    // The self-edit receipt key is native-owned and bound to the original pending
+    // identity. Its mutation and result commit together in the agent transaction.
+    let result = &receipt["result"];
+    if result["status"] != "success" {
+        return Ok(None);
+    }
+    let store = ledger_on(base, run).await?;
+    store
+        .action_finish(
+            field(action, "id")?,
+            action["claim"].as_str().unwrap_or(""),
+            "completed",
+            result,
+            &receipt,
+            false,
+        )
+        .await?;
+    store.action_get(field(action, "id")?).await
+}
+
+pub(crate) async fn not_dispatched_on(base: &Store, run: &Value, pending: &Value) -> Result<()> {
+    if let Some(id) = pending["action_id"].as_str() {
+        ledger_on(base, run).await?.action_not_dispatched(id).await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn recover_results_on(base: &Store, run: &mut Value) -> Result<bool> {
+    let store = ledger_on(base, run).await?;
+    let has_batch = run["batch"].is_array();
+    let pending = if has_batch {
+        run["batch"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter(|(_, i)| matches!(i["state"].as_str(), Some("executing" | "uncertain")))
+            .map(|(n, i)| (Some(n), i["pending"].clone()))
+            .collect::<Vec<_>>()
+    } else {
+        vec![(None, run["pending"].clone())]
+    };
+    let mut resolved = true;
+    for (index, pending) in pending {
+        let name = pending["name"].as_str().unwrap_or("");
+        if tools::is_read(name) {
+            continue;
+        }
+        let Some(id) = pending["action_id"].as_str() else {
+            resolved = false;
+            continue;
+        };
+        let Some(mut action) = store.action_get(id).await? else {
+            resolved = false;
+            continue;
+        };
+        if action["state"] == "uncertain" {
+            action = reconcile_on(base, run, &action).await?.unwrap_or(action);
+        }
+        if !matches!(
+            action["state"].as_str(),
+            Some("completed" | "confirmed_failed")
+        ) {
+            resolved = false;
+            continue;
+        }
+        let result = if action["state"] == "completed" {
+            response(&action)
+        } else {
+            let mut result = action["result"].clone();
+            result["action"] = summary(&action);
+            result
+        };
+        if let Some(index) = index {
+            run["batch"][index]["state"] = json!("done");
+            run["batch"][index]["result"] = result;
+        } else {
+            crate::agent_loop::append_tool(run, &result)?;
+        }
+    }
+    if resolved {
+        if let Some(items) = run["batch"].as_array_mut() {
+            for item in items {
+                if item["state"] == "executing"
+                    && tools::is_read(item["pending"]["name"].as_str().unwrap_or(""))
+                {
+                    item["state"] = json!("requested");
+                    item["pending"]["state"] = json!("requested");
+                }
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+pub(crate) async fn interrupt_run_on(base: &Store, run: &Value) -> Result<()> {
+    let store = ledger_on(base, run).await?;
+    for pending in std::iter::once(&run["pending"]).chain(
+        run["batch"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|i| &i["pending"]),
+    ) {
+        if let Some(id) = pending["action_id"].as_str() {
+            store.action_interrupt(id).await?;
+        }
+    }
+    Ok(())
+}
+impl webagent_engine::runtime::actions::Actions<Store> for crate::tool_execution::NativeActions {
+ fn strip(args:&Value)->Value {strip(args)}
+ fn response(action:&Value)->Value {response(action)}
+ fn summary(action:&Value)->Value {summary(action)}
+ fn ledger<'a>(&'a self,store:&'a Store,run:&'a Value)->impl std::future::Future<Output=Result<Store>>+Send+'a {ledger_on(store,run)}
+ fn list_for_agent<'a>(&'a self,ledger:&'a Store,agent:&'a str)->impl std::future::Future<Output=Result<Vec<Value>>>+Send+'a {async move {ledger.action_list(&format!("agent:{agent}")).await}}
+ fn prepare<'a>(&'a self,store:&'a Store,run:&'a Value,name:&'a str,args:&'a Value,pending_id:&'a str,visibility:&'a Value)->impl std::future::Future<Output=Result<Option<Value>>>+Send+'a {prepare_on(store,run,name,args,pending_id,visibility)}
+ fn preflight<'a>(&'a self,store:&'a Store,run:&'a mut Value,name:&'a str,args:&'a Value,visibility:&'a Value)->impl std::future::Future<Output=Result<Option<Value>>>+Send+'a {preflight_on(store,run,name,args,visibility)}
+ fn claim<'a>(&'a self,store:&'a Store,run:&'a Value,pending:&'a Value)->impl std::future::Future<Output=Result<Option<Value>>>+Send+'a {claim_on(store,run,pending)}
+ fn finish<'a>(&'a self,store:&'a Store,run:&'a Value,action:&'a Value,result:&'a Result<Value>)->impl std::future::Future<Output=Result<Value>>+Send+'a {finish_on(store,run,action,result)}
+ fn reconcile<'a>(&'a self,store:&'a Store,run:&'a Value,action:&'a Value)->impl std::future::Future<Output=Result<Option<Value>>>+Send+'a {reconcile_on(store,run,action)}
+ fn not_dispatched<'a>(&'a self,store:&'a Store,run:&'a Value,pending:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a {not_dispatched_on(store,run,pending)}
+ fn recover_results<'a>(&'a self,store:&'a Store,run:&'a mut Value)->impl std::future::Future<Output=Result<bool>>+Send+'a {recover_results_on(store,run)}
+ fn interrupt_run<'a>(&'a self,store:&'a Store,run:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a {interrupt_run_on(store,run)}
 }

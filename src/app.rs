@@ -69,9 +69,7 @@ use webagent_configuration::digest;
 fn key(prefix: &str, id: &str) -> String {
     format!("{prefix}:{id}")
 }
-fn terminal(status: &str) -> bool {
-    matches!(status, "completed" | "cancelled" | "failed")
-}
+fn terminal(status: &str) -> bool {webagent_engine::runtime::failure::terminal(status)}
 fn status(run: &Value) -> &str {
     run["status"].as_str().unwrap_or("failed")
 }
@@ -161,15 +159,7 @@ fn bounded_model_authorization_failure_stage(error: &anyhow::Error) -> &'static 
 }
 
 // Publish model identity at the pinned failover cursor, never credentials.
-fn public_run_model(run: &Value) -> Value {
-    if run["model"].is_object(){return json!({"entry_id":run["model"]["entry_id"],"model":run["model"]["model"]});}
-    let index=run["failover_state"]["candidate_index"].as_u64().unwrap_or(0) as usize;
-    let candidate=run["selection_plan"]["candidates"].as_array().and_then(|items|items.get(index));
-    match candidate {
-        Some(value)=>json!({"entry_id":value["entry_id"],"model":value["upstream_model"]}),
-        None=>json!({"entry_id":null,"model":run["provider_selection"]["model"]}),
-    }
-}
+fn public_run_model(run: &Value) -> Value {webagent_engine::output::public_run_model(run)}
 async fn public_runs(app:&App,views:Vec<Value>)->Result<Vec<Value>>{
     let mut result=Vec::with_capacity(views.len());
     for view in views{
@@ -280,7 +270,7 @@ fn run_diagnostics(run: &Value) -> Value {
         "context_summary":public_context_summary(run),
         "latest_context_assembly":public_assembly_attempt(&run["latest_context_assembly"]),
         "last_successful_assembly":public_context_summary(run),
-        "ability_context":abilities::AbilityContext::public(&run["ability_context"])})
+        "ability_context":abilities::public_context(&run["ability_context"])})
 }
 async fn run_diagnostics_api(
     State(app): State<App>,
@@ -333,84 +323,12 @@ async fn assembled_agent_instructions(store: &Store, agent_id: &str) -> Result<S
         &store.list_agent_prompt_slots(agent_id).await?)
 }
 /// Advance a pinned cursor only for a typed, safe pre-response failure.
-fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
-    use model_selection::{FailureKind, FailoverState, NextAction, SelectionPlan};
-    let failure = error.downcast_ref::<provider::ProviderFailure>();
-    let kind = failure.map(|e| e.kind).unwrap_or(FailureKind::Protocol);
-    let mut state: FailoverState = run.get("failover_state").filter(|v| !v.is_null())
-        .map(|v| serde_json::from_value(v.clone())).transpose()?.unwrap_or_default();
-    state.response_started |= failure.is_some_and(|e| e.response_started);
-    state.uncertain_tool_effect |= run["uncertain"] == true;
-    let action = if let Some(value) = run.get("selection_plan").filter(|v| !v.is_null()) {
-        let plan: SelectionPlan = serde_json::from_value(value.clone())?;
-        let action = state.failed(&plan, kind);
-        if action == NextAction::Backup {
-            run["provider_selection"] = provider::ProviderSelection { limits:plan.candidates[state.candidate_index].limits.clone(),
-                provider: plan.candidates[state.candidate_index].transport.provider_id(),
-                model: plan.candidates[state.candidate_index].upstream_model.clone(),
-            }.value();
-            run["attempt"] = json!(0);
-        }
-        action
-    } else if kind == FailureKind::Transient && !state.response_started
-        && !state.uncertain_tool_effect && state.retries < 1 {
-        state.retries += 1;
-        NextAction::Retry
-    } else { NextAction::Terminal };
-    let resumable = kind == FailureKind::Transient && !state.response_started
-        && !state.uncertain_tool_effect;
-    // This encrypted marker permits an explicit new retry budget, never an
-    // automatic reset. Partial responses and uncertain effects cannot set it.
-    run["provider_recovery"] = if resumable && action == NextAction::Terminal {
-        json!({"version":1,"safe_to_resume":true})
-    } else { Value::Null };
-    run["provider_retry_at"] = if action != NextAction::Terminal { json!(now()+2) } else { Value::Null };
-    run["failover_state"] = serde_json::to_value(state)?;
-    run["status"] = json!(match action { NextAction::Retry | NextAction::Backup => "queued", NextAction::Terminal if resumable => "stopped", NextAction::Terminal => "failed" });
-    run["error"] = json!(match action {
-        NextAction::Retry => format!("Transient provider failure; bounded retry: {error}"),
-        NextAction::Backup => format!("Primary/backup provider failed; trying the next configured connection: {error}"),
-        NextAction::Terminal if resumable => format!("Provider recovery budget exhausted; resume to try again: {error}"),
-        NextAction::Terminal => format!("Provider request failed; no safe retry or eligible backup remains: {error}"),
-    });
-    Ok(())
-}
+fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {webagent_engine::runtime::failure::model_failure(run,error)}
 // Diagnostic ownership comes from the caller's Store, never model/run arguments.
-fn trusted_model_failure(store:&Store,run:&mut Value,error:&anyhow::Error,system:bool)->Result<()> {
-    let evidence=if diagnostics::provider_enabled(store) {
-        let selected=if system {system_dispatch_run(run).ok().map(|r|r["provider_selection"].clone())}else{Some(run["provider_selection"].clone())};
-        Some(json!({"id":run["id"],"session_id":run["session_id"],"provider_selection":selected,"candidate_index":if system {run["system_failover_state"]["candidate_index"].clone()}else{run["failover_state"]["candidate_index"].clone()}}))
-    }else{None};
-    if system {system_model_failure(run,error)?;}else{model_failure(run,error)?;}
-    if let Some(evidence)=evidence {
-        let next=if system {run["system_failover_state"]["candidate_index"].as_u64()}else{run["failover_state"]["candidate_index"].as_u64()};
-        let action=if next.unwrap_or(0)>evidence["candidate_index"].as_u64().unwrap_or(0){"backup"}else if run["status"]=="queued"{"retry"}else if run["provider_recovery"]["safe_to_resume"]==true{"resume_required"}else{"terminal"};
-        diagnostics::failure(store,&evidence,error,action);
-    }
-    Ok(())
-}
+fn trusted_model_failure(store:&Store,run:&mut Value,error:&anyhow::Error,system:bool)->Result<()> {webagent_engine::runtime::failure::trusted_model_failure(&diagnostics::EngineModelDiagnostics,store,run,error,system)}
 // Compaction has its own pinned System cursor. Failover must never rewrite the chat role.
-fn system_dispatch_run(run: &Value) -> Result<Value> {
-    let plan:model_selection::SelectionPlan=serde_json::from_value(run["system_selection_plan"].clone())
-        .map_err(|_|anyhow!("System model required for context compaction; configure it before starting a new run"))?;
-    if plan.role != model_selection::ModelRole::System {return Err(anyhow!("Invalid System role plan"));}
-    let state:model_selection::FailoverState=serde_json::from_value(run["system_failover_state"].clone())?;
-    let candidate=plan.candidates.get(state.candidate_index).ok_or_else(||anyhow!("System candidates exhausted"))?;
-    Ok(json!({"id":run["id"],"session_id":run["session_id"],"requester_user_id":run["requester_user_id"],"agent_id":run["agent_id"],"selection_plan":plan,"failover_state":state,
-        "uncertain":run["uncertain"],"provider_selection":provider::ProviderSelection { limits:candidate.limits.clone(),
-            provider:candidate.transport.provider_id(),model:candidate.upstream_model.clone()}.value()}))
-}
-fn system_model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
-    let mut system=system_dispatch_run(run)?;
-    model_failure(&mut system,error)?;
-    run["system_failover_state"]=system["failover_state"].clone();
-    run["provider_recovery"]=system["provider_recovery"].clone();
-    if run["provider_recovery"].is_object() { run["provider_recovery"]["system"]=json!(true); }
-    run["provider_retry_at"]=system["provider_retry_at"].clone();
-    run["status"]=system["status"].clone();
-    run["error"]=system["error"].clone();
-    Ok(())
-}
+fn system_dispatch_run(run: &Value) -> Result<Value> {webagent_engine::runtime::failure::system_dispatch_run(run)}
+fn system_model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {webagent_engine::runtime::failure::system_model_failure(run,error)}
 // System requests use their own model ceiling, including instructions and JSON framing.
 #[cfg(test)]
 fn system_summary_input(context: &loop_runtime::Context, selection: &provider::ProviderSelection,
@@ -420,15 +338,7 @@ fn system_summary_input(context: &loop_runtime::Context, selection: &provider::P
     Ok(input)
 }
 /// Validate the complete summary envelope, including current instructions, against the System model and workflow byte ceilings.
-fn validate_system_summary_input(context:&loop_runtime::Context,selection:&provider::ProviderSelection,input:&[Value],instructions:&str,max_bytes:usize)->Result<()> {
-    #[derive(serde::Serialize)]
-    struct Envelope<'a>{instructions:&'a str,tools:[Value;0],input:&'a [Value]}
-    let envelope=Envelope{instructions,tools:[],input};
-    if context_accounting::json_size(&envelope)?>context.ceiling(selection)?.min(max_bytes){
-        return Err(context_assembly::Failure::new("system_summary_input_unavailable","summary_input").into());
-    }
-    Ok(())
-}
+fn validate_system_summary_input(context:&loop_runtime::Context,selection:&provider::ProviderSelection,input:&[Value],instructions:&str,max_bytes:usize)->Result<()> {webagent_engine::runtime::failure::validate_system_summary_input(context,selection,input,instructions,max_bytes)}
 
 #[cfg(test)]
 mod code_index_run_projection_tests {
@@ -500,106 +410,23 @@ mod system_budget_tests {
     }
 }
 /// Seed installation tool permissions; live account, agent and session gates still constrain execution.
-fn policy_default() -> Value {
-    let mut policy=json!({"version":1,"rules":{"list_abilities":"allow","load_ability":"allow","list_skills":"allow","load_skill":"allow","context_assets":"allow","get_time":"allow","get_date":"allow","calculate":"allow","read_attachment":"allow","search_this_session":"allow","read_own_prompt":"allow","web_search":"allow","get_weather":"allow","maps_geocode":"allow","file_list":"allow","file_read":"allow","file_search":"allow","state_inspect":"allow","prompt_slot_read":"allow","prompt_slot_write":"require_approval","file_write":"require_approval","file_edit":"require_approval","workspace_seed":"require_approval","source_review":"allow","source_patch":"require_approval","promotion_propose":"allow","shell":"require_approval","python":"require_approval"}});
-    for name in ["task_status","task_wait","task_cancel"] {policy["rules"][name]=json!("allow");}
-    for schema in tools::administrator::schemas() {
-        let name=schema["name"].as_str().unwrap();
-        policy["rules"][name]=json!(if tools::is_read(name){"allow"}else{"require_approval"});
-    }
-    for schema in tools::core_mode::schemas().into_iter()
-        .chain(tools::core_search::schemas()).chain(tools::core_compaction::schemas())
-        .chain(tools::core_recall::schemas()).chain(tools::core_self_edit::schemas()).chain(crate::session_messaging::schemas())
-        .chain(crate::main_chat::schemas()).chain(tools::core_task::schemas()).chain(tools::core_tool_search::schemas()).chain(tools::core_decision::schemas()).chain(tools::core_directory_decision::schemas()).chain(modules::schemas()) {
-        let name=schema["name"].as_str().unwrap();
-        policy["rules"][name]=json!(if tools::is_read(name){"allow"}else{"require_approval"});
-    }
-    for schema in mcp::all_schemas() {
-        let name=schema["name"].as_str().unwrap();
-        policy["rules"][name]=json!(if tools::is_read(name){"allow"}else{"require_approval"});
-    }
-    for name in ["message_other_session","start_session"] {policy["rules"][name]=json!("allow");}
-    #[cfg(test)] { policy["rules"]["test_owner_purchase"]=json!("require_approval"); }
-    policy
-}
-fn policy_decision<'a>(policy: &'a Value, name: &str) -> &'a str {
-    policy["rules"][name].as_str().unwrap_or("deny")
-}
+fn policy_default()->Value {webagent_engine::runtime::policy::default_policy::<tool_execution::NativeActions,engine_runtime::policy::NativePolicy>()}
+fn policy_decision<'a>(policy: &'a Value, name: &str) -> &'a str {webagent_engine::runtime::policy::policy_decision(policy,name)}
 fn live_tool_decision(app:&App, access:&access_policy::LiveAccess, name:&str,
     policy:&Value, visibility:&Value, state:&Value, loaded:&Value,
-    read_only:bool) -> access::ToolDecision {
-    let installation=access::Permission::from_policy(policy_decision(policy,name))
-        .unwrap_or(access::Permission::Deny);
-    let (available,visible)=app.abilities.tool_gate(name,visibility,state,loaded);
-    let ability_ids=app.abilities.tool_abilities(name,visibility,state,loaded);
-    let caution=if !tools::is_read(name) && ability_ids.iter().any(|id| {
-        let key=match id.as_str(){"terminal_control"=>"terminal_caution","codebase_admin"=>"destructive_caution",_=>return false};
-        visibility["settings"][id][key]=="cautious"
-    }) {access::Permission::Ask}else{access::Permission::Auto};
-    access.tool_decision_for_abilities(name,&ability_ids,installation.meet(caution),
-        available,visible,read_only && !crate::session_messaging::owns(name),tools::is_read(name))
-}
+    read_only:bool) -> access::ToolDecision {app.engine().live_tool_decision(access,name,policy,visibility,state,loaded,read_only)}
 fn filter_ability_entry(app:&App, access:&access_policy::LiveAccess, entry:&mut Value,
     policy:&Value, visibility:&Value, state:&Value, loaded:&Value,
-    read_only:bool) -> bool {
-    let id=entry["id"].as_str().unwrap_or("");
-    if access.ability_permission(id)==access::Permission::Deny {return false;}
-    let Some(tools)=entry["tools"].as_array_mut() else {return false;};
-    tools.retain(|tool| {
-        let name=tool["name"].as_str().unwrap_or("");
-        let installation=access::Permission::from_policy(policy_decision(policy,name))
-            .unwrap_or(access::Permission::Deny);
-        let (available,_)=app.abilities.tool_gate(name,visibility,state,loaded);
-        let ability_ids=app.abilities.tool_abilities(name,visibility,state,loaded);
-        access.tool_decision_for_abilities(name,&ability_ids,installation,
-            available,true,read_only && !crate::session_messaging::owns(name),tools::is_read(name))
-            .permission!=access::Permission::Deny
-    });
-    !tools.is_empty()
-}
-fn default_session_mode() -> Value {
-    json!({"mode":"write","revision":0})
-}
+    read_only:bool) -> bool {app.engine().filter_ability_entry(access,entry,policy,visibility,state,loaded,read_only)}
+fn default_session_mode() -> Value {webagent_engine::runtime::policy::default_session_mode()}
 async fn agent_abilities(app: &App) -> Result<Value> {
     app.store.agent_abilities().await
 }
-async fn session_agent_id(app: &App, sid: &str) -> Result<String> {
-    let session = app.store.get(&key("session", sid)).await?
-        .ok_or_else(|| anyhow!("Session not found"))?;
-    if session["status"] != "active" { return Err(crate::store::session::RecycledSession.into()); }
-    Ok(session["agent_id"].as_str().unwrap_or("shared_default").to_owned())
-}
-async fn session_agent_abilities(app: &App, sid: &str) -> Result<Value> {
-    let agent_id=session_agent_id(app,sid).await?;
-    app.store.for_agent(&agent_id).await?.agent_abilities_for(&agent_id).await
-}
-fn default_session_abilities() -> Value {
-    json!({"revision":0,"active":[],"suppressed":[]})
-}
-async fn session_ability_state(app: &App, sid: &str) -> Result<Value> {
-    let value = app
-        .store
-        .get(&key("session_ability_state", sid))
-        .await?
-        .unwrap_or_else(default_session_abilities);
-    if value["revision"].as_u64().is_none()
-        || !value["active"]
-            .as_array()
-            .is_some_and(|a| a.iter().all(Value::is_string))
-        || !value["suppressed"]
-            .as_array()
-            .is_some_and(|a| a.iter().all(Value::is_string))
-    {
-        return Err(anyhow!("Invalid session ability state"));
-    }
-    Ok(value)
-}
-async fn ability_controls(app: &App, sid: &str) -> Result<(Value, u64, Value, Value)> {
-    let (policy, mode_revision) = effective_policy(app, sid).await?;
-    let visibility = session_agent_abilities(app, sid).await?;
-    let state = session_ability_state(app, sid).await?;
-    Ok((policy, mode_revision, visibility, state))
-}
+async fn session_agent_id(app: &App, sid: &str) -> Result<String> {app.engine().session_agent_id(sid).await}
+async fn session_agent_abilities(app: &App, sid: &str) -> Result<Value> {app.engine().session_agent_abilities(sid).await}
+fn default_session_abilities() -> Value {webagent_engine::runtime::policy::default_session_abilities()}
+async fn session_ability_state(app: &App, sid: &str) -> Result<Value> {app.engine().session_ability_state(sid).await}
+async fn ability_controls(app: &App, sid: &str) -> Result<(Value, u64, Value, Value)> {app.engine().ability_controls(sid).await}
 fn invalidate_waiting_run(mut run: Value) -> Value {
     run["pending"]["state"] = json!("requested");
     run["pending"]["decision"] = Value::Null;
@@ -607,53 +434,9 @@ fn invalidate_waiting_run(mut run: Value) -> Value {
     run["updated_at"] = json!(now());
     run
 }
-async fn session_mode(app: &App, sid: &str) -> Result<Value> {
-    let mut value = app.store.get(&key("session_mode", sid)).await?.unwrap_or_else(default_session_mode);
-    let agent=session_agent_id(app,sid).await?;
-    let config=execution_modes::config(&app.store,&agent).await?;
-    if let Some(id)=value["execution_mode"].as_str() {
-        // Removed custom modes fail closed to Ask; never inherit write authority.
-        let entry=execution_modes::resolve(&config,id).unwrap_or_else(|_|execution_modes::defaults()[0].clone());
-        // A configuration edit cannot elevate an already read-only conversation.
-        // Explicit mode selection must cross the existing approval boundary.
-        if value["mode"]!="read_only" || entry["permission_policy"]=="read_only" {
-            value["mode"]=entry["permission_policy"].clone();
-        }
-        value["execution_mode"]=entry["id"].clone();
-        value["definition"]=entry;
-    }
-    if !matches!(value["mode"].as_str(), Some("write" | "read_only")) || value["revision"].as_u64().is_none() {
-        return Err(anyhow!("Invalid session capability mode"));
-    }
-    Ok(value)
-}
-async fn effective_policy(app: &App, sid: &str) -> Result<(Value, u64)> {
-    effective_policy_for_mode(app,&session_mode(app,sid).await?).await
-}
-async fn effective_policy_for_mode(app:&App,mode:&Value)->Result<(Value,u64)> {
-    let mut policy = app
-        .store
-        .get("policy")
-        .await?
-        .unwrap_or_else(policy_default);
-    // New Base discovery is available by default; an explicit saved denial wins.
-    for name in ["search_tools","list_tools","load_tool"] {
-        if policy["rules"].get(name).is_none() {policy["rules"][name]=json!("allow");}
-    }
-    for name in ["task_status","task_wait","task_cancel"] {
-        if policy["rules"].get(name).is_none() {policy["rules"][name]=json!("allow");}
-    }
-    policy=crate::session_messaging::policy_defaults(policy);
-    if mode["mode"] == "read_only" {
-        for schema in tools::schemas() {
-            let name = schema["name"].as_str().unwrap_or("");
-            if !tools::is_read(name) && !crate::session_messaging::owns(name) {
-                policy["rules"][name] = json!("deny");
-            }
-        }
-    }
-    Ok((policy, mode["revision"].as_u64().unwrap()))
-}
+async fn session_mode(app: &App, sid: &str) -> Result<Value> {app.engine().session_mode(sid).await}
+async fn effective_policy(app: &App, sid: &str) -> Result<(Value, u64)> {app.engine().effective_policy(sid).await}
+async fn effective_policy_for_mode(app:&App,mode:&Value)->Result<(Value,u64)> {app.engine().effective_policy_for_mode(mode).await}
 fn marker(app: &App, shutoff: bool) -> Result<()> {
     let lock = File::open(app.control_dir.join("dispatch.lock"))?;
     lock.lock_exclusive()?;
@@ -693,36 +476,7 @@ impl App {
     /// Deletion is durable across API/loop processes. The epoch also catches a
     /// recycle/restore occurring between polls; old work can never resume.
     async fn session_operation<T>(&self, sid: &str, cancel: CancellationToken,
-        operation: impl std::future::Future<Output=Result<T>>) -> Result<T> {
-        let initial=self.store.get(&key("session",sid)).await?
-            .filter(|session|session["status"]=="active")
-            .ok_or_else(||anyhow::Error::from(crate::store::session::RecycledSession))?;
-        let epoch=initial["execution_epoch"].as_u64().unwrap_or(0);
-        tokio::pin!(operation);
-        let mut poll=tokio::time::interval(Duration::from_millis(100));
-        loop {
-            tokio::select! {
-                result=&mut operation=>{
-                    let available=self.store.get(&key("session",sid)).await
-                        .is_ok_and(|session|session.is_some_and(|s|s["status"]=="active"
-                            && s["execution_epoch"].as_u64().unwrap_or(0)==epoch));
-                    if !available {cancel.cancel();return Err(crate::store::session::RecycledSession.into());}
-                    return result;
-                },
-                _=poll.tick()=>{
-                    let available=self.store.get(&key("session",sid)).await
-                        .is_ok_and(|session|session.is_some_and(|s|s["status"]=="active"
-                            && s["execution_epoch"].as_u64().unwrap_or(0)==epoch));
-                    if !available {
-                        cancel.cancel();
-                        // Poll cancellation cleanup before dropping a worker socket.
-                        let _=tokio::time::timeout(Duration::from_secs(5),&mut operation).await;
-                        return Err(crate::store::session::RecycledSession.into());
-                    }
-                }
-            }
-        }
-    }
+        operation: impl std::future::Future<Output=Result<T>>) -> Result<T> {crate::shared_chat::guard_operation(&self.store,sid,cancel,operation).await}
     async fn save(&self, run: &mut Value) -> Result<()> {
         // Terminal documents are immutable in storage. Preserve their last
         // timestamp so an idempotent save remains identical across seconds.
@@ -789,6 +543,7 @@ async fn run_process() -> Result<()> {
         .init();
     if let Some(path)=std::env::args().skip(1).find_map(|arg|arg.strip_prefix("--validate-assets=").map(PathBuf::from)) {
         let catalog=abilities::Catalog::load_snapshot(&path.join("plugins/abilities"))?;
+        let _=crate::live_assets::native_schema_snapshot_at(Some(&path))?;
         let engine=crate::engine_components::load(&path,"candidate")?;
         let prompts:Value=serde_json::from_slice(&std::fs::read(path.join("config/prompts.json"))?)?;
         crate::api::live_configuration::validate_source_prompts(&prompts)?;
@@ -994,7 +749,7 @@ impl webagent_models::runtime::SessionAuthority for ModelSessionAuthority<'_> {
 }
 impl App {
     fn models_runtime(&self)->webagent_models::runtime::Runtime<'_,Store> {
-        webagent_models::runtime::Runtime::new(self.store.models_repository(),&self.provider.0,
+        webagent_models::runtime::Runtime::new(self.store.models_repository(),self.provider.transport(),
             &self.gate,&self.refresh,&self.login,&self.stop)
     }
 }

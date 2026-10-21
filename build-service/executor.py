@@ -67,9 +67,10 @@ def test_filter(value):
 HOST_FOCUSED_POLICY="registered-host-v2"
 HOST_FOCUSED_REGISTRY=(
  {"id":"host-prompt-restoration","test":"provider::tests::configured_base_instructions_loads_and_recovers_from_file_changes",
-  "paths":("src/engine/","src/models/provider/","crates/modules/models/","config/prompts.json","src/agent_loop/","src/context/","src/engine_components.rs","src/main.rs","Cargo.toml","Cargo.lock","build.rs","crates/context-contracts/","crates/context-assembly/","crates/context-service/","plugins/engine/context-assembly/")},
- {"id":"host-offline-descriptor-identity","test":"engine_components::offline_smoke_uses_frozen_descriptor_versions",
-  "paths":("src/engine/","src/engine_components.rs","src/context/","src/agent_loop/","src/main.rs","Cargo.toml","Cargo.lock","build.rs","crates/context-contracts/","crates/context-assembly/","crates/context-service/","crates/engine-service/","crates/context-assets/","crates/assets-contracts/","crates/assets-service/","crates/capability-contracts/","crates/capability-context/","crates/capability-service/","crates/provider-contracts/","crates/provider-projection/","crates/provider-service/","crates/background-contracts/","crates/background-dispatch/","crates/background-service/","crates/boot-contracts/","crates/boot-supervisor/","crates/boot-service/","plugins/engine/")},
+  "paths":("src/engine/","crates/modules/engine/","src/models/provider/","crates/modules/models/","config/prompts.json","src/agent_loop/","src/context/","src/engine_components.rs","src/main.rs","Cargo.toml","Cargo.lock","build.rs","crates/context-contracts/","crates/context-assembly/","crates/context-service/","plugins/engine/context-assembly/")},
+ {"id":"host-offline-descriptor-identity","test":"components::offline_smoke_uses_frozen_descriptor_versions",
+  "package":"webagent-engine","target":"webagent_engine","target_kind":"lib","source_path":"/build/crates/modules/engine/src/lib.rs",
+  "paths":("src/engine/","crates/modules/engine/","src/engine_components.rs","src/context/","src/agent_loop/","src/main.rs","Cargo.toml","Cargo.lock","build.rs","crates/context-contracts/","crates/context-assembly/","crates/context-service/","crates/engine-service/","crates/context-assets/","crates/assets-contracts/","crates/assets-service/","crates/capability-contracts/","crates/capability-context/","crates/capability-service/","crates/provider-contracts/","crates/provider-projection/","crates/provider-service/","crates/background-contracts/","crates/background-dispatch/","crates/background-service/","crates/boot-contracts/","crates/boot-supervisor/","crates/boot-service/","plugins/engine/")},
 )
 HOST_FOCUSED_POLICY_SHA256=hashlib.sha256(json.dumps({"version":HOST_FOCUSED_POLICY,"registry":HOST_FOCUSED_REGISTRY,"component_limit":3},sort_keys=True).encode()).hexdigest()
 
@@ -155,6 +156,7 @@ class Executor:
             identity=candidate
             with self.resources.lock:self.resources.rows[name]["container_id"]=identity
             self.runner.command(["docker","start",name],timeout=30)
+            if cap is not None:self.runner.resource_request({"operation":"seal","container":name,"expected_id":identity})
             self.resources.attached(name,identity)
             self.runner.job_context.phase_container=name
             if cap is not None:
@@ -249,7 +251,10 @@ class Executor:
             if not isinstance(candidate,str)or not re.fullmatch(r"[a-f0-9]{64}",candidate)or created.get("state")!="created"or created.get("phase")!="package":raise ValueError("Packaging container identity invalid")
             identity=candidate
             with self.resources.lock:self.resources.rows[name]["container_id"]=identity
-            stage="container_start";self.runner.command(["docker","start",name],timeout=30);self.resources.attached(name,identity)
+            stage="container_start";self.runner.command(["docker","start",name],timeout=30)
+            if cap is not None:
+                stage="admission_seal";self.runner.resource_request({"operation":"seal","container":name,"expected_id":identity})
+            self.resources.attached(name,identity)
             stage="initial_attestation"
             if cap is not None:
                 observed=self.runner.resource_request({"operation":"stats","container":name})
@@ -472,7 +477,7 @@ class Executor:
         paths=sorted({p.removeprefix("v3/")for p in changed});plan=[];packages=[]
         for rule in HOST_FOCUSED_REGISTRY:
             affected=[p for p in paths if any(p==prefix or prefix.endswith("/")and p.startswith(prefix)for prefix in rule["paths"])]
-            if affected:plan.append({"id":rule["id"],"package":"webagent-v3","target":"webagent-v3","test":rule["test"],"feature_profile":"default","affected_paths":affected})
+            if affected:plan.append({"id":rule["id"],"package":rule.get("package","webagent-v3"),"target":rule.get("target","webagent-v3"),"test":rule["test"],"feature_profile":"default","affected_paths":affected,**{key:rule[key]for key in ("target_kind","source_path")if key in rule}})
         local=[]
         for item in metadata.get("packages",[]):
             path=item.get("manifest_path","")
@@ -519,10 +524,15 @@ class Executor:
                     authorized();remaining=deadline-time.monotonic()
                     if remaining<=0:raise TimeoutError("Focused verification stage deadline exceeded")
                     argv=["cargo","test","--locked","--offline","-p",item["package"]]
-                    if "test"in item:argv.extend(["--bin",item["target"],item["test"],"--","--exact","--test-threads=1"])
+                    if "test"in item:argv.extend((["--lib"]if item.get("target_kind")=="lib"else["--bin",item["target"]])+[item["test"],"--","--exact","--test-threads=1"])
                     else:argv.extend(["--","--test-threads=1"])
                     if retained is not None:
-                        matches=[row for row in manifest["tests"]if row["target_name"]==item.get("target")and row["source_path"]=="/build/src/main.rs"]
+                        matches=[row for row in manifest["tests"]if row["target_name"]==item.get("target")and row["source_path"]==item.get("source_path","/build/src/main.rs")]
+                        if item.get("target_kind")=="lib":
+                            # This is one fixed protected registration, not a model-selected package/target.
+                            if (item["package"],item["target"],item["source_path"])!=("webagent-engine","webagent_engine","/build/crates/modules/engine/src/lib.rs"):raise ValueError("Unregistered focused library target")
+                            prefix="path+file:///build/crates/modules/engine#webagent-engine@"
+                            matches=[row for row in matches if row.get("kind")==["lib"]and row.get("package_id","").startswith(prefix)and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?",row["package_id"][len(prefix):])]
                         if len(matches)!=1:raise ValueError("Registered retained host test binary unavailable")
                         argv=["/output/artifacts/"+matches[0]["file"],item["test"],"--exact","--test-threads=1"]
                     entry["argv"]=argv;entry["recipe"]="engine:rust1.90:focused-v2:"+item.get("id",item["package"])

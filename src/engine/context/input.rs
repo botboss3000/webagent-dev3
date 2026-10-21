@@ -1,23 +1,6 @@
-//! Core borrowed request adapter; trusted contribution selection lives in the library.
-use crate::{context_compaction,provider};
-use serde_json::Value;
-pub use webagent_context_contracts::context_input::{CallIdentity,Contribution,Lifetime,select};
-/// Borrowed call ingredients plus resolved model and budget policies.
-/// This is not an assembled payload: history and schemas stay borrowed, and
-/// assembly combines instructions only after contribution selection succeeds.
-#[derive(Clone, Copy)]
-pub struct Request<'a> {
-    pub history: &'a [Value],
-    pub base: &'a str,
-    pub guidance: &'a str,
-    pub schemas: &'a [Value],
-    /// Only native, trusted producers can supply instruction contributions.
-    pub contributions: &'a [Contribution],
-    pub identity: CallIdentity,
-    pub selection: &'a provider::ProviderSelection,
-    pub max_bytes: usize,
-    pub compaction: &'a context_compaction::Config,
-}
+//! Root compatibility names for Engine borrowed context inputs.
+pub use webagent_engine::context::input::*;
+
 #[cfg(test)] mod tests {
  use super::*;
  #[test] fn selection_is_borrowed_and_does_not_reinject_history() {

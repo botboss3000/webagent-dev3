@@ -4,25 +4,25 @@ use serde_json::{json,Value};
 use webagent_context_contracts::execution::{Metadata,RpcCall};
 use std::{cell::RefCell,future::Future};
 tokio::task_local! {static EVIDENCE:RefCell<Metadata>;}
-pub(crate) struct Outcome {pub content:Value,pub metadata:Metadata}
+pub struct Outcome {pub content:Value,pub metadata:Metadata}
 impl std::ops::Deref for Outcome {type Target=Value;fn deref(&self)->&Value{&self.content}}
 // Existing result diagnostics format content only, never execution metadata.
 impl std::fmt::Display for Outcome {fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{self.content.fmt(f)}}
 /// Each independently polled dispatch owns its evidence, including nested helper RPCs.
-pub(crate) async fn capture(operation:impl Future<Output=Result<Value>>)->Result<Outcome> {
+pub async fn capture(operation:impl Future<Output=Result<Value>>)->Result<Outcome> {
  EVIDENCE.scope(RefCell::new(Metadata::default()),async {
   let content=operation.await?;let metadata=EVIDENCE.with(|slot|slot.borrow().clone());metadata.validate()?;
   Ok(Outcome{content,metadata})
  }).await
 }
-pub(crate) fn rpc(peer:&str,id:&str)->Result<()> {
+pub fn rpc(peer:&str,id:&str)->Result<()> {
  EVIDENCE.try_with(|slot|{
   let mut evidence=slot.borrow_mut();if evidence.rpc_calls.len()>=256 {bail!("Execution RPC evidence limit");}
   evidence.rpc_calls.push(RpcCall{peer:peer.into(),id:id.into()});Ok(())
  }).unwrap_or(Ok(()))
 }
 /// Stage beside the encrypted run checkpoint, never in its model-facing input.
-pub(crate) fn stage(run:&mut Value,metadata:&Metadata)->Result<()> {
+pub fn stage(run:&mut Value,metadata:&Metadata)->Result<()> {
  metadata.validate()?;if metadata.rpc_calls.is_empty(){return Ok(());}
  let id=run["pending"]["call_id"].as_str().filter(|id|!id.is_empty()).ok_or_else(||anyhow::anyhow!("Execution call identity missing"))?.to_owned();
  if !run["_tool_execution_metadata"].is_object(){run["_tool_execution_metadata"]=json!({});}
@@ -53,7 +53,7 @@ pub(crate) fn stage(run:&mut Value,metadata:&Metadata)->Result<()> {
    }
   });
   let sid=uuid::Uuid::new_v4().to_string();let args=json!({"path":"a.rs"});let mut outputs=Vec::new();
-  for _ in 0..2 {outputs.push(capture(super::super::execute("file_read",&args,&sid,&socket,tokio_util::sync::CancellationToken::new())).await.unwrap());}
+  for _ in 0..2 {outputs.push(capture(super::super::transport::execute("file_read",&args,&sid,&socket,tokio_util::sync::CancellationToken::new())).await.unwrap());}
   server.await.unwrap();assert_eq!(outputs[0].content,outputs[1].content);
   assert_ne!(outputs[0].metadata.rpc_calls[0].id,outputs[1].metadata.rpc_calls[0].id);
   assert_eq!(outputs[0].content["id"],"domain-id");

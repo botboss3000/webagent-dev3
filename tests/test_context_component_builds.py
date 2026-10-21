@@ -54,6 +54,27 @@ class ComponentBuildTests(unittest.TestCase):
                 file.unlink();file.symlink_to("/etc/passwd")
                 with self.assertRaisesRegex(ValueError,"symlink"):engine.closure(root,identity)
 
+    # Runtime policy is supplied in the IPC request, never a component compiler input.
+    def test_context_runtime_json_changes_do_not_change_compiler_closure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            (root/"Cargo.toml").write_text("[workspace]\n")
+            (root/"Cargo.lock").write_text("version=4\n")
+            for name,deps in [("context-service",["context-assembly"]),("context-assembly",["context-contracts"]),("context-contracts",[])]:
+                folder=root/"crates"/name
+                (folder/"src").mkdir(parents=True)
+                (folder/"src/lib.rs").write_text("pub fn fixture() {}\n")
+                (folder/"Cargo.toml").write_text('[package]\nname="'+name+'"\nversion="0.1.0"\n[dependencies]\n'+"".join(dep.replace("-","_")+'={path="../'+dep+'"}\n' for dep in deps))
+            config=root/"config";config.mkdir()
+            policy=config/"context-compaction.json";policy.write_text('{"schema_version":1}\n')
+            before=engine.closure(root,engine.ID)
+            self.assertNotIn("config/context-compaction.json",before)
+            policy.write_text('{"schema_version":1,"trigger_tokens":10000}\n')
+            self.assertEqual(before,engine.closure(root,engine.ID))
+            test=root/"crates/context-service/tests";test.mkdir()
+            (test/"service.rs").write_text("#[test] fn compiler_attested_fixture() {}\n")
+            self.assertNotEqual(before,engine.closure(root,engine.ID))
+
     # Keep shared contracts core-owned while honoring compiler-attested implementation dependencies.
     def test_new_shared_contracts_require_core_and_implementation_respects_compiler_attestation(self):
         with tempfile.TemporaryDirectory()as temporary:

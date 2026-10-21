@@ -12,37 +12,9 @@ use std::{
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_ABILITIES: usize = 128;
 
-/// Content-free evidence generated from the same authorized model-call assets.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct AbilityContext {
-    pub turn: u64,
-    pub call: u64,
-    pub abilities: Vec<AbilityInclusion>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct AbilityInclusion {
-    pub id: String,
-    pub visibility: String,
-    pub availability: String,
-    pub guidance_bytes: usize,
-    pub schemas: Vec<String>,
-    pub skills: Vec<SkillInclusion>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SkillInclusion {
-    pub kind: String,
-    pub id: String,
-    pub mode: String,
-    pub included: bool,
-    pub content_bytes: usize,
-    pub reason: String,
-}
-impl AbilityContext {
-    pub(crate) fn public(value: &Value) -> Option<Self> {
-        let report: Self = serde_json::from_value(value.clone()).ok()?;
+pub(crate) use webagent_engine::context::abilities::{AbilityContext,AbilityInclusion,SkillInclusion};
+pub(crate) fn public_context(value: &Value) -> Option<AbilityContext> {
+        let report: AbilityContext = serde_json::from_value(value.clone()).ok()?;
         if report.abilities.len() > MAX_ABILITIES || report.abilities.iter().any(|a|
             !valid_id(&a.id) || !matches!(a.visibility.as_str(), "visible" | "discoverable")
             || !matches!(a.availability.as_str(), "visible" | "activated" | "discoverable")
@@ -55,7 +27,6 @@ impl AbilityContext {
         }
         Some(report)
     }
-}
 
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -133,7 +104,7 @@ struct GroupManifest {
 pub struct Catalog {
     root:PathBuf,
     published:bool,
-    native_overrides:BTreeMap<String,(String,String)>,
+    native_schemas:Vec<Value>,
     abilities: Vec<Ability>,
     version: String,
 }
@@ -264,7 +235,7 @@ fn optional_skill(path: &Path) -> Result<Option<String>> {
 impl Catalog {
     /// Freeze a completely validated catalog for one immutable publication revision.
     pub(crate) fn load_snapshot(root:&Path)->Result<Self> {
-        let mut catalog=Self::load(root)?;
+        let mut catalog=Self::load_mode(root,false,true)?;
         catalog.published=true;
         for ability in &mut catalog.abilities {ability.frozen=true;}
         Ok(catalog)
@@ -275,25 +246,21 @@ impl Catalog {
     }
     /// Combine compiled contracts with present isolated schemas without probing unrelated modules.
     pub(crate) fn all_schemas(&self)->Vec<Value> {
-        let mut schemas=crate::tools::native_schemas();
-        for schema in &mut schemas {
-            if let Some((original,description))=schema["name"].as_str().and_then(|name|self.native_overrides.get(name)){
-                if let Some(text)=schema["description"].as_str(){schema["description"]=json!(text.replace(original,description));}
-            }
-        }
+        let mut schemas=crate::tools::native_schemas_without_administrator();
+        schemas.extend(self.native_schemas.clone());
         schemas.extend(self.abilities.iter().filter_map(|a|a.plugin.as_ref().filter(|_|Self::present(a))).flat_map(|p|p.schemas.clone()));
         schemas
     }
 
     /// Validate manifest ownership and guidance before admitting any catalog revision.
-    pub fn load(root: &Path) -> Result<Self> { Self::load_mode(root,false) }
+    pub fn load(root: &Path) -> Result<Self> { Self::load_mode(root,false,false) }
 
     /// Local live sources may explicitly withdraw a declaration by unlinking its manifest.
     /// Present invalid manifests and all immutable publication snapshots stay fail-closed.
-    pub(crate) fn load_current(root:&Path)->Result<Self> { Self::load_mode(root,true) }
+    pub(crate) fn load_current(root:&Path)->Result<Self> { Self::load_mode(root,true,false) }
 
-    fn load_mode(root:&Path,withdraw_missing:bool)->Result<Self> {
-        let native_overrides=crate::live_assets::native_schema_overrides(root)?;
+    fn load_mode(root:&Path,withdraw_missing:bool,publication:bool)->Result<Self> {
+        let native_schemas=crate::live_assets::native_schemas_for_catalog(root,publication)?;
         let mut abilities = Vec::new();
         let mut ids = HashSet::new();
         let mut owners = BTreeMap::new();
@@ -301,8 +268,8 @@ impl Catalog {
         let groups = match fs::read_dir(root) {
             Ok(groups) => groups,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let version = hex::encode(Sha256::digest(b"[]"));
-                return Ok(Self { abilities, version,root:root.to_owned(),published:false,native_overrides });
+                let version=hex::encode(Sha256::digest(serde_json::to_vec(&json!([abilities,native_schemas]))?));
+                return Ok(Self { abilities, version,root:root.to_owned(),published:false,native_schemas });
             }
             Err(error) => return Err(error).with_context(|| format!("Cannot read ability catalog: {}", root.display())),
         };
@@ -517,15 +484,21 @@ impl Catalog {
                 &b.id,
             ))
         });
-        let version = hex::encode(Sha256::digest(serde_json::to_vec(&json!([abilities,native_overrides]))?));
-        Ok(Self { abilities, version,root:root.to_owned(),published:false,native_overrides })
+        let version = hex::encode(Sha256::digest(serde_json::to_vec(&json!([abilities,native_schemas]))?));
+        Ok(Self { abilities, version,root:root.to_owned(),published:false,native_schemas })
     }
 
-    pub(crate) fn empty()->Self {Self{root:PathBuf::new(),published:false,native_overrides:BTreeMap::new(),abilities:Vec::new(),version:hex::encode(Sha256::digest(b"[]"))}}
+    pub(crate) fn empty()->Self {Self{root:PathBuf::new(),published:false,native_schemas:Vec::new(),abilities:Vec::new(),version:hex::encode(Sha256::digest(b"[]"))}}
     pub(crate) fn snapshot_root(&self)->&Path {&self.root}
     pub(crate) fn published(&self)->bool {self.published}
     pub(crate) fn source_root(&self)->Option<&Path> {
         self.root.ends_with("plugins/abilities").then(||self.root.parent().and_then(Path::parent)).flatten()
+    }
+    /// Recheck one complete native snapshot at the existing final dispatch fence.
+    pub(crate) fn native_snapshot_current(&self)->Result<bool>{
+      let current=if self.published {crate::live_assets::native_schema_snapshot_at(None)?}
+          else {crate::live_assets::native_schemas_for_catalog(&self.root,false)?};
+      Ok(current==self.native_schemas)
     }
     pub fn version(&self) -> &str {
         &self.version
@@ -776,7 +749,7 @@ impl Catalog {
         self.abilities.iter().any(|a|a.plugin.as_ref().is_some_and(|p|p.owns(name))) || Self::supported(name)
     }
     fn supported(name: &str) -> bool {
-        crate::tools::native_schemas().iter().any(|schema| schema["name"] == name)
+        crate::tools::administrator::supported_schema_name(name) || crate::tools::native_schemas_without_administrator().iter().any(|schema| schema["name"] == name)
     }
 
     fn allowed(policy: &Value, name: &str) -> bool {
@@ -1530,7 +1503,7 @@ mod tests {
         assert!(report[0].schemas.contains(&"file_read".into()));
         let value=serde_json::to_value(AbilityContext{turn:0,call:1,abilities:report}).unwrap();
         assert!(!value.to_string().contains("CORE-BEGIN"));
-        assert!(AbilityContext::public(&value).is_some());
+        assert!(public_context(&value).is_some());
     }
 
     #[test]
@@ -1564,7 +1537,7 @@ mod tests {
     #[test]
     fn diagnostic_projection_rejects_content_and_unknown_identifiers() {
         let value=json!({"turn":1,"call":1,"abilities":[],"prompt":"PRIVATE"});
-        assert!(AbilityContext::public(&value).is_none());
+        assert!(public_context(&value).is_none());
     }
 
     #[test]
@@ -2621,4 +2594,29 @@ mod optional_settings_schema_tests {
         assert_eq!(catalog.selected_state(&visibility,&state,&json!(["unknown"])),state);
     }
 
+}
+
+impl webagent_engine::context::abilities::Catalog for Catalog {
+ fn is_discovery(name:&str)->bool {is_discovery(name)}
+ fn model_index(entries:&[Value],schemas:&[Value])->String {Catalog::model_index(entries,schemas)}
+ fn all_schemas(&self)->Vec<Value> {Catalog::all_schemas(self)}
+ fn capability_guidance(&self,entries:&[Value],schemas:&[Value],visibility:&Value,state:&Value,loaded:&Value,loaded_skills:&Value)->Vec<webagent_capability_contracts::Guidance> {Catalog::capability_guidance(self,entries,schemas,visibility,state,loaded,loaded_skills)}
+ fn catalog_with(&self,policy:&Value,visibility:&Value,state:&Value)->Vec<Value> {Catalog::catalog_with(self,policy,visibility,state)}
+ fn context_inclusion(&self,entries:&[Value],schemas:&[Value],visibility:&Value,state:&Value,loaded:&Value,loaded_skills:&Value)->Vec<AbilityInclusion> {Catalog::context_inclusion(self,entries,schemas,visibility,state,loaded,loaded_skills)}
+ fn discover_with(&self,name:&str,args:&Value,run:&mut Value,policy:&Value,visibility:&Value,state:&Value)->Value {Catalog::discover_with(self,name,args,run,policy,visibility,state)}
+ fn live_version(&self)->String {Catalog::live_version(self)}
+ fn plugin_binding(&self,name:&str)->Option<Value> {Catalog::plugin_binding(self,name)}
+ fn published(&self)->bool {Catalog::published(self)}
+ fn schemas_with(&self,policy:&Value,loaded:&Value,visibility:&Value,state:&Value)->Vec<Value> {Catalog::schemas_with(self,policy,loaded,visibility,state)}
+ fn selected_state(&self,visibility:&Value,state:&Value,loaded:&Value)->Value {Catalog::selected_state(self,visibility,state,loaded)}
+ fn snapshot_root(&self)->&Path {Catalog::snapshot_root(self)}
+ fn source_root(&self)->Option<&Path> {Catalog::source_root(self)}
+ fn version(&self)->&str {Catalog::version(self)}
+ fn tool_gate(&self,name:&str,visibility:&Value,state:&Value,loaded:&Value)->(bool,bool) {Catalog::tool_gate(self,name,visibility,state,loaded)}
+ fn tool_abilities(&self,name:&str,visibility:&Value,state:&Value,loaded:&Value)->Vec<String> {Catalog::tool_abilities(self,name,visibility,state,loaded)}
+ fn native_snapshot_current(&self)->Result<bool> {Catalog::native_snapshot_current(self)}
+ fn current(&self)->Result<Self> {
+  if let Some(root)=crate::live_assets::published_root() {Catalog::load_snapshot(&root.join("plugins/abilities"))}
+  else {Catalog::load_current(self.snapshot_root())}
+ }
 }
