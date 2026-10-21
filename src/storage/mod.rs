@@ -3353,3 +3353,52 @@ impl Store {
         webagent_models::storage::Repository::new(&self.root,&self.app_pool,&self.agent_pool,&self.agent_id,&self.user_id,self)
     }
 }
+
+impl webagent_manager::storage::RecordEffects for Store {
+ fn unseal(&self,value:&[u8])->Result<Value> {Store::unseal(self,value)}
+ fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {Store::encode_user_record(self,value)}
+ fn resolved_prompts(&self,root:&Path)->Result<Value> {crate::live_assets::resolved_prompts(root)}
+ fn prompt_defaults(&self)->Result<Vec<u8>> {crate::live_assets::prompt_defaults()}
+ fn public_usage(&self,value:&Value)->Value {crate::usage::public(value)}
+ fn record_usage(&self,record:&mut Value,response:&Value) {crate::usage::record(record,response)}
+ fn invalidate_documents(&self,keys:&[String]) {self.cache.lock().unwrap().invalidate(keys)}
+ async fn agent_pool<'a>(&'a self,id:&'a str)->Result<SqlitePool> {Ok(self.for_agent(id).await?.agent_pool)}
+ async fn list_documents<'a>(&'a self,prefix:&'a str)->Result<Vec<Value>> {self.list(prefix).await}
+ async fn read_document<'a>(&'a self,key:&'a str)->Result<Option<Value>> {self.get(key).await}
+ async fn requester_claim_ready<'a>(&'a self,run:&'a Value)->Result<bool> {Store::requester_claim_ready(self,run).await}
+ async fn participation_allows_run<'a>(&'a self,run:&'a Value)->Result<bool> {Store::participation_allows_run(self,run).await}
+ async fn reconcile_requester_slots(&self)->Result<()> {Store::reconcile_requester_slots(self).await}
+ async fn require_active_session_in<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,sid:&'a str)->Result<()> where 'c:'a {self.require_active_session(tx,sid).await}
+ async fn write_document_in<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,key:&'a str,value:&'a Value)->Result<()> where 'c:'a {self.write_document(tx,key,value).await}
+ async fn admit_message_in<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,id:&'a str,sid:&'a str,run:&'a Value,message:&'a Value,command_id:&'a str)->Result<()> where 'c:'a {
+            self.require_active_session(tx, sid).await?;
+            self.require_participation(tx,&run).await?;
+            let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')")
+                .bind(sid).fetch_one(&mut **tx).await?;
+            if count != 0 {
+                return Err(anyhow!("Session already has unresolved work"));
+            }
+            self.write_document(tx, &format!("run:{id}"), &run)
+                .await?;
+            self.index_run(tx, &run).await?;
+            self.write_document(tx,&format!("message_meta:{id}"),&json!({"author_id":message["author_id"],"context_eligible":true,"queued":false})).await?;
+            // Naming begins only after the manager admits the message.
+            self.begin_session_naming(tx, sid, id, message).await?;
+            let text = message["context_content"]
+                .as_str()
+                .or_else(|| message["content"].as_str())
+                .ok_or_else(|| anyhow!("Review message missing"))?;
+            self.insert_interaction(
+                tx,
+                sid,
+                id,
+                "user",
+                &json!({"role":"user","content":text}),
+            )
+            .await?;
+            sqlx::query("INSERT INTO loop_commands(command_id,run_id,schema_version,kind,payload,created_at) VALUES(?,?,1,'message',?,strftime('%s','now'))")
+                .bind(command_id).bind(id).bind(self.encode_user_record(&json!({"schema_version":1,"run_id":id,"kind":"message","status":"queued"}))?)
+                .execute(&mut **tx).await?;
+  Ok(())
+ }
+}

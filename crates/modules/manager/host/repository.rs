@@ -1,153 +1,9 @@
-//! Durable review transitions. Only acceptance creates model context and an agent run.
+//! Root compatibility delegates; Manager owns all review SQL and transitions.
 use super::*;
 impl Store {
-    pub(crate) async fn claim_manager_review(&self, id: &str) -> Result<Option<Value>> {
-        let key = format!("manager_review:{id}");
-        let Some(saved)=self.get(&key).await? else {return Ok(None)};
-        if saved["status"]!="pending_review" || !self.requester_claim_ready(&saved["run"]).await? {return Ok(None);}
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE docs SET value=value WHERE key=?")
-            .bind(&key)
-            .execute(&mut *tx)
-            .await?;
-        let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-            .bind(&key)
-            .fetch_optional(&mut *tx)
-            .await?
-        else {
-            return Ok(None);
-        };
-        let mut record = self.unseal(&raw)?;
-        if record["status"] != "pending_review" {
-            return Ok(None);
-        }
-        self.require_active_session(&mut tx,record["session_id"].as_str().ok_or_else(||anyhow!("Missing review session"))?).await?;
-        record["status"] = json!("reviewing");
-        record["generation"] = json!(uuid::Uuid::new_v4().to_string());
-        record["deadline"] = json!(crate::now() + 50);
-        self.write_document(&mut tx, &key, &record).await?;
-        tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[key]);
-        Ok(Some(record))
-    }
-    pub(crate) async fn finish_manager_review(
-        &self,
-        observed: &Value,
-        state: &str,
-        verdict: Option<crate::manager::Verdict>,
-    ) -> Result<bool> {
-        if !matches!(state, "acceptable" | "unacceptable" | "review_error") {
-            return Err(anyhow!("Invalid manager state"));
-        }
-        let id = observed["id"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Review ID missing"))?;
-        let sid = observed["session_id"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Review session missing"))?;
-        let key = format!("manager_review:{id}");
-        let pointer = format!("manager_pending:{sid}");
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE docs SET value=value WHERE key=?")
-            .bind(&key)
-            .execute(&mut *tx)
-            .await?;
-        let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(&key)
-            .fetch_one(&mut *tx)
-            .await?;
-        let mut record = self.unseal(&raw)?;
-        if record["status"] != "reviewing" || record["generation"] != observed["generation"] {
-            return Ok(false);
-        }
-        let pending: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(&pointer)
-            .fetch_optional(&mut *tx)
-            .await?;
-        if pending
-            .as_ref()
-            .map(|v| self.unseal(v))
-            .transpose()?
-            .is_none_or(|v| v["id"] != id)
-        {
-            return Ok(false);
-        }
-        if (state == "unacceptable" && verdict != Some(crate::manager::Verdict::Unacceptable))
-            || (state == "review_error" && verdict.is_some())
-        {
-            return Err(anyhow!("Review state and verdict disagree"));
-        }
-        let acceptable = state == "acceptable";
-        if acceptable {
-            if verdict != Some(crate::manager::Verdict::Acceptable) {
-                return Err(anyhow!("Acceptable verdict required"));
-            }
-            if record["deadline"].as_u64().unwrap_or(0) <= crate::now() {
-                return Err(anyhow!("Manager review lease expired"));
-            }
-            self.require_active_session(&mut tx, sid).await?;
-            self.require_participation(&mut tx,&record["run"]).await?;
-            let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')")
-                .bind(sid).fetch_one(&mut *tx).await?;
-            if count != 0 {
-                return Err(anyhow!("Session already has unresolved work"));
-            }
-            let mut run = record["run"].clone();
-            run["run_revision"] = json!(1);
-            self.write_document(&mut tx, &format!("run:{id}"), &run)
-                .await?;
-            self.index_run(&mut tx, &run).await?;
-            let message = &record["message"];
-            self.write_document(&mut tx,&format!("message_meta:{id}"),&json!({"author_id":message["author_id"],"context_eligible":true,"queued":false})).await?;
-            // Naming begins only after the manager admits the message.
-            self.begin_session_naming(&mut tx, sid, id, message).await?;
-            let text = message["context_content"]
-                .as_str()
-                .or_else(|| message["content"].as_str())
-                .ok_or_else(|| anyhow!("Review message missing"))?;
-            self.insert_interaction(
-                &mut tx,
-                sid,
-                id,
-                "user",
-                &json!({"role":"user","content":text}),
-            )
-            .await?;
-            sqlx::query("INSERT INTO loop_commands(command_id,run_id,schema_version,kind,payload,created_at) VALUES(?,?,1,'message',?,strftime('%s','now'))")
-                .bind(format!("manager:{id}")).bind(id).bind(self.encode_user_record(&json!({"schema_version":1,"run_id":id,"kind":"message","status":"queued"}))?)
-                .execute(&mut *tx).await?;
-        }
-        record["status"] = json!(state);
-        record["verdict"] = json!(verdict);
-        record["error"] = if state == "review_error" {
-            json!("Review could not be completed. This message was not sent to the agent; you may submit a new message.")
-        } else {
-            Value::Null
-        };
-        record["usage"] = observed["usage"].clone();
-        record["updated_at"] = json!(crate::now());
-        // Retain submission and criteria as private audit evidence; public views expose only status.
-        self.write_document(&mut tx, &key, &record).await?;
-        sqlx::query("DELETE FROM docs WHERE key=?")
-            .bind(&pointer)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,'manager_verdict',?)")
-            .bind(sid)
-            .bind(self.encode_user_record(&crate::manager::public(&record))?)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[
-            key,
-            pointer,
-            format!("run:{id}"),
-            format!("run_view:{id}"),
-            format!("session:{sid}"),
-        ]);
-        if state!="acceptable" {self.reconcile_requester_slots().await?;}
-        Ok(true)
-    }
+ pub(crate) fn manager_repository(&self)->webagent_manager::storage::Repository<'_,Self> {webagent_manager::storage::Repository::new(&self.root,&self.pool,self.current_user_id(),self)}
+ pub(crate) async fn claim_manager_review(&self,id:&str)->Result<Option<Value>> {self.manager_repository().claim_manager_review(id).await}
+ pub(crate) async fn finish_manager_review(&self,observed:&Value,state:&str,verdict:Option<crate::manager::Verdict>)->Result<bool> {self.manager_repository().finish_manager_review(observed,state,verdict).await}
 }
 #[cfg(test)]
 mod tests {
@@ -287,5 +143,24 @@ mod tests {
             .unwrap());
         assert!(store.context("session").await.unwrap().is_empty());
         assert!(store.get("run:review").await.unwrap().is_none());
+    }
+    #[tokio::test]
+    async fn late_manager_verdict_abort_rolls_back_actual_owner_effects_and_preserves_submission() {
+        let root=tempfile::tempdir().unwrap();let store=Store::open(root.path()).await.unwrap();
+        let record=submitted(&store,"session","review").await;
+        let before_docs:Vec<(String,Vec<u8>)>=sqlx::query_as("SELECT key,value FROM docs ORDER BY key").fetch_all(&store.pool).await.unwrap();
+        let before_events:Vec<(i64,String,String,Vec<u8>)>=sqlx::query_as("SELECT seq,session_id,kind,payload FROM events ORDER BY seq").fetch_all(&store.pool).await.unwrap();
+        let notifications:i64=sqlx::query_scalar("SELECT COUNT(*) FROM notification_stage").fetch_one(&store.pool).await.unwrap();
+        sqlx::raw_sql("CREATE TRIGGER reject_manager_verdict BEFORE INSERT ON events WHEN NEW.kind='manager_verdict' BEGIN SELECT RAISE(ABORT,'fixture late verdict abort'); END;").execute(&store.pool).await.unwrap();
+        assert!(store.finish_manager_review(&record,"acceptable",Some(crate::manager::Verdict::Acceptable)).await.is_err());
+        let after_docs:Vec<(String,Vec<u8>)>=sqlx::query_as("SELECT key,value FROM docs ORDER BY key").fetch_all(&store.pool).await.unwrap();assert_eq!(after_docs,before_docs);
+        let after_events:Vec<(i64,String,String,Vec<u8>)>=sqlx::query_as("SELECT seq,session_id,kind,payload FROM events ORDER BY seq").fetch_all(&store.pool).await.unwrap();assert_eq!(after_events,before_events);
+        assert!(store.context("session").await.unwrap().is_empty());assert!(store.active_runs().await.unwrap().is_empty());
+        let commands:i64=sqlx::query_scalar("SELECT COUNT(*) FROM loop_commands WHERE command_id='manager:review'").fetch_one(&store.pool).await.unwrap();assert_eq!(commands,0);
+        assert_eq!(store.chat_snapshot("session").await.unwrap().0.len(),1);
+        sqlx::query("DROP TRIGGER reject_manager_verdict").execute(&store.pool).await.unwrap();
+        assert!(store.finish_manager_review(&record,"acceptable",Some(crate::manager::Verdict::Acceptable)).await.unwrap());
+        assert!(!store.finish_manager_review(&record,"acceptable",Some(crate::manager::Verdict::Acceptable)).await.unwrap());
+        let after_notifications:i64=sqlx::query_scalar("SELECT COUNT(*) FROM notification_stage").fetch_one(&store.pool).await.unwrap();assert_eq!(after_notifications,notifications,"acceptance must not restage original message notification");
     }
 }
