@@ -7,7 +7,7 @@
   //
   // We ALSO flag the mobile soft keyboard being open by toggling `body.kb-open`:
   // the keyboard is open when the visual viewport is meaningfully shorter than
-  // the (constant) layout viewport AND an editable field holds focus. Some pages
+  // the largest viewport at the current width AND an editable field holds focus. Some pages
   // hide bottom-docked clutter while it's up so the focused field isn't covered —
   // e.g. the App Config chat pill + sticky section headings (see app3.css
   // `body.kb-open` rules). Class is mobile-gated here, so desktop never sets it.
@@ -20,14 +20,22 @@
     }
     var keyboardWasOpen = false;
     var keyboardDismissed = false;
+    var keyboardWidth = window.innerWidth, keyboardHeight = window.innerHeight;
     function applyKb() {
       if (!document.body) return;
       var isMobile = window.innerWidth <= 800;       // mirrors __isMobileChatLayout / the CSS breakpoint
       var vvh = (vv ? vv.height : window.innerHeight);
       var ae = document.activeElement;
       var editable = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
+      var stableViewport = keyboardWidth === window.innerWidth && (!vv || vv.scale === 1);
+      // resizes-content shrinks innerHeight too; retain the pre-keyboard height.
+      // Rotation and zoom cannot establish a keyboard-dismiss transition.
+      if (!stableViewport) keyboardWasOpen = false;
+      if (keyboardWidth !== window.innerWidth) keyboardHeight = window.innerHeight;
+      keyboardWidth = window.innerWidth;
+      if (stableViewport) keyboardHeight = Math.max(keyboardHeight, window.innerHeight, vvh);
       // Keyboards are ~250px+; a 120px floor clears browser-chrome jitter.
-      var open = isMobile && editable && (window.innerHeight - vvh) > 120;
+      var open = isMobile && stableViewport && editable && (keyboardHeight - vvh) > 120;
       // The OS keyboard-dismiss control can leave the composer focused. Some
       // mobile browsers briefly report a shrunken viewport again during the
       // hide animation; latch that dismissal until the user re-engages an editor.

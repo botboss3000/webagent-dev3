@@ -255,3 +255,47 @@ test('JSON bubble glass supports role-local opacity blur validation and live res
  await p.waitForFunction(()=>getComputedStyle(document.getElementById('glass-user')).backdropFilter==='none');
  assert.equal(await p.locator('#glass-user').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(255, 0, 0)');
 });
+
+
+/** Model both Android resizes-content and visual-only keyboard geometry. */
+async function keyboardFixture(t,mode='content') {
+ const p=await fixture(t);
+ await p.evaluate(async mode=>{
+  window.keyboardHeight=844;window.keyboardInner=844;window.keyboardScale=1;
+  Object.defineProperty(window,'innerHeight',{configurable:true,get:()=>keyboardInner});
+  if(mode==='fallback')Object.defineProperty(window,'visualViewport',{configurable:true,value:undefined});
+  else {
+   Object.defineProperty(visualViewport,'height',{configurable:true,get:()=>keyboardHeight});
+   Object.defineProperty(visualViewport,'scale',{configurable:true,get:()=>keyboardScale});
+  }
+  await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});
+ },mode);
+ return p;
+}
+async function keyboardResize(p,height,mode) {
+ await p.evaluate(({height,mode})=>{keyboardHeight=height;if(mode!=='visual')keyboardInner=height;window.dispatchEvent(new Event('resize'));window.visualViewport?.dispatchEvent(new Event('resize'));},{height,mode});await settle(p);
+}
+for(const mode of ['content','visual','fallback'])test('OS keyboard dismissal blurs composer with '+mode+' viewport resizing',async t=>{
+ const p=await keyboardFixture(t,mode);
+ for(const draft of ['', 'retained draft']){
+  await p.locator('#chat-input').fill(draft);await p.locator('#chat-input').focus();
+  await keyboardResize(p,500,mode);
+  assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),true);
+  assert.equal((await stable(p)).focused,true);
+  await keyboardResize(p,470,mode);assert.equal((await stable(p)).focused,true);
+  await keyboardResize(p,844,mode);assert.equal((await stable(p)).focused,false);
+  assert.equal(await p.locator('#chat-input').inputValue(),draft);
+  if(!draft)assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-idle')),true);
+  await p.locator('#chat-input').tap();await keyboardResize(p,500,mode);assert.equal((await stable(p)).focused,true);
+  await keyboardResize(p,844,mode);assert.equal((await stable(p)).focused,false);
+ }
+});
+test('browser chrome, zoom, rotation and desktop resizing do not dismiss the composer',async t=>{
+ const p=await keyboardFixture(t);await p.locator('#chat-input').focus();
+ await keyboardResize(p,780,'content');assert.equal((await stable(p)).focused,true);
+ await keyboardResize(p,844,'content');assert.equal((await stable(p)).focused,true);
+ await keyboardResize(p,500,'content');
+ await p.evaluate(()=>{keyboardScale=1.5;keyboardHeight=330;visualViewport.dispatchEvent(new Event('resize'));});assert.equal((await stable(p)).focused,true);
+ await p.evaluate(()=>{keyboardScale=1;});await p.setViewportSize({width:740,height:390});await keyboardResize(p,390,'content');assert.equal((await stable(p)).focused,true);
+ await p.setViewportSize({width:1200,height:844});await keyboardResize(p,844,'content');await keyboardResize(p,500,'content');assert.equal((await stable(p)).focused,true);
+});
