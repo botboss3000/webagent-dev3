@@ -71,9 +71,9 @@ export function mountChatNotifications({root,guard,request,note}) {
     routeExpanded=!routeExpanded;routeList.hidden=!routeExpanded;routeToggle.setAttribute('aria-expanded',String(routeExpanded));routeToggle.textContent=routeExpanded?'Hide permissions':'Show permissions';
     if(routeExpanded)await loadRoutes();
   });
-  const routeCard=card({title:'Messaging permissions',details:{toggle:routeToggle,body:routeList},actions:[]});routesSlot.append(routeCard);routesSlot.hidden=true;
+  const routeCard=card({title:'Messaging permissions',details:{toggle:routeToggle,body:routeList},actions:[]});routesSlot.append(routeCard);routesSlot.hidden=routeCard.hidden=true;
   const messagingRoutes={
-    open(id,owner){routeGeneration++;routeSession=owner?id:'';routesSlot.hidden=!routeSession;routeExpanded=false;routeList.hidden=true;routeList.replaceChildren();routeToggle.setAttribute('aria-expanded','false');routeToggle.textContent='Show permissions';},
+    open(id,owner){routeGeneration++;routeSession=owner?id:'';routesSlot.hidden=routeCard.hidden=!routeSession;routeExpanded=false;routeList.hidden=true;routeList.replaceChildren();routeToggle.setAttribute('aria-expanded','false');routeToggle.textContent='Show permissions';},
     disconnect(){this.open('',false);},
     destroy(){this.disconnect();revokeKeys.clear();routeToggle.onclick=null;routesSlot.remove();}
   };
