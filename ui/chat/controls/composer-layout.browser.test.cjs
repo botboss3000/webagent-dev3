@@ -76,7 +76,10 @@ test('desktop and widget profile changes retain rows when their structure is ide
 test('dismissal survives programmatic focus and viewport jitter until editor interaction',async t=>{
  const p=await fixture(t);await p.evaluate(async()=>{window.vh=500;window.ih=844;Object.defineProperty(window,'innerHeight',{configurable:true,get:()=>ih});Object.defineProperty(window.visualViewport,'height',{configurable:true,get:()=>vh});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});input.focus();});
  assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),true);
- await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));vh=500;visualViewport.dispatchEvent(new Event('resize'));document.dispatchEvent(new FocusEvent('focusin',{bubbles:true}));input.dispatchEvent(new FocusEvent('focusin',{bubbles:true}));});
+ await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));});await settle(p);
+ assert.equal((await stable(p)).focused,false);assert.equal((await stable(p)).blur,1);
+ assert.equal(await p.locator('#chat-input-area').evaluate(e=>e.classList.contains('footer-mode-idle')),true);
+ await p.evaluate(()=>{input.focus();vh=500;visualViewport.dispatchEvent(new Event('resize'));document.dispatchEvent(new FocusEvent('focusin',{bubbles:true}));input.dispatchEvent(new FocusEvent('focusin',{bubbles:true}));});
  assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),false);
  await p.locator('#chat-input').tap();
  assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),true);
@@ -109,7 +112,7 @@ test('keyboard movement starts at the rendered position while app height changes
   assert.equal(state.height,height+'px');assert.equal(state.duration,140);assert(Math.abs(state.before-state.after)<.5,'visible composer starts where it was');assert.equal(state.opacity,'1');assert(state.frames.every(f=>f.opacity===undefined));
   await p.evaluate(()=>{for(const node of document.querySelectorAll('#chat-input-row,#chat-footer-row,#chat-footer-handle'))for(const a of node.getAnimations())a.finish();});await settle(p);
  }
- const s=await stable(p);assert.equal(s.focused,true);assert.equal(s.blur,0);assert.equal(s.focus,0);assert.equal(s.value,'retained draft');assert.equal(s.start,2);assert.equal(s.end,7);
+ const s=await stable(p);assert.equal(s.focused,false);assert.equal(s.blur,1);assert.equal(s.focus,0);assert.equal(s.value,'retained draft');assert.equal(s.start,2);assert.equal(s.end,7);
 });
 test('interrupted keyboard motion retargets from the current position and preserves CSS transforms',async t=>{
  const p=await motionFixture(t,{enabled:true,duration_ms:160});
@@ -119,7 +122,7 @@ test('interrupted keyboard motion retargets from the current position and preser
 test('motion completes, and reduced motion or disabling cancels translations immediately',async t=>{
  const p=await motionFixture(t);await p.evaluate(()=>{motionVh=500;visualViewport.dispatchEvent(new Event('resize'));});await p.waitForFunction(()=>document.querySelector('#chat-input-row').getAnimations().length===0);assert.equal(await p.locator('#chat-input-row').evaluate(e=>getComputedStyle(e).translate),'none');
  await p.evaluate(()=>{motionVh=844;visualViewport.dispatchEvent(new Event('resize'));for(const a of document.querySelector('#chat-input-row').getAnimations())a.pause();});await p.emulateMedia({reducedMotion:'reduce'});await p.waitForFunction(()=>document.querySelector('#chat-input-row').getAnimations().length===0);assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);
- await p.emulateMedia({reducedMotion:'no-preference'});await p.evaluate(()=>{motionVh=500;visualViewport.dispatchEvent(new Event('resize'));window.__chatKeyboardMotionConfigure({enabled:false});});assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);assert.equal((await stable(p)).focused,true);
+ await p.emulateMedia({reducedMotion:'no-preference'});await p.evaluate(()=>{motionVh=500;visualViewport.dispatchEvent(new Event('resize'));window.__chatKeyboardMotionConfigure({enabled:false});});assert.equal(await p.locator('#chat-input-row').evaluate(e=>e.getAnimations().length),0);assert.equal((await stable(p)).focused,false);
 });
 test('desktop, widget, zoom, chrome jitter and zero duration bypass keyboard motion',async t=>{
  const p=await motionFixture(t);

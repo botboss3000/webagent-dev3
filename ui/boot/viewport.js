@@ -31,7 +31,11 @@
       // The OS keyboard-dismiss control can leave the composer focused. Some
       // mobile browsers briefly report a shrunken viewport again during the
       // hide animation; latch that dismissal until the user re-engages an editor.
-      if (keyboardWasOpen && !open && editable) keyboardDismissed = true;
+      if (keyboardWasOpen && !open && editable) {
+        keyboardDismissed = true;
+        // Use normal focusout handling to restore the mobile composer's idle layout.
+        if (isMobile && ae.id === 'chat-input') ae.blur();
+      }
       keyboardWasOpen = open;
       open = open && !keyboardDismissed;
       document.body.classList.toggle('kb-open', open);
