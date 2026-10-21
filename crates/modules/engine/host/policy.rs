@@ -67,7 +67,7 @@ impl webagent_engine::runtime::ports::StartupPolicy<Store> for NativePolicy {
 }
 
 impl webagent_engine::runtime::ports::PublicationObservation<Store,abilities::Catalog> for NativePolicy {
- fn record_source_adoption(&self,store:&Store,catalog:&Arc<abilities::Catalog>) {let snapshot=crate::live_assets::catalog(catalog);let _=crate::live_assets::record_adoption(&store.root,"loop",&snapshot);}
+ fn record_source_adoption(&self,store:&Store,catalog:&Arc<abilities::Catalog>) {match crate::live_assets::catalog(catalog) {Ok(snapshot)=>{let _=crate::live_assets::record_adoption(&store.root,"loop",&snapshot);},Err(_)=>tracing::error!("Ability catalog unavailable; adoption skipped")}}
 }
 
 impl webagent_engine::runtime::followup::FollowupQueue<Store> for NativePolicy {

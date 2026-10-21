@@ -31,7 +31,7 @@ class PublicationTests(unittest.TestCase):
         runner.inspect=lambda name:{"Mounts":[{"Destination":"/opt/v3/assets","Source":str(fixtures.host.ASSET_ROOT),"RW":False}],"Config":{"Env":["V3_UI_ROOT=/opt/v3/assets/current/v3/ui"]}}
         def command(args,**kwargs):
             compile(args[-1],"<protocol probe>","exec")
-            return json.dumps({"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}})
+            return json.dumps({"version":2,"id":"plugin-protocol","result":{"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}}})
         runner.command=command;self.assertTrue(runner.plugin_hot_swappable())
 if __name__=="__main__":unittest.main()
 

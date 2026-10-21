@@ -35,24 +35,7 @@ fn load_args(value:&Value)->Result<LoadArgs> {
 struct Args {query:String,#[serde(default)] model_entry_id:Option<String>,#[serde(default)] activate:Option<bool>,#[serde(default)] limit:Option<usize>,#[serde(default)] threshold:Option<f64>}
 /// Constrain scoring text, candidate limits and finite thresholds before IO.
 fn valid(a:&Args)->bool {!a.query.trim().is_empty() && a.query.len()<=4096 && !a.query.chars().any(|c|c.is_control()&&c!='\n'&&c!='\t') && (1..=32).contains(&a.limit.unwrap_or(16)) && a.threshold.is_none_or(|x|x.is_finite()&&(0.0..=1.0).contains(&x)) && a.model_entry_id.as_ref().is_none_or(|s|!s.is_empty()&&s.len()<=128)}
-/// Encode a content-free tool identity for the run projection.
-pub fn marker(name:&str)->String {format!("tool:{name}")}
-/// Merge successful native selection receipts; host fences and the ledger own persistence.
-pub fn apply_selection(run:&mut Value,result:&Value) {
-    if !matches!(run["pending"]["name"].as_str(),Some("search_tools"|"load_tool"))||result["status"]!="success"||result["output"]["activated"]!=true {return;}
-    let Some(items)=result["output"]["selected_tools"].as_array() else {return;};
-    if items.len()>32||items.iter().any(|v|v.as_str().is_none()) {return;}
-    let mut loaded=run["loaded_abilities"].as_array().cloned().unwrap_or_default();
-    let mut selected=run["selected_tools"].as_array().cloned().unwrap_or_default();
-    for item in items {
-        let tool_marker=json!(marker(item.as_str().unwrap()));
-        if !loaded.contains(&tool_marker) {loaded.push(tool_marker);}
-        if !selected.contains(item) {selected.push(item.clone());}
-    }
-    // This run mirrors content-free conversation selectors. The host commits the
-    // conversation ledger after the native fence; these markers grant no permission.
-    run["loaded_abilities"]=json!(loaded);run["selected_tools"]=json!(selected);
-}
+pub use webagent_abilities::selection::{marker,apply_selection};
 /// Rebuild permitted availability from current authority and call-local identities.
 async fn eligible(app:&App,sid:&str,agent:&str,loaded:&Value)->Result<Vec<Value>> {
     let access=crate::shared_chat::live_access(&app.store,crate::shared_chat::actor(app),sid,agent).await?;

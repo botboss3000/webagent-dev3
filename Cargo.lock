@@ -2163,6 +2163,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-abilities"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "hex",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "webagent-access",
+ "webagent-capability-contracts",
+ "webagent-configuration",
+ "webagent-context-contracts",
+]
+
+[[package]]
 name = "webagent-access"
 version = "0.1.0"
 dependencies = [
@@ -2408,6 +2428,7 @@ dependencies = [
 name = "webagent-engine"
 version = "0.1.0"
 dependencies = [
+ "webagent-abilities",
  "aes-gcm",
  "anyhow",
  "fs2",
@@ -2512,6 +2533,7 @@ dependencies = [
 name = "webagent-v3"
 version = "0.1.0"
 dependencies = [
+ "webagent-abilities",
  "aes-gcm",
  "anyhow",
  "argon2",

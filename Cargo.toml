@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["crates/modules/access", "crates/modules/configuration", "crates/modules/context", "crates/modules/engine", "crates/modules/manager", "crates/modules/models", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service", "src/plugin_packages/diagnostics"]
-default-members = ["crates/modules/access", "crates/modules/configuration", "crates/modules/context", "crates/modules/engine", "crates/modules/manager", "crates/modules/models", ".", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service", "src/plugin_packages/diagnostics"]
+members = ["crates/modules/abilities", "crates/modules/access", "crates/modules/configuration", "crates/modules/context", "crates/modules/engine", "crates/modules/manager", "crates/modules/models", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service", "src/plugin_packages/diagnostics"]
+default-members = ["crates/modules/abilities", "crates/modules/access", "crates/modules/configuration", "crates/modules/context", "crates/modules/engine", "crates/modules/manager", "crates/modules/models", ".", "crates/context-contracts", "crates/context-assembly", "crates/context-service", "crates/background-contracts", "crates/background-dispatch", "crates/engine-service", "crates/background-service", "crates/boot-contracts", "crates/boot-supervisor", "crates/boot-service", "crates/assets-contracts", "crates/context-assets", "crates/assets-service", "crates/capability-contracts", "crates/capability-context", "crates/capability-service", "crates/provider-contracts", "crates/provider-projection", "crates/provider-service", "src/plugin_packages/diagnostics"]
 resolver = "2"
 
 [features]
@@ -14,6 +14,7 @@ linked-context = ["webagent-engine/linked-context", "dep:webagent-context-assemb
 live-context = ["webagent-engine/live-context"]
 
 [dependencies]
+webagent-abilities = { path = "crates/modules/abilities" }
 webagent-access = { path = "crates/modules/access" }
 webagent-configuration = { path = "crates/modules/configuration" }
 webagent-diagnostics = { path = "src/plugin_packages/diagnostics" }
@@ -59,6 +60,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
 
 [dev-dependencies]
+webagent-abilities = { path = "crates/modules/abilities", features=["test-support"] }
 webagent-diagnostics = { path = "src/plugin_packages/diagnostics", features = ["test-support"] }
 webagent-engine = { path="crates/modules/engine", default-features=false, features=["test-support"] }
 webagent-models = { path = "crates/modules/models", features = ["test-support"] }

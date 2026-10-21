@@ -59,9 +59,48 @@ struct PackageIdentity {
     directory: FileIdentity,
     assets: Vec<FileIdentity>,
 }
-type ValidatedPackage = std::sync::Arc<(String, Vec<u8>, String)>;
+type ValidatedPackage = std::sync::Arc<(String, Vec<u8>, String, Value)>;
 type PackageCache = std::sync::Mutex<Option<(PackageIdentity, ValidatedPackage)>>;
 static PACKAGE_CACHE: PackageCache = std::sync::Mutex::new(None);
+
+/// The installed declaration may change presentation, never executable ownership.
+fn valid_declaration(value: &Value) -> bool {
+    const SETTINGS: &[&str] = &[
+        "priority", "attempts", "total_seconds", "profiling", "cpu_cores", "ram_mb",
+        "coverage", "max_slowdown_percent", "max_memory_regression_percent", "allow_dependencies",
+    ];
+    let Some(object) = value.as_object() else { return false; };
+    if object.keys().any(|key| !matches!(key.as_str(), "display_name" | "kind" | "description"
+        | "tools" | "readiness" | "skill_summary" | "migration_note" | "icon" | "color" | "order" | "config"))
+        || value["kind"] != "ability" || value["readiness"] != "ready"
+        || value["tools"] != json!(["performance_work"])
+        || value["display_name"].as_str().is_none_or(|text| text.is_empty() || text.len() > 100)
+        || value["description"].as_str().is_none_or(|text| text.is_empty() || text.len() > 1000)
+        || value.get("order").is_some_and(|number| number.as_i64().is_none_or(|number| i32::try_from(number).is_err())) {
+        return false;
+    }
+    for (key, limit) in [("skill_summary", 2000), ("migration_note", 2000), ("icon", 100), ("color", 100)] {
+        if value.get(key).is_some_and(|field| !field.is_null()
+            && field.as_str().is_none_or(|text| text.len() > limit)) { return false; }
+    }
+    let Some(config) = value["config"].as_object() else { return false; };
+    let Some(settings) = config.get("settings").and_then(Value::as_array) else { return false; };
+    config.len() == 1 && settings.len() == SETTINGS.len()
+        && settings.iter().zip(SETTINGS).all(|(value, expected)| value.as_str() == Some(*expected))
+}
+
+/// Return one identity-pinned declaration even before its optional worker is ready.
+/// Missing installation is optional; a present invalid installation is never old metadata.
+pub(crate) fn declaration() -> anyhow::Result<Option<(String, Value)>> {
+    let folder = folder();
+    match std::fs::symlink_metadata(&folder) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    let package = package(&folder).ok_or_else(|| anyhow::anyhow!("Optimization declaration unavailable"))?;
+    Ok(Some((package.0.clone(), package.3.clone())))
+}
 
 pub(crate) fn package(path: &Path) -> Option<ValidatedPackage> {
     package_cached(path, &PACKAGE_CACHE)
@@ -140,6 +179,7 @@ fn package_cached_inner(path: &Path, cache: &PackageCache) -> Option<ValidatedPa
     let mut hash = Sha256::new();
     let mut executable = Vec::new();
     let mut guidance = String::new();
+    let mut declaration = Value::Null;
     for (index, (name, file)) in FILES.iter().zip(files.iter_mut()).enumerate() {
         let limit = if *name == "webagent-optimization" {
             32 * 1024 * 1024
@@ -159,14 +199,9 @@ fn package_cached_inner(path: &Path, cache: &PackageCache) -> Option<ValidatedPa
         {
             return None;
         }
-        if *name == "optimization.json"
-            && serde_json::from_slice::<Value>(&bytes).ok()?
-                != serde_json::from_str::<Value>(include_str!(
-                    "plugin_packages/optimization/optimization.json"
-                ))
-                .ok()?
-        {
-            return None;
+        if *name == "optimization.json" {
+            declaration = serde_json::from_slice(&bytes).ok()?;
+            if !valid_declaration(&declaration) { return None; }
         }
         if *name == "optimization.skill.md" {
             guidance = std::str::from_utf8(&bytes).ok()?.to_owned();
@@ -185,7 +220,7 @@ fn package_cached_inner(path: &Path, cache: &PackageCache) -> Option<ValidatedPa
     if !identities_still_match(path, &directory, &files, &identity) {
         return None;
     }
-    let validated = std::sync::Arc::new((hex::encode(hash.finalize()), executable, guidance));
+    let validated = std::sync::Arc::new((hex::encode(hash.finalize()), executable, guidance, declaration));
     *cached = Some((identity, validated.clone()));
     Some(validated)
 }
@@ -533,6 +568,53 @@ mod cache_tests {
             .unwrap()
             .success());
         assert!(package_cached(root.path(), &cache).is_none());
+    }
+
+    #[test]
+    fn installed_declaration_metadata_edits_change_generation_without_changing_tools() {
+        let (root, cache) = fixture();
+        let path = root.path().join("optimization.json");
+        let original = std::fs::read(&path).unwrap();
+        let before = package_cached(root.path(), &cache).unwrap();
+        let mut value: Value = serde_json::from_slice(&original).unwrap();
+        value["display_name"] = json!("Optimization resources");
+        value["description"] = json!("Measured workload metadata changed without recompilation.");
+        value["order"] = json!(94);
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let changed = package_cached(root.path(), &cache).unwrap();
+        assert_ne!(before.0, changed.0);
+        assert_eq!(changed.3, value);
+        assert_eq!(changed.3["tools"], before.3["tools"]);
+        assert_eq!(changed.1, before.1);
+        std::fs::write(&path, &original).unwrap();
+        let restored = package_cached(root.path(), &cache).unwrap();
+        assert_eq!(restored.0, before.0);
+        assert_eq!(restored.3, before.3);
+    }
+
+    #[test]
+    fn invalid_declaration_withdraws_cached_package_without_old_valid_fallback() {
+        let (root, cache) = fixture();
+        let path = root.path().join("optimization.json");
+        let original = std::fs::read(&path).unwrap();
+        let baseline: Value = serde_json::from_slice(&original).unwrap();
+        for (field, invalid) in [
+            ("tools", json!(["performance_work", "file_read"])),
+            ("kind", json!("virtual_core")),
+            ("readiness", json!("pending")),
+            ("config", json!({"settings":["unknown_authority"]})),
+            ("display_name", json!("")),
+            ("order", json!(2147483648_i64)),
+            ("unexpected", json!(true)),
+        ] {
+            std::fs::write(&path, &original).unwrap();
+            assert!(package_cached(root.path(), &cache).is_some());
+            let mut invalid_value = baseline.clone();
+            invalid_value[field] = invalid;
+            std::fs::write(&path, serde_json::to_vec(&invalid_value).unwrap()).unwrap();
+            assert!(package_cached(root.path(), &cache).is_none(), "{field}");
+            assert!(cache.lock().unwrap().is_none(), "{field}");
+        }
     }
 
     #[test]

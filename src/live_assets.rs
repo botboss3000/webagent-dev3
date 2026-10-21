@@ -1,6 +1,6 @@
 //! Immutable publication snapshots. Only the protected broker switches current.
 use crate::*;
-use std::sync::{Mutex as SyncMutex, OnceLock};
+use std::sync::OnceLock;
 /// Permit published native descriptions while rejecting changes to compiled tool contracts.
 /// Load all native Administrator schema metadata from an authoritative external file.
 /// Supported execution identities and runtime argument/authority checks remain fixed Rust code.
@@ -125,21 +125,10 @@ fn merge_prompt_overrides(defaults:&mut Value,live:&Value,baseline:&Value) {
   assert_eq!(published,json!({"session_naming":{"prompt":"new","attempts_per_job":5}}));
  }
 }
-type CatalogCache=(HashMap<PathBuf,Arc<abilities::Catalog>>,Option<Arc<abilities::Catalog>>);
-/// Cache complete immutable catalogs by revision and retain the last valid catalog on rejection.
-pub(crate) fn catalog(fallback:&Arc<abilities::Catalog>) -> Arc<abilities::Catalog> {
-    let Some(root)=published_root().map(|root|root.join("plugins/abilities")) else{return fallback.clone();};
-    static CACHE:OnceLock<SyncMutex<CatalogCache>>=OnceLock::new();
-    let mut cache=CACHE.get_or_init(||SyncMutex::new((HashMap::new(),None))).lock().unwrap_or_else(|e|e.into_inner());
-    if let Some(value)=cache.0.get(&root){return value.clone();}
-    match abilities::Catalog::load_snapshot(&root) {
-        Ok(value)=>{
-            let value=Arc::new(value);
-            if cache.0.len()>=8 {cache.0.clear();}
-            cache.0.insert(root,value.clone());cache.1=Some(value.clone());value
-        },
-        Err(_)=>{tracing::error!("Published ability snapshot rejected");cache.1.clone().unwrap_or_else(||fallback.clone())}
-    }
+/// Cache only validated immutable revisions; selected source errors remain errors.
+pub(crate) fn catalog(fallback:&Arc<abilities::Catalog>) -> Result<Arc<abilities::Catalog>> {
+    static CACHE:OnceLock<webagent_abilities::CatalogCache<abilities::NativeHost>>=OnceLock::new();
+    CACHE.get_or_init(webagent_abilities::CatalogCache::default).current(fallback)
 }
 
 #[cfg(test)]mod external_default_tests {

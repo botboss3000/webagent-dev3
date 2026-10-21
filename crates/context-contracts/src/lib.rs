@@ -9,3 +9,5 @@ pub mod tool_results;
 pub mod execution;
 
 pub mod compatibility;
+
+pub mod abilities;
