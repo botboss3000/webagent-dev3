@@ -18,7 +18,14 @@ def host_sample():
             row=next(line for line in Path("/proc/pressure/"+kind).read_text().splitlines()if line.startswith("some "))
             pressure[kind]=float(dict(p.split("=",1)for p in row.split()[1:])["avg10"])
         except (OSError,ValueError,StopIteration):pressure[kind]=0.
-    return {"available":memory["MemAvailable"],"total":memory["MemTotal"],"swap_free":memory.get("SwapFree",0),"swap_total":memory.get("SwapTotal",0),"pressure":pressure}
+    cpu=None
+    try:
+        # Guest time is already included in user/nice; use only the first eight counters.
+        row=next(line for line in Path("/proc/stat").read_text().splitlines()if line.startswith("cpu ")).split()
+        ticks=[int(value)for value in row[1:9]]
+        if len(ticks)==8 and all(value>=0 for value in ticks):cpu={"count":os.cpu_count()or 1,"ticks":ticks}
+    except (OSError,ValueError,StopIteration):pass
+    return {"available":memory["MemAvailable"],"total":memory["MemTotal"],"swap_free":memory.get("SwapFree",0),"swap_total":memory.get("SwapTotal",0),"pressure":pressure,"cpu":cpu}
 # @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Measured admission and compiler parking. Config: build-service/scheduler-defaults.json -> reserve_bytes, reserve_percent, max_phases, max_parked, memory_pressure_percent; protected overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image","/package_ram_bytes","/package_tmpfs_bytes"]}],"opportunities":[]}}
 class AdmissionTimeout(TimeoutError):
     """A pre-effect admission wait can resume through normal host authorization."""
@@ -45,6 +52,7 @@ class Resources:
         self.migrate_test_profiles()
         self.restore_diagnostic_profiles(state)
         self.initialized=False;self.last_save=0.;self.pressure_since=None;self.stable_since=None;self.cpu_budget=max(1,(os.cpu_count()or 1)-1);self.last_cpu_adjust=0.;self.last_cpu_recovery=0.
+        self.previous_cpu=copy.deepcopy(self.host.get("cpu"));self.cpu_decision=None
         self.thread=None
     def migrate_test_profiles(self):
         """Split old mixed test history by actual terminal phase, preserving original samples and rows."""
@@ -89,7 +97,7 @@ class Resources:
         if self.thread is not None:self.thread.join(timeout=2)
     def persist(self):
         """Atomically retain bounded resource profiles and phase identities outside application storage."""
-        value={"version":1,"profiles":self.profiles,"phases":self.rows,"controls":self.controls,"profile_migrations":self.profile_migrations}
+        value={"version":1,"profiles":self.profiles,"phases":self.rows,"controls":self.controls,"profile_migrations":self.profile_migrations,"cpu_decision":self.cpu_decision}
         temporary=self.path.with_suffix(".new")
         if temporary.is_symlink():raise PermissionError("Resource metadata replaced")
         fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
@@ -109,6 +117,23 @@ class Resources:
         if len(active)>=self.policy.get("max_phases",4):return False
         remaining=sum(max(0,r["estimate"]-r.get("metrics",{}).get("memory",0))for r in active if r["state"]in {"admitted","running","parked"})
         return self.host["available"]-self.reserve()>=estimate+remaining and not any(r["state"]in {"recovery_required","waiting_intervention","memory_recovery_required"}for r in self.rows.values())
+    @staticmethod
+    def cpu_interval(previous,current):
+        """Require measured execution headroom; PSI alone does not show CPU use."""
+        for sample in (previous,current):
+            if not isinstance(sample,dict)or type(sample.get("count"))is not int or sample["count"]<=0:return None
+            ticks=sample.get("ticks")
+            if not isinstance(ticks,list)or len(ticks)!=8 or any(type(value)is not int or value<0 for value in ticks):return None
+        if previous["count"]!=current["count"]:return None
+        delta=[b-a for a,b in zip(previous["ticks"],current["ticks"])]
+        total=sum(delta)
+        if any(value<0 for value in delta)or total<=0:return None
+        count=current["count"];execution=sum(delta[index]for index in (0,1,2,5,6));steal=delta[7]
+        capacity=max(1,count-1)
+        return {"logical_cpus":count,"execution_cores":execution*count/total,"steal_cores":steal*count/total,
+                "available_cores":(delta[3]+delta[4])*count/total,"iowait_cores":delta[4]*count/total,
+                "spare":(execution+steal)*count<=capacity*total}
+
     @staticmethod
     def cpu_floor(phase):
         """Reserve one core for deadline-sensitive assertions; other phases retain a small share."""
@@ -442,10 +467,19 @@ class Resources:
         if not self.enabled:return
         now=self.clock()
         if now-self.last_cpu_adjust>=5:
-            if sample["pressure"]["cpu"]>20:
-                self.cpu_budget=max(.5,self.cpu_budget-.5);self.last_cpu_recovery=now
-            elif now-self.last_cpu_recovery>=20:
-                self.cpu_budget=min(max(1,(os.cpu_count()or 1)-1),self.cpu_budget+.5);self.last_cpu_recovery=now
+            interval=self.cpu_interval(self.previous_cpu,sample.get("cpu"))
+            self.previous_cpu=copy.deepcopy(sample.get("cpu"))
+            decision={"at":time.time(),"pressure_percent":sample["pressure"]["cpu"],"budget_before":self.cpu_budget,
+                      "reason":"counters_unavailable",**(interval or{})}
+            if interval is not None:
+                if sample["pressure"]["cpu"]>20 and not interval["spare"]:
+                    self.cpu_budget=max(.5,self.cpu_budget-.5);self.last_cpu_recovery=now
+                    decision["reason"]="execution_pressure"
+                elif interval["spare"] and now-self.last_cpu_recovery>=20:
+                    self.cpu_budget=min(max(1,(os.cpu_count()or 1)-1),self.cpu_budget+.5);self.last_cpu_recovery=now
+                    decision["reason"]="spare_cpu_recovery"
+                else:decision["reason"]="recovery_wait"if interval["spare"]else"execution_busy"
+            decision["budget_after"]=self.cpu_budget;self.cpu_decision=decision
             with self.condition:
                 self.rebalance_cpu();self.persist();self.condition.notify_all()
             self.last_cpu_adjust=now

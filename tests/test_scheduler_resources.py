@@ -180,3 +180,107 @@ class DeadlineCPUAdmissionTests(unittest.TestCase):
   stats=control.Control.stats(group)
   self.assertEqual(stats["cpu_limit_millis"],1000);self.assertEqual(stats["cpu_throttled_usec"],900);self.assertEqual(stats["cpu_throttled_periods"],3)
   (group/"cpu.max").write_text("max 100000");self.assertIsNone(control.Control.stats(group)["cpu_limit_millis"])
+
+
+class CPUHeadroomTests(unittest.TestCase):
+    """Exercise the real governor with quota pressure and independently measured CPU intervals."""
+    def setUp(self):
+        from unittest.mock import patch
+        self.cpu_patch=patch.object(m.os,"cpu_count",return_value=4);self.cpu_patch.start()
+        self.root=tempfile.TemporaryDirectory();self.time=100
+        self.sample={"available":20*G,"total":24*G,"swap_free":0,"swap_total":0,
+                     "pressure":{"cpu":90,"memory":0,"io":0},"cpu":{"count":4,"ticks":[100]*8}}
+        self.runner=Fake();self.scheduler=m.Resources(self.root.name,self.runner,{"mode":"enforce"},lambda:self.time,lambda:dict(self.sample))
+        self.scheduler.last_cpu_recovery=self.time
+    def tearDown(self):
+        self.scheduler.close();self.root.cleanup();self.cpu_patch.stop()
+    def step(self,execution=50,idle=350,iowait=0,steal=0,seconds=5):
+        ticks=self.sample["cpu"]["ticks"]
+        for index,amount in [(0,execution),(3,idle),(4,iowait),(7,steal)]:ticks[index]+=amount
+        self.time+=seconds;self.scheduler.tick()
+    def test_own_quota_pressure_with_spare_cpu_does_not_ratchet_down_and_recovers(self):
+        self.scheduler.cpu_budget=.5
+        for _ in range(3):self.step()
+        self.assertEqual(self.scheduler.cpu_budget,.5)
+        for _ in range(17):self.step()
+        self.assertEqual(self.scheduler.cpu_budget,3)
+        self.assertEqual(self.scheduler.cpu_decision["reason"],"spare_cpu_recovery")
+        self.assertAlmostEqual(self.scheduler.cpu_decision["available_cores"],3.5)
+        self.assertEqual(self.sample["pressure"]["cpu"],90)
+    def test_real_execution_pressure_reduces_once_then_stops_with_headroom(self):
+        self.step(execution=350,idle=50)
+        self.assertEqual(self.scheduler.cpu_budget,2.5)
+        self.assertEqual(self.scheduler.cpu_decision["reason"],"execution_pressure")
+        for _ in range(3):self.step(execution=290,idle=110)
+        self.assertEqual(self.scheduler.cpu_budget,2.5)
+        self.step(execution=290,idle=110)
+        self.assertEqual(self.scheduler.cpu_budget,3)
+    def test_stolen_cpu_consumes_headroom_but_iowait_is_not_execution(self):
+        self.step(execution=100,idle=50,steal=250)
+        self.assertEqual(self.scheduler.cpu_budget,2.5)
+        self.assertAlmostEqual(self.scheduler.cpu_decision["steal_cores"],2.5)
+        for _ in range(4):self.step(execution=50,idle=0,iowait=350)
+        self.assertEqual(self.scheduler.cpu_budget,3)
+        self.assertAlmostEqual(self.scheduler.cpu_decision["iowait_cores"],3.5)
+    def test_exact_reserved_core_boundary_and_low_psi_do_not_reduce(self):
+        self.step(execution=300,idle=100)
+        self.assertEqual(self.scheduler.cpu_budget,3)
+        self.sample["pressure"]["cpu"]=0
+        self.step(execution=400,idle=0)
+        self.assertEqual(self.scheduler.cpu_budget,3)
+        self.assertEqual(self.scheduler.cpu_decision["reason"],"execution_busy")
+    def test_missing_reset_zero_and_inconsistent_counters_hold_budget(self):
+        valid={"count":4,"ticks":[100]*8}
+        invalid=[None,{}, {"count":4,"ticks":[100]*7},{"count":True,"ticks":[100]*8},
+                 {"count":3,"ticks":[200]*8},{"count":4,"ticks":[100]*8},
+                 {"count":4,"ticks":[200,99,200,200,200,200,200,200]},
+                 {"count":4,"ticks":[-1]*8},{"count":4,"ticks":[True]*8}]
+        for current in invalid:
+            for budget in (.5,3):
+                with self.subTest(current=current,budget=budget):
+                    self.scheduler.previous_cpu={"count":4,"ticks":list(valid["ticks"])}
+                    self.sample["cpu"]=current;self.scheduler.cpu_budget=budget
+                    self.scheduler.last_cpu_recovery=0;self.time+=5;self.scheduler.tick()
+                    self.assertEqual(self.scheduler.cpu_budget,budget)
+                    self.assertEqual(self.scheduler.cpu_decision["reason"],"counters_unavailable")
+    def test_missing_interval_needs_a_fresh_baseline_before_recovery(self):
+        self.scheduler.cpu_budget=.5;self.scheduler.last_cpu_recovery=0
+        self.sample.pop("cpu");self.time+=5;self.scheduler.tick()
+        self.sample["cpu"]={"count":4,"ticks":[100]*8};self.time+=5;self.scheduler.tick()
+        self.assertEqual(self.scheduler.cpu_budget,.5)
+        self.step();self.assertEqual(self.scheduler.cpu_budget,1)
+    def test_subdecision_samples_do_not_shorten_the_execution_interval(self):
+        self.scheduler.last_cpu_adjust=self.time
+        self.sample["cpu"]["ticks"][0]+=350;self.sample["cpu"]["ticks"][3]+=50
+        self.time+=1;self.scheduler.tick()
+        self.assertEqual(self.scheduler.cpu_budget,3)
+        self.assertEqual(self.scheduler.previous_cpu["ticks"],[100]*8)
+        self.time+=4;self.scheduler.tick();self.assertEqual(self.scheduler.cpu_budget,2.5)
+    def test_counter_parser_ignores_guest_columns_and_missing_counters_are_unknown(self):
+        from unittest.mock import patch
+        def read(path):
+            if str(path)=="/proc/meminfo":return "MemAvailable: 1000 kB\nMemTotal: 2000 kB\n"
+            if str(path)=="/proc/stat":return "cpu 1 2 3 4 5 6 7 8 9000 8000\ncpu0 0 0 0 0\n"
+            raise OSError("Optional pressure fixture unavailable")
+        with patch.object(m.Path,"read_text",read):
+            sample=m.host_sample()
+        self.assertEqual(sample["cpu"],{"count":4,"ticks":[1,2,3,4,5,6,7,8]})
+        def missing(path):
+            if str(path)=="/proc/meminfo":return "MemAvailable: 1000 kB\nMemTotal: 2000 kB\n"
+            raise OSError("Unavailable")
+        with patch.object(m.Path,"read_text",missing):self.assertIsNone(m.host_sample()["cpu"])
+    def test_phase_floors_weights_and_three_core_cap_are_preserved(self):
+        for name,phase in [("test","test"),("browser","ui_test"),("compiler","compile_release")]:
+            self.scheduler.enter(name,{"job_id":name},phase,"cpu-fixture-"+name,"test",timeout=.05)
+            self.scheduler.attached(name,"container")
+        self.step(execution=350,idle=50)
+        rows=self.scheduler.rows
+        self.assertGreaterEqual(rows["test"]["cpu_millis"],1000)
+        self.assertGreaterEqual(rows["browser"]["cpu_millis"],1000)
+        self.assertGreaterEqual(rows["compiler"]["cpu_millis"],100)
+        self.assertLessEqual(sum(row["cpu_millis"]for row in rows.values()),3000)
+        self.assertFalse(self.runner.frozen)
+        import json
+        saved=json.loads(self.scheduler.path.read_text())
+        self.assertEqual(saved["cpu_decision"]["reason"],"execution_pressure")
+        self.assertEqual(saved["cpu_decision"]["budget_after"],2.5)
