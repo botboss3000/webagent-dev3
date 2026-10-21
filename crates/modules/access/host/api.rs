@@ -19,11 +19,8 @@ pub(crate) async fn administrator(app: &App, identity: &Value) -> Result<(), Api
     let id = identity["_user_id"].as_str().unwrap_or("");
     let account = app.store.account_by_id(id).await?
         .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Sign in required".into()))?;
-    let principal = Principal::from_account(&account)
+    crate::access::require_administrator(&account)
         .map_err(|_| ApiError(StatusCode::FORBIDDEN, "Administrator access required".into()))?;
-    if !principal.administrator() {
-        return Err(ApiError(StatusCode::FORBIDDEN, "Administrator access required".into()));
-    }
     Ok(())
 }
 /// Called while holding App.gate after an access mutation.
@@ -122,11 +119,8 @@ pub(crate) async fn quiesce_agent(app: &App, agent_id: &str) -> Result<(), ApiEr
 }
 async fn quiesce_tier(app: &App, tier_id: &str) -> Result<(), ApiError> {
     let mut closure_error=None;
-    for user_id in app.store.all_user_ids().await? {
-        if app.store.account_by_id(&user_id).await?
-            .is_some_and(|account| account["tier_id"] == tier_id) {
-            if let Err(error)=quiesce_user(app,&user_id,None).await {closure_error=Some(error);}
-        }
+    for user_id in app.store.access_repository().tier_user_ids(tier_id).await? {
+        if let Err(error)=quiesce_user(app,&user_id,None).await {closure_error=Some(error);}
     }
     if let Some(error)=closure_error {return Err(error);}
     Ok(())
@@ -171,9 +165,8 @@ async fn change_account(
     Path(id): Path<String>, Json(body): Json<AccountChange>,
 ) -> Api {
     administrator(&app, &identity).await?;
-    if identity["_user_id"]==id && (body.status!=AccountStatus::Active || body.role!=Role::Administrator) {
-        return Err(invalid("You cannot restrict or demote your own administrator account"));
-    }
+    crate::access::validate_self_administration(identity["_user_id"].as_str().unwrap_or(""),&id,body.status,body.role)
+        .map_err(|_|invalid("You cannot restrict or demote your own administrator account"))?;
     let _guard = app.gate.lock().await;
     let account = app.store.update_account_access(&id, body.expected_revision,
         body.status, body.role, &body.tier_id).await
@@ -198,14 +191,13 @@ async fn change_tier(
     }
     let _guard = app.gate.lock().await;
     if let Some(policy)=&body.tier.model_policy {
-        if let Some(roster_id)=&policy.roster_id {
-            if roster_id=="base" {return Err(invalid("Base catalog is administrator-only"));}
+        if let Some(roster_id)=policy.tier_roster_id()
+            .map_err(|_|invalid("Base catalog is administrator-only"))? {
             let roster=app.store.platform_roster(roster_id).await?
                 .ok_or_else(||invalid("Published catalog required"))?;
             let snapshot=roster.published().ok_or_else(||invalid("Published catalog required"))?;
-            if policy.allowed_entry_ids.iter().any(|id|!snapshot.entries.contains_key(id)) {
-                return Err(invalid("Catalog entry not published"));
-            }
+            policy.validate_published_entries(|id|snapshot.entries.contains_key(id))
+                .map_err(|_|invalid("Catalog entry not published"))?;
         }
     }
     let tier = app.store.save_entitlement_tier(body.tier, body.expected_revision).await

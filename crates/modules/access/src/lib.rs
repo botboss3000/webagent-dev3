@@ -316,3 +316,44 @@ mod tests {
         assert!(tier.validate().is_err());
     }
 }
+
+pub mod storage;
+pub mod policy_file;
+pub mod authority;
+pub mod repository;
+pub mod capabilities;
+pub mod credential_authorization;
+pub fn require_administrator(account:&serde_json::Value)->anyhow::Result<()> {
+    if !Principal::from_account(account)?.administrator() {anyhow::bail!("Administrator access required");} Ok(())
+}
+pub fn validate_self_administration(actor:&str,target:&str,status:AccountStatus,role:Role)->anyhow::Result<()> {
+    if actor==target && (status!=AccountStatus::Active || role!=Role::Administrator) {
+        anyhow::bail!("You cannot restrict or demote your own administrator account");
+    } Ok(())
+}
+
+impl ModelPolicy {
+    /// The base catalog is installation administration, never a tier roster grant.
+    pub fn tier_roster_id(&self)->Result<Option<&str>> {
+        if self.roster_id.as_deref()==Some("base") {bail!("Base catalog is administrator-only");}
+        Ok(self.roster_id.as_deref())
+    }
+    /// Models supplies its existing published snapshot; Access owns grant membership.
+    pub fn validate_published_entries(&self, contains:impl Fn(&str)->bool)->Result<()> {
+        if self.allowed_entry_ids.iter().any(|id|!contains(id)) {bail!("Catalog entry not published");}
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod catalog_authority_tests {
+    use super::*;
+    #[test]
+    fn tier_grants_require_non_base_published_entry_identity() {
+        let mut policy:ModelPolicy=serde_json::from_value(serde_json::json!({"roster_id":"base","allowed_entry_ids":[],"allow_byo":false,"max_byo_entries":0})).unwrap();
+        assert_eq!(policy.tier_roster_id().unwrap_err().to_string(),"Base catalog is administrator-only");
+        policy.roster_id=Some("team".into());policy.allowed_entry_ids=["published".into()].into_iter().collect();
+        assert_eq!(policy.tier_roster_id().unwrap(),Some("team"));
+        assert!(policy.validate_published_entries(|id|id=="published").is_ok());
+        assert_eq!(policy.validate_published_entries(|_|false).unwrap_err().to_string(),"Catalog entry not published");
+    }
+}

@@ -2166,9 +2166,16 @@ dependencies = [
 name = "webagent-access"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
+ "fs2",
  "serde",
  "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "webagent-configuration",
 ]
 
 [[package]]

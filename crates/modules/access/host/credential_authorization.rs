@@ -6,45 +6,11 @@ pub(crate) fn declaration(name: &str) -> Option<Value> {
         .find(|s| s["name"] == name)
         .and_then(|s| s.get("authorization").cloned())
 }
-async fn binding(
-    store: &store::Store,
-    run: &Value,
-    name: &str,
-    args: &Value,
-    requirement: &Value,
-) -> Result<Value> {
-    if requirement["kind"] != "credential_owner" {
-        anyhow::bail!("Unsupported tool authorization declaration");
-    }
-    let kind = requirement["credential_kind"]
-        .as_str()
-        .ok_or_else(|| anyhow!("Credential kind missing"))?;
-    if kind.is_empty() || !kind.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-        anyhow::bail!("Invalid credential kind");
-    }
-    let owner = run["requester_user_id"]
-        .as_str()
-        .unwrap_or(store.current_user_id());
-    // The authenticated run requester selects the credential namespace. Model arguments cannot select it.
-    let reference = format!("tool_credential:{owner}:{kind}");
-    let credential = store
-        .get(&reference)
-        .await?
-        .ok_or_else(|| anyhow!("The requesting user must configure their own credential"))?;
-    if credential["owner_user_id"] != owner || credential["revoked"] == true {
-        anyhow::bail!("Credential owner or status invalid");
-    }
-    let version = credential["version"]
-        .as_u64()
-        .ok_or_else(|| anyhow!("Credential version missing"))?;
-    Ok(
-        json!({"kind":"credential_owner","owner_user_id":owner,"credential_ref":reference,"credential_version":version,
-        "session_id":run["session_id"],"run_id":run["id"],"tool":name,"arguments_digest":digest(args),
-        "participation_generation":run["participation_generation"].as_u64().unwrap_or(0),
-        "policy_version":run["pending"]["policy_version"],"mode_revision":run["pending"]["mode_revision"],
-        "visibility_revision":run["pending"]["visibility_revision"],"ability_state_revision":run["pending"]["ability_state_revision"],
-        "access_revision":run["pending"]["access_revision"]}),
-    )
+async fn binding(store:&store::Store,run:&Value,name:&str,args:&Value,requirement:&Value)->Result<Value> {
+    let reference=access::credential_authorization::reference(run,store.current_user_id(),requirement)?;
+    let credential=store.get(&reference).await?
+        .ok_or_else(||anyhow!("The requesting user must configure their own credential"))?;
+    access::credential_authorization::binding(run,store.current_user_id(),name,args,requirement,&credential)
 }
 pub(crate) async fn resolve(
     store: &store::Store,

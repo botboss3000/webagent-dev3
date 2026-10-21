@@ -3780,3 +3780,16 @@ mod admin_storage_policy_tests {
         assert!(Store::open(root.path()).await.is_err());
     }
 }
+
+// Access borrows the existing cipher, identities and pools; no resource is duplicated.
+impl webagent_access::storage::RecordCodec for Store {
+    fn seal(&self,value:&Value)->Result<Vec<u8>> {Store::seal(self,value)}
+    fn unseal(&self,value:&[u8])->Result<Value> {Store::unseal(self,value)}
+    fn encode_application(&self,value:&Value)->Result<Vec<u8>> {self.encode_for_pool(&self.app_pool,value)}
+}
+impl Store {
+    pub(crate) fn access_repository(&self)->webagent_access::storage::Repository<'_,Self> {
+        webagent_access::storage::Repository::new(&self.root,&self.app_pool,&self.agent_pool,
+            &self.agent_id,&self.user_id,self)
+    }
+}

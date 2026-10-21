@@ -377,61 +377,7 @@ impl Store {
         tx.commit().await?;
         Ok(())
     }
-    async fn migrate_access_v1(&self) -> Result<()> {
-        let mut tx = self.app_pool.begin().await?;
-        let marker: Option<Vec<u8>> = sqlx::query_scalar(
-            "SELECT value FROM docs WHERE key='storage:access_v1'")
-            .fetch_optional(&mut *tx).await?;
-        if let Some(marker) = &marker {
-            if self.unseal(marker)?["version"] != 1 {
-                bail!("Unsupported access migration marker");
-            }
-        }
-        let operator = Tier { id:"operator".into(), revision:1, model_policy:None,
-            ability_permissions:access::legacy_ability_grants(),
-            allowed_models:vec!["*".into()],
-            tools:[("*".into(), access::Permission::Auto)].into(),
-            max_sessions:10_000, max_active_runs:200 };
-        let basic = Tier { id:"basic".into(), revision:1, model_policy:None,
-            ability_permissions:access::legacy_ability_grants(),
-            allowed_models:Vec::new(), tools:Default::default(),
-            max_sessions:10, max_active_runs:2 };
-        for tier in [&operator, &basic] {
-            tier.validate()?;
-            sqlx::query("INSERT OR IGNORE INTO entitlement_tiers(tier_id,revision,value) VALUES(?,?,?)")
-                .bind(&tier.id).bind(tier.revision as i64)
-                .bind(self.seal(&serde_json::to_value(tier)?)?)
-                .execute(&mut *tx).await?;
-        }
-        let admin: Option<Vec<u8>> = sqlx::query_scalar(
-            "SELECT value FROM user_accounts WHERE user_id='admin'")
-            .fetch_optional(&mut *tx).await?;
-        if let Some(admin) = admin {
-            let mut account = self.unseal(&admin)?;
-            let changed = account["status"].is_null() || account["role"].is_null()
-                || account["tier_id"].is_null() || account["access_revision"].is_null();
-            if changed {
-                account["status"] = json!(AccountStatus::Active);
-                account["role"] = json!(Role::Administrator);
-                account["tier_id"] = json!("operator");
-                account["access_revision"] = json!(1);
-                sqlx::query("UPDATE user_accounts SET value=? WHERE user_id='admin'")
-                    .bind(self.seal(&account)?).execute(&mut *tx).await?;
-            }
-            let membership = json!({"user_id":"admin","agent_id":"shared_default",
-                "relationship":Relationship::Owner,"revision":1});
-            sqlx::query("INSERT OR IGNORE INTO agent_memberships(user_id,agent_id,value) VALUES(?,?,?)")
-                .bind("admin").bind("shared_default").bind(self.seal(&membership)?)
-                .execute(&mut *tx).await?;
-        }
-        if marker.is_none() {
-            sqlx::query("INSERT INTO docs(key,value) VALUES('storage:access_v1',?)")
-                .bind(self.seal(&json!({"version":1}))?)
-                .execute(&mut *tx).await?;
-        }
-        tx.commit().await?;
-        Ok(())
-    }
+    async fn migrate_access_v1(&self) -> Result<()> { self.access_repository().migrate_access_v1().await }
 }
 
 #[cfg(test)]
