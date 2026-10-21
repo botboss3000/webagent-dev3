@@ -1,85 +1,11 @@
-//! Browser reports are untrusted operational observations, never runtime authority.
+//! HTTP authority stays in the root; Diagnostics owns bounded event semantics.
 use super::*;
-use axum::{extract::DefaultBodyLimit, routing::post};
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct IssueEvent {
-    issue_id: String,
-    event: String,
-    operation: String,
-    session_id: Option<String>,
-    status: Option<u16>,
-    repeat_count: u32,
-    duration_ms: u64,
-}
-impl IssueEvent {
-    fn validate(&self) -> Result<(), crate::ApiError> {
-        let uuid = |s: &str| uuid::Uuid::parse_str(s).is_ok();
-        if !uuid(&self.issue_id)
-            || self.session_id.as_deref().is_some_and(|s| !uuid(s))
-            || !matches!(self.event.as_str(), "issue_opened" | "issue_resolved")
-            || !matches!(
-                self.operation.as_str(),
-                "usage"
-                    | "shared_snapshot"
-                    | "history_refresh"
-                    | "message_statistics"
-                    | "read_ack"
-                    | "manager_status"
-                    | "session_controls"
-                    | "shared_controls"
-                    | "chat_sync"
-                    | "status_poll"
-                    | "sessions_list"
-                    | "activity_display"
-                    | "media_display"
-                    | "transcript_position"
-            )
-            || self.status.is_some_and(|s| !(100..=599).contains(&s))
-            || self.repeat_count == 0
-            || self.repeat_count > 1_000_000
-            || self.duration_ms > 31_536_000_000
-        {
-            return Err(crate::bad("Invalid background issue event"));
-        }
-        Ok(())
-    }
-}
-/// Exposes presentation policy only. Capture remains restricted to the fixed admin account.
-async fn configuration(Extension(app): Extension<crate::App>) -> crate::Api {
-    let s = settings();
-    Ok(Json(json!({
-        "enabled": scope(&app.store) && bridge::available() && s.as_ref().is_some_and(|s| permits(s,"app_background")),
-        "show_toasts": s.filter(|s| s.error.is_none()).map(|s|s.config.background_issues.show_toasts).unwrap_or(true)
-    })))
-}
-/// Bounds and allowlists client observations; never accepts raw messages, URLs, headers or credentials.
-async fn report(
-    Extension(app): Extension<crate::App>,
-    Extension(identity): Extension<Value>,
-    Json(body): Json<IssueEvent>,
-) -> crate::Api {
-    authorize(&app, &identity).await?;
-    body.validate()?;
-    let Some(s) = settings().filter(|s| bridge::available() && permits(s, "app_background")) else {
-        return Ok(Json(json!({"accepted":false})));
-    };
-    // A missing/deleted session can itself be the failure. Do not invent verified ownership.
-    let verified_session = if let Some(sid) = body.session_id.as_deref() {
-        app.store.get(&format!("session:{sid}")).await?.is_some()
-    } else {
-        false
-    };
-    let event = json!({"owner":"admin","category":"app_background","level":if body.event=="issue_resolved"{"info"}else{"warning"},
-        "source":"browser_observation","config_digest":s.digest,"issue_id":body.issue_id,"event":body.event,
-        "operation":body.operation,"session_id":if verified_session {body.session_id.as_deref()}else{None},
-        "client_session_id":body.session_id,"status":body.status,"repeat_count":body.repeat_count,"duration_ms":body.duration_ms});
-    // Await the existing bounded recorder acknowledgement so retries cannot silently lose a queued event.
-    bridge::send("event", event, None)
-        .await
-        .map_err(anyhow::Error::from)?;
-    Ok(Json(json!({"accepted":true})))
+use axum::{extract::DefaultBodyLimit,routing::post};
+use package::background::IssueEvent;
+async fn configuration(Extension(app):Extension<crate::App>)->crate::Api {Ok(Json(package::background::configuration(RECORDER.get(),&app.store)))}
+async fn report(Extension(app):Extension<crate::App>,Extension(identity):Extension<Value>,Json(body):Json<IssueEvent>)->crate::Api {
+ authorize(&app,&identity).await?;
+ Ok(Json(package::background::report(RECORDER.get(),&app.store,body).await.map_err(api_error)?))
 }
 pub(super) fn router() -> Router<crate::App> {
     Router::new()

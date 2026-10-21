@@ -1,121 +1,16 @@
-//! Host materialization of validated component plans; authority and durable history remain native.
-// @code-index {"version":1,"feature":"context-permanent-assets","purpose":"Materialize live guidance and permanent conversation selectors through bounded component plans; native host retains authorization and canonical history. Config: plugins/engine/context-assets/component.json -> limits; config/engine-components.json -> disabled, revision initializes data-root controls; config/prompts.json -> base_instructions, closing_reporting, jev_guidance supplies published defaults merged with data-root overrides and saved default provenance.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled","/revision"]},{"path":"plugins/engine/context-assets/component.json","pointers":["/limits"]},{"path":"config/prompts.json","pointers":["/base_instructions","/closing_reporting","/jev_guidance"]}],"opportunities":[]},"aliases":[]}
+//! Engine current-owner authority and source composition, over Context-owned materialization.
 use crate::{context_input,context_assembly,provider};
 use crate::runtime::{Runtime,config,ports::*,models::ModelRecords};
 use crate::ports::*;
 use crate::context::abilities::Catalog;
 use anyhow::{bail,Result};
 use serde_json::{json,Value};
-use std::collections::BTreeMap;
 use tokio_util::sync::CancellationToken;
-use webagent_assets_contracts::{State,Operation,Request,Plan};
-use webagent_capability_contracts::{Guidance,PreparedCapability,PrepareRequest};
+use webagent_assets_contracts::State;
+use webagent_capability_contracts::{Guidance,PreparedCapability};
 use webagent_provider_contracts::ProfileV1;
 
-pub struct Working {
- pub instructions:String,pub guidance:String,pub input:Vec<Value>,pub schemas:Vec<Value>,
- pub extra_json_bytes:usize,pub contributions_projected:bool,
-}
-
-/// Reload current published files; a changed body cannot hide behind an old cached manifest.
-
-
-/// Fence synchronous file-backed sources around body assembly and the final provider poll boundary.
-/// A catalog loaded before a publication cannot authorize bodies under a newer source fingerprint.
-
-
-/// Normalize only identity fields from trusted native producers; old hashes never pin guidance.
-fn skill_selector(value:&Value)->Result<Value> {
- let selector=json!({"type":"skill","ability_id":value["ability_id"],"kind":value["kind"],"skill_id":value["skill_id"]});
- webagent_assets_contracts::validate_selector(&selector)?;Ok(selector)
-}
-
-/// Resolve immutable run identity without accepting model-selected scope arguments.
-
-
-/// Import only canonical encrypted native selection projections once, never automatic dependencies.
-
-
-/// Hydrate permanent identities before policy/catalog assembly and persist changed native projections.
-
-
-/// Bind every current source/authority input, excluding self-mutating placement revisions.
-
-
-/// Resolve current host-owned prompt sources and submit only authorized bodies to the composer.
-
-
-/// Preserve typed host settings classification separately from untrusted file guidance.
-fn definition_body(definition:&webagent_capability_contracts::Definition)->String {
- let label=if definition.kind==webagent_capability_contracts::GuidanceKind::Ability
-  &&definition.id.starts_with("ability:")&&definition.id.ends_with(":settings") {
-  "Current host ability settings"
- } else {"Untrusted live guidance"};
- format!("\n\n## {label}: {}\n{}",definition.id,definition.body)
-}
-
-/// Map only authorized schema identities back to the exact current host objects.
-fn schemas_in_order(schemas:&[Value],order:&[String])->Result<Vec<Value>> {
- order.iter().map(|name|schemas.iter().find(|schema|schema["name"]==name.as_str()).cloned()
-  .ok_or_else(||anyhow::anyhow!("Context schema unavailable"))).collect()
-}
-
-/// Place permanent references and temporary native additions without ever changing durable history.
-
-
-/// Decode native call arguments while retaining their exact expected revisions and request IDs.
-fn arguments(run:&Value)->Result<Value> {
- let value=&run["pending"]["arguments"];
- if let Some(raw)=value.as_str(){Ok(serde_json::from_str(raw)?)}else{Ok(value.clone())}
-}
-
-/// Stage only validated explicit selection effects before append_tool clears pending identity.
-pub fn record_tool_operation(run:&mut Value,result:&Value,previous_tools:&Value,previous_skills:&Value)->Result<()> {
- let Some(name)=run["pending"]["name"].as_str() else {return Ok(());};
- let name=name.to_owned();
- if !matches!(name.as_str(),"context_assets"|"load_tool"|"search_tools"|"load_skill"|"load_ability")
-  ||!matches!(result["status"].as_str(),Some("success"|"ok")) {return Ok(());}
- let args=arguments(run)?;
- if name=="context_assets" {
-  if result["status"]!="success"||args["action"]!="unload" {return Ok(());}
-  let operation=Operation::Unload{selector:args["selector"].clone(),
-   expected_revision:args["expected_revision"].as_u64().ok_or_else(||anyhow::anyhow!("Unload revision"))?,
-   request_id:args["request_id"].as_str().ok_or_else(||anyhow::anyhow!("Unload request ID"))?.into()};
-  if result["output"]["operation"]!=json!(operation){bail!("Unload operation result mismatch");}
-  webagent_assets_contracts::validate_selector(&args["selector"])?;
-  run["_context_assets_operation"]=json!(operation);return Ok(());
- }
- let mut selectors=Vec::new();
- match name.as_str() {
-  "load_tool"|"search_tools" if result["status"]=="success"&&result["output"]["activated"]==true=>{
-   for tool in result["output"]["selected_tools"].as_array().into_iter().flatten() {
-    if !run["selected_tools"].as_array().is_some_and(|items|items.contains(tool))
-     ||previous_tools.as_array().is_some_and(|items|items.contains(tool)){continue;}
-    let value=json!({"type":"tool","tool_name":tool});webagent_assets_contracts::validate_selector(&value)?;
-    if !selectors.contains(&value){selectors.push(value);}
-   }
-  },
-  "load_skill" if result["status"]=="success"&&result["output"]["status"]=="loaded"=>{
-   let expected=skill_selector(&result["output"])?;
-   if run["loaded_skills"].as_array().into_iter().flatten().any(|skill|skill_selector(skill).ok().as_ref()==Some(&expected))
-    &&!previous_skills.as_array().into_iter().flatten().any(|skill|skill_selector(skill).ok().as_ref()==Some(&expected)) {selectors.push(expected);}
-  },
-  "load_ability" if result["status"]=="ok"&&result["ability_id"]==args["ability_id"]=>{
-   let id=args["ability_id"].clone();
-   if run["loaded_abilities"].as_array().is_some_and(|items|items.contains(&id)) {
-    let value=json!({"type":"ability","ability_id":id});webagent_assets_contracts::validate_selector(&value)?;selectors.push(value);
-   }
-  },
-  _=>{},
- }
- if selectors.is_empty(){return Ok(());}
- let revision=run["context_assets_revision"].as_u64().unwrap_or(0);
- let request_id=format!("activation:{}",crate::digest(&json!([run["id"],run["pending"]["call_id"],name])));
- run["_context_assets_operation"]=json!(Operation::Activate{selectors,expected_revision:revision,request_id});
- Ok(())
-}
-
-
+pub use webagent_context::assets::{Working,record_tool_operation};
 impl<S:ScopedStorage+ModelRecords+ChatEffects+AdmissionEffects+NotificationEffects+UsageEffects+RunObservation+RunPresentation,C:config::SchemaCatalog,B:Catalog,A:crate::runtime::actions::Actions<S>+Clone+PartialEq,H:ChatAuthority<S>,M:ModuleBindings<S>,X:AgentPolicy<S>+NativePolicy+CredentialBindings<S>+SkillSources<S>+PromptSlots<S>+MainGuidance<S>+crate::runtime::native::NativeDispatch<S,C,B,H::Binding>> Runtime<S,C,B,A,H,M,X> {
 pub fn asset_catalog(&self)->Result<B> {self.abilities.current()}
 pub fn source_fence(&self)->Result<String> {let app=self;
@@ -129,36 +24,14 @@ pub fn source_fence(&self)->Result<String> {let app=self;
  Ok(crate::digest(&json!([app.abilities.version(),app.abilities.live_version(),
   fresh.version(),fresh.live_version(),base,engines.revision,controls])))
 }
-fn asset_identity(&self,run:&Value)->Result<(String,String,String)> {let app=self;
- let sid=run["session_id"].as_str().ok_or_else(||anyhow::anyhow!("Context assets session missing"))?;
- let agent=run["agent_id"].as_str().unwrap_or("shared_default");
- let requester=run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id());
- if [sid,agent,requester].iter().any(|id|!webagent_assets_contracts::valid_id(id)){bail!("Context assets identity");}
- Ok((sid.into(),agent.into(),requester.into()))
-}
-async fn asset_legacy_seed(&self,run:&mut Value,state:&State)->Result<bool> {let app=self;
- if state.revision!=0||!run["context_assets_revision"].is_null()||run["status"]!="running" {return Ok(false);}
- let tools=run["selected_tools"].as_array().cloned().unwrap_or_default();
- let skills=run["loaded_skills"].as_array().cloned().unwrap_or_default();
- if tools.is_empty()&&skills.is_empty(){return Ok(false);}
- let (sid,agent,requester)=app.asset_identity(run)?;
+fn asset_identity(&self,run:&Value)->Result<(String,String,String)> {webagent_context::assets::identity(run,self.store.current_user_id())}
+async fn asset_legacy_seed(&self,run:&mut Value,state:&State)->Result<bool> {
+ if !webagent_context::assets::legacy_seed_needed(run,state){return Ok(false);}
+ let (_sid,_agent,_requester)=self.asset_identity(run)?;
  let rid=run["id"].as_str().ok_or_else(||anyhow::anyhow!("Context assets run missing"))?.to_owned();
- let canonical=app.run(&rid).await?;
- let canonical_requester=canonical["requester_user_id"].as_str().unwrap_or(app.store.current_user_id());
- if canonical["status"]!="running"||canonical["session_id"]!=sid
-  ||canonical["agent_id"].as_str().unwrap_or("shared_default")!=agent||canonical_requester!=requester
-  ||canonical["run_revision"]!=run["run_revision"]||canonical["selected_tools"]!=run["selected_tools"]
-  ||canonical["loaded_skills"]!=run["loaded_skills"] {bail!("Context assets legacy checkpoint changed");}
- let mut selectors=Vec::new();
- for tool in tools {
-  let value=json!({"type":"tool","tool_name":tool});webagent_assets_contracts::validate_selector(&value)?;
-  if !selectors.contains(&value){selectors.push(value);}
- }
- for skill in skills {let value=skill_selector(&skill)?;if !selectors.contains(&value){selectors.push(value);}}
- let operation=Operation::Activate{selectors,expected_revision:0,
-  request_id:format!("legacy:{}",crate::digest(&json!([sid,agent,requester,rid])))};
- run["_context_assets_operation"]=json!(operation);
- app.save(run).await?;Ok(true)
+ let canonical=self.run(&rid).await?;
+ let operation=webagent_context::assets::legacy_operation(run,&canonical,self.store.current_user_id())?;
+ run["_context_assets_operation"]=json!(operation);self.save(run).await?;Ok(true)
 }
 pub async fn hydrate_context(&self,run:&mut Value)->Result<State> {let app=self;
  let (sid,agent,requester)=app.asset_identity(run)?;
@@ -167,27 +40,8 @@ pub async fn hydrate_context(&self,run:&mut Value)->Result<State> {let app=self;
  if app.asset_legacy_seed(run,&state).await? {state=scoped.context_assets(&sid,&agent,&requester).await?;}
  let fresh=app.asset_catalog()?;
  let (_,_,visibility,session_state)=app.ability_controls(&sid).await?;
- let mut loaded=Vec::new();let mut tools=Vec::new();let mut skills=Vec::new();
- for selector in &state.selectors {
-  match selector["type"].as_str() {
-   Some("ability")=>{let value=selector["ability_id"].clone();if !loaded.contains(&value){loaded.push(value);}},
-   Some("tool")=>{
-    let Some(name)=selector["tool_name"].as_str() else {continue;};
-    tools.push(json!(name));let marker=json!(X::tool_marker(name));
-    if !loaded.contains(&marker){loaded.push(marker);}
-    for owner in fresh.tool_abilities(name,&visibility,&session_state,&json!(loaded)) {
-     let value=json!(owner);if !loaded.contains(&value){loaded.push(value);}
-    }
-   },
-   Some("skill")=>skills.push(json!({"ability_id":selector["ability_id"],"kind":selector["kind"],"skill_id":selector["skill_id"]})),
-   _=>bail!("Invalid context asset selector"),
-  }
- }
- let before=crate::digest(&json!([run["loaded_abilities"],run["selected_tools"],run["loaded_skills"],run["context_assets_revision"]]));
- run["loaded_abilities"]=json!(loaded);run["selected_tools"]=json!(tools);run["loaded_skills"]=json!(skills);
- run["context_assets_revision"]=json!(state.revision);
- let after=crate::digest(&json!([run["loaded_abilities"],run["selected_tools"],run["loaded_skills"],run["context_assets_revision"]]));
- if before!=after {app.save(run).await?;}
+ let changed=webagent_context::assets::hydrate_selectors(run,&state,X::tool_marker,|name,loaded|fresh.tool_abilities(name,&visibility,&session_state,loaded))?;
+ if changed {app.save(run).await?;}
  Ok(state)
 }
 pub async fn context_fingerprint(&self,sid:&str,agent_id:&str,loaded:&Value,selected:&Value,
@@ -221,70 +75,14 @@ pub async fn prepare_capability(&self,run:&Value,schemas:&[Value],guidance:Vec<G
  let slots=app.native.prompt_slots(scoped.records(),&agent).await?;
  let live_slots=context_assembly::pinned_instructions("",&slots)?;
  let ledger=scoped.context_assets(&sid,&agent,&requester).await?;
- let request=PrepareRequest{version:1,source_fingerprint:sourcefingerprint.into(),base_prompt,live_slots,guidance,
-  permitted_schemas:schemas.iter().map(|schema|schema["name"].as_str().map(str::to_owned).ok_or_else(||anyhow::anyhow!("Schema identity"))).collect::<Result<_>>()?,
-  prior_schema_order:ledger.schema_order,menu};
+ let request=webagent_context::assets::capability_request(base_prompt,live_slots,ledger,schemas,guidance,menu,sourcefingerprint)?;
  crate::components::capability_prepare(crate::ports::AgentMetadata::root(app.store.records()),&request,cancel).await
 }
 pub async fn project_context(&self,run:&mut Value,cap:&PreparedCapability,profile:&ProfileV1,
- schemas:&[Value],history:&[Value],contributions:&[context_input::Contribution],
- call:context_input::CallIdentity,cancel:&CancellationToken)->Result<Working> {let app=self;
- let (sid,agent,requester)=app.asset_identity(run)?;let scoped=app.store.for_agent(&agent).await?;
+ schemas:&[Value],history:&[Value],contributions:&[context_input::Contribution],call:context_input::CallIdentity,cancel:&CancellationToken)->Result<Working> {
+ let (sid,agent,requester)=self.asset_identity(run)?;let scoped=self.store.for_agent(&agent).await?;
  let ledger=scoped.context_assets(&sid,&agent,&requester).await?;
  let session=scoped.get(&format!("session:{sid}")).await?.ok_or_else(||anyhow::anyhow!("Context session missing"))?;
- let history_basis=crate::digest(&json!([session["history_revision"],session["checkpoint_through"]]));
- let mut bodies=BTreeMap::new();let mut definitions=Vec::new();
- for definition in &cap.definitions {
-  if bodies.insert(definition.id.clone(),definition_body(definition)).is_some(){bail!("Duplicate capability definition");}
-  definitions.push(definition.id.clone());
- }
- let mut native=cap.temporary_menu.clone();
- for selected in context_input::select(contributions,call)? {
-  if selected.disposition=="included" {native.push('\n');native.push_str(&selected.item.content);}
- }
- let temporary=if profile.append_instructions&&!native.is_empty() {
-  if bodies.insert("native-call".into(),native.clone()).is_some(){bail!("Reserved native definition ID");}
-  vec!["native-call".into()]
- } else {Vec::new()};
- let request=Request::Place{version:1,state:ledger.clone(),history:history.to_vec(),definitions:definitions.clone(),
-  temporary,schema_names:cap.schema_order.clone(),history_basis:history_basis.clone(),append:profile.append_instructions};
- let plan=crate::components::assets_plan(crate::ports::AgentMetadata::root(app.store.records()),&request,cancel).await?;
- webagent_assets_contracts::validate_plan(&request,&plan)?;
- let Plan::Place{placements,schema_order,..}=&plan else {bail!("Context placement kind");};
- let mut next=ledger.clone();
- next.placements=placements.iter().filter(|placement|definitions.contains(&placement.id)).cloned().collect();
- next.schema_order=schema_order.clone();next.history_basis=history_basis;
- if next!=ledger {
-  next.revision=ledger.revision.checked_add(1).ok_or_else(||anyhow::anyhow!("Context assets revision exhausted"))?;
-  run["_context_assets_write"]=json!({"scope":crate::context_ledger::scope_key(&agent,&requester),
-   "expected_revision":ledger.revision,"state":next});
- }
- let schemas=schemas_in_order(schemas,schema_order)?;
- if profile.append_instructions {
-  let projected=webagent_assets_contracts::project(&request,&plan,&bodies,profile.instruction_role.as_str())?;
-  Ok(Working{instructions:cap.main.clone(),guidance:String::new(),input:projected.input,schemas,
-   extra_json_bytes:projected.extra_json_bytes,contributions_projected:true})
- } else {
-  let mut guidance=definitions.iter().map(|id|bodies[id].as_str()).collect::<Vec<_>>().join("");
-  guidance.push_str(&cap.temporary_menu);
-  Ok(Working{instructions:cap.main.clone(),guidance,input:history.to_vec(),schemas,extra_json_bytes:0,contributions_projected:false})
- }
+ webagent_context::assets::project_context(run,cap,profile,schemas,history,contributions,call,ledger,&session,&agent,&requester,crate::ports::AgentMetadata::root(self.store.records()),&crate::context::bridge::Planner,cancel).await
 }
-}
-#[cfg(test)] mod tests {use super::*;
- #[test]fn explicit_tool_delta_only() {
-  let mut run=json!({"id":"r","context_assets_revision":4,"pending":{"name":"load_tool","call_id":"c","arguments":{"tool_name":"file_read"}},
-   "selected_tools":["file_read"],"loaded_abilities":["automatic"]});
-  record_tool_operation(&mut run,&json!({"status":"success","output":{"activated":true,"selected_tools":["file_read"]}}),&json!([]),&json!([])).unwrap();
-  let operation:Operation=serde_json::from_value(run["_context_assets_operation"].clone()).unwrap();
-  let Operation::Activate{selectors,expected_revision,..}=operation else {panic!()};
-  assert_eq!(expected_revision,4);assert_eq!(selectors,vec![json!({"type":"tool","tool_name":"file_read"})]);
-  let mut denied=run.clone();denied.as_object_mut().unwrap().remove("_context_assets_operation");
-  record_tool_operation(&mut denied,&json!({"status":"denied"}),&json!([]),&json!([])).unwrap();
-  assert!(denied.get("_context_assets_operation").is_none());
- }
- #[test]fn normalized_skill_is_identity_only() {
-  let value=skill_selector(&json!({"ability_id":"base","kind":"own","skill_id":"guide","sha256":"old","revision":8})).unwrap();
-  assert_eq!(value,json!({"type":"skill","ability_id":"base","kind":"own","skill_id":"guide"}));
- }
 }

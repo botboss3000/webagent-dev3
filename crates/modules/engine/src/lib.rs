@@ -17,6 +17,7 @@ pub mod workflow;
 pub mod sandbox;
 pub mod wake;
 pub mod context {
+ pub(crate) mod bridge;
  pub mod accounting;
  pub mod assembly;
  pub mod input;

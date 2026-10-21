@@ -565,7 +565,7 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
         loop {
             let rows: Vec<String> =
                 sqlx::query_scalar("SELECT payload FROM diagnostics WHERE category='run'")
-                    .fetch_all(&r.pool)
+                    .fetch_all(package::test_support::test_pool(r))
                     .await
                     .unwrap();
             if !rows.is_empty() {
@@ -585,14 +585,14 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
     assert!(app.save(&mut stale).await.is_err());
     let committed_rows: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM diagnostics WHERE category='run'")
-            .fetch_one(&r.pool)
+            .fetch_one(package::test_support::test_pool(r))
             .await
             .unwrap();
     assert_eq!(committed_rows, 1);
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM context_snapshots")
-                .fetch_one(&r.pool)
+                .fetch_one(package::test_support::test_pool(r))
                 .await
                 .unwrap();
             if n == 1 {
@@ -652,7 +652,7 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
         .unwrap();
     assert!(!String::from_utf8_lossy(&body).contains("PRIVATE"));
     let bytes: Vec<u8> = sqlx::query_scalar("SELECT sealed FROM context_snapshots")
-        .fetch_one(&r.pool)
+        .fetch_one(package::test_support::test_pool(r))
         .await
         .unwrap();
     assert!(!String::from_utf8_lossy(&bytes).contains("PRIVATE"));
@@ -717,7 +717,7 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
     .await
     .unwrap();
     assert_eq!(
-        read_snapshot(&r.pool, &app.store, &sid, &rid, &attempt)
+        read_snapshot(package::test_support::test_pool(r), &app.store, &sid, &rid, &attempt)
             .await
             .unwrap()["history"],
         json!(history)
@@ -729,7 +729,7 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
         .unwrap();
     let _ = assembly(&app.store, &run, &request, &prepared);
     tokio::time::timeout(Duration::from_secs(3), async {
-        while r.write_errors.load(Ordering::Relaxed) == 0 {
+        while package::test_support::test_write_errors(r) == 0 {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })

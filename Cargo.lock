@@ -2227,12 +2227,61 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-context"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "uuid",
+ "webagent-access",
+ "webagent-assets-contracts",
+ "webagent-capability-contracts",
+ "webagent-configuration",
+ "webagent-context-assembly",
+ "webagent-context-contracts",
+ "webagent-models",
+ "webagent-provider-contracts",
+]
+
+[[package]]
 name = "webagent-context-assets"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde_json",
  "webagent-assets-contracts",
+]
+
+[[package]]
+name = "webagent-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "axum",
+ "fs2",
+ "hex",
+ "http-body-util",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "webagent-context",
+ "webagent-models",
 ]
 
 [[package]]
@@ -2382,6 +2431,7 @@ dependencies = [
  "webagent-capability-context",
  "webagent-capability-contracts",
  "webagent-configuration",
+ "webagent-context",
  "webagent-context-assembly",
  "webagent-context-assets",
  "webagent-context-contracts",
@@ -2499,6 +2549,7 @@ dependencies = [
  "webagent-context-assembly",
  "webagent-context-assets",
  "webagent-context-contracts",
+ "webagent-diagnostics",
  "webagent-engine",
  "webagent-manager",
  "webagent-models",

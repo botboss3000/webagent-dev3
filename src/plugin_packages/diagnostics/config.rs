@@ -4,7 +4,7 @@ use sha2::Digest;
 use std::path::Path;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Config {
+pub struct Config {
     pub version: u32,
     pub enabled: bool,
     pub capture_scope: String,
@@ -18,7 +18,7 @@ pub(crate) struct Config {
 /// Background capture is independently selectable; toast visibility never disables logging.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct BackgroundIssues {
+pub struct BackgroundIssues {
     pub enabled: bool,
     pub show_toasts: bool,
 }
@@ -32,7 +32,7 @@ impl Default for BackgroundIssues {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Categories {
+pub struct Categories {
     pub provider: bool,
     pub context_assembly: bool,
     #[serde(default = "category_default")]
@@ -44,13 +44,13 @@ pub(crate) struct Categories {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Retention {
+pub struct Retention {
     pub hours: u64,
     pub max_rows: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct FullContext {
+pub struct FullContext {
     pub enabled: bool,
     pub sessions: Vec<Session>,
     pub retention_hours: u64,
@@ -59,7 +59,7 @@ pub(crate) struct FullContext {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Session {
+pub struct Session {
     pub session_id: String,
     pub expires_at: String,
 }
@@ -68,7 +68,12 @@ fn category_default() -> bool {
 }
 impl Config {
     pub fn disabled() -> Self {
-        serde_json::from_str(include_str!("diagnostics.json")).expect("diagnostics template")
+        // Fail-closed state, not installation defaults or a last-good configuration.
+        Self { version:1, enabled:false, capture_scope:"fixed_admin".into(),
+            categories:Categories {provider:true,context_assembly:true,run:true,tool:true,recovery:true},
+            assembly_successes:false, retention:Retention {hours:168,max_rows:200000},
+            full_context:FullContext {enabled:false,sessions:Vec::new(),retention_hours:24,max_snapshot_bytes:16777216,max_retained_bytes:268435456},
+            background_issues:BackgroundIssues::default() }
     }
     pub fn read(path: &Path) -> Result<(Self, String)> {
         use std::io::Read;
@@ -129,7 +134,7 @@ impl Config {
     }
 }
 // Fixed RFC3339 UTC seconds; no additional clock/parser dependency.
-pub(crate) fn expiry(text: &str) -> Option<u64> {
+pub fn expiry(text: &str) -> Option<u64> {
     let b = text.as_bytes();
     if b.len() != 20
         || b[4] != b'-'

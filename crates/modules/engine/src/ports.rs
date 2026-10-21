@@ -38,13 +38,7 @@ pub trait UsageEffects:Sync {
  fn stage_run_usage_in<'a,'c>(&'a self,tx:&'a mut Transaction<'c,Sqlite>,run:&'a Value)->impl Future<Output=Result<Value>>+Send+'a where 'c:'a;
 }
 
-/// Borrow the existing agent pool; this interface creates no pool and performs no metadata mutation.
-pub trait AgentMetadata:webagent_access::storage::RecordCodec+Sync {
- type Agent:AgentMetadata;
- fn agent_pool(&self)->&sqlx::SqlitePool;
- fn root(&self)->&std::path::Path;
- fn for_agent<'a>(&'a self,agent:&'a str)->impl Future<Output=Result<Self::Agent>>+Send+'a;
-}
+pub use webagent_context::ports::AgentMetadata;
 
 pub trait ToolJournal:Sync {
  fn tool_result<'a>(&'a self,sid:&'a str,rid:&'a str,call_id:&'a str)->impl Future<Output=Result<Option<Value>>>+Send+'a;

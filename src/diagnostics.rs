@@ -1,4 +1,4 @@
-//! Optional installation plugin. Removing its directory and rebuilding leaves safe no-op hooks.
+//! Optional installation hooks; the independent Diagnostics package owns recorder and server algorithms.
 #[cfg(diagnostics_plugin)]
 #[path = "diagnostics_plugin/mod.rs"]
 mod installed;

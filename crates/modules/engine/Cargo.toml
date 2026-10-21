@@ -5,9 +5,9 @@ edition = "2021"
 
 [features]
 default = ["linked-context"]
-linked-context = ["dep:webagent-context-assembly", "dep:webagent-background-dispatch", "dep:webagent-boot-supervisor", "dep:webagent-context-assets", "dep:webagent-capability-context", "dep:webagent-provider-projection"]
-live-context = []
-test-support = ["webagent-models/test-support"]
+linked-context = ["webagent-context/linked-context", "dep:webagent-context-assembly", "dep:webagent-background-dispatch", "dep:webagent-boot-supervisor", "dep:webagent-context-assets", "dep:webagent-capability-context", "dep:webagent-provider-projection"]
+live-context = ["webagent-context/live-context"]
+test-support = ["webagent-context/test-support", "webagent-models/test-support"]
 
 [dependencies]
 anyhow = "1"
@@ -26,6 +26,7 @@ tracing = "0.1"
 webagent-access = {path="../access"}
 webagent-models = {path="../models"}
 webagent-configuration = {path="../configuration"}
+webagent-context = {path="../context",default-features=false}
 webagent-context-contracts = {path="../../context-contracts"}
 webagent-background-contracts = {path="../../background-contracts"}
 webagent-boot-contracts = {path="../../boot-contracts"}
@@ -40,6 +41,7 @@ webagent-capability-context = {path="../../capability-context",optional=true}
 webagent-provider-projection = {path="../../provider-projection",optional=true}
 
 [dev-dependencies]
+webagent-context = {path="../context",default-features=false,features=["test-support"]}
 webagent-models = {path="../models",features=["test-support"]}
 aes-gcm = "0.10"
 webagent-context-assembly = {path="../../context-assembly"}
