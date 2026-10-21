@@ -114,7 +114,7 @@
         "feature_id": {
           "type": "string",
           "maxLength": 48,
-          "description": "For snippet: bind the source excerpt to a searched feature and include its configuration assessment and bounded current settings."
+          "description": "For  snippet: bind the source excerpt to a searched feature and include its configuration assessment and bounded current settings."
         }
       },
       "required": [
