@@ -12,9 +12,6 @@
 #chat-panel #chat-input-area #chat-above-pill:not(.visible):not(:has(#chat-notifications .chat-notification:not([hidden]),#runs > :not([hidden]),.v3-repository-notice:not([hidden]),.followup-queue-banner:not([hidden]))){display:none}
 #chat-notifications{padding:0 4px}
 #runs{max-height:none;overflow:visible;padding:0 4px}
-/* Remembered-route controls retain native disclosure and keyboard focus. */
-.chat-messaging-routes>summary{cursor:pointer;list-style-position:inside}
-.chat-messaging-routes>summary:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
 /* All composer notices share the approval pill surface and chip actions. */
 #runs .run-card{box-sizing:border-box;width:fit-content;max-width:min(100%,var(--chat-pill-current-width,var(--chat-pill-width,500px)));margin:6px auto;padding:8px 12px;border:var(--border-width) solid color-mix(in oklab,var(--fg-1) 22%,transparent);border-radius:22px;background:var(--chat-pill-bg,color-mix(in oklab,var(--bg-elev) 82%,transparent));color:var(--fg-2);backdrop-filter:blur(12px) saturate(140%);-webkit-backdrop-filter:blur(12px) saturate(140%);font-size:13px;line-height:1.45;overflow-wrap:anywhere;text-align:center}
 body.light-mode #runs .run-card{background:var(--chat-pill-bg,color-mix(in oklab,var(--bg-elev) 85%,transparent))}

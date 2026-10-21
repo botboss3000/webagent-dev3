@@ -6,7 +6,6 @@ import {mountScreenAwake} from '../../shared/screen-awake.js';
 import {mountChatControlFeedback} from '../controls/feedback.js';
 import {mountSharedChat} from '../controls/shared-chat.js';
 import { createChatClient } from './client.js';
-import {mountMessagingRoutes} from './messaging-routes.js';
 import {mountFollowupQueue} from './followup-queue.js';
 import {mountTranscriptAnchor} from './transcript-anchor.js';
 import {mountComposerMedia} from '../controls/composer-media.js';
@@ -66,8 +65,8 @@ await mountChat();
 const mainNotes=enableMainNotes?createMainNotes({request}):null;if(mainNotes){mainNotes.element.dataset.headerExtension='main-notes';$('chat-header').append(mainNotes.element);}
 // Display activity uses authoritative selected-session run states and live publications.
 const screenAwake=mountScreenAwake(root,{getProfile:currentChatProfile});
-const notifications=mountChatNotifications({root,guard});
-const messagingRoutes=mountMessagingRoutes({root,request,guard,note});
+const notifications=mountChatNotifications({root,guard,request,note});
+const {messagingRoutes}=notifications;
 const anchor=mountTranscriptAnchor({scroller:$('chat-messages'),inner:$('chat-messages-inner'),header:$('chat-header'),getProfile:currentChatProfile});
 // Progress visibility is filtered using the current account's administrator identity.
 const progress=mountComposerProgress({root,getProfile:currentChatProfile,isAdmin:()=>!!getIdentity().is_admin});
@@ -341,7 +340,7 @@ $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
   /** Disconnects and disposes panel-owned timers, observers, listeners, and mounted child controls. */
   function destroy(){
     mainNotes?.destroy();disposeFeedback();screenAwake.destroy();++sessionGeneration;closeUndoDialog?.();
-    disconnect();messagingRoutes.destroy();followups.destroy();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
+    disconnect();followups.destroy();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
     $('chat-input').onkeydown=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;
   }

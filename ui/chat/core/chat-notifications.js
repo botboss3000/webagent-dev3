@@ -1,7 +1,7 @@
 // @code-index {"version":1,"feature":"chat-run-notifications","aliases":["run approval","mode confirmation"],"purpose":"Locates guarded mode confirmations and pending run-approval cards in the composer","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider notice labels and presentation settings; approval and cancellation authority remain enforced."]}}
 // One composer surface for confirmations issued by chat controls and the runtime.
 // Mount composer confirmation slots; decisions remain caller-owned guarded callbacks.
-export function mountChatNotifications({root,guard}) {
+export function mountChatNotifications({root,guard,request,note}) {
   const host=root.querySelector('#chat-notifications');
   const modeSlot=document.createElement('div');
   const toolSlot=document.createElement('div');
@@ -42,6 +42,41 @@ export function mountChatNotifications({root,guard}) {
     node.append(buttons);
     return node;
   }
+  // Remembered routes use the same card and action renderer as pending approvals.
+  const routesSlot=document.createElement('div');host.append(routesSlot);
+  let routeSession='',routeGeneration=0,routeExpanded=false;const revokeKeys=new Map();
+  async function loadRoutes(){
+    const sid=routeSession,epoch=routeGeneration;if(!sid||!routeExpanded)return;
+    const data=await request('/sessions/'+encodeURIComponent(sid)+'/messaging-routes');
+    if(sid!==routeSession||epoch!==routeGeneration)return;
+    routeList.replaceChildren();
+    const routes=(data.routes||[]).filter(route=>!route.revoked);
+    if(!routes.length){const empty=document.createElement('p');empty.textContent='No remembered messaging routes.';routeList.append(empty);}
+    for(const route of routes){
+      const row=card({title:'To '+(route.target_title||route.scope.target_session_id),message:'queue or steer',actions:[{label:'Revoke',kind:'deny',run:async()=>{
+        if(sid!==routeSession||epoch!==routeGeneration)return;
+        const key=route.key+':'+route.revision;if(!revokeKeys.has(key))revokeKeys.set(key,crypto.randomUUID());
+        const button=row.querySelector('button');button.disabled=true;
+        try{
+          await request('/sessions/'+encodeURIComponent(sid)+'/messaging-routes/'+encodeURIComponent(route.scope.target_session_id),'POST',{expected_revision:route.revision,client_request_id:revokeKeys.get(key)});
+          revokeKeys.delete(key);if(sid===routeSession&&epoch===routeGeneration)await loadRoutes();
+        }finally{if(button.isConnected)button.disabled=false;}
+      }}]});
+      routeList.append(row);
+    }
+  }
+  const routeList=document.createElement('div');routeList.id='messaging-permissions-details';routeList.hidden=true;
+  const routeToggle=document.createElement('button');routeToggle.type='button';routeToggle.className='chat-notification-detail-toggle';routeToggle.textContent='Show permissions';routeToggle.setAttribute('aria-controls',routeList.id);routeToggle.setAttribute('aria-expanded','false');
+  routeToggle.onclick=guard(async()=>{
+    routeExpanded=!routeExpanded;routeList.hidden=!routeExpanded;routeToggle.setAttribute('aria-expanded',String(routeExpanded));routeToggle.textContent=routeExpanded?'Hide permissions':'Show permissions';
+    if(routeExpanded)await loadRoutes();
+  });
+  const routeCard=card({title:'Messaging permissions',details:{toggle:routeToggle,body:routeList},actions:[]});routesSlot.append(routeCard);routesSlot.hidden=true;
+  const messagingRoutes={
+    open(id,owner){routeGeneration++;routeSession=owner?id:'';routesSlot.hidden=!routeSession;routeExpanded=false;routeList.hidden=true;routeList.replaceChildren();routeToggle.setAttribute('aria-expanded','false');routeToggle.textContent='Show permissions';},
+    disconnect(){this.open('',false);},
+    destroy(){this.disconnect();revokeKeys.clear();routeToggle.onclick=null;routesSlot.remove();}
+  };
   // Resolve an outstanding auto-mode prompt as denied/cancelled.
   function cancelMode() {
     finishMode?.(false);
@@ -112,6 +147,6 @@ export function mountChatNotifications({root,guard}) {
   // Remove tool-approval cards without affecting a mode confirmation.
   function clearTools(){toolSlot.replaceChildren();}
   // Cancel pending confirmation and remove both slots from the supplied composer host.
-  function destroy(){routeChoices.clear();cancelMode();clearTools();host.replaceChildren();}
-  return {confirmMode,cancelMode,showTool,clearTools,destroy};
+  function destroy(){messagingRoutes.destroy();routeChoices.clear();cancelMode();clearTools();host.replaceChildren();}
+  return {confirmMode,cancelMode,showTool,clearTools,messagingRoutes,destroy};
 }

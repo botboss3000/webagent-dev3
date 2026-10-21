@@ -34,23 +34,35 @@ test('messaging approval exposes destination and remembers only an explicit chec
  ui.destroy();assert.equal(host.children.length,0);
 });
 test('route revocation is revision fenced and retries retain request identity',async()=>{
- const host=new E(),{api,root}=await moduleAt('messaging-routes.js',host),calls=[],errors=[];
+ const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host),calls=[],errors=[];
  const route={key:'route-key',revision:7,target_title:'Recipient',scope:{target_session_id:'target'}};
  let fail=true;
  const request=async(...args)=>{calls.push(args);if(args[1]==='POST'){if(fail)throw Error('connection lost');return {};}return {routes:[route]};};
- const ui=api.mountMessagingRoutes({root,request,guard:fn=>async()=>{try{await fn();}catch(e){errors.push(e.message);}},note:e=>errors.push(e)});
- ui.open('source',false);assert.equal(host.children[0].hidden,true);
- ui.open('source',true);const disclosure=host.children[0];disclosure.open=true;disclosure.ontoggle();await tick();
+ const ui=api.mountChatNotifications({root,request,guard:fn=>async()=>{try{await fn();}catch(e){errors.push(e.message);}},note:e=>errors.push(e)});
+ ui.messagingRoutes.open('source',false);assert.equal(host.children[2].hidden,true);
+ ui.messagingRoutes.open('source',true);const disclosure=host.children[2];disclosure.querySelector('button').onclick();await tick();
  assert.match(flat(host),/Recipient/);
- const revoke=host.querySelector('button');await revoke.onclick();await revoke.onclick();
+ const revoke=host.querySelector('.chat-notification-deny');await revoke.onclick();await revoke.onclick();
  const writes=calls.filter(c=>c[1]==='POST');assert.equal(writes.length,2);
  assert.equal(writes[0][2].expected_revision,7);assert.equal(writes[0][2].client_request_id,writes[1][2].client_request_id);
  fail=false;await revoke.onclick();assert.equal(errors.length,2);ui.destroy();assert.equal(host.children.length,0);
 });
 test('late route reads cannot populate a newly selected conversation',async()=>{
- const host=new E(),{api,root}=await moduleAt('messaging-routes.js',host);let resolve;
- const ui=api.mountMessagingRoutes({root,request:()=>new Promise(r=>resolve=r),guard:fn=>fn,note:()=>{}});
- ui.open('old',true);const disclosure=host.children[0];disclosure.open=true;disclosure.ontoggle();await tick();
- ui.open('new',true);resolve({routes:[{key:'old',revision:1,target_title:'Old destination',scope:{target_session_id:'old'}}]});await tick();
- assert.equal(disclosure.children[1].children.length,0);assert.equal(disclosure.open,false);ui.destroy();
+ const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host);let resolve;
+ const ui=api.mountChatNotifications({root,request:()=>new Promise(r=>resolve=r),guard:fn=>fn,note:()=>{}});
+ ui.messagingRoutes.open('old',true);const disclosure=host.children[2],toggle=disclosure.querySelector('button');toggle.onclick();await tick();
+ ui.messagingRoutes.open('new',true);resolve({routes:[{key:'old',revision:1,target_title:'Old destination',scope:{target_session_id:'old'}}]});await tick();
+ const list=disclosure.children[0].children[1];assert.equal(list.children.length,0);assert.equal(list.hidden,true);assert.equal(toggle.attributes['aria-expanded'],'false');ui.destroy();
+});
+test('permissions and tool approvals share card structure and clearing approvals retains permissions',async()=>{
+ const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host);
+ const ui=api.mountChatNotifications({root,guard:fn=>fn,request:async()=>({routes:[]})});
+ ui.messagingRoutes.open('source',true);
+ ui.showTool({approval:{id:'tool',name:'file_write',arguments:{}},run:{id:'run'},expanded:new Set(),decide:()=>{}});
+ const approval=host.children[1].children[0],permissions=host.children[2].children[0];
+ assert.equal(approval.tag,permissions.tag);assert.equal(approval.className,permissions.className);assert.equal(approval.attributes.role,permissions.attributes.role);
+ assert.equal(approval.children[0].className,permissions.children[0].className);
+ await permissions.querySelector('button').onclick();assert.match(flat(permissions),/No remembered messaging routes/);
+ ui.clearTools();assert.equal(host.children[1].children.length,0);assert.match(flat(host),/Messaging permissions/);
+ ui.messagingRoutes.disconnect();assert.equal(host.children[2].hidden,true);ui.destroy();assert.equal(host.children.length,0);
 });
