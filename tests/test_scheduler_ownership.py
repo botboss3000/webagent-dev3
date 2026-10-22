@@ -211,3 +211,91 @@ class SubmissionBindingTests(unittest.TestCase):
         for invalid in ("", "short", None):
             with self.assertRaises(ValueError):
                 self.store.submitted(released["id"],released["owner"],released["revision"],released["epoch"],invalid,"submitted-invalid")
+
+
+class CargoModuleReservationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)/"v3";self.root.mkdir()
+        self.write("Cargo.toml",'[package]\nname="app"\nversion="0.1.0"\n[workspace]\nmembers=["crates/modules/models","crates/modules/diagnostics"]\n[dependencies]\nmodels={path="crates/modules/models"}\n')
+        self.write("crates/modules/models/Cargo.toml",'[package]\nname="models"\nversion="0.1.0"\n')
+        self.write("crates/modules/diagnostics/Cargo.toml",'[package]\nname="diagnostics"\nversion="0.1.0"\n')
+        self.write("crates/modules/models/src/private.rs","fn helper() {}\n")
+        self.write("crates/modules/diagnostics/src/private.rs","fn helper() {}\n")
+    def tearDown(self):self.temp.cleanup()
+    def write(self,path,text):
+        p=self.root/path;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(text)
+    def scopes(self,path,patch=None):return m.Components(self.root).scopes([path],patch)
+    def test_private_modules_acquire_independently_but_same_module_blocks(self):
+        db=m.Ownership(Path(self.temp.name)/"claims.sqlite")
+        def acquire(name,path):
+            v=db.begin(identity(name),name,name,"begin-"+name)
+            return db.acquire(v['id'],name,v['revision'],v['epoch'],self.scopes(path),"acquire-"+name)
+        self.assertTrue(acquire('models','crates/modules/models/src/private.rs')['acquired'])
+        self.assertTrue(acquire('diagnostics','crates/modules/diagnostics/src/private.rs')['acquired'])
+        self.assertFalse(acquire('models-again','crates/modules/models/src/other.rs')['acquired'])
+    def test_export_reserves_consumers_without_unrelated_modules(self):
+        self.write('crates/modules/models/src/public.rs','pub struct Item;\n')
+        scopes=self.scopes('crates/modules/models/src/public.rs')
+        self.assertIn('module:general',scopes);self.assertIn('module:backend:models',scopes)
+        self.assertNotIn('module:backend:diagnostics',scopes);self.assertNotIn('module:engine',scopes)
+    def test_checked_patch_reserves_new_exports_before_write(self):
+        scopes=self.scopes('crates/modules/models/src/private.rs','+pub struct Export;\n')
+        self.assertIn('module:general',scopes)
+        self.assertNotIn('module:general',self.scopes('crates/modules/models/src/private.rs'))
+    def test_transitive_target_and_workspace_dependencies(self):
+        self.write('crates/middle/Cargo.toml','[package]\nname="middle"\nversion="0.1.0"\n[target.\'cfg(unix)\'.dependencies]\nmodels={path="../modules/models"}\n')
+        self.write('Cargo.toml','[package]\nname="app"\nversion="0.1.0"\n[workspace.dependencies]\nmiddle={path="crates/middle"}\n[dependencies]\nmiddle={workspace=true}\n')
+        scopes=self.scopes('crates/modules/models/Cargo.toml')
+        self.assertIn('module:general',scopes);self.assertIn('module:crate:crates/middle',scopes)
+    def test_baseline_edges_survive_removed_dependency_or_manifest(self):
+        import io,tarfile
+        with tarfile.open(self.root.parent/'baseline.tar','w')as archive:
+            for p in self.root.rglob('Cargo.toml'):
+                raw=p.read_bytes();item=tarfile.TarInfo('v3/'+str(p.relative_to(self.root)));item.size=len(raw);archive.addfile(item,io.BytesIO(raw))
+        self.write('Cargo.toml','[package]\nname="app"\nversion="0.1.0"\n')
+        (self.root/'crates/modules/models/Cargo.toml').unlink()
+        self.assertIn('module:general',self.scopes('crates/modules/models/Cargo.toml'))
+    def test_unknown_or_invalid_inventory_is_conservative(self):
+        self.assertIn('module:engine',self.scopes('crates/unknown/src/lib.rs'))
+        self.write('crates/modules/models/Cargo.toml','invalid toml = [')
+        self.assertIn('module:engine',self.scopes('crates/modules/models/src/private.rs'))
+    def test_legacy_engine_fences_new_scopes_in_both_directions(self):
+        for scope in ['module:backend:models','module:general','module:crate:crates/helper']:
+            self.assertTrue(m.scope_overlap('module:engine',scope));self.assertTrue(m.scope_overlap(scope,'module:engine'))
+        self.assertFalse(m.scope_overlap('module:backend:models','module:backend:diagnostics'))
+        self.assertFalse(m.scope_overlap('module:engine','module:broker'))
+    def test_compiler_attestation_does_not_turn_private_rust_into_shared_contract(self):
+        path='crates/modules/models/src/private.rs'
+        self.assertNotIn('module:general',m.Components(self.root,[path]).scopes([path]))
+        embedded='crates/modules/models/defaults.json';self.write(embedded,'{}')
+        self.assertIn('module:general',m.Components(self.root,[embedded]).scopes([embedded]))
+    def test_baseline_public_surface_cannot_be_hidden_by_a_private_rewrite(self):
+        import io,tarfile
+        path='crates/modules/models/src/private.rs';raw=b'pub struct Previous;'
+        with tarfile.open(self.root.parent/'baseline.tar','w')as archive:
+            item=tarfile.TarInfo('v3/'+path);item.size=len(raw);archive.addfile(item,io.BytesIO(raw))
+        self.assertIn('module:general',self.scopes(path))
+    def test_directory_claim_covers_all_package_consumers(self):
+        self.assertIn('module:backend:models',self.scopes('crates/modules'))
+        self.assertIn('module:backend:diagnostics',self.scopes('crates/modules'))
+        self.assertIn('module:general',self.scopes('crates/modules'))
+    def test_existing_component_scope_survives_cargo_discovery(self):
+        self.write('crates/boot-service/Cargo.toml','[package]\nname="boot"\nversion="0.1.0"\n')
+        self.write('crates/boot-service/src/helper.rs','fn helper() {}')
+        self.assertIn('module:engine-component:boot-supervisor',self.scopes('crates/boot-service/src/helper.rs'))
+    def test_symlink_inventory_cannot_narrow_claims(self):
+        p=self.root/'crates/modules/models/Cargo.toml';p.rename(p.with_suffix('.real'));p.symlink_to(p.with_suffix('.real').name)
+        self.assertIn('module:engine',self.scopes('crates/modules/models/src/private.rs'))
+
+    def test_general_owns_unsplit_application_source(self):
+        self.write('src/chat.rs','fn chat() {}')
+        self.assertEqual(self.scopes('src/chat.rs'),['module:general','path:src/chat.rs'])
+    def test_unregistered_manifest_cannot_split_an_existing_owner(self):
+        self.write('crates/modules/models/child/Cargo.toml','[package]\nname="child"\nversion="0.1.0"\n')
+        self.write('crates/modules/models/child/src/helper.rs','fn helper() {}')
+        self.assertIn('module:backend:models',self.scopes('crates/modules/models/child/src/helper.rs'))
+        self.assertNotIn('module:crate:crates/modules/models/child',self.scopes('crates/modules/models/child/src/helper.rs'))
+    def test_invalid_cargo_table_falls_back_to_global_without_blocking_repair(self):
+        self.write('crates/modules/models/Cargo.toml','[package]\nname="models"\nversion="0.1.0"\ntarget=1\n')
+        self.write('Cargo.toml','target=1\n[package]\nname="app"\nversion="0.1.0"\n[dependencies]\nmodels={path="crates/modules/models"}\n')
+        self.assertIn('module:engine',self.scopes('crates/modules/models/Cargo.toml'))

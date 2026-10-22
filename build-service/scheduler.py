@@ -201,9 +201,9 @@ class Scheduler:
             item["acquisition_refresh"]={"revision":current["revision"]};self.broker._save_work()
         self.refresh_waiter(item,current)
 
-    def reserve(self,item,trusted,workspace,paths,request=None,expected=None):
+    def reserve(self,item,trusted,workspace,paths,request=None,expected=None,patch=None):
         """Acquire before edits; failed expansion returns concrete blockers without changing source."""
-        value=self.ensure(item,trusted,workspace);self.refresh_waiter(item,value);scopes=self.components(item).scopes(paths)
+        value=self.ensure(item,trusted,workspace);self.refresh_waiter(item,value);scopes=self.components(item).scopes(paths,patch)if patch is not None else self.components(item).scopes(paths)
         self.require_clean_waiter(item,value)
         if value["state"]not in {"waiting","owned"}:
             self.store.assert_owned(value["id"],value["owner"],item["ownership_epoch"],scopes)
@@ -216,14 +216,15 @@ class Scheduler:
         if not result["acquired"]:raise Conflict(result)
         self.mark_waiter_refresh(item,value,result["task"])
         return result["task"]
-    def guard(self,item,trusted,workspace,paths,request):
+    def guard(self,item,trusted,workspace,paths,request,patch=None):
         """Enforced writes require ownership; observe mode records no implicit conflicting claims."""
         if self.mode!="enforce":return
         if item.get("mode")!="isolated":raise ValueError("Legacy shared work must be reconciled into an isolated task")
         self.housekeeping()
         if self.pending(item["key"]):raise ValueError("Scheduler transition requires exact-request recovery before editing")
-        value=self.reserve(item,trusted,workspace,paths)
-        self.store.assert_owned(value["id"],value["owner"],item["ownership_epoch"],self.components(item).scopes(paths))
+        value=self.reserve(item,trusted,workspace,paths,patch=patch)
+        scopes=self.components(item).scopes(paths,patch)if patch is not None else self.components(item).scopes(paths)
+        self.store.assert_owned(value["id"],value["owner"],item["ownership_epoch"],scopes)
         item["ownership_revision"]=value["revision"]
     def edited(self,item,trusted,workspace,request):
         """Invalidate acceptance after a checked source edit; repeated applies return existing receipts."""

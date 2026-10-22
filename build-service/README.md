@@ -637,3 +637,42 @@ projects fresh evidence in memory and persists an exact completion receipt.
 Any later review mutation invalidates that receipt. Task acceptance/completion
 and project finalization require the completed reviews. Later builds reuse only
 source/dependency-matching assertions; they cannot inherit stale approval.
+
+
+## Cargo module source reservations
+
+Known Cargo package directories receive their own source scopes:
+`crates/modules/<name>/` uses `module:backend:<name>`, Diagnostics retains its
+actual package path with `module:backend:diagnostics`, and other independent
+packages registered as workspace members or local Cargo dependencies use
+`module:crate:<source-directory>`. An unregistered nested manifest cannot take
+ownership away from its parent. Root application Rust uses
+`module:general`. Exact path claims remain mandatory. New extractions must
+include a real Cargo manifest and verify their actual derived scope; a folder
+name or a ledger entry alone is not an independent package.
+
+Private implementation files can be edited independently. Cargo manifests,
+compiler-attested non-Rust inputs and possible public/impl/macro/attribute Rust surfaces
+also reserve transitive consumers. This is deliberately conservative, not a Rust
+ABI parser: a body-only edit in a public file may still reserve its consumers.
+The checked patch is included before writing so newly introduced exports cannot
+avoid consumer reservations. Baseline and current Cargo dependency edges are
+unioned, including target/workspace/dev/build dependencies and prior exported
+surfaces; deleting or editing a
+manifest cannot erase a prior consumer. Invalid/unknown metadata falls back to
+`module:engine`, and old broad Engine claims conflict with new Rust scopes.
+Existing component/ability publication rules remain conservative when no separate
+package owns the path. No manifest field can declare itself exempt from conflicts.
+
+This changes source editing reservations, not execution concurrency, resource
+ceilings, promotion freshness, source attestation, acceptance or deployment gates.
+Full application builds still serialize through their existing Engine build scope.
+For each future module separation record: actual Cargo root and scope, dependency
+contracts/consumers, independent-edit and contract-conflict tests, legacy overlap,
+and the release/commit proving the installed classifier recognizes the boundary.
+
+Unsplit backend application source uses General (`module:general`); exact UI,
+asset, ability, broker and service reservations retain their established rules.
+Shared workspace/build files and unsafe or unknown classification retain the
+conservative global `module:engine` fence. Cargo ownership does not replace
+explicit runtime/IPC component contracts or deployment lifecycle coordination.

@@ -4727,7 +4727,7 @@ class Broker:
                     raise ValueError("stale source inputs")
                 source = tree / "v3"
                 paths, patch = inspect_source_patch_corrected(source, patch)
-                self.scheduler.guard(item,trusted,workspace,paths,request_id)
+                self.scheduler.guard(item,trusted,workspace,paths,request_id,patch=patch)
                 if isolated and context_digest(release.snapshot(tree,TASK_CONTEXT,context_digest))[0]!=current:
                     raise ValueError("Queued task refreshed to current source; reread before applying a patch")
                 receipt = {"task_id": task_id, "request_id": request_id, "request_sha256": digest,
