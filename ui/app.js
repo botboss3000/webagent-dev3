@@ -704,7 +704,23 @@ async function hardRefresh(signOut=false){
 $('header-refresh-browser').onclick=()=>{void hardRefresh();};
 function setupHeaderPullRefresh(){
   const indicator=$('ptr-indicator'),blue=$('ptr-blue'),red=$('ptr-red'),hint=$('ptr-hint');
-  const fullDash=98,normalAt=.5,hardAt=.85,pullZone=50;
+  const fullDash=98,normalAt=.5,hardAt=.85;
+  let pullZone=50,configLoading=false;
+  // Keep the last valid preference on network/config errors; never interrupt a drag.
+  async function refreshPullZone(){
+    if(configLoading||document.hidden||document.body.classList.contains('app-restricted'))return;
+    configLoading=true;
+    try{
+      const response=await fetch('/api/v3/auth/ui-config',{credentials:'same-origin',cache:'no-store'});
+      if(!response.ok)return;
+      const value=(await response.json()).app_ui?.pull_to_refresh?.start_zone_px;
+      if(typeof value==='number'&&Number.isFinite(value)&&value>=0)pullZone=value;
+    }catch{}finally{configLoading=false;}
+  }
+  setInterval(refreshPullZone,5000);
+  document.addEventListener('visibilitychange',refreshPullZone);
+  window.addEventListener('v3-identity-changed',refreshPullZone);
+  void refreshPullZone();
   let dragging=false,startY=0,stage=0;
   function end(){
     if(!dragging)return;

@@ -7,5 +7,11 @@
   "development": {
     "live_ui_editing": false,
     "_instructions": "Development only. true serves v3 UI directly from /live-checkout/ui (/home/ar/webagent-dev3/ui on the host). Save and refresh; no restart. false restores broker-selected frozen UI. Disable before broker releases, then re-enable after promotion. Backend code and shared V2 assets remain frozen."
+  },
+  "ui": {
+    "pull_to_refresh": {
+      "start_zone_px": 50,
+      "_instructions": "Gesture start band measured in CSS pixels from the viewport top, inclusive. Nonnegative number; missing defaults to 50. The API rereads data/config/app-settings.json per request. Visible signed-in pages adopt changes within five seconds, or when returning to the page, without reload, compilation or server restart."
+    }
   }
 }

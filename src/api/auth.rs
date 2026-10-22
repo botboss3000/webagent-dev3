@@ -468,6 +468,21 @@ pub(crate) async fn logout(
     );
     Ok(r)
 }
+/// Validate the app-owned gesture preference without exposing other app settings.
+pub(crate) fn pull_refresh_start_zone(settings: &Value) -> Result<f64> {
+    let mut section = settings;
+    for key in ["ui", "pull_to_refresh"] {
+        let Some(value) = section.get(key) else { return Ok(50.0); };
+        if !value.is_object() { return Err(anyhow!("Invalid pull-to-refresh settings")); }
+        section = value;
+    }
+    match section.get("start_zone_px") {
+        None => Ok(50.0),
+        Some(value) => value.as_f64().filter(|n| n.is_finite() && *n >= 0.0)
+            .ok_or_else(|| anyhow!("Pull-to-refresh start_zone_px must be a nonnegative number")),
+    }
+}
+
 pub(crate) async fn chat_ui_config(State(app): State<App>) -> Api {
     let bytes = tokio::fs::read(&app.chat_ui_config_path)
         .await
@@ -483,5 +498,35 @@ pub(crate) async fn chat_ui_config(State(app): State<App>) -> Api {
     if !chat_ui["chat_common"].is_object() {
         return Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, "Chat UI configuration invalid".into()));
     }
-    Ok(Json(json!({"chat_ui": chat_ui})))
+    let settings = crate::store::read_app_settings(&app.store.root)?;
+    let start_zone_px = pull_refresh_start_zone(&settings)?;
+    // Allowlist this presentation value; never send the whole administrator file.
+    Ok(Json(json!({"chat_ui": chat_ui, "app_ui": {"pull_to_refresh": {"start_zone_px": start_zone_px}}})))
+}
+
+#[cfg(test)]
+mod pull_refresh_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn pull_refresh_config_reloads_and_projects_only_ui_value() {
+        let (root, mut app) = crate::runtime_tests::fixture().await;
+        app.chat_ui_config_path = root.path().join("chat-ui.json");
+        std::fs::write(&app.chat_ui_config_path, br#"{"chat_common":{}}"#).unwrap();
+        let path = app.store.root.join("config/app-settings.json");
+        for zone in [50.0, 200.0, 0.0, 12.5] {
+            let settings = json!({"ui":{"pull_to_refresh":{"start_zone_px":zone}},"private_test_marker":"must not be projected"});
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
+            let response = chat_ui_config(State(app.clone())).await.unwrap().0;
+            assert_eq!(response, json!({"chat_ui":{"chat_common":{}},"app_ui":{"pull_to_refresh":{"start_zone_px":zone}}}));
+        }
+        assert_eq!(pull_refresh_start_zone(&json!({})).unwrap(), 50.0);
+        for settings in [json!({"ui":false}), json!({"ui":{"pull_to_refresh":[]}}),
+            json!({"ui":{"pull_to_refresh":{"start_zone_px":-1}}}),
+            json!({"ui":{"pull_to_refresh":{"start_zone_px":"200"}}}),
+            json!({"ui":{"pull_to_refresh":{"start_zone_px":null}}})] {
+            assert!(pull_refresh_start_zone(&settings).is_err());
+        }
+    }
 }
