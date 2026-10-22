@@ -34,6 +34,8 @@ mod build_dashboard;
 mod app_settings;
 #[path = "../../crates/modules/configuration/host/api.rs"]
 pub(crate) mod live_configuration;
+#[path = "../../crates/modules/system/host/api.rs"]
+mod system;
 mod loop_settings;
 mod engine_components;
 pub(crate) mod notifications;
@@ -80,6 +82,7 @@ pub(super) fn router(app: App) -> Router {
         .route_layer(middleware::from_fn_with_state(app.clone(), message_api_auth));
     let admin_api = Router::new()
         .merge(diagnostics::router())
+        .nest("/admin/system", system::router())
         .route("/admin/event-readers",get(notifications::readers).post(notifications::issue_reader))
         .route("/admin/event-readers/{id}",axum::routing::delete(notifications::revoke_reader))
         .route("/admin/events",get(notifications::read))

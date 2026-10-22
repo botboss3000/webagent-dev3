@@ -2530,6 +2530,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-system"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde_json",
+]
+
+[[package]]
 name = "webagent-v3"
 version = "0.1.0"
 dependencies = [
@@ -2575,6 +2583,7 @@ dependencies = [
  "webagent-engine",
  "webagent-manager",
  "webagent-models",
+ "webagent-system",
  "webagent-provider-contracts",
  "webagent-provider-projection",
 ]
