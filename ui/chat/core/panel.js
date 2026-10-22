@@ -247,7 +247,7 @@ function failedRunMessages(items){
     row.firstChild.querySelector('.chat-notification-message').textContent='To continue, write a new message in the chat.';
   }
 }
-/** Fans run snapshots to transport, display lease, controls, progress and activity, then paints composer and run actions. Approval, recovery, resume, and cancel handlers call their matching client endpoints. */
+/** Fans run snapshots to transport, display lease, controls, progress and activity, then paints composer and run actions. Approval, recovery, and cancel handlers call their matching client endpoints. */
 function runs(items,authoritative=false){if(!authoritative&&sharing.state&&activityRuns.length&&!items.some(run=>run.session_id===session))items=activityRuns;onEvent('runs',{session_id:session,runs:items.filter(r=>r.session_id===session||!r.session_id).map(r=>({id:r.id,status:r.status,uncertain:!!r.uncertain,approval_id:r.pending?.id||null}))});screenAwake.runs(items.filter(run=>run.session_id===session||!run.session_id));client.updateRuns(items);anchor.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));progress.update(items);void stats.refresh();controls.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));activityRuns=items.filter(run=>run.session_id===session||!run.session_id);rememberRuns(activityRuns);if(session)paintActivity();notifications.clearRuns();const relevant=items.filter(run=>run.session_id===session||!run.session_id);const pendingReview=!!$('chat-messages-inner').querySelector('[data-admission-status="pending_review"],[data-admission-status="reviewing"]');const active=relevant.find(run=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(run.status));$('chat-input-row').dataset.runStatus=active?.status||relevant[0]?.status||'Ready';$('chat-stop-btn').hidden=!active||$('chat-stop-btn').dataset.configEnabled==='false';$('chat-stop-btn').dataset.run=active?.id||'';$('chat-stop-btn').style.display=$('chat-stop-btn').hidden?'none':'';$('chat-send').disabled=historyBusy||sharedAccess?.can_send===false||!!getState().shutoff||submitting||!!media?.uploading;
 $('chat-input').readOnly=sharedAccess?.can_send===false;
 $('chat-stop-btn').disabled=sharedAccess?.can_control===false;
@@ -268,7 +268,6 @@ for(const run of relevant){
     continue;
   }
   notifications.showRun({run,active,canControl:sharedAccess?.can_control!==false,expanded:expandedRecovery,renderRecovery:createRecoveryDetails,
-    resume:async()=>{await client.resume(run.id,{client_request_id:crypto.randomUUID()});await refresh();},
     cancel:()=>cancel(run.id),
     recover:async(decision,output)=>{await client.recover(run.id,{decision,output,client_request_id:keyId('recovery:'+run.id+':'+decision+':'+output)});await refresh();}
   });

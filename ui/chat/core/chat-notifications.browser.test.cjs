@@ -15,8 +15,9 @@ for(const mobile of [false,true])for(const light of [false,true])test(`shared no
  window.notifications=mountChatNotifications({root:document,guard,request:async()=>({routes:[]}),note:e=>errors.push(e)});
  notifications.messagingRoutes.open('session',true);await notifications.messagingRoutes.refresh();
  if(document.querySelector('#chat-notifications .chat-notification:not([hidden])'))throw Error('Idle notification placeholder');
- window.paused=notifications.showRun({run:{id:'paused',status:'paused',error:'Cancelled by user'},canControl:true,resume:()=>calls.push(['resume','paused'])});
- window.readonly=notifications.showRun({run:{id:'readonly',status:'stopped'},canControl:false});
+ window.paused=notifications.showRun({run:{id:'paused',status:'paused',error:'Cancelled by user'},canControl:true});
+ if(paused||document.querySelector('#chat-notifications .chat-notification:not([hidden])'))throw Error('Redundant paused notification');
+ for(const canControl of [true,false])if(notifications.showRun({run:{id:'stopped',status:'stopped'},canControl}))throw Error('Redundant stopped notification');
  notifications.showRun({run:{id:'observer',status:'waiting_approval',pending:{arguments:{secret:'PRIVATE_ARGUMENT'}}},canControl:false});
  window.recovery=notifications.showRun({run:{id:'recovery',status:'recovery',uncertain:true,pending:{name:'shell',arguments:{command:'echo safe'},interruption:{reason:'uncertain'}}},canControl:true,expanded:new Set(['recovery']),renderRecovery:createRecoveryDetails,recover:(...args)=>calls.push(['recover',...args])});
  notifications.showTool({approval:{id:'approve',name:'file_write',arguments:{path:'example'}},run:{id:'approval-run'},expanded:new Set(),decide:decision=>calls.push(['approval',decision])});
@@ -29,12 +30,11 @@ for(const mobile of [false,true])for(const light of [false,true])test(`shared no
  assert.equal(await p.evaluate(()=>innerWidth),mobile?390:1200);
  assert.equal(await p.locator('#runs,.run-card').count(),0);assert.equal(await p.locator('#chat-notifications img').count(),0);
  assert.equal(await p.locator('body').innerText().then(x=>x.includes('PRIVATE_ARGUMENT')),false);
- assert.equal(await p.evaluate(()=>readonly.querySelector('button')),null);
- const styles=await p.locator('.chat-notification:not([hidden])').evaluateAll(nodes=>nodes.map(n=>{const s=getComputedStyle(n);return [s.border,s.borderRadius,s.backgroundColor,s.padding,s.fontSize];}));assert.ok(styles.length>=8);for(const style of styles)assert.deepEqual(style,styles[0]);
+ assert.equal(await p.getByRole('button',{name:'Resume run',exact:true}).count(),0);
+ const styles=await p.locator('.chat-notification:not([hidden])').evaluateAll(nodes=>nodes.map(n=>{const s=getComputedStyle(n);return [s.border,s.borderRadius,s.backgroundColor,s.padding,s.fontSize];}));assert.ok(styles.length>=6);for(const style of styles)assert.deepEqual(style,styles[0]);
  assert.equal(await p.locator('#chat-notifications button:not(.chat-notification-action):not(.chat-notification-detail-toggle)').count(),0);
  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  if(process.env.EVIDENCE_DIR)await p.screenshot({path:path.join(process.env.EVIDENCE_DIR,`shared-${mobile?'mobile':'desktop'}-${light?'light':'dark'}.png`),fullPage:true});
- await p.getByRole('button',{name:'Resume run',exact:true}).click();assert.deepEqual(await p.evaluate(()=>calls.find(x=>x[0]==='resume')),['resume','paused']);
  await p.getByRole('textbox',{name:'Known action result'}).fill('Confirmed result');await p.getByRole('button',{name:'Accept known result'}).click();assert.deepEqual(await p.evaluate(()=>calls.find(x=>x[0]==='recover')),['recover','accept','Confirmed result']);
  await p.getByRole('button',{name:'Resume queue',exact:true}).click();assert.equal(await p.evaluate(()=>calls.find(x=>x[0]==='queue')[2].expected_revision),7);
  await p.getByRole('button',{name:'Mark reviewed'}).click();assert.deepEqual(await p.evaluate(()=>calls.find(x=>x[0]==='review')),['review','notice']);

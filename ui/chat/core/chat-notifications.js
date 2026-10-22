@@ -75,8 +75,8 @@ export function mountChatNotifications({root,guard,request,note}) {
   };
   const runSlot=document.createElement('div');host.append(runSlot);
   // Run status, observer approval and uncertain-outcome controls share the approval card UI.
-  function showRun({run,active,canControl=false,expanded,renderRecovery,resume,cancel,recover}) {
-    if(run.status==='completed'||(!run.uncertain&&['queued','running','waiting_gate','waiting_external','failed'].includes(run.status)))return;
+  function showRun({run,active,canControl=false,expanded,renderRecovery,cancel,recover}) {
+    if(run.status==='completed'||(!run.uncertain&&['queued','running','waiting_gate','waiting_external','failed','paused','stopped'].includes(run.status)))return;
     let title=run.status+(run.error?' — '+run.error:''),body;const actions=[];
     if(run.pending&&run.status==='waiting_approval')title=run.pending.waiting_message||'Waiting for the authorized user';
     else {
@@ -84,7 +84,6 @@ export function mountChatNotifications({root,guard,request,note}) {
         title='Run recovery';
         body=renderRecovery(run,{expanded,button:(label,fn)=>action(label,label==='Authorize retry'?'approve':label==='Abandon run'?'deny':'neutral',fn),decide:recover});
       }
-      if(canControl&&!run.uncertain&&['paused','stopped'].includes(run.status))actions.push({label:'Resume run',kind:'approve',run:resume});
       if(canControl&&active?.id===run.id)actions.push({label:'Cancel run',kind:'neutral',run:cancel});
     }
     const node=card({title,body,actions});runSlot.append(node);return node;

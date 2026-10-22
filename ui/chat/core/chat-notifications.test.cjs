@@ -65,15 +65,14 @@ test('saved permissions are hidden without pending approvals, including nested r
  ui.clearTools();assert.equal(slot.hidden,true);assert.equal(card.hidden,true);assert.equal(list.children[0].hidden,true);
  ui.destroy();
 });
-test('paused, stopped, observer and recovery notices use the shared card and guarded actions',async()=>{
+test('paused and stopped runs stay quiet while observer and recovery notices retain guarded actions',async()=>{
  const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host),calls=[];let guarded=0;
  const ui=api.mountChatNotifications({root,guard:fn=>(...args)=>{guarded++;return fn(...args);}});
- const node=ui.showRun({run:{id:'paused',status:'paused',error:'Cancelled by user'},canControl:true,resume:()=>calls.push('resume')});
- assert.equal(node.className,'chat-notification');assert.match(flat(node),/paused.*Cancelled by user.*Resume run/);node.querySelector('button').onclick();assert.deepEqual(calls,['resume']);assert.equal(guarded,1);
- const readonly=ui.showRun({run:{id:'stopped',status:'stopped'},canControl:false});assert.equal(readonly.querySelector('button'),null);
+ for(const status of ['paused','stopped'])for(const canControl of [true,false])assert.equal(ui.showRun({run:{id:status,status,error:'Cancelled by user'},canControl}),undefined);
+ assert.equal(host.children[3].children.length,0);
  const waiting=ui.showRun({run:{id:'waiting',status:'waiting_approval',pending:{arguments:{secret:'hidden'},can_decide:false}},canControl:false});assert.match(flat(waiting),/Waiting for the authorized user/);assert.doesNotMatch(flat(waiting),/hidden/);
  const recovery=ui.showRun({run:{id:'uncertain',status:'paused',uncertain:true},canControl:true,expanded:new Set(),renderRecovery:(run,{button,decide})=>{const body=new E();body.append(button('Authorize retry',()=>decide('retry','known')));return body;},recover:(...args)=>calls.push(args)});
- assert.equal(recovery.querySelector('.chat-notification-approve').className,'chat-notification-action chat-notification-approve');recovery.querySelector('button').onclick();assert.deepEqual(calls[1],['retry','known']);assert.doesNotMatch(flat(recovery),/Resume run/);
+ assert.equal(recovery.querySelector('.chat-notification-approve').className,'chat-notification-action chat-notification-approve');recovery.querySelector('button').onclick();assert.deepEqual(calls[0],['retry','known']);assert.equal(guarded,1);assert.doesNotMatch(flat(recovery),/Resume run/);
  for(const status of ['completed','running','queued','failed'])assert.equal(ui.showRun({run:{id:status,status}}),undefined);
  ui.clearRuns();assert.equal(host.children[3].children.length,0);ui.destroy();assert.equal(host.children.length,0);
 });

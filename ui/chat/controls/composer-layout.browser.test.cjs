@@ -296,6 +296,8 @@ test('browser chrome, zoom, rotation and desktop resizing do not dismiss the com
  await keyboardResize(p,844,'content');assert.equal((await stable(p)).focused,true);
  await keyboardResize(p,500,'content');
  await p.evaluate(()=>{keyboardScale=1.5;keyboardHeight=330;visualViewport.dispatchEvent(new Event('resize'));});assert.equal((await stable(p)).focused,true);
- await p.evaluate(()=>{keyboardScale=1;});await p.setViewportSize({width:740,height:390});await keyboardResize(p,390,'content');assert.equal((await stable(p)).focused,true);
+ // Finish the rotated geometry before ending zoom; stale keyboard dimensions are not a dismissal.
+ await p.setViewportSize({width:740,height:390});await keyboardResize(p,390,'content');
+ await p.evaluate(()=>{keyboardScale=1;visualViewport.dispatchEvent(new Event('resize'));});assert.equal((await stable(p)).focused,true);
  await p.setViewportSize({width:1200,height:844});await keyboardResize(p,844,'content');await keyboardResize(p,500,'content');assert.equal((await stable(p)).focused,true);
 });
