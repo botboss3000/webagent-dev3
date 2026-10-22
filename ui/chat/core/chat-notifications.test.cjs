@@ -2,12 +2,13 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 class E {
- constructor(tag='div'){this.tag=tag;this.children=[];this.attributes={};this.dataset={};this.hidden=false;this.isConnected=true;this.textContent='';}
+ constructor(tag='div'){this.tag=tag;this.children=[];this.attributes={};this.dataset={};this.hidden=false;this.isConnected=true;this.textContent='';this.listeners={};}
  append(...items){for(const item of items){item.parent=this;this.children.push(item);}}
  replaceChildren(...items){this.children=[];this.append(...items);}
  get lastChild(){return this.children.at(-1);}
  insertBefore(node,before){node.parent=this;const i=this.children.indexOf(before);if(i<0)this.append(node);else this.children.splice(i,0,node);}
  setAttribute(k,v){this.attributes[k]=v;}
+ addEventListener(name,fn){this.listeners[name]=fn;}
  querySelector(s){return this.children.find(c=>s.startsWith('.')?(c.className||'').split(' ').includes(s.slice(1)):c.tag===s)||this.children.map(c=>c.querySelector(s)).find(Boolean)||null;}
  remove(){this.isConnected=false;if(this.parent)this.parent.children=this.parent.children.filter(c=>c!==this);}
 }
@@ -16,7 +17,7 @@ const tick=()=>new Promise(setImmediate);
 async function moduleAt(file,host){
  const document={createElement:t=>new E(t),createTextNode:text=>Object.assign(new E('#text'),{textContent:text})};
  const context=vm.createContext({document,crypto:require('node:crypto').webcrypto,Set,Map});
- vm.runInContext(fs.readFileSync(path.join(__dirname,file),'utf8').replace('export function','function'),context);
+ vm.runInContext(fs.readFileSync(path.join(__dirname,file),'utf8').replaceAll('export function','function'),context);
  return {api:context,root:{querySelector:()=>host}};
 }
 test('empty or revoked routes never show an idle permission card; real approvals remain visible',async()=>{
@@ -63,4 +64,16 @@ test('saved permissions are hidden without pending approvals, including nested r
  assert.equal(card.hidden,false);assert.equal(list.children[0].hidden,false);
  ui.clearTools();assert.equal(slot.hidden,true);assert.equal(card.hidden,true);assert.equal(list.children[0].hidden,true);
  ui.destroy();
+});
+test('paused, stopped, observer and recovery notices use the shared card and guarded actions',async()=>{
+ const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host),calls=[];let guarded=0;
+ const ui=api.mountChatNotifications({root,guard:fn=>(...args)=>{guarded++;return fn(...args);}});
+ const node=ui.showRun({run:{id:'paused',status:'paused',error:'Cancelled by user'},canControl:true,resume:()=>calls.push('resume')});
+ assert.equal(node.className,'chat-notification');assert.match(flat(node),/paused.*Cancelled by user.*Resume run/);node.querySelector('button').onclick();assert.deepEqual(calls,['resume']);assert.equal(guarded,1);
+ const readonly=ui.showRun({run:{id:'stopped',status:'stopped'},canControl:false});assert.equal(readonly.querySelector('button'),null);
+ const waiting=ui.showRun({run:{id:'waiting',status:'waiting_approval',pending:{arguments:{secret:'hidden'},can_decide:false}},canControl:false});assert.match(flat(waiting),/Waiting for the authorized user/);assert.doesNotMatch(flat(waiting),/hidden/);
+ const recovery=ui.showRun({run:{id:'uncertain',status:'paused',uncertain:true},canControl:true,expanded:new Set(),renderRecovery:(run,{button,decide})=>{const body=new E();body.append(button('Authorize retry',()=>decide('retry','known')));return body;},recover:(...args)=>calls.push(args)});
+ assert.equal(recovery.querySelector('.chat-notification-approve').className,'chat-notification-action chat-notification-approve');recovery.querySelector('button').onclick();assert.deepEqual(calls[1],['retry','known']);assert.doesNotMatch(flat(recovery),/Resume run/);
+ for(const status of ['completed','running','queued','failed'])assert.equal(ui.showRun({run:{id:status,status}}),undefined);
+ ui.clearRuns();assert.equal(host.children[3].children.length,0);ui.destroy();assert.equal(host.children.length,0);
 });

@@ -1,6 +1,25 @@
 // @code-index {"version":1,"feature":"chat-run-notifications","aliases":["run approval","mode confirmation"],"purpose":"Locates guarded mode confirmations and pending run-approval cards in the composer","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider notice labels and presentation settings; approval and cancellation authority remain enforced."]}}
 // One composer surface for confirmations issued by chat controls and the runtime.
 // Mount composer confirmation slots; decisions remain caller-owned guarded callbacks.
+// All chat notices use these card and action primitives, including notices owned by other controllers.
+export function createChatNotificationAction({label,kind='neutral',run,title,disabled=false},{documentObject=globalThis.document,guard=fn=>fn}={}) {
+  const button=documentObject.createElement('button');button.type='button';
+  button.className='chat-notification-action chat-notification-'+kind;button.textContent=label;
+  button.disabled=disabled;if(title)button.title=title;button.onclick=guard(run);return button;
+}
+// Render inert text and caller-owned detail content; callbacks retain their original authority checks.
+export function createChatNotification({title,message,details,body,actions=[],documentObject=globalThis.document,guard=fn=>fn}) {
+  const node=documentObject.createElement('section');node.className='chat-notification';
+  node.setAttribute('role','group');node.setAttribute('aria-label',title);
+  const heading=documentObject.createElement('div');heading.className='chat-notification-heading';
+  const label=documentObject.createElement('strong');label.textContent=title;heading.append(label);
+  if(details)heading.append(details.toggle);node.append(heading);
+  if(message!=null){const text=documentObject.createElement('p');text.className='chat-notification-message';text.textContent=message;node.append(text);}
+  if(details)node.append(details.body);if(body)node.append(body);
+  const buttons=documentObject.createElement('div');buttons.className='chat-notification-actions';
+  for(const item of actions)buttons.append(createChatNotificationAction(item,{documentObject,guard}));
+  node.append(buttons);return node;
+}
 export function mountChatNotifications({root,guard,request,note}) {
   const host=root.querySelector('#chat-notifications');
   const modeSlot=document.createElement('div');
@@ -8,40 +27,9 @@ export function mountChatNotifications({root,guard,request,note}) {
   host.append(modeSlot,toolSlot);
   let finishMode=null;const routeChoices=new Map();
 
-  // Wrap each supplied action in the panel's interaction guard.
-  function action(label,kind,handler) {
-    const button=document.createElement('button');
-    button.type='button';
-    button.className='chat-notification-action chat-notification-'+kind;
-    button.textContent=label;
-    button.onclick=guard(handler);
-    return button;
-  }
-  // Assemble an accessible text-only card with optional details and action buttons.
-  function card({title,message,details,actions}) {
-    const node=document.createElement('section');
-    node.className='chat-notification';
-    node.setAttribute('role','group');
-    node.setAttribute('aria-label',title);
-    const heading=document.createElement('div');
-    heading.className='chat-notification-heading';
-    const label=document.createElement('strong');
-    label.textContent=title;
-    heading.append(label);
-    if(details)heading.append(details.toggle);
-    node.append(heading);
-    if(message){
-      const text=document.createElement('p');
-      text.textContent=message;
-      node.append(text);
-    }
-    if(details)node.append(details.body);
-    const buttons=document.createElement('div');
-    buttons.className='chat-notification-actions';
-    for(const item of actions)buttons.append(action(item.label,item.kind,item.run));
-    node.append(buttons);
-    return node;
-  }
+  // Bind the common renderers to this panel's interaction guard.
+  const action=(label,kind,run)=>createChatNotificationAction({label,kind,run},{guard});
+  const card=options=>createChatNotification({...options,guard});
   // Remembered routes use the same card and action renderer as pending approvals.
   const routesSlot=document.createElement('div');host.append(routesSlot);
   let routeSession='',routeGeneration=0,routeRead=0,routeExpanded=false,routeCount=0,pendingApprovals=false;const revokeKeys=new Map();
@@ -85,6 +73,23 @@ export function mountChatNotifications({root,guard,request,note}) {
     disconnect(){this.open('',false);},
     destroy(){this.disconnect();revokeKeys.clear();routeToggle.onclick=null;routesSlot.remove();}
   };
+  const runSlot=document.createElement('div');host.append(runSlot);
+  // Run status, observer approval and uncertain-outcome controls share the approval card UI.
+  function showRun({run,active,canControl=false,expanded,renderRecovery,resume,cancel,recover}) {
+    if(run.status==='completed'||(!run.uncertain&&['queued','running','waiting_gate','waiting_external','failed'].includes(run.status)))return;
+    let title=run.status+(run.error?' — '+run.error:''),body;const actions=[];
+    if(run.pending&&run.status==='waiting_approval')title=run.pending.waiting_message||'Waiting for the authorized user';
+    else {
+      if((run.uncertain||run.status==='recovery')&&canControl){
+        title='Run recovery';
+        body=renderRecovery(run,{expanded,button:(label,fn)=>action(label,label==='Authorize retry'?'approve':label==='Abandon run'?'deny':'neutral',fn),decide:recover});
+      }
+      if(canControl&&!run.uncertain&&['paused','stopped'].includes(run.status))actions.push({label:'Resume run',kind:'approve',run:resume});
+      if(canControl&&active?.id===run.id)actions.push({label:'Cancel run',kind:'neutral',run:cancel});
+    }
+    const node=card({title,body,actions});runSlot.append(node);return node;
+  }
+  function clearRuns(){runSlot.replaceChildren();clearTools();}
   // Resolve an outstanding auto-mode prompt as denied/cancelled.
   function cancelMode() {
     finishMode?.(false);
@@ -155,6 +160,6 @@ export function mountChatNotifications({root,guard,request,note}) {
   // Remove tool-approval cards without affecting a mode confirmation.
   function clearTools(){toolSlot.replaceChildren();pendingApprovals=false;updateRoutesVisibility();}
   // Cancel pending confirmation and remove both slots from the supplied composer host.
-  function destroy(){messagingRoutes.destroy();routeChoices.clear();cancelMode();clearTools();host.replaceChildren();}
-  return {confirmMode,cancelMode,showTool,clearTools,messagingRoutes,destroy};
+  function destroy(){messagingRoutes.destroy();routeChoices.clear();cancelMode();clearRuns();host.replaceChildren();}
+  return {confirmMode,cancelMode,showTool,clearTools,showRun,clearRuns,messagingRoutes,destroy};
 }

@@ -8,7 +8,8 @@ class E {
  querySelectorAll(s){return this.children.flatMap(c=>[...((s==='[data-public-id]'&&c.dataset.publicId)||(s==='button'&&c.tag==='button')?[c]:[]),...c.querySelectorAll(s)]);}
  contains(node){return node===this||this.children.some(child=>child.contains(node));}
  focus(){if(this.document)this.document.activeElement=this;}
- querySelector(s){return this.children.find(c=>c.className===s.slice(1))||this.children.map(c=>c.querySelector(s)).find(Boolean)||null;}
+ get childNodes(){return this.children;}
+ querySelector(s){return this.children.find(c=>s==='button'?c.tag==='button':(c.className||'').split(' ').includes(s.slice(1)))||this.children.map(c=>c.querySelector(s)).find(Boolean)||null;}
  remove(){if(this.parent)this.parent.children=this.parent.children.filter(c=>c!==this);}
 }
 const flatten=n=>[n.textContent,...n.children.map(flatten)].join(' ');
@@ -17,7 +18,7 @@ async function fixture(canWrite=()=>true){
  const root=new E(),row=new E(),host=new E();row.dataset.publicId='user:a';row.dataset.seq='7';root.append(row,host);
  const document={activeElement:null,createElement:tag=>{const node=new E(tag);node.document=document;return node;}};
  const context=vm.createContext({document,Set,Number});
- const mod=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../ui/chat/core/followup-queue.js'),'utf8'),{context});await mod.link(()=>{});await mod.evaluate();
+ const mod=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../ui/chat/core/followup-queue.js'),'utf8'),{context});await mod.link(()=>new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../ui/chat/core/chat-notifications.js'),'utf8'),{context}));await mod.evaluate();
  let session='one',data={queue:[{id:'a',message_id:'user:a',revision:2,choice:'queue',status:'pending'}],queue_state:{revision:3,held:false}};
  const calls=[],errors=[],keys=new Map();let write=null;
  const client={snapshot:async()=>data,delivery:async(...args)=>{calls.push(args);if(write)return write();data={queue:[{...data.queue[0],choice:args[2].choice,revision:3}],queue_state:{revision:4}};},resumeQueue:async(...args)=>calls.push(args)};
@@ -34,7 +35,7 @@ test('queue choices update the existing bubble with revision and request identit
 test('claimed interruption hides choices and held queue exposes explicit resume',async()=>{
  const f=await fixture();f.queue.update({queue:[{id:'a',message_id:'user:a',status:'interrupting',choice:'interrupt'}],queue_state:{revision:4,held:true,reason:'Stopped'}});
  assert.equal(f.row.querySelector('.followup-delivery-actions'),null);assert.match(flatten(f.row),/Interrupting/);assert.match(flatten(f.host),/Queue held.*Stopped.*Resume queue/);
- await f.host.children[0].children[1].onclick();assert.equal(f.calls[0][0],'one');assert.ok(f.calls[0][1].client_request_id);assert.equal(f.calls[0][1].expected_revision,4);
+ await f.host.children[0].querySelector('button').onclick();assert.equal(f.calls[0][0],'one');assert.ok(f.calls[0][1].client_request_id);assert.equal(f.calls[0][1].expected_revision,4);
 });
 test('stale snapshots and late choice results cannot overwrite a new session',async()=>{
  const f=await fixture();let resolve;f.setWrite(()=>new Promise(r=>resolve=r));const pending=f.buttons()[1].onclick();await tick();assert.ok(f.buttons().every(b=>b.disabled));
@@ -58,7 +59,7 @@ test('unchanged polling preserves focused actions and resume, but paints newly r
  f.queue.update(snapshot);assert.equal(f.buttons()[1],button);assert.equal(f.document.activeElement,button);
  f.row.querySelector('.followup-delivery').remove();f.queue.update(snapshot);assert.equal(f.buttons().length,4);
  const held={...snapshot,queue_state:{revision:4,held:true,reason:'Stopped'}};f.queue.update(held);
- const resume=f.host.children[0].children[1];resume.focus();f.queue.update(held);assert.equal(f.host.children[0].children[1],resume);assert.equal(f.document.activeElement,resume);
+ const resume=f.host.children[0].querySelector('button');resume.focus();f.queue.update(held);assert.equal(f.host.children[0].querySelector('button'),resume);assert.equal(f.document.activeElement,resume);
 });
 test('busy choices retain nodes and semantic updates restore focus',async()=>{
  const f=await fixture(),button=f.buttons()[1];button.focus();let resolve;f.setWrite(()=>new Promise(r=>resolve=r));const pending=button.onclick();await tick();
@@ -72,8 +73,8 @@ test('read-only queue projection keeps status visible and blocks every mutation'
  assert.match(flatten(f.row),/Queued/);assert.ok(f.buttons().every(b=>b.disabled));
  await f.buttons()[1].onclick();assert.equal(f.calls.length,0);assert.match(f.errors[0],/not available/);
  const held={queue:[{id:'a',message_id:'user:a',revision:2,choice:'queue',status:'held'}],queue_state:{revision:4,held:true,reason:'Stopped'}};
- f.queue.update(held);const resume=f.host.children[0].children[1];assert.ok(resume.disabled);
+ f.queue.update(held);const resume=f.host.children[0].querySelector('button');assert.ok(resume.disabled);
  await resume.onclick();assert.equal(f.calls.length,0);
- allowed=true;f.queue.update(held);assert.ok(f.buttons().every(b=>!b.disabled));assert.equal(f.host.children[0].children[1].disabled,false);
- allowed=false;f.queue.update(held);assert.ok(f.buttons().every(b=>b.disabled));assert.ok(f.host.children[0].children[1].disabled);
+ allowed=true;f.queue.update(held);assert.ok(f.buttons().every(b=>!b.disabled));assert.equal(f.host.children[0].querySelector('button').disabled,false);
+ allowed=false;f.queue.update(held);assert.ok(f.buttons().every(b=>b.disabled));assert.ok(f.host.children[0].querySelector('button').disabled);
 });

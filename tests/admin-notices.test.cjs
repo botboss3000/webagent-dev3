@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../ui/chat/core/administrator-notices.js'),'utf8');
-function load(){const ctx={};vm.createContext(ctx);vm.runInContext(source.replaceAll('export function','function'),ctx);return ctx;}
+function load(){const ctx={};vm.createContext(ctx);vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/chat/core/chat-notifications.js'),'utf8').replaceAll('export function','function')+'\n'+source.replace(/^import .*;\n/m,'').replaceAll('export function','function'),ctx);return ctx;}
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
 const flush=async()=>{for(let i=0;i<4;i++)await new Promise(setImmediate);};
 const notice=(sha='a')=>({notice:{snapshot_sha256:sha.repeat(64),dirty:true,ahead:0,observed_at:123,notification:'Repository changed. Review before editing.'}});
@@ -41,14 +41,19 @@ test('invalid/failed live notice withdraws prior FYI without unsafe text',async(
  timer.tick();await flush();assert.equal(events.at(-1),'');assert(!events.some(x=>x.includes('private')));
  helper.stop();
 });
-test('dedicated DOM renderer never overwrites chat connection errors or uses HTML',()=>{
- const error={textContent:'Connection interrupted'},parent={children:[],prepend(el){el.parentNode=this;this.children.unshift(el);}};
- const document={getElementById:id=>id==='chat-above-pill'?parent:error,
- createElement:()=>({setAttribute(){},textContent:'',hidden:false})};
- const render=load().repositoryNoticeRenderer(document);
- render('<script>literal</script>');assert.equal(parent.children[0].textContent,'<script>literal</script>');
- assert.equal(error.textContent,'Connection interrupted');render('');assert(parent.children[0].hidden);
- assert.equal(error.textContent,'Connection interrupted');assert.equal(parent.children.length,1);
+class Element {
+ constructor(tag='div'){this.tag=tag;this.children=[];this.textContent='';}
+ setAttribute(){}append(...items){for(const item of items){item.parentNode=this;this.children.push(item);}}
+ prepend(item){item.parentNode=this;this.children.unshift(item);}replaceChildren(){this.children=[];}
+ querySelector(s){return this.children.find(c=>s==='button'?c.tag==='button':(c.className||'').split(' ').includes(s.slice(1)))||this.children.map(c=>c.querySelector(s)).find(Boolean)||null;}
+}
+const flatten=node=>[node.textContent,...node.children.map(flatten)].join(' ');
+test('shared repository card never overwrites chat connection errors or uses HTML',()=>{
+ const error={textContent:'Connection interrupted'},parent=new Element();
+ const document={getElementById:id=>id==='chat-notifications'?parent:error,createElement:tag=>new Element(tag)};
+ const render=load().repositoryNoticeRenderer(document);render('<script>literal</script>');
+ assert.match(flatten(parent),/<script>literal<\/script>/);assert.match(parent.children[0].className,/chat-notification/);
+ assert.equal(error.textContent,'Connection interrupted');render('');assert(parent.children[0].hidden);assert.equal(error.textContent,'Connection interrupted');assert.equal(parent.children.length,1);
 });
 test('chat client clears timer and stale EventSource epoch while preserving note callbacks',async()=>{
  const ctx=load(),notes=[],timer=timers(),sources=[];class Events{constructor(){sources.push(this);}addEventListener(){}close(){this.closed=true;}}
@@ -89,15 +94,9 @@ test('switched sessions and unavailable broker withdraw stale build notices and 
  response={notice:null,build_notices:[buildNotice()],build_notices_unavailable:true};
  timer.tick();await flush();assert.equal(renders.at(-1).rows.length,0);helper.stop();
 });
-test('build reminder DOM renders literal text and reviews only its revision',async()=>{
- class Element{constructor(){this.children=[];this.listeners={};}setAttribute(){}append(...items){this.children.push(...items);}
- replaceChildren(){this.children=[];}prepend(child){child.parentNode=this;this.children.unshift(child);}
- addEventListener(name,fn){this.listeners[name]=fn;}}
- const parent=new Element(),doc={getElementById:()=>parent,createElement:()=>new Element()},reviewed=[];
- const render=load().buildNoticeRenderer(doc);
- render([{...buildNotice(),notification:'<script>literal</script>'}],async id=>reviewed.push(id));
- const region=parent.children[0],row=region.children[0];
- assert(row.children[0].textContent.startsWith('<script>literal</script>'));
- await row.children[1].listeners.click();assert.deepEqual(reviewed,['b'.repeat(64)]);
- render([],null);assert.equal(region.hidden,true);
+test('build reminder shared card renders literal text and reviews only its revision',async()=>{
+ const parent=new Element(),doc={getElementById:()=>parent,createElement:tag=>new Element(tag)},reviewed=[];
+ const render=load().buildNoticeRenderer(doc);render([{...buildNotice(),notification:'<script>literal</script>'}],async id=>reviewed.push(id));
+ const region=parent.children[0],row=region.children[0];assert.match(flatten(row),/<script>literal<\/script>/);assert.equal(row.className,'chat-notification');
+ await row.querySelector('button').onclick();assert.deepEqual(reviewed,['b'.repeat(64)]);render([],null);assert.equal(region.hidden,true);
 });

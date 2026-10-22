@@ -1,11 +1,7 @@
 /* Compact recovery disclosure follows the existing composer notice surface. */
-#runs .recovery-details summary{cursor:pointer;color:var(--fg-1);font-weight:600}
-#runs .recovery-details summary:focus-visible,#runs .recovery-details button:focus-visible,#runs .recovery-details textarea:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
-#runs .recovery-details p{margin:6px 0}
-#runs .recovery-details pre{text-align:left;padding:8px;border:var(--border-width) solid var(--border);border-radius:10px;background:var(--bg-1)}
-#runs .recovery-reference{font-size:11px;color:var(--fg-3)}
-#runs .recovery-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:4px}
-#runs .recovery-details textarea{box-sizing:border-box;margin:8px 0;padding:8px 10px;min-height:60px;border:var(--border-width) solid var(--border);border-radius:12px;font:inherit;resize:vertical}
-#runs .recovery-details button{min-height:28px;padding:3px 10px;border:var(--border-width) solid color-mix(in oklab,currentColor 22%,transparent);border-radius:999px;background:color-mix(in oklab,var(--fg-1) 5%,transparent);color:var(--fg-2);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
-#runs .recovery-details button:hover{background:color-mix(in oklab,currentColor 15%,transparent)}
-#runs .recovery-details button:disabled{opacity:.5;cursor:wait}
+#chat-notifications .recovery-details summary{cursor:pointer;color:var(--fg-1);font-weight:600}
+#chat-notifications .recovery-details summary:focus-visible,#chat-notifications .recovery-details button:focus-visible,#chat-notifications .recovery-details textarea:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
+#chat-notifications .recovery-details p{margin:6px 0}
+#chat-notifications .recovery-details pre{text-align:left;padding:8px;border:var(--border-width) solid var(--border);border-radius:10px;background:var(--bg-1)}
+#chat-notifications .recovery-reference{font-size:11px;color:var(--fg-3)}
+#chat-notifications .recovery-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:4px}

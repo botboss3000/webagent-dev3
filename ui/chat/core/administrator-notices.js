@@ -1,61 +1,28 @@
 // @code-index {"version":1,"feature":"chat-administrator-notices","aliases":["repository status reminder","retained build notice"],"purpose":"Locates administrator repository and retained-build notices in the chat composer","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider notice presentation preferences; access authority remains enforced by policy."]}}
-// Repository notices are server-authored FYI, separate from chat connection errors.
-// Adapt repository notice text into a polite status region; caller owns polling and lifecycle.
-export function repositoryNoticeRenderer(documentObject = globalThis.document) {
-  let region = null;
-  // Return the renderer callback used by the repository notice poller.
-  return text => {
-    const parent = documentObject?.getElementById('chat-above-pill');
-    if (!parent) return;
-    if (!region || region.parentNode !== parent) {
-      region = documentObject.createElement('p');
-      region.className = 'ac-hint v3-repository-notice';
-      region.setAttribute('role', 'status');
-      region.setAttribute('aria-live', 'polite');
-      parent.prepend(region);
+import {createChatNotification} from './chat-notifications.js';
+// The poller owns freshness and access; all visible cards come from chat notifications.
+export function repositoryNoticeRenderer(documentObject=globalThis.document) {
+  let region=null;
+  return text=>{
+    const parent=documentObject?.getElementById('chat-notifications');if(!parent)return;
+    if(!region||region.parentNode!==parent){
+      region=createChatNotification({title:'Repository status',message:'',documentObject});region.className+=' v3-repository-notice';
+      region.setAttribute('role','status');region.setAttribute('aria-live','polite');parent.prepend(region);
     }
-    region.textContent = text;
-    region.hidden = !text;
+    region.querySelector('.chat-notification-message').textContent=text;region.hidden=!text;
   };
 }
-
-
-// Render retained-build reminders as inert text and delegate reviewed-state changes to the supplied callback.
-export function buildNoticeRenderer(documentObject = globalThis.document) {
-  let region = null;
-  // Return the renderer callback; review is invoked only by the explicit button action.
-  return (items, review) => {
-    const parent = documentObject?.getElementById('chat-above-pill');
-    if (!parent) return;
-    if (!region || region.parentNode !== parent) {
-      region = documentObject.createElement('section');
-      // The shared composer visibility rule recognizes repository notice surfaces.
-      region.className = 'ac-hint v3-build-leftovers v3-repository-notice';
-      region.setAttribute('role', 'status');
-      region.setAttribute('aria-live', 'polite');
-      parent.prepend(region);
-    }
-    region.replaceChildren();
-    region.hidden = !items.length;
-    // The input was validated by the poller before this renderer receives it.
-    for (const item of items) {
-      const row = documentObject.createElement('p');
-      const text = documentObject.createElement('span');
-      text.textContent = item.notification + (Number.isSafeInteger(item.retained_bytes)
-        ? ' Retained space: ' + (item.retained_bytes / 1024 ** 2).toFixed(1) + ' MiB.' : '');
-      const button = documentObject.createElement('button');
-      button.type = 'button';
-      button.textContent = 'Mark reviewed';
-      button.title = 'Clear this reminder after investigation. Retained work remains intact.';
-      // Prevent duplicate review requests while pending and retain a visible failure message.
-      button.addEventListener('click', async () => {
-        button.disabled = true;
-        try { await review(item.id); }
-        catch { button.textContent = 'Review unavailable; refresh'; }
-        finally { button.disabled = false; }
-      });
-      row.append(text, button);
-      region.append(row);
+export function buildNoticeRenderer(documentObject=globalThis.document) {
+  let region=null;
+  return(items,review)=>{
+    const parent=documentObject?.getElementById('chat-notifications');if(!parent)return;
+    if(!region||region.parentNode!==parent){region=documentObject.createElement('div');region.className='v3-build-leftovers v3-repository-notice';region.setAttribute('aria-live','polite');parent.prepend(region);}
+    region.replaceChildren();region.hidden=!items.length;
+    for(const item of items){
+      const node=createChatNotification({title:'Retained work',message:item.notification+(Number.isSafeInteger(item.retained_bytes)?' Retained space: '+(item.retained_bytes/1024**2).toFixed(1)+' MiB.':''),documentObject,actions:[{
+        label:'Mark reviewed',kind:'neutral',title:'Clear this reminder after investigation. Retained work remains intact.',
+        run:async()=>{const button=node.querySelector('button');button.disabled=true;try{await review(item.id);}catch{button.textContent='Review unavailable; refresh';}finally{button.disabled=false;}}
+      }]});region.append(node);
     }
   };
 }
