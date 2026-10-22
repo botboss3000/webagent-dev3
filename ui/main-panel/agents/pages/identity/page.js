@@ -1,5 +1,6 @@
 import {createSettingsRow} from './settings-row.js';
 import {renderMainChat} from './main-chat.js';
+import {renderMemberAccess} from './member-access.js';
 
 'use strict';
 import { renderSharedChat } from './shared-chat.js';
@@ -64,6 +65,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
     const task = queue.then(async()=>{ const saved=await request(path,'PUT',{revision:agent.revision,...patch}); agent=saved; onSaved(saved); return saved; });
     queue=task.catch(()=>{}); return task;
   };
+  renderMemberAccess(content,agent,persist,request,{agentId,reload:()=>renderIdentity(host,request,{agentId,onSaved})});
   if(agent.can_manage)await renderEmbedSettings(content,request,{agentId});
   renderSharedChat(content, agent, persist, request, {agentId});
   await renderMainChat(content, request, {agentId,canManage:agent.can_manage});

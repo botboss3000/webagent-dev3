@@ -26,7 +26,7 @@ try{
    const {renderIdentity}=await import('/ui/main-panel/agents/pages/identity/page.js');
    const {vibrationConfigReady}=await import('/ui/shared/vibrate.js');await vibrationConfigReady;
    window.pulses=[];Object.defineProperty(navigator,'vibrate',{configurable:true,value:n=>{pulses.push(n);return true;}});
-   const agent={name:'Fixture',description:'',revision:3,can_manage:true,default_execution_mode:'ask',execution_modes:[{id:'ask',label:'Ask',permission_policy:'read_only',description:'Ask first',prompt:'Ask prompt',builtin:true},{id:'auto',label:'Auto',permission_policy:'write',description:'Act',prompt:'Auto prompt',builtin:true}],shared_chat:{shareable:false,admin_view:false,admin_join:false,help:false,initial_active:true},compaction_thresholds:{trigger_tokens:150000,tail_tokens:40000},compaction_defaults:{trigger_tokens:150000,tail_tokens:40000},manager_incoming_message:{enabled:false,criteria:''},message_visibility:{mode:'manual',guidance:'Saved guidance',fixed_protocol:'Fixed protocol'},closing_message:{notification_guidance:'Saved closing'},closing_protocol:{flags:['complete'],notification_max_words:5}};
+   const agent={name:'Fixture',description:'',revision:3,can_manage:true,member_access:{visitor_access:false,app_login_members:true,conversation_privacy:'operator_reviewable'},capability_levels:{revision:0,order:['operator','member','visitor'],levels:Object.fromEntries([['operator','Operator'],['member','Member'],['visitor','Visitor']].map(([id,name])=>[id,{id,name,revision:1,ability_permissions:{},tool_permissions:{},ability_exposure:{},tool_exposure:{},skill_exposure:{}}]))},default_execution_mode:'ask',execution_modes:[{id:'ask',label:'Ask',permission_policy:'read_only',description:'Ask first',prompt:'Ask prompt',builtin:true},{id:'auto',label:'Auto',permission_policy:'write',description:'Act',prompt:'Auto prompt',builtin:true}],shared_chat:{shareable:false,admin_view:false,admin_join:false,help:false,initial_active:true},compaction_thresholds:{trigger_tokens:150000,tail_tokens:40000},compaction_defaults:{trigger_tokens:150000,tail_tokens:40000},manager_incoming_message:{enabled:false,criteria:''},message_visibility:{mode:'manual',guidance:'Saved guidance',fixed_protocol:'Fixed protocol'},closing_message:{notification_guidance:'Saved closing'},closing_protocol:{flags:['complete'],notification_max_words:5}};
    const widget={revision:5,config:{enabled:false,guest_access:false,allowed_origins:['https://example.com']}};
    window.fixture={agent,widget,writes:[],fail:false};
    const request=async(url,method='GET',body)=>{
@@ -40,7 +40,7 @@ try{
    };
    window.remount=async()=>{await renderIdentity(document.querySelector('#host'),request,{agentId:'one'});};await remount();
   },light);
-  const titles=['Website chat widget','Shared conversations','Chat modes','Review incoming messages','Working-message promotion','Final response'];
+  const titles=['Website chat widget','Shared conversations','Chat modes','Review incoming messages','Working-message promotion','Final response','Member access'];
   for(const title of titles){
    const btn=page.getByRole('button',{name:'Expand '+title,exact:true});assert.equal(await btn.getAttribute('aria-expanded'),'false');
    await btn.press('Enter');assert.equal(await page.getByRole('button',{name:'Collapse '+title,exact:true}).getAttribute('aria-expanded'),'true');
@@ -65,6 +65,8 @@ try{
   assert.equal(await page.evaluate(()=>fixture.widget.config.enabled),false);
   await page.getByRole('button',{name:'Save widget settings',exact:true}).click();await page.waitForFunction(()=>fixture.widget.config.enabled);assert.equal(await page.evaluate(()=>fixture.writes.at(-1).body.expected_revision),5);
   await page.getByLabel('Participants may invite others',{exact:true}).check();await page.getByRole('button',{name:'Save shared-chat policy',exact:true}).click();await page.waitForFunction(()=>fixture.agent.shared_chat.shareable);
+  await page.getByLabel('Accept app registered users as members',{exact:true}).uncheck();await page.waitForFunction(()=>fixture.agent.member_access.app_login_members===false);
+  await page.getByLabel('Conversation privacy',{exact:true}).selectOption('private');await page.waitForFunction(()=>fixture.agent.member_access.conversation_privacy==='private');
   await page.locator('[data-field="default_execution_mode"]').selectOption('auto');await page.waitForFunction(()=>fixture.agent.default_execution_mode==='auto');
   await page.locator('[data-mode-id="ask"] summary').click();await page.locator('[data-mode-id="ask"] [data-mode-field="prompt"]').fill('Updated prompt');await page.locator('[data-mode-id="ask"] [data-mode-card-save]').click();await page.waitForFunction(()=>fixture.agent.execution_modes[0].prompt==='Updated prompt');
   await page.getByLabel('Working-message promotion',{exact:true}).selectOption('none');await page.waitForFunction(()=>fixture.agent.message_visibility.mode==='none');assert.equal(await page.getByLabel('Additional promotion guidance',{exact:true}).isVisible(),false);
@@ -78,10 +80,10 @@ try{
   assert.equal(await page.locator('[data-identity-section="website-chat-widget"]').count(),0);
   for(const title of titles.slice(1))await page.getByRole('button',{name:'Expand '+title,exact:true}).click();
   assert.equal(await page.locator('[data-field="default_execution_mode"]').isDisabled(),true);
-  for(const label of ['Enable incoming-message review','Working-message promotion','Notification guidance'])assert.equal(await page.getByLabel(label,{exact:true}).isDisabled(),true);
+  for(const label of ['Enable incoming-message review','Working-message promotion','Notification guidance','Accept app registered users as members','Conversation privacy'])assert.equal(await page.getByLabel(label,{exact:true}).isDisabled(),true);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   if(touch)assert.equal(await page.evaluate(()=>innerWidth===390&&matchMedia('(pointer: coarse)').matches),true);
   assert.deepEqual(errors,[]);await context.close();
  }
- console.log('Identity configuration rows: six features, keyboard-only expansion without writes, explicit widget save, revision fences, review validation/rollback, shared policy, modes, promotion, closing, remount persistence, read-only, touch, both themes.');
+ console.log('Identity configuration rows: seven features including joining and pinned privacy, keyboard-only expansion without writes, explicit widget save, revision fences, review validation/rollback, shared policy, modes, promotion, closing, remount persistence, read-only, touch, both themes.');
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

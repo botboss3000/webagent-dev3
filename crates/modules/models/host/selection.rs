@@ -12,6 +12,15 @@ impl Store {
 mod tests {
     use super::*;
     const CATALOG_KEY: &str = "model_selection:catalog:v1";
+    async fn prepared(store:&Store)->&Store {
+        let owner:Option<String>=sqlx::query_scalar("SELECT owner_id FROM agent_directory WHERE id='agent-a'").fetch_optional(&store.app_pool).await.unwrap();
+        let owner=owner.unwrap_or_else(||"owner".into());
+        let pool=crate::agent_storage::open_agent_pool(&store.root,"agent-a").await.unwrap();
+        sqlx::query("INSERT OR IGNORE INTO agents VALUES('agent-a','Agent','','openai_subscription','','active',?,1,1,1)")
+            .bind(store.seal(&json!({"owner_id":owner})).unwrap()).execute(&pool).await.unwrap();
+        sqlx::query("INSERT OR IGNORE INTO agent_directory VALUES('agent-a',?)").bind(owner).execute(&store.app_pool).await.unwrap();
+        pool.close().await;store.for_agent("agent-a").await.unwrap();store
+    }
 
 
     fn fixture() -> (Assignment, BTreeMap<String, ModelEntry>, BTreeMap<String, Connection>, BTreeMap<String, BackupGroup>) {
@@ -43,24 +52,24 @@ mod tests {
     #[tokio::test]
     async fn role_edits_are_atomic_revisioned_and_revocation_does_not_block_clearing() {
         let root = tempfile::tempdir().unwrap(); let store = crate::store::Store::open(root.path()).await.unwrap();
-        let mut catalog = store.save_model_catalog(&catalog_fixture(), 0).await.unwrap();
+        let mut catalog = prepared(&store).await.save_model_catalog(&catalog_fixture(), 0).await.unwrap();
         let pinned = catalog.resolve("agent-a").unwrap();
         catalog.connections.get_mut("a").unwrap().allowed_agents.clear();
-        catalog = store.save_model_catalog(&catalog, 1).await.unwrap();
+        catalog = prepared(&store).await.save_model_catalog(&catalog, 1).await.unwrap();
         assert!(pinned.authorize_candidate(0, &catalog.entries, &catalog.connections).is_err());
         let mut invalid = catalog.clone();
         invalid.agent_models.get_mut("agent-a").unwrap().roles.insert(ModelRole::Premium,
             RoleAssignment { entry_id: "a".into(), backup_entry_ids: vec![] });
-        assert!(store.save_model_catalog(&invalid, 2).await.is_err());
-        assert_eq!(store.model_catalog().await.unwrap(), catalog);
+        assert!(prepared(&store).await.save_model_catalog(&invalid, 2).await.is_err());
+        assert_eq!(prepared(&store).await.model_catalog().await.unwrap(), catalog);
         catalog.agent_models.get_mut("agent-a").unwrap().roles.clear();
-        let saved = store.save_model_catalog(&catalog, 2).await.unwrap();
+        let saved = prepared(&store).await.save_model_catalog(&catalog, 2).await.unwrap();
         assert_eq!(saved.agent_models["agent-a"].revision, 2);
         assert_eq!(saved.entries["a"].revision, 1);
         assert!(saved.resolve("agent-a").is_err());
-        assert!(store.save_model_catalog(&catalog, 2).await.is_err());
+        assert!(prepared(&store).await.save_model_catalog(&catalog, 2).await.is_err());
         let mut forged = saved.clone(); forged.agent_models.get_mut("agent-a").unwrap().owner_id = "other".into();
-        assert!(store.save_model_catalog(&forged, saved.revision).await.is_err());
+        assert!(prepared(&store).await.save_model_catalog(&forged, saved.revision).await.is_err());
     }
 
     // The old installer could configure a different owner's agent. Migration keeps
@@ -81,7 +90,7 @@ mod tests {
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
             .bind(CATALOG_KEY).bind(store.seal(&serde_json::to_value(&legacy).unwrap()).unwrap())
             .execute(&store.app_pool).await.unwrap();
-        let projected = store.model_catalog().await.unwrap();
+        let projected = prepared(&store).await.model_catalog().await.unwrap();
         assert_eq!(projected.agent_models["agent-a"].owner_id, "tenant-owner");
         assert_eq!(projected.assignments["agent-a"].owner_id, "admin");
         assert!(projected.entries["a"].allowed_agents.contains("agent-a"));
@@ -92,19 +101,19 @@ mod tests {
         // storage advances revisions without turning the editor into the owner.
         let mut owner_edit = projected;
         owner_edit.agent_models.get_mut("agent-a").unwrap().roles.get_mut(&ModelRole::Standard).unwrap().backup_entry_ids = vec!["c".into()];
-        let saved = store.save_model_catalog(&owner_edit,0).await.unwrap();
+        let saved = prepared(&store).await.save_model_catalog(&owner_edit,0).await.unwrap();
         assert_eq!(saved.agent_models["agent-a"].owner_id, "tenant-owner");
         assert_eq!(saved.agent_models["agent-a"].revision, 2);
-        let mut oversight_edit = store.model_catalog().await.unwrap();
+        let mut oversight_edit = prepared(&store).await.model_catalog().await.unwrap();
         oversight_edit.agent_models.get_mut("agent-a").unwrap().roles.insert(ModelRole::System,
             RoleAssignment { entry_id:"c".into(), backup_entry_ids:vec![] });
-        let saved = store.save_model_catalog(&oversight_edit,1).await.unwrap();
+        let saved = prepared(&store).await.save_model_catalog(&oversight_edit,1).await.unwrap();
         assert_eq!(saved.agent_models["agent-a"].owner_id, "tenant-owner");
         assert_eq!(saved.agent_models["agent-a"].revision, 3);
         assert!(saved.connections["b"].allowed_agents.is_empty());
-        assert_eq!(store.model_catalog().await.unwrap(), saved);
+        assert_eq!(prepared(&store).await.model_catalog().await.unwrap(), saved);
         let mut transfer = saved.clone(); transfer.agent_models.get_mut("agent-a").unwrap().owner_id = "admin".into();
-        assert!(store.save_model_catalog(&transfer,2).await.is_err());
+        assert!(prepared(&store).await.save_model_catalog(&transfer,2).await.is_err());
     }
 
     // Newly accepted legacy-form writes use the same directory projection, while
@@ -114,7 +123,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap(); let store = crate::store::Store::open(root.path()).await.unwrap();
         sqlx::query("INSERT INTO agent_directory(id,owner_id) VALUES('agent-a','tenant-owner')")
             .execute(&store.app_pool).await.unwrap();
-        let saved = store.save_model_catalog(&catalog_fixture(),0).await.unwrap();
+        let saved = prepared(&store).await.save_model_catalog(&catalog_fixture(),0).await.unwrap();
         assert_eq!(saved.agent_models["agent-a"].owner_id, "tenant-owner");
         assert_eq!(saved.resolve("agent-a").unwrap().owner_id, "tenant-owner");
         // Simulate an existing explicit snapshot from before directory reconciliation.
@@ -122,46 +131,46 @@ mod tests {
         sqlx::query("UPDATE docs SET value=? WHERE key=?")
             .bind(store.seal(&serde_json::to_value(&explicit).unwrap()).unwrap()).bind(CATALOG_KEY)
             .execute(&store.app_pool).await.unwrap();
-        assert_eq!(store.model_catalog().await.unwrap().agent_models["agent-a"].owner_id,"previous-explicit-owner");
+        assert_eq!(prepared(&store).await.model_catalog().await.unwrap().agent_models["agent-a"].owner_id,"previous-explicit-owner");
     }
 
     #[tokio::test]
     async fn encrypted_catalog_round_trip_and_revision_conflict() {
         let root = tempfile::tempdir().unwrap();
         let store = crate::store::Store::open(root.path()).await.unwrap();
-        assert_eq!(store.model_catalog().await.unwrap(), Catalog::default());
-        let saved = store.save_model_catalog(&catalog_fixture(), 0).await.unwrap();
+        assert_eq!(prepared(&store).await.model_catalog().await.unwrap(), Catalog::default());
+        let saved = prepared(&store).await.save_model_catalog(&catalog_fixture(), 0).await.unwrap();
         assert_eq!(saved.revision, 1);
-        assert_eq!(store.model_catalog().await.unwrap(), saved);
-        assert!(store.save_model_catalog(&catalog_fixture(), 0).await.is_err());
+        assert_eq!(prepared(&store).await.model_catalog().await.unwrap(), saved);
+        assert!(prepared(&store).await.save_model_catalog(&catalog_fixture(), 0).await.is_err());
         let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
             .bind(CATALOG_KEY).fetch_one(&store.app_pool).await.unwrap();
         assert!(!raw.windows(b"same-upstream".len()).any(|x| x == b"same-upstream"));
         let mut changed = saved.clone();
         changed.entries.get_mut("a").unwrap().display_name = "Renamed".into();
-        let updated = store.save_model_catalog(&changed, 1).await.unwrap();
+        let updated = prepared(&store).await.save_model_catalog(&changed, 1).await.unwrap();
         assert_eq!(updated.entries["a"].revision, 2);
         assert_eq!(updated.entries["b"].revision, 1);
         store.app_pool.close().await; store.pool.close().await; store.agent_pool.close().await;
         let reopened = crate::store::Store::open(root.path()).await.unwrap();
-        assert_eq!(reopened.model_catalog().await.unwrap(), updated);
+        assert_eq!(prepared(&reopened).await.model_catalog().await.unwrap(), updated);
     }
     #[tokio::test]
     async fn revocation_allowed_but_new_assignment_and_owner_transfer_rejected() {
         let root = tempfile::tempdir().unwrap();
         let store = crate::store::Store::open(root.path()).await.unwrap();
-        let mut catalog = store.save_model_catalog(&catalog_fixture(), 0).await.unwrap();
+        let mut catalog = prepared(&store).await.save_model_catalog(&catalog_fixture(), 0).await.unwrap();
         catalog.connections.get_mut("a").unwrap().revoked = true;
-        catalog = store.save_model_catalog(&catalog, 1).await.unwrap();
+        catalog = prepared(&store).await.save_model_catalog(&catalog, 1).await.unwrap();
         assert!(catalog.resolve("agent-a").is_err());
         let mut transfer = catalog.clone();
         transfer.entries.get_mut("a").unwrap().owner_id = "other-owner".into();
-        assert!(store.save_model_catalog(&transfer, 2).await.is_err());
+        assert!(prepared(&store).await.save_model_catalog(&transfer, 2).await.is_err());
         let mut assignment = catalog.assignments["agent-a"].clone();
         assignment.agent_id = "agent-b".into();
         catalog.assignments.insert("agent-b".into(), assignment);
-        assert!(store.save_model_catalog(&catalog, 2).await.is_err());
-        assert_eq!(store.model_catalog().await.unwrap().revision, 2);
+        assert!(prepared(&store).await.save_model_catalog(&catalog, 2).await.is_err());
+        assert_eq!(prepared(&store).await.model_catalog().await.unwrap().revision, 2);
     }
     #[test] fn explicit_order_and_distinct_connections() {
         let (a,e,c,g) = fixture(); let p = SelectionPlan::resolve(&a,&e,&c,&g).unwrap();

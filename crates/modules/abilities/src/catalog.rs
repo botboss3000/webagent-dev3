@@ -780,12 +780,19 @@ impl<H:Host> Catalog<H> {
         Self::contains_id(&state["active"], id)
     }
 
+    fn exposure<'a>(visibility:&'a Value,field:&str,id:&str,default:&'a str)->&'a str {
+        let configured=visibility[field][id].as_str().unwrap_or(default);
+        let caps=&visibility["_capability_exposure"][field];
+        let ceiling=caps.get(id).or_else(||caps.get("*")).and_then(Value::as_str).unwrap_or("visible");
+        if configured=="off" || ceiling=="off" {"off"}
+        else if configured=="discoverable" || ceiling=="discoverable" {"discoverable"} else {configured}
+    }
     fn is_off(visibility: &Value, id: &str) -> bool {
-        visibility["visibility"][id] == "off"
+        Self::exposure(visibility,"visibility",id,"discoverable")=="off"
     }
 
     fn skill_mode<'a>(visibility: &'a Value, id: &str) -> &'a str {
-        visibility["skill_visibility"][id].as_str().unwrap_or("visible")
+        Self::exposure(visibility,"skill_visibility",id,"visible")
     }
 
     fn selectable_metadata(name: &str, text: &str) -> Option<(String, String, &'static str)> {
@@ -818,12 +825,12 @@ impl<H:Host> Catalog<H> {
 
     fn selectable_mode<'a>(visibility: &'a Value, ability: &str, name: &str, text: &str) -> &'a str {
         let key = format!("{ability}:{name}");
-        visibility["skill_visibility"][&key].as_str().unwrap_or_else(||
-            Self::selectable_metadata(name, text).map(|(_, _, mode)| mode).unwrap_or("off"))
+        Self::exposure(visibility,"skill_visibility",&key,
+            Self::selectable_metadata(name,text).map(|(_,_,mode)|mode).unwrap_or("off"))
     }
 
     fn tool_mode<'a>(visibility: &'a Value, name: &str) -> &'a str {
-        visibility["tool_modes"][name].as_str().unwrap_or("visible")
+        Self::exposure(visibility,"tool_modes",name,"visible")
     }
 
     pub fn has_tool(&self, ability_id: &str, tool_name: &str) -> bool {
@@ -832,7 +839,7 @@ impl<H:Host> Catalog<H> {
     }
 
     fn is_visible(visibility: &Value, id: &str) -> bool {
-        visibility["visibility"][id] == "visible"
+        Self::exposure(visibility,"visibility",id,"discoverable")=="visible"
     }
 
     fn available(ability: &Ability, visibility: &Value, state: &Value) -> bool {

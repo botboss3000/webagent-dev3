@@ -73,9 +73,15 @@ pub async fn effective_policy_for_mode(&self,mode:&Value)->Result<(Value,u64)> {
     }
     Ok((policy, mode["revision"].as_u64().unwrap()))
 }
-pub async fn ability_controls(&self, sid: &str) -> Result<(Value, u64, Value, Value)> {
+pub async fn ability_controls(&self,sid:&str)->Result<(Value,u64,Value,Value)> {
+    self.ability_controls_for(sid,self.store.current_user_id()).await
+}
+pub async fn ability_controls_for(&self, sid: &str,requester:&str) -> Result<(Value, u64, Value, Value)> {
     let (policy, mode_revision) = self.effective_policy( sid).await?;
-    let visibility = self.session_agent_abilities( sid).await?;
+    let mut visibility = self.session_agent_abilities( sid).await?;
+    let agent=self.session_agent_id(sid).await?;
+    let access=self.chat.live_access(self.store.records(),requester,sid,&agent).await?;
+    access.capability_level.decorate_visibility(&mut visibility);
     let state = self.session_ability_state( sid).await?;
     Ok((policy, mode_revision, visibility, state))
 }

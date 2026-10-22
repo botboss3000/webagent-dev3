@@ -170,6 +170,10 @@ impl Store {
             child["forked_from"] =
                 json!({"session_id":sid,"message_id":body.message_id,"through_seq":target_seq});
             child["auto_naming"] = json!({"version":1,"stage":"locked"});
+            child["conversation_privacy"]=match session["conversation_privacy"].as_str() {
+                Some("operator_reviewable")=>json!("operator_reviewable"),_=>json!("private")
+            };
+            child.as_object_mut().unwrap().remove("operator_joined");
             let admitted_batches: HashSet<String> = items
                 .iter()
                 .filter(|row| row.get::<i64, _>("seq") <= cutoff)
@@ -1020,8 +1024,10 @@ mod tests {
             .put("attachment_quota", &json!({"bytes":19}))
             .await
             .unwrap();
+        let mut source=store.get("session:s").await.unwrap().unwrap();
+        source["conversation_privacy"]=json!("private");store.put("session:s",&source).await.unwrap();
         let request = request(&store, "assistant:r1", "fork").await;
-        let child = json!({"id":"child","title":"Fork","agent_id":"shared_default","checkpoint_input":[],"checkpoint_through":0});
+        let child = json!({"id":"child","title":"Fork","agent_id":"shared_default","checkpoint_input":[],"checkpoint_through":0,"conversation_privacy":"operator_reviewable","operator_joined":{"operator":true}});
         let result = saved(
             store
                 .conversation_history(
@@ -1033,6 +1039,8 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(result["title"], "Fork: Original");
+        let forked=store.get("session:child").await.unwrap().unwrap();
+        assert_eq!(forked["conversation_privacy"],"private");assert!(forked.get("operator_joined").is_none());
         assert_eq!(
             store.get("attachment_quota").await.unwrap().unwrap()["bytes"],
             38

@@ -4681,7 +4681,7 @@ async fn model_selection_admission_pins_agent_model_prompt_and_credentials() {
     app.store.upsert_prompt_slot("selection-isolation", "DEFAULT PRIVATE PROMPT", Some(5), None, None, 0).await.unwrap();
     let agent=app.store.for_agent("agent-a").await.unwrap();
     sqlx::query("INSERT INTO agent_prompts(id,agent_id,slot_name,order_index,lock,merge_mode,content,revision,updated_at) VALUES('agent-a:selection-isolation','agent-a','selection-isolation',5,0,'replace',?,1,0)")
-        .bind(app.store.seal(&json!("AGENT A PRIVATE PROMPT")).unwrap()).execute(&agent.agent_pool).await.unwrap();
+        .bind(agent.seal_agent(&json!("AGENT A PRIVATE PROMPT")).unwrap()).execute(&agent.agent_pool).await.unwrap();
     for (agent_id, expected_model, expected_token, expected_prompt, excluded) in [
         ("shared_default","model-one","token-one","DEFAULT PRIVATE PROMPT","AGENT A PRIVATE PROMPT"),
         ("agent-a","model-two","token-two","AGENT A PRIVATE PROMPT","DEFAULT PRIVATE PROMPT"),
@@ -4990,7 +4990,7 @@ async fn phase3_http_isolation_and_membership_revocation() {
     let scoped=app.store.for_user(&user_id).await.unwrap();
     assert_eq!(scoped.get(&key("run",run_id)).await.unwrap().unwrap()["status"],"stopped");
     assert_eq!(router(app.clone()).oneshot(request(&user_token,"user-csrf","GET",
-        &user_path,Value::Null)).await.unwrap().status(),StatusCode::UNAUTHORIZED);
+        &user_path,Value::Null)).await.unwrap().status(),StatusCode::FORBIDDEN);
     let revision=app.store.account_by_id(&user_id).await.unwrap().unwrap()
         ["access_revision"].as_u64().unwrap();
     app.store.update_account_access(&user_id,revision,access::AccountStatus::Suspended,
@@ -5714,7 +5714,7 @@ async fn tenant_ability_http_levels_effective_views_and_stale_updates() {
     assert_eq!(call(&app,&token,"a","PUT",level_path,update).await.0,StatusCode::CONFLICT);
     let assign=format!("/api/v3/agents/agent-a/members/{user}/capability-level");
     assert_eq!(call(&app,&token,"a","PUT",&assign,json!({"expected_revision":1,"capability_level_id":"limited"})).await.0,StatusCode::OK);
-    assert_eq!(call(&app,&member_token,"m","GET",path,Value::Null).await.0,StatusCode::UNAUTHORIZED);
+    assert_eq!(call(&app,&member_token,"m","GET",path,Value::Null).await.0,StatusCode::OK);
     let (_,preview)=call(&app,&token,"a","GET",&format!("{path}/effective?user_id={user}"),Value::Null).await;
     let codebase=preview["abilities"].as_array().unwrap().iter().find(|a|a["id"]=="codebase_admin").unwrap();
     assert_eq!(codebase["effective"]["permission"],"deny");assert_eq!(codebase["effective"]["reason"],"capability_denied");
@@ -6003,6 +6003,8 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
     app.store.mutate_platform_roster("team",2,Mutation::Publish{rollback:None},"admin").await.unwrap();
     let mut tier=app.store.entitlement_tier("basic").await.unwrap().unwrap();let rev=tier.revision;
     tier.model_policy=Some(access::ModelPolicy{roster_id:Some("team".into()),allowed_entry_ids:BTreeSet::from(["model".into()]),allow_byo:false,max_byo_entries:0});
+    let mut ceiling=app.store.entitlement_tier("operator").await.unwrap().unwrap();let upper_revision=ceiling.revision;
+    ceiling.model_policy=tier.model_policy.clone();app.store.save_entitlement_tier(ceiling,upper_revision).await.unwrap();
     app.store.save_entitlement_tier(tier,rev).await.unwrap();
     let before=app.store.model_catalog().await.unwrap();
     let adopted=app.store.adopt_byo_source(user,"shared_default",&Adoption{client_request_id:"platform_once".into(),

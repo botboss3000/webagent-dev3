@@ -111,6 +111,7 @@ impl LiveAccess {
     }
 
     pub fn ability_permission(&self,ability_id:&str) -> Permission {
+        if !self.capability_level.ability_enabled(ability_id) {return Permission::Deny;}
         self.base_ability_permission(ability_id).meet(self.tier.ability_permission(ability_id))
             .meet(self.capability_level.ability_permission(ability_id))
     }
@@ -154,6 +155,7 @@ impl LiveAccess {
             |"remove_own_skill") && !self.agent_administrator {
             return ToolDecision {permission:Permission::Deny,reason:access::Reason::CallerDenied};
         }
+        if !self.capability_level.tool_enabled(name) {return ToolDecision {permission:Permission::Deny,reason:access::Reason::AgentDenied};}
         let ability=if ability_ids.is_empty() {
             if available {Permission::Deny} else {Permission::Auto}
         } else {
@@ -214,11 +216,10 @@ impl<C: RecordCodec> Repository<'_, C> {
                 return Err(anyhow!("Guest access is not enabled"));
             }
         }
-        let tier:Tier=serde_json::from_value(policy["tiers"].get(&principal.tier_id)
-            .ok_or_else(||anyhow!("Entitlement tier not found"))?.clone())?;
+        let tier=crate::account_ladder::effective(&policy,&principal.tier_id)?;
         tier.validate()?;
         if tier.id != principal.tier_id {return Err(anyhow!("Tier identity conflict"));}
-        let membership = self.agent_membership(user_id, agent_id).await?;
+        let membership = self.resolved_membership(user_id, agent_id).await?;
         if let Some(value)=&membership {
             if value["user_id"]!=user_id || value["agent_id"]!=agent_id
                 || value["revision"].as_u64().is_none_or(|revision|revision==0) {
@@ -235,7 +236,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         let agent = sqlx::query("SELECT status,metadata,revision FROM agents WHERE id=?")
             .bind(agent_id).fetch_optional(agent_view.agent_pool).await?;
         let (agent_enabled, agent_revision, tool_permissions, ability_permissions, tool_callers) = if let Some(agent) = agent {
-            let metadata = self.unseal(&agent.get::<Vec<u8>,_>("metadata"))?;
+            let metadata = self.unseal_agent(&agent.get::<Vec<u8>,_>("metadata"))?;
             if !metadata.is_object() {return Err(anyhow!("Invalid agent metadata"));}
             let owner:Option<String>=sqlx::query_scalar(
                 "SELECT owner_id FROM agent_directory WHERE id=?")
@@ -261,7 +262,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         let agent_administrator=self.agent_authority(user_id,agent_id).await?["can_manage"]==true;
         let levels=self.capability_levels(agent_id).await?;
         let level_id=crate::capabilities::membership_level(membership.as_ref(),relationship)?;
-        let capability_level=levels.levels.get(&level_id).ok_or_else(||anyhow!("Membership capability level is missing"))?.clone();
+        let capability_level=levels.effective(&level_id)?;
         let revision = AccessRevision { account:principal.access_revision,
             tier:tier.revision, membership:membership_revision, agent:agent_revision,
             policy:webagent_configuration::digest(&policy),capability_level:levels.revision };
@@ -278,13 +279,13 @@ impl<C: RecordCodec> Repository<'_, C> {
         sqlx::query("UPDATE agents SET revision=revision WHERE id=?").bind(agent).execute(&mut *tx).await?;
         let row=sqlx::query("SELECT metadata,revision FROM agents WHERE id=?").bind(agent).fetch_one(&mut *tx).await?;
         if row.get::<i64,_>("revision") as u64!=expected {return Err(anyhow!("Agent revision changed"));}
-        let mut metadata=self.unseal(&row.get::<Vec<u8>,_>("metadata"))?;
+        let mut metadata=self.unseal_agent(&row.get::<Vec<u8>,_>("metadata"))?;
         metadata["ability_permissions"]=abilities.clone();metadata["tool_permissions"]=tools.clone();
         sqlx::query("UPDATE agents SET metadata=?,revision=revision+1,updated_at=strftime('%s','now') WHERE id=?")
-            .bind(self.seal(&metadata)?).bind(agent).execute(&mut *tx).await?;
+            .bind(self.seal_agent(&metadata)?).bind(agent).execute(&mut *tx).await?;
         let receipt=serde_json::json!({"agent_id":agent,"actor_id":self.current_user_id(),"revision":expected+1});
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)").bind(format!("agent:{agent}:ability_policy_audit:{}",expected+1))
-            .bind(self.seal(&receipt)?).execute(&mut *tx).await?;tx.commit().await?;
+            .bind(self.seal_agent(&receipt)?).execute(&mut *tx).await?;tx.commit().await?;
         Ok(serde_json::json!({"revision":expected+1,"ability_permissions":abilities,"tool_permissions":tools}))
     }
     pub async fn agent_tool_permissions(&self, agent_id: &str) -> Result<Value> {
@@ -295,7 +296,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         let row = sqlx::query("SELECT metadata,revision FROM agents WHERE id=?")
             .bind(agent_id).fetch_optional(view.agent_pool).await?
             .ok_or_else(|| anyhow!("Agent not found"))?;
-        let metadata = self.unseal(&row.get::<Vec<u8>,_>("metadata"))?;
+        let metadata = self.unseal_agent(&row.get::<Vec<u8>,_>("metadata"))?;
         Ok(serde_json::json!({"agent_id":agent_id,
             "revision":row.get::<i64,_>("revision"),
             "tool_permissions":metadata.get("tool_permissions")
@@ -314,14 +315,14 @@ impl<C: RecordCodec> Repository<'_, C> {
         if row.get::<i64,_>("revision") as u64 != expected_revision {
             return Err(anyhow!("Agent revision changed"));
         }
-        let mut metadata = self.unseal(&row.get::<Vec<u8>,_>("metadata"))?;
+        let mut metadata = self.unseal_agent(&row.get::<Vec<u8>,_>("metadata"))?;
         if !metadata.is_object() {
             return Err(anyhow!("Invalid agent metadata"));
         }
         metadata["tool_permissions"] = serde_json::to_value(&permissions)?;
         let updated = sqlx::query("UPDATE agents SET metadata=?,revision=revision+1,
             updated_at=strftime('%s','now') WHERE id=? AND revision=?")
-            .bind(self.seal(&metadata)?).bind(agent_id).bind(expected_revision as i64)
+            .bind(self.seal_agent(&metadata)?).bind(agent_id).bind(expected_revision as i64)
             .execute(&mut *tx).await?;
         if updated.rows_affected() != 1 {
             return Err(anyhow!("Agent revision changed"));
@@ -337,7 +338,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         let row=sqlx::query("SELECT metadata,revision FROM agents WHERE id=?")
             .bind(agent_id).fetch_optional(view.agent_pool).await?
             .ok_or_else(||anyhow!("Agent not found"))?;
-        let metadata=self.unseal(&row.get::<Vec<u8>,_>("metadata"))?;
+        let metadata=self.unseal_agent(&row.get::<Vec<u8>,_>("metadata"))?;
         Ok(serde_json::json!({"agent_id":agent_id,
             "revision":row.get::<i64,_>("revision"),
             "ability_permissions":metadata.get("ability_permissions")
@@ -356,12 +357,12 @@ impl<C: RecordCodec> Repository<'_, C> {
         if row.get::<i64,_>("revision") as u64!=expected_revision {
             return Err(anyhow!("Agent revision changed"));
         }
-        let mut metadata=self.unseal(&row.get::<Vec<u8>,_>("metadata"))?;
+        let mut metadata=self.unseal_agent(&row.get::<Vec<u8>,_>("metadata"))?;
         if !metadata.is_object() {return Err(anyhow!("Invalid agent metadata"));}
         metadata["ability_permissions"]=serde_json::to_value(&permissions)?;
         let updated=sqlx::query("UPDATE agents SET metadata=?,revision=revision+1,
             updated_at=strftime('%s','now') WHERE id=? AND revision=?")
-            .bind(self.seal(&metadata)?).bind(agent_id).bind(expected_revision as i64)
+            .bind(self.seal_agent(&metadata)?).bind(agent_id).bind(expected_revision as i64)
             .execute(&mut *tx).await?;
         if updated.rows_affected()!=1 {return Err(anyhow!("Agent revision changed"));}
         tx.commit().await?;
@@ -376,7 +377,7 @@ impl<C: RecordCodec> Repository<'_, C> {
         let row=sqlx::query("SELECT metadata,revision FROM agents WHERE id=?")
             .bind(agent_id).fetch_optional(view.agent_pool).await?
             .ok_or_else(||anyhow!("Agent not found"))?;
-        let metadata=self.unseal(&row.get::<Vec<u8>,_>("metadata"))?;
+        let metadata=self.unseal_agent(&row.get::<Vec<u8>,_>("metadata"))?;
         Ok(serde_json::json!({"agent_id":agent_id,
             "revision":row.get::<i64,_>("revision"),
             "tool_callers":metadata.get("tool_callers")
@@ -394,12 +395,12 @@ impl<C: RecordCodec> Repository<'_, C> {
         if row.get::<i64,_>("revision") as u64 != expected_revision {
             return Err(anyhow!("Agent revision changed"));
         }
-        let mut metadata=self.unseal(&row.get::<Vec<u8>,_>("metadata"))?;
+        let mut metadata=self.unseal_agent(&row.get::<Vec<u8>,_>("metadata"))?;
         if !metadata.is_object() {return Err(anyhow!("Invalid agent metadata"));}
         metadata["tool_callers"]=serde_json::to_value(&callers)?;
         let updated=sqlx::query("UPDATE agents SET metadata=?,revision=revision+1,
             updated_at=strftime('%s','now') WHERE id=? AND revision=?")
-            .bind(self.seal(&metadata)?).bind(agent_id).bind(expected_revision as i64)
+            .bind(self.seal_agent(&metadata)?).bind(agent_id).bind(expected_revision as i64)
             .execute(&mut *tx).await?;
         if updated.rows_affected()!=1 {return Err(anyhow!("Agent revision changed"));}
         tx.commit().await?;

@@ -39,7 +39,7 @@ pub async fn hydrate_context(&self,run:&mut Value)->Result<State> {let app=self;
  let mut state=scoped.context_assets(&sid,&agent,&requester).await?;
  if app.asset_legacy_seed(run,&state).await? {state=scoped.context_assets(&sid,&agent,&requester).await?;}
  let fresh=app.asset_catalog()?;
- let (_,_,visibility,session_state)=app.ability_controls(&sid).await?;
+ let (_,_,visibility,session_state)=app.ability_controls_for(&sid,&requester).await?;
  let changed=webagent_context::assets::hydrate_selectors(run,&state,X::tool_marker,|name,loaded|fresh.tool_abilities(name,&visibility,&session_state,loaded))?;
  if changed {app.save(run).await?;}
  Ok(state)
@@ -48,7 +48,7 @@ pub async fn context_fingerprint(&self,sid:&str,agent_id:&str,loaded:&Value,sele
  skills:&Value,optimization:&Value,requester:&str)->Result<String> {let app=self;
  let fresh=app.asset_catalog()?;
  let access=app.chat.live_access(app.store.records(),requester,sid,agent_id).await?;
- let (policy,mode_revision,visibility,state)=app.ability_controls(sid).await?;
+ let (policy,mode_revision,visibility,state)=app.ability_controls_for(sid,requester).await?;
  let mode=app.session_mode(sid).await?;
  let scoped=app.store.for_agent(agent_id).await?;
  let ledger=scoped.context_assets(sid,agent_id,requester).await?;

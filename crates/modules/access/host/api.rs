@@ -23,6 +23,13 @@ pub(crate) async fn administrator(app: &App, identity: &Value) -> Result<(), Api
         .map_err(|_| ApiError(StatusCode::FORBIDDEN, "Administrator access required".into()))?;
     Ok(())
 }
+async fn agent_operator(app:&App,identity:&Value,agent:&str)->Result<(),ApiError> {
+    if !app.store.agent_authority(identity["_user_id"].as_str().unwrap_or(""),agent).await
+        .is_ok_and(|rights|rights["can_manage"]==true) {
+        return Err(ApiError(StatusCode::NOT_FOUND,"Agent not found".into()));
+    }
+    Ok(())
+}
 /// Called while holding App.gate after an access mutation.
 pub(crate) async fn quiesce_user(app: &App, user_id: &str, agent_filter: Option<&str>) -> Result<(), ApiError> {
     let mut caller = app.clone();
@@ -117,13 +124,14 @@ pub(crate) async fn quiesce_agent(app: &App, agent_id: &str) -> Result<(), ApiEr
     if let Some(error)=closure_error {return Err(error);}
     Ok(())
 }
-async fn quiesce_tier(app: &App, tier_id: &str) -> Result<(), ApiError> {
-    let mut closure_error=None;
-    for user_id in app.store.access_repository().tier_user_ids(tier_id).await? {
-        if let Err(error)=quiesce_user(app,&user_id,None).await {closure_error=Some(error);}
-    }
-    if let Some(error)=closure_error {return Err(error);}
-    Ok(())
+async fn quiesce_tier(app:&App,tier_id:&str)->Result<(),ApiError> {
+    let policy=app.store.read_access_policy()?;let order=crate::access::account_ladder::order(&policy)?;
+    let index=order.iter().position(|id|id==tier_id).ok_or_else(||invalid("Tier not found"))?;
+    let mut error=None;
+    for tier in &order[index..] {for user in app.store.access_repository().tier_user_ids(tier).await? {
+        if let Err(failure)=quiesce_user(app,&user,None).await {error=Some(failure);}
+    }}
+    if let Some(error)=error{return Err(error);}Ok(())
 }
 
 #[derive(Deserialize)]
@@ -176,11 +184,34 @@ async fn change_account(
 }
 async fn tiers(State(app): State<App>, Extension(identity): Extension<Value>) -> Api {
     administrator(&app, &identity).await?;
-    Ok(Json(json!({"tiers":app.store.entitlement_tiers().await?})))
+    let policy=app.store.read_access_policy()?;
+    let mut tiers=Vec::new();for tier in app.store.entitlement_tiers().await? {
+        let mut value=serde_json::to_value(&tier).map_err(anyhow::Error::from)?;
+        value["name"]=policy["tier_names"][&tier.id].as_str().map(|v|json!(v)).unwrap_or_else(||json!(tier.id));tiers.push(value);
+    }
+    Ok(Json(json!({"tiers":tiers,"order":crate::access::account_ladder::order(&policy)?,"revision":policy["revision"]})))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TierChange { expected_revision: u64, tier: Tier }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TierOrder {expected_revision:u64,order:Vec<String>,names:std::collections::BTreeMap<String,String>,#[serde(default)]confirm_expansion:bool}
+async fn tier_order(State(app):State<App>,Extension(identity):Extension<Value>,Json(body):Json<TierOrder>)->Api {
+    administrator(&app,&identity).await?;let _guard=app.gate.lock().await;
+    {
+        let _lock=app.store.access_repository().policy_lock()?;let mut policy=app.store.read_access_policy()?;
+        if policy["revision"].as_u64()!=Some(body.expected_revision){return Err(stale("Account levels changed"));}
+        let before=crate::access::account_ladder::order(&policy)?;
+        if before!=body.order&&!body.confirm_expansion{return Err(stale("Preview and confirm account-level reordering"));}
+        if body.names.len()>128||body.names.iter().any(|(id,name)|policy["tiers"].get(id).is_none()||name.trim().is_empty()||name.len()>100||name.chars().any(char::is_control)){return Err(invalid("Invalid account level names"));}
+        policy["tier_order"]=json!(body.order);crate::access::account_ladder::order(&policy).map_err(|_|invalid("Invalid account ladder"))?;
+        policy["tier_names"]=json!(body.names);policy["revision"]=json!(body.expected_revision.checked_add(1).ok_or_else(||invalid("Policy revision overflow"))?);
+        app.store.access_repository().write_access_policy(&policy)?;
+    }
+    for user in app.store.all_user_ids().await?{quiesce_user(&app,&user,None).await?;}
+    Ok(Json(json!({"saved":true})))
+}
 async fn change_tier(
     State(app): State<App>, Extension(identity): Extension<Value>,
     Path(id): Path<String>, Json(body): Json<TierChange>,
@@ -210,6 +241,7 @@ async fn membership(
     Path((user_id, agent_id)): Path<(String, String)>,
 ) -> Api {
     administrator(&app, &identity).await?;
+    agent_operator(&app,&identity,&agent_id).await?;
     let value = app.store.agent_membership(&user_id, &agent_id).await
         .map_err(|_| invalid("Invalid membership identity"))?;
     Ok(Json(json!({"membership":value})))
@@ -224,6 +256,7 @@ async fn change_membership(
     Json(body): Json<MembershipChange>,
 ) -> Api {
     administrator(&app, &identity).await?;
+    agent_operator(&app,&identity,&agent_id).await?;
     let _guard = app.gate.lock().await;
     // LEGACY-MEMBERSHIP: installation oversight uses the same owner and revision checks as tenant APIs.
     let value = app.store.assign_agent_membership(identity["_user_id"].as_str().unwrap_or(""),
@@ -242,6 +275,7 @@ async fn agent_tool_permissions(
     State(app): State<App>, Extension(identity): Extension<Value>, Path(id): Path<String>,
 ) -> Api {
     administrator(&app, &identity).await?;
+    agent_operator(&app,&identity,&id).await?;
     let value = app.store.agent_tool_permissions(&id).await
         .map_err(|_| invalid("Agent permissions unavailable"))?;
     Ok(Json(value))
@@ -251,6 +285,7 @@ async fn change_agent_tool_permissions(
     Path(id): Path<String>, Json(body): Json<ToolPermissionsChange>,
 ) -> Api {
     administrator(&app, &identity).await?;
+    agent_operator(&app,&identity,&id).await?;
     let _guard = app.gate.lock().await;
     let value = app.store.set_agent_tool_permissions(&id, body.expected_revision,
         body.tool_permissions).await
@@ -268,6 +303,7 @@ async fn agent_tool_callers(
     State(app): State<App>, Extension(identity): Extension<Value>, Path(id): Path<String>,
 ) -> Api {
     administrator(&app, &identity).await?;
+    agent_operator(&app,&identity,&id).await?;
     let value = app.store.agent_tool_callers(&id).await
         .map_err(|_| invalid("Agent caller restrictions unavailable"))?;
     Ok(Json(value))
@@ -277,6 +313,7 @@ async fn change_agent_tool_callers(
     Path(id): Path<String>, Json(body): Json<ToolCallersChange>,
 ) -> Api {
     administrator(&app, &identity).await?;
+    agent_operator(&app,&identity,&id).await?;
     let _guard = app.gate.lock().await;
     let value = app.store.set_agent_tool_callers(&id, body.expected_revision,
         body.tool_callers).await
@@ -294,6 +331,7 @@ async fn agent_ability_permissions(
     State(app): State<App>, Extension(identity): Extension<Value>, Path(id): Path<String>,
 ) -> Api {
     administrator(&app, &identity).await?;
+    agent_operator(&app,&identity,&id).await?;
     let value = app.store.agent_ability_permissions(&id).await
         .map_err(|_| invalid("Agent ability permissions unavailable"))?;
     Ok(Json(value))
@@ -303,6 +341,7 @@ async fn change_agent_ability_permissions(
     Path(id): Path<String>, Json(body): Json<AbilityPermissionsChange>,
 ) -> Api {
     administrator(&app, &identity).await?;
+    agent_operator(&app,&identity,&id).await?;
     let _guard = app.gate.lock().await;
     let value = app.store.set_agent_ability_permissions(&id, body.expected_revision,
         body.ability_permissions).await
@@ -329,6 +368,7 @@ async fn agent_status(
     State(app): State<App>, Extension(identity): Extension<Value>, Path(id): Path<String>,
 ) -> Api {
     administrator(&app, &identity).await?;
+    agent_operator(&app,&identity,&id).await?;
     let status = app.store.agent_status(&id).await
         .map_err(|_| invalid("Agent status unavailable"))?;
     Ok(Json(status))
@@ -338,6 +378,7 @@ async fn change_agent_status(
     Path(id): Path<String>, Json(body): Json<AgentStatusChange>,
 ) -> Api {
     administrator(&app, &identity).await?;
+    agent_operator(&app,&identity,&id).await?;
     if !matches!(body.status.as_str(), "active" | "disabled") {
         return Err(invalid("Agent status must be active or disabled"));
     }
@@ -398,6 +439,7 @@ pub fn router() -> Router<App> {
         .route("/accounts/{id}/sessions",get(account_sessions))
         .route("/accounts/{id}/sessions/{session_id}",axum::routing::delete(revoke_account_session))
         .route("/tiers", get(tiers))
+        .route("/tiers/order",axum::routing::put(tier_order))
         .route("/tiers/{id}", axum::routing::put(change_tier))
         .route("/agents/{id}/tool-callers",
             get(agent_tool_callers).put(change_agent_tool_callers))

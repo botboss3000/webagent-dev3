@@ -42,7 +42,10 @@ impl<C:RuntimeStorage> Repository<'_,C> {
     pub(crate) async fn account_by_id(&self,user:&str)->Result<Option<Value>> {self.access().account_by_id(user).await}
     pub(crate) async fn entitlement_tier(&self,id:&str)->Result<Option<webagent_access::Tier>> {self.access().entitlement_tier(id).await}
     pub(crate) async fn entitlement_tiers(&self)->Result<Vec<webagent_access::Tier>> {self.access().entitlement_tiers().await}
-    pub(crate) async fn agent_authority(&self,user:&str,agent:&str)->Result<Value> {self.access().agent_authority(user,agent).await}
+    pub(crate) async fn agent_authority(&self,user:&str,agent:&str)->Result<Value> {
+        let pool=self.storage.agent_pool(agent).await?;
+        AccessRepository::new(self.root,self.app_pool,&pool,agent,self.actor,self.storage).agent_authority(user,agent).await
+    }
 }
 
 impl<C:RuntimeStorage> Repository<'_,C> {

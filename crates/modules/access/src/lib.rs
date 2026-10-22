@@ -357,3 +357,10 @@ mod catalog_authority_tests {
         assert_eq!(policy.validate_published_entries(|_|false).unwrap_err().to_string(),"Catalog entry not published");
     }
 }
+
+#[cfg(test)]
+mod ladder_tests;
+
+pub mod membership;
+
+pub mod account_ladder;

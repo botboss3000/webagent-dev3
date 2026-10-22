@@ -189,12 +189,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_,C> {
     pub async fn model_catalog(&self) -> Result<Catalog> {
         use sqlx::Row;
         let mut connection = self.app_pool.acquire().await?;
-        let row = sqlx::query("SELECT value FROM docs WHERE key=?")
-            .bind(CATALOG_KEY).fetch_optional(&mut *connection).await?;
-        let mut catalog: Catalog = match row {
-            Some(row) => serde_json::from_value(self.unseal(&row.get::<Vec<u8>, _>("value"))?)?,
-            None => Catalog::default(),
-        };
+        let mut catalog=self.read_catalog_connection(&mut connection).await?;
         catalog.migrate_stored(&mut connection).await?;
         Ok(catalog)
     }
@@ -207,12 +202,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_,C> {
         let mut tx = self.app_pool.begin().await?;
         sqlx::query("UPDATE docs SET value=value WHERE key=?")
             .bind(CATALOG_KEY).execute(&mut *tx).await?;
-        let row = sqlx::query("SELECT value FROM docs WHERE key=?")
-            .bind(CATALOG_KEY).fetch_optional(&mut *tx).await?;
-        let mut previous: Catalog = match row {
-            Some(row) => serde_json::from_value(self.unseal(&row.get::<Vec<u8>, _>("value"))?)?,
-            None => Catalog::default(),
-        };
+        let mut previous=self.read_catalog_connection(&mut tx).await?;
         previous.migrate_stored(&mut tx).await?;
         if previous.revision != expected_revision || catalog.revision != expected_revision {
             bail!("Model catalog revision changed");
@@ -284,9 +274,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_,C> {
         saved.migrate_stored(&mut tx).await?;
         saved.revision = expected_revision.checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("Model catalog revision exhausted"))?;
-        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-            .bind(CATALOG_KEY).bind(self.seal(&serde_json::to_value(&saved)?)?)
-            .execute(&mut *tx).await?;
+        self.stage_catalog_connection(&mut tx,&saved).await?;
         tx.commit().await?;
         Ok(saved)
     }

@@ -12,14 +12,14 @@ export async function mountUsers(host){
       for(const account of rows){
         const row=el('tr'),name=el('td');name.append(el('div','members-user-name',account.profile?.display_name||account.username),el('div','members-user-sub',account.username));row.append(name);
         const tierCell=el('td'),select=el('select','ac-input ac-config-sel');select.setAttribute('aria-label','Tier for '+account.username);
-        for(const tier of tiers.tiers){const option=el('option','',tier.id);option.value=tier.id;select.append(option);}select.value=account.tier_id;select.disabled=account.user_id==='admin';tierCell.append(select);row.append(tierCell);
+        for(const tier of tiers.tiers){const option=el('option','',tier.name||tier.id);option.value=tier.id;select.append(option);}select.value=account.tier_id;select.disabled=account.user_id==='admin'||account.role==='guest';tierCell.append(select);row.append(tierCell);
         row.append(el('td','members-num',String(account.session_count??'—')),el('td','members-num',String(account.message_count??'—')),el('td','',account.profile?.last_login_at?new Date(account.profile.last_login_at*1000).toLocaleString():'—'),el('td','members-status',account.status));
         const actions=el('td','members-actions');row.append(actions);
         async function save(patch,control){control.disabled=true;status.textContent='Saving…';try{await request('/admin/access/accounts/'+encodeURIComponent(account.user_id),'PUT',{expected_revision:account.access_revision,status:account.status,role:account.role,tier_id:account.tier_id,...patch});await mountUsers(host);}catch(e){status.textContent=e.message;control.disabled=false;select.value=account.tier_id;}}
-        select.onchange=()=>save({tier_id:select.value},select);
+        select.onchange=()=>{const appoint=select.value==='operator'&&account.role!=='administrator';if(appoint&&!window.confirm('Appoint '+account.username+' as an App Administrator?')){select.value=account.tier_id;return;}save({tier_id:select.value,...(appoint?{role:'administrator'}:{})},select);};
         if(account.user_id!==me.user_id&&account.user_id!=='admin'){
           const access=button(account.status==='active'?'Restrict':'Authorize',()=>save({status:account.status==='active'?'suspended':'active'},access));actions.append(access);
-          if(account.role!=='guest'){const role=button(account.role==='administrator'?'Remove admin':'Make admin',()=>save({role:account.role==='administrator'?'user':'administrator'},role));actions.append(role);}
+          if(account.role!=='guest'){const role=button(account.role==='administrator'?'Remove admin':'Make admin',()=>{if(window.confirm('Change App Administrator appointment for '+account.username+'?'))save({role:account.role==='administrator'?'user':'administrator',tier_id:account.role==='administrator'?'basic':'operator'},role);});actions.append(role);}
         }
         const manage=button('Profile & sign-ins',()=>openAccountManager(account,host,status));actions.append(manage);
         tbody.append(row);

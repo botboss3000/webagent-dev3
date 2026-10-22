@@ -61,6 +61,7 @@ impl Fixture {
             CREATE TABLE agent_memberships(user_id TEXT,agent_id TEXT,value BLOB,PRIMARY KEY(user_id,agent_id));
             CREATE TABLE entitlement_tiers(tier_id TEXT PRIMARY KEY,revision INTEGER,value BLOB);").execute(&app).await.unwrap();
         sqlx::raw_sql("CREATE TABLE agents(id TEXT PRIMARY KEY,status TEXT,metadata BLOB,revision INTEGER,updated_at INTEGER);
+            CREATE TABLE agent_memberships(user_id TEXT,agent_id TEXT,value BLOB,PRIMARY KEY(user_id,agent_id));
             CREATE TABLE docs(key TEXT PRIMARY KEY,value BLOB);").execute(&agent).await.unwrap();
         let storage=Storage {app,agent,cipher:Aes256Gcm::new_from_slice(&[27;32]).unwrap(),nonce:Arc::new(AtomicU64::new(1)),reads:Arc::new(AtomicU64::new(0))};
         let f=Self {root,storage};let repo=f.repo();let access=repo.access();access.init_access_policy(None).unwrap();
@@ -76,7 +77,7 @@ impl Fixture {
         sqlx::query("INSERT INTO agents VALUES('shared_default','active',?,1,0)").bind(f.storage.seal(&json!({"owner_id":"admin"})).unwrap()).execute(&f.storage.agent).await.unwrap();
         for (id,relationship,administrator) in [("admin","owner",false),("alice","member",true)] {
             let value=json!({"user_id":id,"agent_id":"shared_default","relationship":relationship,"agent_administrator":administrator,"revision":1});
-            sqlx::query("INSERT INTO agent_memberships VALUES(?,'shared_default',?)").bind(id).bind(f.storage.seal(&value).unwrap()).execute(&f.storage.app).await.unwrap();
+            sqlx::query("INSERT INTO agent_memberships VALUES(?,'shared_default',?)").bind(id).bind(f.storage.seal(&value).unwrap()).execute(&f.storage.agent).await.unwrap();
         }
         f
     }

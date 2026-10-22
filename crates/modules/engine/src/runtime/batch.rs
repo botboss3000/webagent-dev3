@@ -74,7 +74,7 @@ pub async fn execute_parallel_batch(
     }
     let sid=run["session_id"].as_str().ok_or_else(||anyhow!("Missing session"))?.to_owned();
     let agent_id=run["agent_id"].as_str().unwrap_or("shared_default").to_owned();
-    let (policy,mode_revision,visibility,ability_state)=app.ability_controls(&sid).await?;
+    let (policy,mode_revision,visibility,ability_state)=app.ability_controls_for(&sid,run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id())).await?;
     let execution_mode=app.session_mode(&sid).await?;
     let execution_mode=if run["post_run_followup"]==true {
         json!({"mode":"read_only","execution_mode":"ask","revision":execution_mode["revision"]})

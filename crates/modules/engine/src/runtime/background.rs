@@ -37,7 +37,7 @@ pub async fn background_permitted(&self,task:&Value)->Result<bool> {let app=self
     if !app.chat.participation_allows_run(app.store.records(),&origin).await? {return Ok(false);}
     let access=app.chat.live_access(app.store.records(),origin["requester_user_id"].as_str().unwrap_or(app.store.current_user_id()),task["session_id"].as_str().unwrap_or(""),&agent).await?;
     if !access.admitted() {return Ok(false);}
-    let (policy,mode_revision,visibility,state)=app.ability_controls(sid).await?;
+    let (policy,mode_revision,visibility,state)=app.ability_controls_for(sid,origin["requester_user_id"].as_str().unwrap_or(app.store.current_user_id())).await?;
     let mode=app.session_mode(sid).await?;
     let name=task["name"].as_str().unwrap_or("");
     if !tool_execution::background_capable(name) {return Ok(false);}

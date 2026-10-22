@@ -7,7 +7,8 @@ use webagent_models::{storage::RuntimeStorage,model_selection};
 use crate::storage::RecordEffects;
 use std::{future::Future,sync::atomic::Ordering,time::Duration};
 pub fn process<C:RuntimeStorage+RecordEffects,A:ReviewAuthority<C>,P:Engine>(app: Runtime<C,A,P>, id: String) -> impl Future<Output=Result<()>>+Send+'static {
-    async move {
+    // A review embeds provider and authority futures; keep callers off that inline stack.
+    Box::pin(async move {
     let Some(mut record) = app.repository().claim_manager_review(&id).await? else {
         return Ok(());
     };
@@ -19,7 +20,7 @@ pub fn process<C:RuntimeStorage+RecordEffects,A:ReviewAuthority<C>,P:Engine>(app
         }
     };
     // Include credential refresh and authority reads in the operation deadline.
-    let result = tokio::time::timeout(Duration::from_secs(45), app.judge(&mut record))
+    let result = tokio::time::timeout(Duration::from_secs(45), Box::pin(app.judge(&mut record)))
         .await
         .unwrap_or_else(|_| Err(anyhow!("Manager operation timed out")));
     let _guard = app.gate.lock().await;
@@ -66,7 +67,7 @@ pub fn process<C:RuntimeStorage+RecordEffects,A:ReviewAuthority<C>,P:Engine>(app
         .finish_manager_review(&record, status, verdict)
         .await?;
     Ok(())
-}
+    })
 }
 
 pub async fn scheduler<C:RuntimeStorage+RecordEffects,A:ReviewAuthority<C>,P:Engine,U:OwnerSources<C,A,P>>(app: Runtime<C,A,P>,owners:U) {

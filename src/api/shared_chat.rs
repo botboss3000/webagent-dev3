@@ -165,25 +165,33 @@ async fn redeem(Extension(app): Extension<App>, Json(body): Json<Redeem>) -> Api
     announce(&app, &sid, user).await?;
     Ok(Json(json!({"session_id":sid})))
 }
-async fn join(Extension(app): Extension<App>, Path(sid): Path<String>) -> Api {
-    let _guard = app.gate.lock().await;
-    let user = shared_chat::actor(&app);
-    let dir = app
-        .store
-        .shared_directory(&sid)
-        .await?
-        .ok_or_else(no_access)?;
-    require_active_directory(&app, &dir).await?;
-    let agent = dir["agent_id"].as_str().unwrap();
-    if !app.store.live_access(user, agent).await?.agent_enabled
-        || !shared_chat::policy(&app.store, agent).await?.admin_join
-        || !shared_chat::staff(&app.store, user, agent).await?
-    {
-        return Err(no_access());
-    }
-    app.store.shared_join(&sid, user).await?;
-    announce(&app, &sid, user).await?;
+async fn join(Extension(app):Extension<App>,Path(sid):Path<String>)->Api {
+    let _guard=app.gate.lock().await;let user=shared_chat::actor(&app);
+    let rights=shared_chat::resolve(&app,&sid,user).await.map_err(|_|no_access())?;
+    if !shared_chat::staff(&app.store,user,&rights.agent_id).await? {return Err(no_access());}
+    let store=app.store.for_user(&rights.owner_id).await?;
+    store.operator_join(&sid,user).await?;
+    let profile=app.store.user_profile(user).await?.unwrap_or(json!({}));
+    store.publish_shared_join(&sid,user,profile["display_name"].as_str().unwrap_or("Agent Operator")).await?;
     Ok(Json(json!({"session_id":sid,"joined":true})))
+}
+async fn operator_reply(Extension(app):Extension<App>,Path(sid):Path<String>,Json(body):Json<Value>)->Api {
+    let _guard=app.gate.lock().await;let actor=shared_chat::actor(&app);
+    let rights=shared_chat::resolve(&app,&sid,actor).await.map_err(|_|no_access())?;
+    if !shared_chat::staff(&app.store,actor,&rights.agent_id).await? {return Err(no_access());}
+    if body.as_object().is_none_or(|o|o.keys().any(|k|!matches!(k.as_str(),"text"|"client_message_id"|"attachment_ids")))
+        || body["attachment_ids"].as_array().is_some_and(|a|!a.is_empty()) {return Err(bad("Operator replies support text only"));}
+    let text=body["text"].as_str().filter(|v|!v.trim().is_empty()&&v.len()<=65536).ok_or_else(||bad("Message text required"))?;
+    let request=super::required(&body,"client_message_id",128)?;
+    let store=app.store.for_user(&rights.owner_id).await?;
+    let session=store.get(&format!("session:{sid}")).await?.ok_or_else(no_access)?;
+    if session["conversation_privacy"]!="operator_reviewable" || session["operator_joined"][actor]!=true {return Err(no_access());}
+    let rid=format!("operator:{}",crate::digest(&json!([sid,actor,request])));
+    let receipt=format!("receipt:message:{sid}:{actor}:{request}");
+    let result=json!({"run_id":null,"operator_reply":true});
+    let docs=vec![(receipt,json!({"digest":crate::digest(&body),"result":result}))];
+    let value=store.admit_shared_message(docs,&sid,"human_message",&json!({"role":"user","content":text,"run_id":rid,"author_id":actor,"message_kind":"operator"})).await?;
+    Ok(Json(value))
 }
 async fn discover(Extension(app): Extension<App>, Path(agent): Path<String>) -> Api {
     let user = shared_chat::actor(&app);
@@ -195,15 +203,15 @@ async fn discover(Extension(app): Extension<App>, Path(agent): Path<String>) -> 
     }
     let mut sessions = vec![];
     for directory in app.store.shared_all_sessions().await? {
-        if directory["agent_id"] != agent || (!policy.admin_view && !policy.admin_join) {
+        if directory["agent_id"] != agent {
             continue;
         }
         let owner = directory["owner_id"].as_str().unwrap();
         let sid = directory["session_id"].as_str().unwrap();
         let store = app.store.for_user(owner).await?;
         if let Some(session) = store.get(&format!("session:{sid}")).await? {
-            if session["status"] != "active" { continue; }
-            sessions.push(json!({"id":sid,"title":session["title"],"agent_id":agent,"can_observe":policy.admin_view,"can_join":policy.admin_join}));
+            if session["status"] != "active" || session["conversation_privacy"]!="operator_reviewable" {continue;}
+            sessions.push(json!({"id":sid,"title":session["title"],"agent_id":agent,"can_observe":true,"can_join":true}));
         }
     }
     Ok(Json(json!({"sessions":sessions})))
@@ -319,6 +327,7 @@ pub fn router() -> Router<App> {
         )
         .route("/chat-invitations/redeem", post(redeem))
         .route("/sessions/{sid}/join", post(join))
+        .route("/sessions/{sid}/operator-replies",post(operator_reply))
         .route("/agents/{id}/shared-sessions", get(discover))
         .route("/sessions/{sid}/help", post(help).delete(cancel_help))
 }
@@ -339,7 +348,7 @@ mod tests {
             .unwrap();
         metadata["shared_chat"] = serde_json::to_value(policy).unwrap();
         sqlx::query("UPDATE agents SET metadata=?,revision=revision+1 WHERE id='shared_default'")
-            .bind(app.store.seal(&metadata).unwrap())
+            .bind(app.store.seal_agent(&metadata).unwrap())
             .execute(&app.store.agent_pool)
             .await
             .unwrap();
@@ -538,48 +547,20 @@ mod tests {
         assert!(shared_chat::resolve(&app, "staff-chat", "admin")
             .await
             .is_err());
-        set_policy(
-            &app,
-            shared_chat::SharedChatPolicy {
-                admin_view: true,
-                ..Default::default()
-            },
-        )
-        .await;
-        assert_eq!(
-            shared_chat::resolve(&app, "staff-chat", "admin")
-                .await
-                .unwrap()
-                .kind,
-            shared_chat::AccessKind::Observer
-        );
-        set_policy(&app, shared_chat::SharedChatPolicy::default()).await;
-        assert!(shared_chat::resolve(&app, "staff-chat", "admin")
-            .await
-            .is_err());
-        set_policy(
-            &app,
-            shared_chat::SharedChatPolicy {
-                admin_join: true,
-                ..Default::default()
-            },
-        )
-        .await;
-        assert!(shared_chat::resolve(&app, "staff-chat", "admin")
-            .await
-            .is_err());
-        let mut scoped = app.clone();
-        scoped.store = app.store.for_user("admin").await.unwrap();
-        assert!(join(Extension(scoped), Path("staff-chat".into()))
-            .await
-            .is_ok());
-        assert_eq!(
-            shared_chat::resolve(&app, "staff-chat", "admin")
-                .await
-                .unwrap()
-                .kind,
-            shared_chat::AccessKind::Participant
-        );
+        set_policy(&app,shared_chat::SharedChatPolicy{admin_view:true,admin_join:true,..Default::default()}).await;
+        // Old global switches cannot change the pinned privacy of an existing conversation.
+        assert!(shared_chat::resolve(&app,"staff-chat","admin").await.is_err());
+        owner.put("session:staff-chat",&json!({"id":"staff-chat","agent_id":"shared_default","status":"active","conversation_privacy":"operator_reviewable"})).await.unwrap();
+        assert_eq!(shared_chat::resolve(&app,"staff-chat","admin").await.unwrap().kind,shared_chat::AccessKind::Observer);
+        let scoped=app.clone();
+        assert!(join(Extension(scoped.clone()),Path("staff-chat".into())).await.is_ok());
+        // Joining permits only the dedicated human-reply route, never participant controls.
+        assert_eq!(shared_chat::resolve(&app,"staff-chat","admin").await.unwrap().kind,shared_chat::AccessKind::Observer);
+        let reply=json!({"text":"Operator response","client_message_id":"operator-once"});
+        operator_reply(Extension(scoped.clone()),Path("staff-chat".into()),Json(reply.clone())).await.unwrap();
+        operator_reply(Extension(scoped),Path("staff-chat".into()),Json(reply)).await.unwrap();
+        let (messages,_)=owner.chat_snapshot("staff-chat").await.unwrap();
+        assert_eq!(messages.iter().filter(|m|m["content"]=="Operator response").count(),1);
         let bob = active_user(&app, "shared-revoked").await;
         app.store.shared_join("staff-chat", &bob).await.unwrap();
         assert!(shared_chat::resolve(&app, "staff-chat", &bob).await.is_ok());
@@ -821,7 +802,7 @@ mod tests {
         owner
             .put(
                 "session:observed-participation",
-                &json!({"id":"observed-participation","agent_id":"shared_default"}),
+                &json!({"id":"observed-participation","agent_id":"shared_default","status":"active","conversation_privacy":"operator_reviewable"}),
             )
             .await
             .unwrap();

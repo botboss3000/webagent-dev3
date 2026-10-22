@@ -39,7 +39,8 @@ pub(crate) async fn open_agent_pool(root:&Path, agent_id:&str) -> Result<SqliteP
     if !access::valid_agent_id(agent_id) { bail!("Invalid agent identity"); }
     let path = root.join("agent_data").join(agent_id).join(format!("{agent_id}.db"));
     let pool = open_pool(&path,false,false).await?;
-    sqlx::raw_sql("CREATE TABLE IF NOT EXISTS agents(
+    sqlx::raw_sql("CREATE TABLE IF NOT EXISTS agent_memberships(user_id TEXT NOT NULL,agent_id TEXT NOT NULL,value BLOB NOT NULL,PRIMARY KEY(user_id,agent_id));
+        CREATE TABLE IF NOT EXISTS agents(
         id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
         provider TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL,
         metadata BLOB NOT NULL, revision INTEGER NOT NULL,
@@ -237,7 +238,10 @@ impl Store {
             let pool=open_agent_pool(root,id).await?;
             let result=async {
                 if marker.is_none() { copy_snapshot(&pool,source).await?; }
-                validate_destination(self,&pool,id,owner).await
+                if marker.is_some() {
+                    let scoped=self.for_agent(id).await?;
+                    validate_destination(&scoped,&pool,id,owner).await
+                }else{validate_destination(self,&pool,id,owner).await}
             }.await;
             pool.close().await;
             result?;
@@ -266,7 +270,8 @@ impl Store {
                 "SELECT owner_id FROM agent_directory WHERE id=?")
                 .bind(&id).fetch_one(&self.app_pool).await?;
             let pool=open_agent_pool(root,&id).await?;
-            let result=validate_destination(self,&pool,&id,&owner).await;
+            let scoped=self.for_agent(&id).await?;
+            let result=validate_destination(&scoped,&pool,&id,&owner).await;
             pool.close().await;
             result?;
         }
@@ -287,7 +292,10 @@ impl Store {
             bail!("Invalid agent registration");
         }
         let pool=open_agent_pool(&self.root,id).await?;
-        let verified=validate_destination(self,&pool,id,owner).await;
+        let registered:Option<String>=sqlx::query_scalar("SELECT owner_id FROM agent_directory WHERE id=?").bind(id).fetch_optional(&self.app_pool).await?;
+        if registered.as_deref().is_some_and(|value|value!=owner) {bail!("Agent owner conflict");}
+        let scoped=if registered.is_some(){Some(self.for_agent(id).await?)}else{None};
+        let verified=validate_destination(scoped.as_ref().unwrap_or(self),&pool,id,owner).await;
         pool.close().await;
         verified?;
         if self.account_by_id(owner).await?.is_none() {
@@ -318,7 +326,13 @@ mod tests {
         let source=snapshot(&store.agent_pool,"agent_1").await.unwrap().unwrap();
         store.migrate_agent_storage(dir.path()).await.unwrap();
         let destination=open_agent_pool(dir.path(),"agent_1").await.unwrap();
-        assert_eq!(snapshot(&destination,"agent_1").await.unwrap().unwrap(),source);
+        let migrated=snapshot(&destination,"agent_1").await.unwrap().unwrap();
+        let scoped=store.for_agent("agent_1").await.unwrap();
+        assert_eq!(scoped.unseal_agent(&migrated.agent.metadata).unwrap(),store.unseal(&source.agent.metadata).unwrap());
+        assert_eq!(migrated.agent.model,source.agent.model);
+        assert_eq!(migrated.agent.revision,source.agent.revision);
+        assert_eq!(migrated.connections,source.connections);assert_eq!(migrated.prompts,source.prompts);
+        assert_eq!(snapshot(&store.agent_pool,"agent_1").await.unwrap().unwrap(),source);
         sqlx::query("UPDATE agents SET model='gpt-6-sol',revision=revision+1 WHERE id='agent_1'")
             .execute(&destination).await.unwrap();
         destination.close().await;

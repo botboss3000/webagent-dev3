@@ -5,6 +5,7 @@ use sqlx::{Sqlite,SqlitePool,Transaction};
 use std::{future::Future,path::Path};
 pub trait RecordEffects:Sync {
     fn unseal(&self,bytes:&[u8])->Result<Value>;
+    fn unseal_agent(&self,_agent:&str,bytes:&[u8])->Result<Value> {self.unseal(bytes)}
     fn encode_user_record(&self,value:&Value)->Result<Vec<u8>>;
     fn resolved_prompts(&self,root:&Path)->Result<Value>;
     fn prompt_defaults(&self)->Result<Vec<u8>>;

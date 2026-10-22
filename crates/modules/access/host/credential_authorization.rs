@@ -65,7 +65,7 @@ mod tests {
         access_policy["tiers"]["operator"]["ability_permissions"]["base"]=json!("auto");
         app.store.write_access_policy(&access_policy).unwrap();
         let levels=app.store.capability_levels("shared_default").await.unwrap();
-        let mut level=levels.levels["administrator"].clone();
+        let mut level=levels.levels["operator"].clone();
         level.ability_permissions.insert("base".into(),crate::access::Permission::Auto);
         app.store.save_capability_level("shared_default",level,levels.revision).await.unwrap();
         let mut policy = app.store.get("policy").await.unwrap().unwrap();

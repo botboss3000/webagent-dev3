@@ -2,13 +2,14 @@
 use super::*;
 pub(crate) async fn overview(State(app): State<App>) -> Api {
     // Installation status must not reveal another owner\'s device authorization code.
-    let login=app.login.read().await.clone().filter(|v|v["connection_id"].is_null()).map(|v|json!({"verification_url":v["verification_url"],"user_code":v["user_code"],"status":v["status"]}));
+    let operator=app.store.agent_authority(app.store.current_user_id(),app.store.current_agent_id()).await.is_ok_and(|r|r["can_manage"]==true);
+    let login=app.login.read().await.clone().filter(|_|operator).filter(|v|v["connection_id"].is_null()).map(|v|json!({"verification_url":v["verification_url"],"user_code":v["user_code"],"status":v["status"]}));
     let mut runs = app.store.active_runs().await?;
     runs.extend(app.store.recent_runs(None).await?);
     let runs = runs.iter().map(public_run).collect::<Vec<_>>();
     Ok(Json(
-        json!({"shutoff":app.shutoff().await?,"provider":{"connected":app.store.get("provider_tokens").await?.is_some(),"login":login},
-        "model":app.store.agent_model().await?["model"],"policy":app.store.get("policy").await?,"runs":runs}),
+        json!({"shutoff":app.shutoff().await?,"provider":{"connected":if operator {Some(app.store.get("provider_tokens").await?.is_some())}else{None},"login":login},
+        "model":if operator {app.store.agent_model().await?["model"].clone()}else{Value::Null},"policy":app.store.get("policy").await?,"runs":runs}),
     ))
 }
 pub(crate) fn requested_selection(body: &Value) -> std::result::Result<provider::ProviderSelection, ApiError> {
@@ -17,6 +18,7 @@ pub(crate) fn requested_selection(body: &Value) -> std::result::Result<provider:
         .map_err(|_| bad("Invalid model or unsupported provider"))
 }
 pub(crate) async fn settings(State(app): State<App>, Json(body): Json<Value>) -> Api {
+    require_agent_operator(&app,app.store.current_agent_id()).await?;
     let selection = requested_selection(&body)?;
     let _guard = app.gate.lock().await;
     let value = selection.value();
@@ -36,6 +38,7 @@ pub(crate) async fn admin_agent_view(app:&App,id:&str) -> std::result::Result<Ap
 }
 // Model-only persisted settings retain the original subscription default.
 pub(crate) async fn agent_model(State(app): State<App>, Path(id): Path<String>) -> Api {
+    require_agent_operator(&app,&id).await?;
     let app=admin_agent_view(&app,&id).await?;
     let mut value = app.selection().await?.value();
     value["id"] = json!(id);
@@ -46,6 +49,7 @@ pub(crate) async fn agent_model_set(
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Api {
+    require_agent_operator(&app,&id).await?;
     let app=admin_agent_view(&app,&id).await?;
     let selection = requested_selection(&body)?;
     let _guard = app.gate.lock().await;
@@ -108,7 +112,7 @@ pub(crate) async fn ability_catalog(State(app): State<App>) -> Api {
         .get("policy")
         .await?
         .unwrap_or_else(policy_default);
-    let visibility = agent_abilities(&app).await?;
+    let visibility = Value::Null;
     Ok(Json(json!({"catalog_version":app.abilities.version(),
         "visibility_revision":visibility["revision"],
         "abilities":app.abilities.catalog_with(&policy, &visibility, &Value::Null)})))
@@ -345,12 +349,14 @@ mod policy_tests {
 
 // Tenant connections are the sole credential authority after the catalog migration.
 // Retire the global route so installation oversight cannot bypass connection ownership.
-pub(crate) async fn provider_start(State(_app): State<App>) -> Api {
+pub(crate) async fn provider_start(State(app): State<App>) -> Api {
+    require_agent_operator(&app,"shared_default").await?;
     Err(conflict("Use the selected agent's Models page to authorize a connection"))
 }
 /// A device authorization belongs to one connection. Never copy subscription tokens.
 pub(crate) async fn provider_start_for(app:App,credential_ref:String,connection_id:Option<String>)->Api { app.models_runtime().provider_start_for(credential_ref,connection_id).await.map_err(Into::into) }
-pub(crate) async fn provider_logout(State(_app): State<App>) -> Api {
+pub(crate) async fn provider_logout(State(app): State<App>) -> Api {
+    require_agent_operator(&app,"shared_default").await?;
     // Revocation belongs to the owner-scoped catalog, never a global token deletion.
     Err(conflict("Use the selected agent's Models page to revoke a connection"))
 }
@@ -369,4 +375,11 @@ mod legacy_credential_tests {
         assert_eq!(app.store.get("provider_tokens").await.unwrap(),before);
         assert_eq!(app.login.read().await.as_ref().unwrap()["connection_id"],"tenant-connection");
     }
+}
+
+async fn require_agent_operator(app:&App,agent:&str)->Result<(),ApiError> {
+    if !app.store.agent_authority(app.store.current_user_id(),agent).await.is_ok_and(|r|r["can_manage"]==true) {
+        return Err(ApiError(StatusCode::NOT_FOUND,"Agent not found".into()));
+    }
+    Ok(())
 }

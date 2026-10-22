@@ -10,6 +10,10 @@ pub(crate) mod own_skills;
 pub(crate) mod base_task;
 mod activity;
 mod execution_metadata;
+mod agent_memberships;
+mod account_levels;
+mod agent_encryption;
+mod conversation_privacy;
 mod naming;
 mod background_tasks;
 mod background_followup;
@@ -112,6 +116,9 @@ pub struct Store {
     user_states: Arc<RwLock<HashMap<String, UserState>>>,
     agent_states: Arc<RwLock<HashMap<String, SqlitePool>>>,
     cipher: Aes256Gcm,
+    // Store views share immutable expanded keys instead of copying large key schedules into futures.
+    agent_cipher: Option<Arc<Aes256Gcm>>,
+    agent_keys: Arc<std::sync::RwLock<HashMap<String,Arc<Aes256Gcm>>>>,
     cache: Arc<Mutex<Cache>>,
     context_cache: Arc<Mutex<ContextCache>>,
     context_gate: Arc<RwLock<()>>,
@@ -318,7 +325,7 @@ impl Store {
         let shared_agent_pool = open_pool(&root.join("agent_data/shared_default/shared_default.db"),false,false).await?;
         let mut agent_states = HashMap::new();
         agent_states.insert("shared_default".to_owned(),shared_agent_pool.clone());
-        let store = Self {
+        let mut store = Self {
             app_pool: open_pool(&root.join("db/app.db"), true, false).await?,
             pool: admin_state.pool.clone(),
             agent_pool: shared_agent_pool,
@@ -329,6 +336,8 @@ impl Store {
             agent_states: Arc::new(RwLock::new(agent_states)),
             cipher: Aes256Gcm::new_from_slice(&key)
                 .map_err(|_| anyhow!("Invalid encryption key"))?,
+            agent_cipher: None,
+            agent_keys: Arc::new(std::sync::RwLock::new(HashMap::new())),
             cache: admin_state.cache,
             context_cache: admin_state.context_cache,
             context_gate: admin_state.context_gate,
@@ -344,13 +353,25 @@ impl Store {
         )
         .execute(&store.agent_pool)
         .await?;
+        let existing_key_table:Option<String>=sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_key_envelopes'")
+            .fetch_optional(&store.agent_pool).await?;
+        // Reopen must load the retained key before legacy/default readers encounter encrypted records.
+        if existing_key_table.is_some() {store.initialize_agent_encryption().await?;}
         store.migrate_legacy(root).await?;
         store.migrate_session_metadata().await?;
         store.init_accounts().await?;
         store.init_access_policy().await?;
         store.init_policy_tiers().await?;
+        store.access_repository().ensure_account_ladder()?;
+        store.reconcile_guest_account_levels().await?;
         store.init_agent_tables().await?;
         store.ensure_default_agent_directory().await?;
+        store.initialize_agent_encryption().await?;
+        // Complete the bounded authority conversion before either API or loop can serve work.
+        for agent in store.agent_ids().await? {let view=store.for_agent(&agent).await?;view.import_agent_memberships().await?;}
+        store.pin_conversation_privacy().await?;
+        for user in store.all_user_ids().await? {store.for_user(&user).await?;}
+        store.models_repository().ensure_agent_roster_storage().await?;
         Ok(store)
     }
     /// Select an existing account database while sharing cache budgets and retaining active invalidation gates.
@@ -382,9 +403,10 @@ impl Store {
             agent_pool:self.agent_pool.clone(),root:self.root.clone(),
             user_id:user_id.to_owned(),agent_id:self.agent_id.clone(),
             user_states:self.user_states.clone(),agent_states:self.agent_states.clone(),
-            cipher:self.cipher.clone(),cache:state.cache,
+            cipher:self.cipher.clone(),agent_cipher:self.agent_cipher.clone(),agent_keys:self.agent_keys.clone(),cache:state.cache,
             context_cache:state.context_cache,context_gate:state.context_gate};
         handle.migrate_session_metadata().await?;
+        handle.pin_conversation_privacy().await?;
         Ok(handle)
     }
     /// Select a registered agent database without changing the canonical conversation user authority.
@@ -406,13 +428,15 @@ impl Store {
                 states.insert(agent_id.to_owned(),pool.clone()); pool
             }
         }};
-        Ok(Self {app_pool:self.app_pool.clone(),pool:self.pool.clone(),
+        let mut view=Self {app_pool:self.app_pool.clone(),pool:self.pool.clone(),
             agent_pool:pool,root:self.root.clone(),
             user_id:self.user_id.clone(),agent_id:agent_id.to_owned(),
             user_states:self.user_states.clone(),agent_states:self.agent_states.clone(),
-            cipher:self.cipher.clone(),
+            cipher:self.cipher.clone(),agent_cipher:None,agent_keys:self.agent_keys.clone(),
             cache:self.cache.clone(),context_cache:self.context_cache.clone(),
-            context_gate:self.context_gate.clone()})
+            context_gate:self.context_gate.clone()};
+        view.initialize_agent_encryption().await?;
+        Ok(view)
     }
     /// Expose the agent identity already bound to this storage handle.
     pub fn current_agent_id(&self)->&str {&self.agent_id}
@@ -420,7 +444,8 @@ impl Store {
     pub fn current_user_id(&self)->&str {&self.user_id}
     /// Create agent-owned tables and migrate the legacy default agent and prompt slots once.
     async fn init_agent_tables(&self) -> Result<()> {
-        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS agents(
+        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS agent_memberships(user_id TEXT NOT NULL,agent_id TEXT NOT NULL,value BLOB NOT NULL,PRIMARY KEY(user_id,agent_id));
+            CREATE TABLE IF NOT EXISTS agents(
             id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
             provider TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL,
             metadata BLOB NOT NULL, revision INTEGER NOT NULL,
@@ -465,14 +490,14 @@ impl Store {
                 .bind("shared_default").bind("WebAgent").bind("")
                 .bind(old_model["provider"].as_str().unwrap_or("openai_subscription"))
                 .bind(old_model["model"].as_str().unwrap_or("gpt-6-luna"))
-                .bind("active").bind(self.seal(&metadata)?)
+                .bind("active").bind(if self.agent_cipher.is_some(){self.seal_agent(&metadata)?}else{self.seal(&metadata)?})
                 .bind(old_abilities["revision"].as_i64().unwrap_or(0).max(0))
                 .bind(now).bind(now).execute(&mut *tx).await?;
             if let Some(old) = old_abilities["visibility"].as_object() {
                 for (id, mode) in old {
                     sqlx::query("INSERT INTO agent_connections(id,agent_id,connection_type,section,enabled,config,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)")
                         .bind(format!("ability:{id}")).bind("shared_default").bind(id).bind("ability")
-                        .bind((mode != "off") as i64).bind(self.seal(&json!({}))?)
+                        .bind((mode != "off") as i64).bind(if self.agent_cipher.is_some(){self.seal_agent(&json!({}))?}else{self.seal(&json!({}))?})
                         .bind(1_i64).bind(now).bind(now).execute(&mut *tx).await?;
                 }
             }
@@ -539,7 +564,7 @@ impl Store {
     fn pool_for(&self, key: &str) -> &SqlitePool {
         if key.starts_with("agent:") || key.starts_with("agent_abilities:") {
             &self.agent_pool
-        } else if key.starts_with("module_state:")
+        } else if key=="migration:conversation_privacy_v1" || key.starts_with("module_state:")
             || key.starts_with("receipt:module:")
             || key.starts_with("session:")
             || key.starts_with("manager_review:")
@@ -768,7 +793,7 @@ impl Store {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
-        let sealed = self.seal(&json!(content))?;
+        let sealed = self.seal_agent(&json!(content))?;
         let revision = expected_revision
             .checked_add(1)
             .ok_or_else(|| anyhow!("Invalid prompt slot revision"))?;
@@ -1092,7 +1117,8 @@ impl Store {
     }
     /// Apply optional administrator plaintext policy only to user-plane records; other authorities always seal.
     fn encode_for_pool(&self, pool: &SqlitePool, value: &Value) -> Result<Vec<u8>> {
-        if std::ptr::eq(pool, &self.pool) { self.encode_user_record(value) } else { self.seal(value) }
+        if std::ptr::eq(pool, &self.agent_pool) {self.seal_agent(value)}
+        else if std::ptr::eq(pool, &self.pool) {self.encode_user_record(value)} else {self.seal(value)}
     }
     /// Encode a JSON value with a fresh AES-GCM nonce and authenticated ciphertext.
     pub fn seal(&self, value: &Value) -> Result<Vec<u8>> {
@@ -1111,6 +1137,7 @@ impl Store {
     }
     /// Authenticate and decode either encrypted records or the explicitly versioned administrator plaintext envelope.
     pub fn unseal(&self, data: &[u8]) -> Result<Value> {
+        if data.starts_with(b"WAAGENT1") {return self.unseal_agent(data);}
         // A nonce in the legacy binary format can begin with '{'; only a
         // parsed, explicitly versioned envelope selects the plaintext reader.
         if let Ok(record) = serde_json::from_slice::<Value>(data) {
@@ -3262,6 +3289,10 @@ impl webagent_access::storage::RecordCodec for Store {
     fn seal(&self,value:&Value)->Result<Vec<u8>> {Store::seal(self,value)}
     fn unseal(&self,value:&[u8])->Result<Value> {Store::unseal(self,value)}
     fn encode_application(&self,value:&Value)->Result<Vec<u8>> {self.encode_for_pool(&self.app_pool,value)}
+    fn seal_agent(&self,value:&Value)->Result<Vec<u8>> {Store::seal_agent(self,value)}
+    fn unseal_agent(&self,value:&[u8])->Result<Value> {Store::unseal_agent(self,value)}
+    fn seal_agent_for(&self,agent:&str,value:&Value)->Result<Vec<u8>> {self.seal_agent_for(agent,value)}
+    fn unseal_agent_for(&self,agent:&str,value:&[u8])->Result<Value> {self.unseal_agent_for(agent,value)}
 }
 impl Store {
     pub(crate) fn access_repository(&self)->webagent_access::storage::Repository<'_,Self> {
@@ -3274,7 +3305,12 @@ impl webagent_models::storage::RuntimeStorage for Store {
     fn credential_get<'a>(&'a self,key:&'a str)->impl std::future::Future<Output=Result<Option<Value>>>+Send+'a {self.get(key)}
     fn credential_put<'a>(&'a self,key:&'a str,value:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a {self.put(key,value)}
     fn agent_pool<'a>(&'a self,agent:&'a str)->impl std::future::Future<Output=Result<SqlitePool>>+Send+'a {
-        async move {Ok(self.for_agent(agent).await?.agent_pool)}
+        async move {
+            if !access::valid_agent_id(agent) {return Err(anyhow!("Invalid agent identity"));}
+            // Catalog transactions already hold an app connection; initialized handles avoid pool reentry.
+            if let Some(pool)=self.agent_states.read().await.get(agent).cloned() {return Ok(pool);}
+            Ok(self.for_agent(agent).await?.agent_pool)
+        }
     }
 }
 impl Store {
@@ -3284,6 +3320,7 @@ impl Store {
 }
 
 impl webagent_manager::storage::RecordEffects for Store {
+ fn unseal_agent(&self,agent:&str,bytes:&[u8])->Result<Value> {Store::unseal_agent_for(self,agent,bytes)}
  fn unseal(&self,value:&[u8])->Result<Value> {Store::unseal(self,value)}
  fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {Store::encode_user_record(self,value)}
  fn resolved_prompts(&self,root:&Path)->Result<Value> {crate::live_assets::resolved_prompts(root)}

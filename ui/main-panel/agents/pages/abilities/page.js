@@ -22,7 +22,7 @@ let expandedAbility = null;
 
 // The selected tenant and server authority govern every read and save on this page.
 export async function renderAbilities(host, request, options) {
-  const { agentId, levelId = '', previewUser = '' } = options;
+  const { agentId, levelId = 'operator', previewUser = '' } = options;
   const scope = '/agents/' + encodeURIComponent(agentId);
   const generation = (host._abilityGeneration || 0) + 1;
   host._abilityGeneration = generation;
@@ -42,7 +42,17 @@ export async function renderAbilities(host, request, options) {
   const effectiveAbilities = effective.abilities || [];
   const projection = ability => effectiveAbilities.find(item => item.id === ability.id) || ability;
   const rerender = next => renderAbilities(host, request, { ...options, ...next });
-  const abilities = data.abilities || [];
+  const abilities = structuredClone(data.abilities || []);
+  const selectedLevel=data.capability_levels?.levels?.[levelId];
+  if(selectedLevel&&levelId!=='operator'){
+    const mode=(map,key,fallback)=>map?.[key]||map?.['*']||fallback;
+    for(const ability of abilities){
+      ability.visibility=mode(selectedLevel.ability_exposure,ability.id,ability.visibility);
+      ability.skill_visibility=mode(selectedLevel.skill_exposure,ability.id,ability.skill_visibility);
+      for(const skill of ability.selectable_skills||[])skill.mode=mode(selectedLevel.skill_exposure,ability.id+':'+skill.skill_id,skill.mode);
+      for(const tool of ability.tools||[])tool.visibility=mode(selectedLevel.tool_exposure,tool.name,tool.visibility||'visible');
+    }
+  }
   const slots = slotsResult.slots || [];
   const groups = new Map();
   for (const ability of abilities) {
@@ -70,6 +80,16 @@ export async function renderAbilities(host, request, options) {
 
   const save = async (ability, kind, mode, control, toolName = null) => {
     control.disabled = true;
+    if(levelId!=='operator'){
+      try{
+        const level=structuredClone(data.capability_levels.levels[levelId]);
+        const key=kind==='ability'?'ability_exposure':kind==='tool'?'tool_exposure':'skill_exposure';
+        const id=kind==='tool'?toolName:kind==='skill'&&toolName&&toolName!=='core'?ability.id+':'+toolName:ability.id;
+        level[key]||={};level[key][id]=mode;
+        await request(scope+'/capability-levels/'+encodeURIComponent(levelId),'PUT',{expected_revision:data.capability_levels.revision,level});
+        expandedAbility=ability.id;await rerender({});return;
+      }catch(error){status.textContent=error.message;control.disabled=false;throw error;}
+    }
     try {
       const path = scope + '/abilities/' + encodeURIComponent(ability.id) +
         (kind === 'tool' ? '/tools/' + encodeURIComponent(toolName) + '/mode' :
@@ -89,7 +109,7 @@ export async function renderAbilities(host, request, options) {
     const trigger = _buildMoreButton(() => modes.map(mode => ({
       icon: mode === 'off' ? 'eye-off' : mode === 'visible' ? 'eye' : 'download',
       label: mode[0].toUpperCase() + mode.slice(1), checked: current === mode,
-      disabled: !canManage || !!levelId || !!previewUser,
+      disabled: !canManage || !!previewUser,
       action: () => save(ability, kind, mode, trigger, toolName).catch(() => {}),
     })), { title: 'Choose ' + kind + ' availability' });
     if (anchorOnly) trigger.classList.add('ac-ability-more-anchor');
@@ -125,7 +145,7 @@ export async function renderAbilities(host, request, options) {
         when_to_use: ability.skill_summary || '', mode: ability.skill_visibility || 'visible' }] : []);
     for (const entry of generalSkills) {
       const skill = buildSkillRow(entry, {
-        canEdit: canManage && !levelId && !previewUser,
+        canEdit: canManage && levelId==='operator' && !previewUser,
         menu: modeMenu(ability, 'skill', entry.mode || 'visible', entry.skill_id, true),
         loadContent: () => request(scope + '/abilities/' + encodeURIComponent(ability.id) +
           (entry.skill_id === 'core' ? '/skill-content' :
@@ -172,7 +192,7 @@ export async function renderAbilities(host, request, options) {
         permMode: data.permissions?.tool_permissions?.[tool.name] ||
           data.permissions?.tool_permissions?.['*'] || 'auto',
       }, {
-        canEdit: canManage && !previewUser && !levelId,
+        canEdit: canManage && !previewUser && levelId==='operator',
         showPerm: true,
         abilityId: ability.id,
         hasToolSkill: tool.has_tool_skill === true,
@@ -256,7 +276,7 @@ export async function renderAbilities(host, request, options) {
       const toggleWrap = node('label', 'conn-toggle-wrap ac-ability-toggle-wrap');
       const toggle = node('input', 'conn-toggle');
       toggle.type = 'checkbox';
-      toggle.disabled = !canManage || !!levelId || !!previewUser;
+      toggle.disabled = !canManage || !!previewUser;
       toggle.checked = ability.visibility !== 'off';
       toggle.setAttribute('aria-label',
         ability.name + ' availability: ' + ability.visibility + '. Toggle on or off.');

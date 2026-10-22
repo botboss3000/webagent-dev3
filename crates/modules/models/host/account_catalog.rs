@@ -9,10 +9,10 @@ impl Store {
     pub async fn account_model_choices(&self,user:&str)->Result<Value> { self.models_repository().account_model_choices(user).await }
     pub async fn account_model_preferences(&self,user:&str)->Result<Preferences> { self.models_repository().account_model_preferences(user).await }
     pub async fn resolve_account_model_source(&self,user:&str,source:&Source)->Result<ResolvedSource> { self.models_repository().resolve_account_model_source(user, source).await }
-    pub async fn adopt_byo_source(&self,user:&str,agent:&str,input:&Adoption)->Result<Value> { self.models_repository().adopt_byo_source(user, agent, input).await }
-    pub async fn seed_new_agent_default(&self,user:&str,agent:&str)->Result<bool> { self.models_repository().seed_new_agent_default(user, agent).await }
-    pub async fn agent_model_adoptions(&self,user:&str,agent:&str)->Result<Value> { self.models_repository().agent_model_adoptions(user, agent).await }
-    pub(crate) async fn platform_dispatch_tokens(&self,user:&str,agent:&str,pin:&PlatformPin)->Result<Value> { self.models_repository().platform_dispatch_tokens(user, agent, pin).await }
+    pub async fn adopt_byo_source(&self,user:&str,agent:&str,input:&Adoption)->Result<Value> { self.for_agent(agent).await?.models_repository().adopt_byo_source(user, agent, input).await }
+    pub async fn seed_new_agent_default(&self,user:&str,agent:&str)->Result<bool> { self.for_agent(agent).await?.models_repository().seed_new_agent_default(user, agent).await }
+    pub async fn agent_model_adoptions(&self,user:&str,agent:&str)->Result<Value> { self.for_agent(agent).await?.models_repository().agent_model_adoptions(user, agent).await }
+    pub(crate) async fn platform_dispatch_tokens(&self,user:&str,agent:&str,pin:&PlatformPin)->Result<Value> { self.for_agent(agent).await?.models_repository().platform_dispatch_tokens(user, agent, pin).await }
     pub(crate) async fn pin_platform_source(&self,user:&str,source:&Source)->Result<PlatformPin> { self.models_repository().pin_platform_source(user, source).await }
 }
 #[cfg(test)]
@@ -65,6 +65,8 @@ mod source_tests {
         assert!(app.store.resolve_account_model_source(user,&source).await.is_err());
         let mut tier=app.store.entitlement_tier("basic").await.unwrap().unwrap();let revision=tier.revision;
         tier.model_policy=Some(crate::access::ModelPolicy{roster_id:Some("team".into()),allowed_entry_ids:BTreeSet::from(["model".into()]),allow_byo:false,max_byo_entries:0});
+        let mut ceiling=app.store.entitlement_tier("operator").await.unwrap().unwrap();let ceiling_revision=ceiling.revision;
+        ceiling.model_policy=tier.model_policy.clone();app.store.save_entitlement_tier(ceiling,ceiling_revision).await.unwrap();
         app.store.save_entitlement_tier(tier,revision).await.unwrap();
         assert!(app.store.resolve_account_model_source(user,&source).await.is_err());
         app.store.mutate_platform_roster("team",1,Mutation::Publish{rollback:None},"admin").await.unwrap();
@@ -130,6 +132,8 @@ mod platform_pin_tests {
         let source=Source{origin:Origin::Platform,entry_id:platform_id("team","model")};
         let mut tier=app.store.entitlement_tier("basic").await.unwrap().unwrap();let revision=tier.revision;
         tier.model_policy=Some(crate::access::ModelPolicy{roster_id:Some("team".into()),allowed_entry_ids:BTreeSet::from(["model".into()]),allow_byo:false,max_byo_entries:0});
+        let mut ceiling=app.store.entitlement_tier("operator").await.unwrap().unwrap();let ceiling_revision=ceiling.revision;
+        ceiling.model_policy=tier.model_policy.clone();app.store.save_entitlement_tier(ceiling,ceiling_revision).await.unwrap();
         app.store.save_entitlement_tier(tier,revision).await.unwrap();
         app.store.platform_credential_set("team","model",1,Some("fixture-first-key"),"admin").await.unwrap();
         app.store.mutate_platform_roster("team",2,Mutation::Publish{rollback:None},"admin").await.unwrap();

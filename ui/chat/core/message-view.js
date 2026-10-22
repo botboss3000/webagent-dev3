@@ -35,7 +35,7 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
   const profile=currentChatProfile()||{},role=item.role==='user'?'user':'agent';
   let text=typeof item.content==='string'?item.content:JSON.stringify(item.content);
   const bubble=document.createElement('article');bubble.className='chat-bubble '+role+' published';bubble.dataset.publicId=item.id;bubble.dataset.msgId=item.id;bubble.dataset.seq=String(item.seq);bubble.dataset.turnId=item.run_id;
-  const label=document.createElement('span');label.className='label';label.textContent=item.message_kind==='agent_message'?(item.author_name||'Message from another agent'):role==='user'?(item.author?.display_name||item.author?.user_id||item.author_name||item.author_id||item.author_display_name||item.author_user_id||'You'):'Agent';bubble.append(label);
+  const label=document.createElement('span');label.className='label';label.textContent=item.message_kind==='operator'?((item.author?.display_name||item.author?.user_id||item.author_id||'Human')+' (Agent Operator)'):item.message_kind==='agent_message'?(item.author_name||'Message from another agent'):role==='user'?(item.author?.display_name||item.author?.user_id||item.author_name||item.author_id||item.author_display_name||item.author_user_id||'You'):'Agent';bubble.append(label);
   const body=document.createElement('div');
   if(role==='agent'){const section=document.createElement('div');section.className='turn-section llm-section md';section.dataset.sectionIdx='0';section.dataset.msgId=item.id;markdown(body,text);section.append(body);bubble.append(section);}else{body.className='bubble-body';linkify(body,text);bubble.append(body);}
   if(role==='user'&&Array.isArray(item.attachments)){

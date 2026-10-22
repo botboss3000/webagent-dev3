@@ -209,11 +209,13 @@ async fn resolve_store_internal(
     let agent = directory["agent_id"]
         .as_str()
         .ok_or_else(|| anyhow!("Invalid directory"))?;
+    let storage=store.for_user(owner).await?;
+    let pinned=storage.get(&format!("session:{sid}")).await?.ok_or_else(||anyhow!("Session not found"))?;
     let kind = if owner == user {
         AccessKind::Owner
     } else if store.shared_is_participant(sid, user).await? {
         AccessKind::Participant
-    } else if policy(&store, agent).await?.admin_view && staff(&store, user, agent).await? {
+    } else if pinned["conversation_privacy"]=="operator_reviewable" && staff(&store, user, agent).await? {
         AccessKind::Observer
     } else {
         bail!("Session not found");

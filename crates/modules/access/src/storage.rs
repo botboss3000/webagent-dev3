@@ -8,6 +8,10 @@ pub trait RecordCodec: Sync {
     fn seal(&self,value:&Value)->Result<Vec<u8>>;
     fn unseal(&self,value:&[u8])->Result<Value>;
     fn encode_application(&self,value:&Value)->Result<Vec<u8>>;
+    fn seal_agent(&self,value:&Value)->Result<Vec<u8>> {self.seal(value)}
+    fn unseal_agent(&self,value:&[u8])->Result<Value> {self.unseal(value)}
+    fn seal_agent_for(&self,_agent:&str,value:&Value)->Result<Vec<u8>> {self.seal_agent(value)}
+    fn unseal_agent_for(&self,_agent:&str,value:&[u8])->Result<Value> {self.unseal_agent(value)}
 }
 pub struct Repository<'a,C:RecordCodec> {
     pub(crate) root:&'a Path,
@@ -29,6 +33,8 @@ impl<'a,C:RecordCodec> Repository<'a,C> {
     pub(crate) fn current_user_id(&self)->&str {self.actor_id}
     pub(crate) fn seal(&self,value:&Value)->Result<Vec<u8>> {self.codec.seal(value)}
     pub(crate) fn unseal(&self,value:&[u8])->Result<Value> {self.codec.unseal(value)}
+    pub(crate) fn seal_agent(&self,value:&Value)->Result<Vec<u8>> {self.codec.seal_agent_for(self.agent_id,value)}
+    pub(crate) fn unseal_agent(&self,value:&[u8])->Result<Value> {self.codec.unseal_agent_for(self.agent_id,value)}
     pub async fn account_by_id(&self,id:&str)->Result<Option<Value>> {
         let row=sqlx::query("SELECT value FROM user_accounts WHERE user_id=?").bind(id).fetch_optional(self.app_pool).await?;
         row.map(|r|self.unseal(&r.get::<Vec<u8>,_>("value"))).transpose()
@@ -89,6 +95,7 @@ mod integration_tests {
                 CREATE TABLE entitlement_tiers(tier_id TEXT PRIMARY KEY,revision INTEGER,value BLOB);
                 CREATE TABLE docs(key TEXT PRIMARY KEY,value BLOB);").execute(&app).await.unwrap();
             sqlx::raw_sql("CREATE TABLE agents(id TEXT PRIMARY KEY,status TEXT,metadata BLOB,revision INTEGER,updated_at INTEGER);
+                CREATE TABLE agent_memberships(user_id TEXT,agent_id TEXT,value BLOB,PRIMARY KEY(user_id,agent_id));
                 CREATE TABLE docs(key TEXT PRIMARY KEY,value BLOB);").execute(&agent).await.unwrap();
             let f=Self {root,app,agent,codec:Codec::new()};
             let repo=f.repo();repo.init_access_policy(None).unwrap();
@@ -104,7 +111,7 @@ mod integration_tests {
             sqlx::query("INSERT INTO agents VALUES('shared_default','active',?,1,0)").bind(f.codec.seal(&json!({"owner_id":"admin"})).unwrap()).execute(&f.agent).await.unwrap();
             for (id,relationship) in [("admin","owner"),("alice","member")] {
                 let value=json!({"user_id":id,"agent_id":"shared_default","relationship":relationship,"revision":1});
-                sqlx::query("INSERT INTO agent_memberships VALUES(?,'shared_default',?)").bind(id).bind(f.codec.seal(&value).unwrap()).execute(&f.app).await.unwrap();
+                sqlx::query("INSERT INTO agent_memberships VALUES(?,'shared_default',?)").bind(id).bind(f.codec.seal(&value).unwrap()).execute(&f.agent).await.unwrap();
             }
             f
         }
@@ -141,13 +148,13 @@ mod integration_tests {
         let changed=repo.assign_agent_membership("admin","alice","shared_default",Relationship::Revoked,false,1).await.unwrap();
         assert_eq!(changed["revision"],2);
         let after=repo.live_access("alice","shared_default").await.unwrap();assert!(!after.admitted());assert_ne!(before.context_fingerprint(),after.context_fingerprint());
-        let account=repo.account_by_id("alice").await.unwrap().unwrap();assert_ne!(account["generation"],"initial");assert_eq!(account["access_revision"],2);
+        let account=repo.account_by_id("alice").await.unwrap().unwrap();assert_eq!(account["generation"],"initial");assert_eq!(account["access_revision"],1);
         assert!(repo.assign_agent_membership("admin","alice","shared_default",Relationship::Member,false,1).await.is_err());
-        sqlx::raw_sql("CREATE TRIGGER reject_access_receipt BEFORE INSERT ON events WHEN NEW.kind='agent_membership_changed' BEGIN SELECT RAISE(ABORT,'test late audit failure'); END;").execute(&f.app).await.unwrap();
+        sqlx::raw_sql("CREATE TRIGGER reject_access_receipt BEFORE INSERT ON docs WHEN NEW.key LIKE 'agent:shared_default:membership_audit:%' BEGIN SELECT RAISE(ABORT,'test late audit failure'); END;").execute(&f.agent).await.unwrap();
         assert!(repo.assign_agent_membership("admin","alice","shared_default",Relationship::Member,false,2).await.is_err());
         assert_eq!(repo.agent_membership("alice","shared_default").await.unwrap().unwrap(),changed);
         assert_eq!(repo.account_by_id("alice").await.unwrap().unwrap(),account);
-        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE kind='agent_membership_changed'").fetch_one(&f.app).await.unwrap();assert_eq!(count,1);
+        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key LIKE 'agent:shared_default:membership_audit:%'").fetch_one(&f.agent).await.unwrap();assert_eq!(count,1);
         let bytes:Vec<u8>=sqlx::query_scalar("SELECT value FROM user_accounts WHERE user_id='alice'").fetch_one(&f.app).await.unwrap();
         assert!(serde_json::from_slice::<Value>(&bytes).is_err());
         assert!(repo.capability_levels("other_agent").await.is_err());
@@ -207,7 +214,7 @@ mod integration_tests {
         legacy["password_hash"]=json!("original-credential");
         let bytes=f.codec.seal(&legacy).unwrap();
         sqlx::query("UPDATE user_accounts SET value=? WHERE user_id='admin'").bind(&bytes).execute(&f.app).await.unwrap();
-        sqlx::query("DELETE FROM agent_memberships WHERE user_id='admin'").execute(&f.app).await.unwrap();
+        sqlx::query("DELETE FROM agent_memberships WHERE user_id='admin'").execute(&f.agent).await.unwrap();
         sqlx::raw_sql("CREATE TRIGGER reject_migration_marker BEFORE INSERT ON docs BEGIN SELECT RAISE(ABORT,'test late marker failure'); END;").execute(&f.app).await.unwrap();
         assert!(repo.migrate_access_v1().await.is_err());
         let tiers:i64=sqlx::query_scalar("SELECT COUNT(*) FROM entitlement_tiers").fetch_one(&f.app).await.unwrap();assert_eq!(tiers,0);
@@ -218,7 +225,9 @@ mod integration_tests {
         let account=repo.account_by_id("admin").await.unwrap().unwrap();
         assert_eq!(account["password_hash"],"original-credential");assert_eq!(account["generation"],"initial");
         assert_eq!(account["status"],"active");assert_eq!(account["role"],"administrator");assert_eq!(account["tier_id"],"operator");
-        assert_eq!(repo.agent_membership("admin","shared_default").await.unwrap().unwrap()["relationship"],"owner");
+        let legacy:Vec<u8>=sqlx::query_scalar("SELECT value FROM agent_memberships WHERE user_id='admin' AND agent_id='shared_default'").fetch_one(&f.app).await.unwrap();
+        assert_eq!(f.codec.unseal(&legacy).unwrap()["relationship"],"owner");
+        assert!(repo.agent_membership("admin","shared_default").await.unwrap().is_none());
         let stable:Vec<u8>=sqlx::query_scalar("SELECT value FROM user_accounts WHERE user_id='admin'").fetch_one(&f.app).await.unwrap();
         repo.migrate_access_v1().await.unwrap();
         let after:Vec<u8>=sqlx::query_scalar("SELECT value FROM user_accounts WHERE user_id='admin'").fetch_one(&f.app).await.unwrap();assert_eq!(stable,after);

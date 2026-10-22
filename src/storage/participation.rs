@@ -386,7 +386,7 @@ impl Store {
                 self.write_document(&mut tx, &key, &value).await?;
             }
         }
-        self.write_document(&mut tx,&format!("message_meta:{rid}"),&json!({"author_id":message["author_id"],"context_eligible":eligible,"queued":queued})).await?;
+        self.write_document(&mut tx,&format!("message_meta:{rid}"),&json!({"author_id":message["author_id"],"message_kind":message["message_kind"],"context_eligible":eligible,"queued":queued})).await?;
         self.insert_chat(&mut tx, sid, rid, "user", &message["content"])
             .await?;
         if queued {

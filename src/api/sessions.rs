@@ -148,7 +148,13 @@ pub(crate) async fn prepare_session_id(app:&App,body:&Value,id:Option<String>) -
     if exists.is_none() { return Err(bad("Agent not found")); }
     let id = id.unwrap_or_else(uuid);
     let initial_active=crate::shared_chat::policy(&app.store,agent_id).await?.initial_active;
-    let value = json!({"participation":{"active":initial_active,"revision":0,"generation":0},"id":id,"agent_id":agent_id,"title":title,"checkpoint_input":[],"checkpoint_through":0,"created_at":now(),
+    let privacy=agent_store.access_repository().member_access(agent_id).await?.conversation_privacy;
+    if let Some(expected)=body.get("expected_conversation_privacy") {
+        let expected:crate::access::membership::ConversationPrivacy=serde_json::from_value(expected.clone()).map_err(|_|bad("Invalid privacy expectation"))?;
+        if expected!=privacy {return Err(conflict("Conversation privacy changed; review the notice and retry"));}
+    }
+    app.store.record_agent_visit(app.store.current_user_id(),agent_id).await?;
+    let value = json!({"conversation_privacy":privacy,"participation":{"active":initial_active,"revision":0,"generation":0},"id":id,"agent_id":agent_id,"title":title,"checkpoint_input":[],"checkpoint_through":0,"created_at":now(),
         "auto_naming":{"version":1,"stage":if supplied.is_some() {"locked"} else {"awaiting_message"}}});
     let result = json!({"id":id,"agent_id":agent_id,"title":title});
     let mode = {
@@ -177,8 +183,9 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
     let components = app.store.base_chat_components(&id).await?;
     let queue=crate::followup_queue::public(&app.store.followup_queue(&id).await?);
     Ok(Json(
-        json!({"access":{"observer":crate::shared_projection::observer(&app),"can_send":!crate::shared_projection::observer(&app),"can_control":!crate::shared_projection::observer(&app),"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id()},"usage":usage,"session":app.store.shared_read_summary(&id,crate::shared_chat::actor(&app)).await?,
-        "messages":messages,"runs":runs,"components":components,"last_seq":last_seq,"queue":queue["queue"],"queue_state":queue["queue_state"]}),
+        json!({"access":{"observer":crate::shared_projection::observer(&app),"operator_reply":crate::shared_projection::observer(&app)&&_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true,
+        "can_send":!crate::shared_projection::observer(&app)||(_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true),"can_control":!crate::shared_projection::observer(&app),"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id()},"usage":usage,"session":app.store.shared_read_summary(&id,crate::shared_chat::actor(&app)).await?,
+        "conversation_privacy":_session["conversation_privacy"],"messages":messages,"runs":runs,"components":components,"last_seq":last_seq,"queue":queue["queue"],"queue_state":queue["queue_state"]}),
     ))
 }
 #[derive(Deserialize)]
@@ -945,5 +952,23 @@ mod session_creation_recovery_tests {
         assert_eq!(create_session(State(app.clone()),Json(body.clone())).await.unwrap_err().0,StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(app.store.shared_directory(sid).await.unwrap().unwrap()["owner_id"],"other-owner");
         assert_eq!(app.store.get("receipt:session:directory-conflict").await.unwrap().unwrap()["result"],created);
+    }
+}
+
+#[cfg(test)]
+mod privacy_notice_tests {
+    use super::*;
+    #[tokio::test]
+    async fn session_creation_rejects_privacy_changes_since_the_notice() {
+        let (_root,app)=crate::runtime_tests::fixture().await;
+        let body=|mode:&str|json!({"client_request_id":"privacy-notice","expected_conversation_privacy":mode});
+        assert_eq!(create_session(State(app.clone()),Json(body("operator_reviewable"))).await.unwrap_err().0,StatusCode::CONFLICT);
+        let raw:Vec<u8>=sqlx::query_scalar("SELECT metadata FROM agents WHERE id='shared_default'").fetch_one(&app.store.agent_pool).await.unwrap();
+        let mut metadata=app.store.unseal_agent(&raw).unwrap();metadata["member_access"]=json!({"conversation_privacy":"operator_reviewable"});
+        sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'").bind(app.store.seal_agent(&metadata).unwrap()).execute(&app.store.agent_pool).await.unwrap();
+        assert_eq!(create_session(State(app.clone()),Json(body("private"))).await.unwrap_err().0,StatusCode::CONFLICT);
+        let result=create_session(State(app.clone()),Json(body("operator_reviewable"))).await.unwrap().0;
+        let saved=app.store.get(&format!("session:{}",result["id"].as_str().unwrap())).await.unwrap().unwrap();
+        assert_eq!(saved["conversation_privacy"],"operator_reviewable");
     }
 }

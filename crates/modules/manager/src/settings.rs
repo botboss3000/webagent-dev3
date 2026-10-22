@@ -12,7 +12,7 @@ pub async fn snapshot(store: &Repository<'_,impl RecordEffects>, agent: &str) ->
         .bind(agent)
         .fetch_one(&pool)
         .await?;
-    let metadata = store.effects.unseal(&blob)?;
+    let metadata = store.effects.unseal_agent(agent,&blob)?;
     let value = &metadata["manager_incoming_message"];
     let mut settings: IncomingMessage = if value.is_null() {
         IncomingMessage::default()

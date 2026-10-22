@@ -33,6 +33,7 @@ pub fn validate_configuration(value:&Value)->Result<()> {
             let map=tiers.as_object().ok_or_else(||anyhow!("Invalid policy tiers"))?;
             for (id,definition) in map {let tier:crate::Tier=serde_json::from_value(definition.clone())?;tier.validate()?;if tier.id!=*id {return Err(anyhow!("Tier identity mismatch"));}}
         }
+        if value.get("tier_order").is_some(){crate::account_ladder::order(value)?;}
         if let Some(pages)=value.get("pages") {validate_pages(pages)?;}
     Ok(())
 }

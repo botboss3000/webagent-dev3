@@ -82,20 +82,18 @@ export function permissionControl({ data, request, scope, levelId, previewUser, 
   });
   return control;
 }
-export async function buildPolicyControls({ data, request, scope, levelId, previewUser, rerender, status }) {
-  const canManage = data.authority?.can_manage === true;
-  const levels = data.capability_levels?.levels || {};
-  const selector = node('div', 'member-policy-selector');
-  const levelSelect = select('Capability level to configure', [['', 'Base agent'], ...Object.values(levels)
-    .map(level => [level.id, level.name || level.id])], levelId);
-  levelSelect.disabled = !canManage;
-  levelSelect.onchange = () => rerender({ levelId: levelSelect.value, previewUser: '' })
-    .catch(error => { status.textContent = error.message; });
-  selector.append(levelSelect, node('div', 'ac-hint', canManage
-    ? (levelId ? 'Editing this capability level. Effective access also includes the account tier and agent base policy.'
-      : 'Editing agent base policy. Effective access is shown for your account.')
-    : 'Read-only effective access for your membership: ' + (data.capability_level_id || 'Unassigned')));
-  const panel = node('div', 'ac-list');
+export async function buildPolicyControls({data,request,scope,levelId,previewUser,rerender,status}) {
+  const canManage=data.authority?.can_manage===true;
+  const levels=data.capability_levels?.levels||{};
+  const order=data.capability_levels?.order||Object.keys(levels);
+  const selector=node('div','member-policy-selector');
+  const levelSelect=select('Capability level to configure',order.map(id=>[id,levels[id].name||id]),levelId||'operator');
+  levelSelect.disabled=!canManage;
+  levelSelect.onchange=()=>rerender({levelId:levelSelect.value,previewUser:''}).catch(error=>{status.textContent=error.message;});
+  selector.append(levelSelect,node('div','ac-hint',canManage
+    ? 'Editing '+(levels[levelId]?.name||'Operator')+'. Higher agent levels and app account policy cap effective access.'
+    : 'Read-only effective access for your agent membership.'));
+  const panel=node('div','ac-list');
   // Installation lifecycle controls are independent of tenant visibility and levels.
   if (data.authority?.is_installation_admin) {
     const servicePanel = node('div', 'ac-list');
@@ -123,83 +121,16 @@ export async function buildPolicyControls({ data, request, scope, levelId, previ
         'Startup resume service unavailable: ' + String(error.message || 'Request failed').slice(0, 240)));
     }
   }
-  if (!canManage) return { selector, panel };
-  const memberResult = await request(scope + '/ability-members');
-  const members = memberResult.members || [];
-  const preview = select('Effective access preview user', [['', 'Your effective access'], ...members
-    .filter(member => member.relationship !== 'revoked')
-    .map(member => [member.user_id, member.user_id + ' · ' + member.relationship])], previewUser);
-  preview.onchange = () => rerender({ previewUser: preview.value })
-    .catch(error => { status.textContent = error.message; });
-  panel.append(row('Effective access preview', preview, 'The server combines all access layers. Previewing a user disables policy edits.'));
-  const createName = node('input', 'ac-input'); createName.placeholder = 'Capability level name';
-  createName.maxLength = 100; createName.setAttribute('aria-label', 'New capability level name');
-  const create = node('button', 'ac-btn ac-btn-sm', 'Create level'); create.type = 'button';
-  create.onclick = () => saving(create, status, async () => {
-    const name = createName.value.trim(); if (!name) throw Error('Enter a capability level name');
-    const id = 'level-' + crypto.randomUUID();
-    await request(scope + '/capability-levels/' + id, 'PUT', {
-      expected_revision: data.capability_levels.revision,
-      level: { id, name, revision: 1, ability_permissions: {}, tool_permissions: {} },
-    });
-    await rerender({ levelId: id, previewUser: '' });
-  });
-  const creation = node('div'); creation.append(createName, create);
-  panel.append(row('Custom capability level', creation, 'New levels deny abilities until configured; tools inherit the existing account and agent ceilings.'));
-  for (const member of members) {
-    if (member.relationship === 'revoked') {
-      panel.append(row(member.user_id, node('span', 'ac-hint', 'Revoked'), 'Membership access revoked'));
-      continue;
-    }
-    const control = select('Capability level for ' + member.user_id,
-      Object.values(levels).map(level => [level.id, level.name || level.id]), member.capability_level_id);
-    control.dataset.savedValue = member.capability_level_id;
-    control.onchange = () => saving(control, status, async () => {
-      await request(scope + '/members/' + encodeURIComponent(member.user_id) + '/capability-level', 'PUT', {
-        expected_revision: member.revision, capability_level_id: control.value,
-      });
-      await rerender({});
-    });
-    panel.append(row(member.user_id, control, 'Membership capability level · ' + member.relationship));
+  if(!canManage)return {selector,panel};
+  const memberResult=await request(scope+'/ability-members');
+  const members=memberResult.members||[];
+  const preview=select('Effective access preview user',[['','Your effective access'],...members.filter(m=>m.relationship!=='revoked').map(m=>[m.user_id,m.username||m.user_id])],previewUser);
+  preview.onchange=()=>rerender({previewUser:preview.value}).catch(error=>{status.textContent=error.message;});
+  panel.append(row('Effective access preview',preview,'Previewing a user disables policy edits.'));
+  const links=node('div');
+  for(const [view,label]of [['identity','Configure member levels'],['members','Manage members']]){
+    const link=node('a','ac-btn',label);link.href='/app?tab=agents&agent='+encodeURIComponent(data.agent_id)+'&agentView='+view;links.append(link);
   }
-  if (data.authority.is_installation_admin) {
-    const details = node('details'); details.append(node('summary', '', 'Installation account tier ceilings'));
-    const tierPanel = node('div', 'ac-list'); details.append(tierPanel); panel.append(details);
-    let loaded = false;
-    details.ontoggle = async () => {
-      if (!details.open || loaded) return; loaded = true;
-      try {
-        const result = await request('/admin/access/tiers');
-        const tiers = result.tiers || [];
-        const choose = select('Installation account tier', tiers.map(tier => [tier.id, tier.id]), tiers[0]?.id || '');
-        const editor = node('div', 'ac-list'); tierPanel.append(row('Account tier', choose), editor);
-        const renderTier = () => {
-          const tier = tiers.find(item => item.id === choose.value); editor.replaceChildren();
-          if (!tier) return;
-          editor.append(node('p', 'ac-hint', 'Missing ability and tool grants deny access. These are installation-wide ceilings.'));
-          if (tier.id === 'operator') editor.append(node('p', 'ac-hint', 'Operator model and tool defaults are immutable; ability grants remain editable.'));
-          const entries = [['*', 'All abilities (explicit opt-in)', 'ability_permissions'],
-            ...(data.abilities || []).map(ability => [ability.id, ability.name, 'ability_permissions']),
-            ['*', 'All tools (explicit opt-in)', 'tools'],
-            ...[...new Set((data.abilities || []).flatMap(ability => (ability.tools || []).map(tool => tool.name)))]
-              .map(name => [name, name, 'tools'])];
-          for (const [id, label, key] of entries) {
-            const mode = tier[key]?.[id] || tier[key]?.['*'] || 'deny';
-            const control = select('Tier ' + tier.id + ' ' + label, permissions.map(value => [value, title(value)]), mode);
-            control.dataset.savedValue = mode;
-            control.disabled = tier.id === 'operator' && key === 'tools';
-            control.onchange = () => saving(control, status, async () => {
-              const next = clone(tier); next[key] ||= {}; next[key][id] = control.value;
-              await request('/admin/access/tiers/' + encodeURIComponent(tier.id), 'PUT',
-                { expected_revision: tier.revision, tier: next });
-              await rerender({});
-            });
-            editor.append(row(label, control));
-          }
-        };
-        choose.onchange = renderTier; renderTier();
-      } catch (error) { status.textContent = error.message; loaded = false; }
-    };
-  }
-  return { selector, panel };
+  panel.append(links);
+  return {selector,panel};
 }

@@ -25,7 +25,7 @@ mod tests {
  /// Initialize a canonical queued run without a provider or worker; all state uses the real Store.
  #[cfg(feature="linked-context")]
  async fn bridge_fixture()->(tempfile::TempDir,App,Value) {
-  let (root,app)=crate::runtime_tests::fixture_uninitialized().await;
+  let (root,app)=crate::runtime_tests::fixture().await;
   app.store.put("session:assets-bridge",&json!({"id":"assets-bridge","agent_id":"shared_default"})).await.unwrap();
   let mut run=json!({"id":"assets-run","session_id":"assets-bridge","agent_id":"shared_default",
    "status":"queued","run_revision":0,"lease_epoch":0,"generation":"fixture",

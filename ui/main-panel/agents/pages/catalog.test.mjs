@@ -7,7 +7,7 @@ const catalog=JSON.parse(await fs.readFile(new URL('./catalog.json',import.meta.
 async function load(value){globalThis.fetch=async()=>({ok:true,json:async()=>value});return loadAgentPages();}
 test('typed catalog separates configuration from common pages',async()=>{
  const pages=await load(catalog);
- assert.deepEqual(pages.filter(p=>p.type==='agent_configuration').map(p=>p.id),['identity','model','abilities']);
+ assert.deepEqual(pages.filter(p=>p.type==='agent_configuration').map(p=>p.id),['identity','model','abilities','members']);
  assert.equal(pages.find(p=>p.type==='directory').id,'config');
  assert.equal(pages.find(p=>p.type==='sessions').id,'sessions');
 });

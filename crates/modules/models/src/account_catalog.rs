@@ -188,7 +188,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_,C> {
     /// are mandatory; stale adoption documents never confer availability.
     pub async fn agent_model_adoptions(&self,user:&str,agent:&str)->Result<Value> {
         use sqlx::Row;
-        let authority=self.access().agent_authority(user,agent).await?;
+        let authority=self.agent_authority(user,agent).await?;
         if authority["can_manage"]!=true && !self.live_access(user,agent).await?.admitted() {
             bail!("Agent access required");
         }
@@ -245,7 +245,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_,C> {
             || input.alias.trim().is_empty() || input.alias.len()>200 || input.alias.chars().any(char::is_control) {
             bail!("Invalid adoption input");
         }
-        let authority=self.access().agent_authority(user,agent).await?;
+        let authority=self.agent_authority(user,agent).await?;
         if authority["can_manage"]!=true {bail!("Agent management required");}
         let resolved=self.resolve_account_model_source(user,&input.source).await?;
         let platform_pin=match &resolved {
@@ -271,8 +271,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_,C> {
             if receipt["digest"]!=digest {bail!("Request identifier reused with different adoption");}
             return Ok(receipt["result"].clone());
         }
-        let row=sqlx::query("SELECT value FROM docs WHERE key=?").bind(catalog_key).fetch_optional(&mut *tx).await?;
-        let mut catalog:Catalog=match row {Some(row)=>serde_json::from_value(self.unseal(&row.get::<Vec<u8>,_>("value"))?)?,None=>Catalog::default()};
+        let mut catalog=self.read_catalog_connection(&mut tx).await?;
         catalog.migrate_stored(&mut tx).await?;
         if let Some(pin)=&platform_pin {
             if let Some(existing)=catalog.entries.get(&source.id) {
@@ -308,8 +307,8 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_,C> {
         catalog.revision=catalog.revision.checked_add(1).ok_or_else(||anyhow::anyhow!("Revision exhausted"))?;
         catalog.validate()?;
         let provenance=json!({"origin":origin,"source_id":input.source.entry_id,"adopted_by":user,"alias":input.alias.trim()});
-        for (key,value) in [(catalog_key.to_owned(),serde_json::to_value(&catalog)?),
-            (format!("model_adoption:v1:{agent}:{}",source.id),provenance),
+        self.stage_catalog_connection(&mut tx,&catalog).await?;
+        for (key,value) in [(format!("model_adoption:v1:{agent}:{}",source.id),provenance),
             (receipt_key,json!({"digest":digest,"result":result}))] {
             sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
                 .bind(key).bind(self.seal(&value)?).execute(&mut *tx).await?;

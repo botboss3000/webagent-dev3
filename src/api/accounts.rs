@@ -168,6 +168,7 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+        self.set_agent_membership("admin","shared_default",Relationship::Owner,0).await?;
         Ok(())
     }
 

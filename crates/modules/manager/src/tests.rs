@@ -310,8 +310,8 @@ mod independent_runtime_io {
                 CREATE TABLE entitlement_tiers(tier_id TEXT PRIMARY KEY,revision INTEGER,value BLOB);").execute(&app).await.unwrap();
             sqlx::raw_sql("CREATE TABLE docs(key TEXT PRIMARY KEY,value BLOB); CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,kind TEXT,payload BLOB);
                 CREATE TABLE owner_admissions(id TEXT PRIMARY KEY); CREATE TABLE loop_commands(command_id TEXT PRIMARY KEY);").execute(&user).await.unwrap();
-            sqlx::raw_sql("CREATE TABLE agents(id TEXT PRIMARY KEY,status TEXT,metadata BLOB,revision INTEGER,updated_at INTEGER);").execute(&agent).await.unwrap();
-            sqlx::raw_sql("CREATE TABLE agents(id TEXT PRIMARY KEY,status TEXT,metadata BLOB,revision INTEGER,updated_at INTEGER);").execute(&default_agent).await.unwrap();
+            sqlx::raw_sql("CREATE TABLE docs(key TEXT PRIMARY KEY,value BLOB); CREATE TABLE agents(id TEXT PRIMARY KEY,status TEXT,metadata BLOB,revision INTEGER,updated_at INTEGER); CREATE TABLE agent_memberships(user_id TEXT,agent_id TEXT,value BLOB,PRIMARY KEY(user_id,agent_id));").execute(&agent).await.unwrap();
+            sqlx::raw_sql("CREATE TABLE docs(key TEXT PRIMARY KEY,value BLOB); CREATE TABLE agents(id TEXT PRIMARY KEY,status TEXT,metadata BLOB,revision INTEGER,updated_at INTEGER); CREATE TABLE agent_memberships(user_id TEXT,agent_id TEXT,value BLOB,PRIMARY KEY(user_id,agent_id));").execute(&default_agent).await.unwrap();
             let storage = Storage { root: root.path().to_owned(), app, user, target_agent: agent.clone(), agent,
                 default_agent, agent_scope: AGENT.into(),
                 cipher: Aes256Gcm::new_from_slice(&[31; 32]).unwrap(), nonce: Arc::new(AtomicU64::new(1)), usage: Arc::new(AtomicU64::new(0)) };
@@ -325,7 +325,7 @@ mod independent_runtime_io {
                 sqlx::query("INSERT INTO user_profiles VALUES(?,?)").bind(id).bind(storage.seal(&json!({"is_admin":id==OWNER})).unwrap()).execute(&storage.app).await.unwrap();
                 sqlx::query("INSERT INTO agent_memberships VALUES(?,?,?)").bind(id).bind(AGENT)
                     .bind(storage.seal(&json!({"user_id":id,"agent_id":AGENT,"relationship":if id==OWNER {"owner"}else{"member"},"agent_administrator":id==REQUESTER,"revision":1})).unwrap())
-                    .execute(&storage.app).await.unwrap();
+                    .execute(&storage.agent).await.unwrap();
             }
             for id in [AGENT, DEFAULT_AGENT] {
                 sqlx::query("INSERT INTO agent_directory VALUES(?,?)").bind(id).bind(OWNER).execute(&storage.app).await.unwrap();

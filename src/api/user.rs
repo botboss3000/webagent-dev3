@@ -470,12 +470,12 @@ mod shared_observer_mutation_tests {
   let owner=account["user_id"].as_str().unwrap();
   app.store.update_account_access(owner,1,crate::access::AccountStatus::Active,crate::access::Role::User,"basic").await.unwrap();
   let storage=app.store.for_user(owner).await.unwrap();
-  storage.put("session:observer-guard",&json!({"id":"observer-guard","agent_id":"shared_default"})).await.unwrap();
+  storage.put("session:observer-guard",&json!({"id":"observer-guard","agent_id":"shared_default","status":"active","conversation_privacy":"operator_reviewable"})).await.unwrap();
   app.store.register_shared_session(owner,"observer-guard","shared_default").await.unwrap();
   let raw=sqlx::query("SELECT metadata FROM agents WHERE id='shared_default'").fetch_one(&app.store.agent_pool).await.unwrap();
   let mut meta=app.store.unseal(&raw.get::<Vec<u8>,_>("metadata")).unwrap();
   meta["shared_chat"]=json!({"admin_view":true});
-  sqlx::query("UPDATE agents SET metadata=?,revision=revision+1 WHERE id='shared_default'").bind(app.store.seal(&meta).unwrap()).execute(&app.store.agent_pool).await.unwrap();
+  sqlx::query("UPDATE agents SET metadata=?,revision=revision+1 WHERE id='shared_default'").bind(app.store.seal_agent(&meta).unwrap()).execute(&app.store.agent_pool).await.unwrap();
   let token=crate::uuid();
   app.store.put(&format!("auth:{}",crate::digest(&json!(token))),&json!({"csrf":"fixture","expires":crate::now()+3600,"generation":"fixture-generation"})).await.unwrap();
   let router=crate::router(app);

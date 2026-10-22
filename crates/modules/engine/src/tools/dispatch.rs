@@ -153,7 +153,7 @@ pub async fn foreground_authorized(&self,sid:&str,run_id:&str,generation:&str,na
                 };
                 if let Some(pending)=pending {
                     if !app.native.valid(app.store.records(),&run,&pending).await? || (!pending["authorization"].is_null() && pending["human_approved"]!=true) {return Ok(false);}
-                    let (policy,mode_revision,visibility,state)=app.ability_controls(sid).await?;
+                    let (policy,mode_revision,visibility,state)=app.ability_controls_for(sid,run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id())).await?;
                     let access=app.chat.live_access(app.store.records(),run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id()),sid,&agent_id).await?;
                     let mut mode=app.session_mode(sid).await?;
                     if run["post_run_followup"]==true {mode["mode"]=json!("read_only");mode["execution_mode"]=json!("ask");}

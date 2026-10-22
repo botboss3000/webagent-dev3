@@ -51,7 +51,7 @@ impl Store {
         let id = format!("guest_{}", uuid::Uuid::new_v4().simple());
         let account = json!({"user_id":id,"username":id,"password_hash":null,
             "generation":uuid::Uuid::new_v4().to_string(),"is_approved":true,
-            "status":AccountStatus::Active,"role":Role::Guest,"tier_id":"basic",
+            "status":AccountStatus::Active,"role":Role::Guest,"tier_id":"anonymous",
             "access_revision":1});
         let profile = json!({"user_id":id,"display_name":"Guest","is_admin":false,
             "default_agent_id":null,"last_login_at":null,"source_channel":"web_public"});
@@ -91,12 +91,12 @@ impl Store {
     pub async fn entitlement_tiers(&self) -> Result<Vec<Tier>> { self.access_repository().entitlement_tiers().await }
     pub async fn save_entitlement_tier(&self, tier: Tier,
         expected_revision: u64) -> Result<Tier> { self.access_repository().save_entitlement_tier(tier, expected_revision).await }
-    pub async fn agent_membership(&self, user_id: &str, agent_id: &str) -> Result<Option<Value>> { self.access_repository().agent_membership(user_id, agent_id).await }
+    pub async fn agent_membership(&self, user_id: &str, agent_id: &str) -> Result<Option<Value>> { let view=self.for_agent(agent_id).await?; view.access_repository().agent_membership(user_id, agent_id).await }
     /// Directory ownership is immutable. Agent administration is a separate
     /// membership capability and does not grant ability/tool permissions.
-    pub async fn agent_authority(&self, user_id: &str, agent_id: &str) -> Result<Value> { self.access_repository().agent_authority(user_id, agent_id).await }
+    pub async fn agent_authority(&self, user_id: &str, agent_id: &str) -> Result<Value> { let view=self.for_agent(agent_id).await?; view.access_repository().agent_authority(user_id, agent_id).await }
     /// Caller must authorize roster access before returning these bounded records.
-    pub async fn agent_memberships(&self, agent_id: &str) -> Result<Vec<Value>> { self.access_repository().agent_memberships(agent_id).await }
+    pub async fn agent_memberships(&self, agent_id: &str) -> Result<Vec<Value>> { let view=self.for_agent(agent_id).await?; view.access_repository().agent_memberships(agent_id).await }
     // TENANT-ASSIGNMENT: existing accounts receive revisioned grants; no invitation identity is minted.
     pub async fn assign_agent_membership(&self, actor_id: &str, user_id: &str,
         agent_id: &str, relationship: Relationship, agent_administrator: bool,
@@ -143,7 +143,7 @@ mod tests {
         first.save_agent_model(&json!({"provider":"openai_subscription","model":"first-model"})).await.unwrap();
         assert_ne!(second.agent_model().await.unwrap()["model"],"first-model");
         assert_eq!(store.agent_authority("admin","tenant-one").await.unwrap()["owner_id"],owner);
-        assert_eq!(store.agent_authority("admin","tenant-one").await.unwrap()["can_manage"],true);
+        assert_eq!(store.agent_authority("admin","tenant-one").await.unwrap()["can_manage"],false);
         assert_eq!(store.agent_authority("admin","tenant-one").await.unwrap()["can_use"],false);
         assert!(store.assign_agent_membership("admin",&manager,"tenant-one",Relationship::Member,true,0).await.is_err());
         let appointed = store.assign_agent_membership(&owner,&manager,"tenant-one",Relationship::Member,true,0).await.unwrap();
@@ -154,14 +154,14 @@ mod tests {
         let visitor = store.assign_agent_membership(&manager,&member,"tenant-one",Relationship::Caller,false,0).await.unwrap();
         assert_eq!(visitor["relationship"],"caller");
         assert!(store.assign_agent_membership(&manager,&member,"tenant-one",Relationship::Member,false,0).await.is_err());
-        assert!(store.assign_agent_membership(&manager,&member,"tenant-one",Relationship::Member,true,1).await.is_err());
-        store.assign_agent_membership(&manager,&member,"tenant-one",Relationship::Member,false,1).await.unwrap();
+        assert!(store.assign_agent_membership(&manager,&member,"tenant-one",Relationship::Member,true,1).await.is_ok());
+        store.assign_agent_membership(&manager,&member,"tenant-one",Relationship::Member,false,2).await.unwrap();
         assert!(store.assign_agent_membership(&member,&manager,"tenant-one",Relationship::Member,false,1).await.is_err());
-        assert!(store.assign_agent_membership(&manager,&manager,"tenant-one",Relationship::Revoked,false,1).await.is_err());
+        assert!(store.assign_agent_membership(&member,&manager,"tenant-one",Relationship::Revoked,false,1).await.is_err());
         assert!(store.assign_agent_membership(&owner,&owner,"tenant-one",Relationship::Member,false,1).await.is_err());
         assert!(store.set_agent_membership(&member,"tenant-one",Relationship::Owner,2).await.is_err());
         assert!(store.assign_agent_membership(&owner,"missing_account","tenant-one",Relationship::Member,false,0).await.is_err());
-        let revoked = store.assign_agent_membership("admin",&manager,"tenant-one",Relationship::Revoked,false,1).await.unwrap();
+        let revoked = store.assign_agent_membership(&owner,&manager,"tenant-one",Relationship::Revoked,false,1).await.unwrap();
         assert_eq!(revoked["agent_administrator"],false);
         assert_eq!(store.agent_authority(&manager,"tenant-one").await.unwrap()["can_manage"],false);
         assert!(store.assign_agent_membership(&manager,&member,"tenant-one",Relationship::Caller,false,2).await.is_err());
@@ -187,7 +187,7 @@ mod tests {
         let before = store.account_by_id(&manager).await.unwrap().unwrap();
         store.assign_agent_membership(&owner,&manager,"tenant-one",Relationship::Member,false,1).await.unwrap();
         let after = store.account_by_id(&manager).await.unwrap().unwrap();
-        assert_ne!(before["generation"],after["generation"]);
+        assert_eq!(before["generation"],after["generation"]);
         assert_eq!(reopened.agent_authority(&manager,"tenant-one").await.unwrap()["can_manage"],false);
         let revision = store.account_by_id(&owner).await.unwrap().unwrap()["access_revision"].as_u64().unwrap();
         store.update_account_access(&owner,revision,AccountStatus::Suspended,Role::User,"basic").await.unwrap();
@@ -262,7 +262,7 @@ mod tests {
             Relationship::Caller,0).await.unwrap();
         assert_eq!(membership["revision"],1);
         let revision = store.account_by_id(id).await.unwrap().unwrap()["access_revision"].as_u64().unwrap();
-        assert!(revision >= 3);
+        assert_eq!(revision,2);
         store.save_entitlement_tier(Tier{max_sessions:2,..tier},1).await.unwrap();
         let after = store.account_by_id(id).await.unwrap().unwrap()["access_revision"].as_u64().unwrap();
         assert_eq!(after,revision+1);

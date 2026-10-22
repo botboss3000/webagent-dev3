@@ -295,7 +295,7 @@ mod tests {
         metadata["manager_incoming_message"] =
             json!({"enabled":true,"criteria":"Review incoming questions."});
         sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'")
-            .bind(store.seal(&metadata).unwrap())
+            .bind(store.seal_agent(&metadata).unwrap())
             .execute(&store.agent_pool)
             .await
             .unwrap();

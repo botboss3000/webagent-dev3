@@ -17,7 +17,7 @@ async fn settings(app: &App, enabled: bool) {
     metadata["manager_incoming_message"] =
         json!({"enabled":enabled,"criteria":"Only accept questions about clothing and sizes."});
     sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'")
-        .bind(store.seal(&metadata).unwrap())
+        .bind(store.seal_agent(&metadata).unwrap())
         .execute(&store.agent_pool)
         .await
         .unwrap();
@@ -98,7 +98,7 @@ async fn unacceptable_keeps_chat_excludes_context_and_retry_does_not_rejudge() {
     let (_root, mut app) = crate::runtime_tests::fixture().await;
     let raw:Vec<u8>=sqlx::query_scalar("SELECT metadata FROM agents WHERE id='shared_default'").fetch_one(&app.store.agent_pool).await.unwrap();
     let mut metadata=app.store.unseal(&raw).unwrap();metadata["shared_chat"]=json!({"shareable":true});
-    sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'").bind(app.store.seal(&metadata).unwrap()).execute(&app.store.agent_pool).await.unwrap();
+    sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'").bind(app.store.seal_agent(&metadata).unwrap()).execute(&app.store.agent_pool).await.unwrap();
     settings(&app, true).await;
     let (server, calls) = provider(&mut app, r#"{"verdict":"unacceptable"}"#, false).await;
     let sid = session(&app).await;

@@ -23,7 +23,7 @@ impl<'a,C:RecordCodec> Repository<'a,C> {
                 id,agent_id,connection_type,section,enabled,config,revision,created_at,updated_at)
                 VALUES(?,?,?,?,1,?,1,strftime('%s','now'),strftime('%s','now'))")
                 .bind(format!("ability:{id}")).bind(self.agent_id).bind(id).bind("ability")
-                .bind(self.codec.seal(&json!({}))?).execute(&mut *tx).await?;
+                .bind(self.codec.seal_agent_for(self.agent_id,&json!({}))?).execute(&mut *tx).await?;
         }
         tx.commit().await?;
         Ok(())
@@ -33,7 +33,7 @@ impl<'a,C:RecordCodec> Repository<'a,C> {
         if agent_id != self.agent_id {return Err(anyhow!("Agent view mismatch"));}
         let row = sqlx::query("SELECT metadata,revision FROM agents WHERE id=?")
             .bind(agent_id).fetch_one(self.agent_pool).await?;
-        let metadata = self.codec.unseal(&row.get::<Vec<u8>,_>("metadata"))?;
+        let metadata = self.codec.unseal_agent_for(self.agent_id,&row.get::<Vec<u8>,_>("metadata"))?;
         let mut visibility = metadata["ability_modes"].as_object().cloned().unwrap_or_default();
         let rows = sqlx::query("SELECT connection_type,enabled FROM agent_connections WHERE agent_id=? AND section='ability'")
             .bind(agent_id).fetch_all(self.agent_pool).await?;
@@ -54,7 +54,7 @@ impl<'a,C:RecordCodec> Repository<'a,C> {
         sqlx::query("UPDATE agents SET revision=revision WHERE id=?").bind(self.agent_id).execute(&mut *tx).await?;
         let row = sqlx::query("SELECT metadata,revision FROM agents WHERE id=?")
             .bind(self.agent_id).fetch_one(&mut *tx).await?;
-        let mut metadata = self.codec.unseal(&row.get::<Vec<u8>,_>("metadata"))?;
+        let mut metadata = self.codec.unseal_agent_for(self.agent_id,&row.get::<Vec<u8>,_>("metadata"))?;
         if metadata["ability_revision"].as_u64().unwrap_or(0) != expected_revision {
             return Err(anyhow!("Agent ability revision changed"));
         }
@@ -66,7 +66,7 @@ impl<'a,C:RecordCodec> Repository<'a,C> {
                 VALUES(?,?,?,?,?,?,1,strftime('%s','now'),strftime('%s','now'))
                 ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled,revision=agent_connections.revision+1,updated_at=excluded.updated_at")
                 .bind(format!("ability:{id}")).bind(self.agent_id).bind(id).bind("ability")
-                .bind((mode != "off") as i64).bind(self.codec.seal(&json!({}))?)
+                .bind((mode != "off") as i64).bind(self.codec.seal_agent_for(self.agent_id,&json!({}))?)
                 .execute(&mut *tx).await?;
         }
         metadata["ability_modes"]=Value::Object(active);
@@ -83,10 +83,10 @@ impl<'a,C:RecordCodec> Repository<'a,C> {
         // Visibility and its encrypted audit receipt have one agent-owned commit.
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
             .bind(format!("agent:{}:ability_visibility_audit:{}",self.agent_id,expected_revision+1))
-            .bind(self.codec.seal(&json!({"agent_id":self.agent_id,"actor_id":self.actor_id,"revision":expected_revision+1}))?)
+            .bind(self.codec.seal_agent_for(self.agent_id,&json!({"agent_id":self.agent_id,"actor_id":self.actor_id,"revision":expected_revision+1}))?)
             .execute(&mut *tx).await?;
         sqlx::query("UPDATE agents SET metadata=?,revision=revision+1,updated_at=strftime('%s','now') WHERE id=? AND revision=?")
-            .bind(self.codec.seal(&metadata)?).bind(self.agent_id)
+            .bind(self.codec.seal_agent_for(self.agent_id,&metadata)?).bind(self.agent_id)
             .bind(row.get::<i64,_>("revision"))
             .execute(&mut *tx).await?;
         tx.commit().await?;

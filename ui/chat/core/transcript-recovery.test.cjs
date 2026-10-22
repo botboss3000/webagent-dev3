@@ -68,10 +68,10 @@ test('queue rewind callback opening another session invalidates the old recovery
 });
 test('panel snapshot merge refuses different history revisions and other sessions',()=>{
  const source=fs.readFileSync(path.join(__dirname,'panel.js'),'utf8'),start=source.indexOf('function syncSnapshot(data)'),code=source.slice(start,source.indexOf('/** Confirms rewind',start));
- const published=[],updates=[],changes=[];
- const context=vm.createContext({session:'a',historyRevision:2,historyLastSeq:4,historyChanged:s=>changes.push(s),message:item=>published.push(item),followups:{update:data=>updates.push(data)},runs(){}});vm.runInContext(code,context);
+ const published=[],updates=[],changes=[],disclosures=[];
+ const context=vm.createContext({session:'a',historyRevision:2,historyLastSeq:4,privacyNotice:mode=>disclosures.push(mode),sharedAccess:null,canManageQueue:true,historyChanged:s=>changes.push(s),message:item=>published.push(item),followups:{update:data=>updates.push(data)},runs(){}});vm.runInContext(code,context);
  assert.equal(context.syncSnapshot({session:{id:'a',history_revision:1},messages:[msg(8)]}),false);assert.equal(context.syncSnapshot({session:{id:'b',history_revision:2},messages:[msg(9)]}),false);assert.equal(published.length,0);assert.equal(updates.length,0);
- assert.equal(context.syncSnapshot({session:{id:'a',history_revision:2},last_seq:7,messages:[msg(7)],queue:[]}),true);assert.equal(context.historyLastSeq,7);assert.equal(published.length,1);assert.equal(updates.length,1);
+ assert.equal(context.syncSnapshot({session:{id:'a',history_revision:2},conversation_privacy:'operator_reviewable',access:{observer:true,can_manage_queue:false},last_seq:7,messages:[msg(7)],queue:[]}),true);assert.equal(context.historyLastSeq,7);assert.equal(published.length,1);assert.equal(updates.length,1);assert.equal(disclosures.length,2);assert.equal(disclosures.at(-1),'operator_reviewable');assert.equal(context.canManageQueue,false);
 });
 
 test('actual activity render failure stays open through message and resolves on successful render',()=>{

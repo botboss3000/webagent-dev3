@@ -19,6 +19,7 @@ mod voice;
 #[cfg(test)]mod composer_tests;
 #[cfg(test)]mod session_deletion_tests;
 mod ability_admin;
+mod agent_members;
 mod service_admin;
 mod administrator;
 #[path = "../../crates/modules/models/host/api/platform_catalog.rs"]
@@ -166,6 +167,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/auth/change-password", post(change_password))
         .route("/auth/logout", post(logout))
         .merge(user_api::router())
+        .merge(agent_members::router())
         .merge(self::shared_chat::router())
         .merge(admin_api)
         .route_layer(middleware::from_fn_with_state(app.clone(), auth));

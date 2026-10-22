@@ -83,11 +83,8 @@ impl<C: RecordCodec> Repository<'_, C> {
     pub async fn entitlement_tier(&self, id: &str) -> Result<Option<Tier>> {
         if !access::valid_id(id) { bail!("Invalid tier ID"); }
         let policy=self.read_access_policy()?;
-        policy["tiers"].get(id).map(|value| {
-            let tier:Tier=serde_json::from_value(value.clone())?;
-            tier.validate()?;
-            Ok(tier)
-        }).transpose()
+        if policy["tiers"].get(id).is_none(){return Ok(None);}
+        Ok(Some(crate::account_ladder::effective(&policy,id)?))
     }
     pub async fn entitlement_tiers(&self) -> Result<Vec<Tier>> {
         let policy=self.read_access_policy()?;
@@ -96,20 +93,16 @@ impl<C: RecordCodec> Repository<'_, C> {
     }
     pub async fn save_entitlement_tier(&self, mut tier: Tier,
         expected_revision: u64) -> Result<Tier> {
-        if tier.id == "operator" {
-            let mut previous=self.entitlement_tier("operator").await?.ok_or_else(||anyhow!("Operator tier missing"))?;
-            previous.ability_permissions=tier.ability_permissions.clone();previous.revision=tier.revision;
-            if serde_json::to_value(&previous)?!=serde_json::to_value(&tier)? {
-                bail!("Only operator ability grants may change");
-            }
-        }
         tier.revision=expected_revision.checked_add(1).ok_or_else(||anyhow!("Tier revision overflow"))?;
         tier.validate()?;
         {
             let _lock=self.policy_lock()?;
             let mut policy=self.read_access_policy()?;
             if policy["tiers"][&tier.id]["revision"].as_u64().unwrap_or(0)!=expected_revision {bail!("Tier revision changed");}
+            let mut order=crate::account_ladder::order(&policy)?;
+            if !order.contains(&tier.id) {let position=order.iter().position(|id|id=="basic").or_else(||order.iter().position(|id|id=="anonymous")).unwrap_or(order.len());order.insert(position,tier.id.clone());}
             policy["tiers"][&tier.id]=serde_json::to_value(&tier)?;
+            policy["tier_order"]=json!(order);
             policy["revision"]=json!(policy["revision"].as_u64().unwrap_or(0).checked_add(1).ok_or_else(||anyhow!("Policy revision overflow"))?);
             self.write_access_policy(&policy)?;
         }
@@ -128,159 +121,107 @@ impl<C: RecordCodec> Repository<'_, C> {
         tx.commit().await?;
         Ok(tier)
     }
-    pub async fn agent_membership(&self, user_id: &str, agent_id: &str) -> Result<Option<Value>> {
-        if !access::valid_id(user_id) || !access::valid_agent_id(agent_id) {
-            bail!("Invalid membership identity");
-        }
-        let row = sqlx::query("SELECT value FROM agent_memberships WHERE user_id=? AND agent_id=?")
-            .bind(user_id).bind(agent_id).fetch_optional(self.app_pool).await?;
-        row.map(|row| self.unseal(&row.get::<Vec<u8>,_>("value"))).transpose()
+    pub async fn agent_membership(&self,user:&str,agent:&str)->Result<Option<Value>> {
+        if !access::valid_id(user) {bail!("Invalid membership identity");}
+        self.for_agent(agent).await?;
+        let row:Option<Vec<u8>>=sqlx::query_scalar("SELECT value FROM agent_memberships WHERE user_id=? AND agent_id=?")
+            .bind(user).bind(agent).fetch_optional(self.agent_pool).await?;
+        row.map(|blob|self.unseal_agent(&blob)).transpose()
     }
-    pub async fn agent_authority(&self, user_id: &str, agent_id: &str) -> Result<Value> {
-        if !access::valid_id(user_id) || !access::valid_agent_id(agent_id) {
-            bail!("Invalid membership identity");
+    pub async fn agent_owner(&self,agent:&str)->Result<String> {
+        self.for_agent(agent).await?;
+        let owner:String=sqlx::query_scalar("SELECT owner_id FROM agent_directory WHERE id=?")
+            .bind(agent).fetch_one(self.app_pool).await?;
+        let blob:Vec<u8>=sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?")
+            .bind(agent).fetch_one(self.agent_pool).await?;
+        let metadata=self.unseal_agent(&blob)?;
+        if metadata["owner_id"].as_str()!=Some(owner.as_str()) && !(agent=="shared_default" && owner=="admin" && metadata["owner_id"].is_null()) {
+            bail!("Agent owner conflict");
         }
-        let owner: String = sqlx::query_scalar("SELECT owner_id FROM agent_directory WHERE id=?")
-            .bind(agent_id).fetch_optional(self.app_pool).await?
-            .ok_or_else(||anyhow!("Agent not found"))?;
-        let account = self.account_by_id(user_id).await?
-            .ok_or_else(||anyhow!("Account not found"))?;
-        let principal = Principal::from_account(&account)?;
-        let membership = self.agent_membership(user_id,agent_id).await?;
-        if membership.as_ref().is_some_and(|value| value["user_id"] != user_id
-            || value["agent_id"] != agent_id || value["revision"].as_u64().is_none_or(|r|r == 0)) {
+        Ok(owner)
+    }
+    pub async fn agent_authority(&self,user:&str,agent:&str)->Result<Value> {
+        if !access::valid_id(user) {bail!("Invalid membership identity");}
+        let owner=self.agent_owner(agent).await?;
+        let account=self.account_by_id(user).await?.ok_or_else(||anyhow!("Account not found"))?;
+        let principal=Principal::from_account(&account)?;
+        let membership=self.agent_membership(user,agent).await?;
+        if membership.as_ref().is_some_and(|v|v["user_id"]!=user || v["agent_id"]!=agent || v["revision"].as_u64().is_none_or(|r|r==0)) {
             bail!("Invalid membership record");
         }
-        let relationship: Relationship = membership.as_ref()
-            .map(|value|serde_json::from_value(value["relationship"].clone()))
-            .transpose()?.unwrap_or(Relationship::Revoked);
-        let administrator = membership.as_ref().is_some_and(|value|
-            value["agent_administrator"] == true && value["relationship"] == "member");
-        Ok(json!({"agent_id":agent_id,"owner_id":owner,"relationship":relationship,
+        let relationship:Relationship=membership.as_ref().map(|v|serde_json::from_value(v["relationship"].clone())).transpose()?.unwrap_or(Relationship::Revoked);
+        let operator=owner==user || membership.as_ref().is_some_and(|v|v["agent_administrator"]==true && v["relationship"]=="member");
+        Ok(json!({"agent_id":agent,"owner_id":owner,"relationship":relationship,
             "revision":membership.as_ref().and_then(|v|v["revision"].as_u64()).unwrap_or(0),
-            "agent_administrator":administrator,"installation_administrator":principal.administrator(),
-            "can_manage":principal.active() && (owner == user_id || administrator || principal.administrator()),
-            "can_use":principal.active() && relationship != Relationship::Revoked}))
+            "agent_operator":operator,"agent_administrator":operator,
+            "installation_administrator":principal.administrator(),
+            "can_manage":principal.active() && operator,
+            "can_use":principal.active() && relationship!=Relationship::Revoked}))
     }
-    pub async fn agent_memberships(&self, agent_id: &str) -> Result<Vec<Value>> {
-        if !access::valid_agent_id(agent_id) { bail!("Invalid agent identity"); }
-        let exists: Option<String> = sqlx::query_scalar("SELECT id FROM agent_directory WHERE id=?")
-            .bind(agent_id).fetch_optional(self.app_pool).await?;
-        if exists.is_none() { bail!("Agent not found"); }
-        let rows = sqlx::query("SELECT user_id,value FROM agent_memberships WHERE agent_id=? ORDER BY user_id")
-            .bind(agent_id).fetch_all(self.app_pool).await?;
+    pub async fn agent_memberships(&self,agent:&str)->Result<Vec<Value>> {
+        self.for_agent(agent).await?;
+        let rows=sqlx::query("SELECT value FROM agent_memberships WHERE agent_id=? ORDER BY user_id")
+            .bind(agent).fetch_all(self.agent_pool).await?;
         rows.iter().map(|row| {
-            let value = self.unseal(&row.get::<Vec<u8>,_>("value"))?;
-            Ok(json!({"user_id":row.get::<String,_>("user_id"),"agent_id":agent_id,
-                "relationship":value["relationship"],"revision":value["revision"],
-                "agent_administrator":value["agent_administrator"].as_bool().unwrap_or(false),
-                "capability_level_id":crate::capabilities::membership_level(Some(&value),
-                    serde_json::from_value(value["relationship"].clone())?)?}))
+            let mut value=self.unseal_agent(&row.get::<Vec<u8>,_>("value"))?;
+            value["agent_operator"]=json!(value["agent_administrator"]==true || value["relationship"]=="owner");
+            value["capability_level_id"]=json!(crate::capabilities::membership_level(Some(&value),serde_json::from_value(value["relationship"].clone())?)?);
+            Ok(value)
         }).collect()
     }
-    pub async fn assign_agent_membership(&self, actor_id: &str, user_id: &str,
-        agent_id: &str, relationship: Relationship, agent_administrator: bool,
-        expected_revision: u64) -> Result<Value> {
-        validate_membership_actor(actor_id)?;
-        self.write_agent_membership(user_id,agent_id,relationship,expected_revision,
-            Some((actor_id,agent_administrator))).await
+    pub async fn assign_agent_membership(&self,actor:&str,user:&str,agent:&str,relationship:Relationship,operator:bool,expected:u64)->Result<Value> {
+        validate_membership_actor(actor)?;
+        self.write_agent_membership(user,agent,relationship,expected,Some((actor,operator)),None,"explicit").await
     }
-    pub async fn set_agent_membership(&self, user_id: &str, agent_id: &str,
-        relationship: Relationship, expected_revision: u64) -> Result<Value> {
-        // Trusted bootstrap/internal seam; HTTP roster writes use the actor-aware method.
-        self.write_agent_membership(user_id,agent_id,relationship,expected_revision,None).await
+    pub async fn set_agent_membership(&self,user:&str,agent:&str,relationship:Relationship,expected:u64)->Result<Value> {
+        self.write_agent_membership(user,agent,relationship,expected,None,None,"explicit").await
     }
-    async fn write_agent_membership(&self, user_id: &str, agent_id: &str,
-        relationship: Relationship, expected_revision: u64,
-        actor: Option<(&str,bool)>) -> Result<Value> {
-        validate_membership_update(user_id,agent_id,relationship)?;
-        let agent_view = self.for_agent(agent_id).await?;
-        let agent: Option<String> = sqlx::query_scalar("SELECT status FROM agents WHERE id=?")
-            .bind(agent_id).fetch_optional(agent_view.agent_pool).await?;
-        if agent.is_none() { bail!("Agent not found"); }
-        let owner: Option<String> = sqlx::query_scalar(
-            "SELECT owner_id FROM agent_directory WHERE id=?")
-            .bind(agent_id).fetch_optional(self.app_pool).await?;
-        let owner = owner.ok_or_else(||anyhow!("Agent is not registered"))?;
-        if (owner == user_id && relationship != Relationship::Owner)
-            || (owner != user_id && relationship == Relationship::Owner) {
-            bail!("Agent owner relationship cannot be changed here");
+    pub async fn manage_agent_member(&self,actor:&str,user:&str,agent:&str,level:Option<&str>,blocked:bool,expected:u64)->Result<Value> {
+        if blocked && level.is_some() {bail!("Blocked membership cannot have a level");}
+        let operator=level==Some("operator");
+        self.write_agent_membership(user,agent,if blocked {Relationship::Revoked} else if level.is_some_and(|v|v!="visitor") {Relationship::Member} else {Relationship::Caller},
+            expected,Some((actor,operator)),level,if blocked {"blocked"} else if level.is_none(){"removed"}else{"explicit"}).await
+    }
+    async fn write_agent_membership(&self,user:&str,agent:&str,relationship:Relationship,expected:u64,actor:Option<(&str,bool)>,level:Option<&str>,origin:&str)->Result<Value> {
+        validate_membership_update(user,agent,relationship)?;
+        let owner=self.agent_owner(agent).await?;
+        if (owner==user && relationship!=Relationship::Owner) || (owner!=user && relationship==Relationship::Owner) {bail!("Agent owner relationship cannot be changed");}
+        let target=self.account_by_id(user).await?.ok_or_else(||anyhow!("Account not found"))?;
+        if actor.is_some_and(|(_,operator)|operator) && target["role"]=="guest" {bail!("Anonymous identities cannot be Operators");}
+        let mut tx=self.agent_pool.begin().await?;
+        sqlx::query("UPDATE agents SET revision=revision WHERE id=?").bind(agent).execute(&mut *tx).await?;
+        let blob:Option<Vec<u8>>=sqlx::query_scalar("SELECT value FROM agent_memberships WHERE user_id=? AND agent_id=?")
+            .bind(user).bind(agent).fetch_optional(&mut *tx).await?;
+        let previous=blob.as_ref().map(|b|self.unseal_agent(b)).transpose()?;
+        if previous.as_ref().and_then(|v|v["revision"].as_u64()).unwrap_or(0)!=expected {bail!("Membership revision changed");}
+        if let Some(level)=level {
+            let bytes:Vec<u8>=sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?").bind(agent).fetch_one(&mut *tx).await?;
+            if !crate::capabilities::CapabilityLevels::from_metadata(&self.unseal_agent(&bytes)?)?.levels.contains_key(level) {bail!("Capability level not found");}
         }
-        let mut tx = self.app_pool.begin().await?;
-        sqlx::query("UPDATE user_accounts SET value=value WHERE user_id=?")
-            .bind(user_id).execute(&mut *tx).await?;
-        let account_blob: Vec<u8> = sqlx::query_scalar(
-            "SELECT value FROM user_accounts WHERE user_id=?")
-            .bind(user_id).fetch_optional(&mut *tx).await?
-            .ok_or_else(|| anyhow!("Account not found"))?;
-        let row: Option<Vec<u8>> = sqlx::query_scalar(
-            "SELECT value FROM agent_memberships WHERE user_id=? AND agent_id=?")
-            .bind(user_id).bind(agent_id).fetch_optional(&mut *tx).await?;
-        let current = row.as_ref().map(|row| self.unseal(row)).transpose()?;
-        if current.as_ref().and_then(|value|value["revision"].as_u64()).unwrap_or(0)
-            != expected_revision { bail!("Membership revision changed"); }
-        let current_admin = current.as_ref().is_some_and(|v|v["agent_administrator"] == true);
-        let administrator = if let Some((actor_id, requested_admin)) = actor {
-            // This write transaction serializes authority reads with revocation.
-            let blob: Vec<u8> = sqlx::query_scalar("SELECT value FROM user_accounts WHERE user_id=?")
-                .bind(actor_id).fetch_optional(&mut *tx).await?
-                .ok_or_else(||anyhow!("Actor account not found"))?;
-            let principal = Principal::from_account(&self.unseal(&blob)?)?;
-            let actor_membership: Option<Vec<u8>> = sqlx::query_scalar(
-                "SELECT value FROM agent_memberships WHERE user_id=? AND agent_id=?")
-                .bind(actor_id).bind(agent_id).fetch_optional(&mut *tx).await?;
-            let actor_membership = actor_membership.as_ref().map(|blob|self.unseal(blob)).transpose()?;
-            let delegated = actor_membership.as_ref().is_some_and(|v|
-                v["agent_administrator"] == true && v["relationship"] == "member");
-            if !principal.active() || !(actor_id == owner || delegated || principal.administrator()) {
-                bail!("Agent administration required");
-            }
-            // Owners appoint administrators. Installation oversight can revoke
-            // an administrator but never silently gains ownership or appoints one.
-            if requested_admin && actor_id != owner && !current_admin {
-                bail!("Only the agent owner can appoint administrators");
-            }
-            if actor_id != owner && !principal.administrator()
-                && (current_admin || requested_admin || user_id == owner) {
-                bail!("Agent administrators cannot change privileged memberships");
-            }
-            if requested_admin && relationship != Relationship::Member {
-                bail!("Agent administrator must be a member");
-            }
-            requested_admin
-        } else {
-            current_admin && relationship == Relationship::Member
-        };
-        let revision = expected_revision.checked_add(1)
-            .ok_or_else(|| anyhow!("Membership revision overflow"))?;
-        let mut value = json!({"user_id":user_id,"agent_id":agent_id,
-            "relationship":relationship,"agent_administrator":administrator,"revision":revision});
-        // Relationship/admin edits do not silently replace an appointed capability policy.
-        value["capability_level_id"]=json!(if let Some(level)=current.as_ref().and_then(|v|v.get("capability_level_id")) {
-            level.as_str().ok_or_else(||anyhow!("Invalid membership level"))?.to_owned()
-        } else {crate::capabilities::membership_level(Some(&value),relationship)?});
-        sqlx::query("INSERT INTO agent_memberships(user_id,agent_id,value) VALUES(?,?,?)
-            ON CONFLICT(user_id,agent_id) DO UPDATE SET value=excluded.value")
-            .bind(user_id).bind(agent_id).bind(self.seal(&value)?)
-            .execute(&mut *tx).await?;
-        let mut account = self.unseal(&account_blob)?;
-        let old = Principal::from_account(&account)?.access_revision;
-        account["access_revision"] = json!(old.checked_add(1)
-            .ok_or_else(||anyhow!("Account revision overflow"))?);
-        // INITIAL-OWNER-SESSION: new ownership grants no previously held access to revoke.
-        // Keep the creator signed in so creation can proceed to model configuration.
-        // Every later membership edit still invalidates sign-ins and access snapshots.
-        let initial_owner = owner == user_id && current.is_none() && relationship == Relationship::Owner;
-        if !initial_owner {
-            account["generation"] = json!(uuid::Uuid::new_v4().to_string());
-        }
-        sqlx::query("UPDATE user_accounts SET value=? WHERE user_id=?")
-            .bind(self.seal(&account)?).bind(user_id).execute(&mut *tx).await?;
-        audit(&mut tx,self,"agent_membership_changed",&json!({"user_id":user_id,
-            "agent_id":agent_id,"relationship":relationship,"agent_administrator":administrator,
-            "actor_id":actor.map(|(id,_)|id),"revision":revision})).await?;
-        tx.commit().await?;
-        Ok(value)
+        let operator=if let Some((actor,operator))=actor {
+            let account=self.account_by_id(actor).await?.ok_or_else(||anyhow!("Actor not found"))?;
+            let member:Option<Vec<u8>>=sqlx::query_scalar("SELECT value FROM agent_memberships WHERE user_id=? AND agent_id=?")
+                .bind(actor).bind(agent).fetch_optional(&mut *tx).await?;
+            let delegated=member.as_ref().map(|b|self.unseal_agent(b)).transpose()?.is_some_and(|v|v["relationship"]=="member" && v["agent_administrator"]==true);
+            if !Principal::from_account(&account)?.active() || !(actor==owner || delegated) {bail!("Agent Operator required");}
+            if user==owner {bail!("Owner appointment is protected");}
+            if operator && relationship!=Relationship::Member {bail!("Operator must be a member");}
+            operator
+        } else {previous.as_ref().is_some_and(|v|v["agent_administrator"]==true) && relationship==Relationship::Member};
+        let revision=expected.checked_add(1).ok_or_else(||anyhow!("Membership revision overflow"))?;
+        let mut value=json!({"user_id":user,"agent_id":agent,"relationship":relationship,
+            "agent_administrator":operator,"revision":revision,"origin":origin});
+        value["capability_level_id"]=if operator || relationship==Relationship::Owner {json!("operator")}
+            else if let Some(level)=level {json!(level)}
+            else {previous.as_ref().and_then(|v|v.get("capability_level_id")).filter(|v|*v!="operator" && *v!="administrator").cloned()
+                .unwrap_or_else(||json!(if relationship==Relationship::Member {"member"} else {"visitor"}))};
+        sqlx::query("INSERT INTO agent_memberships(user_id,agent_id,value) VALUES(?,?,?) ON CONFLICT(user_id,agent_id) DO UPDATE SET value=excluded.value")
+            .bind(user).bind(agent).bind(self.seal_agent(&value)?).execute(&mut *tx).await?;
+        sqlx::query("UPDATE agents SET revision=revision+1 WHERE id=?").bind(agent).execute(&mut *tx).await?;
+        let receipt=json!({"agent_id":agent,"user_id":user,"actor_id":actor.map(|v|v.0),"revision":revision,"relationship":relationship,"operator":operator});
+        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)").bind(format!("agent:{agent}:membership_audit:{}",uuid::Uuid::new_v4()))
+            .bind(self.seal_agent(&receipt)?).execute(&mut *tx).await?;
+        tx.commit().await?;Ok(value)
     }
 }
 

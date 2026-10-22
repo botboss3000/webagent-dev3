@@ -48,6 +48,10 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   // Projects panel run states into the activity view's display-state vocabulary.
   const paintActivity=()=>{try{activity.render({sessionId:session,runs:activityRuns.map(r=>({...r,state:({completed:'completed',failed:'failed',stopped:'cancelled',waiting_approval:'running',waiting_gate:'finalizing'})[r.status]||r.status}))},$('chat-messages-inner'));issues?.resolve('activity_display',session);}catch(error){if(issues)issues.fail('activity_display',error,session);else note('Activity display unavailable: '+error.message);}};
   const client = createChatClient({request, note, issues, clearNoticeFrom, createStream});
+  let privacyMode=null;
+  function privacyNotice(mode){privacyMode=mode;const notice=$('chat-privacy-notice');if(!notice)return;
+    notice.hidden=false;notice.textContent=mode==='operator_reviewable'?'Agent Operators can read this conversation and join to reply.':mode==='private'?'Private conversation: Agent Operators cannot review these messages.':'Conversation privacy is loading…';}
+  async function loadAgentPrivacy(){if(session)return;privacyNotice(null);try{const data=await request('/agents/'+encodeURIComponent(getAgentId())+'/access-summary');if(!session)privacyNotice(data.conversation_privacy);}catch(error){if(!session){privacyNotice(null);$('chat-privacy-notice').textContent='Conversation privacy unavailable. Retry before sending.';}}}
 /** Fetches, validates, and mounts the required V3 chat partial into the supplied root. */
 async function mountChat(){
   const response=await fetch('/v3-ui/chat/chat.html?v=chat-partial-20261007-notifications',{credentials:'same-origin'});
@@ -89,7 +93,7 @@ function historyChanged(summary){
 /** Merge a matching-session poll snapshot only when it shares the displayed history revision. */
 function syncSnapshot(data){
   if(data.session?.id&&data.session.id!==session)return false;
-  if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}
+  privacyNotice(data.conversation_privacy);if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}
   if((data.session?.history_revision||0)!==historyRevision){historyChanged(data.session);return false;}
   historyLastSeq=Math.max(historyLastSeq,data.last_seq||0);
   for(const item of data.messages||[])message(item);followups.update(data);runs(data.runs||[],true);return true;
@@ -225,7 +229,7 @@ async function sessions(){const turn=++sessionsGeneration;let data;try{data=awai
  * Resets the display lease for the selected session; only newly delivered messages restore brightness.
  * Client snapshot failures propagate; controls report independent issues, or note when no tracker is injected.
  */
-async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{mainNotes?.setAgent(null);messagingRoutes.disconnect();canManageQueue=false;sharedAccess={can_send:false,can_control:false};followups.reset();historyReady=false;anchor.reset();progress.open(id);notifications.clearRuns();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;issues?.select(id);screenAwake.select(id);stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);sharing.open(id).catch(error=>{if(id===session&&!issues)note('Shared controls unavailable: '+error.message);});controls.open(id).catch(error=>{if(id===session&&!issues)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}messagingRoutes.open(id,canManageQueue);void messagingRoutes.refresh().catch(error=>note(error.message));historyReady=true;historyLastSeq=data.last_seq||0;historyRevision=data.session.history_revision||0;readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';if(id!==session)return;mainNotes?.setAgent(sessionAgentId);$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);onEvent('session',{session_id:id});document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);followups.update(data);runs(data.runs||[],true);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;if(!recovered)screenAwake.attention('message');try{media.published(item);issues?.resolve('media_display',id);}catch(error){if(issues)issues.fail('media_display',error,id);else note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);issues?.resolve('transcript_position',id);}catch(error){if(issues)issues.fail('transcript_position',error,id);else note('Transcript positioning unavailable: '+error.message);}return true;},summary=>{historyChanged(summary);void sessions().catch(error=>{if(!issues)note(error.message);});},syncSnapshot);if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
+async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{mainNotes?.setAgent(null);messagingRoutes.disconnect();canManageQueue=false;sharedAccess={can_send:false,can_control:false};followups.reset();historyReady=false;anchor.reset();progress.open(id);notifications.clearRuns();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;issues?.select(id);screenAwake.select(id);stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);sharing.open(id).catch(error=>{if(id===session&&!issues)note('Shared controls unavailable: '+error.message);});controls.open(id).catch(error=>{if(id===session&&!issues)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{privacyNotice(data.conversation_privacy);if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}messagingRoutes.open(id,canManageQueue);void messagingRoutes.refresh().catch(error=>note(error.message));historyReady=true;historyLastSeq=data.last_seq||0;historyRevision=data.session.history_revision||0;readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';if(id!==session)return;mainNotes?.setAgent(sessionAgentId);$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);onEvent('session',{session_id:id});document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);followups.update(data);runs(data.runs||[],true);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;if(!recovered)screenAwake.attention('message');try{media.published(item);issues?.resolve('media_display',id);}catch(error){if(issues)issues.fail('media_display',error,id);else note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);issues?.resolve('transcript_position',id);}catch(error){if(issues)issues.fail('transcript_position',error,id);else note('Transcript positioning unavailable: '+error.message);}return true;},summary=>{historyChanged(summary);void sessions().catch(error=>{if(!issues)note(error.message);});},syncSnapshot);if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
 // Requests run cancellation and refreshes shell state even when the request fails.
 async function cancel(id){if(sharedAccess?.can_control===false)throw Error('This conversation is read only');progress.note('Stopping…');try{await client.cancel(id,{client_request_id:keyId('cancel:'+id)});}finally{await refresh();}}
 // Adds/removes a transcript notice only for certain failed runs; uncertain outcomes remain in recovery UI.
@@ -282,8 +286,10 @@ async function ensureSession(){
   creatingSession=(async()=>{
     const focusWatch=watchFocus();
     try {
+      if(!privacyMode)await loadAgentPrivacy();
+      if(!privacyMode)throw Error('Conversation privacy unavailable; retry before sending.');
       const requestKey='session:'+getAgentId();
-      const item=await client.create({agent_id:getAgentId(),client_request_id:keyId(requestKey)});
+      const item=await client.create({agent_id:getAgentId(),client_request_id:keyId(requestKey),expected_conversation_privacy:privacyMode});
       forgetKey(requestKey);
       if(epoch!==sessionGeneration)throw Error('Conversation changed; repeat the action in the selected conversation.');
       await sessions();
@@ -310,11 +316,14 @@ async function submit(text,clearInput=false){
   const origin=session,epoch=sessionGeneration,draft=$('chat-input').value;
   progress.note('Sending…');submitting=true;$('chat-send').disabled=true;$('chat-continue-btn').disabled=true;
   try{
+    if(!session){await loadAgentPrivacy();if(!privacyMode)throw Error('Conversation privacy unavailable; message was not sent.');}
     const sid=await ensureSession();
     if((origin&&origin!==session)||(epoch!==sessionGeneration&&session!==sid))throw Error('Conversation changed; message was not sent.');
     const ids=media.snapshot(sid),content=text+(elementContext?'\n\n[Untrusted page context selected by user]\n'+elementContext:'');
     const requestKey='message:'+sid+':'+content+':'+ids.join(',');
-    const sent=await client.send(sid,{text:content,attachment_ids:ids,client_message_id:keyId(requestKey)});
+    const sent=sharedAccess?.operator_reply
+      ? await request('/sessions/'+encodeURIComponent(sid)+'/operator-replies','POST',{text:content,attachment_ids:ids,client_message_id:keyId(requestKey)})
+      : await client.send(sid,{text:content,attachment_ids:ids,client_message_id:keyId(requestKey)});
     if(sid===session){
       progress.note(sent.submission_id?'Message queued':sent.review_id?'Awaiting manager review…':'Message sent');
       const data=await client.snapshot(sid);
@@ -374,6 +383,7 @@ $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
   };
   // One capture owner also covers chat portals and the shell Chat/Float buttons.
   const disposeFeedback=mountChatControlFeedback(root,{portals:true,shell:true});
+  await loadAgentPrivacy();
   mountedPanels.set(root, panel);
   return panel;
 }

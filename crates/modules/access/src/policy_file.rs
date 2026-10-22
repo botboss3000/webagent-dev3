@@ -42,6 +42,19 @@ impl<C: RecordCodec> Repository<'_, C> {
         if policy.get("tiers").is_none() {policy["tiers"]=Value::Object(tiers);policy["revision"]=json!(policy["revision"].as_u64().unwrap_or(0)+1);self.write_access_policy(&policy)?;}
         Ok(())
     }
+    pub fn ensure_account_ladder(&self)->Result<()> {
+        let _lock=self.policy_lock()?;let mut policy=self.read_access_policy()?;
+        if policy.get("tier_order").is_some(){crate::account_ladder::order(&policy)?;return Ok(());}
+        if policy["tiers"].get("anonymous").is_none() {
+            let mut anonymous=policy["tiers"]["basic"].clone();
+            if anonymous.is_null(){return Err(anyhow!("Base account tier missing"));}
+            anonymous["id"]=json!("anonymous");policy["tiers"]["anonymous"]=anonymous;
+        }
+        policy["tier_order"]=json!(crate::account_ladder::order(&policy)?);
+        policy["tier_names"]=json!({"operator":"Admin","basic":"Base","anonymous":"Anonymous"});
+        policy["revision"]=json!(policy["revision"].as_u64().unwrap_or(0).checked_add(1).ok_or_else(||anyhow!("Policy revision overflow"))?);
+        self.write_access_policy(&policy)
+    }
     pub fn write_access_policy(&self, value: &Value) -> Result<()> {
         use std::io::Write;
         let path=self.access_policy_path();

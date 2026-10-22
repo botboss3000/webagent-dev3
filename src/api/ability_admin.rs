@@ -20,7 +20,7 @@ fn map_permission(map:&Value,id:&str,default:Permission)->std::result::Result<Pe
         Some(v)=>Permission::from_policy(v.as_str().ok_or_else(||bad("Invalid permission"))?).map_err(Into::into),None=>Ok(default),
     }
 }
-async fn grant_ceiling(app:&App,identity:&Value,abilities:&Value,tools:&Value,previous_abilities:&Value,previous_tools:&Value,base:bool)->std::result::Result<(),ApiError> {
+pub(super) async fn grant_ceiling(app:&App,identity:&Value,abilities:&Value,tools:&Value,previous_abilities:&Value,previous_tools:&Value,base:bool)->std::result::Result<(),ApiError> {
     let account=app.store.account_by_id(identity["_user_id"].as_str().ok_or_else(denied)?).await?.ok_or_else(denied)?;
     let principal=crate::access::Principal::from_account(&account)?;
     let tier=app.store.entitlement_tier(&principal.tier_id).await?.ok_or_else(denied)?;
@@ -71,10 +71,11 @@ async fn catalog(app:&App,identity:&Value,id:&str,params:&HashMap<String,String>
     if user!=caller && !access.admitted() {return Err(denied());}
     let levels=app.store.capability_levels(id).await?;
     if let Some(level)=params.get("level_id").filter(|v|!v.is_empty()) {
-        access.capability_level=levels.levels.get(level).ok_or_else(||bad("Unknown capability level"))?.clone();
+        access.capability_level=levels.effective(level).map_err(|_|bad("Unknown capability level"))?;
     }
     let scoped=admin_agent_view(app,id).await?;
     let mut visibility=agent_abilities(&scoped).await?;
+    access.capability_level.decorate_visibility(&mut visibility);
     let policy=crate::session_messaging::policy_defaults(scoped.store.get("policy").await?.unwrap_or_else(policy_default));
     let mut abilities=app.abilities.configuration_catalog(&policy,&visibility);
     let call_counts = app.store.for_user(caller).await?.tool_call_counts(id).await?;

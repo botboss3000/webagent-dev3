@@ -176,7 +176,7 @@ impl Store {
         let revision = expected_revision.checked_add(1)
             .ok_or_else(|| anyhow!("Invalid prompt slot revision"))?;
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
-        let sealed = self.seal(&json!(next_content))?;
+        let sealed = self.seal_agent(&json!(next_content))?;
         if existing.is_some() {
             let updated = sqlx::query("UPDATE agent_prompts SET content=?,revision=?,updated_at=?
                 WHERE agent_id=? AND slot_name=? AND revision=? AND lock=0")

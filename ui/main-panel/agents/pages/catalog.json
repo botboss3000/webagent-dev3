@@ -42,6 +42,15 @@
       "type": "agent_configuration"
     },
     {
+      "id": "members",
+      "title": "Members",
+      "description": "Manage this agent’s members and Operators.",
+      "order": 25,
+      "panelId": "members-page",
+      "icon": "users",
+      "type": "agent_configuration"
+    },
+    {
       "id": "sessions",
       "title": "Sessions",
       "description": "Browse your conversations across agents.",

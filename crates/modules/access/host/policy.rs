@@ -71,7 +71,7 @@ mod tests {
         let mut metadata=store.unseal(&original).unwrap();
         metadata["tool_permissions"]=serde_json::json!({"file_read":"deny"});
         sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'")
-            .bind(store.seal(&metadata).unwrap()).execute(&store.agent_pool).await.unwrap();
+            .bind(store.seal_agent(&metadata).unwrap()).execute(&store.agent_pool).await.unwrap();
         let changed=store.live_access("admin","shared_default").await.unwrap();
         sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'")
             .bind(original).execute(&store.agent_pool).await.unwrap();
@@ -106,7 +106,7 @@ mod tests {
         let denied=store.live_access("admin","shared_default").await.unwrap();
         assert_eq!(denied.tool_decision_for_abilities("file_read",
             &["codebase_admin".to_owned()],Permission::Auto,true,true,false,true)
-            .reason,Reason::AbilityDenied);
+            .reason,Reason::CapabilityDenied);
         store.set_agent_ability_permissions("shared_default",agent_revision+1,
             [("codebase_admin".to_owned(),Permission::Ask)].into())
             .await.unwrap();
@@ -125,7 +125,7 @@ mod tests {
         assert!(!pending.admitted());
         assert_eq!(pending.tool_decision("file_read",Permission::Auto,
             true,true,false,true).reason,Reason::TierDenied);
-        store.update_account_access(id,2,AccountStatus::Active,Role::User,"basic")
+        store.update_account_access(id,1,AccountStatus::Active,Role::User,"basic")
             .await.unwrap();
         let active = store.live_access(id,"shared_default").await.unwrap();
         assert!(active.admitted());

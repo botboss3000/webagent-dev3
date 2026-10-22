@@ -2130,7 +2130,7 @@ mod automation_evidence_privacy_tests {
         metadata["manager_incoming_message"] =
             json!({"enabled":true,"criteria":"Review incoming automation tasks."});
         sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'")
-            .bind(agent.seal(&metadata).unwrap())
+            .bind(agent.seal_agent(&metadata).unwrap())
             .execute(&agent.agent_pool)
             .await
             .unwrap();
@@ -2238,8 +2238,13 @@ mod authenticated_caller_namespace_tests {
             )
             .await
             .unwrap();
-        // Give this ordinary caller Automation metadata authority, while the
-        // global administrator's capability level remains denied for that ability.
+        // Both ceilings permit Automation; authenticated caller identity still owns its namespace.
+        let mut ceiling=app.store.entitlement_tier("operator").await.unwrap().unwrap();let ceiling_revision=ceiling.revision;
+        ceiling.ability_permissions.insert("automation".into(),crate::access::Permission::Auto);
+        app.store.save_entitlement_tier(ceiling,ceiling_revision).await.unwrap();
+        let ladder=app.store.capability_levels("shared_default").await.unwrap();
+        let mut operator=ladder.levels["operator"].clone();operator.ability_permissions.insert("automation".into(),crate::access::Permission::Auto);
+        app.store.save_capability_level("shared_default",operator,ladder.revision).await.unwrap();
         let mut tier = app.store.entitlement_tier("basic").await.unwrap().unwrap();
         let expected = tier.revision;
         tier.ability_permissions

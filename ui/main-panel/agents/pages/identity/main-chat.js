@@ -70,7 +70,7 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
     open.hidden=!data.session_id;if(data.session_id)open.href='/app?session_id='+encodeURIComponent(data.session_id);warnings();lock(false);save.textContent='Save Main Chat';
   }
   /** Explicit reload reconciles conflicts; detached navigation cannot repaint another agent. */
-  async function load(){const epoch=++generation;busy=true;lock(true);status.textContent='Loading Main Chat…';try{const data=await request(path);if(!alive()||epoch!==generation)return;paint(data);status.textContent=data.can_manage===true?'':'Only this agent’s administrators can edit these settings.';}catch(error){if(alive()&&epoch===generation)status.textContent='Main Chat unavailable: '+error.message;}finally{if(epoch===generation){busy=false;reload.disabled=false;}}}
+  async function load(){const epoch=++generation;busy=true;lock(true);status.textContent='Loading Main Chat…';try{const data=await request(path);if(!alive()||epoch!==generation)return;paint(data);status.textContent=data.can_manage===true?'':'Only this agent’s Operators can edit these settings.';}catch(error){if(alive()&&epoch===generation)status.textContent='Main Chat unavailable: '+error.message;}finally{if(epoch===generation){busy=false;reload.disabled=false;}}}
   reload.addEventListener('click',()=>{if(!busy)void load();});
   form.addEventListener('submit',async event=>{
     event.preventDefault();if(busy||!state||!editable())return;

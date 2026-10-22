@@ -454,7 +454,7 @@ async fn execute_tool_step(
                 return Ok(std::ops::ControlFlow::Continue(()));
             }
             let (policy, mode_revision, visibility, mut ability_state) =
-                app.ability_controls( &sid).await?;
+                app.ability_controls_for(&sid,run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id())).await?;
             let mode=app.session_mode(&sid).await?;
             let authorization_mode=if run["post_run_followup"]==true {
                 json!({"mode":"read_only","execution_mode":"ask","revision":mode["revision"]})
@@ -1001,7 +1001,7 @@ async fn execute_run_inner(app:Self,id:String,generation:String,cancel:Cancellat
                 app.save(&mut run).await?;
                 return Ok(());
             }
-            let (policy, _, visibility, ability_state) = app.ability_controls( &sid).await?;
+            let (policy, _, visibility, ability_state) = app.ability_controls_for(&sid,run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id())).await?;
             let ability_state=app.abilities.selected_state(&visibility,&ability_state,&run["loaded_abilities"]);
             let mode = app.session_mode( &sid).await?;
             let authorization_mode=if run["post_run_followup"]==true {
