@@ -240,7 +240,7 @@ let noticeSource='',actionNotice='',backgroundNotices=[];
 const paintNotices=()=>{$('notice').textContent=[actionNotice,...backgroundNotices].filter(Boolean).join(' · ');};
 const issues=createBackgroundIssues({request:(...args)=>api(...args),render:messages=>{backgroundNotices=messages;paintNotices();}});
 const note=(text,source='')=>{
-  const visibleText=text==='Sign in required'?'':text;
+  const visibleText=(text==='Sign in required'||text==='Guest access is not enabled')?'':text;
   actionNotice=visibleText;paintNotices();
   noticeSource=visibleText?source:'';
 };
