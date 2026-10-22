@@ -16,6 +16,11 @@ assert not module.secret(b"https://user:password@deb.debian.org/debian/pool/p.de
 assert module.secret(b"https://user:password@service.example/private")
 assert module.secret(b"access_token=" + b"x" * 24)
 assert module.secret(b"-----BEGIN PRIVATE KEY-----")
+# Reviewing one historical line must not make its sentinel globally acceptable.
+assert module.secret(b"secret:" + b"'PRIVATE_ARGUMENT'")
+assert module._REVIEWED_HISTORY_LINES[(
+    "f2d332c246ce23dae46b6267b5301a59182df87f", "ui/chat/core/chat-notifications.browser.test.cjs"
+)] == frozenset({"6ef6c6a7a40bbb800a8a9b78261065a47f9d524d661cfcce61ee8202761596d6"})
 async def push_guard_check():
     with tempfile.TemporaryDirectory() as temporary:
         base=Path(temporary)

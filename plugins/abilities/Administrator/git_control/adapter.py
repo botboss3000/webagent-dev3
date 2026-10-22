@@ -289,9 +289,25 @@ async def outgoing_guard_location(repo,remote,scan_head):
  except (Rejected,UnicodeError,ValueError):
   return {"status":"unavailable"}
 
-# SHA256 of full added diff lines in one reviewed, already committed smoke test.
+# SHA256 of full added diff lines in reviewed, already committed regression tests.
 # The exception cannot be selected by tool arguments and never applies to another commit/path.
 _REVIEWED_HISTORY_LINES={
+ # Models tests exercise encrypted storage and device-flow fencing with literal dummy tokens.
+ ("22934cce71b2157b3e257b02f266256f5e4a1833","crates/modules/models/src/model_io_tests.rs"):frozenset({
+  "9a06dea7e24d76373a11501db5bfd1b881850f95c4cb85231b1b2ac379d4ed74",
+ }),
+ ("22934cce71b2157b3e257b02f266256f5e4a1833","crates/modules/models/src/runtime.rs"):frozenset({
+  "d8361830b286f433a795dd4c4dde6560da19cfdef8cc6c64cf34d371272ed359",
+  "6749b873c877027b761e26054e497da416b04d26f3005cc4b30ca342c672c24d",
+ }),
+ # Manager fixture supplies a dummy token only to its temporary loopback mock provider.
+ ("4f2442caad651fed6d64cb7147f48c512a352246","crates/modules/manager/src/tests.rs"):frozenset({
+  "9232707750cebd746de222b1620b3a04c17b31500b8e0ae973ffb06cb5d8b4b1",
+ }),
+ # UI observer fixture uses a public sentinel to prove private arguments stay hidden.
+ ("f2d332c246ce23dae46b6267b5301a59182df87f","ui/chat/core/chat-notifications.browser.test.cjs"):frozenset({
+  "6ef6c6a7a40bbb800a8a9b78261065a47f9d524d661cfcce61ee8202761596d6",
+ }),
  ("0aa6da670fba3fed8018af1c125eaca164f6f3a0","plugins/abilities/Administrator/git_control/test_runner.py"):frozenset({
   "5251d40c76a281311caf4b366d595672db2b280d6c9454d50da72aa03dfc1a5c",
   "d20e527b2b21a4eaeb67130f34d20c2884f3a6680ce6d6296822212b0c333784",
