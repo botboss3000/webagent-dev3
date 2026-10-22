@@ -357,7 +357,7 @@ function saveAgentTabs(){
 
 syncAgentTabs();
 wirePageTabDrag(document.querySelector('#agents-detail-region .agent-card-tabs'), { getOrder: () => agentTabOrder, save: saveAgentTabs, prefix: 'agent-tab-' });
-async function loadGuestPolicy(){try{const policy=await api('/auth/access-mode');$('guest-login').hidden=!policy.guest_access;document.querySelector('.private-access-approval').hidden=!!policy.guest_access;}catch{$('guest-login').hidden=true;}}
+async function loadGuestPolicy(){const approval=document.querySelector('.private-access-approval');approval.hidden=true;try{const policy=await api('/auth/access-mode');$('guest-login').hidden=!policy.guest_access;approval.hidden=policy.access_mode!=='admin_approval';}catch{$('guest-login').hidden=true;}}
 $('guest-login').onclick=async()=>{const btn=$('guest-login');btn.disabled=true;try{const result=await api('/auth/guest-login','POST',{});csrf=result.csrf_token;await boot();}catch(error){$('registration-status').textContent=error.message;}finally{btn.disabled=false;}};
 // Authentication loss is a state transition, not a refresh event. Late 401s
 // must not reset an open sign-in form or recursively refresh identity consumers.

@@ -185,6 +185,7 @@ body.app-restricted #session-new-header-btn { display: none !important; }
 }
 
 /* Hidden must override the flex layouts of the reveal button and form host. */
+.private-access-approval[hidden],
 .private-access-sign-in[hidden],
 .private-access-action[hidden] { display: none; }
 .private-access-sign-in, .private-access-action { margin-bottom: 24px; }
