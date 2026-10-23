@@ -42,18 +42,15 @@ def scope_overlap(left,right):
     return left==right if left.startswith("module:")or right.startswith("module:")else overlap(left[5:],right[5:])
 
 class Components:
-    """Conservative actual build grouping; manifests cannot override compiled dependencies."""
+    """Write ownership follows edited paths; build dependency impact is checked separately."""
     def __init__(self,root,compile_inputs=(),ui_file_reservations=False):
         """Bind task source declarations to compiler-attested dependency paths."""
         self.root=Path(root);self.compile_inputs={source_path(p)for p in compile_inputs}
         self.ui_file_reservations=ui_file_reservations
-    @staticmethod
-    def public_surface(text):
-        return bool(re.search(r"\bpub(?!\s*\()|\b(?:impl|extern)\b|\w+\s*!|#\s*\[",text))
     def package_graph(self):
-        """Union baseline/current Cargo edges; task edits cannot erase consumer ownership."""
+        """Union baseline/current Cargo membership so deletions retain their source owner."""
         if hasattr(self,"_packages"):return self._packages
-        baseline=self.root.parent/"baseline.tar";prior={};self._public_paths=set()
+        baseline=self.root.parent/"baseline.tar";prior={}
         if baseline.is_symlink():raise PermissionError("Baseline manifest symlink rejected")
         if baseline.exists():
             fd=os.open(baseline,os.O_RDONLY|os.O_NOFOLLOW)
@@ -65,10 +62,6 @@ class Components:
                         if member.name.startswith("v3/")and name.endswith("Cargo.toml"):
                             if not member.isfile()or not 0<member.size<=262144:raise ValueError("Bounded regular Cargo manifest required")
                             prior[name]=archive.extractfile(member).read(262145)
-                        elif member.name.startswith("v3/")and name.endswith(".rs"):
-                            if not member.isfile()or member.size>2*1024*1024:raise ValueError("Bounded regular Rust source required")
-                            text=archive.extractfile(member).read(2*1024*1024+1).decode()
-                            if self.public_surface(text):self._public_paths.add(name)
         paths={"Cargo.toml"}|set(prior)
         for folder in ["crates","src/plugin_packages","plugins/abilities"]:
             paths.update(str(p.relative_to(self.root))for p in(self.root/folder).rglob("Cargo.toml"))
@@ -120,36 +113,17 @@ class Components:
             declared.update(more)
         self._packages=({k:v for k,v in packages.items()if k in declared},{k:v for k,v in edges.items()if k in declared});return self._packages
     def package_scopes(self,path,patch=None):
-        """Private source stays local; possible exported contracts reserve transitive consumers."""
+        """Reserve owners of selected files/subtrees, never unedited Cargo consumers."""
         if not path.startswith(("crates/","src/")):return None
-        try:packages,edges=self.package_graph()
+        try:packages,_=self.package_graph()
         except (ValueError,OSError,UnicodeError,tarfile.TarError,TypeError,AttributeError):return {"module:engine"}
         matches=[p for p in packages if p!="."and overlap(path,p)]
         if not matches:
             return {"module:general"}if"."in packages and path.startswith("src/")else None
         folders={x for x in matches if path==x or path.startswith(x+"/")}or set(matches)
-        output={packages[x]for x in folders};p=self.root/path
-        # This is deliberately conservative, not a Rust ABI parser. Public/impl/macro
-        # files can widen a body-only edit; private helpers do not share a core lock.
-        contract=any(path==x or x.startswith(path+"/")for x in folders)or path.endswith(("Cargo.toml","build.rs"))or(path in self._public_paths)or(not path.endswith(".rs")and any(overlap(path,x)for x in self.compile_inputs))
-        if path.endswith(".rs"):
-            if p.is_symlink():raise PermissionError("Rust source symlink rejected")
-            if not p.is_file()or p.stat().st_size>2*1024*1024:contract=True
-            else:
-                text=p.read_text()
-                contract=contract or self.public_surface(text)
-            # Checked patch additions can introduce exports before the current file has them.
-            if patch is not None:
-                added="\n".join(line[1:]for line in patch.splitlines()if line.startswith("+")and not line.startswith("+++"))
-                contract=contract or bool(re.search(r"\b(?:pub|impl|extern)\b|\w+\s*!|#\s*\[",added))
-        if contract:
-            affected=set(folders)
-            while True:
-                more={owner for owner,deps in edges.items()if deps&affected}-affected
-                if not more:break
-                affected.update(more)
-            output.update(packages[x]for x in affected if x in packages)
-        return output
+        if (self.root/path).is_symlink():raise PermissionError("Source symlink rejected")
+        # Public API edits may rebuild consumers, but do not grant or require write ownership of them.
+        return {packages[x]for x in folders}
     def deleted_isolated(self,path,parts):
         """Read a bounded prior manifest from the broker baseline only when executable source is deleted."""
         target=self.root/path
