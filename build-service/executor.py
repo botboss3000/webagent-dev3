@@ -491,7 +491,7 @@ class Executor:
                 if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,79}",name)and name not in packages:packages.append(name)
         return plan+[{"package":name}for name in packages[:3]]
 
-    def focused_tests(self,job,application,output,retained=None):
+    def focused_tests(self,job,application,output,retained=None,fresh_tests=None):
         """Fail fast without certifying a partial pass or replacing the required suite.
 
         Each phase uses the normal host cancellation/admission controls. Guards bind
@@ -503,7 +503,7 @@ class Executor:
         plan=self.focused_test_plan(job.get("changed_paths",[]),metadata)
         proof={"policy":HOST_FOCUSED_POLICY,"policy_sha256":HOST_FOCUSED_POLICY_SHA256,"required_suite":"workspace",
             "inputs_sha256":job.get("inputs_sha256"),"source_sha256":before,"toolchain":RUST,"selection":plan,
-            "reuse":"verified_retained_test_binaries"if retained is not None else"existing_private_cargo_target",
+            "reuse":"verified_retained_test_binaries"if retained is not None else"fresh_workspace_test_binaries"if fresh_tests is not None else"existing_private_cargo_target",
             "status":"running"if plan else"not_applicable","runs":[]}
         job["focused_verification"]=proof;started=time.monotonic();deadline=started+600
         progress=getattr(self.runner,"resource_progress",lambda _:None);progress(job)
@@ -516,7 +516,7 @@ class Executor:
             if job.get("revoked")or job.get("lease_until",float("inf"))<=time.time()or(event is not None and event.is_set()):
                 raise PermissionError("Focused verification cancelled or authorization expired")
         try:
-            manifest=self.test_manifest(retained)if retained is not None and plan else None
+            manifest=self.test_manifest(retained if retained is not None else fresh_tests)if (retained is not None or fresh_tests is not None)and plan else None
             for item in plan:
                 label=item.get("test",item["package"]);entry={**item,"feature_profile":"default","status":"running","matched":0,"started_at":time.time()}
                 proof["runs"].append(entry);run_started=time.monotonic();progress(job)
@@ -526,13 +526,17 @@ class Executor:
                     argv=["cargo","test","--locked","--offline","-p",item["package"]]
                     if "test"in item:argv.extend((["--lib"]if item.get("target_kind")=="lib"else["--bin",item["target"]])+[item["test"],"--","--exact","--test-threads=1"])
                     else:argv.extend(["--","--test-threads=1"])
-                    if retained is not None:
+                    if retained is not None or fresh_tests is not None and "test"in item:
                         matches=[row for row in manifest["tests"]if row["target_name"]==item.get("target")and row["source_path"]==item.get("source_path","/build/src/main.rs")]
                         if item.get("target_kind")=="lib":
                             # This is one fixed protected registration, not a model-selected package/target.
                             if (item["package"],item["target"],item["source_path"])!=("webagent-engine","webagent_engine","/build/crates/modules/engine/src/lib.rs"):raise ValueError("Unregistered focused library target")
                             prefix="path+file:///build/crates/modules/engine#webagent-engine@"
                             matches=[row for row in matches if row.get("kind")==["lib"]and row.get("package_id","").startswith(prefix)and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?",row["package_id"][len(prefix):])]
+                        else:
+                            if (item["package"],item.get("target"),item.get("source_path","/build/src/main.rs"))!=("webagent-v3","webagent-v3","/build/src/main.rs"):raise ValueError("Unregistered focused binary target")
+                            prefix="path+file:///build#webagent-v3@"
+                            matches=[row for row in matches if row.get("kind")==["bin"]and row.get("package_id","").startswith(prefix)and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?",row["package_id"][len(prefix):])]
                         if len(matches)!=1:raise ValueError("Registered retained host test binary unavailable")
                         argv=["/output/artifacts/"+matches[0]["file"],item["test"],"--exact","--test-threads=1"]
                     entry["argv"]=argv;entry["recipe"]="engine:rust1.90:focused-v2:"+item.get("id",item["package"])
@@ -1001,7 +1005,9 @@ class Executor:
         logs=self.dependencies(job,application,output,prepare=True)
         if seeded:logs+=self.phase(job,"dependency","dependency",application,output,["cargo","clean","--package","webagent-v3"],"engine:rust1.90:clean-root",600)
         logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"],"engine:rust1.90:compile_test")
-        logs+=self.focused_tests(job,application,output)
+        artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
+        self.retain_test_manifest(output,artifacts)
+        logs+=self.focused_tests(job,application,output,fresh_tests=artifacts)
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Focused tests changed captured application inputs")
         logs+=self.phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads=1"],"engine:rust1.90:test")
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Tests left changed application inputs")
@@ -1027,7 +1033,6 @@ class Executor:
         artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
         self.collect_runtime_artifacts(application,output,artifacts,legacy_automation,self.context_component_recipe(blob))
         shutil.copytree(stable,artifacts/"stable")
-        self.retain_test_manifest(output,artifacts)
         # Preserve the offline optimization registry independently of optional abilities.
         registry=artifacts/"optimization-cargo/registry";registry.parent.mkdir()
         shutil.copytree(cargo/"registry",registry)

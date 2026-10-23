@@ -576,9 +576,11 @@ class HostFocusedVerificationTests(unittest.TestCase):
             if "focused-v2"in recipe and not success:raise RuntimeError("host regression")
             if phase=="compile_linked":raise RuntimeError("optimized pipeline reached")
             return "test result: ok. 1 passed; 0 failed\n"
-        with patch.object(self.worker,"validate_compiler_recipe",return_value=False),patch.object(self.worker,"cached_engine",return_value=None),patch.object(self.worker,"seed_cargo_cache",return_value=False),patch.object(self.worker,"dependencies",side_effect=dependency),patch.object(self.worker,"phase",side_effect=phase):
+        manifest={"tests":[{"file":"tests/webagent_v3-0123456789abcdef","target_name":"webagent-v3","source_path":"/build/src/main.rs","kind":["bin"],"package_id":"path+file:///build#webagent-v3@0.1.0"},{"file":"tests/webagent_engine-fedcba9876543210","target_name":"webagent_engine","source_path":"/build/crates/modules/engine/src/lib.rs","kind":["lib"],"package_id":"path+file:///build/crates/modules/engine#webagent-engine@0.1.0"}]}
+        with patch.object(self.worker,"retain_test_manifest",return_value=manifest)as retain,patch.object(self.worker,"test_manifest",return_value=manifest),patch.object(self.worker,"validate_compiler_recipe",return_value=False),patch.object(self.worker,"cached_engine",return_value=None),patch.object(self.worker,"seed_cargo_cache",return_value=False),patch.object(self.worker,"dependencies",side_effect=dependency),patch.object(self.worker,"phase",side_effect=phase):
             with self.assertRaisesRegex((ValueError,RuntimeError),"optimized pipeline reached"if success else"host regression"):
                 self.worker.engine(job,self.blob,lambda root,blob:fixtures.host.release.extract(root,blob,fixtures.host.context_digest),fixtures.host.context_digest)
+        retain.assert_called_once()
         required=[p for p in phases if p[1]=="engine:rust1.90:test"]
         self.assertEqual(bool(required),success);self.assertEqual(any(p[0]=="compile_linked"for p in phases),success)
         self.assertFalse((self.root/"state/execution"/job["job_id"]/"verified.json").exists())
@@ -591,7 +593,7 @@ class HostFocusedVerificationTests(unittest.TestCase):
 
     def test_retained_host_binary_uses_exact_test_with_no_compiler(self):
         from unittest.mock import patch
-        manifest={"tests":[{"file":"tests/webagent_v3-0123456789abcdef","target_name":"webagent-v3","source_path":"/build/src/main.rs"},{"file":"tests/webagent_engine-fedcba9876543210","target_name":"webagent_engine","source_path":"/build/crates/modules/engine/src/lib.rs","kind":["lib"],"package_id":"path+file:///build/crates/modules/engine#webagent-engine@0.1.0"}]}
+        manifest={"tests":[{"file":"tests/webagent_v3-0123456789abcdef","target_name":"webagent-v3","source_path":"/build/src/main.rs","kind":["bin"],"package_id":"path+file:///build#webagent-v3@0.1.0"},{"file":"tests/webagent_engine-fedcba9876543210","target_name":"webagent_engine","source_path":"/build/crates/modules/engine/src/lib.rs","kind":["lib"],"package_id":"path+file:///build/crates/modules/engine#webagent-engine@0.1.0"}]}
         with patch.object(self.worker,"test_manifest",return_value=manifest):self.worker.focused_tests(self.job,self.source/"v3",self.output,retained=self.output/"artifacts")
         self.assertEqual(len(self.calls),2)
         for call,expected in zip(self.calls,["webagent_v3-0123456789abcdef","webagent_engine-fedcba9876543210"]):self.assertEqual(call[5][0],"/output/artifacts/tests/"+expected);self.assertIn("--exact",call[5]);self.assertNotIn("cargo",call[5])
@@ -599,7 +601,7 @@ class HostFocusedVerificationTests(unittest.TestCase):
 
     def test_registered_engine_library_rejects_missing_wrong_or_ambiguous_retained_target(self):
         from unittest.mock import patch
-        root={"file":"tests/webagent_v3-0123456789abcdef","target_name":"webagent-v3","source_path":"/build/src/main.rs"}
+        root={"file":"tests/webagent_v3-0123456789abcdef","target_name":"webagent-v3","source_path":"/build/src/main.rs","kind":["bin"],"package_id":"path+file:///build#webagent-v3@0.1.0"}
         library={"file":"tests/webagent_engine-fedcba9876543210","target_name":"webagent_engine","source_path":"/build/crates/modules/engine/src/lib.rs","kind":["lib"],"package_id":"path+file:///build/crates/modules/engine#webagent-engine@0.1.0"}
         for rows in [[],[{**library,"kind":["bin"]}],[{**library,"package_id":"path+file:///build/crates/foreign#webagent-engine@0.1.0"}],[library,dict(library)]]:
             self.calls=[]
