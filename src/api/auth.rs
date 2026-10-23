@@ -468,8 +468,6 @@ pub(crate) async fn logout(
     );
     Ok(r)
 }
-#[cfg(test)]
-use webagent_webapp::configuration::pull_refresh_start_zone;
 pub(crate) async fn chat_ui_config(State(app):State<App>)->Api {
     webagent_webapp::configuration::ui_config(&app.chat_ui_config_path,&app.store.root)
         .await.map(Json).map_err(|error|match error {
@@ -479,28 +477,24 @@ pub(crate) async fn chat_ui_config(State(app):State<App>)->Api {
 }
 
 #[cfg(test)]
-mod pull_refresh_tests {
+mod webapp_adapter_tests {
     use super::*;
 
     #[tokio::test]
-    async fn pull_refresh_config_reloads_and_projects_only_ui_value() {
+    async fn ui_config_adapter_delegates_and_preserves_error_status() {
         let (root, mut app) = crate::runtime_tests::fixture().await;
-        app.chat_ui_config_path = root.path().join("chat-ui.json");
+        app.chat_ui_config_path = root.path().join("adapter-chat-ui.json");
         std::fs::write(&app.chat_ui_config_path, br#"{"chat_common":{}}"#).unwrap();
-        let path = app.store.root.join("config/app-settings.json");
-        for zone in [50.0, 200.0, 0.0, 12.5] {
-            let settings = json!({"ui":{"pull_to_refresh":{"start_zone_px":zone}},"private_test_marker":"must not be projected"});
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, serde_json::to_vec(&settings).unwrap()).unwrap();
-            let response = chat_ui_config(State(app.clone())).await.unwrap().0;
-            assert_eq!(response, json!({"chat_ui":{"chat_common":{}},"app_ui":{"pull_to_refresh":{"start_zone_px":zone}}}));
-        }
-        assert_eq!(pull_refresh_start_zone(&json!({})).unwrap(), 50.0);
-        for settings in [json!({"ui":false}), json!({"ui":{"pull_to_refresh":[]}}),
-            json!({"ui":{"pull_to_refresh":{"start_zone_px":-1}}}),
-            json!({"ui":{"pull_to_refresh":{"start_zone_px":"200"}}}),
-            json!({"ui":{"pull_to_refresh":{"start_zone_px":null}}})] {
-            assert!(pull_refresh_start_zone(&settings).is_err());
-        }
+        // Domain schema/default/privacy assertions live in Webapp; this verifies host wiring.
+        let expected = webagent_webapp::configuration::ui_config(
+            &app.chat_ui_config_path, &app.store.root,
+        ).await.unwrap();
+        assert_eq!(chat_ui_config(State(app.clone())).await.unwrap().0, expected);
+        std::fs::write(&app.chat_ui_config_path, "{}").unwrap();
+        assert_eq!(chat_ui_config(State(app.clone())).await.err().unwrap().0,
+            StatusCode::INTERNAL_SERVER_ERROR);
+        std::fs::remove_file(&app.chat_ui_config_path).unwrap();
+        assert_eq!(chat_ui_config(State(app)).await.err().unwrap().0,
+            StatusCode::SERVICE_UNAVAILABLE);
     }
 }

@@ -86,6 +86,20 @@ pub async fn ui_config(chat_path: &Path, state: &Path) -> Result<Value, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pull_refresh_defaults_and_validation_belong_to_webapp() {
+        assert_eq!(pull_refresh_start_zone(&json!({})).unwrap(), 50.0);
+        for settings in [
+            json!({"ui":false}),
+            json!({"ui":{"pull_to_refresh":[]}}),
+            json!({"ui":{"pull_to_refresh":{"start_zone_px":-1}}}),
+            json!({"ui":{"pull_to_refresh":{"start_zone_px":"200"}}}),
+            json!({"ui":{"pull_to_refresh":{"start_zone_px":null}}}),
+        ] {
+            assert!(pull_refresh_start_zone(&settings).is_err());
+            assert!(validate_app_settings(&settings).is_err());
+        }
+    }
     #[tokio::test]
     async fn configuration_reloads_rejects_invalid_and_never_projects_private_siblings() {
         let root = tempfile::tempdir().unwrap();
