@@ -4871,7 +4871,14 @@ class Broker:
                             blob = release.archive(files, context_digest)
                         folder = self.work_dir / "trees" / key
                         release.extract(folder, blob, context_digest)
-                        (folder / "baseline.tar").write_bytes(blob)
+                        # Persist the baseline before acknowledging/registering the task.
+                        with (folder / "baseline.tar").open("xb") as stream:
+                            stream.write(blob); stream.flush(); os.fsync(stream.fileno())
+                        directory = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                        try:
+                            os.fsync(directory)
+                        finally:
+                            os.close(directory)
                         item["workspace_path"] = str(folder / "v3")
                         item["base_inputs_sha256"] = context_digest(blob)[0]
                     self.work[key] = item

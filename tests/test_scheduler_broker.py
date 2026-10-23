@@ -57,6 +57,23 @@ class SchedulerBrokerTests(unittest.TestCase):
             "inputs_sha256":self.broker.scheduler_digest(blob),"operation":"plugin_deploy","rust_tests":{"status":"not_required"}}
         self.broker.jobs[job_id]=job;item.update(status="closed",job_id=job_id);self.broker._save_work()
         return job,commit
+    def test_begin_persists_baseline_before_registering_task(self):
+        """An acknowledged task must retain its baseline across a host restart."""
+        import os
+        events=[];real_sync=os.fsync;real_save=self.broker._save_work
+        def sync(fd):
+            events.append(os.readlink("/proc/self/fd/"+str(fd)))
+            return real_sync(fd)
+        def save():
+            baseline=next(self.root.rglob("baseline.tar"))
+            self.assertIn(str(baseline),events)
+            self.assertIn(str(baseline.parent),events[events.index(str(baseline))+1:])
+            self.assertEqual(fixtures.host.context_digest(baseline.read_bytes())[0],
+                fixtures.host.context_digest(self.runner.blob)[0])
+            return real_save()
+        with patch.object(fixtures.host.os,"fsync",side_effect=sync), patch.object(self.broker,"_save_work",side_effect=save):
+            self.begin("durable-baseline")
+
     def test_old_retention_clearance_cannot_release_source_ownership(self):
         """A finished image and legacy cleanup receipt cannot delete an agent's retained correction source."""
         item=self.begin("retention-owner");self.write(item,"README.md","retained correction\n")
