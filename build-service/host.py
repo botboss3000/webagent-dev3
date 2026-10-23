@@ -3549,8 +3549,8 @@ class Broker:
         # This operator path can publish only already-installed host code and its
         # own docs/tests and paired ownership classifier. Each changed executable
         # must match protected installation. Worker, policy and app changes still build.
-        review_modules={"workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
-        allowed={"v3/tests/test_admin_workspace.py","v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
+        allowed={"v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
@@ -4362,7 +4362,8 @@ class Broker:
                 recent = (job for job in self.jobs.values() if not job.get("operator_adopted_at"))
                 for job in sorted(recent, key=lambda row: row["created_at"], reverse=True):
                     view = self._view(job, administrator=True)
-                    view.pop("access_fingerprint", None)
+                    # Keep compiler/cache artifacts on the per-job detail endpoint.
+                    view = {key: value for key, value in view.items() if key in {"job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "isolated", "synchronization", "cancellation", "queue_preflight", "reason", "log", "log_bytes", "log_truncated"}}
                     view["log"] = view["log"][-2048:]
                     view["task_id"] = tasks.get(job["job_id"], {}).get("task_id") or job.get("task_id")
                     summary = tasks.get(job["job_id"], {}).get("summary") or job.get("summary")
@@ -4400,7 +4401,9 @@ class Broker:
                 policy = self._reconcile_leftover_state()
                 leftovers = self._leftover_views(administrator=True)
                 live = self._current_release_blob()
-                return {"leftovers": leftovers, "leftover_total": len(leftovers), "leftover_policy": policy,
+                source_status_snapshot = scheduler_module.sibling("source_status").snapshot
+                return {"source_git": source_status_snapshot(CONFIG["checkout_root"]),
+                        "leftovers": leftovers, "leftover_total": len(leftovers), "leftover_policy": policy,
                         "jobs": jobs, "busy": self.active is not None or self.active_ui is not None,
                         "containers": containers, "synchronization": self._sync_report(live, live, ()),
                         "scheduler":self.scheduler.list(trusted,workspace,True),"resources":self.resources.snapshot()}

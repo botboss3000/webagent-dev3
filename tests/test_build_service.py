@@ -213,7 +213,8 @@ class DashboardHistoryTests(unittest.TestCase):
     job_id=str(uuid.uuid4())
     broker.jobs[job_id]={"job_id":job_id,"status":"completed","phase":"finished",
      "operation":"build_deploy","created_at":index,"user_id":"codex-local",
-     "workspace":fixture.workspace,"access_fingerprint":"f"*64}
+     "workspace":fixture.workspace,"access_fingerprint":"f"*64,
+     "compiler_checkpoint":{"fixture":"x"*100000}}
    trusted={"user_id":"admin","session_id":"00000000-0000-0000-0000-000000000000",
     "lease_until":time.time()+30,"access_fingerprint":"a"*64}
    result=fixture.call("v3_build_dashboard",trusted=trusted,workspace=trusted["session_id"])
@@ -222,6 +223,8 @@ class DashboardHistoryTests(unittest.TestCase):
    self.assertEqual(len(result["jobs"]),35)
    self.assertEqual([job["created_at"] for job in result["jobs"]],list(range(34,-1,-1)))
    self.assertNotIn("access_fingerprint",json.dumps(result))
+   self.assertNotIn("compiler_checkpoint",json.dumps(result))
+   self.assertLess(len(json.dumps(result)),256*1024)
    with self.assertRaises(PermissionError):fixture.call("v3_build_dashboard")
   finally:fixture.tearDown()
 
