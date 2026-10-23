@@ -1,3 +1,4 @@
+import { readActivity } from './activity.js';
 // The catalog owns tile identity and size; system summary supplies current resource values.
  // @code-index {"version":1,"feature":"app-dashboard","purpose":"Config: ui/main-panel/app/pages/dashboard/cards.json -> cards; frontend tile inventory and pending backend state","span_lines":64,"configuration":{"status":"configured","references":[{"path":"ui/main-panel/app/pages/dashboard/cards.json","pointers":["/cards"]}],"opportunities":[]},"aliases":["dashboard tiles"]}
 /** Mount resource tiles from the administrator summary; return a polling disposer. */
@@ -35,7 +36,7 @@ export async function mountDashboard(host) {
   const node=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;};
   host.replaceChildren();host.classList.add('v3-dashboard');
   const heading=node('h2','Dashboard');
-  const notice=node('p','Live system resources refresh every 5 seconds. Red marks unavailable data or backend work still needed. Metrics reflect the server process namespace, not container quotas; storage covers /.');
+  const notice=node('p','System resources refresh every 5 seconds; other connected tiles every 30 seconds. Red marks unavailable data or backend work still needed. Metrics reflect the server process namespace, not container quotas; storage covers /.');
   const toolbar=node('div',undefined,'dashboard-toolbar');
   const count=node('span');count.setAttribute('role','status');
   const add=node('button','Add card');add.type='button';add.setAttribute('aria-expanded','false');
@@ -49,6 +50,8 @@ export async function mountDashboard(host) {
   const grid=node('div',undefined,'dashboard-grid');
   host.append(heading,notice,toolbar,picker,grid);
   let selected=catalog.cards.map(card=>card.id),editing=false;
+  let activity=new Map(),nextActivityAt=0;
+  const activityViews=new Map();
   let sample=null,failure='Loading system resources…',inFlight=false;
   const resources=new Set(['cpu','memory','storage','uptime','system_resources']);
   const views=new Map();
@@ -90,6 +93,21 @@ export async function mountDashboard(host) {
       }
     }
   }
+  /** Paint scoped API projections without touching the layout controls. */
+  function updateActivity(){
+    for(const [id,view] of activityViews){
+      const data=activity.get(id);if(!data)continue;
+      view.tile.dataset.state=data.state;
+      view.badge.textContent=data.state==='live'?'Live':data.state==='partial'?'Live · limited scope':'Unavailable';
+      view.body.replaceChildren();
+      for(const [label,value] of data.rows){
+        const row=node('div',undefined,'dashboard-field');row.append(node('span',String(label)),node('span',String(value)));view.body.append(row);
+      }
+      if(!data.rows.length)view.body.append(node('p',data.state==='unavailable'?'—':'No reported data'));
+      view.needs.textContent=data.note;
+      if(data.link){const link=node('a',data.link[0]);link.href=data.link[1];view.body.append(link);}
+    }
+  }
   /** Poll one cached summary; errors clear old readings and never become fake zeroes. */
   async function refresh(){
     clearTimeout(timer);timer=null;
@@ -101,6 +119,7 @@ export async function mountDashboard(host) {
     const request=new AbortController();
     const cancel=()=>request.abort();controller.signal.addEventListener('abort',cancel,{once:true});
     const timeout=setTimeout(()=>request.abort(),15000);
+    const pendingActivity=Date.now()>=nextActivityAt?readActivity(request.signal):null;
     try{
       const response=await fetch('/api/v3/admin/system/summary',{credentials:'same-origin',cache:'no-store',signal:request.signal});
       if(!response.ok)throw Error(response.status===401?'Sign in required':response.status===403?'Administrator access required':'System metrics unavailable ('+response.status+')');
@@ -110,13 +129,14 @@ export async function mountDashboard(host) {
     }catch(error){
       if(!stopped){sample=null;failure=error.name==='AbortError'?'System metrics request timed out':error.message;}
     }finally{
+      if(pendingActivity){const result=await pendingActivity;if(!stopped){activity=result;nextActivityAt=Date.now()+30000;}}
       clearTimeout(timeout);controller.signal.removeEventListener('abort',cancel);inFlight=false;
-      if(!stopped){updateMetrics();timer=setTimeout(refresh,5000);}
+      if(!stopped){updateMetrics();updateActivity();timer=setTimeout(refresh,5000);}
     }
   }
   /** Repaint local layout only; persistence remains explicitly pending. */
   function paint(){
-    views.clear();grid.replaceChildren();picker.replaceChildren();count.textContent=selected.length+' tiles · layout changes last until reload';
+    views.clear();activityViews.clear();grid.replaceChildren();picker.replaceChildren();count.textContent=selected.length+' tiles · layout changes last until reload';
     for(const [index,id] of selected.entries()){
       const card=catalog.cards.find(item=>item.id===id);
       const tile=node('article',undefined,'dashboard-tile');tile.dataset.card=id;tile.style.setProperty('--tile-span',card.w);
@@ -132,6 +152,7 @@ export async function mountDashboard(host) {
         const fields=new Map([...body.querySelectorAll('.dashboard-field')].map(row=>[row.firstElementChild.textContent,row.lastElementChild]));
         views.set(id,{tile,badge,needs,fields,value:body.querySelector('.dashboard-value')});
       }
+      if(!resources.has(id))activityViews.set(id,{tile,badge,body,needs});
       if(editing){
         const actions=node('div',undefined,'dashboard-tile-actions');
         for(const [label,delta] of [['Move earlier',-1],['Move later',1],['Remove tile',0]]){
@@ -141,7 +162,7 @@ export async function mountDashboard(host) {
         }tile.append(actions);
       }grid.append(tile);
     }
-    updateMetrics();
+    updateMetrics();updateActivity();
     for(const card of catalog.cards){const button=node('button',card.label);button.type='button';button.disabled=selected.includes(card.id);button.onclick=()=>{selected.push(card.id);picker.hidden=true;add.setAttribute('aria-expanded','false');paint();};picker.append(button);}
   }
   add.onclick=()=>{picker.hidden=!picker.hidden;add.setAttribute('aria-expanded',String(!picker.hidden));};

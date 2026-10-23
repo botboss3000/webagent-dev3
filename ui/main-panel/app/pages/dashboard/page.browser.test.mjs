@@ -19,6 +19,15 @@ const server=http.createServer(async(req,res)=>{
   if(mode==='invalid'){res.end('{"schema_version":99}');return;}
   res.end(JSON.stringify(sample()));return;
  }
+ const activity={
+  '/api/v3/models/agents':{agents:[{id:'fixture',name:'Fixture agent',status:'active'}]},
+  '/api/v3/sessions/stats':{sessions:[{agent_id:'fixture',message_count:3,usage:{input_tokens:20,output_tokens:5,reported_calls:1,unreported_calls:0,known_cost_usd:.12,unknown_cost_calls:0}}],next_offset:null},
+  '/api/v3/admin/access/accounts':{accounts:[{role:'administrator',status:'active'}]},
+  '/api/v3/auth/sessions':{sessions:[{current:true}]},
+  '/api/v3/status':{model:'fixture-model',runs:[{id:'run',status:'running',context_controls:{trigger_tokens:100,tail_tokens:20}}]},
+  '/health/ready':{ready:true}
+ };
+ if(activity[url.pathname]){res.setHeader('content-type','application/json');res.end(JSON.stringify(activity[url.pathname]));return;}
  if(url.pathname==='/fixture'){
   res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:8px;background:var(--bg-elev);color:var(--fg-1)}</style><section id="dashboard"></section><script type="module">import {mountDashboard} from "/ui/main-panel/app/pages/dashboard/page.js";window.mount=()=>mountDashboard(document.querySelector("#dashboard"));window.dispose=await window.mount();</script>');return;
  }
@@ -40,6 +49,14 @@ try{
   const cpu=page.locator('[data-card=cpu]'),system=page.locator('[data-card=system_resources]');
   await page.waitForFunction(()=>document.querySelector('[data-card=cpu]')?.dataset.state==='live');
   assert.match(await cpu.innerText(),/24.5%/);
+  await page.waitForFunction(()=>document.querySelector('[data-card=agents_panel]')?.dataset.state==='live');
+  assert.match(await page.locator('[data-card=agents_panel]').innerText(),/Fixture agent/);
+  assert.match(await page.locator('[data-card=tokens]').innerText(),/Reported input tokens/);
+  assert.match(await page.locator('[data-card=cost]').innerText(),/\$0.1200/);
+  assert.match(await page.locator('[data-card=active_runs]').innerText(),/Default agent only/);
+  assert.match(await page.locator('[data-card=security]').innerText(),/Current account only/);
+  assert.equal(await page.locator('[data-card=user_mgmt] a').getAttribute('href'),'/app?tab=app&appView=users');
+  assert.match(await page.locator('[data-card=db_latency]').innerText(),/Backend work needed/);
   assert.match(await page.locator('[data-card=memory]').innerText(),/25.0%/);
   assert.match(await page.locator('[data-card=storage]').innerText(),/10.00 GiB/);
   assert.match(await page.locator('[data-card=uptime]').innerText(),/2d 1h 0m/);
