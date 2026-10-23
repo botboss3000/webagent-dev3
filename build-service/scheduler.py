@@ -581,8 +581,8 @@ class Scheduler:
         if previous.get("state")!="pending"and not(record and previous.get("reconciled_by")==args["request_id"]):raise ValueError("Exact pending continuation required")
         if self.pending(key,except_path=path)not in {args["original_request_id"],None}:raise ValueError("Another scheduler transition requires recovery")
         job=self.broker.jobs.get(previous.get("previous_job"))
-        if not job or job.get("status")!="completed"or job.get("task_id")!=item["task_id"]or job.get("user_id")!=item["user_id"]or job.get("workspace")!=workspace:
-            raise ValueError("Completed owned generation required")
+        if not job or (job.get("status")!="completed"and not(job.get("status")=="failed"and not job.get("effects_started")))or job.get("task_id")!=item["task_id"]or job.get("user_id")!=item["user_id"]or job.get("workspace")!=workspace:
+            raise ValueError("Completed or pre-effect failed owned generation required")
         if any(j.get("ownership_id")==key and j.get("status")in {"queued","running","interrupted","uncertain","needs_decision"}for j in self.broker.jobs.values()):raise ValueError("Reconcile active execution first")
         if any(l.get("task_key")==key for l in self.broker.code_index_leases.values())or item.get("acquisition_refresh"):raise ValueError("Reconcile active maintenance or acquisition first")
         folder=self.broker.work_dir/"continuations"/key/original_path.stem
@@ -590,8 +590,9 @@ class Scheduler:
         archive=self.broker.work_dir/"generations"/key/job["job_id"]
         if not baseline.is_file()or not archive.is_dir()or not tree.is_dir()or(folder/"prepared").exists()or(folder/"preparing").exists():raise ValueError("Already switched continuation with preserved archive required")
         blob=baseline.read_bytes();frozen=(self.broker.state/job["job_id"]/"task.tar").read_bytes()
+        source=frozen if job["status"]=="failed" else blob
         binding={"baseline_sha256":self.broker.scheduler_digest(blob),"archive_sha256":self.broker.scheduler_digest(frozen),"previous_job":job["job_id"],"archive_baseline_sha256":self.broker.scheduler_digest((archive/"baseline.tar").read_bytes())}
-        if (tree/"baseline.tar").read_bytes()!=blob or self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree))!=binding["baseline_sha256"]or self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(archive))!=binding["archive_sha256"]:
+        if (tree/"baseline.tar").read_bytes()!=blob or self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree))!=self.broker.scheduler_digest(source)or self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(archive))!=binding["archive_sha256"]:
             raise ValueError("Continuation source or archive changed")
         token="continuation-recovery-"+hashlib.sha256(ownership.canonical([owner,key,args["request_id"]]).encode()).hexdigest()[:40]
         committed=self.store.receipt(token);current=self.store.get(key);old=previous["value"]
@@ -623,7 +624,7 @@ class Scheduler:
     def continuation(self,item,args,value,record,path,owner,revision,epoch,request):
         """Recoverable generation switch; preserve the old tree and pin the new baseline once."""
         job=self.broker.jobs.get(record["previous_job"])
-        if not job or job["status"]!="completed":raise ValueError("Previous generation must finish before correction applies")
+        if not job or (job["status"]!="completed"and not(job["status"]=="failed"and not job.get("effects_started"))):raise ValueError("Completed or pre-effect failed generation required for correction")
         folder=self.broker.work_dir/"continuations"/item["key"]/path.stem
         folder.mkdir(parents=True,exist_ok=True)
         baseline=folder/"baseline.tar";prepared=folder/"prepared";tree=self.broker.work_dir/"trees"/item["key"]
@@ -634,10 +635,15 @@ class Scheduler:
                 previous=(Path(self.broker.state)/job["job_id"]/"task.tar").read_bytes()
                 if self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree))!=self.broker.scheduler_digest(previous):
                     raise ValueError("Retained source generation changed; reconcile before continuation")
-            blob=self.broker.scheduler_preserve_inspection(self.broker._current_release_blob(),tree)
+            if job["status"]=="failed":
+                # Keep unpublished edits against their original merge baseline.
+                blob=(tree/"baseline.tar").read_bytes()
+            else:
+                blob=self.broker.scheduler_preserve_inspection(self.broker._current_release_blob(),tree)
             temporary=baseline.with_suffix(".new");temporary.write_bytes(blob);os.replace(temporary,baseline)
         blob=baseline.read_bytes()
-        fresh=tree.exists()and(tree/"baseline.tar").is_file()and(tree/"baseline.tar").read_bytes()==blob
+        source=(self.broker.state/job["job_id"]/"task.tar").read_bytes()if job["status"]=="failed"else blob
+        fresh=archive.is_dir()and tree.exists()and(tree/"baseline.tar").is_file()and(tree/"baseline.tar").read_bytes()==blob and self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree))==self.broker.scheduler_digest(source)
         if not fresh:
             if not prepared.exists():
                 temporary=folder/"preparing"
@@ -645,9 +651,9 @@ class Scheduler:
                     # Only this request's unpublished derived preparation can be replaced after interruption.
                     import shutil
                     shutil.rmtree(temporary)
-                self.broker.scheduler_extract(temporary,blob);(temporary/"baseline.tar").write_bytes(blob)
+                self.broker.scheduler_extract(temporary,source);(temporary/"baseline.tar").write_bytes(blob)
                 temporary.rename(prepared)
-            if self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(prepared))!=self.broker.scheduler_digest(blob):
+            if self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(prepared))!=self.broker.scheduler_digest(source):
                 raise ValueError("Prepared correction source changed")
             if tree.exists():
                 if archive.exists():raise ValueError("Both original generation and archive exist; reconcile")

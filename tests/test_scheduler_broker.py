@@ -214,6 +214,90 @@ class SchedulerBrokerTests(unittest.TestCase):
         (self.runner.source/"README.md").write_text("later change\n")
         with self.assertRaisesRegex(ValueError,"Promoted source changed"):self.action(item["task_id"],"complete")
         self.assertEqual(self.broker.scheduler.store.get(item["key"])["state"],"validating")
+    def failed_generation(self,label):
+        """Freeze an unpublished draft without changing the published fixture."""
+        item=self.begin(label);self.write(item,"README.md","unpublished correction\n")
+        tree=Path(item["workspace_path"]).parent;blob=self.broker.scheduler_task_snapshot(tree)
+        folder=self.broker.state/str(uuid.uuid4());folder.mkdir();(folder/"task.tar").write_bytes(blob)
+        current=self.broker.scheduler.store.get(item["key"])
+        job={"job_id":folder.name,"task_id":label,"user_id":item["user_id"],"workspace":item["workspace"],
+            "status":"failed","effects_started":False,"ownership_id":item["key"],"source_generation":current["generation"]}
+        self.broker.jobs[job["job_id"]]=job;item.update(status="closed",job_id=job["job_id"]);self.broker._save_work()
+        return item,job,blob,(tree/"baseline.tar").read_bytes()
+
+    def test_failed_continuation_preserves_draft_baseline_and_receipt(self):
+        """Correction retains unpublished bytes and claims while fencing the failed generation."""
+        item,job,blob,baseline=self.failed_generation("failed-correction")
+        before=self.broker.scheduler.store.get(item["key"]);receipt=dict(job)
+        result,request=self.action(item["task_id"],"continue")
+        tree=Path(item["workspace_path"]).parent;archive=self.broker.work_dir/"generations"/item["key"]/job["job_id"]
+        self.assertEqual(self.broker.scheduler_task_snapshot(tree),blob)
+        self.assertEqual((tree/"baseline.tar").read_bytes(),baseline)
+        self.assertEqual(self.broker.scheduler_task_snapshot(archive),blob)
+        self.assertEqual((archive/"baseline.tar").read_bytes(),baseline)
+        self.assertEqual(self.broker.jobs[job["job_id"]],receipt)
+        self.assertEqual(self.runner.blob,fixtures.context(extra={"v3/README.md":"original\n"}))
+        self.assertEqual(result,self.call("build_work",request))
+        self.assertEqual(result["ownership"]["scopes"],before["scopes"])
+        self.assertGreater(result["ownership"]["generation"],before["generation"])
+        self.write(item,"README.md","fixed unpublished correction\n")
+
+    def test_failed_continuation_recovers_after_filesystem_switch(self):
+        """An interrupted failed-draft correction reuses the original generation switch."""
+        item,job,blob,baseline=self.failed_generation("failed-switch")
+        original=self.broker.scheduler.store.edited;once=[True]
+        def after_commit(*args):
+            result=original(*args)
+            if once[0]:once[0]=False;raise OSError("fixture failed switch")
+            return result
+        current=self.broker.scheduler.store.get(item["key"])
+        request={"action":"continue","task_id":item["task_id"],"request_id":"failed-switch-fixture",
+            "expected_revision":current["revision"],"expected_epoch":current["epoch"]}
+        with patch.object(self.broker.scheduler.store,"edited",side_effect=after_commit):
+            with self.assertRaisesRegex(OSError,"failed switch"):self.call("build_work",request)
+        result=self.call("build_work",request)
+        self.assertEqual(result,self.call("build_work",request))
+        tree=Path(item["workspace_path"]).parent
+        self.assertEqual(self.broker.scheduler_task_snapshot(tree),blob)
+        self.assertEqual((tree/"baseline.tar").read_bytes(),baseline)
+        self.assertEqual(item["previous_jobs"],[job["job_id"]])
+
+    def test_failed_orphan_continuation_reconciliation_preserves_unpublished_source(self):
+        """Legacy post-switch recovery binds the failed draft separately from its merge baseline."""
+        item,job,blob,baseline=self.failed_generation("failed-orphan-correction")
+        scheduler=self.broker.scheduler;store=scheduler.store
+        with store.transaction()as db:store.update(db,store.get(item["key"],db),state="orphaned")
+        value=store.get(item["key"]);owner=scheduler.owner(self.trusted,self.workspace)
+        item["base_inputs_sha256"]=self.broker.scheduler_digest(baseline)
+        original={"action":"continue","task_id":item["task_id"],"request_id":"failed-orphan-switch",
+            "expected_revision":value["revision"],"expected_epoch":value["epoch"]}
+        path=scheduler.journal_path(owner,original["request_id"],item["key"])
+        digest=hashlib.sha256(fixtures.host.scheduler_module.ownership.canonical([owner,original]).encode()).hexdigest()
+        record={"digest":digest,"state":"pending","request_id":original["request_id"],"task_key":item["key"],"value":value,"previous_job":job["job_id"]}
+        scheduler.write_record(path,record)
+        with self.assertRaisesRegex(ValueError,"Editing ownership"):
+            scheduler.continuation(item,original,value,record,path,owner,value["revision"],value["epoch"],"failed-orphan-fixture")
+        request={"action":"reconcile_continuation","task_id":item["task_id"],"original_request_id":original["request_id"],
+            "expected_transition_sha256":digest,"expected_revision":value["revision"],"expected_epoch":value["epoch"],"request_id":"failed-orphan-recovery"}
+        result=self.call("build_work",request)
+        self.assertEqual(result,self.call("build_work",request))
+        tree=Path(item["workspace_path"]).parent
+        self.assertEqual(self.broker.scheduler_task_snapshot(tree),blob)
+        self.assertEqual((tree/"baseline.tar").read_bytes(),baseline)
+        self.assertTrue(result["source_preserved"]);self.assertFalse(result["deployment_replayed"])
+        self.assertEqual(job["status"],"failed");self.assertEqual(result["ownership"]["scopes"],value["scopes"])
+
+    def test_failed_continuation_rejects_effects_unsettled_or_changed_draft(self):
+        """No uncertain publication or changed frozen draft can become editable through recovery."""
+        item,job,blob,baseline=self.failed_generation("failed-reject")
+        for status,effects in (("failed",True),("running",False),("uncertain",False),("interrupted",False)):
+            job.update(status=status,effects_started=effects)
+            with self.assertRaisesRegex(ValueError,"pre-effect failed"):self.action(item["task_id"],"continue")
+        job.update(status="failed",effects_started=False)
+        Path(item["workspace_path"],"README.md").write_text("unexpected draft mutation\n")
+        with self.assertRaisesRegex(ValueError,"Retained source generation changed"):self.action(item["task_id"],"continue")
+        self.assertEqual(item["status"],"closed")
+
     def test_continue_retry_recovers_after_filesystem_switch(self):
         """A crash between ownership mutation and task persistence preserves one generation switch."""
         item=self.begin("continue-task");self.write(item,"README.md","published\n");self.publish(item)
