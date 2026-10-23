@@ -30,7 +30,7 @@ test('scoped accounting, bounded pages, partial cost, deduplication and failure 
   assert.equal(tiles.get('cost').rows[0][1],'$0.1200');
   assert.equal(tiles.get('active_runs').rows[0][1],1);
   assert.equal(tiles.get('user_mgmt').rows[0][1],2);
-  assert.match(tiles.get('security').note,/Current account only/);
+  assert.match(tiles.get('security').note,/current account/i);
   mode='unknown-cost';tiles=await readActivity(controller.signal);assert.equal(tiles.get('cost').rows[0][1],'Unavailable');
   mode='broken';tiles=await readActivity(controller.signal);
   assert.equal(tiles.get('agents_panel').state,'unavailable');assert.equal(tiles.get('user_mgmt').state,'live');

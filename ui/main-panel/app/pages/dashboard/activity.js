@@ -37,7 +37,7 @@ export async function readActivity(signal){
    'Installation account summary','live',['Manage users','/app?tab=app&appView=users']));
  }
  if(data.signins)tiles.set('security',model([['Your active sign-ins',data.signins.sessions.length]],
-  'Current account only. Installation sign-in history and security events need backend work.','partial'));
+  'Active sign-ins for the current account.','partial'));
  if(data.sessions){
   const sessions=data.sessions.sessions;
   const scope='Your active sessions · '+sessions.length+' records'+(data.sessions.next_offset!=null?' · first page only (100 maximum)':'')+'. Missing provider usage is excluded.';
@@ -47,7 +47,7 @@ export async function readActivity(signal){
   const sum=key=>reported.reduce((n,s)=>n+(numeric(s.usage[key])?s.usage[key]:0),0);
   const incomplete=reported.length!==sessions.length||sum('unreported_calls')>0||data.sessions.next_offset!=null;
   tiles.set('tokens',model([['Reported input tokens',reported.length?sum('input_tokens'):'Unavailable'],['Reported output tokens',reported.length?sum('output_tokens'):'Unavailable'],['Sessions without usage',sessions.length-reported.length],['Unreported calls',reported.length?sum('unreported_calls'):'Unavailable']],scope,incomplete?'partial':'live'));
-  tiles.set('tool_usage',model([['Provider-reported calls',reported.length?sum('reported_calls'):'Unavailable'],['Calls without usage',reported.length?sum('unreported_calls'):'Unavailable']],scope+' Tool invocation statistics need backend work.','partial'));
+  tiles.set('tool_usage',model([['Provider-reported calls',reported.length?sum('reported_calls'):'Unavailable'],['Calls without usage',reported.length?sum('unreported_calls'):'Unavailable']],scope+' Provider usage projection; detailed tool counts are supplied by the system snapshot.','partial'));
   const byAgent=new Map();
   for(const s of reported){const key=text(s.agent_id);byAgent.set(key,(byAgent.get(key)||0)+s.usage.input_tokens+s.usage.output_tokens);}
   tiles.set('tokens_by_agent',model([...byAgent].slice(0,12),scope+(byAgent.size>12?' Showing first 12 agents.':''),incomplete?'partial':'live'));
@@ -62,9 +62,9 @@ export async function readActivity(signal){
   tiles.set('failures',model([['Failed retained runs',failed.length],...failed.slice(0,5).map(r=>[r.id,text(r.error).slice(0,160)])],'Default agent only · retained recent runs; not installation history.','partial'));
   const run=runs.find(r=>numeric(r.context_controls?.trigger_tokens));
   tiles.set('context',model([['Default agent model',text(data.status.model)],['Compaction trigger (tokens)',run?.context_controls?.trigger_tokens??'Unavailable'],['Tail target (tokens)',run?.context_controls?.tail_tokens??'Unavailable']],
-   'Thresholds from a retained default-agent run. Model input/output limits need backend work.','partial'));
+   'Compaction thresholds from a retained default-agent run; provider limits depend on the selected model.','partial'));
  }
  if(data.health)tiles.set('health_board',model([['API readiness',data.health.ready?'Ready':'Not ready']],
-  'API readiness only. Database latency and broader service checks need backend work.',data.health.ready?'partial':'unavailable'));
+  'API readiness. Database pools are measured in the Database tiles.',data.health.ready?'partial':'unavailable'));
  return tiles;
 }

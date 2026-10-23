@@ -1,5 +1,7 @@
 //! Administrator-only metrics routes; the parent router owns authentication and authorization.
 use super::*;
+#[path = "dashboard.rs"]
+mod dashboard;
 
 /// Collect bounded proc counters on the blocking pool instead of the HTTP executor.
 async fn summary() -> Api {
@@ -26,6 +28,8 @@ async fn metric(Path(name): Path<String>) -> Api {
 pub(crate) fn router() -> Router<App> {
     Router::new()
         .route("/summary", get(summary))
+        .route("/dashboard", get(dashboard::read))
+        .route("/dashboard/{section}", get(dashboard::section))
         .route("/{metric}", get(metric))
 }
 
@@ -85,6 +89,38 @@ mod tests {
                 assert!(value["metrics"][name].is_object());
             }
         }
+        for name in [
+            "dashboard",
+            "dashboard/history",
+            "dashboard/database",
+            "dashboard/devices",
+            "dashboard/git",
+            "dashboard/loop",
+            "dashboard/throughput",
+            "dashboard/runtime",
+            "dashboard/usage",
+        ] {
+            let denied = crate::router(app.clone())
+                .oneshot(request(name, None, "GET"))
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            let allowed = crate::router(app.clone())
+                .oneshot(request(name, Some(&token), "GET"))
+                .await
+                .unwrap();
+            assert_eq!(allowed.status(), StatusCode::OK, "{name}");
+            let body = axum::body::to_bytes(allowed.into_body(), 1048576)
+                .await
+                .unwrap();
+            let value: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["schema_version"], 1);
+        }
+        let invalid = crate::router(app.clone())
+            .oneshot(request("dashboard?window=invalid", Some(&token), "GET"))
+            .await
+            .unwrap();
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
         let unknown = crate::router(app.clone())
             .oneshot(request("processes", Some(&token), "GET"))
             .await
@@ -130,6 +166,11 @@ mod tests {
             .unwrap();
         let denied = crate::router(app.clone())
             .oneshot(request("summary", Some(&token), "GET"))
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        let denied = crate::router(app)
+            .oneshot(request("dashboard", Some(&token), "GET"))
             .await
             .unwrap();
         assert_eq!(denied.status(), StatusCode::FORBIDDEN);

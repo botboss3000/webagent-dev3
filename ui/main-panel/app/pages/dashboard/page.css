@@ -27,3 +27,7 @@
 .v3-dashboard .dashboard-preview a { display:inline-block;margin-top:10px;color:inherit;-webkit-tap-highlight-color:transparent; }
 .v3-dashboard .dashboard-preview a:focus-visible { outline:2px solid currentColor;outline-offset:2px; }
 .v3-dashboard .dashboard-field span { min-width:0;overflow-wrap:anywhere; }
+
+.v3-dashboard .dashboard-history { display:block;width:100%;height:auto;min-height:100px;border-bottom:1px solid var(--border,#888); }
+.v3-dashboard .dashboard-scope { font-size:12px;overflow-wrap:anywhere; }
+.v3-dashboard .dashboard-tile[data-state="warming"] { color:var(--fg-1,inherit);border-color:var(--border,#888);background:var(--bg-elev,transparent); }

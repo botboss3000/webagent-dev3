@@ -1,4 +1,5 @@
 //! Read-only Linux namespace metrics, sampled at most once per second on demand.
+pub mod dashboard;
 mod metrics;
 use serde_json::{json, Value};
 use std::sync::{Mutex, OnceLock};

@@ -4,7 +4,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(new URL('../../../../..',import.meta.url).pathname);
-let mode='live',calls=0;
+let mode='live',calls=0;const windows=[];
 const sample=()=>({schema_version:1,sampled_at_unix_ms:Date.now(),metrics:{
  cpu:{available:true,logical_processors:8,utilization_available:mode!=='warm',utilization_percent:mode==='warm'?null:24.5},
  memory:{available:true,total_bytes:8589934592,used_bytes:2147483648,utilization_percent:25},
@@ -18,6 +18,20 @@ const server=http.createServer(async(req,res)=>{
   if(mode==='denied'){res.statusCode=403;res.end('{}');return;}
   if(mode==='invalid'){res.end('{"schema_version":99}');return;}
   res.end(JSON.stringify(sample()));return;
+ }
+ if(url.pathname==='/api/v3/admin/system/dashboard'){
+  windows.push(url.searchParams.get('window'));
+  const point={at:1700000000,cpu:24.5,memory:25,db_ms:1.5,input_tokens:20,output_tokens:5,reported_calls:1,known_cost_usd:.12,active_runs:1};
+  res.setHeader('content-type','application/json');
+  res.end(JSON.stringify({schema_version:1,window:url.searchParams.get('window'),scope:{sessions_truncated:false},history:{plot_interval_seconds:120,points:[point,{...point,at:1700000120,cpu:30}]},
+   database:{available:true,measurement:'Read-only probes',window_p95_ms:1.5,probes:[{name:'application',available:true,journal_mode:'wal',latency_ms:1.5}]},
+   devices:{available:true,scope:'process namespace',devices:[{name:'eth0',kind:'network',state:'up'}]},
+   git:{available:true,scope:'source checkout',changes:[],truncated:false},
+   loop:{available:true,model_samples:2,tool_samples:1,other_samples:0,total_samples:3,measurement:'Sampled phase occupancy'},
+   throughput:{available:true,output_tokens_per_second:1,calls_per_second:.1,interval_seconds:30,measurement:'Provider reported'},
+   usage:{input_tokens:20,output_tokens:5,reported_calls:1,unreported_calls:0,unknown_cost_calls:0,known_cost_usd:.12,sessions_without_usage:0,session_count:1,tools:[{name:'file_read',calls:1}],agents:[{agent:'fixture',tokens:25}]},
+   runtime:{load_average:'0.1 0.2 0.3',active_runs:1,concurrency:0,open_descriptors:24}
+  }));return;
  }
  const activity={
   '/api/v3/models/agents':{agents:[{id:'fixture',name:'Fixture agent',status:'active'}]},
@@ -52,18 +66,28 @@ try{
   await page.waitForFunction(()=>document.querySelector('[data-card=agents_panel]')?.dataset.state==='live');
   assert.match(await page.locator('[data-card=agents_panel]').innerText(),/Fixture agent/);
   assert.match(await page.locator('[data-card=tokens]').innerText(),/Reported input tokens/);
-  assert.match(await page.locator('[data-card=cost]').innerText(),/\$0.1200/);
+  assert.match(await page.locator('[data-card=cost]').innerText(),/0.12 USD/);
   assert.match(await page.locator('[data-card=active_runs]').innerText(),/Default agent only/);
-  assert.match(await page.locator('[data-card=security]').innerText(),/Current account only/);
+  assert.match(await page.locator('[data-card=security]').innerText(),/current account/i);
   assert.equal(await page.locator('[data-card=user_mgmt] a').getAttribute('href'),'/app?tab=app&appView=users');
-  assert.match(await page.locator('[data-card=db_latency]').innerText(),/Backend work needed/);
+  assert.match(await page.locator('[data-card=db_latency]').innerText(),/Read-only probes/);
   assert.match(await page.locator('[data-card=memory]').innerText(),/25.0%/);
   assert.match(await page.locator('[data-card=storage]').innerText(),/10.00 GiB/);
   assert.match(await page.locator('[data-card=uptime]').innerText(),/2d 1h 0m/);
   assert.equal(await page.locator('.dashboard-tile').count(),25);
   assert.equal(await system.getAttribute('data-state'),'partial');
-  assert.equal(await system.locator('.dashboard-field[data-available="true"]').count(),4);
-  assert.match(await page.locator('[data-card=metric_chart]').innerText(),/Backend work needed/);
+  assert.equal(await system.locator('.dashboard-field[data-available="true"]').count(),8);
+  assert.equal(await page.locator('[data-card=metric_chart] svg').count(),1);
+  assert.equal(await page.locator('[data-card=metric_chart] svg polyline').count(),1);
+  assert.equal(await page.locator('[data-card=db_latency_chart] svg').count(),1);
+  for(const id of ['devices','db_mode','db_latency','loop_split','token_rate','git_changes'])assert.equal(await page.locator('[data-card='+id+']').getAttribute('data-state'),'live');
+  assert.match(await page.locator('[data-card=devices]').innerText(),/eth0/);
+  assert.match(await page.locator('[data-card=tool_usage]').innerText(),/file_read/);
+  await page.getByLabel('Dashboard time window',{exact:true}).selectOption('5m');
+  await page.waitForFunction(()=>document.querySelector('[data-card=metric_chart] svg'));
+  assert.ok(windows.includes('5m'));
+  await page.getByLabel('History chart metric',{exact:true}).selectOption('memory');
+  assert.equal(await page.locator('[data-card=metric_chart] svg').getAttribute('aria-label'),'RAM sampled history in %');
   for(const theme of ['dark','light']){
    await page.evaluate(theme=>{document.documentElement.style.setProperty('--fg-1',theme==='dark'?'#eee':'#111');document.documentElement.style.setProperty('--bg-elev',theme==='dark'?'#222':'#fff');},theme);
    assert.notEqual(await cpu.evaluate(el=>getComputedStyle(el).color),await system.evaluate(el=>getComputedStyle(el).color));
