@@ -1,4 +1,4 @@
-/* Dashboard owns only its page; red signals unavailable backend functionality. */
+/* Resource readings are neutral; red retains unavailable and unfinished states. */
 /* @code-index {"version":1,"feature":"app-dashboard-style","purpose":"Responsive pending dashboard tiles; sizes read from cards.json by page.js","span_lines":19,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider dashboard presentation tokens in an owning JSON profile."]},"aliases":["dashboard tiles"]} */
 .v3-dashboard { --dashboard-danger:var(--danger,#ef4444); min-width:0; }
 .v3-dashboard .dashboard-toolbar,.v3-dashboard .dashboard-tile-actions { display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px; }
@@ -19,3 +19,7 @@
 .v3-dashboard .dashboard-picker button { margin:4px; }
 @media(max-width:900px){.v3-dashboard .dashboard-tile{grid-column:span 6;}}
 @media(max-width:560px){.v3-dashboard .dashboard-grid{grid-template-columns:minmax(0,1fr);}.v3-dashboard .dashboard-tile{grid-column:1;}.v3-dashboard .dashboard-toolbar{align-items:stretch;}}
+
+.v3-dashboard .dashboard-tile[data-state="live"] { color:var(--fg-1,inherit);border-color:var(--border,#888);background:var(--bg-elev,transparent); }
+.v3-dashboard .dashboard-tile[data-state="partial"] .dashboard-field[data-available="true"] { color:var(--fg-1,CanvasText); }
+.v3-dashboard .dashboard-field span:last-child { text-align:right;overflow-wrap:anywhere; }
