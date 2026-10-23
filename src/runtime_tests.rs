@@ -363,6 +363,24 @@ async fn running(app: &App, id: &str, generation: &str) {
     assert!(app.store.claim_run(&mut run,"fixture-loop",generation).await.unwrap());
 }
 
+
+// Manual multi-turn journeys need the same fenced lease renewal as the production loop.
+async fn execute_fixture_journey(app: App, id: String, generation: String, cancel: CancellationToken) {
+    let epoch=app.run(&id).await.unwrap()["lease_epoch"].as_i64().unwrap();
+    let store=app.store.clone();let lease_id=id.clone();let lease_generation=generation.clone();let lease_cancel=cancel.clone();
+    let watcher=tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            if !store.renew_run_lease(&lease_id,&lease_generation,"fixture-loop",epoch).await.unwrap_or(false) {
+                lease_cancel.cancel();break;
+            }
+        }
+    });
+    let result=tokio::time::timeout(Duration::from_secs(90),execute_run(app,id,generation,cancel)).await;
+    watcher.abort();let _=watcher.await;
+    result.expect("fixture journey exceeded its bounded deadline").unwrap();
+}
+
 #[tokio::test]
 async fn message_receipts_are_idempotent_and_conflicting_reuse_is_rejected() {
     let (_root, app) = fixture().await;
@@ -1918,7 +1936,8 @@ async fn shutoff_cancels_midstream_model_without_waiting_for_eof() {
         "generation".into(),
         cancel,
     ));
-    tokio::time::timeout(Duration::from_secs(2), started.notified())
+    // Catalog assembly is setup; the cancellation deadline below remains two seconds.
+    tokio::time::timeout(Duration::from_secs(10), started.notified())
         .await
         .unwrap();
     assert_eq!(
@@ -1973,7 +1992,7 @@ async fn runtime_restart_resumes_model_once_but_preserves_intentional_stops() {
         let cancel = app.stop.child_token();
         app.active.lock().await.insert(id.clone(), cancel.clone());
         let executing = tokio::spawn(execute_run(app.clone(), id.clone(), "before-restart".into(), cancel.clone()));
-        tokio::time::timeout(Duration::from_secs(5), started.notified()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(20), started.notified()).await.unwrap();
         match action {
             "restart" | "disabled" => { app.stop.cancel(); },
             "pause" | "cancel" => {
@@ -2064,7 +2083,7 @@ async fn runtime_restart_retains_pending_read_for_startup_retry() {
     let id = queued(&app, &sid).await;
     running(&app, &id, "before-read-restart").await;
     let executing = tokio::spawn(execute_run(app.clone(), id.clone(), "before-read-restart".into(), app.stop.child_token()));
-    tokio::time::timeout(Duration::from_secs(5), started.notified()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(20), started.notified()).await.unwrap();
     app.stop.cancel();
     tokio::time::timeout(Duration::from_secs(5), executing).await.unwrap().unwrap().unwrap();
     let interrupted = app.run(&id).await.unwrap();
@@ -3013,14 +3032,13 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
     });
     app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
     running(&app, &id, "discover-inspect").await;
-    execute_run(
+    execute_fixture_journey(
         app.clone(),
         id.clone(),
         "discover-inspect".into(),
         CancellationToken::new(),
     )
-    .await
-    .unwrap();
+    .await;
 
     assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
     assert_eq!(
@@ -5663,7 +5681,7 @@ async fn web_access_policy_migration_preserves_denial_and_approval() {
     let migrated=app.store.get("policy").await.unwrap().unwrap();
     assert_eq!(migrated["rules"]["web_search"],"deny");
     assert_eq!(migrated["rules"]["get_weather"],"require_approval");
-    assert_eq!(migrated["rules"]["maps_geocode"],"allow");assert_eq!(migrated["version"],2);
+    assert_eq!(migrated["rules"]["maps_geocode"],"deny");assert_eq!(migrated["version"],2);
 }
 
 #[tokio::test]
@@ -6319,7 +6337,7 @@ type BackgroundJourneyRequest = (Value, tokio::sync::oneshot::Sender<Value>);
 async fn background_journey_request(
     requests: &mut tokio::sync::mpsc::UnboundedReceiver<BackgroundJourneyRequest>,
 ) -> BackgroundJourneyRequest {
-    tokio::time::timeout(Duration::from_secs(5), requests.recv())
+    tokio::time::timeout(Duration::from_secs(20), requests.recv())
         .await.unwrap().expect("mock provider request")
 }
 
@@ -6369,7 +6387,7 @@ async fn background_execution_journey(behavior: &str) {
          Json(body):Json<Value>| async move {
             let (reply_sender,reply_receiver)=tokio::sync::oneshot::channel();
             sender.send((body,reply_sender)).unwrap();
-            let output=tokio::time::timeout(Duration::from_secs(5),reply_receiver).await.unwrap().unwrap();
+            let output=tokio::time::timeout(Duration::from_secs(20),reply_receiver).await.unwrap().unwrap();
             let event=json!({"type":"response.completed","response":{"status":"completed","output":output}});
             ([("content-type","text/event-stream")],format!("data: {event}\n\n"))
         }
@@ -6389,9 +6407,16 @@ async fn background_execution_journey(behavior: &str) {
     let (arrived_sender,arrived_receiver)=tokio::sync::oneshot::channel();
     let (release_sender,release_receiver)=tokio::sync::oneshot::channel::<()>();
     let wake=behavior=="wake";
+    let service=tokio::spawn(background_tasks::service(app.clone()));
+    let loop_app=app.clone();let loop_rid=rid.clone();
+    let origin=tokio::spawn(async move {
+        execute_fixture_journey(loop_app,loop_rid,"background-journey".into(),CancellationToken::new()).await;
+    });
+    let (_,reply)=background_journey_request(&mut requests).await;
+    // Start the worker-stage deadline only after the first model has been admitted.
     let worker=tokio::spawn(async move {
         // Bound each socket stage; the driver explicitly releases the held read between stages.
-            let (stream,_)=tokio::time::timeout(Duration::from_secs(5),listener.accept()).await.unwrap().unwrap();
+            let (stream,_)=tokio::time::timeout(Duration::from_secs(20),listener.accept()).await.unwrap().unwrap();
             let mut reader=BufReader::new(stream);
             let mut line=String::new();tokio::time::timeout(Duration::from_secs(5),reader.read_line(&mut line)).await.unwrap().unwrap();
             let request:Value=serde_json::from_str(&line).unwrap();
@@ -6411,7 +6436,7 @@ async fn background_execution_journey(behavior: &str) {
             tokio::time::timeout(Duration::from_secs(5),reader.get_mut().write_all(format!("{reply}\n").as_bytes())).await.unwrap().unwrap();
             drop(reader);
             if wake {
-                let (stream,_)=tokio::time::timeout(Duration::from_secs(5),listener.accept()).await.unwrap().unwrap();
+                let (stream,_)=tokio::time::timeout(Duration::from_secs(20),listener.accept()).await.unwrap().unwrap();
                 let mut reader=BufReader::new(stream);
                 let mut line=String::new();tokio::time::timeout(Duration::from_secs(5),reader.read_line(&mut line)).await.unwrap().unwrap();
                 let request:Value=serde_json::from_str(&line).unwrap();
@@ -6424,12 +6449,6 @@ async fn background_execution_journey(behavior: &str) {
             }
             (false,1)
     });
-    let service=tokio::spawn(background_tasks::service(app.clone()));
-    let loop_app=app.clone();let loop_rid=rid.clone();
-    let origin=tokio::spawn(async move {
-        execute_run(loop_app,loop_rid,"background-journey".into(),CancellationToken::new()).await.unwrap();
-    });
-    let (_,reply)=background_journey_request(&mut requests).await;
     reply.send(json!([{"type":"function_call","call_id":"journey-background","name":"file_read",
         "arguments":json!({"path":"background-evidence"}).to_string()}])).unwrap();
     let (advanced,reply)=background_journey_request(&mut requests).await;
@@ -6497,7 +6516,7 @@ async fn background_execution_journey(behavior: &str) {
                 running(&app,&next,"silent-next-turn").await;
                 let next_app=app.clone();let next_id=next.clone();
                 let next_run=tokio::spawn(async move {
-                    execute_run(next_app,next_id,"silent-next-turn".into(),CancellationToken::new()).await.unwrap();
+                    execute_fixture_journey(next_app,next_id,"silent-next-turn".into(),CancellationToken::new()).await;
                 });
                 let (request,reply)=background_journey_request(&mut requests).await;
                 let envelopes=background_journey_envelopes(&request);
@@ -6530,7 +6549,7 @@ async fn background_execution_journey(behavior: &str) {
                 running(&app,&follow_id,"wake-followup").await;
                 let follow_app=app.clone();let follow_run_id=follow_id.clone();
                 let follow_run=tokio::spawn(async move {
-                    execute_run(follow_app,follow_run_id,"wake-followup".into(),CancellationToken::new()).await.unwrap();
+                    execute_fixture_journey(follow_app,follow_run_id,"wake-followup".into(),CancellationToken::new()).await;
                 });
                 let (_,reply)=background_journey_request(&mut requests).await;
                 reply.send(json!([

@@ -757,7 +757,7 @@ impl<H:Host> Catalog<H> {
         self.abilities.iter().any(|a|a.plugin.as_ref().is_some_and(|p|p.owns(name))) || Self::supported(name)
     }
     fn supported(name: &str) -> bool {
-        H::administrator_supported(name) || H::native_schemas_without_administrator().iter().any(|schema| schema["name"] == name)
+        is_discovery(name) || H::administrator_supported(name) || H::native_schemas_without_administrator().iter().any(|schema| schema["name"] == name)
     }
 
     fn allowed(policy: &Value, name: &str) -> bool {
@@ -1866,9 +1866,9 @@ pub mod tests {
         let manifest = path.join("base.json");
         fs::write(&manifest, r#"{"display_name":"Base","kind":"virtual_core",
             "description":"Partial core","readiness":"partial",
-            "tools":["calculate","register_webhook"]}"#).unwrap();
+            "tools":["calculate","legacy_unwired_tool"]}"#).unwrap();
         let catalog = Catalog::<H>::load(root.path()).unwrap();
-        let policy = json!({"rules":{"calculate":"allow","register_webhook":"allow"}});
+        let policy = json!({"rules":{"calculate":"allow","legacy_unwired_tool":"allow"}});
         let visibility = json!({"visibility":{"base":"visible"}});
         let state = json!({"active":["base"]});
         let item = catalog.configuration_catalog(&policy, &visibility)
@@ -1876,7 +1876,7 @@ pub mod tests {
         assert_eq!(item["readiness"], "partial");
         assert_eq!(item["available"], true);
         assert!(catalog.tool_available("calculate", &visibility, &state, &Value::Null));
-        assert!(!catalog.tool_available("register_webhook", &visibility, &state, &Value::Null));
+        assert!(!catalog.tool_available("legacy_unwired_tool", &visibility, &state, &Value::Null));
         fs::write(&manifest, r#"{"display_name":"Base","kind":"virtual_core",
             "description":"Disabled","readiness":"pending","tools":["calculate"]}"#).unwrap();
         assert!(!catalog.tool_available("calculate", &visibility, &state, &Value::Null));
@@ -1887,6 +1887,12 @@ pub mod tests {
 
     pub fn catalog_only_v2_tool_is_listed_but_never_executable<H:crate::TestHost>() {
         let (root, _) = fixture::<H>();
+        fs::write(root.path().join("Administrator/codebase_admin/codebase_admin.json"),
+            r#"{"display_name":"Discovery","kind":"ability","description":"Native discovery",
+                "tools":["list_abilities","load_ability"]}"#).unwrap();
+        let discovery=Catalog::<H>::load(root.path()).unwrap().configuration_catalog(&policy::<H>(),&Value::Null)
+            .into_iter().find(|item|item["id"]=="codebase_admin").unwrap();
+        assert!(discovery["tools"].as_array().unwrap().iter().all(|tool|tool["supported"]==true));
         let path = root.path().join("Administrator/computer_control");
         fs::create_dir_all(&path).unwrap();
         fs::write(path.join("computer_control.json"),
@@ -2263,17 +2269,20 @@ pub mod tests {
         assert!(!catalog.known("mcp"));
         assert_eq!(catalog.abilities.iter().filter(|entry| entry.id == "optimization").count(), usize::from(H::optimization_declaration().unwrap().is_some()));
         assert!(!catalog.known("optimization"));
-        assert_eq!(catalog.abilities.iter().filter(|entry| Catalog::<H>::executable(entry)).count(), 7);
-        assert_eq!(ordinary.iter().filter(|entry| entry.readiness == Readiness::Ready).count(), 6);
-        assert_eq!(catalog.abilities.iter().filter(|entry| entry.readiness == Readiness::Partial).count(), 2);
+        assert_eq!(catalog.abilities.iter().filter(|entry| Catalog::<H>::executable(entry)).count(), 17);
+        assert_eq!(ordinary.iter().filter(|entry| entry.readiness == Readiness::Ready).count(), 18);
+        assert_eq!(catalog.abilities.iter().filter(|entry| entry.readiness == Readiness::Partial).count(), 0);
+        for ability in catalog.abilities.iter().filter(|a|a.group=="Core"&&!matches!(a.id.as_str(),"p2p"|"automation")) {
+            for name in &ability.tools {assert!(Catalog::<H>::supported(name)||is_discovery(name),"Unwired Core tool: {}::{name}",ability.id);}
+        }
         let automation=catalog.abilities.iter().find(|entry|entry.id=="automation").unwrap();
         assert_eq!(automation.required_module.as_deref(),Some("automation"));
         assert!(!Catalog::<H>::executable(automation));
         assert!(catalog.abilities.iter().any(|entry| entry.id == "decision" && entry.tools == ["decide_with_jev", "score_directory_with_jev"]));
         let base = catalog.abilities.iter().find(|entry| entry.id == "base").unwrap();
-        let mut installed: Vec<_> = base.tools.iter().filter(|name| Catalog::<H>::supported(name)).map(String::as_str).collect();
-        installed.sort();
-        assert_eq!(installed, ["calculate", "compact_context", "context_assets", "edit_own_prompt", "get_date", "get_task_checkpoint", "get_time", "list_skills", "list_tools", "load_skill", "load_tool", "main_notes_read", "main_notes_write", "message_other_session", "present_chat_component", "present_plan", "read_attachment", "read_own_prompt", "recall_compacted", "remove_own_skill", "save_own_skill", "search_this_session", "search_tools", "session_search", "set_execution_mode", "similar_sessions", "start_session", "task_cancel", "task_status", "task_wait", "update_task_checkpoint"]);
+        assert_eq!(base.tools.len(),41);
+        let p2p=catalog.abilities.iter().find(|a|a.id=="p2p").unwrap();assert_eq!(p2p.readiness,Readiness::Pending);assert!(!Catalog::<H>::executable(p2p));for tool in &p2p.tools{assert!(!Catalog::<H>::supported(tool));}
+        for name in &base.tools {assert!(Catalog::<H>::supported(name)||is_discovery(name),"Unwired Base tool: {name}");}
         assert!(!catalog.abilities.iter().any(|ability| matches!(ability.id.as_str(), "v3_build"|"v3_workspace")));
         let coding=catalog.abilities.iter().find(|ability| ability.id=="codebase_admin").unwrap();
         assert_eq!(coding.tools, ["file_list","file_read","file_search","file_edit","file_write",

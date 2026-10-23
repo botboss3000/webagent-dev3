@@ -61,6 +61,10 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
           // Include gaps below a newer live event; ID deduplication keeps rows.
           for (const item of [...data.messages].sort((a,b) => a.seq-b.seq)) deliver(state, item, true);
           state.last = Math.max(state.last, data.last_seq || 0);
+          const viewRevision=data.app_view?.revision||0;
+          if(viewRevision<=state.appViewRevision)data.app_view=null;
+          else state.appViewRevision=viewRevision;
+          state.componentRevision=data.component_revision||0;
           state.snapshotChanged(data);
         } while (state.again && valid(state));
         state.failures = 0;
@@ -94,14 +98,14 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
     if (turn !== epoch) return;
     render(data);
     const state = current = {id, epoch:turn, publish, metadataChanged, snapshotChanged, historyRevision:data.session?.history_revision||0,historyChanged:false,last:data.last_seq || 0,
-      seen:new Set(data.messages.map(item => item.id)), runs:new Map((data.runs || []).map(run => [run.id,run.status])),
+      componentRevision:data.component_revision||0,appViewRevision:data.app_view?.revision||0,seen:new Set(data.messages.map(item => item.id)), runs:new Map((data.runs || []).map(run => [run.id,run.status])),
       inFlight:null, again:false, retry:null, failures:0};
     administratorNotices.start(id);
     const streamUrl='/api/v3/sessions/' + encodeURIComponent(id) + '/events?after=' + state.last;
     source = createStream ? createStream(streamUrl) : new EventSourceClass(streamUrl);
     setConnecting(true);
     source.addEventListener('queue_updated', () => { if (valid(state)) void recover(state); });
-    source.addEventListener('session_updated', event => { if (valid(state)) {try {const summary=JSON.parse(event.data).session;if((summary?.history_revision||0)>state.historyRevision)state.historyChanged=true;metadataChanged(summary);} catch {metadataChanged();}} });
+    source.addEventListener('session_updated', event => { if (valid(state)) {try {const summary=JSON.parse(event.data).session;if((summary?.history_revision||0)>state.historyRevision)state.historyChanged=true;metadataChanged(summary);if((JSON.parse(event.data).app_view_revision||0)>state.appViewRevision||(JSON.parse(event.data).component_revision||0)>state.componentRevision)void recover(state);} catch {metadataChanged();}} });
     // Validates each SSE payload; rendering/parse failures trigger snapshot recovery.
     source.onmessage = event => {
       if (!valid(state)||state.historyChanged) return;

@@ -23,7 +23,35 @@ impl NativeDispatch<Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_
     if optimization_run["plugin_bindings"].get(&name).is_some() {
         return crate::ability_plugins::execute(&app,&sid,&name,&args,&pending_id,&optimization_run["plugin_bindings"][&name],cancel).await;
     }
-    if crate::session_messaging::owns(&name) {
+    if name=="screenshot_genui" {
+        tools::core_visual_capture::execute(&app,&sid,&run_id,&generation,&pending_id,&args,cancel).await
+    } else if tools::core_vault::owns(&name) {
+        tools::core_vault::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if tools::core_visualizer::owns(&name) {
+        tools::core_visualizer::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if tools::core_webhooks::owns(&name) {
+        tools::core_webhooks::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if tools::core_base_extras::owns(&name) {
+        tools::core_base_extras::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if tools::core_orchestration::owns(&name) {
+        tools::core_orchestration::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if tools::core_functions::owns(&name) {
+        tools::core_functions::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if tools::core_ui_admin::owns(&name) {
+        tools::core_ui_admin::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if tools::core_app_control::owns(&name) {
+        tools::core_app_control::execute(&app,&sid,&run_id,&generation,&pending_id,&args,cancel).await
+    } else if tools::core_image_generation::owns(&name) {
+        tools::core_image_generation::execute(&app,&sid,&run_id,&generation,&pending_id,&args,cancel).await
+    } else if tools::core_image_vision::owns(&name) {
+        tools::core_image_vision::execute(&app,&sid,&run_id,&generation,&pending_id,&args,cancel).await
+    } else if tools::core_agent_management::owns(&name) {
+        tools::core_agent_management::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if tools::core_model_switcher::owns(&name) {
+        tools::core_model_switcher::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if tools::core_user_files::owns(&name) {
+        tools::core_user_files::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if crate::session_messaging::owns(&name) {
         crate::session_messaging::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
     } else if name=="promotion_propose" {
         propose_promotion(&app,&sid,&pending_id,&run_id,&args,policy_version,cancel).await
@@ -97,8 +125,8 @@ impl NativeDispatch<Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_
 
  fn optimization_prepare<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,sid:&'a str,run:&'a mut Value)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {crate::optimization_prompt::prepare(&self.app(view),sid,run).await}}
  fn optimization_guidance(run:&Value)->&str {crate::optimization_prompt::guidance(run)}
- fn chat_model_preference<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,run:&'a mut Value)->impl std::future::Future<Output=Result<bool>>+Send+'a {async move {crate::apply_chat_model_preference(&self.app(view),run).await}}
- fn messaging_preflight<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,run:&'a mut Value,name:&'a str,args:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {crate::session_messaging::preflight(&self.app(view),run,name,args).await}}
+ fn chat_model_preference<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,run:&'a mut Value)->impl std::future::Future<Output=Result<bool>>+Send+'a {async move {let app=self.app(view);let changed=crate::apply_chat_model_preference(&app,run).await?;Ok(tools::core_model_switcher::apply(&app,run).await?||changed)}}
+ fn messaging_preflight<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,run:&'a mut Value,name:&'a str,args:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {let app=self.app(view);tools::core_model_switcher::require_premium_confirmation(&app,run,name,args).await?;crate::session_messaging::preflight(&app,run,name,args).await}}
 
  fn host_fingerprint<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,sid:&'a str,run:&'a str,authority:&'a str)->impl std::future::Future<Output=Result<String>>+Send+'a {async move {crate::tools::administrator::host_fingerprint(&self.app(view),sid,run,authority).await}}
  fn recovery_build_socket(&self,view:View<'_,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->PathBuf {crate::tools::administrator::build_socket(&self.app(view))}

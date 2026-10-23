@@ -94,9 +94,9 @@ pub(crate) async fn migrate_tool_policy_defaults(store: &Store) -> Result<()> {
             else if old.contains(&"require_approval") {"require_approval"} else {"allow"});
         changed=true;
     }
-    for (name, decision) in defaults["rules"].as_object().unwrap() {
+    for (name, _) in defaults["rules"].as_object().unwrap() {
         if policy["rules"][name].is_null() {
-            policy["rules"][name] = decision.clone();
+            policy["rules"][name] = json!("deny");
             changed = true;
         }
     }

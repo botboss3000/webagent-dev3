@@ -139,6 +139,8 @@ mod tests {
             "file_edit",
             "prompt_slot_write",
             "workspace_seed",
+            "save_file", "create_tool", "generate_image", "create_agent", "edit_agent_prompt",
+            "register_webhook", "render_visual", "request_credential", "delegate_to_agent", "promote_spawn",
             "source_patch",
             "shell",
             "python",
@@ -150,7 +152,7 @@ mod tests {
         assert_eq!(policy_decision(&p, "promotion_propose"), "allow");
     }
     #[tokio::test]
-    async fn existing_policy_gains_approval_for_new_edit_tool_once() {
+    async fn existing_policy_keeps_new_tools_denied_and_existing_decisions() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let mut policy = policy_default();
@@ -159,12 +161,15 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("workspace_seed");
+        policy["rules"]["calculate"]=json!("deny");
         store.put("policy", &policy).await.unwrap();
         migrate_tool_policy_defaults(&store).await.unwrap();
         migrate_tool_policy_defaults(&store).await.unwrap();
         let migrated = store.get("policy").await.unwrap().unwrap();
-        assert_eq!(migrated["rules"]["file_edit"], "require_approval");
-        assert_eq!(migrated["rules"]["workspace_seed"], "require_approval");
+        assert_eq!(migrated["rules"]["file_edit"], "deny");
+        assert_eq!(migrated["rules"]["workspace_seed"], "deny");
+        assert_eq!(migrated["rules"]["calculate"], "deny");
+        assert_eq!(migrated["rules"]["get_time"], "allow");
         assert_eq!(migrated["version"], 2);
     }
     // DISPATCH-DIGEST-PARITY: streaming must retain the historical buffered

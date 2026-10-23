@@ -1491,7 +1491,9 @@ async fn execute_run_inner(app:Self,id:String,generation:String,cancel:Cancellat
             workflow::record(&mut run, &workflow_policy,
                 &workflow::Input::ContextAssembly(snapshot.clone()), workflow::Decision::Pass)?;
             app.save(&mut run).await?;
+            let core_effort=run["core_model_effort"].as_str().map(str::to_owned);
             let prepared_provider=match crate::provider::CallDraft::new(&selection,projected_input,schemas,&sid,&instructions)
+                .with_reasoning_effort(core_effort.as_deref())
                 .prepare(crate::ports::AgentMetadata::root(app.store.records()),&cancel).await {
                 Ok(value)=>value,Err(_)=>{Self::pause_context_preparation(&app,&mut run).await?;return Ok(());}
             };

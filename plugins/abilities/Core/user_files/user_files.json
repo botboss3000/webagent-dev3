@@ -1,7 +1,7 @@
 {
   "display_name": "User Files",
   "kind": "ability",
-  "description": "Lets the agent save files for the user (reports, documents, downloads) into that user's own data folder and read them back — instead of writing into the codebase.",
+  "description": "Save and read caller-private file records, with bounded byte paging and explicit attachment copies into the current conversation.",
   "tools": [
     "save_file",
     "list_user_files",
@@ -12,7 +12,7 @@
   "color": "#9ece6a",
   "order": 10,
   "placeholder": false,
-  "readiness": "pending",
+  "readiness": "ready",
   "config": {},
-  "migration_note": "Catalog metadata only. V3 adapter, configuration and credential lifecycle remain pending; v2 runtime and skills are not imported."
+  "migration_note": "Native V3 implementation. Current schemas, live policy and configured model/module availability determine callable behavior."
 }

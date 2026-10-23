@@ -3,7 +3,8 @@ use crate::*;
 use anyhow::bail;
 use serde::Deserialize;
 
-pub(crate) fn owns(name:&str)->bool {matches!(name,"message_other_session"|"start_session")}
+pub(crate) fn starts(name:&str)->bool {matches!(name,"start_session"|"spawn_agent"|"delegate_task_to_agent"|"delegate_to_agent")}
+pub(crate) fn owns(name:&str)->bool {starts(name)||matches!(name,"message_other_session"|"kick_user_session"|"message_spawn")}
 /// Project defaults for legacy saved policies; explicit denials remain authoritative.
 pub(crate) fn policy_defaults(mut policy:Value)->Value{
  for name in ["message_other_session","start_session"]{if policy["rules"].get(name).is_none(){policy["rules"][name]=json!("allow");}}
@@ -70,8 +71,11 @@ pub(crate) async fn binding(app:&App,run:&Value,name:&str,args:&Value)->Result<V
  if run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id())!=app.store.current_user_id(){bail!("Private session owner required");}
  let s=private_session(app,source).await?;
  let source_agent=s["agent_id"].as_str().unwrap_or("shared_default");
- let (target,agent,delivery,mode,participation,text,title)=if name=="start_session"{
+ let (target,agent,delivery,mode,participation,text,title)=if starts(name){
   let a:StartArgs=serde_json::from_value(args.clone())?;checked_text(&a.text)?;
+  if matches!(name,"delegate_task_to_agent"|"delegate_to_agent")&&a.agent_id.is_none(){bail!("Saved agent ID required");}
+
+
   let agent=a.agent_id.unwrap_or_else(||source_agent.into());
   let policy=shared_chat::policy(&app.store,&agent).await?;
   if policy.shareable||policy.admin_view||policy.admin_join{bail!("Owner-private agent required");}
@@ -85,15 +89,17 @@ pub(crate) async fn binding(app:&App,run:&Value,name:&str,args:&Value)->Result<V
   let a:MessageArgs=serde_json::from_value(args.clone())?;checked_text(&a.text)?;
   uuid::Uuid::parse_str(&a.target_session_id)?;
   if a.target_session_id==source{bail!("Use the current conversation directly");}
+  if name=="message_spawn"{tools::core_orchestration::require_child(app,source,&a.target_session_id).await?;}
   if !matches!(a.delivery.as_str(),"queue"|"steer"|"interrupt"){bail!("Invalid delivery");}
   let target=private_session(app,&a.target_session_id).await?;
   let agent=target["agent_id"].as_str().unwrap_or("shared_default").to_owned();
   let mode=session_mode(app,&a.target_session_id).await?;
   (a.target_session_id,agent,a.delivery,mode,target["participation"].clone(),a.text,None)
  };
- let raw_mode=if name=="start_session"{mode.clone()}else{app.store.get(&key("session_mode",&target)).await?.unwrap_or_else(default_session_mode)};
+ let spawn_limits=if starts(name){tools::core_orchestration::spawn_limits(app,source,name).await?}else{Value::Null};
+ let raw_mode=if starts(name){mode.clone()}else{app.store.get(&key("session_mode",&target)).await?.unwrap_or_else(default_session_mode)};
  let mut mode=mode;
- if name=="start_session"{if let Some(id)=mode["execution_mode"].as_str(){let config=execution_modes::config(&app.store,&agent).await?;mode["definition"]=execution_modes::resolve(&config,id)?;}}
+ if starts(name){if let Some(id)=mode["execution_mode"].as_str(){let config=execution_modes::config(&app.store,&agent).await?;mode["definition"]=execution_modes::resolve(&config,id)?;}}
  if participation["active"]==false{bail!("Recipient agent is inactive");}
  let access=app.store.live_access(app.store.current_user_id(),&agent).await?;
  let interrupt=if delivery=="interrupt"{
@@ -102,10 +108,10 @@ pub(crate) async fn binding(app:&App,run:&Value,name:&str,args:&Value)->Result<V
   let r=app.run(r["id"].as_str().unwrap()).await?;
   json!({"id":r["id"],"generation":r["generation"],"lease_epoch":r["lease_epoch"]})
  }else{Value::Null};
- Ok(json!({"source_access_revision":app.store.live_access(app.store.current_user_id(),source_agent).await?.revision,"source_execution_epoch":s["execution_epoch"].as_u64().unwrap_or(0),"target_execution_epoch":if name=="start_session"{0}else{app.store.get(&key("session",&target)).await?.and_then(|v|v["execution_epoch"].as_u64()).unwrap_or(0)},"source_session_id":source,"source_agent_id":source_agent,"source_title":s["title"],
-  "target_title":if name=="start_session"{title.as_deref().unwrap_or("New chat").to_owned()}else{app.store.get(&key("session",&target)).await?.and_then(|v|v["title"].as_str().map(str::to_owned)).unwrap_or_else(||"Conversation".into())},"target_session_id":target,"target_agent_id":agent,"delivery":delivery,"target_mode":mode,
+ Ok(json!({"spawn_limits":spawn_limits,"source_access_revision":app.store.live_access(app.store.current_user_id(),source_agent).await?.revision,"source_execution_epoch":s["execution_epoch"].as_u64().unwrap_or(0),"target_execution_epoch":if starts(name){0}else{app.store.get(&key("session",&target)).await?.and_then(|v|v["execution_epoch"].as_u64()).unwrap_or(0)},"source_session_id":source,"source_agent_id":source_agent,"source_title":s["title"],
+  "target_title":if starts(name){title.as_deref().unwrap_or("New chat").to_owned()}else{app.store.get(&key("session",&target)).await?.and_then(|v|v["title"].as_str().map(str::to_owned)).unwrap_or_else(||"Conversation".into())},"target_session_id":target,"target_agent_id":agent,"delivery":delivery,"target_mode":mode,
   "target_mode_raw":raw_mode,"participation":participation,"target_access_revision":access.revision,"interrupt_target":interrupt,
-  "target_capabilities":recipient_capabilities(app,&target,&agent,&mode,name=="start_session").await?,"text":text,"title":title,"source_kind":"agent_message","owner_user_id":app.store.current_user_id()}))
+  "target_capabilities":recipient_capabilities(app,&target,&agent,&mode,starts(name)).await?,"text":text,"title":title,"source_kind":"agent_message","owner_user_id":app.store.current_user_id()}))
 }
 fn route_key(source:&str,target:&str)->String{format!("messaging_route:{source}:{target}")}
 fn route_scope(b:&Value)->Value{json!({"source_session_id":b["source_session_id"],"source_agent_id":b["source_agent_id"],
@@ -132,7 +138,7 @@ async fn preflight_inner(app:&App,run:&mut Value,name:&str,args:&Value)->Result<
  }
  let onward=run["received_agent_message"]==true||run["origin_agent_message"].is_object();
  let route=if name=="message_other_session"&&!onward{route_for(app,&b).await?}else{None};
- let must_approve=name=="start_session"||b["delivery"]=="interrupt"||onward||route.is_none();
+ let must_approve=starts(name)||b["delivery"]=="interrupt"||onward||route.is_none();
  run["pending"]["messaging_approval_required"]=json!(must_approve);
  run["pending"]["new_intent_confirmation"]=json!(must_approve);
  run["pending"]["messaging_route"]=route.map(|r|json!({"key":r["key"],"revision":r["revision"]})).unwrap_or(Value::Null);
@@ -158,6 +164,7 @@ pub(crate) fn stamp(prepared:&mut api::chat::PreparedMessage,b:&Value){
 }
 /// Execute one authorized send; its immutable receipt precedes retry-time capacity checks.
 pub(crate) async fn execute(app:&App,sid:&str,rid:&str,generation:&str,pending_id:&str,name:&str,args:&Value,cancel:CancellationToken)->Result<Value>{
+ let _guard=app.gate.lock().await;
  let run=app.run(rid).await?;
  let pending=if run["pending"]["id"]==pending_id{run["pending"].clone()}else{
   run["batch"].as_array().and_then(|xs|xs.iter().find(|x|x["pending"]["id"]==pending_id)).map(|x|x["pending"].clone()).unwrap_or(Value::Null)};
@@ -180,10 +187,15 @@ pub(crate) async fn execute(app:&App,sid:&str,rid:&str,generation:&str,pending_i
  let target=b["target_session_id"].as_str().unwrap();
  let body=json!({"text":b["text"],"client_message_id":stable_id("agent-message",&json!([rid,pending["call_id"]]))});
  let mut created=Value::Null;let mut docs=vec![];
- let mut prepared=if name=="start_session"{
+ let mut prepared=if starts(name){
   let mut session_body=json!({"agent_id":b["target_agent_id"]});if b["title"].is_string(){session_body["title"]=b["title"].clone();}
   let s=api::sessions::prepare_session_id(&target_app,&session_body,Some(target.into())).await.map_err(|e|anyhow!(e.1))?;
   created=s.result.clone();docs=s.docs;
+  if b["spawn_limits"].is_object() {
+   let origin=app.store.get(&format!("core_spawn_origin:{sid}")).await?.unwrap_or(json!({}));
+   docs.push((format!("core_spawn_origin:{target}"),json!({"parent_session_id":sid,"root_session_id":origin["root_session_id"].as_str().unwrap_or(sid),"depth":origin["depth"].as_u64().unwrap_or(0)+1,"max_depth":b["spawn_limits"]["max_depth"]})));
+  }
+
   api::chat::prepare_message(&target_app,target,&body,Some(&s.value)).await.map_err(|e|anyhow!(e.1))?
  }else{api::chat::prepare_followup(&target_app,target,&body).await.map_err(|e|anyhow!(e.1))?};
  stamp(&mut prepared,&b);
@@ -312,6 +324,15 @@ mod tests {
   assert_eq!(entry["status"],"pending");
   assert_eq!(entry["template"]["origin_agent_message"]["source_session_id"],run["session_id"]);
   assert!(entry["template"]["input"].as_array().unwrap().is_empty());
+ }
+ #[tokio::test]async fn delegation_handoff_commits_only_with_the_approved_child_and_replays_once(){
+  let (_root,app)=crate::runtime_tests::fixture().await;
+  let (_,run)=prepared(&app,"delegate_to_agent",json!({"text":"Continue this task from this explicit summary","agent_id":"shared_default"}),true,false).await;
+  let result=execute_run(&app,&run).await.unwrap();let sid=run["session_id"].as_str().unwrap();
+  let state=app.store.module_state(&format!("core_ui:{sid}")).await.unwrap();
+  assert_eq!(state["state"]["destination"],"handoff");assert_eq!(state["state"]["target_session_id"],result["output"]["session_id"]);
+  assert_eq!(state["state"]["actor_id"],app.store.current_user_id());
+  assert_eq!(execute_run(&app,&run).await.unwrap(),result);assert_eq!(app.store.module_state(&format!("core_ui:{sid}")).await.unwrap()["revision"],state["revision"]);
  }
  #[tokio::test]
  async fn failed_first_message_transaction_leaves_no_new_session_or_receipt(){

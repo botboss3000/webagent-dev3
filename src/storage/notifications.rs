@@ -41,6 +41,7 @@ impl Store {
         if !matches!(
             kind,
             "session.created"
+                | "webhook.received"
                 | "main_notes.updated"
                 | "message.received"
                 | "run.started"

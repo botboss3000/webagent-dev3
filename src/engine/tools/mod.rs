@@ -36,6 +36,36 @@ pub(crate) mod core_mode;
 pub(crate) mod core_compaction;
 #[path = "../../../plugins/abilities/Core/base/recall_adapter.rs"]
 pub(crate) mod core_recall;
+#[path = "../../../crates/modules/abilities/host/user_files.rs"]
+pub(crate) mod core_user_files;
+#[path = "../../../crates/modules/abilities/host/authority.rs"]
+pub(crate) mod core_authority;
+#[path = "../../../crates/modules/abilities/host/model_switcher.rs"]
+pub(crate) mod core_model_switcher;
+#[path = "../../../crates/modules/abilities/host/agent_management.rs"]
+pub(crate) mod core_agent_management;
+#[path = "../../../crates/modules/abilities/host/image_vision.rs"]
+pub(crate) mod core_image_vision;
+#[path = "../../../crates/modules/abilities/host/image_generation.rs"]
+pub(crate) mod core_image_generation;
+#[path = "../../../crates/modules/abilities/host/app_control.rs"]
+pub(crate) mod core_app_control;
+#[path = "../../../crates/modules/abilities/host/ui_admin.rs"]
+pub(crate) mod core_ui_admin;
+#[path = "../../../crates/modules/abilities/host/functions.rs"]
+pub(crate) mod core_functions;
+#[path = "../../../crates/modules/abilities/host/orchestration.rs"]
+pub(crate) mod core_orchestration;
+#[path = "../../../crates/modules/abilities/host/base_extras.rs"]
+pub(crate) mod core_base_extras;
+#[path = "../../../crates/modules/abilities/host/webhooks.rs"]
+pub(crate) mod core_webhooks;
+#[path = "../../../crates/modules/abilities/host/visualizer.rs"]
+pub(crate) mod core_visualizer;
+#[path = "../../../crates/modules/abilities/host/vault.rs"]
+pub(crate) mod core_vault;
+#[path = "../../../crates/modules/abilities/host/visual_capture.rs"]
+pub(crate) mod core_visual_capture;
 pub(crate) mod failure;
 mod dispatch;
 pub(crate) mod administrator;
@@ -51,7 +81,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 pub fn is_read(name: &str) -> bool {
-    name=="main_notes_read" || crate::modules::is_read(name) || matches!(name,"mcp_list_connections"|"mcp_search_servers"|"mcp_inspect_server"|"mcp_list_tools") || matches!(
+    name=="process_image" || core_vault::is_read(name) || core_visualizer::is_read(name) || core_webhooks::is_read(name) || core_orchestration::is_read(name) || core_ui_admin::is_read(name) || core_agent_management::is_read(name) || name=="list_models" || core_user_files::is_read(name) || name=="main_notes_read" || crate::modules::is_read(name) || matches!(name,"mcp_list_connections"|"mcp_search_servers"|"mcp_inspect_server"|"mcp_list_tools") || matches!(
         name,
         "task_status" | "task_wait" | "task_cancel"
             | "search_tools" | "list_tools" | "load_tool"
@@ -151,6 +181,20 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(core_decision::schemas());
         schemas.extend(core_directory_decision::schemas());
         schemas.extend(core_utilities::schemas());
+        schemas.extend(core_user_files::schemas());
+        schemas.extend(core_model_switcher::schemas());
+        schemas.extend(core_agent_management::schemas());
+        schemas.extend(core_image_vision::schemas());
+        schemas.extend(core_image_generation::schemas());
+        schemas.extend(core_app_control::schemas());
+        schemas.extend(core_ui_admin::schemas());
+        schemas.extend(core_functions::schemas());
+        schemas.extend(core_orchestration::schemas());
+        schemas.extend(core_base_extras::schemas());
+        schemas.extend(core_webhooks::schemas());
+        schemas.extend(core_visualizer::schemas());
+        schemas.extend(core_vault::schemas());
+        schemas.extend(core_visual_capture::schemas());
         schemas.extend(core_session::schemas());
         schemas.extend(crate::session_messaging::schemas());
         schemas.extend(crate::main_chat::schemas());

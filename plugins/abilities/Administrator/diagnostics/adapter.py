@@ -214,7 +214,7 @@ def cleanup_prior(directory):
                 if process_stamp(pid)==data.get("stamp"):os.killpg(pid,signal.SIGKILL)
         except OSError:pass
     record.unlink()
-def chrome_factory(profile,origin):
+def chrome_factory(profile,origin,*,offline=False):
     # Selenium's debug transport logging includes cookie command bodies.
     # This private worker suppresses those libraries instead of trusting log redaction.
     """Start fixed-origin Chromium with private storage and scrubbed partial-startup cleanup."""
@@ -234,7 +234,12 @@ def chrome_factory(profile,origin):
     # Unrelated origins cannot receive browser network traffic. Only the fixed
     # origin bypasses an intentionally unavailable local proxy.
     options.add_argument("--proxy-server=http://127.0.0.1:9")
-    options.add_argument("--proxy-bypass-list=<-loopback>;"+parsed.hostname+":"+str(port))
+    options.add_argument("--proxy-bypass-list="+("<-loopback>" if offline else "<-loopback>;"+parsed.hostname+":"+str(port)))
+    if offline:
+        options.add_argument("--host-resolver-rules=MAP * ~NOTFOUND")
+        options.add_argument("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
+        options.add_argument("--disable-quic")
+        options.set_capability("goog:loggingPrefs",{"browser":"ALL"})
     options.add_experimental_option("prefs",{"download_restrictions":3,
         "credentials_enable_service":False,"profile.password_manager_enabled":False})
     service=Service(executable_path="/usr/bin/chromedriver",log_path="/dev/null",

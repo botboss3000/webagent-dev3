@@ -270,6 +270,7 @@ fn trigger(
         let source = string(args, "source")?;
         if ![
             "session_settled",
+            "webhook.received",
             "main_notes.updated",
             "run.completed",
             "run.failed",
@@ -466,7 +467,7 @@ fn reduce(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), S
         }
         "probe" => json!({"protocol":1,"package":"automation","ready":true}),
         "list_event_sources" => {
-            json!({"sources":[{"id":"session_settled","available":true},{"id":"run.completed","available":true},{"id":"run.failed","available":true},{"id":"run.cancelled","available":true},{"id":"main_notes.updated","available":true}],"external_adapters":"unavailable"})
+            json!({"sources":[{"id":"session_settled","available":true},{"id":"webhook.received","available":true},{"id":"run.completed","available":true},{"id":"run.failed","available":true},{"id":"run.cancelled","available":true},{"id":"main_notes.updated","available":true}],"external_adapters":"unavailable"})
         }
         "list_delivery_channels" => {
             json!({"channels":[{"kind":"existing_chat","available":true},{"kind":"new_session","available":true},{"kind":"silent","available":true}],"runners":[{"id":"inline","available":true},{"id":"clone","available":false},{"id":"device","available":false}]})
@@ -948,7 +949,10 @@ fn tick(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), Str
                     continue;
                 }
                 if source=="main_notes.updated"&&(event["agent_id"]!=d.agent_id||event["payload"]["review_required"]!=true){continue;}
-                if event["agent_id"] == d.agent_id && source!="main_notes.updated" {
+                // A named sibling-session watch can share the same agent; its own destination remains excluded.
+                let sibling_watch=d.destination["kind"]=="existing_chat"&&d.trigger["filter"]["session_id"].as_str().is_some_and(|target|
+                    event["session_id"]==target&&d.destination["session_id"]!=target);
+                if event["agent_id"] == d.agent_id && source!="main_notes.updated" && source!="webhook.received" && !sibling_watch {
                     continue;
                 }
                 let chain: Vec<String> = event["causal_chain"]
@@ -1152,6 +1156,24 @@ mod tests {
         assert_eq!(tick["state"]["occurrences"].as_object().unwrap().len(), 1);
         let again = call(tick["state"].clone(), "tick", events, NOW);
         assert_eq!(again["state"]["occurrences"].as_object().unwrap().len(), 1);
+    }
+    #[test]
+    fn explicit_sibling_watch_accepts_same_agent_without_waking_itself() {
+        let created=call(json!({}),"event_subscribe",json!({"request_id":"watch","source":"session_settled","prompt":"check child","destination":{"kind":"existing_chat","session_id":"parent"},"filter":{"session_id":"child"}}),NOW);
+        assert_eq!(created["ok"],true);
+        let events=json!({"events":[{"id":"child-done","seq":1,"kind":"run.completed","agent_id":"a","session_id":"child"},{"id":"parent-done","seq":2,"kind":"run.completed","agent_id":"a","session_id":"parent"},{"id":"cycle","seq":3,"kind":"run.completed","agent_id":"a","session_id":"child","causal_chain":["watch"]}]});
+        let tick=call(created["state"].clone(),"tick",events,NOW);
+        assert_eq!(tick["state"]["occurrences"].as_object().unwrap().len(),1);
+        let self_watch=call(json!({}),"event_subscribe",json!({"request_id":"self-watch","source":"session_settled","prompt":"p","destination":{"kind":"existing_chat","session_id":"parent"},"filter":{"session_id":"parent"}}),NOW);
+        let tick=call(self_watch["state"].clone(),"tick",json!({"events":[{"id":"parent","seq":1,"kind":"run.completed","agent_id":"a","session_id":"parent"}]}),NOW);
+        assert_eq!(tick["state"]["occurrences"].as_object().unwrap().len(),0);
+    }
+    #[test]
+    fn private_webhook_metadata_can_wake_its_agent_with_an_exact_inbox_filter(){
+        let created=call(json!({}),"event_subscribe",json!({"request_id":"hook-sub","source":"webhook.received","prompt":"read inbox","filter":{"webhook_id":"inbox"},"destination":{"kind":"existing_chat","session_id":"s"}}),NOW);
+        assert_eq!(created["ok"],true);
+        let tick=call(created["state"].clone(),"tick",json!({"events":[{"id":"hook-event","seq":1,"kind":"webhook.received","agent_id":"a","session_id":"s","webhook_id":"inbox"},{"id":"other-inbox","seq":2,"kind":"webhook.received","agent_id":"a","session_id":"s","webhook_id":"other"}]}),NOW);
+        assert_eq!(tick["state"]["occurrences"].as_object().unwrap().len(),1);
     }
     #[test]
     fn unsafe_retry_is_not_replayed() {

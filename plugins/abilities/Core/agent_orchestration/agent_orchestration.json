@@ -1,7 +1,7 @@
 {
   "display_name": "Agent Orchestration",
   "kind": "ability",
-  "description": "Lets the agent orchestrate other agents: spawn purpose-built helpers with a system prompt it writes on the spot (or by cloning an existing agent), hold a real back-and-forth with them (saved like any chat), and run them blocking or forked. Forked helpers report back when they finish, and the agent can set durable follow-up timers to check on them. It can also delegate a discrete task to one of the user's own saved agents — including a Local Claude Code agent — which runs as itself (its own persona/abilities/engine) as a family member shown in the chat sub-header, distinct from handing the whole session over (delegate). Also runs the prompt optimizer. Switch off to remove it platform-wide.",
+  "description": "Coordinate owner-private helper conversations using configured agents, attributed task messages, child observations, stop controls, durable reminders, explicit handoff, saved helper promotion and System-role prompt proposals.",
   "tools": [
     "spawn_agent",
     "message_spawn",
@@ -23,7 +23,7 @@
   "color": "#7dcfff",
   "order": 2,
   "placeholder": false,
-  "readiness": "pending",
+  "readiness": "ready",
   "config": {
     "bias": {
       "key": "delegation_level",
@@ -85,43 +85,8 @@
         "max": 5,
         "step": 1,
         "hint": "How many levels of spawns-within-spawns are allowed. 0 means only the main orchestrator can spawn (all clones are leaf workers, even those given the orchestration ability). 1 lets the main agent's direct spawns also spawn one more level. 2 allows two levels of nesting, and so on. The main agent is level 0; each spawn increments the depth by 1."
-      },
-      {
-        "key": "auto_stop_on_session_end",
-        "label": "Auto-Stop on Session End",
-        "type": "boolean",
-        "default": true,
-        "hint": "When the orchestrator's chat session ends (user closes or navigates away), automatically stop all running and queued spawns. On by default to prevent orphaned workers burning resources with nobody to receive their results. Turn off only if you need long-running spawns to outlive the chat session."
-      },
-      {
-        "key": "default_spawn_mode",
-        "label": "Default Spawn Mode",
-        "type": "boolean",
-        "default": false,
-        "hint": "How spawns run when the orchestrator doesn't explicitly pick. OFF (default) = forked — the spawn queues up and runs in parallel; the orchestrator gets re-woken when it finishes. ON = blocking — the orchestrator waits inline for the spawn's full reply before continuing. The orchestrator can always override this per-spawn with the wait parameter. Forked mode keeps the conversation moving; blocking mode is simpler for sequential chains."
-      },
-      {
-        "key": "completion_delivery",
-        "label": "Helper Completion",
-        "type": "select",
-        "default": "resume",
-        "options": [
-          {
-            "value": "resume",
-            "label": "Resume parent (default)"
-          },
-          {
-            "value": "notify",
-            "label": "Show notification only"
-          }
-        ],
-        "hint": "When a forked helper finishes or fails, resume this agent once with its event, or only show a status notification. Follow-up timers always remain notifications."
       }
-    ],
-    "notes": {
-      "clone_turn_count": "Not yet configurable per-agent — clone max turn count defaults to 20. This prevents a misdirected clone from looping endlessly on a narrow task. It is separate from the orchestrator's own max_turn_count on the Limits table.",
-      "clone_wall_clock": "Not yet configurable per-agent — clone wall clock defaults to 300 seconds (5 minutes). This time cap cuts off a spawn that hasn't finished within the window. Separate from the orchestrator's own max_wall_seconds on the Limits table."
-    }
+    ]
   },
-  "migration_note": "Catalog metadata only. V3 adapter, configuration and credential lifecycle remain pending; v2 runtime and skills are not imported."
+  "migration_note": "Native V3 implementation. Current schemas, live policy and configured model/module availability determine callable behavior."
 }

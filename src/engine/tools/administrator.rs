@@ -92,9 +92,9 @@ pub(crate) async fn host_fingerprint(app:&App,sid:&str,run_id:&str,name:&str)->R
     }
     // Moving public names never removes the old broker authorization ceilings.
     let legacy = match name {
-        "file_list" => Some("v3_source_list"),
-        "file_read"|"file_search" => Some("v3_source_read"),
-        "file_edit"|"file_write" => Some("v3_source_apply"),
+        "file_list"|"read_directory" => Some("v3_source_list"),
+        "file_read"|"file_search"|"read_source"|"search_source" => Some("v3_source_read"),
+        "file_edit"|"file_write"|"write_source"|"edit_source"|"patch_source"|"delete_source" => Some("v3_source_apply"),
         "build_work"|"build_work_finish"|"v3_build_work_finish" => Some("v3_build_work"),
         _ => None,
     };
@@ -660,4 +660,12 @@ mod performance_renewal_registration_tests {
         }
         assert!(!performance_effect_action(&json!({})));
     }
+}
+
+/// Narrow UI aliases use their own tool decision plus unchanged protected source ceilings.
+pub(crate) async fn ui_host(app:&App,sid:&str,rid:&str,tool:&str,operation:&str,args:&Value,cancel:CancellationToken)->Result<Value> {
+    if !super::core_ui_admin::owns(tool)||!matches!(operation,"file_list"|"file_read"|"file_search"|"file_write"|"file_edit"|"v3_source_apply"){bail!("Invalid UI broker operation");}
+    let fingerprint=host_fingerprint(app,sid,rid,tool).await?;
+    let trusted=json!({"user_id":crate::shared_chat::actor(app),"session_id":sid,"lease_until":now()+30,"access_fingerprint":fingerprint});
+    tools::execute_host_trusted(operation,args,sid,&build_socket(app),Some(trusted),cancel).await
 }

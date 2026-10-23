@@ -22,7 +22,22 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
    .chain(tools::core_search::schemas()).chain(tools::core_compaction::schemas()).chain(tools::core_recall::schemas())
    .chain(tools::core_self_edit::schemas()).chain(crate::session_messaging::schemas()).chain(crate::main_chat::schemas())
    .chain(tools::core_task::schemas()).chain(tools::core_tool_search::schemas()).chain(tools::core_decision::schemas())
-   .chain(tools::core_directory_decision::schemas()).chain(modules::schemas()).chain(mcp::all_schemas()).collect()
+   .chain(tools::core_directory_decision::schemas())
+   .chain(tools::core_user_files::schemas())
+   .chain(tools::core_model_switcher::schemas())
+   .chain(tools::core_agent_management::schemas())
+   .chain(tools::core_image_vision::schemas())
+   .chain(tools::core_image_generation::schemas())
+   .chain(tools::core_app_control::schemas())
+   .chain(tools::core_ui_admin::schemas())
+   .chain(tools::core_functions::schemas())
+   .chain(tools::core_orchestration::schemas())
+   .chain(tools::core_base_extras::schemas())
+   .chain(tools::core_webhooks::schemas())
+   .chain(tools::core_visualizer::schemas())
+   .chain(tools::core_vault::schemas())
+   .chain(tools::core_visual_capture::schemas())
+   .chain(modules::schemas()).chain(mcp::all_schemas()).collect()
  }
 }
 

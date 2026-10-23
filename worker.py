@@ -451,6 +451,38 @@ DIAGNOSTICS_PACKAGES=DiagnosticsPackages()
 
 async def execute_locked(request, lock):
     """Route approved requests to fixed native adapters or validated isolated packages; release the dispatch lock before effects."""
+    if request["name"] == "core_visual_capture":
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        path = Path(__file__).parent / "plugins/abilities/Core/visualizer/capture.py"
+        process = await asyncio.create_subprocess_exec("/usr/bin/python3", "-I", str(path),
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8","HOME":"/tmp","TMPDIR":"/tmp"},start_new_session=True)
+        try:
+            raw = json.dumps(request.get("arguments", {})).encode()
+            if len(raw) > 786432:raise ValueError("Capture input too large")
+            output, _ = await asyncio.wait_for(process.communicate(raw), 25)
+            if len(output) > 1900000:raise ValueError("Capture output too large")
+            return json.loads(output)
+        finally:
+            await terminate(process)
+            # The browser group may outlive its completed capture-process leader.
+            with contextlib.suppress(ProcessLookupError):os.killpg(process.pid,signal.SIGKILL)
+    if request["name"] == "core_function":
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        path = Path(__file__).parent / "plugins/abilities/Core/create_tools/runtime.py"
+        spec = importlib.util.spec_from_file_location("core_pure_functions", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        args = request.get("arguments", {})
+        name, _ = module.parse(args.get("code"))
+        if name != args.get("name"):
+            raise ValueError("function declaration name does not match")
+        operation = args.get("operation")
+        if operation == "validate":
+            return {"status": "success", "output": {"validated": True}}
+        if operation != "invoke":
+            raise ValueError("unknown pure function operation")
+        return {"status": "success", "output": module.invoke(args["code"], args.get("arguments", {}))}
     if request["name"]=="diagnostics_protocol":
         fcntl.flock(lock,fcntl.LOCK_UN)
         return {"status":"success","output":{"protocol":1,"interface":1,"stateful":True}}

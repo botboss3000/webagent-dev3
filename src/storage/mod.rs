@@ -19,6 +19,10 @@ mod background_tasks;
 mod background_followup;
 mod followup_queue;
 mod session_messaging;
+#[path = "../../crates/modules/abilities/host/webhook_storage.rs"]
+mod core_webhooks;
+#[path = "../../crates/modules/abilities/host/vault_storage.rs"]
+mod core_vault;
 mod reasoning_cleanup;
 pub(crate) mod notifications;
 pub(crate) mod shared_chat;
@@ -565,6 +569,19 @@ impl Store {
         if key.starts_with("agent:") || key.starts_with("agent_abilities:") {
             &self.agent_pool
         } else if key=="migration:conversation_privacy_v1" || key.starts_with("module_state:")
+            || key.starts_with("core_vault:")
+            || key.starts_with("receipt:core_vault:")
+            || key.starts_with("core_visual:")
+            || key.starts_with("core_tool:")
+            || key.starts_with("core_profile:")
+            || key.starts_with("core_rating:")
+            || key.starts_with("core_webhook:")
+            || key.starts_with("core_webhook_log:")
+            || key.starts_with("core_spawn_origin:")
+            || key.starts_with("base_checkpoint:")
+            || key.starts_with("base_component:")
+            || key.starts_with("receipt:base:")
+            || key.starts_with("receipt:core_image:")
             || key.starts_with("receipt:module:")
             || key.starts_with("session:")
             || key.starts_with("manager_review:")
@@ -3372,4 +3389,22 @@ impl webagent_manager::storage::RecordEffects for Store {
 impl webagent_webapp::preferences::RecordCodec for Store {
     fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {Store::encode_user_record(self,value)}
     fn unseal(&self,value:&[u8])->Result<Value> {Store::unseal(self,value)}
+}
+
+#[cfg(test)]mod core_private_namespace_tests{
+ use super::*;
+ #[tokio::test]async fn core_records_route_to_the_current_user_database(){
+  let (_root,app)=crate::runtime_tests::fixture_uninitialized().await;
+  let first=app.store.create_user_account("core-first","fixture-password-hash-placeholder").await.unwrap();
+  let second=app.store.create_user_account("core-second","fixture-password-hash-placeholder").await.unwrap();
+  let first=app.store.for_user(first["user_id"].as_str().unwrap()).await.unwrap();
+  let second=app.store.for_user(second["user_id"].as_str().unwrap()).await.unwrap();
+  for prefix in ["core_visual:","core_vault:","receipt:core_vault:","receipt:core_image:","core_tool:","core_profile:","core_rating:","core_webhook:","core_webhook_log:","core_spawn_origin:","base_checkpoint:","base_component:","receipt:base:"]{
+   let key=format!("{prefix}same-id");first.put(&key,&json!({"owner":"first"})).await.unwrap();
+   assert_eq!(first.get(&key).await.unwrap().unwrap()["owner"],"first");
+   assert!(second.get(&key).await.unwrap().is_none(),"{prefix}");
+   assert_eq!(first.list(prefix).await.unwrap().len(),1);assert!(second.list(prefix).await.unwrap().is_empty());
+   let leaked:i64=sqlx::query_scalar("SELECT count(*) FROM docs WHERE key=?").bind(key).fetch_one(&app.store.app_pool).await.unwrap();assert_eq!(leaked,0);
+  }
+ }
 }

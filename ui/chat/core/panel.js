@@ -1,3 +1,7 @@
+import { createAppViewDispatcher, appViewUrl } from './app-control.js';
+import { openRegistrationDialog } from './registration.js';
+import { openCredentialDialog, closeCredentialDialog } from './credential-dialog.js';
+import { mountVisualFrame, syncVisualThemes } from './visual-frame.js';
 import {createMainNotes} from '../elements/main-notes/index.js';
 // @code-index {"version":1,"feature":"chat-panel","aliases":["chat panel","conversation panel","session transcript"],"purpose":"Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides. Touch feedback: ui/vibrate.json -> enabled, duration_ms; gestures stay client-owned.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common/composer/keyboard_focus"],"profile_overrides":true},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
 // V2-style panel/client separation; markup and message protocol remain V3.
@@ -35,6 +39,8 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   // Resolves partial element IDs only within this panel root.
   const $ = id => root.querySelector('#' + id);
   let session = '';
+  const dispatchAppView=createAppViewDispatcher();
+  const visualThemeObserver=new MutationObserver(()=>syncVisualThemes(root));visualThemeObserver.observe(document.body,{attributes:true,attributeFilter:['class']});
   // Chat elements share the panel session, public runs and merged profile; private groups retain admin gating.
   const activity=createChatElements({app:{/* Reads the current selected session. */get currentSessionId(){return session;}},/* Returns the current account's admin flag. */isAdmin:()=>!!getIdentity().is_admin,/* Uses profile configuration when set, otherwise the default. */chatUiFlag:(key,fallback)=>currentChatProfile()?.[key]??fallback});
   let activityRuns=[];
@@ -51,7 +57,7 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   let privacyMode=null;
   function privacyNotice(mode){privacyMode=mode;const notice=$('chat-privacy-notice');if(!notice)return;
     notice.hidden=false;notice.textContent=mode==='operator_reviewable'?'Agent Operators can read this conversation and join to reply.':mode==='private'?'Private conversation: Agent Operators cannot review these messages.':'Conversation privacy is loading…';}
-  async function loadAgentPrivacy(){if(session)return;privacyNotice(null);try{const data=await request('/agents/'+encodeURIComponent(getAgentId())+'/access-summary');if(!session)privacyNotice(data.conversation_privacy);}catch(error){if(!session){privacyNotice(null);$('chat-privacy-notice').textContent='Conversation privacy unavailable. Retry before sending.';}}}
+  async function loadAgentPrivacy(){if(session)return;privacyNotice(null);try{const data=await request('/agents/'+encodeURIComponent(getAgentId())+'/access-summary');if(!session)privacyNotice(data.conversation_privacy);}catch(error){if(!session){privacyNotice(null);const notice=$('chat-privacy-notice');if(notice)notice.textContent='Conversation privacy unavailable. Retry before sending.';}}}
 /** Fetches, validates, and mounts the required V3 chat partial into the supplied root. */
 async function mountChat(){
   const response=await fetch('/v3-ui/chat/chat.html?v=chat-partial-20261007-notifications',{credentials:'same-origin'});
@@ -93,8 +99,18 @@ function historyChanged(summary){
 /** Merge a matching-session poll snapshot only when it shares the displayed history revision. */
 function syncSnapshot(data){
   if(data.session?.id&&data.session.id!==session)return false;
+  if(data.app_view)dispatchAppView(data.app_view,getIdentity(),detail=>{
+    if(detail.destination==='credential'){openCredentialDialog({request,session,name:detail.name,origin:detail.origin,requestId:detail.requestId,revision:detail.revision});return;}
+    if(detail.destination==='registration'){openRegistrationDialog({request});return;}
+    if(detail.destination==='chat'){
+      const toggle=document.getElementById('chat-toggle-btn');if(toggle?.getAttribute('aria-expanded')==='false')toggle.click();return;
+    }
+    if(document.getElementById('chat-input')?.value?.trim()){note('Your draft was preserved. Request navigation again when ready.');return;}
+    const url=appViewUrl(detail.destination,detail.agent_id,location.href,detail.target_session_id);if(url)location.assign(url);
+  });
   privacyNotice(data.conversation_privacy);if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}
   if((data.session?.history_revision||0)!==historyRevision){historyChanged(data.session);return false;}
+  if(data.components)components(data.components);
   historyLastSeq=Math.max(historyLastSeq,data.last_seq||0);
   for(const item of data.messages||[])message(item);followups.update(data);runs(data.runs||[],true);return true;
 }
@@ -191,14 +207,20 @@ function message(item){historyLastSeq=Math.max(historyLastSeq,item.seq||0);const
 /** Renders bounded display-only components; these cards never submit model-described actions. */
 function components(items){
   if(!Array.isArray(items))return;
+  const current=new Set(items.map(row=>row?.component?.id));
+  for(const node of [...$('chat-messages-inner').children])if(node.dataset.componentId&&!current.has(node.dataset.componentId))node.remove();
   for(const row of items.slice(0,64)){
     const spec=row?.component;
-    if(!spec||spec.authority!=='display_only'||!['status','todo_list','choice','approval','form'].includes(spec.type))continue;
-    const card=document.createElement('article');card.className='v3-message assistant';
+    if(!spec||spec.authority!=='display_only'||!['status','todo_list','choice','approval','form','visual'].includes(spec.type))continue;
+    const id=spec.id;if(typeof id!=='string'||!/^[-A-Za-z0-9_]{1,64}$/.test(id))continue;
+    const existing=[...$('chat-messages-inner').children].find(node=>node.dataset.componentId===id);
+    if(existing?.dataset.componentRevision===String(row.revision))continue;
+    const card=document.createElement('article');card.className='v3-message assistant';card.dataset.componentId=id;card.dataset.componentRevision=String(row.revision);
     const body=document.createElement('div');body.className='message-content';
     const heading=document.createElement('strong');heading.textContent=spec.title||'Session display';
     body.append(heading);
     const data=spec.data||{};
+    if(spec.type==='visual'){const frame=mountVisualFrame(spec);if(!frame)continue;body.append(frame);card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);continue;}
     const lines=spec.type==='status'?data.sections?.map(item=>[item.label,item.value].filter(Boolean).join(': ')):
       spec.type==='todo_list'?data.items?.map(item=>(item.done?'☑ ':'☐ ')+item.label):
       spec.type==='choice'?data.options?.map(item=>'Option: '+item.label):
@@ -211,7 +233,7 @@ function components(items){
     if(['choice','approval','form'].includes(spec.type)){
       const note=document.createElement('small');note.textContent='Display only — no action submitted';body.append(note);
     }
-    card.append(body);$('chat-messages-inner').append(card);
+    card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);
   }
 }
 
@@ -229,7 +251,7 @@ async function sessions(){const turn=++sessionsGeneration;let data;try{data=awai
  * Resets the display lease for the selected session; only newly delivered messages restore brightness.
  * Client snapshot failures propagate; controls report independent issues, or note when no tracker is injected.
  */
-async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{mainNotes?.setAgent(null);messagingRoutes.disconnect();canManageQueue=false;sharedAccess={can_send:false,can_control:false};followups.reset();historyReady=false;anchor.reset();progress.open(id);notifications.clearRuns();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;issues?.select(id);screenAwake.select(id);stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);sharing.open(id).catch(error=>{if(id===session&&!issues)note('Shared controls unavailable: '+error.message);});controls.open(id).catch(error=>{if(id===session&&!issues)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{privacyNotice(data.conversation_privacy);if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}messagingRoutes.open(id,canManageQueue);void messagingRoutes.refresh().catch(error=>note(error.message));historyReady=true;historyLastSeq=data.last_seq||0;historyRevision=data.session.history_revision||0;readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';if(id!==session)return;mainNotes?.setAgent(sessionAgentId);$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);onEvent('session',{session_id:id});document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);followups.update(data);runs(data.runs||[],true);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;if(!recovered)screenAwake.attention('message');try{media.published(item);issues?.resolve('media_display',id);}catch(error){if(issues)issues.fail('media_display',error,id);else note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);issues?.resolve('transcript_position',id);}catch(error){if(issues)issues.fail('transcript_position',error,id);else note('Transcript positioning unavailable: '+error.message);}return true;},summary=>{historyChanged(summary);void sessions().catch(error=>{if(!issues)note(error.message);});},syncSnapshot);if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
+async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{closeCredentialDialog();mainNotes?.setAgent(null);messagingRoutes.disconnect();canManageQueue=false;sharedAccess={can_send:false,can_control:false};followups.reset();historyReady=false;anchor.reset();progress.open(id);notifications.clearRuns();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;issues?.select(id);screenAwake.select(id);stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);sharing.open(id).catch(error=>{if(id===session&&!issues)note('Shared controls unavailable: '+error.message);});controls.open(id).catch(error=>{if(id===session&&!issues)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{privacyNotice(data.conversation_privacy);if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}messagingRoutes.open(id,canManageQueue);void messagingRoutes.refresh().catch(error=>note(error.message));historyReady=true;historyLastSeq=data.last_seq||0;historyRevision=data.session.history_revision||0;readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';if(id!==session)return;mainNotes?.setAgent(sessionAgentId);$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);onEvent('session',{session_id:id});document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);followups.update(data);runs(data.runs||[],true);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;if(!recovered)screenAwake.attention('message');try{media.published(item);issues?.resolve('media_display',id);}catch(error){if(issues)issues.fail('media_display',error,id);else note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);issues?.resolve('transcript_position',id);}catch(error){if(issues)issues.fail('transcript_position',error,id);else note('Transcript positioning unavailable: '+error.message);}return true;},summary=>{historyChanged(summary);void sessions().catch(error=>{if(!issues)note(error.message);});},syncSnapshot);if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
 // Requests run cancellation and refreshes shell state even when the request fails.
 async function cancel(id){if(sharedAccess?.can_control===false)throw Error('This conversation is read only');progress.note('Stopping…');try{await client.cancel(id,{client_request_id:keyId('cancel:'+id)});}finally{await refresh();}}
 // Adds/removes a transcript notice only for certain failed runs; uncertain outcomes remain in recovery UI.
@@ -347,7 +369,7 @@ $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
   /** Clears session visuals and disconnects every session-scoped transport/control. */
   function disconnect(){issues?.select('');messagingRoutes.disconnect();screenAwake.select('');followups.reset();session='';activityRuns=[];elementContext='';anchor.reset();progress.reset();notifications.clearRuns();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();sharing.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
   /** Disconnects and disposes panel-owned timers, observers, listeners, and mounted child controls. */
-  function destroy(){
+  function destroy(){closeCredentialDialog();visualThemeObserver.disconnect();
     mainNotes?.destroy();disposeFeedback();screenAwake.destroy();++sessionGeneration;closeUndoDialog?.();
     disconnect();followups.destroy();notifications.destroy();anchor.destroy();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;

@@ -44,7 +44,8 @@
               "run.completed",
               "run.failed",
               "run.cancelled",
-              "main_notes.updated"
+              "main_notes.updated",
+              "webhook.received"
             ]
           },
           "prompt": {
@@ -418,7 +419,8 @@
               "session_settled",
               "run.completed",
               "run.failed",
-              "run.cancelled"
+              "run.cancelled",
+              "webhook.received"
             ]
           },
           "filter": {

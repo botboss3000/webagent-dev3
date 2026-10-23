@@ -13,6 +13,8 @@ pub mod call;
 pub use call::CallDraft;
 mod capabilities;
 mod media;
+mod images;
+pub use images::{GeneratedImage,image_transport};
 
 const ISSUER: &str = "https://auth.openai.com";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -347,6 +349,10 @@ fn decorate(mut tokens: Value) -> Result<Value> {
 #[derive(serde::Serialize)]
 struct RequestBody<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<Reasoning<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tool_calls: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<usize>,
     model: &'a str,
     input: &'a [Value],
@@ -363,7 +369,7 @@ struct RequestBody<'a> {
 }
 /// Borrow the host-selected Responses input and schemas into the stateless body with the session cache key and opaque reasoning replay.
 fn request_body<'a>(model: &'a str, input: &'a [Value], tools: &'a [Value], session: &'a str, instructions: &'a str) -> RequestBody<'a> {
-    RequestBody { max_output_tokens: None, model, input, instructions, stream: true, store: false,
+    RequestBody { reasoning: None, max_tool_calls:None, max_output_tokens: None, model, input, instructions, stream: true, store: false,
         include: ["reasoning.encrypted_content"], prompt_cache_key: session,
         parallel_tool_calls: true, tools: (!tools.is_empty()).then_some(tools),
         tool_choice: (!tools.is_empty()).then_some("auto") }
@@ -587,13 +593,15 @@ impl Provider {
         delta: mpsc::Sender<String>,
         cancel: CancellationToken,
     ) -> Result<Value> {
-        let call::SubscriptionRequest { max_output_tokens, model, input, tools, session, instructions } = request;
+        let call::SubscriptionRequest { max_output_tokens, reasoning_effort, model, input, tools, session, instructions } = request;
         let mut response_started = false;
         if cancel.is_cancelled() {
             return Err(typed_failure(crate::model_selection::FailureKind::Cancelled, response_started, "Provider request cancelled"));
         }
         let mut body = request_body(model, &input, &tools, session, instructions);
         body.max_output_tokens = max_output_tokens;
+        body.reasoning = reasoning_effort.map(|effort|Reasoning{effort});
+        body.max_tool_calls=tools.iter().any(|t|t["type"]=="image_generation").then_some(1);
         let mut request = self
             .client
             .post(self.responses_endpoint())
@@ -988,4 +996,27 @@ pub const DEFAULT_INSTRUCTIONS: &str = "You are WebAgent, a helpful assistant. U
 pub trait Projection: Sync {
     fn project<'a>(&'a self,input:&'a webagent_provider_contracts::RequestV1,
         cancel:&'a CancellationToken)->impl std::future::Future<Output=Result<webagent_provider_contracts::ResultV1>>+Send+'a;
+}
+
+#[derive(serde::Serialize)]
+struct Reasoning<'a> {effort:&'a str}
+/// Host-selected effort is never supplied by a projection or credential payload.
+pub fn validate_reasoning_effort(provider:ProviderId,effort:Option<&str>)->Result<()> {
+    if let Some(effort)=effort {
+        if !matches!(effort,"minimal"|"low"|"medium"|"high")
+            || !matches!(provider,ProviderId::OpenaiSubscription|ProviderId::OpenaiApi|ProviderId::Openrouter) {
+            bail!("Reasoning effort is unsupported for this transport");
+        }
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod core_effort_tests {
+ use super::*;
+ #[test]fn effort_is_bounded_and_not_silently_ignored() {
+  for e in ["minimal","low","medium","high"] {assert!(validate_reasoning_effort(ProviderId::OpenaiSubscription,Some(e)).is_ok());}
+  assert!(validate_reasoning_effort(ProviderId::Deepseek,Some("high")).is_err());
+  assert!(validate_reasoning_effort(ProviderId::OpenaiApi,Some("unbounded")).is_err());
+  assert!(validate_reasoning_effort(ProviderId::Deepseek,None).is_ok());
+ }
 }

@@ -6,12 +6,17 @@ across the v3 interface: text and icon buttons, tabs, switches, menu actions,
 button-like links, and actionable rows, including panel, mobile, widget, and
 portaled controls. Preserve an explicit user-requested exception.
 
-This is frontend guidance, not execution authority. UI Admin remains pending
-in v3; its legacy tool names are not callable. Use the authorized Codebase Admin
-workflow to inspect and edit frontend HTML, CSS, and JavaScript. For changes,
-read the checkout instructions and relevant implementation. Before a browser
-journey, resolve its registered route.
-Loading or reading this document grants no tool permissions.
+This is frontend guidance, not execution authority. Native V3 UI source aliases
+read and edit frontend text below ui/ through the protected broker, retaining
+installation administrator authority, live policy and legacy source ceilings.
+Read the selected snapshot first. Existing drafts require broker_id and the latest
+expected_inputs_sha256. patch_source uses a checked UI-only unified diff;
+delete_source requires a full deletion diff for exactly its named UI file.
+No direct live checkout writes, backend edits or arbitrary execution are supplied
+by these aliases. Publication uses the protected broker release workflow.
+For changes, read the checkout instructions and relevant implementation. Before
+a browser journey, resolve its registered route. Loading or reading this document
+grants no tool permissions.
 
 ## Investigate presentation and layout
 

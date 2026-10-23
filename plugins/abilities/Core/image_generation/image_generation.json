@@ -1,7 +1,7 @@
 {
   "display_name": "Image Generation",
   "kind": "ability",
-  "description": "Lets the agent generate images from text prompts. Requires a provider + model config.",
+  "description": "Generate an image from text using this agent’s assigned Image Out role and return a private authenticated attachment.",
   "tools": [
     "generate_image"
   ],
@@ -9,9 +9,9 @@
   "color": "#bb9af7",
   "order": 6,
   "placeholder": false,
-  "readiness": "pending",
+  "readiness": "ready",
   "config": {
     "settings": []
   },
-  "migration_note": "Catalog metadata only. V3 adapter, configuration and credential lifecycle remain pending; v2 runtime and skills are not imported."
+  "migration_note": "Native V3 implementation. Current schemas, live policy and configured model/module availability determine callable behavior."
 }

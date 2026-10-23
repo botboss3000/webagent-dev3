@@ -1,7 +1,7 @@
 {
   "display_name": "Create Tools",
   "kind": "ability",
-  "description": "Lets the agent define brand-new callable tools at runtime (a self-contained Python function stored in the database). No credentials, no filesystem/network access.",
+  "description": "Save private, bounded pure Python expression functions and invoke them through Base run_soft_ability, without filesystem, network or credentials.",
   "tools": [
     "create_tool"
   ],
@@ -9,7 +9,7 @@
   "color": "#7dcfff",
   "order": 5,
   "placeholder": false,
-  "readiness": "pending",
+  "readiness": "ready",
   "config": {},
-  "migration_note": "Catalog metadata only. V3 adapter, configuration and credential lifecycle remain pending; v2 runtime and skills are not imported."
+  "migration_note": "Native V3 implementation. Current schemas, live policy and configured model/module availability determine callable behavior."
 }

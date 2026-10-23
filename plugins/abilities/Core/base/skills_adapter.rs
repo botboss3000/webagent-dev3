@@ -502,3 +502,13 @@ mod tests {
     }
 
 }
+
+/// Private feedback reuses the same live selector checks as skill loading; no activation or body is persisted.
+pub(crate) async fn rating_asset(app:&App,sid:&str,rid:&str,args:&Value)->Result<Value>{
+ let query:LoadArgs=serde_json::from_value(args.clone())?;
+ validate_load(&query)?;
+ let current=view(app,sid,rid,"rate_skill").await?;
+ let mut asset=load_asset(&current,&query)?;
+ if let Some(object)=asset.as_object_mut(){object.remove("text");}
+ Ok(asset)
+}

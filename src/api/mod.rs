@@ -163,6 +163,9 @@ pub(super) fn router(app: App) -> Router {
         .route("/embed/challenges/{id}",get(embed::challenge_info))
         .route("/embed/authorize",post(embed::authorize))
         .route("/embed/credentials/{id}",axum::routing::delete(embed::revoke))
+        .route("/core/vault/{sid}/{name}",post(tools::core_vault::save).layer(DefaultBodyLimit::max(16384)))
+        .route("/core/visuals/{id}/view",get(tools::core_visualizer::view))
+        .route("/core/webhooks/{id}/setup",get(tools::core_webhooks::setup))
         .route("/auth/me", get(me))
         .route("/auth/ui-config", get(chat_ui_config))
         .route("/auth/profile", put(update_profile))
@@ -184,6 +187,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/api/v3/embed/{id}/challenge",post(embed::challenge))
         .route("/api/v3/embed/{id}/guest",post(embed::guest))
         .route("/api/v3/embed/redeem",post(embed::redeem))
+        .route("/api/v3/core/webhook-receive/{id}",post(tools::core_webhooks::receive).layer(DefaultBodyLimit::max(16384)))
         .route("/api/v3/auth/login",post(login))
         .route("/api/v3/auth/register",post(registration::register))
         .route("/api/v3/auth/guest-login",post(registration::guest_login))
@@ -217,4 +221,14 @@ pub(super) fn router(app: App) -> Router {
             if !response.headers().contains_key("content-security-policy") {response.headers_mut().insert("content-security-policy",HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"));}
             response
         })).with_state(app)
+}
+
+// Native Core tools arrive after persisted tool-policy/approval checks. Domain handlers still own tenant and revision admission.
+pub(crate) fn core_tools_router()->Router<App> {
+    Router::new().nest("/models",model_selection_api::router())
+        .route("/agents/{id}/abilities",get(ability_admin::read))
+        .route("/agents/{id}/abilities/{ability}/visibility",put(ability_admin::visibility_set))
+        .route("/agents/{id}/abilities/{ability}/tools/{tool}/mode",put(ability_admin::tool_set))
+        .route("/agents/{id}/slots/{name}",get(ability_admin::slot).put(ability_admin::slot_put))
+        .merge(user_api::router())
 }

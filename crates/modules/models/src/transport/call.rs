@@ -5,6 +5,7 @@ use crate::transport::Projection;
 
 pub struct CallDraft<'a> {
     selection: &'a ProviderSelection,
+    reasoning_effort: Option<&'a str>,
     input: Vec<Value>,
     tools: Vec<Value>,
     session: &'a str,
@@ -21,6 +22,7 @@ pub struct ReadyCall<'a> {
 
 pub(super) struct SubscriptionRequest<'a> {
     pub(super) max_output_tokens: Option<usize>,
+    pub(super) reasoning_effort: Option<&'a str>,
     pub(super) model: &'a str,
     pub(super) input: Vec<Value>,
     pub(super) tools: Vec<Value>,
@@ -60,11 +62,16 @@ impl<'a> CallDraft<'a> {
     ) -> Self {
         Self {
             selection,
+            reasoning_effort: None,
             input,
             tools,
             session,
             instructions,
         }
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: Option<&'a str>) -> Self {
+        self.reasoning_effort=effort; self
     }
 
     /// Resolve provider projection before the caller reacquires its dispatch gate.
@@ -101,6 +108,7 @@ impl<'a> CallDraft<'a> {
 
     /// Normalize host-only metadata and budget inputs before sending private context over the pipe.
     fn projection_request(&mut self) -> Result<webagent_provider_contracts::RequestV1> {
+        super::validate_reasoning_effort(self.selection.provider,self.reasoning_effort)?;
         if self.instructions.is_empty() {
             return Err(typed_failure(crate::model_selection::FailureKind::MalformedRequest,
                 false, "Invalid provider instructions"));
@@ -174,6 +182,7 @@ impl<'a> CallDraft<'a> {
                         false, "Invalid Provider projection"));
                 }
                 PreparedRequest::Subscription(SubscriptionRequest {
+                    reasoning_effort:self.reasoning_effort,
                     max_output_tokens:self.selection.limits.as_ref().map(|limits|limits.output_tokens),
                     model:&self.selection.model, input, tools, session:self.session,
                     instructions:self.instructions,
@@ -182,9 +191,12 @@ impl<'a> CallDraft<'a> {
             webagent_provider_contracts::MaterializedV1::ChatCompletions { messages, tools } => {
                 let endpoint = self.selection.provider.chat_endpoint()
                     .ok_or_else(|| anyhow!("Provider does not use API keys"))?;
-                PreparedRequest::Compatible {
-                    body:compatible_body(self.selection, messages, tools), endpoint,
+                let mut body=compatible_body(self.selection,messages,tools);
+                if let Some(effort)=self.reasoning_effort {
+                    if self.selection.provider==ProviderId::Openrouter {body["reasoning"]=json!({"effort":effort});}
+                    else {body["reasoning_effort"]=json!(effort);}
                 }
+                PreparedRequest::Compatible { body, endpoint }
             },
         };
         Ok(ValidatedCall { request })

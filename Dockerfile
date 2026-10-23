@@ -98,7 +98,9 @@ COPY --from=tested_builder /out/webagent-assets-service /usr/local/lib/webagent/
 COPY --from=tested_builder /out/webagent-capability-service /usr/local/lib/webagent/engine/capability-context/webagent-capability-service
 COPY --from=tested_builder /out/webagent-provider-service /usr/local/lib/webagent/engine/provider-projection/webagent-provider-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
+RUN chmod -R a+rX /opt/v3/plugins
 RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
+RUN chmod a+r /opt/v3/*.py && python3 -c "import os,pathlib; os.setgid(1100); os.setuid(1101); files=[pathlib.Path('/opt/v3/plugins/abilities/Core/create_tools/runtime.py'),pathlib.Path('/opt/v3/plugins/abilities/Core/visualizer/capture.py')]; [compile(p.read_text(),str(p),'exec') for p in files]"
 # Git invokes this fixed helper directly as the unprivileged tool worker.
 RUN chmod 0555 /opt/v3/plugins/abilities/Administrator/git_control/askpass.py
 COPY v3 /opt/v3/source-template
@@ -134,6 +136,7 @@ COPY --from=tested_builder /out/webagent-assets-service /usr/local/lib/webagent/
 COPY --from=tested_builder /out/webagent-capability-service /usr/local/lib/webagent/engine/capability-context/webagent-capability-service
 COPY --from=tested_builder /out/webagent-provider-service /usr/local/lib/webagent/engine/provider-projection/webagent-provider-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
+RUN chmod -R a+rX /opt/v3/plugins
 RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
 ENV V3_PROCESS_ROLE=loop V3_STATE_ROOT=/state V3_WORKSPACE_ROOT=/workspaces
 WORKDIR /state

@@ -11,6 +11,11 @@ fn artifact_key(sid: &str, kind: &str, id: &str) -> Result<String> {
     match kind {
         "checkpoint" if id == "task" => Ok(format!("base_checkpoint:{sid}")),
         "component" => Ok(format!("base_component:{sid}:{id}")),
+        "core_tool" => Ok(format!("core_tool:{id}")),
+        "core_profile" => Ok(format!("core_profile:{id}")),
+        "core_rating" => Ok(format!("core_rating:{id}")),
+        "core_webhook" => Ok(format!("core_webhook:{id}")),
+        "core_visual" => Ok(format!("core_visual:{id}")),
         _ => Err(anyhow!("Invalid task artifact kind")),
     }
 }
@@ -18,7 +23,7 @@ fn artifact_key(sid: &str, kind: &str, id: &str) -> Result<String> {
 impl Store {
     // The routed user database owns both records. Stop/replacement and lease
     // checks keep an old tool call from writing after recovery.
-    async fn base_run_fence(&self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    pub(super) async fn base_run_fence(&self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         sid: &str, rid: &str, pending_id: Option<&str>, generation: Option<&str>) -> Result<()> {
         let session_raw = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(format!("session:{sid}")).fetch_optional(&mut **tx).await?
@@ -60,6 +65,13 @@ impl Store {
         Ok(())
     }
 
+    /// Native Core dispatch retains the caller's original generation and checks its live database lease.
+    pub(crate) async fn core_native_fence(&self,sid:&str,rid:&str,pending:&str,generation:&str)->Result<()> {
+        let mut tx=self.pool.begin().await?;
+        self.base_run_fence(&mut tx,sid,rid,Some(pending),Some(generation)).await?;
+        tx.commit().await?;Ok(())
+    }
+
     pub async fn base_task_checkpoint(&self, sid: &str, rid: &str) -> Result<Value> {
         let key = artifact_key(sid, "checkpoint", "task")?;
         let mut tx = self.pool.begin().await?;
@@ -84,7 +96,7 @@ impl Store {
             || rid.is_empty() || rid.len() > 128 || pending_id.is_empty() || pending_id.len() > 128
             || !rid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
             || !pending_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-            || serde_json::to_vec(artifact)?.len() > MAX_ARTIFACT_BYTES {
+            || serde_json::to_vec(artifact)?.len() > if kind=="core_visual"{96*1024}else{MAX_ARTIFACT_BYTES} {
             return Err(anyhow!("Task artifact exceeds bounds"));
         }
         let receipt_key = format!("receipt:base:{sid}:{rid}:{pending_id}");
@@ -111,16 +123,33 @@ impl Store {
         let document = json!({"schema_version":1,"revision":next,"kind":kind,
             "id":id,"session_id":sid,"updated_by_run":rid,"artifact":artifact});
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-            .bind(&key).bind(self.encode_user_record(&document)?).execute(&mut *tx).await?;
+            .bind(&key).bind(if kind=="core_webhook"{self.seal(&document)?}else{self.encode_user_record(&document)?}).execute(&mut *tx).await?;
+        if kind=="core_visual"&&artifact["publish"]==true {
+            let component_id=format!("visual-{id}");let component_key=artifact_key(sid,"component",&component_id)?;
+            if artifact["deleted"]==true {
+                sqlx::query("DELETE FROM docs WHERE key=?").bind(&component_key).execute(&mut *tx).await?;
+            }else{
+                let exists:i64=sqlx::query_scalar("SELECT count(*) FROM docs WHERE key=?").bind(&component_key).fetch_one(&mut *tx).await?;
+                let count:i64=sqlx::query_scalar("SELECT count(*) FROM docs WHERE key LIKE ?").bind(format!("base_component:{sid}:%")).fetch_one(&mut *tx).await?;
+                if exists==0&&count>=64{return Err(anyhow!("Conversation display quota reached"));}
+                let component=json!({"schema_version":1,"revision":next,"kind":"component","id":component_id,"session_id":sid,"artifact":{"id":component_id,"type":"visual","title":artifact["name"],"placement":"inline","authority":"display_only","data":{"visual_id":id,"revision":next}}});
+                sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(component_key).bind(self.encode_user_record(&component)?).execute(&mut *tx).await?;
+            }
+        }
         let output = json!({"revision":next,"kind":kind,"id":id,"artifact":artifact});
         let receipt = json!({"fingerprint":fingerprint,"output":output});
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
-            .bind(&receipt_key).bind(self.encode_user_record(&receipt)?).execute(&mut *tx).await?;
+            .bind(&receipt_key).bind(if kind=="core_webhook"{self.seal(&receipt)?}else{self.encode_user_record(&receipt)?}).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,'base_task_artifact',?)")
             .bind(sid).bind(self.encode_user_record(&json!({"kind":kind,"id":id,"revision":next}))?)
             .execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(output)
+    }
+
+    pub(crate) async fn base_component_revision(&self,sid:&str)->Result<u64>{
+        let seq:i64=sqlx::query_scalar("SELECT COALESCE(MAX(seq),0) FROM events WHERE session_id=? AND kind='base_task_artifact'").bind(sid).fetch_one(&self.pool).await?;
+        Ok(seq.max(0) as u64)
     }
 
     // Safe API projection: only previously validated declarative specs.

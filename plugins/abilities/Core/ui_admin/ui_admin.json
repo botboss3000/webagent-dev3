@@ -2,7 +2,7 @@
   "display_name": "UI Admin",
   "kind": "ability",
   "skill_summary": "Default UI guidance for transparent tap highlights, optional touch haptics, persistent outlined controls, and complete interaction-state verification.",
-  "description": "Edits only front-end files (ui/ — CSS & HTML); never backend code or the shell. On by default.",
+  "description": "Read and edit frontend text through isolated checked broker work, retaining administrator authority and source permission ceilings.",
   "tools": [
     "read_source",
     "write_source",
@@ -16,7 +16,7 @@
   "color": "#7dcfff",
   "order": 9,
   "placeholder": false,
-  "readiness": "pending",
+  "readiness": "ready",
   "config": {},
-  "migration_note": "Catalog metadata only. V3 adapter, configuration and credential lifecycle remain pending; v2 runtime and skills are not imported."
+  "migration_note": "Native V3 implementation. Current schemas, live policy and configured model/module availability determine callable behavior."
 }

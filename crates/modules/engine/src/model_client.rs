@@ -33,6 +33,7 @@ impl<'a> CallDraft<'a> {
     pub fn new(selection:&'a ProviderSelection,input:Vec<Value>,tools:Vec<Value>,session:&'a str,instructions:&'a str)->Self {
         Self(webagent_models::transport::CallDraft::new(selection,input,tools,session,instructions))
     }
+    pub fn with_reasoning_effort(self,effort:Option<&'a str>)->Self {Self(self.0.with_reasoning_effort(effort))}
     pub async fn prepare(self,root:&std::path::Path,cancel:&CancellationToken)->Result<webagent_models::transport::call::ValidatedCall<'a>> {
         self.0.prepare(&EngineProjection(root),cancel).await
     }

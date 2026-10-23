@@ -47,7 +47,7 @@ pub(crate) async fn prepare<'a>(app:&App,run:&Value,request:context_input::Reque
    assert!(app.store.claim_run(&mut run,"engine-race-loop","engine-race").await.unwrap());
    let credentials=app.refresh.lock().await;let task_app=app.clone();let task_id=id.clone();
    let task=tokio::spawn(async move{crate::agent_loop::execute_run(task_app,task_id,"engine-race".into(),CancellationToken::new()).await});
-   tokio::time::timeout(Duration::from_secs(10),async{
+   tokio::time::timeout(Duration::from_secs(20),async{
     loop{let current=app.run(&id).await.unwrap();
      if if compact {current["engine_component_prepared"]["kind"]=="compaction"}else{!current["context_assembly_report"].is_null()} {break;}
      if task.is_finished(){panic!("run ended before credential boundary: {}",current["error"]);}

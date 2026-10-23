@@ -22,7 +22,7 @@
   "color": "#e0af68",
   "order": 4,
   "placeholder": false,
-  "readiness": "partial",
+  "readiness": "ready",
   "config": {
     "settings": [
       {
@@ -80,10 +80,10 @@
         "type": "boolean",
         "default": false,
         "ceiling": "on",
-        "hint": "ON makes every automation the agent creates start PAUSED \u2014 a person must switch it on from the Automation tab before it will ever run. Use this when you want the agent to propose schedules and triggers but never arm them by itself. OFF (default) lets the agent's automations start running immediately."
+        "hint": "ON makes every automation the agent creates start PAUSED — a person must switch it on from the Automation tab before it will ever run. Use this when you want the agent to propose schedules and triggers but never arm them by itself. OFF (default) lets the agent's automations start running immediately."
       }
     ]
   },
-  "migration_note": "Optional standalone Rust engine. Internal events, schedules, reminders and host-admitted chat/silent runs are implemented; adapter integrations remain unavailable. Installation and acceptance are required before callable availability.",
+  "migration_note": "Standalone V3 Rust service supports internal events, private webhook inbox events, schedules, reminders and host-admitted runs. The installed package, current permissions and configured model roles determine availability. External event/delivery adapters are not declared by this service.",
   "required_module": "automation"
 }
