@@ -373,6 +373,12 @@ async function boot(){
   await initChatConfig().catch(() => {});
   if(await authorizeEmbedPopup({request:api,me}))return;
   widget?.configure();
+  // Boot defaults are applied once per sign-in, never by live refresh over a user's drag.
+  const bootUi=await api('/auth/ui-config');
+  const panel=bootUi.app_ui?.chat_panel||{width:45,unit:'%'};
+  desktopChatVisible=panel.width!==0;
+  if(!desktopChatVisible){mobileView='main';widget.hide();}
+  chatResize.configure(panel);syncLayout();
   renderAccount(me);issues.start();
   window.dispatchEvent(new Event('v3-identity-changed'));
   privateVisible(false);
@@ -647,7 +653,7 @@ const mobileLayout=matchMedia('(max-width:800px)');
 let mobileView=initialTab==='account'?'main':new URL(location.href).searchParams.has('session_id')?'chat':'main';
 let desktopChatVisible=true;
 const widget=mountNativeWidget({chat,createFloatingChat,createChatLauncher,onChange:()=>syncLayout(),onDock:()=>{desktopChatVisible=true;syncLayout();},note});
-mountChatResize({enabled:()=>!mobileLayout.matches&&!widget.floating&&desktopChatVisible});
+const chatResize=mountChatResize({enabled:()=>!mobileLayout.matches&&!widget.floating&&desktopChatVisible});
 function updateChatControl(visible){$('chat-toggle-btn').classList.toggle('active',visible);$('chat-toggle-btn').setAttribute('aria-expanded',String(visible));}
 function showMobileView(view){mobileView=view;$('app').dataset.mobileView=view;updateChatControl(view==='chat');updateMainPageState();}
 function syncLayout(){

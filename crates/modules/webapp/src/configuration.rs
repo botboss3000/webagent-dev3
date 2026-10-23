@@ -23,7 +23,29 @@ pub fn pull_refresh_start_zone(settings: &Value) -> Result<f64> {
     }
 }
 
+/// Presentation-only boot geometry; no private app-settings siblings enter the UI response.
+pub fn chat_panel(settings: &Value) -> Result<Value> {
+    let Some(panel) = settings.get("ui").and_then(|ui| ui.get("chat_panel")) else {
+        return Ok(json!({"width":45.0,"unit":"%"}));
+    };
+    let width = panel
+        .get("width")
+        .and_then(Value::as_f64)
+        .filter(|n| n.is_finite() && *n >= 0.0)
+        .ok_or_else(|| anyhow!("Chat panel width must be a nonnegative number"))?;
+    let unit = panel
+        .get("unit")
+        .and_then(Value::as_str)
+        .filter(|unit| matches!(*unit, "px" | "%"))
+        .ok_or_else(|| anyhow!("Chat panel unit must be px or %"))?;
+    if unit == "%" && width > 100.0 {
+        return Err(anyhow!("Chat panel percentage cannot exceed 100"));
+    }
+    Ok(json!({"width":width,"unit":unit}))
+}
+
 pub fn validate_app_settings(settings: &Value) -> Result<()> {
+    chat_panel(settings)?;
     pull_refresh_start_zone(settings)?;
     if let Some(dev) = settings.get("development") {
         if !dev.is_object() || dev.get("live_ui_editing").is_some_and(|v| !v.is_boolean()) {
@@ -80,7 +102,10 @@ pub async fn ui_config(chat_path: &Path, state: &Path) -> Result<Value, Error> {
     }
     let settings = app_settings(state).map_err(Error::Settings)?;
     let start_zone_px = pull_refresh_start_zone(&settings).map_err(Error::Settings)?;
-    Ok(json!({"chat_ui":chat_ui,"app_ui":{"pull_to_refresh":{"start_zone_px":start_zone_px}}}))
+    let panel = chat_panel(&settings).map_err(Error::Settings)?;
+    Ok(
+        json!({"chat_ui":chat_ui,"app_ui":{"chat_panel":panel,"pull_to_refresh":{"start_zone_px":start_zone_px}}}),
+    )
 }
 
 #[cfg(test)]
@@ -101,6 +126,45 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn chat_boot_geometry_is_validated_and_reloaded() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("config")).unwrap();
+        let path = root.path().join("config/app-settings.json");
+        let chat = root.path().join("chat.json");
+        std::fs::write(&chat, r#"{"chat_common":{}}"#).unwrap();
+        for (width, unit) in [
+            (420.0, "px"),
+            (30.0, "%"),
+            (0.0, "px"),
+            (0.0, "%"),
+            (100.0, "%"),
+        ] {
+            let panel = json!({"width":width,"unit":unit,"private":"never project"});
+            let settings = json!({"ui":{"chat_panel":panel},"private":"never project"});
+            validate_app_settings(&settings).unwrap();
+            std::fs::write(&path, settings.to_string()).unwrap();
+            let result = ui_config(&chat, root.path()).await.unwrap();
+            assert_eq!(
+                result["app_ui"]["chat_panel"],
+                json!({"width":width,"unit":unit})
+            );
+            assert!(!result.to_string().contains("never project"));
+        }
+        for panel in [
+            json!(null),
+            json!({"width":-1,"unit":"px"}),
+            json!({"width":101,"unit":"%"}),
+            json!({"width":"420","unit":"px"}),
+            json!({"width":20,"unit":"vw"}),
+            json!({"width":10}),
+        ] {
+            let settings = json!({"ui":{"chat_panel":panel}});
+            assert!(validate_app_settings(&settings).is_err());
+            std::fs::write(&path, settings.to_string()).unwrap();
+            assert!(ui_config(&chat, root.path()).await.is_err());
+        }
+    }
+    #[tokio::test]
     async fn configuration_reloads_rejects_invalid_and_never_projects_private_siblings() {
         let root = tempfile::tempdir().unwrap();
         let chat = root.path().join("chat.json");
@@ -118,7 +182,7 @@ mod tests {
             let result = ui_config(&chat, root.path()).await.unwrap();
             assert_eq!(
                 result["app_ui"],
-                json!({"pull_to_refresh":{"start_zone_px":zone}})
+                json!({"chat_panel":{"width":45.0,"unit":"%"},"pull_to_refresh":{"start_zone_px":zone}})
             );
             assert_eq!(
                 result["chat_ui"]["chat_common"]["execution_mode"]["default_mode"],

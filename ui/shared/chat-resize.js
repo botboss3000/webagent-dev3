@@ -5,11 +5,11 @@
 export function mountChatResize({enabled}){
   const stage=document.getElementById('stage');
   const handle=document.getElementById('chat-resize-handle');
-  let fraction=.45,pointer=null,grabOffset=0;
+  let fraction=.45,pointer=null,grabOffset=0,pixels=null;
   const available=()=>Math.max(0,stage.getBoundingClientRect().width-handle.getBoundingClientRect().width);
   const limits=width=>({min:Math.min(240,width/2),max:Math.max(width/2,width-280)});
   /** Clamp the actual split and expose chat's percentage to assistive technology. */
-  function apply(width=fraction*available()){
+  function apply(width=pixels??fraction*available()){
     if(!enabled())return;
     const total=available();
     if(!total)return;
@@ -43,6 +43,7 @@ export function mountChatResize({enabled}){
     if(pointer!==event.pointerId)return;
     if(!enabled()){stop();return;}
     const rect=stage.getBoundingClientRect();
+    pixels=null;
     fraction=apply(rect.right-event.clientX+grabOffset-handle.getBoundingClientRect().width)??fraction;
   });
   for(const type of ['pointerup','pointercancel','lostpointercapture'])handle.addEventListener(type,stop);
@@ -56,10 +57,19 @@ export function mountChatResize({enabled}){
     else if(event.key==='Home')width=min;
     else if(event.key==='End')width=max;
     else return;
-    event.preventDefault();fraction=apply(width)??fraction;
+    event.preventDefault();pixels=null;fraction=apply(width)??fraction;
   });
   new ResizeObserver(()=>{if(!enabled())stop();else apply();}).observe(stage);
   new MutationObserver(()=>{if(!enabled())stop();else apply();}).observe(handle,{attributes:true,attributeFilter:['hidden']});
   // Layout observers apply after the authenticated shell becomes visible.
   apply();
+  return {
+    /** Apply validated boot geometry once; zero visibility is owned by the shell. */
+    configure({width=45,unit='%'}={}){
+      if(!Number.isFinite(width)||width<0||!['px','%'].includes(unit)||(unit==='%'&&width>100))throw Error('Invalid chat panel geometry');
+      pixels=width>0&&unit==='px'?width:null;
+      fraction=width>0&&unit==='%'?width/100:.45;
+      apply();
+    }
+  };
 }
