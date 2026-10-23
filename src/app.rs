@@ -761,3 +761,57 @@ impl From<webagent_models::api::Error> for ApiError {
         }
     }
 }
+
+// Root host state completes native adapters without teaching Engine authentication fields.
+#[derive(Clone)] struct EngineHostState {
+ pub(crate) login_attempts:Arc<Mutex<Vec<u64>>>,pub(crate) promotion_socket:PathBuf,pub(crate) secure:bool,
+ pub(crate) chat_ui_config_path:PathBuf,pub(crate) message_api_token_hash:Option<[u8;32]>,
+ pub(crate) browser_login_bridge:Option<browser_login::Bridge>,
+}
+impl EngineHostState {
+ pub(crate) fn new(app:&App)->Self {Self{login_attempts:app.login_attempts.clone(),promotion_socket:app.promotion_socket.clone(),secure:app.secure,chat_ui_config_path:app.chat_ui_config_path.clone(),message_api_token_hash:app.message_api_token_hash,browser_login_bridge:app.browser_login_bridge.clone()}}
+}
+impl EngineHostState {
+ pub(crate) fn app(&self,view:webagent_engine::runtime::native::View<'_,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->App {
+  App {
+   store:view.store.clone(),abilities:view.catalog.clone(),chat_actor:view.actor.map(str::to_owned),chat_access:view.binding.cloned(),
+   runtime:view.handles.runtime.clone(),runtime_path:view.handles.runtime_path.clone(),compaction_config_path:view.handles.compaction_config_path.clone(),
+   gate:view.handles.gate.clone(),active:view.handles.active.clone(),slots:view.handles.slots.clone(),ready:view.handles.ready.clone(),stop:view.handles.stop.clone(),control_dir:view.handles.control_dir.clone(),
+   provider:view.provider.clone(),refresh:view.refresh.clone(),login:view.login.clone(),tool_socket:view.tool_socket.to_owned(),build_socket:view.build_socket.to_owned(),
+   login_attempts:self.login_attempts.clone(),promotion_socket:self.promotion_socket.clone(),secure:self.secure,chat_ui_config_path:self.chat_ui_config_path.clone(),message_api_token_hash:self.message_api_token_hash,browser_login_bridge:self.browser_login_bridge.clone(),
+  }
+
+ }
+}
+
+#[cfg(test)]
+mod engine_host_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn current_native_view_overrides_captured_host_defaults() {
+        let (_captured_root, captured) = crate::runtime_tests::fixture().await;
+        let (_current_root, current) = crate::runtime_tests::fixture().await;
+        let host = EngineHostState::new(&captured);
+        let handles = webagent_engine::runtime::Handles {
+            runtime: current.runtime.clone(), runtime_path: current.runtime_path.clone(),
+            compaction_config_path: current.compaction_config_path.clone(),
+            control_dir: current.control_dir.clone(), gate: current.gate.clone(),
+            active: current.active.clone(), slots: current.slots.clone(),
+            ready: current.ready.clone(), stop: current.stop.clone(),
+        };
+        let reconstructed = host.app(webagent_engine::runtime::native::View {
+            store: &current.store, catalog: &current.abilities,
+            actor: Some("current-actor"), binding: None, handles: &handles,
+            provider: &current.provider, refresh: &current.refresh, login: &current.login,
+            tool_socket: &current.tool_socket, build_socket: &current.build_socket,
+        });
+        assert_eq!(reconstructed.store.root, current.store.root);
+        assert_ne!(reconstructed.store.root, captured.store.root);
+        assert_eq!(reconstructed.chat_actor.as_deref(), Some("current-actor"));
+        assert!(reconstructed.chat_access.is_none());
+        assert!(Arc::ptr_eq(&reconstructed.abilities, &current.abilities));
+        assert!(Arc::ptr_eq(&reconstructed.runtime, &current.runtime));
+        assert!(Arc::ptr_eq(&reconstructed.login_attempts, &captured.login_attempts));
+    }
+}

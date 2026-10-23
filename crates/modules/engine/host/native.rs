@@ -4,7 +4,7 @@ use crate::*;
 use webagent_engine::runtime::native::{NativeDispatch,View,Call};
 impl NativeDispatch<Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess> for super::policy::NativePolicy {
  fn call<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,request:Call)->impl std::future::Future<Output=Result<Value>>+Send+'a {async move {
-  let app=self.app(view);
+  let app=self.host.app(view);
   let Call {sid,run_id,generation,name,args,pending_id,policy_version,cancel}=request;
 
     #[cfg(test)] if name=="test_owner_purchase" {
@@ -118,40 +118,28 @@ impl NativeDispatch<Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_
 
  }}
  #[cfg(test)]
- fn test_purchase<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,run:&'a Value,action:&'a Value,args:&'a Value)->impl std::future::Future<Output=Result<Value>>+Send+'a {async move {crate::actions::test_purchase(&self.app(view),run,action,args).await}}
+ fn test_purchase<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,run:&'a Value,action:&'a Value,args:&'a Value)->impl std::future::Future<Output=Result<Value>>+Send+'a {async move {crate::actions::test_purchase(&self.host.app(view),run,action,args).await}}
 
- fn decision<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,sid:&'a str,run:&'a str,args:&'a Value,cancel:CancellationToken)->impl std::future::Future<Output=Result<Value>>+Send+'a {async move {crate::tools::core_decision::execute(&self.app(view),sid,run,args,cancel).await}}
- fn own_skill_guidance<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,sid:&'a str,run:&'a str,read_only:bool)->impl std::future::Future<Output=Result<Vec<webagent_capability_contracts::Guidance>>>+Send+'a {async move {crate::tools::core_skills::own_capability_guidance(&self.app(view),sid,run,read_only).await}}
+ fn decision<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,sid:&'a str,run:&'a str,args:&'a Value,cancel:CancellationToken)->impl std::future::Future<Output=Result<Value>>+Send+'a {async move {crate::tools::core_decision::execute(&self.host.app(view),sid,run,args,cancel).await}}
+ fn own_skill_guidance<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,sid:&'a str,run:&'a str,read_only:bool)->impl std::future::Future<Output=Result<Vec<webagent_capability_contracts::Guidance>>>+Send+'a {async move {crate::tools::core_skills::own_capability_guidance(&self.host.app(view),sid,run,read_only).await}}
 
- fn optimization_prepare<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,sid:&'a str,run:&'a mut Value)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {crate::optimization_prompt::prepare(&self.app(view),sid,run).await}}
+ fn optimization_prepare<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,sid:&'a str,run:&'a mut Value)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {crate::optimization_prompt::prepare(&self.host.app(view),sid,run).await}}
  fn optimization_guidance(run:&Value)->&str {crate::optimization_prompt::guidance(run)}
- fn chat_model_preference<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,run:&'a mut Value)->impl std::future::Future<Output=Result<bool>>+Send+'a {async move {let app=self.app(view);let changed=crate::apply_chat_model_preference(&app,run).await?;Ok(tools::core_model_switcher::apply(&app,run).await?||changed)}}
- fn messaging_preflight<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,run:&'a mut Value,name:&'a str,args:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {let app=self.app(view);tools::core_model_switcher::require_premium_confirmation(&app,run,name,args).await?;crate::session_messaging::preflight(&app,run,name,args).await}}
+ fn chat_model_preference<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,run:&'a mut Value)->impl std::future::Future<Output=Result<bool>>+Send+'a {async move {let app=self.host.app(view);let changed=crate::apply_chat_model_preference(&app,run).await?;Ok(tools::core_model_switcher::apply(&app,run).await?||changed)}}
+ fn messaging_preflight<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,run:&'a mut Value,name:&'a str,args:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {let app=self.host.app(view);tools::core_model_switcher::require_premium_confirmation(&app,run,name,args).await?;crate::session_messaging::preflight(&app,run,name,args).await}}
 
- fn host_fingerprint<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,sid:&'a str,run:&'a str,authority:&'a str)->impl std::future::Future<Output=Result<String>>+Send+'a {async move {crate::tools::administrator::host_fingerprint(&self.app(view),sid,run,authority).await}}
- fn recovery_build_socket(&self,view:View<'_,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->PathBuf {crate::tools::administrator::build_socket(&self.app(view))}
+ fn host_fingerprint<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,sid:&'a str,run:&'a str,authority:&'a str)->impl std::future::Future<Output=Result<String>>+Send+'a {async move {crate::tools::administrator::host_fingerprint(&self.host.app(view),sid,run,authority).await}}
+ fn recovery_build_socket(&self,view:View<'_,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->PathBuf {crate::tools::administrator::build_socket(&self.host.app(view))}
 
- fn naming_service<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->impl std::future::Future<Output=()>+Send+'a {async move {crate::session_naming::service(self.app(view)).await}}
- fn manager_service<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->impl std::future::Future<Output=()>+Send+'a {async move {crate::manager::scheduler(self.app(view)).await}}
- fn modules_service<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->impl std::future::Future<Output=()>+Send+'a {async move {crate::modules::service(self.app(view)).await}}
- fn followup_tick<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {crate::followup_queue::scheduler_tick(&self.app(view)).await}}
+ fn naming_service<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->impl std::future::Future<Output=()>+Send+'a {async move {crate::session_naming::service(self.host.app(view)).await}}
+ fn manager_service<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->impl std::future::Future<Output=()>+Send+'a {async move {crate::manager::scheduler(self.host.app(view)).await}}
+ fn modules_service<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->impl std::future::Future<Output=()>+Send+'a {async move {crate::modules::service(self.host.app(view)).await}}
+ fn followup_tick<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {crate::followup_queue::scheduler_tick(&self.host.app(view)).await}}
 
- fn code_index_configuration_attach<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,args:&'a Value,result:&'a mut Value,cancel:&'a CancellationToken)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {crate::tools::code_index_configuration::attach(&self.app(view),args,result,cancel).await}}
+ fn code_index_configuration_attach<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,args:&'a Value,result:&'a mut Value,cancel:&'a CancellationToken)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {crate::tools::code_index_configuration::attach(&self.host.app(view),args,result,cancel).await}}
  fn code_index_configuration_snippet_bytes(source:&Value)->usize {crate::tools::code_index_configuration::snippet_bytes(source)}
 
- fn messaging_revalidate<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,sid:&'a str)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {crate::session_messaging::revalidate(&self.app(view),sid).await}}
+ fn messaging_revalidate<'a>(&'a self,view:View<'a,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>,sid:&'a str)->impl std::future::Future<Output=Result<()>>+Send+'a {async move {crate::session_messaging::revalidate(&self.host.app(view),sid).await}}
 
 }
 
-impl super::policy::NativePolicy {
- fn app(&self,view:View<'_,Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_chat::SessionAccess>)->App {
-  App {
-   store:view.store.clone(),abilities:view.catalog.clone(),chat_actor:view.actor.map(str::to_owned),chat_access:view.binding.cloned(),
-   runtime:view.handles.runtime.clone(),runtime_path:view.handles.runtime_path.clone(),compaction_config_path:view.handles.compaction_config_path.clone(),
-   gate:view.handles.gate.clone(),active:view.handles.active.clone(),slots:view.handles.slots.clone(),ready:view.handles.ready.clone(),stop:view.handles.stop.clone(),control_dir:view.handles.control_dir.clone(),
-   provider:view.provider.clone(),refresh:view.refresh.clone(),login:view.login.clone(),tool_socket:view.tool_socket.to_owned(),build_socket:view.build_socket.to_owned(),
-   login_attempts:self.login_attempts.clone(),promotion_socket:self.promotion_socket.clone(),secure:self.secure,chat_ui_config_path:self.chat_ui_config_path.clone(),message_api_token_hash:self.message_api_token_hash,browser_login_bridge:self.browser_login_bridge.clone(),
-  }
-
- }
-}

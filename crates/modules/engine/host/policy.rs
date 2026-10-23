@@ -1,12 +1,10 @@
 //! Composition of existing Agents and Chat policy data for Engine enforcement.
 use crate::*;
 #[derive(Clone)] pub(crate) struct NativePolicy {
- pub(crate) login_attempts:Arc<Mutex<Vec<u64>>>,pub(crate) promotion_socket:PathBuf,pub(crate) secure:bool,
- pub(crate) chat_ui_config_path:PathBuf,pub(crate) message_api_token_hash:Option<[u8;32]>,
- pub(crate) browser_login_bridge:Option<browser_login::Bridge>,
+ pub(crate) host:crate::EngineHostState,
 }
 impl NativePolicy {
- pub(crate) fn new(app:&App)->Self {Self{login_attempts:app.login_attempts.clone(),promotion_socket:app.promotion_socket.clone(),secure:app.secure,chat_ui_config_path:app.chat_ui_config_path.clone(),message_api_token_hash:app.message_api_token_hash,browser_login_bridge:app.browser_login_bridge.clone()}}
+ pub(crate) fn new(app:&App)->Self {Self{host:crate::EngineHostState::new(app)}}
 }
 impl webagent_engine::runtime::ports::AgentPolicy<Store> for NativePolicy {
  fn default_model()->&'static str {DEFAULT_AGENT_MODEL}
