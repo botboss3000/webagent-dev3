@@ -1,11 +1,10 @@
 //! Administrator routes for people, tiers, and agent membership. When access
 //! is reduced, active work is stopped or held for review so an old grant cannot
 //! continue running in the separate loop process.
+use crate::account_management;
 use crate::State;
 use crate::{access::{AccountStatus, Principal, Relationship, Role, Tier}, App, Api, ApiError};
-use argon2::{password_hash::{PasswordHasher, SaltString}, Argon2};
 use axum::{extract::{Path, Query}, http::StatusCode, routing::get, Extension, Json, Router};
-use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -134,32 +133,6 @@ async fn quiesce_tier(app:&App,tier_id:&str)->Result<(),ApiError> {
     if let Some(error)=error{return Err(error);}Ok(())
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NewAccount { username: String, password: String }
-async fn accounts(State(app): State<App>, Extension(identity): Extension<Value>) -> Api {
-    administrator(&app, &identity).await?;
-    Ok(Json(json!({"accounts": app.store.access_accounts().await?})))
-}
-async fn create_account(
-    State(app): State<App>, Extension(identity): Extension<Value>,
-    Json(body): Json<NewAccount>,
-) -> Api {
-    administrator(&app, &identity).await?;
-    if body.password.len() < 8 || body.password.len() > 1024 {
-        return Err(invalid("Password must be 8-1024 characters"));
-    }
-    let password = body.password;
-    let hash = tokio::task::spawn_blocking(move || {
-        let salt = SaltString::generate(&mut OsRng);
-        Argon2::default().hash_password(password.as_bytes(), &salt)
-            .map(|value| value.to_string())
-    }).await.map_err(|_| invalid("Password hashing unavailable"))?
-        .map_err(|_| invalid("Password hashing failed"))?;
-    let account = app.store.create_user_account(&body.username, &hash).await
-        .map_err(|_| stale("Account creation rejected; check username and existing accounts"))?;
-    Ok(Json(json!({"account":account})))
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AccountChange {
@@ -405,39 +378,14 @@ async fn change_page_policy(State(app):State<App>,Extension(identity):Extension<
     app.store.event("","page_policy_changed",&json!({"revision":policy["revision"]})).await?;
     Ok(Json(policy))
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProfileChange { username:String, display_name:String }
-async fn change_profile(State(app):State<App>,Extension(identity):Extension<Value>,Path(id):Path<String>,Json(body):Json<ProfileChange>)->Api {
-    administrator(&app,&identity).await?;
-    let _guard=app.gate.lock().await;
-    let profile=app.store.update_user_profile(&id,&body.username,&body.display_name).await.map_err(|_|invalid("Profile update rejected"))?;
-    Ok(Json(profile))
-}
-async fn account_sessions(State(app):State<App>,Extension(identity):Extension<Value>,Path(id):Path<String>)->Api {
-    administrator(&app,&identity).await?;
-    let account=app.store.account_by_id(&id).await?.ok_or_else(||invalid("Account not found"))?;
-    let sessions=app.store.auth_sessions(&id,account["generation"].as_str().unwrap_or(""),crate::now()).await?;
-    let public:Vec<Value>=sessions.into_iter().map(|mut session|{session.as_object_mut().unwrap().remove("key");session}).collect();
-    Ok(Json(json!({"sessions":public})))
-}
-async fn revoke_account_session(State(app):State<App>,Extension(identity):Extension<Value>,Path((id,session_id)):Path<(String,String)>)->Api {
-    administrator(&app,&identity).await?;
-    let _guard=app.gate.lock().await;
-    let account=app.store.account_by_id(&id).await?.ok_or_else(||invalid("Account not found"))?;
-    let sessions=app.store.auth_sessions(&id,account["generation"].as_str().unwrap_or(""),crate::now()).await?;
-    let session=sessions.iter().find(|s|s["id"]==session_id).ok_or_else(||invalid("Sign-in session not found"))?;
-    app.store.delete(session["key"].as_str().unwrap()).await?;
-    Ok(Json(json!({"revoked":true})))
-}
 pub fn router() -> Router<App> {
     Router::new()
         .route("/page-policy",get(page_policy).put(change_page_policy))
-        .route("/accounts", get(accounts).post(create_account))
+        .route("/accounts", get(account_management::accounts).post(account_management::create_account))
         .route("/accounts/{id}", axum::routing::put(change_account))
-        .route("/accounts/{id}/profile",axum::routing::put(change_profile))
-        .route("/accounts/{id}/sessions",get(account_sessions))
-        .route("/accounts/{id}/sessions/{session_id}",axum::routing::delete(revoke_account_session))
+        .route("/accounts/{id}/profile",axum::routing::put(account_management::change_profile))
+        .route("/accounts/{id}/sessions",get(account_management::account_sessions))
+        .route("/accounts/{id}/sessions/{session_id}",axum::routing::delete(account_management::revoke_account_session))
         .route("/tiers", get(tiers))
         .route("/tiers/order",axum::routing::put(tier_order))
         .route("/tiers/{id}", axum::routing::put(change_tier))
@@ -459,28 +407,27 @@ mod tests {
     use crate::runtime_tests::fixture;
 
     #[tokio::test]
-    async fn admin_api_creates_pending_account_and_requires_live_role() {
+    async fn account_management_adapter_requires_current_administrator() {
         let (_root, app) = fixture().await;
         let admin = json!({"_user_id":"admin"});
-        let Json(created) = create_account(State(app.clone()), Extension(admin.clone()),
-            Json(NewAccount { username:"new_user".into(),
+        let Json(created) = account_management::create_account(State(app.clone()), Extension(admin.clone()),
+            Json(account_management::NewAccount { username:"new_user".into(),
                 password:"test-password-only".into() })).await.unwrap();
         let id = created["account"]["user_id"].as_str().unwrap();
-        assert_eq!(created["account"]["status"], "pending");
         let pending = json!({"_user_id":id});
-        assert!(accounts(State(app.clone()), Extension(pending.clone())).await.is_err());
+        assert!(account_management::accounts(State(app.clone()), Extension(pending.clone())).await.is_err());
         let Json(updated) = change_account(State(app.clone()), Extension(admin.clone()),
             Path(id.into()), Json(AccountChange { expected_revision:1,
                 status:AccountStatus::Active, role:Role::User,
                 tier_id:"basic".into() })).await.unwrap();
         assert_eq!(updated["account"]["status"], "active");
-        assert!(accounts(State(app.clone()), Extension(pending.clone())).await.is_err());
+        assert!(account_management::accounts(State(app.clone()), Extension(pending.clone())).await.is_err());
         let Json(promoted) = change_account(State(app.clone()), Extension(admin),
             Path(id.into()), Json(AccountChange { expected_revision:2,
                 status:AccountStatus::Active, role:Role::Administrator,
                 tier_id:"basic".into() })).await.unwrap();
         assert_eq!(promoted["account"]["role"], "administrator");
-        assert!(accounts(State(app.clone()), Extension(pending)).await.is_ok());
+        assert!(account_management::accounts(State(app.clone()), Extension(pending)).await.is_ok());
     }
     #[tokio::test]
     async fn agent_status_api_disables_calls_and_rejects_stale_revision() {

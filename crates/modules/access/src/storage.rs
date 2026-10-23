@@ -1,7 +1,7 @@
 //! Borrowed, already scoped resources. Storage retains keys, routing and live encryption policy.
 use anyhow::{anyhow,Result};
 use serde_json::Value;
-use sqlx::{SqlitePool,Row};
+use sqlx::SqlitePool;
 use std::path::Path;
 /// Existing Storage encoding operations only; Access SQL and decisions are never callbacks.
 pub trait RecordCodec: Sync {
@@ -13,6 +13,11 @@ pub trait RecordCodec: Sync {
     fn seal_agent_for(&self,_agent:&str,value:&Value)->Result<Vec<u8>> {self.seal_agent(value)}
     fn unseal_agent_for(&self,_agent:&str,value:&[u8])->Result<Value> {self.unseal_agent(value)}
 }
+pub(crate) struct AccountsCodec<'a,C:RecordCodec>(&'a C);
+impl<C:RecordCodec> webagent_accounts::RecordCodec for AccountsCodec<'_,C> {
+ fn seal(&self,value:&Value)->Result<Vec<u8>> {self.0.seal(value)}
+ fn unseal(&self,value:&[u8])->Result<Value> {self.0.unseal(value)}
+}
 pub struct Repository<'a,C:RecordCodec> {
     pub(crate) root:&'a Path,
     pub(crate) app_pool:&'a SqlitePool,
@@ -20,12 +25,13 @@ pub struct Repository<'a,C:RecordCodec> {
     agent_id:&'a str,
     actor_id:&'a str,
     codec:&'a C,
+    accounts_codec:AccountsCodec<'a,C>,
 }
 impl<'a,C:RecordCodec> Repository<'a,C> {
     /// Trusted root composition supplies existing pools with their bound agent identity.
     pub fn new(root:&'a Path,app_pool:&'a SqlitePool,agent_pool:&'a SqlitePool,
         agent_id:&'a str,actor_id:&'a str,codec:&'a C)->Self {
-        Self {root,app_pool,agent_pool,agent_id,actor_id,codec}
+        Self {root,app_pool,agent_pool,agent_id,actor_id,codec,accounts_codec:AccountsCodec(codec)}
     }
     pub(crate) async fn for_agent(&self,id:&str)->Result<&Self> {
         if id!=self.agent_id {return Err(anyhow!("Agent storage scope mismatch"));} Ok(self)
@@ -35,10 +41,10 @@ impl<'a,C:RecordCodec> Repository<'a,C> {
     pub(crate) fn unseal(&self,value:&[u8])->Result<Value> {self.codec.unseal(value)}
     pub(crate) fn seal_agent(&self,value:&Value)->Result<Vec<u8>> {self.codec.seal_agent_for(self.agent_id,value)}
     pub(crate) fn unseal_agent(&self,value:&[u8])->Result<Value> {self.codec.unseal_agent_for(self.agent_id,value)}
-    pub async fn account_by_id(&self,id:&str)->Result<Option<Value>> {
-        let row=sqlx::query("SELECT value FROM user_accounts WHERE user_id=?").bind(id).fetch_optional(self.app_pool).await?;
-        row.map(|r|self.unseal(&r.get::<Vec<u8>,_>("value"))).transpose()
+    pub(crate) fn accounts(&self)->webagent_accounts::Repository<'_,AccountsCodec<'_,C>> {
+        webagent_accounts::Repository::new(self.app_pool,&self.accounts_codec)
     }
+    pub async fn account_by_id(&self,id:&str)->Result<Option<Value>> {self.accounts().account_state(id).await}
     pub(crate) async fn event(&self,sid:&str,kind:&str,payload:&Value)->Result<()> {
         debug_assert!(sid.is_empty());
         sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,?,?)")
@@ -46,9 +52,9 @@ impl<'a,C:RecordCodec> Repository<'a,C> {
         Ok(())
     }
     pub async fn tier_user_ids(&self,tier:&str)->Result<Vec<String>> {
-        let rows=sqlx::query("SELECT user_id FROM user_accounts ORDER BY user_id").fetch_all(self.app_pool).await?;
+        let account_ids=self.accounts().all_user_ids().await?;
         let mut ids=Vec::new();
-        for row in rows {let id:String=row.get("user_id");
+        for id in account_ids {
             if self.account_by_id(&id).await?.is_some_and(|account|account["tier_id"]==tier) {ids.push(id);}}
         Ok(ids)
     }
@@ -223,7 +229,7 @@ mod integration_tests {
         sqlx::query("DROP TRIGGER reject_migration_marker").execute(&f.app).await.unwrap();
         repo.migrate_access_v1().await.unwrap();
         let account=repo.account_by_id("admin").await.unwrap().unwrap();
-        assert_eq!(account["password_hash"],"original-credential");assert_eq!(account["generation"],"initial");
+        assert!(account.get("password_hash").is_none());assert_eq!(account["generation"],"initial");
         assert_eq!(account["status"],"active");assert_eq!(account["role"],"administrator");assert_eq!(account["tier_id"],"operator");
         let legacy:Vec<u8>=sqlx::query_scalar("SELECT value FROM agent_memberships WHERE user_id='admin' AND agent_id='shared_default'").fetch_one(&f.app).await.unwrap();
         assert_eq!(f.codec.unseal(&legacy).unwrap()["relationship"],"owner");

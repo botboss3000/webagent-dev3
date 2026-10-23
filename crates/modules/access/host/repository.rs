@@ -1,90 +1,12 @@
 //! Application-wide records for who people are, what their tier permits, and
 //! which agents they may use. Conversations themselves belong to user storage.
-use crate::access::{self, AccountStatus, Principal, Relationship, Role, Tier};
+use crate::access::{AccountStatus, Relationship, Role, Tier};
 use crate::store::Store;
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 use serde_json::{json, Value};
-use sqlx::Row;
-
-fn account_view(value: &Value) -> Result<Value> {
-    let principal = Principal::from_account(value)?;
-    Ok(json!({"user_id":principal.user_id,"username":value["username"],
-        "status":principal.status,"role":principal.role,
-        "tier_id":principal.tier_id,"access_revision":principal.access_revision}))
-}
-fn username_ok(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 128 && name.trim() == name
-        && !name.chars().any(char::is_control)
-}
-async fn audit(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, store: &Store,
-    kind: &str, payload: &Value) -> Result<()> {
-    sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES('',?,?)")
-        .bind(kind).bind(store.seal(payload)?).execute(&mut **tx).await?;
-    Ok(())
-}
 
 impl Store {
     pub async fn access_audit(&self, limit: u32) -> Result<Vec<Value>> { self.access_repository().access_audit(limit).await }
-    pub async fn all_user_ids(&self) -> Result<Vec<String>> {
-        let rows = sqlx::query("SELECT user_id FROM user_accounts ORDER BY user_id")
-            .fetch_all(&self.app_pool).await?;
-        Ok(rows.into_iter().map(|row| row.get::<String,_>("user_id")).collect())
-    }
-    pub async fn access_accounts(&self) -> Result<Vec<Value>> {
-        let rows = sqlx::query("SELECT value FROM user_accounts ORDER BY username LIMIT 1000")
-            .fetch_all(&self.app_pool).await?;
-        let mut accounts=Vec::new();
-        for row in rows {
-            let mut account=account_view(&self.unseal(&row.get::<Vec<u8>,_>("value"))?)?;
-            let id=account["user_id"].as_str().unwrap();
-            let profile=self.user_profile(id).await?.unwrap_or_else(||json!({}));
-            let view=self.for_user(id).await?;
-            let sessions:i64=sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key LIKE 'session:%'").fetch_one(&view.pool).await?;
-            let messages:i64=sqlx::query_scalar("SELECT COUNT(*) FROM chat").fetch_one(&view.pool).await?;
-            account["profile"]=profile;account["session_count"]=json!(sessions);account["message_count"]=json!(messages);
-            accounts.push(account);
-        }
-        Ok(accounts)
-    }
-    /// Guests are durable independent identities, never password accounts.
-    pub async fn create_guest_account(&self) -> Result<Value> {
-        let id = format!("guest_{}", uuid::Uuid::new_v4().simple());
-        let account = json!({"user_id":id,"username":id,"password_hash":null,
-            "generation":uuid::Uuid::new_v4().to_string(),"is_approved":true,
-            "status":AccountStatus::Active,"role":Role::Guest,"tier_id":"anonymous",
-            "access_revision":1});
-        let profile = json!({"user_id":id,"display_name":"Guest","is_admin":false,
-            "default_agent_id":null,"last_login_at":null,"source_channel":"web_public"});
-        let mut tx = self.app_pool.begin().await?;
-        sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES(?,?,?)")
-            .bind(&id).bind(&id).bind(self.seal(&account)?).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO user_profiles(user_id,value) VALUES(?,?)")
-            .bind(&id).bind(self.seal(&profile)?).execute(&mut *tx).await?;
-        audit(&mut tx,self,"account_created",&json!({"user_id":id,"role":"guest"})).await?;
-        tx.commit().await?;
-        Ok(account)
-    }
-    pub async fn create_user_account(&self, username: &str, password_hash: &str) -> Result<Value> {
-        if !username_ok(username) || password_hash.len() < 20 || password_hash.len() > 1024 {
-            bail!("Invalid account input");
-        }
-        let id = uuid::Uuid::new_v4().simple().to_string();
-        let account = json!({"user_id":id,"username":username,"password_hash":password_hash,
-            "generation":uuid::Uuid::new_v4().to_string(),"is_approved":false,
-            "status":AccountStatus::Pending,"role":Role::User,"tier_id":"basic",
-            "access_revision":1});
-        let profile = json!({"user_id":id,"display_name":username,"is_admin":false,
-            "default_agent_id":null,"last_login_at":null});
-        let mut tx = self.app_pool.begin().await?;
-        sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES(?,?,?)")
-            .bind(&id).bind(username).bind(self.seal(&account)?)
-            .execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO user_profiles(user_id,value) VALUES(?,?)")
-            .bind(&id).bind(self.seal(&profile)?).execute(&mut *tx).await?;
-        audit(&mut tx,self,"account_created",&json!({"user_id":id,"status":"pending"})).await?;
-        tx.commit().await?;
-        account_view(&account)
-    }
     pub async fn update_account_access(&self, id: &str, expected_revision: u64,
         status: AccountStatus, role: Role, tier_id: &str) -> Result<Value> { self.access_repository().update_account_access(id, expected_revision, status, role, tier_id).await }
     pub async fn entitlement_tier(&self, id: &str) -> Result<Option<Tier>> { self.access_repository().entitlement_tier(id).await }
@@ -195,15 +117,13 @@ mod tests {
         assert_eq!(store.agent_authority(&owner,"tenant-one").await.unwrap()["can_manage"],false);
     }
     #[tokio::test]
-    async fn new_user_is_pending_and_access_revisions_revoke_credentials() {
+    async fn access_assignment_rotates_version_and_rejects_stale_revision() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         store.create_admin_account("root","long-hash-placeholder","generation")
             .await.unwrap();
         let created = store.create_user_account("second","long-hash-placeholder").await.unwrap();
         let id = created["user_id"].as_str().unwrap();
-        assert_eq!(created["status"], "pending");
-        assert_eq!(created["tier_id"], "basic");
         let before = store.account_by_id(id).await.unwrap().unwrap();
         let active = store.update_account_access(id,1,AccountStatus::Active,
             Role::User,"basic").await.unwrap();
@@ -269,4 +189,14 @@ mod tests {
         assert_eq!(store.agent_membership(id,"shared_default").await.unwrap().unwrap()
             ["relationship"],"caller");
     }
+}
+
+// The app-owned file is authoritative; unknown fields survive registration edits.
+impl Store {
+    pub(crate) fn access_policy_path(&self) -> std::path::PathBuf { self.access_repository().access_policy_path() }
+    pub(crate) fn policy_lock(&self) -> Result<std::fs::File> { self.access_repository().policy_lock() }
+    pub(crate) fn read_access_policy(&self) -> Result<Value> { self.access_repository().read_access_policy() }
+    pub(crate) fn save_page_policy(&self, pages:Value, expected:u64) -> Result<Value> { self.access_repository().save_page_policy(pages, expected) }
+    pub(crate) async fn init_policy_tiers(&self) -> Result<()> { self.access_repository().init_policy_tiers().await }
+    pub(crate) fn write_access_policy(&self, value: &Value) -> Result<()> { self.access_repository().write_access_policy(value) }
 }

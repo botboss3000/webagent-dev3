@@ -25,7 +25,7 @@ pub fn page_allowed(policy:&Value, scope:&str, id:&str, principal:&crate::Princi
 }
 
 pub fn validate_configuration(value:&Value)->Result<()> {
-        if !value.is_object() || !matches!(value["registration"].as_str(), Some("open"|"restricted")) {
+        if webagent_accounts::RegistrationMode::from_policy(value).is_err() {
             return Err(anyhow!("Invalid access-policy.json registration policy"));
         }
         if value.get("revision").is_some_and(|v|v.as_u64().is_none_or(|n|n==0)) {return Err(anyhow!("Invalid policy revision"));}
@@ -83,4 +83,20 @@ mod tests {
         principal.status = crate::AccountStatus::Suspended;
         assert!(!page_allowed(&policy,"app","settings",&principal));
     }
+}
+
+/// Main-page authorization resource for existing browser API routes.
+pub fn main_page_for_request(path:&str)->Option<&'static str> {
+ if path.ends_with("/main-chat")||path.contains("/main-notes")||
+  ["/api/v3/main-chat","/main-chat","/api/v3/main-notes","/main-notes","/api/v3/sessions","/sessions","/api/v3/runs","/runs"].iter().any(|prefix|path.starts_with(prefix))||path.ends_with("/user/status") {Some("chat")}
+ else if path.starts_with("/api/v3/agents/")||path.starts_with("/agents/") {Some("agents")}else{None}
+}
+#[cfg(test)]
+mod request_page_tests {
+ #[test]
+ fn browser_routes_keep_existing_authorization_resources() {
+  for path in ["/api/v3/sessions/one","/runs/one","/api/v3/agents/one/main-chat","/api/v3/main-notes/one","/api/v3/user/status"] {assert_eq!(super::main_page_for_request(path),Some("chat"));}
+  assert_eq!(super::main_page_for_request("/api/v3/agents/one"),Some("agents"));
+  assert_eq!(super::main_page_for_request("/api/v3/auth/me"),None);
+ }
 }

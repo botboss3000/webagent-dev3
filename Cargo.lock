@@ -2195,6 +2195,26 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "webagent-accounts",
+ "webagent-configuration",
+]
+
+[[package]]
+name = "webagent-accounts"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "argon2",
+ "axum",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "uuid",
  "webagent-configuration",
 ]
 
@@ -2541,8 +2561,6 @@ dependencies = [
 name = "webagent-v3"
 version = "0.1.0"
 dependencies = [
- "webagent-webapp",
- "webagent-abilities",
  "aes-gcm",
  "anyhow",
  "argon2",
@@ -2568,7 +2586,9 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "webagent-abilities",
  "webagent-access",
+ "webagent-accounts",
  "webagent-assets-contracts",
  "webagent-background-contracts",
  "webagent-background-dispatch",
@@ -2584,9 +2604,10 @@ dependencies = [
  "webagent-engine",
  "webagent-manager",
  "webagent-models",
- "webagent-system",
  "webagent-provider-contracts",
  "webagent-provider-projection",
+ "webagent-system",
+ "webagent-webapp",
 ]
 
 [[package]]

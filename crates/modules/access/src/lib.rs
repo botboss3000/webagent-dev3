@@ -6,9 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountStatus { Pending, Active, Suspended, Disabled }
+pub use webagent_accounts::AccountStatus;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -143,11 +141,7 @@ impl Principal {
             .ok_or_else(|| anyhow!("Account has no stable identity"))?;
         if !valid_id(user_id) { bail!("Invalid account identity"); }
         let legacy_admin = user_id == "admin";
-        let status = match account["status"].as_str() {
-            Some(value) => serde_json::from_value(Value::String(value.into()))?,
-            None if legacy_admin => AccountStatus::Active,
-            _ => bail!("Account has no status"),
-        };
+        let status=webagent_accounts::account_status(account)?;
         let role = match account["role"].as_str() {
             Some(value) => serde_json::from_value(Value::String(value.into()))?,
             None if legacy_admin => Role::Administrator,
@@ -364,3 +358,14 @@ mod ladder_tests;
 pub mod membership;
 
 pub mod account_ladder;
+
+/// Current installation defaults are authorization assignments, not credential policy.
+pub const fn initial_user_access()->webagent_accounts::InitialAccess<'static> {
+ webagent_accounts::InitialAccess {role:"user",tier_id:"basic",profile_is_admin:false}
+}
+pub const fn initial_guest_access()->webagent_accounts::InitialAccess<'static> {
+ webagent_accounts::InitialAccess {role:"guest",tier_id:"anonymous",profile_is_admin:false}
+}
+pub const fn initial_admin_access()->webagent_accounts::InitialAccess<'static> {
+ webagent_accounts::InitialAccess {role:"administrator",tier_id:"operator",profile_is_admin:true}
+}

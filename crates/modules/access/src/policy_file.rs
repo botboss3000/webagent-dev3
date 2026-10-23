@@ -82,7 +82,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             return Ok(());
         }
 
-        let registration=if legacy.and_then(|v|v["access_mode"].as_str())==Some("public_registered") {"open"} else {"restricted"};
+        let registration=webagent_accounts::RegistrationMode::from_legacy(legacy).policy_name();
         let _lock=self.policy_lock()?;
         if self.access_policy_path().exists() {self.read_access_policy()?;return Ok(());}
         self.write_access_policy(&json!({"schema_version":1,"revision":1,"registration":registration}))
@@ -91,12 +91,12 @@ impl<C: RecordCodec> Repository<'_, C> {
         self.set_registration_policy_revision(registration,None)
     }
     pub fn set_registration_policy_revision(&self, registration: &str, expected:Option<u64>) -> Result<()> {
-        if !matches!(registration,"open"|"restricted") {return Err(anyhow!("Invalid registration policy"));}
+        let mode=webagent_accounts::RegistrationMode::from_policy(&json!({"registration":registration}))?;
         let _lock=self.policy_lock()?;
         let mut value=self.read_access_policy()?;
         if expected.is_some_and(|revision|revision!=value["revision"].as_u64().unwrap_or(0)) {return Err(anyhow!("Policy revision changed"));}
         value["revision"]=json!(value["revision"].as_u64().unwrap_or(0).checked_add(1).ok_or_else(||anyhow!("Policy revision overflow"))?);
-        value["registration"]=json!(registration);
+        mode.write_policy(&mut value)?;
         self.write_access_policy(&value)
     }
 }
