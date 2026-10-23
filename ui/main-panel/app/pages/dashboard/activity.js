@@ -57,12 +57,12 @@ export async function readActivity(signal){
  if(data.status){
   const runs=[...new Map(data.status.runs.filter(r=>typeof r.id==='string').map(r=>[r.id,r])).values()];
   const active=runs.filter(r=>['running','queued','waiting_approval','waiting_gate','recovery','paused'].includes(r.status));
-  tiles.set('active_runs',model([['Running / queued',active.filter(r=>['running','queued'].includes(r.status)).length],['Waiting / paused / recovery',active.filter(r=>!['running','queued'].includes(r.status)).length]],'Default agent only; retained run snapshot.','partial'));
+  tiles.set('active_runs',model([['Running / queued',active.filter(r=>['running','queued'].includes(r.status)).length],['Waiting / paused / recovery',active.filter(r=>!['running','queued'].includes(r.status)).length]],'Current account across agents; retained run snapshot.','partial'));
   const failed=runs.filter(r=>r.status==='failed');
-  tiles.set('failures',model([['Failed retained runs',failed.length],...failed.slice(0,5).map(r=>[r.id,text(r.error).slice(0,160)])],'Default agent only · retained recent runs; not installation history.','partial'));
+  tiles.set('failures',model([['Failed retained runs',failed.length],...failed.slice(0,5).map(r=>[r.id,text(r.error).slice(0,160)])],'Current account across agents · retained recent runs; not installation history.','partial'));
   const run=runs.find(r=>numeric(r.context_controls?.trigger_tokens));
   tiles.set('context',model([['Default agent model',text(data.status.model)],['Compaction trigger (tokens)',run?.context_controls?.trigger_tokens??'Unavailable'],['Tail target (tokens)',run?.context_controls?.tail_tokens??'Unavailable']],
-   'Compaction thresholds from a retained default-agent run; provider limits depend on the selected model.','partial'));
+   'Compaction thresholds from a retained caller-owned run; provider limits depend on the selected model.','partial'));
  }
  if(data.health)tiles.set('health_board',model([['API readiness',data.health.ready?'Ready':'Not ready']],
   'API readiness. Database pools are measured in the Database tiles.',data.health.ready?'partial':'unavailable'));

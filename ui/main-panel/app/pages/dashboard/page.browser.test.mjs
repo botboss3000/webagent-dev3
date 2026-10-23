@@ -67,7 +67,7 @@ try{
   assert.match(await page.locator('[data-card=agents_panel]').innerText(),/Fixture agent/);
   assert.match(await page.locator('[data-card=tokens]').innerText(),/Reported input tokens/);
   assert.match(await page.locator('[data-card=cost]').innerText(),/0.12 USD/);
-  assert.match(await page.locator('[data-card=active_runs]').innerText(),/Default agent only/);
+  assert.match(await page.locator('[data-card=active_runs]').innerText(),/Current account across agents/);
   assert.match(await page.locator('[data-card=security]').innerText(),/current account/i);
   assert.equal(await page.locator('[data-card=user_mgmt] a').getAttribute('href'),'/app?tab=app&appView=users');
   assert.match(await page.locator('[data-card=db_latency]').innerText(),/Read-only probes/);
