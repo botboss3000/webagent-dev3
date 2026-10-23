@@ -3769,7 +3769,7 @@ class Broker:
         if mode=="packaging_resume":
             self.package_cache.ready(candidate)
             proof=None
-        elif mode=="cached_rebuild":
+        elif mode in {"cached_rebuild","fresh_rebuild"}:
             if lineage is not None:
                 inherited=lineage["legacy_image_proof"]
                 source=self.jobs.get(inherited["source_job_id"])

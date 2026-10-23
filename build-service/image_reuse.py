@@ -114,7 +114,10 @@ def failed_retry_mode(prior, merged_sha256, rebuild_if_stale):
         if images or not isinstance(inherited, dict) or not re.fullmatch(r"[a-f0-9]{64}", inherited.get("source_sha256", "")):
             raise ValueError("Inherited image evidence inconsistent")
         bound = inherited["source_sha256"]
-    elif set(images) == set(COPIES):
+    elif images == {}:
+        # No images can be reused; opt in to compiling the verified source again.
+        return "fresh_rebuild" if rebuild_if_stale else "needs_rebuild"
+    elif isinstance(images, dict) and set(images) == set(COPIES):
         bound = prior["inputs_sha256"]
     else:
         raise ValueError("Failed release has no verified image pair")

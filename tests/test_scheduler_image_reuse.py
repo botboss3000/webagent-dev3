@@ -86,6 +86,26 @@ class FailedRetryModeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"pre-activation"):
             reuse.failed_retry_mode(failed,merged,True)
 
+    def test_empty_image_failure_requires_explicit_fresh_build(self):
+        failed={"status":"failed","operation":"build_deploy","inputs_sha256":"a"*64,"images":{}}
+        for mode in (None,"fresh_rebuild"):
+            failed["retry_mode"]=mode
+            for merged in ("a"*64,"b"*64):
+                self.assertEqual(reuse.failed_retry_mode(failed,merged,False),"needs_rebuild")
+                self.assertEqual(reuse.failed_retry_mode(failed,merged,True),"fresh_rebuild")
+        for field,value in (("effects_started",True),("status","uncertain"),("operation","check")):
+            invalid={**failed,field:value}
+            with self.assertRaisesRegex(ValueError,"pre-activation"):
+                reuse.failed_retry_mode(invalid,"a"*64,True)
+
+    def test_fresh_build_rejects_partial_or_malformed_image_evidence(self):
+        failed={"status":"failed","operation":"build_deploy","images":{}}
+        for images in ({"api":"sha256:"+"1"*64},None,[],{"unknown":"image"}):
+            with self.subTest(images=images),self.assertRaisesRegex(ValueError,"verified image pair"):
+                reuse.failed_retry_mode({**failed,"images":images},"a"*64,True)
+        with self.assertRaisesRegex(ValueError,"inconsistent"):
+            reuse.failed_retry_mode({**failed,"legacy_image_proof":{}},"a"*64,True)
+
     def test_failed_retry_inherits_old_binding_without_reusing_it(self):
         old="a"*64;merged="b"*64
         failed={"status":"failed","operation":"build_deploy","inputs_sha256":merged,
@@ -241,6 +261,32 @@ class PackagingRetryBrokerTests(unittest.TestCase):
         self.assertEqual(new["retry_mode"],"packaging_resume")
         self.assertEqual(new["packaging_resume"]["source_job_id"],prior["job_id"])
         self.assertEqual(prior["status"],"failed");self.assertEqual(prior["images"],{})
+    def test_fresh_retry_without_images_or_compiler_proof_is_durable(self):
+        from unittest.mock import patch
+        item,prior,value=self.prepare()
+        prior.pop("compiler_checkpoint");prior.pop("packaging_preflight")
+        ready=[];self.broker.package_cache.ready=lambda blob:ready.append(blob)
+        args={"action":"retry_verified_failed_release","task_id":item["task_id"],"job_id":prior["job_id"],"expected_revision":value["revision"],"expected_epoch":value["epoch"],"request_id":"fresh-broker-retry"}
+        with patch.object(self.broker,"_start_next"),patch.object(self.broker,"_sync_report",return_value={"total":0,"status":"synchronized"}):
+            self.assertEqual(self.call("build_work",args)["status"],"needs_rebuild")
+            self.assertEqual(len(self.broker.jobs),1)
+            args={**args,"rebuild_if_stale":True}
+            result=self.call("build_work",args)
+            self.assertEqual(result["job_id"],self.call("build_work",args)["job_id"])
+        new=self.broker.jobs[result["job_id"]]
+        self.assertEqual(new["retry_mode"],"fresh_rebuild")
+        self.assertIsNone(new["legacy_image_proof"])
+        self.assertEqual(new["images"],{})
+        self.assertEqual(len(ready),1)
+        self.assertEqual(prior["status"],"failed")
+        # A second pre-image failure needs no image lineage either.
+        new["status"]="failed";value=self.broker.scheduler.store.get(item["key"])
+        args={**args,"job_id":new["job_id"],"expected_revision":value["revision"],"request_id":"fresh-broker-retry-again"}
+        with patch.object(self.broker,"_start_next"),patch.object(self.broker,"_sync_report",return_value={"total":0,"status":"synchronized"}):
+            again=self.call("build_work",args)
+        self.assertNotEqual(again["job_id"],new["job_id"])
+        self.assertEqual(self.broker.jobs[again["job_id"]]["retry_mode"],"fresh_rebuild")
+
     def test_changed_baseline_requires_rebuild_before_creating_attempt(self):
         from unittest.mock import patch
         item,prior,value=self.prepare()
