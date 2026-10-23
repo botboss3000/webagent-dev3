@@ -56,7 +56,7 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   const client = createChatClient({request, note, issues, clearNoticeFrom, createStream});
   let privacyMode=null;
   function privacyNotice(mode){privacyMode=mode;const notice=$('chat-privacy-notice');if(!notice)return;
-    notice.hidden=false;notice.textContent=mode==='operator_reviewable'?'Agent Operators can read this conversation and join to reply.':mode==='private'?'Private conversation: Agent Operators cannot review these messages.':'Conversation privacy is loading…';}
+    notice.hidden=mode==='private';notice.textContent=mode==='private'?'':mode==='operator_reviewable'?'Agent Operators can read this conversation and join to reply.':'Conversation privacy is loading…';}
   async function loadAgentPrivacy(){if(session)return;privacyNotice(null);try{const data=await request('/agents/'+encodeURIComponent(getAgentId())+'/access-summary');if(!session)privacyNotice(data.conversation_privacy);}catch(error){if(!session){privacyNotice(null);const notice=$('chat-privacy-notice');if(notice)notice.textContent='Conversation privacy unavailable. Retry before sending.';}}}
 /** Fetches, validates, and mounts the required V3 chat partial into the supplied root. */
 async function mountChat(){
