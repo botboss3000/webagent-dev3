@@ -13,7 +13,7 @@ const html=fs.readFileSync(path.join(root,'ui/index.html'),'utf8')
  .replace('class="is-booting"','')
  .replace('<div id="app" hidden>','<div id="app" data-mobile-view="chat">')
  .replace('<div id="chat-panel" class="chat-surface"></div>','<div id="chat-panel" class="chat-surface">'+fs.readFileSync(path.join(root,'ui/chat/chat.html'),'utf8')+'</div>')
- .replace('</body>','<script src="/v3-ui/boot/viewport.js"></script></body>');
+ .replace('</body>','<script src="/v3-ui/boot/boot.js"></script><script src="/v3-ui/boot/viewport.js"></script></body>');
 const server=http.createServer((req,res)=>{
  const url=new URL(req.url,'http://localhost'),rel=url.pathname;
  if(rel==='/app'){res.setHeader('content-type','text/html');res.end(html);return;}
@@ -40,6 +40,7 @@ try{
      const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();return{top:r.top,bottom:r.bottom,left:r.left,right:r.right,width:r.width,height:r.height}};
      return{app:rect('app'),stage:rect('stage'),chat:rect('chat-panel'),footer:rect('chat-input-area'),main:rect('main-panel')};
     });
+    await page.waitForFunction(()=>getComputedStyle(document.documentElement).backgroundColor===getComputedStyle(document.body).backgroundColor);
     const g=await measure();
     assert.equal(g.app.height,cfg.height);
     if(cfg.width<=800){
@@ -53,6 +54,12 @@ try{
      await page.evaluate(()=>document.getElementById('app').dataset.mobileView='chat');
     }else assert(Math.abs(g.chat.width-g.stage.width*.45)<1,'desktop split keeps its width');
    }
+  }
+  for(const owner of ['body','html']) for(const [color,expected] of [['#00a040','rgb(0, 160, 64)'],['#000000','rgb(0, 0, 0)'],['#ffffff','rgb(255, 255, 255)']]){
+   await page.evaluate(({owner,color})=>{document.body.classList.remove('light-mode');document.querySelector(owner).style.setProperty('--bg-0',color);},{owner,color});
+   await page.waitForFunction(()=>getComputedStyle(document.documentElement).backgroundColor===getComputedStyle(document.body).backgroundColor);
+   assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).backgroundColor),expected);
+   await page.evaluate(owner=>document.querySelector(owner).style.removeProperty('--bg-0'),owner);
   }
   if(cfg.width===390&&cfg.height===844){
    await page.evaluate(()=>{document.getElementById('chat-input').focus();Object.defineProperty(visualViewport,'height',{configurable:true,value:500});visualViewport.dispatchEvent(new Event('resize'));});

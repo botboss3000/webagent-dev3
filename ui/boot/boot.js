@@ -54,6 +54,21 @@ window.WA_BG?.whenReady('bullet-grid', function (renderer) {
 window.addEventListener("error", () => window.__boot.reveal());
 window.addEventListener("unhandledrejection", () => window.__boot.reveal());
 try { document.body.classList.toggle("light-mode", localStorage.getItem("v3-theme") === "light"); } catch {}
+// Keep the browser backing surface opaque and equal to the active body palette.
+(function () {
+  var root = document.documentElement;
+  function syncCanvasBackground() {
+    var color = getComputedStyle(document.body).backgroundColor;
+    if (root.style.getPropertyValue('--app-canvas-bg') !== color) root.style.setProperty('--app-canvas-bg', color);
+  }
+  var paletteObserver = new MutationObserver(syncCanvasBackground);
+  paletteObserver.observe(document.body, {attributes: true, attributeFilter: ['class', 'style']});
+  paletteObserver.observe(root, {attributes: true, attributeFilter: ['class', 'style']});
+  window.addEventListener('resize', syncCanvasBackground);
+  window.visualViewport?.addEventListener('resize', syncCanvasBackground);
+  document.addEventListener('load', function (event) { if (event.target.tagName === 'LINK') syncCanvasBackground(); }, true);
+  syncCanvasBackground();
+})();
   // ── Boot phantom cursor ─────────────────────────────────────────────
   // While the app boots (body.is-booting, set by the pre-paint script above
   // and cleared by the readiness coordinator), a boot input orbits
