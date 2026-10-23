@@ -468,40 +468,14 @@ pub(crate) async fn logout(
     );
     Ok(r)
 }
-/// Validate the app-owned gesture preference without exposing other app settings.
-pub(crate) fn pull_refresh_start_zone(settings: &Value) -> Result<f64> {
-    let mut section = settings;
-    for key in ["ui", "pull_to_refresh"] {
-        let Some(value) = section.get(key) else { return Ok(50.0); };
-        if !value.is_object() { return Err(anyhow!("Invalid pull-to-refresh settings")); }
-        section = value;
-    }
-    match section.get("start_zone_px") {
-        None => Ok(50.0),
-        Some(value) => value.as_f64().filter(|n| n.is_finite() && *n >= 0.0)
-            .ok_or_else(|| anyhow!("Pull-to-refresh start_zone_px must be a nonnegative number")),
-    }
-}
-
-pub(crate) async fn chat_ui_config(State(app): State<App>) -> Api {
-    let bytes = tokio::fs::read(&app.chat_ui_config_path)
-        .await
-        .map_err(|_| {
-            ApiError(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Chat UI configuration unavailable".into(),
-            )
-        })?;
-    let chat_ui: Value = serde_json::from_slice(&bytes).map_err(|_| {
-        ApiError(StatusCode::INTERNAL_SERVER_ERROR, "Chat UI configuration invalid".into())
-    })?;
-    if !chat_ui["chat_common"].is_object() {
-        return Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, "Chat UI configuration invalid".into()));
-    }
-    let settings = crate::store::read_app_settings(&app.store.root)?;
-    let start_zone_px = pull_refresh_start_zone(&settings)?;
-    // Allowlist this presentation value; never send the whole administrator file.
-    Ok(Json(json!({"chat_ui": chat_ui, "app_ui": {"pull_to_refresh": {"start_zone_px": start_zone_px}}})))
+#[cfg(test)]
+use webagent_webapp::configuration::pull_refresh_start_zone;
+pub(crate) async fn chat_ui_config(State(app):State<App>)->Api {
+    webagent_webapp::configuration::ui_config(&app.chat_ui_config_path,&app.store.root)
+        .await.map(Json).map_err(|error|match error {
+            webagent_webapp::configuration::Error::Http(status,message)=>ApiError(status,message.into()),
+            webagent_webapp::configuration::Error::Settings(error)=>error.into(),
+        })
 }
 
 #[cfg(test)]

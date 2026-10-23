@@ -2541,6 +2541,7 @@ dependencies = [
 name = "webagent-v3"
 version = "0.1.0"
 dependencies = [
+ "webagent-webapp",
  "webagent-abilities",
  "aes-gcm",
  "anyhow",
@@ -2586,6 +2587,21 @@ dependencies = [
  "webagent-system",
  "webagent-provider-contracts",
  "webagent-provider-projection",
+]
+
+[[package]]
+name = "webagent-webapp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tower-http",
 ]
 
 [[package]]

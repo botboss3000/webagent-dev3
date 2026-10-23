@@ -72,7 +72,7 @@ mod usage;
 mod runtime_tests;
 #[path = "storage/mod.rs"] mod store;
 #[path = "engine/tools/mod.rs"] mod tools;
-#[path = "api/ui_pages.rs"] mod ui_pages;
+#[path = "../crates/modules/webapp/host/ui_pages.rs"] mod ui_pages;
 use anyhow::{anyhow, Result};
 use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -109,7 +109,7 @@ use std::{
 use store::Store;
 use tokio::sync::{Mutex, RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 // Shared state stays at crate root so API and loop modules use one authority.

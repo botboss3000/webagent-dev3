@@ -26,7 +26,9 @@ mod administrator;
 mod model_catalog;
 #[path = "../../crates/modules/models/host/api/account_catalog.rs"]
 mod account_models;
+#[path = "../../crates/modules/webapp/host/agent_pages.rs"]
 mod agent_pages;
+#[path = "../../crates/modules/webapp/host/app_pages.rs"]
 mod app_pages;
 mod file_manager;
 mod build_dashboard;
@@ -200,10 +202,8 @@ pub(super) fn router(app: App) -> Router {
                 && app.store.loop_fresh(10).await.unwrap_or(false);
             (if healthy{StatusCode::OK}else{StatusCode::SERVICE_UNAVAILABLE},Json(json!({"ready":healthy,"catalog_version":app.abilities.version()})))
         }))
-        .route_service("/setup.html",ServeFile::new(format!("{ui}/setup.html")))
-        .route_service("/app",ServeFile::new(format!("{ui}/index.html")))
-        .route_service("/",ServeFile::new(format!("{ui}/index.html")))
-        .nest_service("/v3-ui",ServeDir::new(ui)).nest_service("/ui",ServeDir::new(shared))
+        .merge(webagent_webapp::pages::routes(std::path::Path::new(&ui)))
+        .nest_service("/ui",ServeDir::new(shared))
         .layer(middleware::from_fn_with_state(app.clone(), ui_pages::live_ui))
         .layer(DefaultBodyLimit::max(2*1024*1024))
         .layer(middleware::from_fn(diagnostics::http_errors))

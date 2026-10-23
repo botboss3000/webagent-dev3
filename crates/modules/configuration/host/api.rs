@@ -23,8 +23,7 @@ pub(crate) fn validate(id:&str,value:&Value)->Result<()> {
     if !value.is_object(){anyhow::bail!("Configuration must be an object");}
     match id{
         "app_settings"=>{crate::store::admin_encryption_enabled(value)?;
-            crate::api::pull_refresh_start_zone(value)?;
-            if let Some(dev)=value.get("development"){if !dev.is_object()||dev.get("live_ui_editing").is_some_and(|v|!v.is_boolean()){anyhow::bail!("Invalid development settings");}}
+            webagent_webapp::configuration::validate_app_settings(value)?;
         },
         "chat"=>{
             for key in ["max_file_size_mb","max_per_message"]{

@@ -3368,3 +3368,8 @@ impl webagent_manager::storage::RecordEffects for Store {
   Ok(())
  }
 }
+
+impl webagent_webapp::preferences::RecordCodec for Store {
+    fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {Store::encode_user_record(self,value)}
+    fn unseal(&self,value:&[u8])->Result<Value> {Store::unseal(self,value)}
+}
