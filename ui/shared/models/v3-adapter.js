@@ -133,6 +133,14 @@ export function createModelAdapter(request, agentId, onAssignment) {
           return {models:[],error:error.message||'Subscription model catalog unavailable'};
         }
       }
+      // Official catalog preview (2026-10-22); a supplied key always uses live discovery.
+      if(provider==='deepseek'&&!api_key?.trim())return {
+        models:[
+          {id:'deepseek-flash',name:'DeepSeek-V4.1-Flash',text_capable:true,image_capable:true,context:1048576,max_output:393216},
+          {id:'deepseek-v4-pro',name:'DeepSeek-V4-Pro',text_capable:true,image_capable:false,context:1048576,max_output:393216},
+        ],
+        preview:true,preview_message:'Current DeepSeek models. Enter an API key to confirm account access.',
+      };
       if(provider!=='webagent_catalog')return request('/models/discovery','POST',{provider,api_key});
       const choices=await accountChoices();
       return {models:[...(choices.available_platform_models||[]),...(choices.entries||[])].map(c=>({

@@ -1465,7 +1465,7 @@ export function mountModelTable(host, opts = {}) {
     const key = keyInput.value.trim();
     const base = urlInput.value.trim() || S.presets[S.currentProvider]?.base_url || '';
     const platformCatalog = userCatalog && S.currentProvider === 'webagent_catalog';
-    if (!isSubscriptionProvider() && !platformCatalog && !key) {
+    if (!isSubscriptionProvider() && !platformCatalog && provider !== 'deepseek' && !key) {
       setModelStatus('Enter an API key to see available models.');
       S.allModels = [];
       renderModelDropdown(modelSearch.value.toLowerCase());
@@ -1485,7 +1485,7 @@ export function mountModelTable(host, opts = {}) {
       }
       S.allModels = data.models || [];
       setModelStatus(data.preview
-        ? 'Current GPT-6 models. Connect ChatGPT to confirm account access.'
+        ? (data.preview_message || 'Current GPT-6 models. Connect ChatGPT to confirm account access.')
         : S.allModels.length ? (S.allModels.length + ' models available. Type to filter.')
         : isSubscriptionProvider() ? 'No models available for this ChatGPT account.' : 'No models available.');
       if (S.selectedModel) {
