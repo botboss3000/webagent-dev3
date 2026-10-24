@@ -721,7 +721,7 @@ async fn run_process() -> Result<()> {
     let notification_relay=tokio::spawn(api::notifications::service(app.clone()));
     let administrator_watch=tokio::spawn(administrator_services::watch(app.clone()));
     let shutdown = app.clone();
-    axum::serve(listener, router(app.clone()))
+    axum::serve(listener, router(app.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>())
         .with_graceful_shutdown(async move {
             let mut signal =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())

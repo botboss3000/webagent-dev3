@@ -3,6 +3,7 @@ use crate::*;
 use axum::{extract::Path, Extension, Json};
 pub(crate) async fn login(
     State(app): State<App>,
+    peer: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> std::result::Result<Response, ApiError> {
@@ -13,7 +14,10 @@ pub(crate) async fn login(
         &headers,
         &body,
         app.secure,
-        now(),
+        webagent_accounts::AdmissionContext {
+            now: now(),
+            client: throttle_client(&app, peer, &headers)?,
+        },
     )
     .await
     .map_err(Into::into)
@@ -25,6 +29,7 @@ pub(crate) async fn setup_status(State(app): State<App>) -> Api {
 }
 pub(crate) async fn setup_admin(
     State(app): State<App>,
+    peer: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> std::result::Result<Response, ApiError> {
@@ -35,7 +40,10 @@ pub(crate) async fn setup_admin(
         &headers,
         &body,
         app.secure,
-        now(),
+        webagent_accounts::AdmissionContext {
+            now: now(),
+            client: throttle_client(&app, peer, &headers)?,
+        },
     )
     .await
     .map_err(Into::into)
@@ -139,4 +147,23 @@ pub(crate) async fn diagnostics_browser_login(
     )
     .await
     .map_err(Into::into)
+}
+
+pub(crate) fn throttle_client(
+    app: &App,
+    peer: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    headers: &HeaderMap,
+) -> std::result::Result<std::net::IpAddr, ApiError> {
+    let settings = crate::store::read_app_settings(&app.store.root).map_err(|_| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Authentication configuration unavailable".into(),
+        )
+    })?;
+    webagent_accounts::client_ip(peer.map(|p| p.0 .0), headers, &settings).map_err(|_| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Client identity unavailable".into(),
+        )
+    })
 }

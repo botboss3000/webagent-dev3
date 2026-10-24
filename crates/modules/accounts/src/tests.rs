@@ -254,10 +254,37 @@ async fn shared_throttle_window() {
     let budget = LoginAttempts::default();
     let other = budget.clone();
     for _ in 0..5 {
-        assert!(budget.admit(100).await);
+        assert!(
+            budget
+                .admit(
+                    crate::Admission::Login,
+                    std::net::IpAddr::from([127, 0, 0, 1]),
+                    "member",
+                    100
+                )
+                .await
+        );
     }
-    assert!(!other.admit(159).await);
-    assert!(other.admit(160).await);
+    assert!(
+        !other
+            .admit(
+                crate::Admission::Login,
+                std::net::IpAddr::from([127, 0, 0, 1]),
+                "member",
+                159
+            )
+            .await
+    );
+    assert!(
+        other
+            .admit(
+                crate::Admission::Login,
+                std::net::IpAddr::from([127, 0, 0, 1]),
+                "member",
+                160
+            )
+            .await
+    );
 }
 #[test]
 fn registration_and_message_credentials_fail_closed() {
@@ -1031,9 +1058,7 @@ async fn native_authentication_controllers_keep_setup_policy_password_and_sessio
         &attempts,
         &headers,
         &json!({"username":"controller-owner","password":concat!("fixture-contr", "oller-password")}),
-        true,
-        100,
-    )
+        true, crate::AdmissionContext { now: 100, client: std::net::IpAddr::from([127,0,0,1]) })
     .await
     .unwrap();
     let (cookie, body) = controller_response(response).await;
@@ -1055,7 +1080,10 @@ async fn native_authentication_controllers_keep_setup_policy_password_and_sessio
         &headers,
         &json!({"password":concat!("another-fixt", "ure-password")}),
         true,
-        100,
+        crate::AdmissionContext {
+            now: 100,
+            client: std::net::IpAddr::from([127, 0, 0, 1]),
+        },
     )
     .await;
     assert!(matches!(
@@ -1094,9 +1122,7 @@ async fn native_authentication_controllers_keep_setup_policy_password_and_sessio
         &attempts,
         &headers,
         &json!({"username":"controller-owner","password":concat!("fixture-contr", "oller-password")}),
-        true,
-        101,
-    )
+        true, crate::AdmissionContext { now: 101, client: std::net::IpAddr::from([127,0,0,1]) })
     .await
     .unwrap();
     let (second_cookie, _) = controller_response(second).await;
@@ -1150,9 +1176,7 @@ async fn native_authentication_controllers_keep_setup_policy_password_and_sessio
             &attempts,
             &headers,
             &json!({"username":"controller-owner","password":concat!("fixture-contr", "oller-password")}),
-            true,
-            102
-        )
+            true, crate::AdmissionContext { now: 102, client: std::net::IpAddr::from([127,0,0,1]) })
         .await,
         Err(Error::Public(StatusCode::UNAUTHORIZED, _))
     ));
@@ -1163,7 +1187,10 @@ async fn native_authentication_controllers_keep_setup_policy_password_and_sessio
         &headers,
         &json!({"username":"controller-owner","password":concat!("next-control", "ler-password")}),
         true,
-        103,
+        crate::AdmissionContext {
+            now: 103,
+            client: std::net::IpAddr::from([127, 0, 0, 1]),
+        },
     )
     .await
     .unwrap();
@@ -1198,7 +1225,7 @@ async fn native_registration_controllers_keep_pending_activation_guest_recovery_
         .await
         .unwrap();
     let headers = HeaderMap::new();
-    let response=crate::registration_api::register(&repo,&host,&attempts,&headers,&json!({"username":"pending-member","password":concat!("fixture-mem", "ber-password"),"display_name":"Pending member"}),true,100).await.unwrap();
+    let response=crate::registration_api::register(&repo,&host,&attempts,&headers,&json!({"username":"pending-member","password":concat!("fixture-mem", "ber-password"),"display_name":"Pending member"}),true, crate::AdmissionContext { now: 100, client: std::net::IpAddr::from([127,0,0,1]) }).await.unwrap();
     let (pending_headers, pending) = controller_response(response).await;
     assert!(!pending_headers.contains_key("set-cookie"));
     assert_eq!(pending["pending_approval"], true);
@@ -1232,7 +1259,19 @@ async fn native_registration_controllers_keep_pending_activation_guest_recovery_
         .await,
         Err(Error::Public(StatusCode::CONFLICT, _))
     ));
-    let response=crate::registration_api::register(&repo,&host,&attempts,&headers,&json!({"username":"active-member","password":concat!("fixture-mem", "ber-password"),"role":"administrator"}),true,100).await.unwrap();
+    for _ in 0..5 {
+        assert!(
+            attempts
+                .admit(
+                    crate::Admission::Login,
+                    std::net::IpAddr::from([127, 0, 0, 1]),
+                    "active-member",
+                    100
+                )
+                .await
+        );
+    }
+    let response=crate::registration_api::register(&repo,&host,&attempts,&headers,&json!({"username":"active-member","password":concat!("fixture-mem", "ber-password"),"role":"administrator"}),true, crate::AdmissionContext { now: 100, client: std::net::IpAddr::from([127,0,0,1]) }).await.unwrap();
     let (member_headers, _) = controller_response(response).await;
     let member_token = controller_token(&member_headers);
     let member = repo
@@ -1247,9 +1286,19 @@ async fn native_registration_controllers_keep_pending_activation_guest_recovery_
             .unwrap()["role"],
         "user"
     );
-    let guest = crate::registration_api::guest_login(&repo, &host, &attempts, &headers, true, 100)
-        .await
-        .unwrap();
+    let guest = crate::registration_api::guest_login(
+        &repo,
+        &host,
+        &attempts,
+        &headers,
+        true,
+        crate::AdmissionContext {
+            now: 100,
+            client: std::net::IpAddr::from([127, 0, 0, 1]),
+        },
+    )
+    .await
+    .unwrap();
     let (first_headers, first) = controller_response(guest).await;
     let first_token = controller_token(&first_headers);
     let mut recovered_headers = HeaderMap::new();
@@ -1263,7 +1312,10 @@ async fn native_registration_controllers_keep_pending_activation_guest_recovery_
         &attempts,
         &recovered_headers,
         true,
-        100,
+        crate::AdmissionContext {
+            now: 100,
+            client: std::net::IpAddr::from([127, 0, 0, 1]),
+        },
     )
     .await
     .unwrap();
@@ -1287,8 +1339,18 @@ async fn native_registration_controllers_keep_pending_activation_guest_recovery_
         format!("v3_session={member_token}").parse().unwrap(),
     );
     assert!(matches!(
-        crate::registration_api::guest_login(&repo, &host, &attempts, &member_cookie, true, 100)
-            .await,
+        crate::registration_api::guest_login(
+            &repo,
+            &host,
+            &attempts,
+            &member_cookie,
+            true,
+            crate::AdmissionContext {
+                now: 100,
+                client: std::net::IpAddr::from([127, 0, 0, 1])
+            }
+        )
+        .await,
         Err(Error::Public(StatusCode::CONFLICT, _))
     ));
     assert_eq!(
@@ -1308,7 +1370,18 @@ async fn native_registration_controllers_keep_pending_activation_guest_recovery_
         .unwrap()
         .is_none());
     assert!(matches!(
-        crate::registration_api::guest_login(&repo, &host, &attempts, &headers, true, 100).await,
+        crate::registration_api::guest_login(
+            &repo,
+            &host,
+            &attempts,
+            &headers,
+            true,
+            crate::AdmissionContext {
+                now: 100,
+                client: std::net::IpAddr::from([127, 0, 0, 1])
+            }
+        )
+        .await,
         Err(Error::Public(StatusCode::FORBIDDEN, _))
     ));
 }
@@ -1359,11 +1432,46 @@ async fn cloned_login_budgets_share_the_existing_window() {
     let budget = LoginAttempts::default();
     let peer = budget.clone();
     for _ in 0..4 {
-        assert!(budget.admit(100).await);
+        assert!(
+            budget
+                .admit(
+                    crate::Admission::Login,
+                    std::net::IpAddr::from([127, 0, 0, 1]),
+                    "member",
+                    100
+                )
+                .await
+        );
     }
-    assert!(peer.admit(100).await);
-    assert!(!budget.admit(100).await);
-    assert!(!peer.admit(100).await);
+    assert!(
+        peer.admit(
+            crate::Admission::Login,
+            std::net::IpAddr::from([127, 0, 0, 1]),
+            "member",
+            100
+        )
+        .await
+    );
+    assert!(
+        !budget
+            .admit(
+                crate::Admission::Login,
+                std::net::IpAddr::from([127, 0, 0, 1]),
+                "member",
+                100
+            )
+            .await
+    );
+    assert!(
+        !peer
+            .admit(
+                crate::Admission::Login,
+                std::net::IpAddr::from([127, 0, 0, 1]),
+                "member",
+                100
+            )
+            .await
+    );
 }
 
 #[tokio::test]

@@ -4,24 +4,30 @@ use argon2::{password_hash::SaltString, Argon2, PasswordHash, PasswordHasher, Pa
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
-/// The host shares one budget across password login, public registration and guests.
-#[derive(Clone, Default)]
-pub struct LoginAttempts(Arc<Mutex<Vec<u64>>>);
-impl LoginAttempts {
-    pub async fn admit(&self, now: u64) -> bool {
-        let mut attempts = self.0.lock().await;
-        attempts.retain(|t| now.saturating_sub(*t) < 60);
-        if attempts.len() >= 5 {
-            return false;
-        }
-        attempts.push(now);
-        true
-    }
+static PASSWORD_WORK: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+static PASSWORD_PENDING: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::OnceLock::new();
+async fn password_work<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    let pending = PASSWORD_PENDING
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1024)))
+        .clone()
+        .try_acquire_owned()?;
+    let permit = PASSWORD_WORK
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(8)))
+        .clone()
+        .acquire_owned()
+        .await?;
+    // The blocking closure owns its permit even if the HTTP request is cancelled.
+    Ok(tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let _pending = pending;
+        work()
+    })
+    .await?)
 }
 pub async fn hash_password(password: String) -> Result<String> {
-    tokio::task::spawn_blocking(move || {
+    password_work(move || {
         Argon2::default()
             .hash_password(password.as_bytes(), &SaltString::generate(&mut OsRng))
             .map(|v| v.to_string())
@@ -30,14 +36,14 @@ pub async fn hash_password(password: String) -> Result<String> {
     .await?
 }
 pub async fn verify_password(hash: String, password: String) -> Result<bool> {
-    Ok(tokio::task::spawn_blocking(move || {
+    password_work(move || {
         PasswordHash::new(&hash).ok().is_some_and(|h| {
             Argon2::default()
                 .verify_password(password.as_bytes(), &h)
                 .is_ok()
         })
     })
-    .await?)
+    .await
 }
 pub fn message_api_token_hash(token: &str) -> Result<Option<[u8; 32]>> {
     if token.is_empty() {
@@ -126,12 +132,33 @@ impl VerifiedCredentials {
     }
 }
 
-impl LoginAttempts {
-    /// Read-only host diagnostics keep admission counters opaque to other domains.
-    pub async fn is_empty(&self) -> bool {
-        self.0.lock().await.is_empty()
-    }
-    pub fn shares_state_with(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(&self.0, &other.0)
+#[cfg(test)]
+mod password_work_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[tokio::test]
+    async fn blocking_password_work_is_bounded() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let mut jobs = Vec::new();
+        for _ in 0..24 {
+            let active = active.clone();
+            let peak = peak.clone();
+            jobs.push(tokio::spawn(async move {
+                password_work(move || {
+                    let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(count, Ordering::SeqCst);
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    active.fetch_sub(1, Ordering::SeqCst);
+                })
+                .await
+                .unwrap();
+            }));
+        }
+        for job in jobs {
+            job.await.unwrap();
+        }
+        assert!(peak.load(Ordering::SeqCst) <= 8);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
     }
 }

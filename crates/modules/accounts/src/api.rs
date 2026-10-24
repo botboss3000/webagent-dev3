@@ -95,7 +95,12 @@ pub async fn create_account<C: RecordCodec, H: Host>(
         return Err(invalid("Password must be 8-1024 characters"));
     }
     let hash = crate::hash_password(body.password).await.map_err(|error| {
-        if error.is::<tokio::task::JoinError>() {
+        if error.is::<tokio::sync::TryAcquireError>() {
+            Error::Public(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Password service busy; try again shortly".into(),
+            )
+        } else if error.is::<tokio::task::JoinError>() {
             invalid("Password hashing unavailable")
         } else {
             invalid("Password hashing failed")
@@ -168,4 +173,15 @@ pub async fn revoke_account_session<C: RecordCodec, H: Host>(
     )
     .await?;
     Ok(Json(json!({"revoked":true})))
+}
+
+pub(crate) fn password_error(error: anyhow::Error, message: &str) -> Error {
+    if error.is::<tokio::sync::TryAcquireError>() {
+        Error::Public(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Password service busy; try again shortly".into(),
+        )
+    } else {
+        Error::Public(StatusCode::BAD_REQUEST, message.into())
+    }
 }

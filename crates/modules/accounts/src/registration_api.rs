@@ -1,6 +1,6 @@
 //! Registration and persistent guest sign-in use the existing shared policy document.
 use super::{
-    authentication_api::{login, origin},
+    authentication_api::{login_admitted, origin},
     self_service::required,
 };
 use crate::{
@@ -59,8 +59,9 @@ pub async fn register<C: RecordCodec, H: Host>(
     headers: &HeaderMap,
     body: &Value,
     secure: bool,
-    now: u64,
+    request: crate::AdmissionContext,
 ) -> Result<Response, Error> {
+    let crate::AdmissionContext { now, client } = request;
     origin(headers, secure)?;
     if !repo.has_admin_account().await? {
         return Err(conflict("Complete administrator setup first"));
@@ -83,7 +84,10 @@ pub async fn register<C: RecordCodec, H: Host>(
             "Invalid registration input; password must be at least 8 characters",
         ));
     }
-    if !attempts.admit(now).await {
+    if !attempts
+        .admit(crate::Admission::Registration, client, "", now)
+        .await
+    {
         return Err(Error::Public(
             StatusCode::TOO_MANY_REQUESTS,
             "Try again in one minute".into(),
@@ -92,7 +96,12 @@ pub async fn register<C: RecordCodec, H: Host>(
     let hash = crate::hash_password(password.clone())
         .await
         .map_err(|error| {
-            if error.is::<tokio::task::JoinError>() {
+            if error.is::<tokio::sync::TryAcquireError>() {
+                Error::Public(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Password service busy; try again shortly".into(),
+                )
+            } else if error.is::<tokio::task::JoinError>() {
                 bad("Registration unavailable")
             } else {
                 bad("Password hashing failed")
@@ -113,14 +122,14 @@ pub async fn register<C: RecordCodec, H: Host>(
     }
     host.activate_registered_user(id).await?;
     drop(guard);
-    let mut response = login(
+    let mut response = login_admitted(
         repo,
         host,
         attempts,
         headers,
         &json!({"username":username,"password":password}),
         secure,
-        now,
+        request,
     )
     .await?;
     response
@@ -134,8 +143,9 @@ pub async fn guest_login<C: RecordCodec, H: Host>(
     attempts: &LoginAttempts,
     headers: &HeaderMap,
     secure: bool,
-    now: u64,
+    request: crate::AdmissionContext,
 ) -> Result<Response, Error> {
+    let crate::AdmissionContext { now, client } = request;
     origin(headers, secure)?;
     let _guard = host.gate().lock().await;
     if policy_mode(host)? != RegistrationMode::Open {
@@ -172,7 +182,10 @@ pub async fn guest_login<C: RecordCodec, H: Host>(
     let account = if let Some(account) = recovered {
         account
     } else {
-        if !attempts.admit(now).await {
+        if !attempts
+            .admit(crate::Admission::Guest, client, "", now)
+            .await
+        {
             return Err(Error::Public(
                 StatusCode::TOO_MANY_REQUESTS,
                 "Try again in one minute".into(),

@@ -21,6 +21,7 @@ async fn first_run_setup_is_single_claim_and_revokes_old_sessions() {
     );
     let response = setup_admin(
         State(app.clone()),
+        None,
         HeaderMap::new(),
         Json(json!({"username":"operator","password":"new-secret"})),
     )
@@ -34,6 +35,7 @@ async fn first_run_setup_is_single_claim_and_revokes_old_sessions() {
     );
     let repeated = setup_admin(
         State(app.clone()),
+        None,
         HeaderMap::new(),
         Json(json!({"username":"other","password":"another-secret"})),
     )
@@ -59,6 +61,7 @@ async fn first_run_setup_is_single_claim_and_revokes_old_sessions() {
     );
     let wrong = login(
         State(app.clone()),
+        None,
         HeaderMap::new(),
         Json(json!({"username":"admin","password":"new-secret"})),
     )
@@ -67,6 +70,7 @@ async fn first_run_setup_is_single_claim_and_revokes_old_sessions() {
     assert_eq!(wrong.0, StatusCode::UNAUTHORIZED);
     let valid = login(
         State(app.clone()),
+        None,
         HeaderMap::new(),
         Json(json!({"username":"operator","password":"new-secret"})),
     )
@@ -111,6 +115,7 @@ async fn account_panel_updates_profile_and_rotates_password_generation() {
     app.store.delete("admin").await.unwrap();
     setup_admin(
         State(app.clone()),
+        None,
         HeaderMap::new(),
         Json(json!({"username":"operator","password":"first-secret"})),
     )
@@ -118,6 +123,7 @@ async fn account_panel_updates_profile_and_rotates_password_generation() {
     .unwrap();
     let signed_in = login(
         State(app.clone()),
+        None,
         HeaderMap::new(),
         Json(json!({"username":"operator","password":"first-secret"})),
     )
@@ -185,6 +191,7 @@ async fn account_panel_updates_profile_and_rotates_password_generation() {
     assert_eq!(
         login(
             State(app.clone()),
+            None,
             HeaderMap::new(),
             Json(json!({"username":"operator","password":"first-secret"}))
         )
@@ -196,6 +203,7 @@ async fn account_panel_updates_profile_and_rotates_password_generation() {
     assert_eq!(
         login(
             State(app),
+            None,
             HeaderMap::new(),
             Json(json!({"username":"operator2","password":"second-secret"}))
         )
@@ -211,6 +219,7 @@ async fn sign_in_duration_and_session_revocation_use_the_app_store() {
     app.store.delete("admin").await.unwrap();
     setup_admin(
         State(app.clone()),
+        None,
         HeaderMap::new(),
         Json(json!({"username":"operator","password":"first-secret"})),
     )
@@ -237,6 +246,7 @@ async fn sign_in_duration_and_session_revocation_use_the_app_store() {
     .unwrap();
     let response = login(
         State(app.clone()),
+        None,
         HeaderMap::new(),
         Json(json!({"username":"operator","password":"first-secret"})),
     )

@@ -36,22 +36,46 @@ pub async fn login<C: RecordCodec, H: Host>(
     headers: &HeaderMap,
     body: &Value,
     secure: bool,
-    now: u64,
+    request: crate::AdmissionContext,
 ) -> Result<Response, Error> {
+    let crate::AdmissionContext { now, client } = request;
     origin(headers, secure)?;
     let username = required(body, "username", 128)?;
-    let password = required(body, "password", 1024)?;
-    if !attempts.admit(now).await {
+    required(body, "password", 1024)?;
+    if !attempts
+        .admit(crate::Admission::Login, client, username, now)
+        .await
+    {
         return Err(Error::Public(
             StatusCode::TOO_MANY_REQUESTS,
             "Try signing in again in one minute".into(),
         ));
     }
+    login_admitted(repo, host, attempts, headers, body, secure, request).await
+}
+// Registration has already passed its independent admission window.
+pub(crate) async fn login_admitted<C: RecordCodec, H: Host>(
+    repo: &Repository<'_, C>,
+    host: &H,
+    attempts: &LoginAttempts,
+    headers: &HeaderMap,
+    body: &Value,
+    secure: bool,
+    request: crate::AdmissionContext,
+) -> Result<Response, Error> {
+    let crate::AdmissionContext { now, client } = request;
+    let username = required(body, "username", 128)?;
+    let password = required(body, "password", 1024)?;
     let proof = repo
         .verify_credentials(username, password.into())
         .await
         .map_err(|error| {
-            if error.is::<tokio::task::JoinError>() {
+            if error.is::<tokio::sync::TryAcquireError>() {
+                Error::Public(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Password service busy; try again shortly".into(),
+                )
+            } else if error.is::<tokio::task::JoinError>() {
                 bad("Sign in unavailable")
             } else {
                 Error::Storage(error)
@@ -64,6 +88,7 @@ pub async fn login<C: RecordCodec, H: Host>(
     }
     repo.record_user_login(&proof.identity().user_id, now)
         .await?;
+    attempts.successful_login(client, username).await;
     let user = proof.identity().username.clone();
     let user_agent = headers
         .get("user-agent")
@@ -94,7 +119,7 @@ pub async fn setup_admin<C: RecordCodec, H: Host>(
     headers: &HeaderMap,
     body: &Value,
     secure: bool,
-    now: u64,
+    request: crate::AdmissionContext,
 ) -> Result<Response, Error> {
     origin(headers, secure)?;
     let username = body["username"].as_str().unwrap_or("admin").trim();
@@ -119,7 +144,7 @@ pub async fn setup_admin<C: RecordCodec, H: Host>(
     }
     let hash = crate::hash_password(password.into())
         .await
-        .map_err(|_| bad("Password hashing failed"))?;
+        .map_err(|error| crate::api::password_error(error, "Password hashing failed"))?;
     host.create_administrator(username, &hash, &uuid::Uuid::new_v4().to_string())
         .await?;
     login(
@@ -129,7 +154,7 @@ pub async fn setup_admin<C: RecordCodec, H: Host>(
         headers,
         &json!({"username":username,"password":password}),
         secure,
-        now,
+        request,
     )
     .await
 }

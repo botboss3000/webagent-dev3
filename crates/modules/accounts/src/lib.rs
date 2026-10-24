@@ -88,7 +88,7 @@ fn username_ok(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 pub use authentication::{
-    hash_password, message_api_authorized, message_api_token_hash, verify_password, LoginAttempts,
+    hash_password, message_api_authorized, message_api_token_hash, verify_password,
 };
 pub use sessions::IssuedSession;
 pub use sessions::{AuthenticatedSession, RegistrationMode};
@@ -121,3 +121,6 @@ pub mod browser_login_api;
 pub mod registration_api;
 pub mod self_service;
 pub use sessions::SessionCandidate;
+
+mod throttling;
+pub use throttling::{client_ip, Admission, AdmissionContext, LoginAttempts};

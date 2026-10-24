@@ -24,6 +24,7 @@ pub(crate) async fn set_mode(
 }
 pub(crate) async fn register(
     State(app): State<App>,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> std::result::Result<Response, ApiError> {
@@ -34,13 +35,17 @@ pub(crate) async fn register(
         &headers,
         &body,
         app.secure,
-        now(),
+        webagent_accounts::AdmissionContext {
+            now: now(),
+            client: crate::account_authentication::throttle_client(&app, peer, &headers)?,
+        },
     )
     .await
     .map_err(Into::into)
 }
 pub(crate) async fn guest_login(
     State(app): State<App>,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
 ) -> std::result::Result<Response, ApiError> {
     webagent_accounts::registration_api::guest_login(
@@ -49,7 +54,10 @@ pub(crate) async fn guest_login(
         &app.login_attempts,
         &headers,
         app.secure,
-        now(),
+        webagent_accounts::AdmissionContext {
+            now: now(),
+            client: crate::account_authentication::throttle_client(&app, peer, &headers)?,
+        },
     )
     .await
     .map_err(Into::into)
@@ -106,11 +114,11 @@ mod tests {
     #[tokio::test]
     async fn guest_cookie_rotates_and_policy_revokes_runtime_access() {
         let (_root, app) = crate::runtime_tests::fixture().await;
-        assert!(guest_login(State(app.clone()), HeaderMap::new())
+        assert!(guest_login(State(app.clone()), None, HeaderMap::new())
             .await
             .is_err());
         app.store.set_registration_policy("open").unwrap();
-        let response = guest_login(State(app.clone()), HeaderMap::new())
+        let response = guest_login(State(app.clone()), None, HeaderMap::new())
             .await
             .unwrap();
         let cookie = response.headers()["set-cookie"]
@@ -138,6 +146,7 @@ mod tests {
             .admitted());
         assert!(login(
             State(app.clone()),
+            None,
             HeaderMap::new(),
             Json(json!({"username":id,"password":"anything"}))
         )
@@ -145,7 +154,9 @@ mod tests {
         .is_err());
         let mut headers = HeaderMap::new();
         headers.insert("cookie", HeaderValue::from_str(&cookie).unwrap());
-        let rotated = guest_login(State(app.clone()), headers).await.unwrap();
+        let rotated = guest_login(State(app.clone()), None, headers)
+            .await
+            .unwrap();
         let next = rotated.headers()["set-cookie"]
             .to_str()
             .unwrap()
@@ -170,7 +181,7 @@ mod tests {
     #[tokio::test]
     async fn registration_defaults_pending_and_never_grants_admin() {
         let (_root, app) = crate::runtime_tests::fixture().await;
-        let response=register(State(app.clone()),HeaderMap::new(),Json(json!({"username":"new@example.test","password":"fixture-password","display_name":"New person"}))).await.unwrap();
+        let response=register(State(app.clone()), None,HeaderMap::new(),Json(json!({"username":"new@example.test","password":"fixture-password","display_name":"New person"}))).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert!(!response.headers().contains_key("set-cookie"));
         let account = app
@@ -184,6 +195,7 @@ mod tests {
         assert_eq!(account["tier_id"], "basic");
         assert!(register(
             State(app),
+            None,
             HeaderMap::new(),
             Json(json!({"username":"new@example.test","password":"fixture-password"}))
         )
@@ -196,6 +208,7 @@ mod tests {
         app.store.set_registration_policy("open").unwrap();
         let response = register(
             State(app.clone()),
+            None,
             HeaderMap::new(),
             Json(json!({"username":"second","password":"fixture-password"})),
         )

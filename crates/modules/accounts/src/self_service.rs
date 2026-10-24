@@ -114,7 +114,7 @@ pub async fn change_password<C: RecordCodec, H: Host>(
         current,
     )
     .await
-    .map_err(|_| bad("Password verification unavailable"))?;
+    .map_err(|error| crate::api::password_error(error, "Password verification unavailable"))?;
     if !valid {
         return Err(Error::Public(
             StatusCode::FORBIDDEN,
@@ -126,7 +126,7 @@ pub async fn change_password<C: RecordCodec, H: Host>(
         .ok_or_else(|| bad("Account unavailable"))?;
     let next_hash = crate::hash_password(next.into())
         .await
-        .map_err(|_| bad("Password hashing failed"))?;
+        .map_err(|error| crate::api::password_error(error, "Password hashing failed"))?;
     let _guard = host.gate().lock().await;
     repo.replace_user_password(
         id,

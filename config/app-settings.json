@@ -18,5 +18,10 @@
       "start_zone_px": 50,
       "_instructions": "Gesture start band measured in CSS pixels from the viewport top, inclusive. Nonnegative number; missing defaults to 50. The API rereads data/config/app-settings.json per request. Visible signed-in pages adopt changes within five seconds, or when returning to the page, without reload, compilation or server restart."
     }
+  },
+  "authentication": {
+    "trusted_proxy_ips": [],
+    "_instructions": "Exact socket peers permitted to forward Cloudflare CF-Connecting-IP, only with a matching x-webagent-client-proof header. proxy_header_sha256 is the SHA-256 hex digest of a random 32+ byte proof set by a Cloudflare request-header rule on this hostname and its login/register/guest-login/setup-admin endpoints only. Empty peers trust no proxy. Never store the raw proof here or expose it in responses. Reread per authentication request.",
+    "proxy_header_sha256": null
   }
 }
