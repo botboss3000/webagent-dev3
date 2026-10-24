@@ -76,6 +76,7 @@ const AUTOMATION_TOOLS: &[&str] = &[
     "remember_automation_state",
 ];
 /// The host executes this reviewed reducer; it never receives state paths or credentials.
+#[derive(Clone)]
 pub struct AutomationService {
     pub root: PathBuf,
     pub executable: PathBuf,
@@ -148,7 +149,11 @@ pub fn automation_service(root: &FsPath) -> Result<AutomationService> {
     automation_service_at(root, FsPath::new("/opt/v3/assets/artifacts"))
 }
 /// Keep the artifact registry explicit for private contract tests; callers never supply it through an API.
+mod automation_cache;
 fn automation_service_at(root: &FsPath, artifacts: &FsPath) -> Result<AutomationService> {
+    automation_cache::get(root, artifacts)
+}
+fn load_automation_service_at(root: &FsPath, artifacts: &FsPath) -> Result<AutomationService> {
     use std::os::unix::fs::PermissionsExt;
     let manifest: Value = serde_json::from_slice(&read(&root.join("plugin.json"), 64 * 1024)?)?;
     let declaration: Value =
@@ -430,7 +435,8 @@ pub mod native_automation_contract_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
     /// Build private interface inputs; this fixture asserts contracts, never a Cargo compilation proof.
-    pub fn fixture<H:crate::TestHost>() -> (tempfile::TempDir, Value, Vec<String>) {
+    pub fn fixture<H:crate::TestHost>() -> (tempfile::TempDir, Value, Vec<String>) { fixture_data() }
+    pub fn fixture_data() -> (tempfile::TempDir, Value, Vec<String>) {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         let tools: Vec<String> = AUTOMATION_TOOLS.iter().map(|v| (*v).to_owned()).collect();

@@ -8,6 +8,7 @@ use std::{
     process::Stdio,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+mod idle;
 const IDS: [&str; 2] = ["automation", "outbound_notifications"];
 // A bounded sealed namespace plus a bounded read page may appear in one response.
 const LIMIT: usize = 8 * 1024 * 1024;
@@ -372,12 +373,7 @@ pub(crate) fn available(id: &str) -> bool {
         None
     };
     let root = PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
-    std::fs::read(health_path(&root, id))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .is_some_and(|health| {
-            health_binding_current(&health, &gen, implementation.as_deref(), now())
-        })
+    idle::available(&health_path(&root, id), &gen, implementation.as_deref(), now())
 }
 /// Legacy package probes keep their existing activation-bound health format.
 fn mark_health(app: &App, id: &str, gen: &str, healthy: bool) -> Result<()> {
@@ -1301,7 +1297,7 @@ async fn package_service(app: App, id: &'static str) {
     let mut jobs = tokio::task::JoinSet::new();
     let mut inflight = std::collections::HashSet::new();
     let mut seen = std::collections::HashSet::new();
-    let mut last_started = HashMap::new();
+    let mut next_poll = HashMap::new();
     let mut last_dispatched_wake = HashMap::new();
     let mut wake_hints = crate::wake::subscribe();
     let mut last_probe = 0;
@@ -1365,7 +1361,7 @@ async fn package_service(app: App, id: &'static str) {
                     // A wake received during an in-flight reducer stays pending for
                     // that user. Same-second writes do not depend on polling recovery.
                     let hinted=id=="automation"&&last_dispatched_wake.get(&uid)!=Some(&wake_sequence);
-                    if !hinted && last_started.get(&uid) == Some(&now()) {
+                    if !hinted && next_poll.get(&uid).is_some_and(|deadline| tokio::time::Instant::now() < *deadline) {
                         continue;
                     }
                     if !inflight.insert(uid.clone()) {
@@ -1373,18 +1369,17 @@ async fn package_service(app: App, id: &'static str) {
                     }
                     let startup = !seen.contains(&uid);
                     cursor = cursor.wrapping_add(1);
-                    last_started.insert(uid.clone(), now());
                     last_dispatched_wake.insert(uid.clone(),wake_sequence);
                     jobs.spawn(async move {
-                        let success = tick_package(&user, id, startup).await.is_ok();
-                        (uid, success)
+                        let result = tick_package(&user, id, startup).await;
+                        (uid, result)
                     });
                 }
             }
         }
         tokio::select! {
             _=app.stop.cancelled()=>break,
-            result=jobs.join_next(),if !jobs.is_empty()=>if let Some(Ok((uid,success)))=result{inflight.remove(&uid);if success{seen.insert(uid);}else{tracing::warn!(module_id=id,"Optional module work deferred");}},
+            result=jobs.join_next(),if !jobs.is_empty()=>if let Some(Ok((uid,result)))=result{inflight.remove(&uid);let delay=result.as_ref().copied().unwrap_or(1000);next_poll.insert(uid.clone(),tokio::time::Instant::now()+Duration::from_millis(delay));if result.is_ok(){seen.insert(uid);}else{tracing::warn!(module_id=id,"Optional module work deferred");}},
             _=wake_hints.changed()=>{},
             _=tokio::time::sleep(Duration::from_secs(1))=>{},
         }
@@ -1427,19 +1422,19 @@ fn event_scan_cursor(id: &str, envelope: &Value, latest: i64) -> i64 {
     persisted.max(oldest_active.unwrap_or(latest))
 }
 
-pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<()> {
+pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u64> {
     if !available(id) {
-        return Ok(());
+        return Ok(15000);
     }
     let gen = generation(id)?;
     let _package_lease = package_lock(app, id, false)?;
     let _lock = host_lock(app, id)?;
     let installed = app.store.get(&format!("module_install:{id}")).await?;
     if !installed.is_some_and(|v| v["enabled"] == true && v["generation"] == gen) {
-        return Ok(());
+        return Ok(15000);
     }
     if id == "outbound_notifications" && !administrator(app).await {
-        return Ok(());
+        return Ok(15000);
     }
     let mut notes_by_agent=json!({});
     if id=="automation" {
@@ -1461,6 +1456,7 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<(
     let latest = app.store.notification_page(i64::MAX, 1).await?["latest_seq"]
         .as_i64()
         .unwrap_or(0);
+    if id == "automation" && idle::empty(&initial, latest, &gen) { return Ok(15000); }
     // A generation transition deactivates every retained subscription before tick.
     // It has no active consumer of pre-installation events.
     let cursor = if initial["generation"].is_string() && initial["generation"] != gen {
@@ -1557,7 +1553,7 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<(
         changes.sort_by_key(|v|v["version"].as_u64().unwrap_or(0));changes.truncate(128);
         notes_inputs[agent]=json!({"enabled":notes["settings"]["enabled"],"session_id":notes["session_id"],"changes":changes});
     }
-    perform(app,id,"tick",json!({"events":page["events"],"cursor":page["next_seq"],"pruned_through":page["pruned_through"],"event_page":page,"agent_settings":settings,"agent_allowed":allowed,"main_notes_agents":notes_inputs}),None,None,true,json!({"startup":startup,"event_scan_cursor":cursor})).await?;
+    let tick = perform(app,id,"tick",json!({"events":page["events"],"cursor":page["next_seq"],"pruned_through":page["pruned_through"],"event_page":page,"agent_settings":settings,"agent_allowed":allowed,"main_notes_agents":notes_inputs}),None,None,true,json!({"startup":startup,"event_scan_cursor":cursor})).await?;
     if id == "outbound_notifications" {
         let reserve = perform(
             app,
@@ -1624,7 +1620,7 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<(
         )
         .await?;
     }
-    Ok(())
+    Ok(if id == "automation" { idle::delay(&initial, &envelope, tick["result"]["next_deadline_ms"].as_u64(), now().saturating_mul(1000)) } else { 1000 })
 }
 fn copy_distribution(source: &FsPath, target: &FsPath) -> Result<()> {
     std::fs::create_dir(target)?;
