@@ -93,7 +93,7 @@ pub use authentication::{
 pub use sessions::IssuedSession;
 pub use sessions::{AuthenticatedSession, RegistrationMode};
 mod protection;
-pub use protection::{session_cookie, valid_csrf, valid_origin, BrowserLoginBridge};
+pub use protection::{session_cookie, session_token, valid_csrf, valid_origin, BrowserLoginBridge};
 
 mod bootstrap;
 

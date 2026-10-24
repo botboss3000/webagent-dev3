@@ -425,9 +425,7 @@ pub(super) async fn guest(
 }
 async fn source_valid(app: &App, doc: &Value) -> bool {
     match doc["auth_key"].as_str() {
-        Some(key) => app.store.get(key).await.ok().flatten().is_some_and(|a| {
-            a["generation"] == doc["generation"] && a["expires"].as_u64().unwrap_or(0) > now()
-        }),
+        Some(key) => app.store.accounts_repository().session_reference_live(key,doc["user_id"].as_str().unwrap_or("admin"),&doc["generation"],now()).await.unwrap_or(false),
         None => true,
     }
 }
@@ -924,7 +922,7 @@ mod tests {
             rate(&app).await.unwrap();
         }
         assert!(rate(&app).await.is_err());
-        assert!(app.login_attempts.lock().await.is_empty());
+        assert!(app.login_attempts.is_empty().await);
     }
     #[tokio::test]
     async fn guest_and_descriptor_fail_closed() {

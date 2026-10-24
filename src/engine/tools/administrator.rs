@@ -60,11 +60,9 @@ async fn browser_authority(app:&App,sid:&str)->Result<Value> {
             return Ok(old);
         }
     }
-    let token=uuid(); let expires=now()+600;
-    app.store.put(&format!("auth:{}",digest(&json!(token))),&json!({
-        "id":uuid(),"user":account["username"],"user_id":uid,"csrf":uuid(),
-        "generation":account["generation"],"created_at":now(),"expires":expires,
-        "user_agent":"V3 current-caller Administrator browser"})).await?;
+    let generation=account["generation"].as_str().ok_or_else(||anyhow!("Caller unavailable"))?;
+    let session=app.store.accounts_repository().issue_trusted_browser_session(uid,generation,now(),"V3 current-caller Administrator browser",600).await?;
+    let token=session.token;let expires=session.expires;
     let trusted=json!({"session_id":sid,"user_id":uid,"cookie":token,
         "expires_at":expires,"generation":account["generation"],"agent_id":session_agent_id(app,sid).await?,"allowed_session_ids":[sid]});
     app.store.put(&key,&trusted).await?;Ok(trusted)

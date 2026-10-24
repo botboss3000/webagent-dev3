@@ -147,13 +147,7 @@ pub async fn guest_login<C: RecordCodec, H: Host>(
     if !repo.has_admin_account().await? {
         return Err(conflict("Complete administrator setup first"));
     }
-    let old_token = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .split(';')
-        .find_map(|v| v.trim().strip_prefix("v3_session="))
-        .unwrap_or("");
+    let old_token = crate::session_token(headers);
     let mut recovered = None;
     if old_token.len() == 36 {
         if let Some(doc) = repo.auth_document(old_token).await? {

@@ -49,6 +49,17 @@ pub fn session_cookie(token: &str, duration: u64, secure: bool) -> String {
         if secure { "; Secure" } else { "" }
     )
 }
+/// Parse the established cookie name without exposing session storage details to hosts.
+pub fn session_token(headers: &axum::http::HeaderMap) -> &str {
+    headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .find_map(|v| v.trim().strip_prefix("v3_session="))
+        .unwrap_or("")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +87,20 @@ mod tests {
         assert!(!bridge.authorized(Some(&auth), "operator", true));
         assert!(!bridge.authorized(None, "operator", false));
         assert!(BrowserLoginBridge::configure("", "operator").is_err());
+    }
+    #[test]
+    fn session_cookie_parser_keeps_first_exact_name_and_rejects_invalid_header_text() {
+        use axum::http::{HeaderMap, HeaderValue};
+        let mut headers = HeaderMap::new();
+        assert_eq!(session_token(&headers), "");
+        headers.insert(
+            "cookie",
+            HeaderValue::from_static(
+                "other=value; v3_session_suffix=wrong; v3_session=first; v3_session=second",
+            ),
+        );
+        assert_eq!(session_token(&headers), "first");
+        headers.insert("cookie", HeaderValue::from_bytes(&[0xff]).unwrap());
+        assert_eq!(session_token(&headers), "");
     }
 }

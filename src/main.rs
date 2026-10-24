@@ -46,10 +46,13 @@ mod wake;
 mod session_naming;
 mod administrator_services;
 #[path = "api/browser_login.rs"] mod browser_login;
-#[path = "api/accounts.rs"] mod accounts;
+#[path = "../crates/modules/accounts/host/composition.rs"] mod accounts;
 #[path = "../crates/modules/accounts/host/registration.rs"] mod registration;
 #[path = "../crates/modules/accounts/host/repository.rs"] mod accounts_store;
 #[path = "../crates/modules/accounts/host/api.rs"] mod account_management;
+#[path = "../crates/modules/accounts/host/authentication.rs"] mod account_authentication;
+#[cfg(test)]
+#[path = "../crates/modules/accounts/host/acceptance_tests.rs"] mod account_acceptance_tests;
 #[path = "storage/cache.rs"] mod cache;
 #[path = "engine/context/compaction.rs"] mod context_compaction;
 mod attachments;
@@ -76,10 +79,6 @@ mod runtime_tests;
 #[path = "engine/tools/mod.rs"] mod tools;
 #[path = "../crates/modules/webapp/host/ui_pages.rs"] mod ui_pages;
 use anyhow::{anyhow, Result};
-use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2,
-};
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, Request},
     http::{HeaderMap, HeaderValue, StatusCode},
@@ -92,7 +91,6 @@ use axum::{
     Json, Router,
 };
 use fs2::FileExt;
-use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};

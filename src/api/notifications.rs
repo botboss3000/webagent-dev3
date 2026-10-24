@@ -197,13 +197,18 @@ async fn valid(app: &App, identity: &Value) -> bool {
     let Some(user) = identity["_user_id"].as_str() else {
         return false;
     };
-    let auth = app.store.get(key).await.ok().flatten();
+    let auth_live = if key.starts_with("notification_reader:") {
+        // Reader credentials retain their resource owner's lifecycle.
+        app.store.get(key).await.ok().flatten().is_some_and(|doc| {
+            doc["expires"].as_u64().unwrap_or(0)>now()
+                &&doc["generation"]==identity["generation"]
+                &&doc["user_id"].as_str().unwrap_or("admin")==user
+        })
+    } else {
+        app.store.accounts_repository().session_reference_live(key,user,&identity["generation"],now()).await.unwrap_or(false)
+    };
     let account = app.store.account_by_id(user).await.ok().flatten();
-    auth.as_ref().is_some_and(|doc| {
-        doc["expires"].as_u64().unwrap_or(0) > now()
-            && doc["generation"] == identity["generation"]
-            && doc["user_id"].as_str().unwrap_or("admin") == user
-    }) && account.as_ref().is_some_and(|account| {
+    auth_live && account.as_ref().is_some_and(|account| {
         account["generation"] == identity["generation"]
             && account["is_approved"] == true
             && access::Principal::from_account(account)

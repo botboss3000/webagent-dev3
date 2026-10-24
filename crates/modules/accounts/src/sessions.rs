@@ -188,9 +188,14 @@ impl<C: RecordCodec> Repository<'_, C> {
         if token.len() != 36 {
             return Ok(None);
         }
-        let key = auth_key(token);
+        self.inspect_session_key(&auth_key(token), now).await
+    }
+    async fn inspect_session_key(&self, key: &str, now: u64) -> Result<Option<SessionCandidate>> {
+        if !key.starts_with("auth:") {
+            return Ok(None);
+        }
         let blob: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(&key)
+            .bind(key)
             .fetch_optional(self.app_pool)
             .await?;
         let Some(blob) = blob else {
@@ -217,10 +222,27 @@ impl<C: RecordCodec> Repository<'_, C> {
         Ok(Some(SessionCandidate {
             identity,
             document,
-            key,
+            key: key.to_owned(),
             state: crate::access_records::state(&account),
             generation_matches,
         }))
+    }
+
+    /// Consumers retain resource authorization; Accounts owns browser-session liveness.
+    pub async fn session_reference_live(
+        &self,
+        key: &str,
+        user: &str,
+        generation: &Value,
+        now: u64,
+    ) -> Result<bool> {
+        let Some(candidate) = self.inspect_session_key(key, now).await? else {
+            return Ok(false);
+        };
+        if candidate.identity.user_id != user || &candidate.document["generation"] != generation {
+            return Ok(false);
+        }
+        Ok(candidate.finish().is_some())
     }
     pub async fn authenticate_session(
         &self,

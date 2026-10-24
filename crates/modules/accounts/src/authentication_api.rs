@@ -151,13 +151,7 @@ pub async fn logout<C: RecordCodec>(
     repo: &Repository<'_, C>,
     headers: &HeaderMap,
 ) -> Result<Response, Error> {
-    let token = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .split(';')
-        .find_map(|v| v.trim().strip_prefix("v3_session="))
-        .unwrap_or("");
+    let token = crate::session_token(headers);
     repo.logout(token).await?;
     let mut response = Json(json!({"ok":true})).into_response();
     response.headers_mut().insert(

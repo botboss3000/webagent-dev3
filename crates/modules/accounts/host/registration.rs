@@ -1,247 +1,58 @@
-//! V2 registration policy adapted to independent encrypted v3 accounts.
-//! Approval is not an entitlement: neither public signup nor approval grants tools.
-use super::*;
-use sqlx::Row;
-
+//! Thin registration adapters; Access continues to own the shared policy writer and page decisions.
+use crate::*;
+pub(crate) use access::configuration::{page_allowed, validate_configuration, validate_pages};
 pub(crate) async fn mode(app: &App) -> Result<String> {
     Ok(
-        if app.store.read_access_policy()?["registration"] == "open" {
-            "public_registered"
-        } else {
-            "admin_approval"
-        }
-        .into(),
+        webagent_accounts::RegistrationMode::from_policy(&app.store.read_access_policy()?)?
+            .access_mode_name()
+            .into(),
     )
 }
 pub(crate) async fn access_mode(State(app): State<App>) -> Api {
-    let policy = app.store.read_access_policy()?;
-    let open = policy["registration"] == "open";
-    Ok(Json(
-        json!({"access_mode":if open {"public_registered"} else {"admin_approval"}, "guest_access":open,"revision":policy["revision"].as_u64().unwrap_or(0)}),
-    ))
+    webagent_accounts::registration_api::access_mode(&app)
+        .await
+        .map_err(Into::into)
 }
 pub(crate) async fn set_mode(
     State(app): State<App>,
     axum::Extension(identity): axum::Extension<Value>,
     Json(body): Json<Value>,
 ) -> Api {
-    phase3_api::administrator(&app, &identity).await?;
-    let value = required(&body, "access_mode", 32)?;
-    if !matches!(value, "admin_approval" | "public_registered") {
-        return Err(bad("Invalid access mode"));
-    }
-    let _guard = app.gate.lock().await;
-    let expected = body["expected_revision"]
-        .as_u64()
-        .ok_or_else(|| bad("Expected policy revision required"))?;
-    app.store
-        .set_registration_policy_revision(
-            if value == "public_registered" {
-                "open"
-            } else {
-                "restricted"
-            },
-            Some(expected),
-        )
-        .map_err(|_| conflict("Policy save rejected; reload the current policy"))?;
-    Ok(Json(
-        json!({"access_mode":value,"guest_access":value=="public_registered"}),
-    ))
+    webagent_accounts::registration_api::set_mode(&app, &identity, &body)
+        .await
+        .map_err(Into::into)
 }
 pub(crate) async fn register(
     State(app): State<App>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> std::result::Result<Response, ApiError> {
-    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        let host = headers
-            .get("host")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if origin != format!("https://{host}") && (app.secure || origin != format!("http://{host}"))
-        {
-            return Err(bad("Invalid request origin"));
-        }
-    }
-    if !app.store.has_admin_account().await? {
-        return Err(conflict("Complete administrator setup first"));
-    }
-    let username = required(&body, "username", 128)?.to_owned();
-    let password = required(&body, "password", 1024)?.to_owned();
-    let display = body["display_name"]
-        .as_str()
-        .unwrap_or(&username)
-        .to_owned();
-    if password.len() < 8
-        || username.trim() != username
-        || username.chars().any(char::is_control)
-        || display.trim() != display
-        || display.is_empty()
-        || display.len() > 128
-        || display.chars().any(char::is_control)
-    {
-        return Err(bad(
-            "Invalid registration input; password must be at least 8 characters",
-        ));
-    }
-    // Bound expensive public password hashing, including rejected duplicate signups.
-    {
-        let mut attempts = app.login_attempts.lock().await;
-        attempts.retain(|t| now().saturating_sub(*t) < 60);
-        if attempts.len() >= 5 {
-            return Err(ApiError(
-                StatusCode::TOO_MANY_REQUESTS,
-                "Try again in one minute".into(),
-            ));
-        }
-        attempts.push(now());
-    }
-    let hash_password = password.clone();
-    let hash = tokio::task::spawn_blocking(move || {
-        Argon2::default()
-            .hash_password(hash_password.as_bytes(), &SaltString::generate(&mut OsRng))
-            .map(|hash| hash.to_string())
-    })
-    .await
-    .map_err(|_| bad("Registration unavailable"))?
-    .map_err(|_| bad("Password hashing failed"))?;
-    let _guard = app.gate.lock().await;
-    let public = mode(&app).await? == "public_registered";
-    let created = app
-        .store
-        .create_user_account(&username, &hash)
-        .await
-        .map_err(|_| conflict("Account creation rejected; username may already be registered"))?;
-    let id = created["user_id"]
-        .as_str()
-        .ok_or_else(|| bad("Account unavailable"))?;
-    app.store
-        .update_user_profile(id, &username, &display)
-        .await?;
-    if !public {
-        return Ok(Json(json!({"user_id":id,"username":username,"display_name":display,"pending_approval":true})).into_response());
-    }
-    let assignment = access::initial_user_access();
-    let role = serde_json::from_value(json!(assignment.role)).map_err(anyhow::Error::from)?;
-    app.store
-        .update_account_access(
-            id,
-            1,
-            access::AccountStatus::Active,
-            role,
-            assignment.tier_id,
-        )
-        .await?;
-    drop(_guard);
-    let mut response = login(
-        State(app),
-        headers,
-        Json(json!({"username":username,"password":password})),
+    webagent_accounts::registration_api::register(
+        &app.store.accounts_repository(),
+        &app,
+        &app.login_attempts,
+        &headers,
+        &body,
+        app.secure,
+        now(),
     )
-    .await?;
-    // Login owns cookie/CSRF issuance; no passwordless token or admin fallback.
-    response
-        .headers_mut()
-        .insert("cache-control", HeaderValue::from_static("no-store"));
-    Ok(response)
+    .await
+    .map_err(Into::into)
 }
-
-/// V3 uses an HttpOnly persistent cookie instead of V2's browser-local bearer.
-/// A valid existing guest session recovers the identity and rotates its token.
-/// Caller-supplied browser IDs are never accepted as proof of ownership.
 pub(crate) async fn guest_login(
     State(app): State<App>,
     headers: HeaderMap,
 ) -> std::result::Result<Response, ApiError> {
-    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        let host = headers
-            .get("host")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if origin != format!("https://{host}") && (app.secure || origin != format!("http://{host}"))
-        {
-            return Err(bad("Invalid request origin"));
-        }
-    }
-    let _guard = app.gate.lock().await;
-    if mode(&app).await? != "public_registered" {
-        return Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Guest access is not enabled".into(),
-        ));
-    }
-    if !app.store.has_admin_account().await? {
-        return Err(conflict("Complete administrator setup first"));
-    }
-    let old_token = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .split(';')
-        .find_map(|s| s.trim().strip_prefix("v3_session="))
-        .unwrap_or("");
-    let old_key = format!("auth:{}", digest(&json!(old_token)));
-    let mut recovered = None;
-    if old_token.len() == 36 {
-        if let Some(doc) = app.store.get(&old_key).await? {
-            if doc["expires"].as_u64().unwrap_or(0) > now() {
-                if let Some(id) = doc["user_id"].as_str() {
-                    if let Some(account) = app.store.account_by_id(id).await? {
-                        if account["role"] != "guest" {
-                            return Err(conflict("Sign out before using guest access"));
-                        }
-                        if account["generation"] == doc["generation"]
-                            && account["status"] == "active"
-                        {
-                            recovered = Some(account);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    let account = if let Some(account) = recovered {
-        account
-    } else {
-        let mut attempts = app.login_attempts.lock().await;
-        attempts.retain(|t| now().saturating_sub(*t) < 60);
-        if attempts.len() >= 5 {
-            return Err(ApiError(
-                StatusCode::TOO_MANY_REQUESTS,
-                "Try again in one minute".into(),
-            ));
-        }
-        attempts.push(now());
-        drop(attempts);
-        app.store.create_guest_account().await?
-    };
-    let token = uuid();
-    let csrf = uuid();
-    let duration = 30 * 86400;
-    app.store
-        .put(
-            &format!("auth:{}", digest(&json!(token))),
-            &json!({
-        "id":uuid(),"user":account["username"],"user_id":account["user_id"],
-        "generation":account["generation"],"csrf":csrf,"created_at":now(),
-        "user_agent":"Guest browser","expires":now()+duration}),
-        )
-        .await?;
-    if old_token.len() == 36 {
-        app.store.delete(&old_key).await?;
-    }
-    let mut response =
-        Json(json!({"csrf_token":csrf,"user_id":account["user_id"],"is_guest":true}))
-            .into_response();
-    response.headers_mut().insert(
-        "set-cookie",
-        HeaderValue::from_str(&format!(
-            "v3_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={duration}{}",
-            if app.secure { "; Secure" } else { "" }
-        ))
-        .map_err(|_| bad("Guest session unavailable"))?,
-    );
-    Ok(response)
+    webagent_accounts::registration_api::guest_login(
+        &app.store.accounts_repository(),
+        &app,
+        &app.login_attempts,
+        &headers,
+        app.secure,
+        now(),
+    )
+    .await
+    .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -409,8 +220,6 @@ mod tests {
             .admitted());
     }
 }
-
-pub(crate) use access::configuration::{page_allowed, validate_configuration, validate_pages};
 
 #[cfg(test)]
 mod advanced_policy_tests {

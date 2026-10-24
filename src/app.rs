@@ -19,7 +19,7 @@ struct App {
     slots: Arc<Semaphore>,
     ready: Arc<AtomicBool>,
     stop: CancellationToken,
-    login_attempts: Arc<Mutex<Vec<u64>>>,
+    login_attempts:webagent_accounts::LoginAttempts,
     control_dir: PathBuf,
     tool_socket: PathBuf,
     build_socket: PathBuf,
@@ -653,7 +653,7 @@ async fn run_process() -> Result<()> {
         slots: Arc::new(Semaphore::new(Semaphore::MAX_PERMITS)),
         ready: Arc::new(AtomicBool::new(false)),
         stop: CancellationToken::new(),
-        login_attempts: Arc::new(Mutex::new(Vec::new())),
+        login_attempts:webagent_accounts::LoginAttempts::default(),
         control_dir: PathBuf::from(
             std::env::var("V3_CONTROL_ROOT").unwrap_or_else(|_| "/run/v3/control".into()),
         ),
@@ -764,7 +764,7 @@ impl From<webagent_models::api::Error> for ApiError {
 
 // Root host state completes native adapters without teaching Engine authentication fields.
 #[derive(Clone)] struct EngineHostState {
- pub(crate) login_attempts:Arc<Mutex<Vec<u64>>>,pub(crate) promotion_socket:PathBuf,pub(crate) secure:bool,
+ pub(crate) login_attempts:webagent_accounts::LoginAttempts,pub(crate) promotion_socket:PathBuf,pub(crate) secure:bool,
  pub(crate) chat_ui_config_path:PathBuf,pub(crate) message_api_token_hash:Option<[u8;32]>,
  pub(crate) browser_login_bridge:Option<browser_login::Bridge>,
 }
@@ -812,6 +812,6 @@ mod engine_host_tests {
         assert!(reconstructed.chat_access.is_none());
         assert!(Arc::ptr_eq(&reconstructed.abilities, &current.abilities));
         assert!(Arc::ptr_eq(&reconstructed.runtime, &current.runtime));
-        assert!(Arc::ptr_eq(&reconstructed.login_attempts, &captured.login_attempts));
+        assert!(reconstructed.login_attempts.shares_state_with(&captured.login_attempts));
     }
 }

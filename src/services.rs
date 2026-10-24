@@ -39,9 +39,8 @@ pub(crate) async fn save_boot_orphan_resume(store:&Store,actor:&str,enabled:bool
     // Even an absent first-start row takes SQLite's writer lock before the read;
     // concurrent creators cannot both accept revision zero.
     sqlx::query("UPDATE docs SET value=value WHERE key=?").bind(CONFIG_KEY).execute(&mut *tx).await?;
-    let actor_blob:Vec<u8>=sqlx::query_scalar("SELECT value FROM user_accounts WHERE user_id=?")
-        .bind(actor).fetch_optional(&mut *tx).await?.ok_or_else(||anyhow!("Installation administrator required"))?;
-    let principal=Principal::from_account(&store.unseal(&actor_blob)?)?;
+    let actor_account=store.accounts_repository().account_state_in(&mut tx,actor).await?.ok_or_else(||anyhow!("Installation administrator required"))?;
+    let principal=Principal::from_account(&actor_account)?;
     if principal.user_id!=actor || !principal.administrator() {bail!("Installation administrator required");}
     let blob:Option<Vec<u8>>=sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
         .bind(CONFIG_KEY).fetch_optional(&mut *tx).await?;

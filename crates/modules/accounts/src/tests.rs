@@ -1558,3 +1558,79 @@ async fn initial_tier_repair_joins_transaction_and_preserves_identity_and_genera
         before["access_revision"].as_u64().unwrap() + 1
     );
 }
+
+#[tokio::test]
+async fn browser_session_references_keep_expiry_revocation_identity_and_namespace() {
+    let f = Fixture::new().await;
+    let id = f.active("reference-owner").await;
+    let repo = f.repo();
+    let first = repo
+        .fixture_session(&id, 100, "source browser")
+        .await
+        .unwrap();
+    let key = crate::sessions::auth_key(&first.token);
+    let generation = repo.account_state(&id).await.unwrap().unwrap()["generation"].clone();
+    assert!(repo
+        .session_reference_live(&key, &id, &generation, 100)
+        .await
+        .unwrap());
+    assert!(!repo
+        .session_reference_live(&key, "other", &generation, 100)
+        .await
+        .unwrap());
+    assert!(!repo
+        .session_reference_live(&key, &id, &json!("wrong-generation"), 100)
+        .await
+        .unwrap());
+    assert!(!repo
+        .session_reference_live(&key, &id, &generation, first.expires)
+        .await
+        .unwrap());
+    let doc = repo.auth_document(&first.token).await.unwrap().unwrap();
+    sqlx::query("INSERT INTO docs(key,value) VALUES('notification_reader:fixture',?)")
+        .bind(f.codec.seal(&doc).unwrap())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert!(!repo
+        .session_reference_live("notification_reader:fixture", &id, &generation, 100)
+        .await
+        .unwrap());
+    let mut account = repo.account_by_id(&id).await.unwrap().unwrap();
+    account["generation"] = json!("rotated-reference-generation");
+    f.save(&id, &account).await;
+    assert!(!repo
+        .session_reference_live(&key, &id, &generation, 100)
+        .await
+        .unwrap());
+    let next = repo
+        .fixture_session(&id, 100, "next browser")
+        .await
+        .unwrap();
+    let next_key = crate::sessions::auth_key(&next.token);
+    let next_generation = account["generation"].clone();
+    assert!(repo
+        .session_reference_live(&next_key, &id, &next_generation, 100)
+        .await
+        .unwrap());
+    repo.logout(&next.token).await.unwrap();
+    assert!(!repo
+        .session_reference_live(&next_key, &id, &next_generation, 100)
+        .await
+        .unwrap());
+    let disabled = repo
+        .fixture_session(&id, 100, "disabled browser")
+        .await
+        .unwrap();
+    account["status"] = json!("disabled");
+    f.save(&id, &account).await;
+    assert!(!repo
+        .session_reference_live(
+            &crate::sessions::auth_key(&disabled.token),
+            &id,
+            &next_generation,
+            100
+        )
+        .await
+        .unwrap());
+}
