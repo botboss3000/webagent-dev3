@@ -91,7 +91,7 @@ pub async fn create_account<C: RecordCodec, H: Host>(
     body: NewAccount,
 ) -> Api {
     host.administrator(identity).await?;
-    if body.password.len() < 8 || body.password.len() > 1024 {
+    if !crate::password_length_ok(&body.password) {
         return Err(invalid("Password must be 8-1024 characters"));
     }
     let hash = crate::hash_password(body.password).await.map_err(|error| {

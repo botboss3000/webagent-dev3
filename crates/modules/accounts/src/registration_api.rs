@@ -72,7 +72,7 @@ pub async fn register<C: RecordCodec, H: Host>(
         .as_str()
         .unwrap_or(&username)
         .to_owned();
-    if password.len() < 8
+    if !crate::password_length_ok(&password)
         || username.trim() != username
         || username.chars().any(char::is_control)
         || display.trim() != display

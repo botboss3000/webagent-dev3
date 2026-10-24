@@ -101,13 +101,29 @@ pub async fn change_password<C: RecordCodec, H: Host>(
     host: &H,
     doc: &Value,
     body: &Value,
+    attempts: &crate::LoginAttempts,
+    now: u64,
 ) -> Api {
     let current = required(body, "current_password", 1024)?.to_owned();
     let next = required(body, "new_password", 1024)?;
-    if next.len() < 6 {
-        return Err(bad("New password must be at least 6 characters"));
+    if !crate::password_length_ok(next) {
+        return Err(bad("New password must be at least 8 characters"));
     }
     let id = doc["_user_id"].as_str().unwrap_or("admin");
+    if !attempts
+        .admit(
+            crate::Admission::PasswordChange,
+            std::net::Ipv4Addr::UNSPECIFIED.into(),
+            id,
+            now,
+        )
+        .await
+    {
+        return Err(Error::Public(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Try again in one minute".into(),
+        ));
+    }
     let account = repo.account_by_id(id).await?.ok_or_else(sign_in)?;
     let valid = crate::verify_password(
         account["password_hash"].as_str().unwrap_or("").into(),

@@ -364,8 +364,8 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{id}/promotions/{request_id}/review", get(promotion_review))
         .route("/sessions/{id}/promotions/{request_id}", get(promotion_receipt))
         .route("/sessions/{id}/promotions/{request_id}/reject", post(promotion_reject))
-        .route("/messages",post(direct_message).layer(axum::extract::DefaultBodyLimit::disable()))
-        .route("/sessions/{id}/messages", post(send).layer(axum::extract::DefaultBodyLimit::disable()))
+        .route("/messages",post(direct_message).layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024)))
+        .route("/sessions/{id}/messages", post(send).layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024)))
         .route("/sessions/{id}/messages/{mid}/delivery", axum::routing::patch(followup_delivery))
         .route("/sessions/{id}/queue/resume", post(followup_resume))
         .route("/sessions/{id}/voice/route",post(voice_route).layer(axum::middleware::from_fn(crate::api::media_lane::limit)))
@@ -398,7 +398,7 @@ pub(crate) fn messaging_router() -> Router<App> {
     Router::new()
         .route("/sessions", post(create_session))
         .route("/sessions/{id}", get(snapshot))
-        .route("/sessions/{id}/messages", post(send).layer(axum::extract::DefaultBodyLimit::disable()))
+        .route("/sessions/{id}/messages", post(send).layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024)))
 }
 
 #[cfg(test)]mod embed_identity_compatibility_tests {
@@ -542,5 +542,22 @@ mod followup_route_tests {
         foreign.store = app.store.for_user("foreign_fixture").await.unwrap();
         assert_eq!(followup_delivery(Extension(foreign),Path((sid.clone(),mid)),Json(body)).await.status(),StatusCode::NOT_FOUND);
         assert_eq!(app.store.followup_queue(&sid).await.unwrap()["entries"][0]["status"],"pending");
+    }
+}
+
+#[cfg(test)]
+mod message_body_limit_tests {
+    use super::*;
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt;
+    #[tokio::test]
+    async fn oversized_messages_rejected_before_parsing_for_both_routers() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        for (route, uri) in [(router(), "/messages"), (router(), "/sessions/example/messages"), (messaging_router(), "/sessions/example/messages")] {
+            let request = Request::builder().method("POST").uri(uri).header("content-type", "application/json")
+                .body(Body::from(" ".repeat(2 * 1024 * 1024 + 1))).unwrap();
+            let response = route.layer(Extension(app.clone())).with_state(app.clone()).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        }
     }
 }

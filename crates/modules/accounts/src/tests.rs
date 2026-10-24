@@ -1163,7 +1163,33 @@ async fn native_authentication_controllers_keep_setup_policy_password_and_sessio
         .await
         .unwrap()
         .is_none());
-    assert_eq!(crate::self_service::change_password(&repo,&host,&doc,&json!({"current_password":"fixture-controller-password","new_password":"next-controller-password"})).await.unwrap().0["sign_in_required"],true);
+    let attempts = crate::LoginAttempts::default();
+    let invalid = json!({"current_password":concat!("wrong-", "fixture-value"),"new_password":concat!("next-", "controller-password")});
+    for _ in 0..5 {
+        assert!(matches!(
+            crate::self_service::change_password(&repo, &host, &doc, &invalid, &attempts, 100)
+                .await,
+            Err(crate::api::Error::Public(
+                axum::http::StatusCode::FORBIDDEN,
+                _
+            ))
+        ));
+    }
+    assert!(matches!(
+        crate::self_service::change_password(&repo, &host, &doc, &invalid, &attempts, 100).await,
+        Err(crate::api::Error::Public(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            _
+        ))
+    ));
+    assert!(matches!(
+        crate::self_service::change_password(&repo, &host, &doc, &invalid, &attempts, 160).await,
+        Err(crate::api::Error::Public(
+            axum::http::StatusCode::FORBIDDEN,
+            _
+        ))
+    ));
+    assert_eq!(crate::self_service::change_password(&repo,&host,&doc,&json!({"current_password":"fixture-controller-password","new_password":"next-controller-password"}), &crate::LoginAttempts::default(), 100).await.unwrap().0["sign_in_required"],true);
     assert!(repo
         .authenticate_session(&token, 101, RegistrationMode::Restricted)
         .await
@@ -1741,4 +1767,12 @@ async fn browser_session_references_keep_expiry_revocation_identity_and_namespac
         )
         .await
         .unwrap());
+}
+
+#[test]
+fn password_minimum_counts_characters_and_bounds_bytes() {
+    assert!(!crate::password_length_ok("short"));
+    assert!(!crate::password_length_ok(&"é".repeat(7)));
+    assert!(crate::password_length_ok(&"é".repeat(8)));
+    assert!(!crate::password_length_ok(&"x".repeat(1025)));
 }

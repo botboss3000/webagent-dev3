@@ -165,10 +165,11 @@ pub(super) async fn page(
     );
     Ok(response)
 }
-static EMBED_ATTEMPTS: std::sync::OnceLock<Mutex<HashMap<PathBuf, Vec<u64>>>> =
+static EMBED_ATTEMPTS: std::sync::OnceLock<Mutex<HashMap<(PathBuf, String, std::net::IpAddr, &'static str), Vec<u64>>>> =
     std::sync::OnceLock::new();
-async fn rate(app: &App) -> std::result::Result<(), ApiError> {
-    // Embed traffic must not exhaust native password-login throttling.
+async fn rate(app: &App, agent: &str, client: std::net::IpAddr, lane: &'static str) -> std::result::Result<(), ApiError> {
+    // Independent agent/client/operation windows cannot consume native login admission.
+    let key = (app.store.root.clone(), agent.to_owned(), client, lane);
     let mut roots = EMBED_ATTEMPTS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -177,13 +178,13 @@ async fn rate(app: &App) -> std::result::Result<(), ApiError> {
         attempts.retain(|t| now().saturating_sub(*t) < 60);
         !attempts.is_empty()
     });
-    if roots.len() >= 1024 && !roots.contains_key(&app.store.root) {
+    if roots.len() >= 16384 && !roots.contains_key(&key) {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "Try again in one minute".into(),
         ));
     }
-    let attempts = roots.entry(app.store.root.clone()).or_default();
+    let attempts = roots.entry(key).or_default();
     if attempts.len() >= 30 {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -209,7 +210,7 @@ async fn rate(app: &App) -> std::result::Result<(), ApiError> {
                 if let Some(key) = key {
                     app.store.delete(key).await?;
                 }
-            } else {
+            } else if doc["agent_id"].as_str() == Some(agent) {
                 retained += 1;
             }
         }
@@ -238,11 +239,11 @@ fn first_party(app: &App, headers: &HeaderMap) -> std::result::Result<(), ApiErr
 pub(super) async fn challenge(
     State(app): State<App>,
     Path(id): Path<String>,
+    peer: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Api {
     first_party(&app, &headers)?;
-    rate(&app).await?;
     let origin = required(&body, "origin", 256)?;
     let config = allowed(&app, &id, origin).await?;
     let proof = required(&body, "code_challenge", 43)?;
@@ -253,6 +254,8 @@ pub(super) async fn challenge(
     {
         return Err(bad("S256 challenge required"));
     }
+    let client = crate::account_authentication::throttle_client(&app, peer, &headers)?;
+    rate(&app, &id, client, "challenge").await?;
     let challenge = uuid();
     let expires = now() + 300;
     app.store.put(&format!("embed:challenge:{challenge}"),&json!({"challenge_key":format!("embed:challenge:{challenge}"),"agent_id":id,"origin":origin,"revision":config["revision"],"proof":proof,"expires":expires})).await?;
@@ -360,11 +363,11 @@ async fn issue(app: &App, doc: &Value, account: &Value) -> Api {
 }
 pub(super) async fn redeem(
     State(app): State<App>,
+    peer: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Api {
     first_party(&app, &headers)?;
-    rate(&app).await?;
     let id = required(&body, "challenge_id", 36)?;
     let verifier = required(&body, "code_verifier", 128)?;
     if verifier.len() < 43
@@ -387,6 +390,10 @@ pub(super) async fn redeem(
     if account["generation"] != doc["generation"] || !source_valid(&app, &doc).await {
         return Err(denied());
     }
+    let agent = doc["agent_id"].as_str().ok_or_else(denied)?;
+    allowed(&app, agent, doc["origin"].as_str().unwrap_or("")).await?;
+    let client = crate::account_authentication::throttle_client(&app, peer, &headers)?;
+    rate(&app, agent, client, "redeem").await?;
     let result = issue(&app, &doc, &account).await?;
     app.store.delete(&key).await?;
     Ok(result)
@@ -394,11 +401,11 @@ pub(super) async fn redeem(
 pub(super) async fn guest(
     State(app): State<App>,
     Path(id): Path<String>,
+    peer: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Api {
     first_party(&app, &headers)?;
-    rate(&app).await?;
     let origin = required(&body, "origin", 256)?;
     let _guard = app.gate.lock().await;
     let config = allowed(&app, &id, origin).await?;
@@ -408,6 +415,8 @@ pub(super) async fn guest(
     {
         return Err(denied());
     }
+    let client = crate::account_authentication::throttle_client(&app, peer, &headers)?;
+    rate(&app, &id, client, "guest").await?;
     let account = app.store.create_guest_account().await?;
     let user = account["user_id"].as_str().ok_or_else(denied)?;
     // Owner opt-in admits only a fresh guest as Caller. This does not change
@@ -694,11 +703,11 @@ mod tests {
             .await
             .is_err());
         let verifier = "fixture-verifier-abcdefghijklmnopqrstuvwxyz-0123456789";
-        let challenge=challenge(State(app.clone()),Path("shared_default".into()),HeaderMap::new(),Json(json!({"origin":"https://example.com","code_challenge":URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))}))).await.unwrap().0;
+        let challenge=challenge(State(app.clone()),Path("shared_default".into()),None, HeaderMap::new(),Json(json!({"origin":"https://example.com","code_challenge":URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))}))).await.unwrap().0;
         let id = challenge["challenge_id"].as_str().unwrap();
         assert!(redeem(
             State(app.clone()),
-            HeaderMap::new(),
+            None, HeaderMap::new(),
             Json(json!({"challenge_id":id,"code_verifier":verifier}))
         )
         .await
@@ -727,10 +736,10 @@ mod tests {
         )
         .await
         .is_err());
-        assert!(redeem(State(app.clone()),HeaderMap::new(),Json(json!({"challenge_id":id,"code_verifier":"wrong-verifier-abcdefghijklmnopqrstuvwxyz-0123456789"}))).await.is_err());
+        assert!(redeem(State(app.clone()),None, HeaderMap::new(),Json(json!({"challenge_id":id,"code_verifier":"wrong-verifier-abcdefghijklmnopqrstuvwxyz-0123456789"}))).await.is_err());
         let credential = redeem(
             State(app.clone()),
-            HeaderMap::new(),
+            None, HeaderMap::new(),
             Json(json!({"challenge_id":id,"code_verifier":verifier})),
         )
         .await
@@ -738,7 +747,7 @@ mod tests {
         .0;
         assert!(redeem(
             State(app.clone()),
-            HeaderMap::new(),
+            None, HeaderMap::new(),
             Json(json!({"challenge_id":id,"code_verifier":verifier}))
         )
         .await
@@ -919,10 +928,25 @@ mod tests {
     async fn embed_throttle_preserves_password_login_budget() {
         let (_root, app) = crate::runtime_tests::fixture().await;
         for _ in 0..30 {
-            rate(&app).await.unwrap();
+            rate(&app, "agent-a", "192.0.2.1".parse().unwrap(), "challenge").await.unwrap();
         }
-        assert!(rate(&app).await.is_err());
+        assert!(rate(&app, "agent-a", "192.0.2.1".parse().unwrap(), "challenge").await.is_err());
+        assert!(rate(&app, "agent-b", "192.0.2.1".parse().unwrap(), "challenge").await.is_ok());
+        assert!(rate(&app, "agent-a", "192.0.2.2".parse().unwrap(), "challenge").await.is_ok());
+        assert!(rate(&app, "agent-a", "192.0.2.1".parse().unwrap(), "guest").await.is_ok());
         assert!(app.login_attempts.is_empty().await);
+    }
+    #[tokio::test]
+    async fn malformed_challenges_do_not_spend_valid_admission() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        config_put(State(app.clone()), Extension(json!({"_user_id":"admin"})), Path("shared_default".into()),
+            Json(json!({"expected_revision":0,"config":{"enabled":true,"allowed_origins":["https://example.com"]}}))).await.unwrap();
+        for _ in 0..35 {
+            assert!(challenge(State(app.clone()), Path("shared_default".into()), None, HeaderMap::new(),
+                Json(json!({"origin":"https://example.com","code_challenge":"invalid"}))).await.is_err());
+        }
+        assert!(challenge(State(app), Path("shared_default".into()), None, HeaderMap::new(),
+            Json(json!({"origin":"https://example.com","code_challenge":"a".repeat(43)}))).await.is_ok());
     }
     #[tokio::test]
     async fn guest_and_descriptor_fail_closed() {
@@ -932,7 +956,7 @@ mod tests {
         assert!(guest(
             State(app.clone()),
             Path("shared_default".into()),
-            HeaderMap::new(),
+            None, HeaderMap::new(),
             Json(json!({"origin":"https://example.com"}))
         )
         .await
@@ -941,7 +965,7 @@ mod tests {
         assert!(guest(
             State(app.clone()),
             Path("shared_default".into()),
-            HeaderMap::new(),
+            None, HeaderMap::new(),
             Json(json!({"origin":"https://example.com"}))
         )
         .await
@@ -950,7 +974,7 @@ mod tests {
         let issued = guest(
             State(app.clone()),
             Path("shared_default".into()),
-            HeaderMap::new(),
+            None, HeaderMap::new(),
             Json(json!({"origin":"https://example.com"})),
         )
         .await

@@ -124,3 +124,8 @@ pub use sessions::SessionCandidate;
 
 mod throttling;
 pub use throttling::{client_ip, Admission, AdmissionContext, LoginAttempts};
+
+/// Apply one minimum to every password-creation path; the byte cap bounds hashing input.
+pub fn password_length_ok(value: &str) -> bool {
+    value.chars().count() >= 8 && value.len() <= 1024
+}

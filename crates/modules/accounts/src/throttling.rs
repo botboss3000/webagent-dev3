@@ -15,6 +15,7 @@ pub enum Admission {
     Login,
     Registration,
     Guest,
+    PasswordChange,
 }
 /// Connection identity and the host's admission clock belong to one request.
 #[derive(Clone, Copy)]
@@ -33,12 +34,21 @@ impl LoginAttempts {
             times.retain(|t| now.saturating_sub(*t) < 60);
             !times.is_empty()
         });
-        let lane = (kind, client, String::new());
+        let lane = (
+            kind,
+            client,
+            if kind == Admission::PasswordChange {
+                username.to_owned()
+            } else {
+                String::new()
+            },
+        );
         let account = (kind, client, username.to_owned());
         let cap = match kind {
             Admission::Login => 120,
             Admission::Registration => 10,
             Admission::Guest => 30,
+            Admission::PasswordChange => 5,
         };
         if windows.get(&lane).is_some_and(|v| v.len() >= cap)
             || (kind == Admission::Login && windows.get(&account).is_some_and(|v| v.len() >= 5))
@@ -180,6 +190,22 @@ mod tests {
             b.admit(Admission::Login, IpAddr::from([192, 0, 2, 4]), "next", 10)
                 .await
         );
+    }
+    #[tokio::test]
+    async fn password_changes_are_account_scoped_and_expire() {
+        let b = LoginAttempts::default();
+        let ip = IpAddr::from([0, 0, 0, 0]);
+        for _ in 0..5 {
+            assert!(b.admit(Admission::PasswordChange, ip, "alice", 100).await);
+        }
+        assert!(
+            !b.clone()
+                .admit(Admission::PasswordChange, ip, "alice", 159)
+                .await
+        );
+        assert!(b.admit(Admission::PasswordChange, ip, "bob", 159).await);
+        assert!(b.admit(Admission::Login, ip, "alice", 159).await);
+        assert!(b.admit(Admission::PasswordChange, ip, "alice", 160).await);
     }
     #[test]
     fn forwarded_identity_requires_explicit_socket_peer_trust() {

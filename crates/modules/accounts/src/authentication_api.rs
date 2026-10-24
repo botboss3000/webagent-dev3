@@ -132,8 +132,8 @@ pub async fn setup_admin<C: RecordCodec, H: Host>(
         return Err(bad("Invalid username"));
     }
     let password = required(body, "password", 1024)?;
-    if password.len() < 6 {
-        return Err(bad("Password must be at least 6 characters"));
+    if !crate::password_length_ok(password) {
+        return Err(bad("Password must be at least 8 characters"));
     }
     let _guard = host.gate().lock().await;
     if repo.has_admin_account().await? || repo.legacy_admin_exists().await? {

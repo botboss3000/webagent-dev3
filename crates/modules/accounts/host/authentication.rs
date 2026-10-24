@@ -119,6 +119,8 @@ pub(crate) async fn change_password(
         &app,
         &doc,
         &body,
+        &app.login_attempts,
+        now(),
     )
     .await
     .map_err(Into::into)

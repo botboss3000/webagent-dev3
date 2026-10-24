@@ -10,8 +10,8 @@ $('setup-form').addEventListener('submit', async event => {
   const password = $('password').value;
   const error = $('error-msg');
   error.style.display = 'none';
-  if (password.length < 6 || password !== $('confirm-password').value) {
-    error.textContent = password.length < 6 ? 'Password must be at least 6 characters.' : 'Passwords do not match.';
+  if (password.length < 8 || password !== $('confirm-password').value) {
+    error.textContent = password.length < 8 ? 'Password must be at least 8 characters.' : 'Passwords do not match.';
     error.style.display = 'block';
     return;
   }

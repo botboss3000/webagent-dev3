@@ -21,7 +21,7 @@
   },
   "authentication": {
     "trusted_proxy_ips": [],
-    "_instructions": "Exact socket peers permitted to forward Cloudflare CF-Connecting-IP, only with a matching x-webagent-client-proof header. proxy_header_sha256 is the SHA-256 hex digest of a random 32+ byte proof set by a Cloudflare request-header rule on this hostname and its login/register/guest-login/setup-admin endpoints only. Empty peers trust no proxy. Never store the raw proof here or expose it in responses. Reread per authentication request.",
+    "_instructions": "Exact socket peers permitted to forward Cloudflare CF-Connecting-IP, only with a matching x-webagent-client-proof header. proxy_header_sha256 is the SHA-256 hex digest of a random 32+ byte proof set by a Cloudflare request-header rule on this hostname and its login/register/guest-login/setup-admin and embed challenge/guest/redeem endpoints only. Empty peers trust no proxy. Never store the raw proof here or expose it in responses. Reread per authentication request.",
     "proxy_header_sha256": null
   }
 }
