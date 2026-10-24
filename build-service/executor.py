@@ -137,7 +137,8 @@ class Executor:
         if cap is not None and not self.resources.enabled:raise ValueError("Compiler cap requires enforced resource admission")
         admission_started=time.monotonic()
         self.resources.enter(name,job,phase,profile,kind,timeout=timeout,hard_cap=cap)
-        timeout=max(1,timeout-(time.monotonic()-admission_started));identity=None;success=False;diagnostic_complete=False;primary=False
+        admission_seconds=time.monotonic()-admission_started
+        timeout=max(1,timeout-admission_seconds);identity=None;success=False;diagnostic_complete=False;primary=False
         parent="webagent-build-"+self.config["instance"]+".slice"
         create=["docker","create","--name",name,"--cgroup-parent",parent,"--label","webagent.scheduler.instance="+self.config["instance"],"--label","webagent.scheduler.job="+jobhex,"--label","webagent.scheduler.phase="+phase,
             "--cap-drop","ALL","--security-opt","no-new-privileges","--pids-limit","256","--user",str(self.config["service_uid"])+":"+str(self.config["service_gid"]),
@@ -165,7 +166,17 @@ class Executor:
                 job.setdefault("compiler_cap_outcomes",[]).append({"phase":phase,"recipe":profile,"requested_bytes":cap,"observed_memory_max":observed["memory_max"],"observed_swap_max":observed["swap_max"],"container_id":identity,"outcome":"running"})
                 getattr(self.runner,"resource_progress",lambda _:None)(job)
             # Docker wait reports exit status as data. Logs and counters remain available afterward.
-            logs=self.runner.command(["docker","exec",name,*argv],timeout=timeout)
+            self.runner.job_context.observation_scope={"phase":phase,"recipe":profile,"kind":kind,
+                "target":job.get("test_filter")or("workspace"if "--workspace"in argv else phase),
+                "verification_id":job.get("active_verification",{}).get("id"),"admission_seconds":round(admission_seconds,3)}
+            try:
+                logs=self.runner.command(["docker","exec",name,*argv],timeout=timeout)
+            finally:
+                self.runner.job_context.observation_scope=None
+                observed=job.get("execution_observation")
+                if observed:
+                    job.setdefault("execution_history",[]).append({k:v for k,v in observed.items()if k!="events"})
+                    job["execution_history"]=job["execution_history"][-32:]
             self.persist_phase_log(job,logs)
             success=True;return logs
         except BaseException as error:
@@ -270,7 +281,16 @@ class Executor:
             stage="builder_create"
             self.runner.command(["docker","buildx","create","--name",name,"--driver","remote","docker-container://"+name],timeout=30)
             stage="builder_bootstrap";self.runner.command(["docker","buildx","inspect",name,"--bootstrap"],timeout=60)
-            stage="workload";self.runner.job_context.phase_container=name;yield name;success=True
+            stage="workload";self.runner.job_context.phase_container=name
+            self.runner.job_context.observation_scope={"phase":"package","recipe":profile,"kind":"package","target":role}
+            try:
+                yield name;success=True
+            finally:
+                self.runner.job_context.observation_scope=None
+                observed=job.get("execution_observation",{})
+                if observed.get("phase")=="package":
+                    job.setdefault("execution_history",[]).append({k:v for k,v in observed.items()if k!="events"})
+                    job["execution_history"]=job["execution_history"][-32:]
         except BaseException as error:
             primary=True;job.setdefault("package_failures",[]).append({"role":role,"stage":stage,"exception_type":type(error).__name__})
             getattr(self.runner,"resource_progress",lambda _:None)(job);raise
@@ -321,6 +341,11 @@ class Executor:
         root=Path(self.config["state_root"])/"checks"/job["job_id"]
         source=root/"empty-source";source.mkdir(parents=True,exist_ok=True)
         job["artifact_component"]="resource-probe:"+job["job_id"]
+        if job.get("check_task")=="execution_probe":
+            # Fixed, source-free acceptance of the actual docker-exec stream and libtest.
+            program="#[test] fn slow_observation_probe() { std::thread::sleep(std::time::Duration::from_secs(3)); }"
+            script="set -e\nprintf '%s' "+shlex.quote(program)+" > /output/observation.rs\nrustc --test /output/observation.rs -o /output/observation-test\ni=0; while [ $i -lt 8192 ]; do printf 'bounded observation output line 01234567890123456789012345678901234567890123456789\\n'; i=$((i+1)); done\n/output/observation-test --test-threads=1"
+            return self.phase(job,"test","test",source,root/"output",["sh","-c",script],"resource:execution-probe-v1",90)
         return self.phase(job,"compile_test","engine",source,root/"output",["sh","-c","rustc --version && sleep 30"],"resource:memory-probe-v1",90)
 
     @staticmethod

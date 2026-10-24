@@ -154,3 +154,10 @@ class FeatureProfileCLITests(unittest.TestCase):
         with patch("sys.argv",argv),patch.object(client,"call")as call,patch("sys.stderr",new=io.StringIO()):
             with self.assertRaises(SystemExit):client.main()
         call.assert_not_called()
+
+
+class CursorCliTests(unittest.TestCase):
+    def test_job_cursor_is_forwarded_without_mutating_work(self):
+        with patch.object(client,"call",return_value={}) as call, patch("sys.argv",["buildctl","job","job-1","--log-cursor","42"]), patch("sys.stdout",new_callable=io.StringIO):
+            self.assertEqual(client.main(),0)
+        call.assert_called_once_with("v3_worker_job",{"job_id":"job-1","log_cursor":42})

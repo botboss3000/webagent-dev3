@@ -624,3 +624,20 @@ class HostFocusedVerificationTests(unittest.TestCase):
         with patch.object(self.worker,"test_manifest",side_effect=ValueError("Invalid retained manifest")):
             with self.assertRaisesRegex(ValueError,"Invalid retained manifest"):self.worker.focused_tests(self.job,self.source/"v3",self.output,retained=self.output/"artifacts")
         self.assertEqual(self.job["focused_verification"]["status"],"failed");self.assertFalse(self.calls)
+
+class ExecutionObservationProbeTests(unittest.TestCase):
+    def test_probe_is_fixed_source_free_and_has_no_application_mount(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            worker=module.Executor(None,None,{"state_root":directory})
+            worker.phase=Mock(return_value="fixed proof")
+            job={"job_id":str(uuid.uuid4()),"check_task":"execution_probe"}
+            self.assertEqual(worker.probe(job),"fixed proof")
+            args=worker.phase.call_args.args
+            self.assertEqual(args[1:3],("test","test"))
+            self.assertEqual(list(args[3].iterdir()),[])
+            self.assertEqual(args[6],"resource:execution-probe-v1")
+            self.assertIn("rustc --test /output/observation.rs",args[5][2])
+            self.assertIn("--test-threads=1",args[5][2])
+            self.assertNotIn("/build/",args[5][2])
+            self.assertLessEqual(args[7],90)

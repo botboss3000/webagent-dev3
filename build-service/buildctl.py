@@ -144,6 +144,7 @@ def main():
     abandon.add_argument("task_id")
     job = commands.add_parser("job")
     job.add_argument("job_id")
+    job.add_argument("--log-cursor", type=int, help="Read only retained events after this job cursor")
     cancel = commands.add_parser("cancel", help="request targeted stop; deployment effects require reconciliation")
     cancel.add_argument("job_id")
     cancel.add_argument("--include-batch", action="store_true", help="explicitly stop every member of an admitted shared build")
@@ -214,7 +215,7 @@ def main():
     elif args.command == "review-leftover":
         result = call("v3_build_leftover_review", {"notice_id": args.notice_id})
     elif args.command == "job":
-        result = call("v3_worker_job", {"job_id": args.job_id})
+        result = call("v3_worker_job", {"job_id": args.job_id, **({"log_cursor": args.log_cursor} if args.log_cursor is not None else {})})
     else:
         arguments = {"action": args.command}
         if args.command in ("begin", "finish", "abandon", "preflight", "decide"):

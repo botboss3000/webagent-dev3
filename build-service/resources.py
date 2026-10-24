@@ -455,6 +455,8 @@ class Resources:
                         sampled=self.clock()
                         if previous and sampled>previous["at"]:
                             result["cpu_percent"]=round(max(0,result["cpu_usec"]-previous["cpu_usec"])/(sampled-previous["at"])/10000,1)
+                        result["sampled_at"]=time.time()
+                        result["sample_interval_seconds"]=round(sampled-previous["at"],3)if previous and sampled>previous["at"]else None
                         row["last_sample"]={"at":sampled,"cpu_usec":result["cpu_usec"]};row["metrics"]=result
                         if result["frozen"]and row["state"]=="running":
                             row.update(state="waiting_intervention",paused_at=sampled,reason="Unconfirmed control outcome; explicit resume or cancellation required",revision=row.get("revision",0)+1)

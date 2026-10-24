@@ -1678,3 +1678,195 @@ class ExternalDefaultRoutingTests(unittest.TestCase):
    for evidence in (False,set(),{"v3/docs/note.md"}):
     with self.subTest(name=name,evidence=evidence):
      self.assertEqual(self.route_default(name,evidence),"build_deploy")
+
+class CommandObservationTests(unittest.TestCase):
+ def test_stream_redaction_all_byte_boundaries(self):
+  host=fixtures.host
+  value='synthetic-'+'credential-value'
+  text=('hello π🙂\n'+'author'+'ization: Bear'+'er '+value+'\n'+'pass'+'word='+value+'\n'+'ending '+value).encode()
+  for split in range(len(text)+1):
+   out=[];parser=host.CommandOutput([value],out.append)
+   parser.feed(text[:split]);parser.feed(text[split:]);parser.feed(final=True)
+   result=''.join(out)
+   self.assertNotIn(value,result);self.assertIn('π🙂',result)
+  out=[];parser=host.CommandOutput([value],out.append)
+  for byte in text:parser.feed(bytes([byte]))
+  parser.feed(final=True);self.assertNotIn(value,''.join(out))
+
+ def test_multiline_and_overlong_records_never_publish_partial_values(self):
+  host=fixtures.host;out=[];value='first-fragment\n'+'second-fragment'
+  parser=host.CommandOutput([value],out.append)
+  for data in [b'first-frag',b'ment\nsecond-',b'fragment\n']:
+   parser.feed(data)
+  self.assertNotIn('first-fragment',''.join(out));self.assertNotIn('second-fragment',''.join(out))
+  out.clear();parser=host.CommandOutput([],out.append)
+  parser.feed(('x'*20000+'author'+'ization:\n').encode());parser.feed(b'fixture-hidden\n')
+  self.assertNotIn('fixture-hidden',''.join(out));self.assertLessEqual(len(parser.pending),parser.limit)
+  out.clear();parser=host.CommandOutput([],out.append)
+  parser.feed(('author'+'ization:\n').encode());parser.feed(b'fixture-hidden\n')
+  self.assertNotIn('fixture-hidden',''.join(out))
+
+ def test_unfinished_record_is_withheld_until_final_flush(self):
+  out=[];parser=fixtures.host.CommandOutput([],out.append)
+  parser.feed(b'finished without newline');self.assertEqual(out,[])
+  parser.feed(final=True);self.assertEqual(out,['finished without newline'])
+
+ def test_bounded_events_heartbeat_and_observed_slow_test(self):
+  import threading
+  clock=[100.0];wall=[1000.0];saved=[];job={'job_id':str(uuid.uuid4())}
+  runner=types.SimpleNamespace(secrets=[],job_context=threading.local(),resource_progress=lambda j:saved.append(json.loads(json.dumps(j))))
+  observer=fixtures.host.CommandObservation(runner,job,{'phase':'test','recipe':'fixed-test','kind':'test'},123,lambda:clock[0],lambda:wall[0])
+  observer.flush();observer.feed(b'test fixture::slow ... ')
+  clock[0]+=65;wall[0]+=65;observer.flush()
+  self.assertEqual(job['execution_observation']['test_progress']['active']['observed_seconds'],65)
+  observer.feed(b'ok\n');observer.flush(final=True,outcome='completed')
+  result=job['execution_observation'];self.assertEqual(result['test_progress']['completed'],1)
+  self.assertEqual(result['test_progress']['slowest'][0]['seconds'],65)
+  self.assertEqual(result['state'],'terminal');self.assertEqual(result['heartbeat_at'],1065)
+  for _ in range(100):observer.feed(b'x'*4095+b'\n')
+  observer.flush(final=True,outcome='completed')
+  self.assertLessEqual(len(job['execution_observation']['events']),32)
+  self.assertGreater(job['execution_observation']['events'][0]['cursor'],1)
+
+ def test_resource_pause_and_sampling_are_observational(self):
+  import threading
+  clock=[100.0];job={'job_id':str(uuid.uuid4())}
+  resources=types.SimpleNamespace(lock=threading.RLock(),rows={'phase':{'state':'parked','container_id':'a'*64,'metrics':{'sampled_at':900,'memory':1024}}},elapsed_pause=lambda _:5)
+  context=threading.local();context.phase_container='phase'
+  runner=types.SimpleNamespace(secrets=[],job_context=context,resources=resources)
+  observer=fixtures.host.CommandObservation(runner,job,{'phase':'compile_test','recipe':'fixed'},123,lambda:clock[0],lambda:1000)
+  clock[0]+=10;observer.flush()
+  result=job['execution_observation'];self.assertEqual(result['state'],'paused')
+  self.assertEqual(result['paused_seconds'],5);self.assertEqual(result['execution_seconds'],5)
+  self.assertEqual(result['container_id'],'a'*64)
+
+ def test_real_command_streams_before_exit_and_private_output_is_absent(self):
+  import threading,sys
+  host=fixtures.host
+  with tempfile.TemporaryDirectory()as directory:
+   runner=host.Runner(directory);job={'job_id':str(uuid.uuid4())};seen=[]
+   runner.resource_progress=lambda j:seen.append((time.monotonic(),json.loads(json.dumps(j))))
+   runner.job_context.job=job;runner.job_context.observation_scope={'phase':'test','recipe':'fixture','kind':'test'}
+   runner.command([sys.executable,'-c','import time; print("visible",flush=True); time.sleep(2.3); print("done")'])
+   last=seen[-1][0]
+   self.assertTrue(any('visible' in str(row['execution_observation'].get('events')) and at<last-.1 for at,row in seen))
+   self.assertEqual(job['execution_observation']['outcome'],'completed')
+   seen.clear()
+   runner.command([sys.executable,'-c','print("private fixture")'],private_raw=True)
+   self.assertEqual(seen,[])
+   with self.assertRaisesRegex(RuntimeError,'fixed private command failed')as caught:
+    runner.command([sys.executable,'-c','import sys; print("private fixture"); sys.exit(1)'],private_raw=True)
+   self.assertNotIn('private fixture',str(caught.exception))
+
+ def test_timeout_cancel_and_reporting_failure_preserve_execution(self):
+  import sys
+  host=fixtures.host
+  with tempfile.TemporaryDirectory()as directory:
+   runner=host.Runner(directory);job={'job_id':str(uuid.uuid4())}
+   runner.job_context.job=job;runner.job_context.observation_scope={'phase':'test','recipe':'fixture','kind':'test'}
+   with self.assertRaises(TimeoutError):runner.command([sys.executable,'-c','import time; time.sleep(5)'],timeout=.1)
+   self.assertEqual(job['execution_observation']['outcome'],'timed_out')
+   runner.cancel.set()
+   with self.assertRaises(PermissionError):runner.command([sys.executable,'-c','import time; time.sleep(5)'])
+   self.assertEqual(job['execution_observation']['outcome'],'cancelled')
+   runner.cancel.clear()
+   def unavailable(_):raise OSError('fixture persistence failure')
+   runner.resource_progress=unavailable
+   self.assertIn('survives',runner.command([sys.executable,'-c','print("survives")']))
+   self.assertEqual(job['execution_observation']['reporting'],'unavailable')
+
+
+class ObservationAuthorizationTests(MaintenanceTests):
+ def install_job(self):
+  job={'job_id':str(uuid.uuid4()),'status':'completed','phase':'done','operation':'check',
+       'user_id':'codex-local','workspace':self.sid,'created_at':time.time(),'request_key':uuid.uuid4().hex,
+       'execution_observation':{'heartbeat_at':time.time()-30,'next_cursor':4,'events':[
+          {'cursor':3,'at':1000,'text':'third\n'},{'cursor':4,'at':1001,'text':'fourth\n'}]}}
+  self.broker.jobs[job['job_id']]=job;self.broker._save(job);return job
+ def test_cursor_authorization_gaps_and_restart(self):
+  job=self.install_job();args={'job_id':job['job_id'],'log_cursor':0}
+  result=self.call('v3_worker_job',args)['execution_observation']
+  self.assertTrue(result['log_read']['gap']);self.assertTrue(result['stale'])
+  args['log_cursor']=4
+  self.assertEqual(self.call('v3_worker_job',args)['execution_observation']['log_read']['events'],[])
+  with self.assertRaises(ValueError):self.call('v3_worker_job',args,{**self.trusted,'user_id':'other'})
+  for invalid in (-1,True,'4',2**63):
+   with self.assertRaises(ValueError):self.call('v3_worker_job',{**args,'log_cursor':invalid})
+  self.broker.shutdown();self.broker=fixtures.host.Broker(self.state,self.runner)
+  result=self.call('v3_worker_job',{'job_id':job['job_id'],'log_cursor':2})
+  self.assertEqual([e['cursor']for e in result['execution_observation']['log_read']['events']],[3,4])
+  self.assertEqual(result['execution_observation']['state'],'terminal')
+ def test_concurrent_readers_do_not_consume_each_others_cursor(self):
+  from concurrent.futures import ThreadPoolExecutor
+  job=self.install_job()
+  with ThreadPoolExecutor(max_workers=8)as pool:
+   results=list(pool.map(lambda _:self.call('v3_worker_job',{'job_id':job['job_id'],'log_cursor':3}),range(64)))
+  self.assertTrue(all([e['cursor']for e in r['execution_observation']['log_read']['events']]==[4]for r in results))
+
+ def test_running_restart_retains_cursor_and_never_replays(self):
+  job=self.install_job();job["status"]="running";self.broker._save(job)
+  self.broker.shutdown();self.broker=fixtures.host.Broker(self.state,self.runner)
+  result=self.call('v3_worker_job',{'job_id':job['job_id'],'log_cursor':4})
+  self.assertEqual(result['status'],'interrupted')
+  self.assertEqual(result['execution_state'],'terminal')
+  self.assertEqual(result['execution_observation']['log_read']['events'],[])
+
+ def test_wait_state_and_expired_authority(self):
+  job=self.install_job();job['status']='running';job['resource_waiting']={'state':'waiting','since':time.time(),'phase':'test'}
+  result=self.call('v3_worker_job',{'job_id':job['job_id'],'log_cursor':0})
+  self.assertEqual(result['execution_state'],'resource_waiting')
+  self.assertEqual(result['execution_observation']['state'],'resource_waiting')
+  with self.assertRaises(ValueError):
+   self.call('v3_worker_job',{'job_id':job['job_id'],'log_cursor':0},{**self.trusted,'lease_until':0})
+
+ def test_actual_phase_precedes_first_command_and_unknown_is_explicit(self):
+  job=self.install_job();job.pop('execution_observation');job['status']='running'
+  result=self.call('v3_worker_job',{'job_id':job['job_id'],'log_cursor':0})
+  self.assertEqual(result['execution_state'],'unavailable')
+  job['active_verification']={'id':'bounded-check','phase':'compile_test'}
+  result=self.call('v3_worker_job',{'job_id':job['job_id'],'log_cursor':0})
+  self.assertEqual(result['phase'],'compile_test')
+  self.assertEqual(result['execution_state'],'preparing')
+  self.assertEqual(result['execution_observation']['reporting'],'unavailable')
+
+ def test_cursor_poll_does_not_repeat_legacy_log_or_load_queue_archives(self):
+  job=self.install_job();job['log']='retained terminal log'
+  with patch.object(self.broker,'_queue_preflight',side_effect=AssertionError('cursor poll must not inspect archives')):
+   result=self.call('v3_worker_job',{'job_id':job['job_id'],'log_cursor':4})
+  self.assertNotIn('log',result);self.assertTrue(result['legacy_log_omitted'])
+  self.assertEqual(self.call('v3_worker_job',{'job_id':job['job_id']})['log'],'retained terminal log')
+
+
+class CommandReturnBoundaryTests(unittest.TestCase):
+ def test_unobserved_protocol_and_binary_exports_keep_their_output_contract(self):
+  import sys,io
+  with tempfile.TemporaryDirectory()as directory:
+   runner=fixtures.host.Runner(directory)
+   self.assertEqual(runner.command([sys.executable,'-c','print("x"*20000)']),"x"*20000+"\n")
+   runner.job_context.job={'job_id':str(uuid.uuid4())}
+   runner.job_context.observation_scope={'phase':'test','recipe':'fixture','kind':'test'}
+   out=io.BytesIO()
+   runner.command([sys.executable,'-c','import sys; sys.stdout.buffer.write(bytes([255])*100)'],output_file=out)
+   self.assertEqual(out.getvalue(),bytes([255])*100)
+   self.assertNotIn('execution_observation',runner.job_context.job)
+
+ def test_active_test_identity_cannot_disclose_a_secret_prefix(self):
+  import threading
+  runner=types.SimpleNamespace(secrets=['fixture::slow '+'... ok'],job_context=threading.local())
+  job={};observer=fixtures.host.CommandObservation(runner,job,{'phase':'test','recipe':'fixed','kind':'test'},123)
+  observer.feed(b'test namespace::fixture::slow ... ')
+  self.assertIsNone(observer.active)
+  self.assertNotIn('fixture::slow',json.dumps(job))
+  observer.feed(b'ok\n');observer.flush(final=True,outcome='completed')
+  self.assertNotIn('fixture::slow',json.dumps(job))
+
+ def test_active_name_inspection_does_not_consume_sensitive_continuation(self):
+  import threading
+  runner=types.SimpleNamespace(secrets=[],job_context=threading.local())
+  job={};observation=fixtures.host.CommandObservation(runner,job,{'phase':'test','kind':'test','recipe':'fixture'},1)
+  observation.feed(('token'+'=\n').encode())
+  observation.feed(b'test namespace::fixture ... ')
+  self.assertIsNone(observation.active)
+  self.assertTrue(observation.parser.sensitive_continuation)
+  observation.feed(b'ok\n');observation.flush(final=True,outcome='completed')
+  self.assertNotIn('namespace::fixture',json.dumps(job))

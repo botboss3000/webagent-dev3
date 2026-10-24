@@ -337,6 +337,161 @@ def scrub(text, secrets=()):
     return text[-MAX_LOG:]
 
 
+class CommandOutput:
+    """Frame before redacting: incomplete or overlong lines never reach readers."""
+    limit = 16384
+
+    def __init__(self, secrets, emit):
+        import codecs
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self.secrets = secrets
+        self.emit = emit
+        self.pending = ""
+        self.dropping = False
+        self.sensitive_continuation = False
+
+    def clean(self, line):
+        # Splitting a known multiline value must not disclose its individual lines.
+        fragments = [part for value in self.secrets if len(value) >= 4
+                     for part in value.splitlines() if part]
+        for value in sorted(set(fragments), key=len, reverse=True):
+            line = line.replace(value, "[redacted]")
+        sensitive = re.search(r"(?i)(?:authorization|bearer|cookie|password|secret|token|api[_-]?key)(?:\s*[:=])?\s*$", line)
+        if self.sensitive_continuation:
+            self.sensitive_continuation = not bool(line.strip())
+            return "[redacted continuation]\n"
+        if sensitive:
+            self.sensitive_continuation = True
+            return "[redacted credential line]\n"
+        return scrub(line, self.secrets)
+
+    def feed(self, data=b"", final=False):
+        text = self.decoder.decode(data, final=final)
+        # os.read bounds each input; the retained unfinished record has a hard bound.
+        for part in text.splitlines(keepends=True):
+            ended = part.endswith(("\n", "\r"))
+            if not self.dropping:
+                self.pending += part
+                if len(self.pending) > self.limit:
+                    self.pending = ""
+                    self.dropping = True
+            if ended:
+                self.emit("[overlong output line suppressed]\n" if self.dropping else self.clean(self.pending))
+                if self.dropping:
+                    self.sensitive_continuation = True
+                self.pending = ""
+                self.dropping = False
+        if final and (self.pending or self.dropping):
+            self.emit("[overlong output line suppressed]\n" if self.dropping else self.clean(self.pending))
+            self.pending = ""
+            self.dropping = False
+
+
+class CommandObservation:
+    """Bounded command telemetry; failure to report never retries or cancels work."""
+    interval = 2.0
+    max_events = 32
+
+    def __init__(self, runner, job, scope, pid, clock=time.monotonic, wall=time.time):
+        self.runner, self.job, self.scope = runner, job, scope
+        self.clock, self.wall = clock, wall
+        self.started = clock()
+        self.started_at = wall()
+        self.last_flush = -float("inf")
+        self.last_output = None
+        self.last_progress = None
+        self.sequence = job.get("execution_observation", {}).get("next_cursor", 0)
+        self.events = []
+        self.buffer = ""
+        self.completed = self.failed = self.ignored = 0
+        self.active = None
+        self.slowest = []
+        self.pid = pid
+        self.parser = CommandOutput(runner.secrets, self.line)
+
+    def line(self, text):
+        self.buffer += text
+        while len(self.buffer.encode("utf-8")) >= 4096:
+            chunk = self.buffer.encode("utf-8")[:4096].decode("utf-8", "ignore")
+            self.buffer = self.buffer[len(chunk):]
+            self.append(chunk)
+        match = re.fullmatch(r"test ([A-Za-z0-9_:<>., /-]{1,256}) \.\.\. (ok|FAILED|ignored)\s*", text)
+        if self.scope.get("kind") == "test" and match:
+            name, result = match.groups()
+            self.completed += result != "ignored"
+            self.failed += result == "FAILED"
+            self.ignored += result == "ignored"
+            self.last_progress = self.wall()
+            if self.active and self.active["name"] == name:
+                item = {"name": name, "seconds": round(max(0, self.clock() - self.active["started"]), 3), "result": result}
+                self.slowest = sorted(self.slowest + [item], key=lambda row: row["seconds"], reverse=True)[:20]
+            self.active = None
+
+    def append(self, text):
+        self.sequence += 1
+        self.events.append({"cursor": self.sequence, "at": self.wall(), "phase": self.scope["phase"], "text": text})
+        self.events = self.events[-self.max_events:]
+
+    def feed(self, data):
+        self.last_output = self.wall()
+        self.parser.feed(data)
+        if self.scope.get("kind") == "test" and not self.parser.dropping:
+            match = re.match(r"^test ([A-Za-z0-9_:<>., /-]{1,256}) \.\.\. $", self.parser.pending)
+            if match and self.active is None:
+                name = match.group(1)
+                # A test identity is output too; never use it as a redaction bypass.
+                fragments = [p for s in self.runner.secrets if len(s) >= 4 for p in s.splitlines() if p]
+                prefix = self.parser.pending
+                ambiguous = any(s.startswith(prefix[-length:]) for s in fragments
+                    for length in range(1, min(len(s), len(prefix)) + 1))
+                if not self.parser.sensitive_continuation and scrub(name, self.runner.secrets) == name and scrub(prefix, self.runner.secrets) == prefix and not ambiguous and not any(name in s or s in name for s in fragments):
+                    self.active = {"name": name, "started": self.clock(), "started_at": self.wall()}
+                    self.last_progress = self.wall()
+        self.flush()
+
+    def flush(self, final=False, outcome=None):
+        now = self.clock()
+        if not final and now - self.last_flush < self.interval:
+            return
+        self.last_flush = now
+        if final:
+            self.parser.feed(final=True)
+        if self.buffer:
+            self.append(self.buffer)
+            self.buffer = ""
+        resources = getattr(self.runner, "resources", None)
+        row = {}
+        paused = 0
+        name = getattr(self.runner.job_context, "phase_container", None)
+        if resources is not None and name:
+            with resources.lock:
+                row = dict(resources.rows.get(name, {}))
+                paused = resources.elapsed_pause(name)
+        state = "terminal" if final else "paused" if row.get("state") in {"parked", "waiting_intervention", "memory_recovery_required"} else "executing"
+        sample = row.get("metrics", {})
+        safe_metrics = {k: sample.get(k) for k in ("cpu_percent", "cpu_usec", "cpu_throttled_usec", "cpu_throttled_periods", "cpu_periods", "memory", "memory_max", "peak_memory", "oom_events", "oom_kills", "io_read_bytes", "io_write_bytes", "sampled_at", "sample_interval_seconds")}
+        active = None if not self.active else {"name": self.active["name"], "started_at": self.active["started_at"], "observed_seconds": round(max(0, now - self.active["started"]), 3)}
+        value = {"version": 1, **self.scope, "state": state, "outcome": outcome,
+                 "process_id": self.pid, "container_id": row.get("container_id"),
+                 "started_at": self.started_at, "heartbeat_at": self.wall(),
+                 "elapsed_seconds": round(now - self.started, 3), "paused_seconds": round(paused, 3),
+                 "execution_seconds": round(max(0, now - self.started - paused), 3),
+                 "last_output_at": self.last_output, "last_progress_at": self.last_progress,
+                 "heartbeat_interval_seconds": self.interval, "reporting": "available",
+                 "resources": safe_metrics, "resources_status": "available" if sample.get("sampled_at") else "unavailable",
+                 "test_progress": {"availability": "observed" if self.completed or self.ignored or active else "unavailable", "completed": self.completed, "failed": self.failed, "ignored": self.ignored,
+                                   "active": active, "slowest": self.slowest,
+                                   "timing_basis": "observed_serial_libtest_output; unavailable_when_start_not_observed"},
+                 "next_cursor": self.sequence}
+        lock = getattr(self.runner, "observation_lock", contextlib.nullcontext())
+        with lock:
+            previous = self.job.get("execution_observation", {})
+            value["events"] = (previous.get("events", []) + self.events)[-self.max_events:]
+            self.events = []
+            self.job["execution_observation"] = value
+            getattr(self.runner, "resource_progress", lambda _: None)(self.job)
+
+
 def context_digest(blob):
     if len(blob) > MAX_TASK_CONTEXT:
         raise ValueError("build context exceeds bound")
@@ -946,6 +1101,25 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         with subprocess.Popen(argv, cwd=self.source, env=env, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True) as proc:
             output = bytearray()
+            observer = None
+            scope = getattr(self.job_context, "observation_scope", None)
+            job = getattr(self.job_context, "job", None)
+            if scope and job and not job.get("internal_index") and not private_raw and output_file is None:
+                observer = CommandObservation(self, job, scope, proc.pid)
+            def observe(method, *args, **kwargs):
+                if observer is not None:
+                    try:
+                        getattr(observer, method)(*args, **kwargs)
+                    except Exception:
+                        # Telemetry failure is explicit, content-free and observational.
+                        job.setdefault("execution_observation", {})["reporting"] = "unavailable"
+            def retain(text):
+                output.extend(text.encode("utf-8"))
+                if len(output) > MAX_LOG:
+                    del output[:-MAX_LOG]
+            output_parser = CommandOutput(self.secrets, retain) if observer is not None else None
+            outcome = "interrupted"
+            observe("flush")
             def feed():
                 try:
                     if stdin is not None:
@@ -977,6 +1151,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                         error=TimeoutError("fixed build task timeout")
                         error.log=""if private_raw else scrub(bytes(output).decode("utf-8","replace"),self.secrets)
                         raise error
+                    observe("flush")
                     if select.select([proc.stdout], [], [], .2)[0]:
                         data = os.read(proc.stdout.fileno(), 65536)
                         if not data:
@@ -984,21 +1159,36 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                         if output_file is not None:
                             output_file.write(data)
                         else:
-                            output.extend(data)
-                            if len(output) > MAX_LOG:
-                                if private_raw:
+                            if private_raw:
+                                output.extend(data)
+                                if len(output) > MAX_LOG:
                                     raise ValueError("private inspect exceeds bound")
-                                del output[:-MAX_LOG]
+                            elif output_parser is not None:
+                                output_parser.feed(data)
+                                observe("feed", data)
+                            else:
+                                output.extend(data)
+                                if len(output) > MAX_LOG:
+                                    del output[:-MAX_LOG]
                     elif proc.poll() is not None:
                         continue
+                if output_parser is not None:
+                    output_parser.feed(final=True)
                 code = proc.wait(timeout=5)
+                outcome = "failed" if code else "completed"
                 writer.join(timeout=5)
                 text = scrub(bytes(output).decode("utf-8", "replace"), self.secrets)
                 if code:
-                    error = RuntimeError("fixed command failed: " + text)
+                    error = RuntimeError("fixed private command failed" if private_raw else "fixed command failed: " + text)
                     error.exit_code = code
                     raise error
                 return bytes(output).decode("utf-8", "strict") if private_raw else text
+            except TimeoutError:
+                outcome = "timed_out"
+                raise
+            except PermissionError:
+                outcome = "cancelled"
+                raise
             finally:
                 event = getattr(self.job_context, "event", None)
                 job = getattr(self.job_context, "job", None)
@@ -1019,6 +1209,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                     except ProcessLookupError:
                         pass
                     proc.wait()
+                observe("flush", final=True, outcome=outcome)
 
     def ensure_workspace(self,workspace):
         # Caller identity and SID are already validated; paths/UIDs never come from arguments.
@@ -2149,6 +2340,7 @@ class Broker:
         self.resources=resource_module.Resources(self.state,self.runner,CONFIG.get("scheduler",{}))
         self.runner.resources=self.resources
         self.runner.retention_enabled=CONFIG.get("scheduler",{}).get("task_aware_cleanup",False)
+        self.runner.observation_lock=self.lock
         self.runner.resource_progress=self._resource_progress
         self.runner.executor=executor_module.Executor(self.runner,self.resources,CONFIG)
         self.package_cache=packaging_cache_module.PackagingCache(self,CONFIG,release.entries,context_digest)
@@ -2228,6 +2420,7 @@ class Broker:
         with self.lock:self._save(job)
 
     def _save(self, job):
+        job["status_updated_at"] = time.time()
         path = self.state / (job["job_id"] + ".json")
         temporary = self.state / (job["job_id"] + ".tmp")
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
@@ -2897,8 +3090,10 @@ class Broker:
         report["status"] = "conflicts" if conflicts else "checked"
         return report
 
-    def _view(self, job, administrator=False):
-        raw = scrub(job.get("log", ""), self.runner.secrets).encode("utf-8")
+    def _view(self, job, administrator=False, log_cursor=None):
+        live = job.get("execution_observation", {})
+        live_tail = "".join(event["text"] for event in live.get("events", [])) if live.get("state") in {"executing", "paused"} else ""
+        raw = scrub(job.get("log", "") + live_tail, self.runner.secrets).encode("utf-8") if log_cursor is None else b""
         tail = raw[-PUBLIC_LOG:].decode("utf-8", "replace")
         # Replacement characters from a split UTF-8 sequence must not expand
         # the public byte limit. Storage can retain a larger bounded log.
@@ -2922,7 +3117,7 @@ class Broker:
         if "reason" in job:
             # Compiler failures are at the end of a bounded build transcript.
             view["reason"] = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
-        preflight = self._queue_preflight(job, administrator)
+        preflight = self._queue_preflight(job, administrator) if log_cursor is None else None
         if preflight is not None:
             view["queue_preflight"] = preflight
         parent = self.jobs.get(job.get("batch_parent"), job)
@@ -2934,7 +3129,61 @@ class Broker:
             "affected_job_ids": [parent["job_id"], *parent.get("batch_members", [])]}
         if parent.get("cancel_request"):
             view["cancellation"]["requested_at"] = parent["cancel_request"]["requested_at"]
-        return view | {"log": tail, "log_truncated": len(raw) > PUBLIC_LOG, "log_bytes": len(raw)}
+        now = time.time()
+        view["response_generated_at"] = now
+        view["status_updated_at"] = job.get("status_updated_at")
+        observation = job.get("execution_observation")
+        if observation:
+            observation = json.loads(json.dumps(observation))
+            events = observation.pop("events", [])
+            end = observation.get("next_cursor", 0)
+            first = events[0]["cursor"] if events else end + 1
+            cursor = 0 if log_cursor is None else log_cursor
+            reset = cursor > end
+            observation["log_read"] = {"after": cursor, "next_cursor": end, "first_cursor": first,
+                "gap": reset or cursor < first - 1, "cursor_ahead": reset,
+                "events": [event for event in events if reset or event["cursor"] > cursor],
+                "cursor_scope": "job; durable across restart; gaps require explicit reader acknowledgment"}
+            if log_cursor is None:
+                observation["log_read"] = {"next_cursor": end, "first_cursor": first,
+                    "incremental_read_available": True, "request_log_cursor": True}
+            heartbeat = observation.get("heartbeat_at")
+            observation["heartbeat_age_seconds"] = max(0, now-heartbeat) if heartbeat else None
+            observation["stale"] = heartbeat is None or now-heartbeat > 10
+            observation["silence_warning"] = (job["status"] == "running" and observation.get("state") == "executing" and
+                now-(observation.get("last_output_at") or observation.get("started_at", now)) > 60)
+            sample = observation.get("resources", {}).get("sampled_at")
+            if sample and now-sample > 10:
+                observation["resources_status"] = "stale"
+            observation["command_state"] = observation.get("state")
+            if job["status"] not in {"queued", "running", "needs_decision"}:
+                observation["state"] = "terminal"
+            elif job.get("resource_waiting", {}).get("state") == "waiting":
+                observation["state"] = "resource_waiting"
+            elif observation.get("state") == "terminal":
+                observation["state"] = "between_commands"
+            active_test = observation.get("test_progress", {}).get("active")
+            if active_test:
+                active_test["long_running"] = active_test["observed_seconds"] >= 60
+            if view.get("active_verification"):
+                observation["is_current_phase"] = observation.get("verification_id") == view["active_verification"]["id"]
+            view["execution_observation"] = observation
+        else:
+            view["execution_observation"] = {"reporting": "unavailable", "state":
+                "resource_waiting" if job.get("resource_waiting", {}).get("state") == "waiting" else job["status"]}
+        current = view.get("active_verification")
+        if current:
+            view["phase"] = current["phase"]
+        view["execution_state"] = ("terminal" if job["status"] not in {"running", "queued", "needs_decision"}
+            else "resource_waiting" if job.get("resource_waiting", {}).get("state") == "waiting"
+            else "paused" if job["status"] == "needs_decision"
+            else "queued" if job["status"] == "queued"
+            else view["execution_observation"].get("state", "unavailable") if observation and (not current or observation.get("verification_id") == current["id"])
+            else "preparing" if current else "unavailable")
+        view["execution_history"] = job.get("execution_history", [])[-1:] if administrator else job.get("execution_history", [])
+        view["task_id"] = job.get("task_id")
+        view["phase_history"] = job.get("phase_history", [])[-32:]
+        return view | ({"log": tail, "log_truncated": len(raw) > PUBLIC_LOG, "log_bytes": len(raw)} if log_cursor is None else {"legacy_log_omitted": True})
 
     def _rust_test_result(self, job):
         if job.get("rust_tests"):
@@ -4034,13 +4283,13 @@ class Broker:
         if set(args)-{"task_id","task","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter","feature_profile"}or not{"task_id","task","expected_inputs_sha256"}<=set(args):
             raise ValueError("Task-scoped Cargo check arguments required")
         task_id,task=args["task_id"],args["task"];expected=args["expected_inputs_sha256"];timeout=args.get("timeout_seconds",600)
-        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test","resource_probe","dependencies","runtime_readability"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
+        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test","resource_probe","execution_probe","dependencies","runtime_readability"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
             raise ValueError("Bounded task Cargo request required")
         request_id=args.get("request_id")
         if request_id is not None and (not isinstance(request_id,str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",request_id)):
             raise ValueError("Stable check request ID required")
         request_key="check-"+hashlib.sha256(canonical([trusted["user_id"],workspace,task_id,request_id])).hexdigest() if request_id else None
-        if task in {"resource_probe","dependencies","runtime_readability"}and not(trusted.get("local_caller")and self.resources.enabled):raise PermissionError("Resource probe requires enforced operator channel")
+        if task in {"resource_probe","execution_probe","dependencies","runtime_readability"}and not(trusted.get("local_caller")and self.resources.enabled):raise PermissionError("Resource probe requires enforced operator channel")
         profile=executor_module.check_profile(args.get("feature_profile"))
         if profile!="default":
             if task!="check":raise ValueError("Feature profiles apply only to compile checks")
@@ -4076,7 +4325,7 @@ class Broker:
                 if task in {"dependencies","runtime_readability"}:
                     value=self.scheduler.ensure(item,trusted,workspace)
                     self.scheduler.store.assert_owned(key,self.scheduler.owner(trusted,workspace),value["epoch"],[])
-                else:self.scheduler.submit(item,trusted,workspace,["build-service/resources.py"]if task=="resource_probe"else["src","Cargo.toml","Cargo.lock"],before)
+                else:self.scheduler.submit(item,trusted,workspace,["build-service/resources.py"]if task in {"resource_probe","execution_probe"}else["src","Cargo.toml","Cargo.lock"],before)
                 ownership_value=self.scheduler.store.get(key)
             job_id=str(uuid.uuid4());event=threading.Event();self.job_cancellations[job_id]=event
             job={"job_id":job_id,"request_key":request_key or "check-"+job_id,"check_signature":request_signature,"task_id":task_id,"user_id":trusted["user_id"],"workspace":workspace,
@@ -4117,7 +4366,7 @@ class Broker:
                 if task=="runtime_readability":
                     previous={role:self.runner.inspect(name)for role,name in zip(("api","loop"),TARGETS)}
                     self.runner.preflight_runtime_mounts(job,previous,self.runner.current_asset_id());log="Published runtime mount readability passed as application and worker identities"
-                else:log=self.runner.executor.probe(job)if task=="resource_probe"else self.runner.executor.check(job,blob,task,timeout,lambda p,b:release.extract(p,b,context_digest))
+                else:log=self.runner.executor.probe(job)if task in {"resource_probe","execution_probe"}else self.runner.executor.check(job,blob,task,timeout,lambda p,b:release.extract(p,b,context_digest))
             else:log=self.runner.cargo_task(root,self.state/"checks"/job_id,task,timeout)
             status="completed"
         except Exception as error:
@@ -5032,14 +5281,17 @@ class Broker:
                 return {"inputs_sha256": digest, "input_files": count, "containers": containers, "jobs": jobs, "busy": self.active is not None or self.active_ui is not None,
                         "synchronization": self._sync_report(live, live, ())}
             if name == "v3_worker_job":
-                if set(args) != {"job_id"}:
-                    raise ValueError("job_id required")
+                if "job_id" not in args or set(args) - {"job_id", "log_cursor"}:
+                    raise ValueError("job_id and optional log_cursor required")
+                if "log_cursor" in args and (type(args["log_cursor"]) is not int or not 0 <= args["log_cursor"] <= 2**63-1):
+                    raise ValueError("Invalid log cursor")
                 job = self.jobs.get(args["job_id"])
                 participant = any(self._owned(item, trusted, workspace) and item.get("job_id") == args["job_id"]
                                   for item in self.work.values())
                 if not job or not (self._owned(job, trusted, workspace) or participant):
                     raise ValueError("job not available to this session")
-                return self._view(job)
+                self._incoming_lease(trusted)
+                return self._view(job, log_cursor=args.get("log_cursor"))
             operation = ("build_deploy" if name == "administrator_auto_build_deploy"
                          else "build" if name == "v3_build_image" else args.get("operation"))
             allowed = {"request_id", "expected_inputs_sha256"} | ({"operation", "job_id"} if name == "v3_worker_submit" else set())
