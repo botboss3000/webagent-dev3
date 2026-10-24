@@ -101,7 +101,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/engine-components/{id}",put(engine_components::update))
         .route("/admin/loop-runtime", get(loop_settings::read).put(loop_settings::update))
         .route("/admin/context-compaction", get(context_config_get).put(context_config_put))
-        .nest("/admin/access", phase3_api::router())
+        .nest("/admin/access", phase3_api::router().merge(crate::agents_api::admin_router()))
         .nest("/admin/services", service_admin::router())
         .nest("/admin/models/rosters", model_catalog::router())
         .route("/admin/access/registration", get(registration::access_mode).put(registration::set_mode))
@@ -128,7 +128,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/sessions/{sid}/administrator/artifacts/{id}",get(administrator::artifact))
         .route("/sessions/{sid}/administrator/notices",get(administrator::notices))
         .route("/sessions/{sid}/administrator/notices/{id}/review",post(administrator::review_notice))
-        .nest("/models", model_selection_api::router())
+        .nest("/models", model_selection_api::router().merge(crate::agents_api::router()))
         .route("/models/me/catalog",get(account_models::read).put(account_models::save))
         .route("/models/me/catalog/default",put(account_models::set_default))
         .route("/models/agents/{id}/adoptions",post(account_models::adopt))
@@ -227,7 +227,7 @@ pub(super) fn router(app: App) -> Router {
 
 // Native Core tools arrive after persisted tool-policy/approval checks. Domain handlers still own tenant and revision admission.
 pub(crate) fn core_tools_router()->Router<App> {
-    Router::new().nest("/models",model_selection_api::router())
+    Router::new().nest("/models",model_selection_api::router().merge(crate::agents_api::router()))
         .route("/agents/{id}/abilities",get(ability_admin::read))
         .route("/agents/{id}/abilities/{ability}/visibility",put(ability_admin::visibility_set))
         .route("/agents/{id}/abilities/{ability}/tools/{tool}/mode",put(ability_admin::tool_set))

@@ -410,49 +410,6 @@ impl<C: RecordCodec> Repository<'_, C> {
             "tool_callers":callers}))
     }
 
-    pub async fn agent_status(&self, agent_id: &str) -> Result<Value> {
-        let view = self.for_agent(agent_id).await?;
-        let row = sqlx::query("SELECT status,revision FROM agents WHERE id=?")
-            .bind(agent_id).fetch_optional(view.agent_pool).await?
-            .ok_or_else(|| anyhow!("Agent not found"))?;
-        Ok(serde_json::json!({"agent_id":agent_id,
-            "status":row.get::<String,_>("status"),
-            "revision":row.get::<i64,_>("revision")}))
-    }
-
-    pub async fn set_agent_status(&self, agent_id: &str,
-        expected_revision: u64, status: &str) -> Result<Value> {
-        validate_set_agent_status(agent_id, expected_revision, status)?;
-        let view = self.for_agent(agent_id).await?;
-        let mut tx = view.agent_pool.begin().await?;
-        let row = sqlx::query("SELECT revision FROM agents WHERE id=?")
-            .bind(agent_id).fetch_optional(&mut *tx).await?
-            .ok_or_else(|| anyhow!("Agent not found"))?;
-        if row.get::<i64,_>("revision") as u64 != expected_revision {
-            return Err(anyhow!("Agent revision changed"));
-        }
-        let updated = sqlx::query("UPDATE agents SET status=?,revision=revision+1,
-            updated_at=strftime('%s','now') WHERE id=? AND revision=?")
-            .bind(status).bind(agent_id).bind(expected_revision as i64)
-            .execute(&mut *tx).await?;
-        if updated.rows_affected()!=1 {
-            return Err(anyhow!("Agent revision changed"));
-        }
-        tx.commit().await?;
-        self.event("","agent_status_changed",&serde_json::json!({
-            "agent_id":agent_id,"status":status,"revision":expected_revision+1})).await?;
-        Ok(serde_json::json!({"agent_id":agent_id,"status":status,
-            "revision":expected_revision+1}))
-    }
-}
-
-pub fn validate_set_agent_status(agent_id: &str,
-        expected_revision: u64, status: &str)->Result<()> {
-        if !matches!(status,"active"|"disabled")
-            || expected_revision >= i64::MAX as u64 {
-            return Err(anyhow!("Invalid agent status"));
-        }
-    Ok(())
 }
 
 pub fn validate_set_agent_tool_callers(agent_id:&str,expected_revision:u64,

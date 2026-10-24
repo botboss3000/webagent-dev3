@@ -99,7 +99,7 @@ pub(crate) async fn binding(app:&App,run:&Value,name:&str,args:&Value)->Result<V
  let spawn_limits=if starts(name){tools::core_orchestration::spawn_limits(app,source,name).await?}else{Value::Null};
  let raw_mode=if starts(name){mode.clone()}else{app.store.get(&key("session_mode",&target)).await?.unwrap_or_else(default_session_mode)};
  let mut mode=mode;
- if starts(name){if let Some(id)=mode["execution_mode"].as_str(){let config=execution_modes::config(&app.store,&agent).await?;mode["definition"]=execution_modes::resolve(&config,id)?;}}
+ if starts(name){if let Some(id)=mode["execution_mode"].as_str(){let config=crate::agents_api::modes_config(&app.store,&agent).await?;mode["definition"]=webagent_agents::modes::resolve(&config,id)?;}}
  if participation["active"]==false{bail!("Recipient agent is inactive");}
  let access=app.store.live_access(app.store.current_user_id(),&agent).await?;
  let interrupt=if delivery=="interrupt"{

@@ -2219,6 +2219,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-agents"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "webagent-access",
+]
+
+[[package]]
 name = "webagent-assets-contracts"
 version = "0.1.0"
 dependencies = [
@@ -2589,6 +2604,7 @@ dependencies = [
  "webagent-abilities",
  "webagent-access",
  "webagent-accounts",
+ "webagent-agents",
  "webagent-assets-contracts",
  "webagent-background-contracts",
  "webagent-background-dispatch",

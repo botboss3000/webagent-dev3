@@ -37,7 +37,7 @@ async fn choices(app: &App, sid: &str) -> Result<Value, ApiError> {
         models.push(json!({"entry_id":id,"label":if id.is_none(){format!("Standard · {display}")}else{display.to_owned()},
             "model":first.upstream_model,"connected":connected}));
     }
-    let config = crate::execution_modes::config(&app.store, &agent).await?;
+    let config = crate::agents_api::modes_config(&app.store, &agent).await?;
     let modes: Vec<Value> = config["execution_modes"]
         .as_array()
         .into_iter()
@@ -48,7 +48,7 @@ async fn choices(app: &App, sid: &str) -> Result<Value, ApiError> {
         })
         .collect();
     let mode = session_mode(app, sid).await?;
-    let chat=crate::execution_modes::chat_preferences(&app.chat_ui_config_path).await?;
+    let chat=crate::chat_preferences::chat_preferences(&app.chat_ui_config_path).await?;
     let attachment_limits = uploads::limits(app).await?;
     Ok(
         json!({"composer":{"attachments":true,"voice":true,"attachment_limits":{"max_file_size_mb":attachment_limits.max_file_size_mb,"max_per_message":attachment_limits.max_per_message}},"agent_id":agent,"model":saved,"models":models,"mode":{"mode":mode["mode"],"execution_mode":mode["execution_mode"],"revision":mode["revision"]},

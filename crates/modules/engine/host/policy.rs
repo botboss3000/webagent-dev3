@@ -9,9 +9,9 @@ impl NativePolicy {
 impl webagent_engine::runtime::ports::AgentPolicy<Store> for NativePolicy {
  fn default_model()->&'static str {DEFAULT_AGENT_MODEL}
  fn selection<'a>(&'a self,store:&'a Store)->impl std::future::Future<Output=Result<webagent_models::provider::ProviderSelection>>+Send+'a {async move {let value=store.agent_model().await?;webagent_models::provider::ProviderSelection::parse(&value,DEFAULT_AGENT_MODEL)}}
- fn modes<'a>(&'a self,store:&'a Store,agent:&'a str)->impl std::future::Future<Output=Result<Value>>+Send+'a {execution_modes::config(store,agent)}
- fn resolve_mode(config:&Value,id:&str)->Result<Value> {execution_modes::resolve(config,id)}
- fn removed_mode()->Value {execution_modes::defaults()[0].clone()}
+ fn modes<'a>(&'a self,store:&'a Store,agent:&'a str)->impl std::future::Future<Output=Result<Value>>+Send+'a {crate::agents_api::modes_config(store,agent)}
+ fn resolve_mode(config:&Value,id:&str)->Result<Value> {webagent_agents::modes::resolve(config,id)}
+ fn removed_mode()->Value {webagent_agents::modes::defaults()[0].clone()}
  fn abilities<'a>(&'a self,store:&'a Store,agent:&'a str)->impl std::future::Future<Output=Result<Value>>+Send+'a {store.agent_abilities_for(agent)}
 }
 impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {

@@ -4841,7 +4841,7 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
         "access_revision":access.revision,"policy_version":1,"mode_revision":0,
         "visibility_revision":0,"ability_state_revision":0});
     user_app.save(&mut run).await.unwrap();
-    let status=app.store.agent_status("shared_default").await.unwrap();
+    let status=crate::agents_api::status_value(&app.store,"shared_default").await.unwrap();
     let response=router(app.clone()).oneshot(request(&admin_token,"admin-csrf","PUT",
         "/api/v3/admin/access/agents/shared_default/status",
         json!({"expected_revision":status["revision"],"status":"disabled"}))).await.unwrap();

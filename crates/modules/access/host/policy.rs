@@ -20,9 +20,6 @@ impl Store {
     pub async fn agent_tool_callers(&self, agent_id: &str) -> Result<Value> { let view=self.for_agent(agent_id).await?; view.access_repository().agent_tool_callers(agent_id).await }
     pub async fn set_agent_tool_callers(&self,agent_id:&str,expected_revision:u64,
         callers:std::collections::BTreeMap<String,Vec<Relationship>>) -> Result<Value> { crate::access::authority::validate_set_agent_tool_callers(agent_id, expected_revision, &callers)?; let view=self.for_agent(agent_id).await?; view.access_repository().set_agent_tool_callers(agent_id, expected_revision, callers).await }
-    pub async fn agent_status(&self, agent_id: &str) -> Result<Value> { let view=self.for_agent(agent_id).await?; view.access_repository().agent_status(agent_id).await }
-    pub async fn set_agent_status(&self, agent_id: &str,
-        expected_revision: u64, status: &str) -> Result<Value> { crate::access::authority::validate_set_agent_status(agent_id, expected_revision, status)?; let view=self.for_agent(agent_id).await?; view.access_repository().set_agent_status(agent_id, expected_revision, status).await }
 }
 #[cfg(test)]
 mod tests {
@@ -92,12 +89,11 @@ mod tests {
             true,true,false,false).reason,Reason::AgentDenied);
         assert!(store.set_agent_tool_permissions("shared_default",agent_revision,
             Default::default()).await.is_err());
-        let disabled = store.set_agent_status("shared_default",agent_revision+1,
-            "disabled").await.unwrap();
-        assert_eq!(disabled["status"],"disabled");
+        sqlx::query("UPDATE agents SET status='disabled',revision=revision+1 WHERE id='shared_default'")
+            .execute(&store.agent_pool).await.unwrap();
         assert!(!store.live_access("admin","shared_default").await.unwrap().admitted());
-        store.set_agent_status("shared_default",agent_revision+2,
-            "active").await.unwrap();
+        sqlx::query("UPDATE agents SET status='active',revision=revision+1 WHERE id='shared_default'")
+            .execute(&store.agent_pool).await.unwrap();
         let agent_revision=store.agent_ability_permissions("shared_default").await.unwrap()
             ["revision"].as_u64().unwrap();
         store.set_agent_ability_permissions("shared_default",agent_revision,
@@ -172,7 +168,6 @@ mod scope_validation_regression {
         let root=tempfile::tempdir().unwrap();let store=Store::open(root.path()).await.unwrap();
         assert_eq!(store.live_access("invalid/user","missing_agent").await.unwrap_err().to_string(),"Invalid access identity");
         assert_eq!(store.set_agent_permissions("missing_agent",0,serde_json::json!([]),serde_json::json!({})).await.unwrap_err().to_string(),"Invalid permission map");
-        assert_eq!(store.set_agent_status("missing_agent",0,"invalid").await.unwrap_err().to_string(),"Invalid agent status");
         assert_eq!(store.set_agent_membership("admin","shared_default",Relationship::Revoked,0).await.unwrap_err().to_string(),"The original administrator must retain its agent");
         assert_eq!(store.assign_agent_membership("invalid/actor","admin","missing_agent",Relationship::Member,false,0).await.unwrap_err().to_string(),"Invalid actor identity");
     }

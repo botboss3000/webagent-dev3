@@ -334,33 +334,6 @@ async fn access_audit(
         .map_err(|_| invalid("Audit limit must be 1-200"))?;
     Ok(Json(json!({"events":events})))
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AgentStatusChange { expected_revision: u64, status: String }
-async fn agent_status(
-    State(app): State<App>, Extension(identity): Extension<Value>, Path(id): Path<String>,
-) -> Api {
-    administrator(&app, &identity).await?;
-    agent_operator(&app,&identity,&id).await?;
-    let status = app.store.agent_status(&id).await
-        .map_err(|_| invalid("Agent status unavailable"))?;
-    Ok(Json(status))
-}
-async fn change_agent_status(
-    State(app): State<App>, Extension(identity): Extension<Value>,
-    Path(id): Path<String>, Json(body): Json<AgentStatusChange>,
-) -> Api {
-    administrator(&app, &identity).await?;
-    agent_operator(&app,&identity,&id).await?;
-    if !matches!(body.status.as_str(), "active" | "disabled") {
-        return Err(invalid("Agent status must be active or disabled"));
-    }
-    let _guard = app.gate.lock().await;
-    let status = app.store.set_agent_status(&id, body.expected_revision, &body.status).await
-        .map_err(|_| stale("Agent status changed; reload before saving"))?;
-    quiesce_agent(&app, &id).await?;
-    Ok(Json(status))
-}
 async fn page_policy(State(app):State<App>,Extension(identity):Extension<Value>)->Api {
     administrator(&app,&identity).await?;
     let policy=app.store.read_access_policy()?;
@@ -397,8 +370,6 @@ pub fn router() -> Router<App> {
             get(agent_tool_permissions).put(change_agent_tool_permissions))
         .route("/agents/{id}/ability-permissions",
             get(agent_ability_permissions).put(change_agent_ability_permissions))
-        .route("/agents/{id}/status",
-            get(agent_status).put(change_agent_status))
         .route("/audit", get(access_audit))
 }
 #[cfg(test)]
@@ -429,23 +400,6 @@ mod tests {
         assert_eq!(promoted["account"]["role"], "administrator");
         assert!(account_management::accounts(State(app.clone()), Extension(pending)).await.is_ok());
     }
-    #[tokio::test]
-    async fn agent_status_api_disables_calls_and_rejects_stale_revision() {
-        let (_root, app) = fixture().await;
-        let admin = json!({"_user_id":"admin"});
-        let Json(before) = agent_status(State(app.clone()), Extension(admin.clone()),
-            Path("shared_default".into())).await.unwrap();
-        let revision = before["revision"].as_u64().unwrap();
-        let Json(disabled) = change_agent_status(State(app.clone()), Extension(admin.clone()),
-            Path("shared_default".into()), Json(AgentStatusChange {
-                expected_revision:revision, status:"disabled".into() })).await.unwrap();
-        assert_eq!(disabled["status"], "disabled");
-        assert!(!app.store.live_access("admin", "shared_default").await.unwrap().admitted());
-        assert!(change_agent_status(State(app), Extension(admin),
-            Path("shared_default".into()), Json(AgentStatusChange {
-                expected_revision:revision, status:"active".into() })).await.is_err());
-    }
-
     #[tokio::test]
     async fn session_resource_quiesce_withdraws_only_own_browser_and_requires_worker_ack() {
         use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};
