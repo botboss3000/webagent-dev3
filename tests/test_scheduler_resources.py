@@ -24,6 +24,52 @@ class ResourceTests(unittest.TestCase):
     def phase(self,name="one",phase="compile_release"):
         self.scheduler.enter(name,{"job_id":"job","lease_until":time.time()+60},phase,"engine-release","plugin")
         self.scheduler.attached(name,"container")
+    def test_live_cpu_policy_rebalances_preserves_pause_and_rejects_stale(self):
+        from unittest.mock import patch
+        with patch.object(m.os,"cpu_count",return_value=4):
+            self.phase();before=self.scheduler.resource_policy()
+            policy={**before["values"],"cpu_budget_millis":2000,"cpu_priority":"broker"}
+            with self.assertRaisesRegex(ValueError,"revision"):self.scheduler.adopt_resource_policy(policy,"stale")
+            applied=self.scheduler.adopt_resource_policy(policy,before["sha256"])
+            self.assertEqual(self.scheduler.rows["one"]["cpu_millis"],2000)
+            self.sample["pressure"]["cpu"]=90;self.scheduler.tick()
+            self.assertEqual(self.scheduler.cpu_budget,2);self.assertEqual(self.scheduler.cpu_decision["reason"],"broker_priority")
+            self.assertEqual(self.scheduler.snapshot()["resource_policy"]["sha256"],applied["sha256"])
+            self.scheduler.act("one","freeze");self.runner.calls=[]
+            self.scheduler.adopt_resource_policy(policy,applied["sha256"])
+            self.assertFalse(any(c["operation"]in {"cpu","thaw"}for c in self.runner.calls))
+            reopened=m.Resources(self.root.name,self.runner,policy,lambda:self.time,lambda:dict(self.sample))
+            self.assertEqual(reopened.resource_policy()["sha256"],applied["sha256"])
+            self.assertEqual(reopened.rows["one"]["state"],"recovery_required");reopened.close()
+
+    def test_cpu_policy_failure_can_reconcile_and_floors_cannot_be_removed(self):
+        from unittest.mock import patch
+        with patch.object(m.os,"cpu_count",return_value=4):
+            self.phase();before=self.scheduler.resource_policy();policy={**before["values"],"cpu_budget_millis":2000}
+            with patch.object(self.runner,"resource_request",side_effect=RuntimeError("lost acknowledgment")):
+                with self.assertRaises(RuntimeError):self.scheduler.adopt_resource_policy(policy,before["sha256"])
+            self.scheduler.adopt_resource_policy(policy,before["sha256"])
+            self.assertEqual(self.scheduler.rows["one"]["cpu_millis"],2000)
+            self.scheduler.host["available"]=10*G
+            self.scheduler.rows["one"]["phase"]="test"
+            self.scheduler.enter("two",{"job_id":"other"},"test","independent-test","test",timeout=.1)
+            self.scheduler.attached("two","container")
+            current=self.scheduler.resource_policy()
+            with self.assertRaisesRegex(ValueError,"floors"):self.scheduler.adopt_resource_policy({**current["values"],"cpu_budget_millis":1000},current["sha256"])
+            self.assertEqual(self.scheduler.resource_policy()["sha256"],current["sha256"])
+
+    def test_concurrent_policy_updates_have_one_revision_winner(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+        with patch.object(m.os,"cpu_count",return_value=4):
+            before=self.scheduler.resource_policy()
+            def update(budget):
+                try:return self.scheduler.adopt_resource_policy({**before["values"],"cpu_budget_millis":budget},before["sha256"])["values"]["cpu_budget_millis"]
+                except ValueError:return "stale"
+            with ThreadPoolExecutor(max_workers=2)as pool:results=list(pool.map(update,[1000,2000]))
+            self.assertEqual(results.count("stale"),1)
+            self.assertIn(self.scheduler.resource_policy()["values"]["cpu_budget_millis"],results)
+
     def test_enforced_cap_bounds_admission_without_changing_reserve(self):
         cap=4026531840;self.scheduler.host["available"]=cap+self.scheduler.reserve()+1024
         reserve=self.scheduler.reserve();self.scheduler.enter("capped",{"job_id":"job"},"compile_test","cold-profile","engine",timeout=.01,hard_cap=cap)

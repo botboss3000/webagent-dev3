@@ -112,11 +112,11 @@ def install(args):
  unit.write_text(text);unit.chmod(0o644);subprocess.run(["systemctl","daemon-reload"],check=True)
  print(json.dumps({"installed":True,"version":release,"config":str(config_path),"unit":unit_name}))
 def resource_policy(config_path,candidate_path,task_id,dry_run=False):
- """Atomically change only protected memory policy; reload broker/helper without a restart."""
+ """Atomically change only protected CPU/memory policy; reload broker/helper without a restart."""
  if os.geteuid()!=0:raise PermissionError("Memory policy installation requires root")
  previous=cfg.load(config_path);candidate=cfg.load(candidate_path)
- if {k:v for k,v in previous.items()if k!="scheduler"}!={k:v for k,v in candidate.items()if k!="scheduler"}or {k:v for k,v in previous["scheduler"].items()if k not in cfg.MEMORY_KEYS}!={k:v for k,v in candidate["scheduler"].items()if k not in cfg.MEMORY_KEYS}:raise ValueError("Only memory policy may change live")
- desired=cfg.memory_policy_digest(candidate["scheduler"])
+ if {k:v for k,v in previous.items()if k!="scheduler"}!={k:v for k,v in candidate.items()if k!="scheduler"}or {k:v for k,v in previous["scheduler"].items()if k not in cfg.RESOURCE_KEYS}!={k:v for k,v in candidate["scheduler"].items()if k not in cfg.RESOURCE_KEYS}:raise ValueError("Only CPU and memory policy may change live")
+ desired=cfg.resource_policy_digest(candidate["scheduler"])
  if dry_run:return {"validated":True,"policy_sha256":desired,"restart_required":False}
  if not isinstance(task_id,str)or not __import__("re").fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id):raise ValueError("Bounded operator task ID required")
  folder=Path(config_path).parent;secure_dirs(folder)
@@ -131,8 +131,8 @@ def resource_policy(config_path,candidate_path,task_id,dry_run=False):
   def call(args):
    command=["sudo","-n","-u",previous["service_account"],"env","WEBAGENT_BUILD_CONFIG="+str(config_path),"python3","-B",str(Path(previous["service_dir"])/"buildctl.py"),"schedule","--input","-"]
    return json.loads(subprocess.check_output(command,input=json.dumps(args).encode(),timeout=30))
-  active=call({"action":"resources"})["memory_policy"]
-  request={"action":"reload_memory_policy","expected_policy_sha256":active["sha256"],"policy_sha256":desired}
+  active=call({"action":"resources"})["resource_policy"]
+  request={"action":"reload_resource_policy","expected_policy_sha256":active["sha256"],"policy_sha256":desired}
   history=folder/"resource-policy";secure_dirs(history)
   unresolved=[]
   for path in sorted(history.glob("*.json")):

@@ -51,7 +51,7 @@ class Resources:
                 self.rows[name]=row
         self.migrate_test_profiles()
         self.restore_diagnostic_profiles(state)
-        self.initialized=False;self.last_save=0.;self.pressure_since=None;self.stable_since=None;self.cpu_budget=max(1,(os.cpu_count()or 1)-1);self.last_cpu_adjust=0.;self.last_cpu_recovery=0.
+        self.initialized=False;self.last_save=0.;self.pressure_since=None;self.stable_since=None;self.cpu_budget=self.cpu_capacity()/1000;self.last_cpu_adjust=0.;self.last_cpu_recovery=0.
         self.previous_cpu=copy.deepcopy(self.host.get("cpu"));self.cpu_decision=None
         self.thread=None
     def migrate_test_profiles(self):
@@ -139,7 +139,7 @@ class Resources:
         """Reserve one core for deadline-sensitive assertions; other phases retain a small share."""
         return 1000 if phase in {"test","ui_test","plugin_test"}else 100
     def cpu_capacity(self):
-        return max(1,(os.cpu_count()or 1)-1)*1000
+        return min(max(1,(os.cpu_count()or 1)-1)*1000,self.policy.get("cpu_budget_millis",0)or max(1,(os.cpu_count()or 1)-1)*1000)
     def cpu_fits(self,phase):
         return self.cpu_floor(phase)+sum(self.cpu_floor(r["phase"])for r in self.rows.values()if r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"})<=self.cpu_capacity()
     def allocate_cpu(self,name,millis):
@@ -360,6 +360,26 @@ class Resources:
             self.policy.update(values);self.persist();self.condition.notify_all()
             return self.memory_policy()
 
+    def resource_policy(self):
+        import hashlib
+        values={**self.memory_policy()["values"],"cpu_budget_millis":self.policy.get("cpu_budget_millis",0),"cpu_priority":self.policy.get("cpu_priority","balanced")}
+        return {"values":values,"sha256":hashlib.sha256(json.dumps(values,sort_keys=True,separators=(",",":")).encode()).hexdigest(),"effective_cpu_budget_millis":int(self.cpu_budget*1000),"cpu_capacity_millis":self.cpu_capacity(),"cpu_decision":self.cpu_decision}
+
+    def adopt_resource_policy(self,policy,expected):
+        """Reconcile desired policy and exact container allocations under the admission lock."""
+        with self.condition:
+            previous=self.resource_policy();values={k:policy[k]for k in previous["values"]}
+            if previous["sha256"]!=expected and values!=previous["values"]:raise ValueError("Resource policy revision changed")
+            capacity=min(max(1,(os.cpu_count()or 1)-1)*1000,values["cpu_budget_millis"]or max(1,(os.cpu_count()or 1)-1)*1000)
+            reserved=sum(self.cpu_floor(r["phase"])for r in self.rows.values()if r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"})
+            if reserved>capacity:raise ValueError("CPU budget below admitted phase floors")
+            self.policy.update(values);self.cpu_budget=capacity/1000
+            self.cpu_decision={"at":time.time(),"reason":"policy_reload","budget_after":self.cpu_budget}
+            self.persist()
+            # A partial helper failure keeps desired policy visible; repeating reconciles exact identities.
+            self.rebalance_cpu();self.condition.notify_all()
+            return self.resource_policy()
+
     def reconcile_memory(self,name,observed):
         """Classify an uncertain increase from exact kernel evidence; never repeat the effect."""
         row=self.rows[name];change=row["memory_change"];actual=observed.get("memory_max")
@@ -468,23 +488,26 @@ class Resources:
             except (OSError,ValueError,RuntimeError,TimeoutError):continue
         if not self.enabled:return
         now=self.clock()
-        if now-self.last_cpu_adjust>=5:
-            interval=self.cpu_interval(self.previous_cpu,sample.get("cpu"))
-            self.previous_cpu=copy.deepcopy(sample.get("cpu"))
-            decision={"at":time.time(),"pressure_percent":sample["pressure"]["cpu"],"budget_before":self.cpu_budget,
-                      "reason":"counters_unavailable",**(interval or{})}
-            if interval is not None:
-                if sample["pressure"]["cpu"]>20 and not interval["spare"]:
-                    self.cpu_budget=max(.5,self.cpu_budget-.5);self.last_cpu_recovery=now
-                    decision["reason"]="execution_pressure"
-                elif interval["spare"] and now-self.last_cpu_recovery>=20:
-                    self.cpu_budget=min(max(1,(os.cpu_count()or 1)-1),self.cpu_budget+.5);self.last_cpu_recovery=now
-                    decision["reason"]="spare_cpu_recovery"
-                else:decision["reason"]="recovery_wait"if interval["spare"]else"execution_busy"
-            decision["budget_after"]=self.cpu_budget;self.cpu_decision=decision
-            with self.condition:
-                self.rebalance_cpu();self.persist();self.condition.notify_all()
-            self.last_cpu_adjust=now
+        with self.condition:
+            if now-self.last_cpu_adjust>=5:
+                interval=self.cpu_interval(self.previous_cpu,sample.get("cpu"))
+                self.previous_cpu=copy.deepcopy(sample.get("cpu"))
+                decision={"at":time.time(),"pressure_percent":sample["pressure"]["cpu"],"budget_before":self.cpu_budget,
+                          "reason":"counters_unavailable",**(interval or{})}
+                if self.policy.get("cpu_priority","balanced")=="broker":
+                    self.cpu_budget=self.cpu_capacity()/1000;decision["reason"]="broker_priority"
+                elif interval is not None:
+                    if sample["pressure"]["cpu"]>20 and not interval["spare"]:
+                        self.cpu_budget=max(.5,self.cpu_budget-.5);self.last_cpu_recovery=now
+                        decision["reason"]="execution_pressure"
+                    elif interval["spare"] and now-self.last_cpu_recovery>=20:
+                        self.cpu_budget=min(self.cpu_capacity()/1000,self.cpu_budget+.5);self.last_cpu_recovery=now
+                        decision["reason"]="spare_cpu_recovery"
+                    else:decision["reason"]="recovery_wait"if interval["spare"]else"execution_busy"
+                decision["budget_after"]=self.cpu_budget;self.cpu_decision=decision
+                with self.condition:
+                    self.rebalance_cpu();self.persist();self.condition.notify_all()
+                self.last_cpu_adjust=now
         pressure=sample["pressure"]["memory"]>self.policy.get("memory_pressure_percent",5)
         if pressure:
             if self.pressure_since is None:self.pressure_since=now
@@ -534,4 +557,4 @@ class Resources:
             import hashlib
             rows={hashlib.sha256(n.encode()).hexdigest():{k:v for k,v in r.items()if k not in {"container_id","last_sample","paused_at","started","finished"}}|{"phase_id":hashlib.sha256(n.encode()).hexdigest(),"paused_seconds":self.elapsed_pause(n)}
                 for n,r in self.rows.items()if job_id is None or r["job_id"]==job_id}
-            return copy.deepcopy({"enabled":self.enabled,"host":self.host,"reserve":self.reserve(),"memory_policy":self.memory_policy(),"phases":rows,"profiles":self.profiles if job_id is None else{}})
+            return copy.deepcopy({"enabled":self.enabled,"host":self.host,"reserve":self.reserve(),"memory_policy":self.memory_policy(),"resource_policy":self.resource_policy(),"phases":rows,"profiles":self.profiles if job_id is None else{}})

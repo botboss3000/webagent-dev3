@@ -319,12 +319,12 @@ class PolicyRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory()as temporary:
             path=Path(temporary)/"config.json";candidate=Path(temporary)/"candidate.json"
             data=config.defaults();data.update(service_account="fixture",service_dir="/fixed")
-            data["scheduler"].update(POLICY);desired=config.memory_policy_digest(data["scheduler"])
+            data["scheduler"].update(POLICY);desired=config.resource_policy_digest(data["scheduler"])
             path.write_text(json.dumps(data));candidate.write_text(json.dumps(data))
             history=Path(temporary)/"resource-policy";history.mkdir()
             old=history/"prior.json";old.write_text(json.dumps({"status":"needs_reconciliation","policy_sha256":desired}))
             def write(target,value):Path(target).write_text(json.dumps(value))
-            replies=[json.dumps({"memory_policy":{"sha256":desired}}).encode(),json.dumps({"sha256":desired}).encode()]
+            replies=[json.dumps({"resource_policy":{"sha256":desired}}).encode(),json.dumps({"sha256":desired}).encode()]
             with patch.object(lifecycle.os,"geteuid",return_value=0),patch.object(lifecycle.os,"fstat",return_value=types.SimpleNamespace(st_uid=0,st_nlink=1,st_mode=0o600)),patch.object(lifecycle,"secure_dirs"),patch.object(lifecycle.cfg,"load",return_value=data),patch.object(lifecycle,"atomic",side_effect=write),patch.object(lifecycle.subprocess,"check_output",side_effect=replies):
                 result=lifecycle.resource_policy(path,candidate,"memory-policy-fixture")
             self.assertEqual(json.loads(old.read_text())["status"],"reconciled")
@@ -362,11 +362,14 @@ class SupervisorLoadingTests(unittest.TestCase):
         exec(compile(body,"protected-resource-control.py","exec"),namespace)
         with tempfile.TemporaryDirectory()as temporary:
             policy={"instance":"development","service_dir":temporary,"scheduler":copy.deepcopy(POLICY)}
-            stub="MEMORY_KEYS="+repr(set(config.MEMORY_KEYS))+"\ndef load(path):return "+repr(policy)+"\n"
+            fresh={**policy,"scheduler":{**policy["scheduler"],"cpu_budget_millis":1000,"cpu_priority":"broker"}}
+            stub="RESOURCE_KEYS="+repr(set(config.RESOURCE_KEYS))+"\ndef load(path):return "+repr(fresh)+"\n"
             (Path(temporary)/"config.py").write_text(stub)
             instance=namespace["Control"](copy.deepcopy(policy))
             with patch.dict(namespace["os"].environ,{"WEBAGENT_BUILD_CONFIG":"/protected/fixed.json"}):
                 result=instance.memory_policy()
+                instance.config["port"]=1
+                with self.assertRaisesRegex(PermissionError,"maintenance"):instance.memory_policy()
             self.assertEqual(result["values"],config.memory_policy(POLICY))
             self.assertEqual(result["sha256"],config.memory_policy_digest(POLICY))
 

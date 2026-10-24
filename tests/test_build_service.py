@@ -27,12 +27,42 @@ class ConfigurationTests(unittest.TestCase):
    legacy={k:v for k,v in value.items()if k!="api_pids_limit"}
    self.assertEqual(config.validate(legacy)["api_pids_limit"],256)
    self.assertEqual(config.validate({**value,"api_pids_limit":1024})["api_pids_limit"],1024)
+ def test_cpu_policy_requires_typed_budget_and_host_headroom(self):
+  value=config.defaults("/srv/one");value.update(service_account="builder",source_owner="owner")
+  with patch.object(config.os,"cpu_count",return_value=4),patch.object(config.pwd,"getpwnam",side_effect=self.account):
+   for budget in (True,-1,999,3001):
+    with self.assertRaises(ValueError):config.validate({**value,"scheduler":{**value["scheduler"],"cpu_budget_millis":budget}})
+   for priority in ("",None,"unlimited"):
+    with self.assertRaises(ValueError):config.validate({**value,"scheduler":{**value["scheduler"],"cpu_priority":priority}})
+   accepted=config.validate({**value,"scheduler":{**value["scheduler"],"cpu_priority":"broker","cpu_budget_millis":3000}})
+   self.assertEqual(config.cpu_policy(accepted["scheduler"]),{"cpu_priority":"broker","cpu_budget_millis":3000})
+
  def test_unprotected_config_rejected(self):
   with tempfile.TemporaryDirectory() as base:
    path=Path(base)/"config";path.write_text("{}");path.chmod(0o666)
    with self.assertRaises(PermissionError):config.load(path)
    link=Path(base)/"link";link.symlink_to(path)
    with self.assertRaises(PermissionError):config.load(link)
+class LiveResourcePolicyTests(unittest.TestCase):
+ def test_reload_requires_operator_protected_revision_and_matching_helper(self):
+  from unittest.mock import Mock
+  host=fixtures.host;broker=object.__new__(host.Broker);broker.runner=Mock();broker.resources=Mock()
+  policy=host._config_module.resource_policy(host.CONFIG["scheduler"])
+  fresh={**host.CONFIG,"scheduler":{**host.CONFIG["scheduler"],**policy,"cpu_priority":"broker"}}
+  args={"action":"reload_resource_policy","expected_policy_sha256":"old","policy_sha256":host._config_module.resource_policy_digest(fresh["scheduler"])}
+  with self.assertRaises(PermissionError):broker.reload_resource_policy(args,{})
+  broker.resources.adopt_resource_policy.assert_not_called()
+  with patch.object(host._config_module,"load",return_value=fresh),patch.object(host,"CONFIG",{**host.CONFIG,"scheduler":dict(host.CONFIG["scheduler"])}):
+   with self.assertRaises(ValueError):broker.reload_resource_policy({**args,"policy_sha256":"wrong"},{"local_caller":True})
+   broker.runner.resource_request.return_value={"sha256":"wrong","values":{}}
+   with self.assertRaises(ValueError):broker.reload_resource_policy(args,{"local_caller":True})
+   broker.resources.adopt_resource_policy.assert_not_called()
+   broker.runner.resource_request.return_value={"sha256":host._config_module.memory_policy_digest(fresh["scheduler"]),"values":host._config_module.memory_policy(fresh["scheduler"])}
+   broker.reload_resource_policy(args,{"local_caller":True})
+   broker.resources.adopt_resource_policy.assert_called_once_with(fresh["scheduler"],"old")
+   changed={**fresh,"port":1}
+   with patch.object(host._config_module,"load",return_value=changed),self.assertRaisesRegex(ValueError,"maintenance"):broker.reload_resource_policy(args,{"local_caller":True})
+
 class MaintenanceTests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.state=Path(self.temp.name)/"jobs";self.runner=fixtures.FakeRunner()

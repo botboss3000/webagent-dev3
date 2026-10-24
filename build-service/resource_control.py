@@ -37,14 +37,14 @@ class Control:
         return Path("/sys/fs/cgroup")/relative.lstrip("/")
     # @code-index {"version":1,"feature":"compiler-memory-policy","aliases":["compiler memory defaults","task memory overrides","live memory growth"],"purpose":"Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/compiler_memory_default_bytes","/compiler_memory_min_bytes","/compiler_memory_max_bytes","/allow_live_memory_increase"]}]}}
     def memory_policy(self):
-        """Reload only protected memory settings; identity, paths and other policy cannot drift."""
+        """Allow validated live CPU/memory settings; keep topology and other policy fixed."""
         path=os.environ.get("WEBAGENT_BUILD_CONFIG")
         current=self.config
         if path:
             spec=importlib.util.spec_from_file_location("root_memory_policy",Path(self.config["service_dir"])/"config.py");cfg=importlib.util.module_from_spec(spec);spec.loader.exec_module(cfg)
             current=cfg.load(path)
-            keys=cfg.MEMORY_KEYS
-            if {k:v for k,v in current.items()if k!="scheduler"}!={k:v for k,v in self.config.items()if k!="scheduler"}or {k:v for k,v in current["scheduler"].items()if k not in keys}!={k:v for k,v in self.config["scheduler"].items()if k not in keys}:raise PermissionError("Non-memory installation change requires maintenance")
+            keys=cfg.RESOURCE_KEYS
+            if {k:v for k,v in current.items()if k!="scheduler"}!={k:v for k,v in self.config.items()if k!="scheduler"}or {k:v for k,v in current["scheduler"].items()if k not in keys}!={k:v for k,v in self.config["scheduler"].items()if k not in keys}:raise PermissionError("Non-resource installation change requires maintenance")
         policy=current.get("scheduler",{})
         defaults={"compiler_memory_default_bytes":12*1024**3,"compiler_memory_min_bytes":1024**3,"compiler_memory_max_bytes":16*1024**3,"allow_live_memory_increase":False}
         values={k:policy.get(k,v)for k,v in sorted(defaults.items())}

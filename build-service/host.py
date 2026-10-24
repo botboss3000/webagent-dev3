@@ -3727,6 +3727,7 @@ class Broker:
         if action=="reconcile_release":return self.reconcile_release(request,args)
         if action=="successor_task":return self.successor_task(request,args)
         if action=="release_claims":return self.release_claims(request,args)
+        if action=="reload_resource_policy":return self.reload_resource_policy(args,request["trusted"])
         if action=="reload_memory_policy":return self.reload_memory_policy(args,request["trusted"])
         if action in self.scheduler.actions:return self.scheduler.handle(args,request["trusted"],request["workspace"])
         allowed = {"action", "task_id", "summary", "expected_inputs_sha256", "sync_decision",
@@ -4263,6 +4264,18 @@ class Broker:
         result.update(source_kind="untrusted_maintenance_metadata",completion_is_review_assertion=True)
         if deployed is not None and action=="record"and args.get("status")=="complete"and result.get("record",result).get("unit_id")=="__file__":
             self.review_policy.complete_if_ready(deployed)
+        return result
+
+    def reload_resource_policy(self,args,trusted):
+        """Only the protected operator may adopt allowlisted CPU/memory policy."""
+        if not trusted.get("local_caller")or set(args)!={"action","expected_policy_sha256","policy_sha256"}:raise PermissionError("Protected operator resource reload required")
+        fresh=_config_module.load()
+        if {k:v for k,v in fresh.items()if k!="scheduler"}!={k:v for k,v in CONFIG.items()if k!="scheduler"}or {k:v for k,v in fresh["scheduler"].items()if k not in _config_module.RESOURCE_KEYS}!={k:v for k,v in CONFIG["scheduler"].items()if k not in _config_module.RESOURCE_KEYS}:raise ValueError("Other installation changes require maintenance")
+        if args["policy_sha256"]!=_config_module.resource_policy_digest(fresh["scheduler"]):raise ValueError("Protected resource policy changed")
+        proof=self.runner.resource_request({"operation":"memory_policy"})
+        if proof["sha256"]!=_config_module.memory_policy_digest(fresh["scheduler"])or proof["values"]!=_config_module.memory_policy(fresh["scheduler"]):raise ValueError("Broker/helper memory policy mismatch")
+        result=self.resources.adopt_resource_policy(fresh["scheduler"],args["expected_policy_sha256"])
+        CONFIG["scheduler"].update(_config_module.resource_policy(fresh["scheduler"]))
         return result
 
     def reload_memory_policy(self,args,trusted):
