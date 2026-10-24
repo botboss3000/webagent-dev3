@@ -96,7 +96,7 @@ pub(crate) async fn quiesce_session_resources(app:&App,sid:&str)->Result<(),ApiE
     }
     if let Some(browser)=browser.as_ref() {
         if let Some(token)=browser["cookie"].as_str() {
-            app.store.delete(&format!("auth:{}",crate::digest(&json!(token)))).await?;
+            app.store.accounts_repository().logout(token).await?;
         }
         app.store.delete(&format!("administrator_browser:{sid}")).await?;
     }

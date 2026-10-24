@@ -115,3 +115,9 @@ pub fn account_status(account: &Value) -> Result<AccountStatus> {
 }
 
 pub use authentication::VerifiedCredentials;
+
+pub mod authentication_api;
+pub mod browser_login_api;
+pub mod registration_api;
+pub mod self_service;
+pub use sessions::SessionCandidate;

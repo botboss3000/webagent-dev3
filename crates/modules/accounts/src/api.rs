@@ -35,6 +35,21 @@ pub trait Host: Sync {
         &'a self,
         user: &'a str,
     ) -> impl Future<Output = Result<(i64, i64)>> + Send + 'a;
+
+    fn initial_guest_access(&self) -> crate::InitialAccess<'_>;
+    fn administrator_account(&self, record: &Value) -> Result<bool>;
+    fn registration_policy(&self) -> Result<Value>;
+    fn set_registration_policy(&self, registration: &str, expected: Option<u64>) -> Result<()>;
+    fn create_administrator<'a>(
+        &'a self,
+        username: &'a str,
+        hash: &'a str,
+        generation: &'a str,
+    ) -> impl Future<Output = Result<()>> + Send + 'a;
+    fn activate_registered_user<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> impl Future<Output = Result<()>> + Send + 'a;
     fn gate(&self) -> &Mutex<()>;
 }
 #[derive(Deserialize)]

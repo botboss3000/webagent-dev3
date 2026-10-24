@@ -472,6 +472,38 @@ struct ApiHost {
     gate: tokio::sync::Mutex<()>,
 }
 impl crate::api::Host for ApiHost {
+    fn initial_guest_access(&self) -> InitialAccess<'_> {
+        InitialAccess {
+            role: "guest",
+            tier_id: "anonymous",
+            profile_is_admin: false,
+        }
+    }
+    fn administrator_account(&self, _record: &Value) -> crate::api::Result<bool> {
+        Ok(self.admin.load(Ordering::SeqCst))
+    }
+    fn registration_policy(&self) -> crate::api::Result<Value> {
+        Ok(json!({"registration":"restricted","revision":1}))
+    }
+    fn set_registration_policy(
+        &self,
+        _registration: &str,
+        _expected: Option<u64>,
+    ) -> crate::api::Result<()> {
+        Err(anyhow::anyhow!("Not used by this management fixture").into())
+    }
+    async fn create_administrator<'a>(
+        &'a self,
+        _username: &'a str,
+        _hash: &'a str,
+        _generation: &'a str,
+    ) -> crate::api::Result<()> {
+        Err(anyhow::anyhow!("Not used by this management fixture").into())
+    }
+    async fn activate_registered_user<'a>(&'a self, _id: &'a str) -> crate::api::Result<()> {
+        Err(anyhow::anyhow!("Not used by this management fixture").into())
+    }
+
     fn initial_user_access(&self) -> crate::InitialAccess<'_> {
         fixture_user_access()
     }
@@ -818,4 +850,711 @@ async fn administrative_session_controller_redacts_and_revokes_only_the_target_a
         .await
         .unwrap()
         .is_some());
+}
+
+struct AuthHost<'a> {
+    fixture: &'a Fixture,
+    policy: std::sync::Mutex<Value>,
+    gate: tokio::sync::Mutex<()>,
+    administrator_allowed: std::sync::atomic::AtomicBool,
+}
+impl<'a> AuthHost<'a> {
+    fn new(fixture: &'a Fixture) -> Self {
+        Self {
+            fixture,
+            policy: std::sync::Mutex::new(
+                json!({"registration":"restricted","revision":1,"extension":{"preserve":true}}),
+            ),
+            gate: tokio::sync::Mutex::new(()),
+            administrator_allowed: std::sync::atomic::AtomicBool::new(true),
+        }
+    }
+}
+impl crate::api::Host for AuthHost<'_> {
+    fn initial_user_access(&self) -> InitialAccess<'_> {
+        fixture_user_access()
+    }
+    fn initial_guest_access(&self) -> InitialAccess<'_> {
+        InitialAccess {
+            role: "guest",
+            tier_id: "anonymous",
+            profile_is_admin: false,
+        }
+    }
+    async fn administrator<'a>(&'a self, _identity: &'a Value) -> crate::api::Result<()> {
+        Ok(())
+    }
+    fn administrator_account(&self, record: &Value) -> crate::api::Result<bool> {
+        Ok(record["user_id"] == "admin" && self.administrator_allowed.load(Ordering::SeqCst))
+    }
+    fn account_view(&self, record: &Value) -> crate::api::Result<Value> {
+        Ok(
+            json!({"user_id":record["user_id"],"username":record["username"],"status":record["status"],"role":record["role"],"tier_id":record["tier_id"],"access_revision":record["access_revision"]}),
+        )
+    }
+    async fn user_counts<'a>(&'a self, _user: &'a str) -> crate::api::Result<(i64, i64)> {
+        Ok((0, 0))
+    }
+    fn gate(&self) -> &tokio::sync::Mutex<()> {
+        &self.gate
+    }
+    fn registration_policy(&self) -> crate::api::Result<Value> {
+        Ok(self.policy.lock().unwrap().clone())
+    }
+    fn set_registration_policy(
+        &self,
+        registration: &str,
+        expected: Option<u64>,
+    ) -> crate::api::Result<()> {
+        let mut policy = self.policy.lock().unwrap();
+        let revision = policy["revision"].as_u64().unwrap();
+        if expected.is_some_and(|value| value != revision) {
+            return Err(anyhow::anyhow!("Policy revision changed").into());
+        }
+        RegistrationMode::from_policy(&json!({"registration":registration}))?
+            .write_policy(&mut policy)?;
+        policy["revision"] = json!(revision + 1);
+        Ok(())
+    }
+    async fn create_administrator<'a>(
+        &'a self,
+        username: &'a str,
+        hash: &'a str,
+        generation: &'a str,
+    ) -> crate::api::Result<()> {
+        let repo = self.fixture.repo();
+        let mut tx = self
+            .fixture
+            .pool
+            .begin()
+            .await
+            .map_err(anyhow::Error::from)?;
+        repo.create_admin_in(
+            &mut tx,
+            username,
+            hash,
+            generation,
+            InitialAccess {
+                role: "administrator",
+                tier_id: "operator",
+                profile_is_admin: true,
+            },
+        )
+        .await?;
+        tx.commit().await.map_err(anyhow::Error::from)?;
+        Ok(())
+    }
+    async fn activate_registered_user<'a>(&'a self, id: &'a str) -> crate::api::Result<()> {
+        let repo = self.fixture.repo();
+        let mut tx = self
+            .fixture
+            .pool
+            .begin()
+            .await
+            .map_err(anyhow::Error::from)?;
+        repo.apply_access_in(
+            &mut tx,
+            id,
+            AccessMutation {
+                expected_revision: 1,
+                status: AccountStatus::Active,
+                role: "user",
+                tier_id: "basic",
+                profile_is_admin: false,
+            },
+        )
+        .await?;
+        tx.commit().await.map_err(anyhow::Error::from)?;
+        Ok(())
+    }
+}
+async fn controller_response(response: axum::response::Response) -> (axum::http::HeaderMap, Value) {
+    let headers = response.headers().clone();
+    let bytes = axum::body::to_bytes(response.into_body(), 16384)
+        .await
+        .unwrap();
+    (headers, serde_json::from_slice(&bytes).unwrap())
+}
+fn controller_token(headers: &axum::http::HeaderMap) -> String {
+    headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .strip_prefix("v3_session=")
+        .unwrap()
+        .into()
+}
+async fn controller_identity(
+    repo: &Repository<'_, Codec>,
+    token: &str,
+    now: u64,
+    mode: RegistrationMode,
+) -> Value {
+    let session = repo
+        .authenticate_session(token, now, mode)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut doc = session.document;
+    doc["_user_id"] = json!(session.identity.user_id);
+    doc["_auth_key"] = json!(session.key);
+    doc["_role"] = repo
+        .account_state(doc["_user_id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap()["role"]
+        .clone();
+    doc
+}
+#[tokio::test]
+async fn native_authentication_controllers_keep_setup_policy_password_and_session_contracts() {
+    use crate::api::Error;
+    use axum::http::{HeaderMap, StatusCode};
+    let f = Fixture::new().await;
+    let repo = f.repo();
+    let host = AuthHost::new(&f);
+    let attempts = LoginAttempts::default();
+    let mut headers = HeaderMap::new();
+    headers.insert("host", "native.test".parse().unwrap());
+    assert_eq!(
+        crate::authentication_api::setup_status(&repo)
+            .await
+            .unwrap()
+            .0,
+        json!({"initialized":false})
+    );
+    let response = crate::authentication_api::setup_admin(
+        &repo,
+        &host,
+        &attempts,
+        &headers,
+        &json!({"username":"controller-owner","password":concat!("fixture-contr", "oller-password")}),
+        true,
+        100,
+    )
+    .await
+    .unwrap();
+    let (cookie, body) = controller_response(response).await;
+    assert!(cookie["set-cookie"].to_str().unwrap().ends_with("; Secure"));
+    assert!(body["csrf_token"].is_string());
+    let token = controller_token(&cookie);
+    let doc = controller_identity(&repo, &token, 100, RegistrationMode::Restricted).await;
+    assert_eq!(
+        crate::authentication_api::setup_status(&repo)
+            .await
+            .unwrap()
+            .0,
+        json!({"initialized":true})
+    );
+    let duplicate = crate::authentication_api::setup_admin(
+        &repo,
+        &host,
+        &attempts,
+        &headers,
+        &json!({"password":concat!("another-fixt", "ure-password")}),
+        true,
+        100,
+    )
+    .await;
+    assert!(matches!(
+        duplicate,
+        Err(Error::Public(StatusCode::CONFLICT, _))
+    ));
+    let me = crate::authentication_api::me(&repo, &host, &doc)
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(me["user"], "controller-owner");
+    assert_eq!(me["is_admin"], true);
+    assert!(me.get("password_hash").is_none());
+    assert!(me.get("generation").is_none());
+    assert_eq!(
+        crate::self_service::session_policy(&repo, &doc)
+            .await
+            .unwrap()
+            .0,
+        json!({"days":1})
+    );
+    assert_eq!(
+        crate::self_service::update_session_policy(&repo, &doc, &json!({"days":7}))
+            .await
+            .unwrap()
+            .0,
+        json!({"days":7})
+    );
+    assert!(matches!(
+        crate::self_service::update_session_policy(&repo, &doc, &json!({"days":2})).await,
+        Err(Error::Public(StatusCode::BAD_REQUEST, _))
+    ));
+    let second = crate::authentication_api::login(
+        &repo,
+        &host,
+        &attempts,
+        &headers,
+        &json!({"username":"controller-owner","password":concat!("fixture-contr", "oller-password")}),
+        true,
+        101,
+    )
+    .await
+    .unwrap();
+    let (second_cookie, _) = controller_response(second).await;
+    assert!(second_cookie["set-cookie"]
+        .to_str()
+        .unwrap()
+        .contains("Max-Age=604800"));
+    let second_token = controller_token(&second_cookie);
+    let second_session = repo
+        .authenticate_session(&second_token, 101, RegistrationMode::Restricted)
+        .await
+        .unwrap()
+        .unwrap();
+    let second_id = second_session.document["id"].as_str().unwrap();
+    let listing = crate::self_service::list_auth_sessions(&repo, &doc, 101)
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(listing["sessions"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        listing["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|session| session["current"] == true)
+            .count(),
+        1
+    );
+    assert_eq!(
+        crate::self_service::revoke_auth_session(&repo, &doc, second_id, 101)
+            .await
+            .unwrap()
+            .0["current"],
+        false
+    );
+    assert!(repo
+        .authenticate_session(&second_token, 101, RegistrationMode::Restricted)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(crate::self_service::change_password(&repo,&host,&doc,&json!({"current_password":"fixture-controller-password","new_password":"next-controller-password"})).await.unwrap().0["sign_in_required"],true);
+    assert!(repo
+        .authenticate_session(&token, 101, RegistrationMode::Restricted)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(matches!(
+        crate::authentication_api::login(
+            &repo,
+            &host,
+            &attempts,
+            &headers,
+            &json!({"username":"controller-owner","password":concat!("fixture-contr", "oller-password")}),
+            true,
+            102
+        )
+        .await,
+        Err(Error::Public(StatusCode::UNAUTHORIZED, _))
+    ));
+    let next = crate::authentication_api::login(
+        &repo,
+        &host,
+        &attempts,
+        &headers,
+        &json!({"username":"controller-owner","password":concat!("next-control", "ler-password")}),
+        true,
+        103,
+    )
+    .await
+    .unwrap();
+    let (next_cookie, _) = controller_response(next).await;
+    let next_token = controller_token(&next_cookie);
+    let mut logout_headers = HeaderMap::new();
+    logout_headers.insert(
+        "cookie",
+        format!("v3_session={next_token}").parse().unwrap(),
+    );
+    crate::authentication_api::logout(&repo, &logout_headers)
+        .await
+        .unwrap();
+    assert!(repo
+        .authenticate_session(&next_token, 103, RegistrationMode::Restricted)
+        .await
+        .unwrap()
+        .is_none());
+}
+#[tokio::test]
+async fn native_registration_controllers_keep_pending_activation_guest_recovery_and_live_policy() {
+    use crate::api::{Error, Host};
+    use axum::http::{HeaderMap, StatusCode};
+    let f = Fixture::new().await;
+    let repo = f.repo();
+    let host = AuthHost::new(&f);
+    let attempts = LoginAttempts::default();
+    let hash = hash_password("fixture-controller-password".into())
+        .await
+        .unwrap();
+    host.create_administrator("root", &hash, "initial")
+        .await
+        .unwrap();
+    let headers = HeaderMap::new();
+    let response=crate::registration_api::register(&repo,&host,&attempts,&headers,&json!({"username":"pending-member","password":concat!("fixture-mem", "ber-password"),"display_name":"Pending member"}),true,100).await.unwrap();
+    let (pending_headers, pending) = controller_response(response).await;
+    assert!(!pending_headers.contains_key("set-cookie"));
+    assert_eq!(pending["pending_approval"], true);
+    assert!(repo
+        .verify_credentials("pending-member", "fixture-member-password".into())
+        .await
+        .unwrap()
+        .is_none());
+    let admin = json!({"_user_id":"admin"});
+    assert_eq!(
+        crate::registration_api::set_mode(
+            &host,
+            &admin,
+            &json!({"access_mode":"public_registered","expected_revision":1}),
+        )
+        .await
+        .unwrap()
+        .0["guest_access"],
+        true
+    );
+    assert_eq!(
+        crate::registration_api::access_mode(&host).await.unwrap().0["guest_access"],
+        true
+    );
+    assert!(matches!(
+        crate::registration_api::set_mode(
+            &host,
+            &admin,
+            &json!({"access_mode":"admin_approval","expected_revision":1})
+        )
+        .await,
+        Err(Error::Public(StatusCode::CONFLICT, _))
+    ));
+    let response=crate::registration_api::register(&repo,&host,&attempts,&headers,&json!({"username":"active-member","password":concat!("fixture-mem", "ber-password"),"role":"administrator"}),true,100).await.unwrap();
+    let (member_headers, _) = controller_response(response).await;
+    let member_token = controller_token(&member_headers);
+    let member = repo
+        .authenticate_session(&member_token, 100, RegistrationMode::Open)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        repo.account_state(&member.identity.user_id)
+            .await
+            .unwrap()
+            .unwrap()["role"],
+        "user"
+    );
+    let guest = crate::registration_api::guest_login(&repo, &host, &attempts, &headers, true, 100)
+        .await
+        .unwrap();
+    let (first_headers, first) = controller_response(guest).await;
+    let first_token = controller_token(&first_headers);
+    let mut recovered_headers = HeaderMap::new();
+    recovered_headers.insert(
+        "cookie",
+        format!("v3_session={first_token}").parse().unwrap(),
+    );
+    let recovered = crate::registration_api::guest_login(
+        &repo,
+        &host,
+        &attempts,
+        &recovered_headers,
+        true,
+        100,
+    )
+    .await
+    .unwrap();
+    let (next_headers, next) = controller_response(recovered).await;
+    let next_token = controller_token(&next_headers);
+    assert_eq!(next["user_id"], first["user_id"]);
+    assert!(next_token != first_token);
+    assert!(repo
+        .authenticate_session(&first_token, 100, RegistrationMode::Open)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(repo
+        .authenticate_session(&next_token, 100, RegistrationMode::Open)
+        .await
+        .unwrap()
+        .is_some());
+    let mut member_cookie = HeaderMap::new();
+    member_cookie.insert(
+        "cookie",
+        format!("v3_session={member_token}").parse().unwrap(),
+    );
+    assert!(matches!(
+        crate::registration_api::guest_login(&repo, &host, &attempts, &member_cookie, true, 100)
+            .await,
+        Err(Error::Public(StatusCode::CONFLICT, _))
+    ));
+    assert_eq!(
+        crate::registration_api::set_mode(
+            &host,
+            &admin,
+            &json!({"access_mode":"admin_approval","expected_revision":2}),
+        )
+        .await
+        .unwrap()
+        .0["guest_access"],
+        false
+    );
+    assert!(repo
+        .authenticate_session(&next_token, 100, RegistrationMode::Restricted)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(matches!(
+        crate::registration_api::guest_login(&repo, &host, &attempts, &headers, true, 100).await,
+        Err(Error::Public(StatusCode::FORBIDDEN, _))
+    ));
+}
+#[tokio::test]
+async fn session_candidate_defers_only_generation_check_and_never_exposes_credentials() {
+    let f = Fixture::new().await;
+    let user = f.active("candidate-owner").await;
+    let repo = f.repo();
+    let session = repo.fixture_session(&user, 100, "browser").await.unwrap();
+    let mut account = repo.account_by_id(&user).await.unwrap().unwrap();
+    account["generation"] = json!("rotated");
+    f.save(&user, &account).await;
+    let candidate = repo
+        .inspect_session(&session.token, 100)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(candidate.account_state().get("password_hash").is_none());
+    assert_eq!(candidate.account_state()["status"], "active");
+    assert!(candidate.finish().is_none());
+    account["status"] = json!("disabled");
+    f.save(&user, &account).await;
+    assert!(repo
+        .inspect_session(&session.token, 100)
+        .await
+        .unwrap()
+        .is_none());
+}
+#[test]
+fn authorization_role_catalog_is_not_embedded_in_the_persistence_contract() {
+    assert!(InitialAccess {
+        role: "external_role",
+        tier_id: "external_tier",
+        profile_is_admin: false
+    }
+    .validate()
+    .is_ok());
+    assert!(InitialAccess {
+        role: "bad role",
+        tier_id: "external_tier",
+        profile_is_admin: false
+    }
+    .validate()
+    .is_err());
+}
+#[tokio::test]
+async fn cloned_login_budgets_share_the_existing_window() {
+    let budget = LoginAttempts::default();
+    let peer = budget.clone();
+    for _ in 0..4 {
+        assert!(budget.admit(100).await);
+    }
+    assert!(peer.admit(100).await);
+    assert!(!budget.admit(100).await);
+    assert!(!peer.admit(100).await);
+}
+
+#[tokio::test]
+async fn existing_admin_import_preserves_credentials_profiles_and_rollback_material() {
+    let f = Fixture::new().await;
+    let repo = f.repo();
+    let legacy = json!({"username":"imported-operator","password_hash":"legacy-fixture-hash","generation":"legacy-generation"});
+    let blob = f.codec.seal(&legacy).unwrap();
+    sqlx::query("INSERT INTO docs(key,value) VALUES('admin',?)")
+        .bind(&blob)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert!(repo.legacy_admin_exists().await.unwrap());
+    repo.import_original_admin().await.unwrap();
+    repo.import_original_admin().await.unwrap();
+    let account = repo
+        .account_by_username("imported-operator")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(account["user_id"], "admin");
+    assert_eq!(account["password_hash"], legacy["password_hash"]);
+    assert_eq!(account["generation"], legacy["generation"]);
+    assert_eq!(
+        repo.user_profile("admin").await.unwrap().unwrap()["default_agent_id"],
+        "shared_default"
+    );
+    let retained: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='admin'")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(retained, blob);
+    let public = repo
+        .account_state_by_username("imported-operator")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(public.get("password_hash").is_none());
+}
+#[tokio::test]
+async fn diagnostics_controller_keeps_bound_caller_live_authority_and_ten_minute_expiry() {
+    use crate::api::{Error, Host};
+    use axum::http::{HeaderMap, StatusCode};
+    let f = Fixture::new().await;
+    let repo = f.repo();
+    let host = AuthHost::new(&f);
+    host.create_administrator("operator", "fixture-admin-hash", "generation")
+        .await
+        .unwrap();
+    let fixture_token = "d".repeat(32);
+    let bridge = BrowserLoginBridge::configure(&fixture_token, "fixture-operator")
+        .unwrap()
+        .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        format!("Bearer {fixture_token}").parse().unwrap(),
+    );
+    let request = || crate::browser_login_api::LoginRequest {
+        caller_id: "fixture-operator".into(),
+    };
+    let response = crate::browser_login_api::login(
+        &repo,
+        &host,
+        Some(&bridge),
+        &headers,
+        request(),
+        true,
+        100,
+    )
+    .await
+    .unwrap();
+    let (cookie, body) = controller_response(response).await;
+    assert_eq!(body["expires_in"], 600);
+    assert_eq!(body["user_id"], "admin");
+    assert_eq!(cookie["cache-control"], "no-store");
+    assert!(cookie["set-cookie"]
+        .to_str()
+        .unwrap()
+        .contains("Max-Age=600"));
+    let token = controller_token(&cookie);
+    assert!(repo
+        .authenticate_session(&token, 699, RegistrationMode::Restricted)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(repo
+        .authenticate_session(&token, 700, RegistrationMode::Restricted)
+        .await
+        .unwrap()
+        .is_none());
+    host.administrator_allowed.store(false, Ordering::SeqCst);
+    assert!(matches!(
+        crate::browser_login_api::login(
+            &repo,
+            &host,
+            Some(&bridge),
+            &headers,
+            request(),
+            true,
+            100
+        )
+        .await,
+        Err(Error::Public(StatusCode::UNAUTHORIZED, _))
+    ));
+    host.administrator_allowed.store(true, Ordering::SeqCst);
+    headers.insert("origin", "https://native.test".parse().unwrap());
+    assert!(matches!(
+        crate::browser_login_api::login(
+            &repo,
+            &host,
+            Some(&bridge),
+            &headers,
+            request(),
+            true,
+            100
+        )
+        .await,
+        Err(Error::Public(StatusCode::UNAUTHORIZED, _))
+    ));
+}
+#[tokio::test]
+async fn trusted_browser_issuance_keeps_inspected_generation_and_account_status() {
+    let f = Fixture::new().await;
+    let id = f.active("trusted-browser-owner").await;
+    let repo = f.repo();
+    let mut account = repo.account_by_id(&id).await.unwrap().unwrap();
+    let generation = account["generation"].as_str().unwrap().to_owned();
+    let session = repo
+        .issue_trusted_browser_session(&id, &generation, 100, "bounded trusted browser", 600)
+        .await
+        .unwrap();
+    assert_eq!(session.expires, 700);
+    assert!(repo
+        .authenticate_session(&session.token, 100, RegistrationMode::Restricted)
+        .await
+        .unwrap()
+        .is_some());
+    account["generation"] = json!("rotated-browser-generation");
+    f.save(&id, &account).await;
+    assert!(repo
+        .issue_trusted_browser_session(&id, &generation, 100, "browser", 600)
+        .await
+        .is_err());
+    assert!(repo
+        .authenticate_session(&session.token, 100, RegistrationMode::Restricted)
+        .await
+        .unwrap()
+        .is_none());
+    account["status"] = json!("disabled");
+    f.save(&id, &account).await;
+    assert!(repo
+        .issue_trusted_browser_session(&id, "rotated-browser-generation", 100, "browser", 600)
+        .await
+        .is_err());
+}
+#[tokio::test]
+async fn initial_tier_repair_joins_transaction_and_preserves_identity_and_generation() {
+    let f = Fixture::new().await;
+    let repo = f.repo();
+    let guest = repo
+        .create_guest_account(InitialAccess {
+            role: "guest",
+            tier_id: "basic",
+            profile_is_admin: false,
+        })
+        .await
+        .unwrap();
+    let id = guest["user_id"].as_str().unwrap();
+    let before = repo.account_state(id).await.unwrap().unwrap();
+    let mut tx = f.pool.begin().await.unwrap();
+    repo.initialize_tier_assignment_in(&mut tx, "guest", "anonymous")
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(repo.account_state(id).await.unwrap().unwrap(), before);
+    let mut tx = f.pool.begin().await.unwrap();
+    repo.initialize_tier_assignment_in(&mut tx, "guest", "anonymous")
+        .await
+        .unwrap();
+    repo.initialize_tier_assignment_in(&mut tx, "guest", "anonymous")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let after = repo.account_state(id).await.unwrap().unwrap();
+    assert_eq!(after["user_id"], before["user_id"]);
+    assert_eq!(after["generation"], before["generation"]);
+    assert_eq!(after["tier_id"], "anonymous");
+    assert_eq!(
+        after["access_revision"].as_u64().unwrap(),
+        before["access_revision"].as_u64().unwrap() + 1
+    );
 }

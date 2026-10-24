@@ -125,3 +125,13 @@ impl VerifiedCredentials {
         &self.generation
     }
 }
+
+impl LoginAttempts {
+    /// Read-only host diagnostics keep admission counters opaque to other domains.
+    pub async fn is_empty(&self) -> bool {
+        self.0.lock().await.is_empty()
+    }
+    pub fn shares_state_with(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}

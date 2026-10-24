@@ -95,10 +95,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             crate::valid_id(id) && crate::valid_id(update.tier_id) && update.expected_revision > 0,
             "Invalid account update"
         );
-        ensure!(
-            matches!(update.role, "guest" | "user" | "administrator"),
-            "Invalid account role"
-        );
+        ensure!(crate::valid_id(update.role), "Invalid account role");
         self.lock_account_in(tx, id).await?;
         let blob: Vec<u8> = sqlx::query_scalar("SELECT value FROM user_accounts WHERE user_id=?")
             .bind(id)
@@ -211,10 +208,19 @@ pub struct InitialAccess<'a> {
 impl InitialAccess<'_> {
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
-            matches!(self.role, "guest" | "user" | "administrator")
-                && crate::valid_id(self.tier_id),
+            crate::valid_id(self.role) && crate::valid_id(self.tier_id),
             "Invalid initial account assignment"
         );
         Ok(())
+    }
+}
+
+impl<C: RecordCodec> Repository<'_, C> {
+    pub async fn account_state_by_username(&self, username: &str) -> Result<Option<Value>> {
+        Ok(self
+            .account_by_username(username)
+            .await?
+            .as_ref()
+            .map(state))
     }
 }

@@ -27,48 +27,6 @@ pub(crate) fn auth_key(token: &str) -> String {
     format!("auth:{}", webagent_configuration::digest(&json!(token)))
 }
 impl<C: RecordCodec> Repository<'_, C> {
-    pub async fn authenticate_session(
-        &self,
-        token: &str,
-        now: u64,
-        mode: RegistrationMode,
-    ) -> Result<Option<AuthenticatedSession>> {
-        if token.len() != 36 {
-            return Ok(None);
-        }
-        let key = auth_key(token);
-        let blob: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(&key)
-            .fetch_optional(self.app_pool)
-            .await?;
-        let Some(blob) = blob else {
-            return Ok(None);
-        };
-        let document = self.unseal(&blob)?;
-        if document["expires"].as_u64().unwrap_or(0) <= now {
-            return Ok(None);
-        }
-        let user = document["user_id"].as_str().unwrap_or("admin");
-        let Some(account) = self.account_by_id(user).await? else {
-            return Ok(None);
-        };
-        let Ok(identity) = crate::identity(&account) else {
-            return Ok(None);
-        };
-        if identity.user_id != user
-            || identity.status != AccountStatus::Active
-            || account["is_approved"] != true
-            || document["generation"] != account["generation"]
-            || (account["role"] == "guest" && mode != RegistrationMode::Open)
-        {
-            return Ok(None);
-        }
-        Ok(Some(AuthenticatedSession {
-            identity,
-            document,
-            key,
-        }))
-    }
     /// Revocation checks ownership in the same transaction as deletion.
     pub async fn revoke_session(&self, user: &str, id: &str) -> Result<bool> {
         let mut tx = self.app_pool.begin().await?;
@@ -197,6 +155,168 @@ impl RegistrationMode {
     pub fn write_policy(self, policy: &mut Value) -> Result<()> {
         anyhow::ensure!(policy.is_object(), "Invalid registration policy");
         policy["registration"] = json!(self.policy_name());
+        Ok(())
+    }
+}
+
+/// Session snapshot pending the host's live Access admission check.
+pub struct SessionCandidate {
+    identity: Identity,
+    document: Value,
+    key: String,
+    state: Value,
+    generation_matches: bool,
+}
+impl SessionCandidate {
+    pub fn account_state(&self) -> &Value {
+        &self.state
+    }
+    pub fn guest(&self) -> bool {
+        self.state["role"] == "guest"
+    }
+    pub fn finish(self) -> Option<AuthenticatedSession> {
+        self.generation_matches.then_some(AuthenticatedSession {
+            identity: self.identity,
+            document: self.document,
+            key: self.key,
+        })
+    }
+}
+impl<C: RecordCodec> Repository<'_, C> {
+    /// Access page authorization deliberately precedes generation validation in browser middleware.
+    pub async fn inspect_session(&self, token: &str, now: u64) -> Result<Option<SessionCandidate>> {
+        if token.len() != 36 {
+            return Ok(None);
+        }
+        let key = auth_key(token);
+        let blob: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+            .bind(&key)
+            .fetch_optional(self.app_pool)
+            .await?;
+        let Some(blob) = blob else {
+            return Ok(None);
+        };
+        let document = self.unseal(&blob)?;
+        if document["expires"].as_u64().unwrap_or(0) <= now {
+            return Ok(None);
+        }
+        let user = document["user_id"].as_str().unwrap_or("admin");
+        let Some(account) = self.account_by_id(user).await? else {
+            return Ok(None);
+        };
+        let Ok(identity) = crate::identity(&account) else {
+            return Ok(None);
+        };
+        if identity.user_id != user
+            || identity.status != AccountStatus::Active
+            || account["is_approved"] != true
+        {
+            return Ok(None);
+        }
+        let generation_matches = document["generation"] == account["generation"];
+        Ok(Some(SessionCandidate {
+            identity,
+            document,
+            key,
+            state: crate::access_records::state(&account),
+            generation_matches,
+        }))
+    }
+    pub async fn authenticate_session(
+        &self,
+        token: &str,
+        now: u64,
+        mode: RegistrationMode,
+    ) -> Result<Option<AuthenticatedSession>> {
+        let Some(candidate) = self.inspect_session(token, now).await? else {
+            return Ok(None);
+        };
+        if candidate.guest() && mode != RegistrationMode::Open {
+            return Ok(None);
+        }
+        Ok(candidate.finish())
+    }
+}
+
+impl<C: RecordCodec> Repository<'_, C> {
+    pub(crate) async fn auth_document(&self, token: &str) -> Result<Option<Value>> {
+        if token.len() != 36 {
+            return Ok(None);
+        }
+        let blob: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+            .bind(auth_key(token))
+            .fetch_optional(self.app_pool)
+            .await?;
+        blob.as_ref().map(|blob| self.unseal(blob)).transpose()
+    }
+}
+
+impl RegistrationMode {
+    pub const fn access_mode_name(self) -> &'static str {
+        match self {
+            Self::Open => "public_registered",
+            Self::Restricted => "admin_approval",
+        }
+    }
+}
+
+impl<C: RecordCodec> Repository<'_, C> {
+    /// The host supplies its inspected generation; never refresh a revoked browser authority.
+    pub async fn issue_trusted_browser_session(
+        &self,
+        user: &str,
+        expected_generation: &str,
+        now: u64,
+        user_agent: &str,
+        duration: u64,
+    ) -> Result<crate::IssuedSession> {
+        let account = self
+            .account_by_id(user)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Caller unavailable"))?;
+        let identity = crate::identity(&account)?;
+        anyhow::ensure!(
+            identity.user_id == user
+                && identity.status == AccountStatus::Active
+                && account["is_approved"] == true
+                && account["generation"] == expected_generation,
+            "Caller unavailable"
+        );
+        self.issue_versioned_session(&identity, expected_generation, now, user_agent, duration)
+            .await
+    }
+    /// Existing one-time grant repair: Access supplies the role and target tier; identity is unchanged.
+    pub async fn initialize_tier_assignment_in(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        role: &str,
+        tier: &str,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            crate::valid_id(role) && crate::valid_id(tier),
+            "Invalid initial account assignment"
+        );
+        let rows: Vec<(String, Vec<u8>)> =
+            sqlx::query_as("SELECT user_id,value FROM user_accounts")
+                .fetch_all(&mut **tx)
+                .await?;
+        for (id, blob) in rows {
+            let mut account = self.unseal(&blob)?;
+            if account["role"] != role || account["tier_id"] == tier {
+                continue;
+            }
+            account["tier_id"] = json!(tier);
+            account["access_revision"] = json!(account["access_revision"]
+                .as_u64()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("Account revision overflow"))?);
+            sqlx::query("UPDATE user_accounts SET value=? WHERE user_id=?")
+                .bind(self.seal(&account)?)
+                .bind(id)
+                .execute(&mut **tx)
+                .await?;
+        }
         Ok(())
     }
 }

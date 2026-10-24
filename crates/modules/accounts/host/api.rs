@@ -11,6 +11,53 @@ impl From<webagent_accounts::api::Error> for ApiError {
     }
 }
 impl webagent_accounts::api::Host for App {
+    fn initial_guest_access(&self) -> webagent_accounts::InitialAccess<'_> {
+        access::initial_guest_access()
+    }
+    fn administrator_account(&self, record: &Value) -> webagent_accounts::api::Result<bool> {
+        Ok(access::Principal::from_account(record)?.administrator())
+    }
+    fn registration_policy(&self) -> webagent_accounts::api::Result<Value> {
+        Ok(self.store.read_access_policy()?)
+    }
+    fn set_registration_policy(
+        &self,
+        registration: &str,
+        expected: Option<u64>,
+    ) -> webagent_accounts::api::Result<()> {
+        Ok(self
+            .store
+            .set_registration_policy_revision(registration, expected)?)
+    }
+    async fn create_administrator<'a>(
+        &'a self,
+        username: &'a str,
+        hash: &'a str,
+        generation: &'a str,
+    ) -> webagent_accounts::api::Result<()> {
+        Ok(self
+            .store
+            .create_admin_account(username, hash, generation)
+            .await?)
+    }
+    async fn activate_registered_user<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> webagent_accounts::api::Result<()> {
+        let assignment = access::initial_user_access();
+        let role = serde_json::from_value(json!(assignment.role)).map_err(anyhow::Error::from)?;
+        self.store
+            .update_account_access(
+                id,
+                1,
+                access::AccountStatus::Active,
+                role,
+                assignment.tier_id,
+            )
+            .await?;
+        Ok(())
+    }
+
     fn initial_user_access(&self) -> webagent_accounts::InitialAccess<'_> {
         access::initial_user_access()
     }
