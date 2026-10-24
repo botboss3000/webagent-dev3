@@ -180,6 +180,20 @@ async fn validate_destination(store:&Store,pool:&SqlitePool,id:&str,owner:&str) 
             bail!("Foreign or invalid agent audit receipt");
         }
     }
+    // Notes owns these exact encrypted records outside the agent: namespace.
+    let notes=sqlx::query("SELECT key,value FROM docs WHERE key IN ('main_chat','main_chat_pending','main_notes_emitted')")
+        .fetch_all(pool).await?;
+    for row in &notes {
+        let key:String=row.get("key");
+        let value=store.unseal(&row.get::<Vec<u8>,_>("value"))?;
+        let valid=match key.as_str() {
+            "main_notes_emitted"=>value.as_u64().is_some(),
+            "main_chat"=>value.is_object() && value["agent_id"].as_str()==Some(id),
+            "main_chat_pending"=>value.is_object() && value["state"]["agent_id"].as_str()==Some(id),
+            _=>false,
+        };
+        if !valid {bail!("Foreign or invalid agent Notes record");}
+    }
     let agent_count:i64=sqlx::query_scalar("SELECT count(*) FROM agents")
         .fetch_one(pool).await?;
     let conn_count:i64=sqlx::query_scalar("SELECT count(*) FROM agent_connections")
@@ -189,7 +203,7 @@ async fn validate_destination(store:&Store,pool:&SqlitePool,id:&str,owner:&str) 
     let doc_count:i64=sqlx::query_scalar("SELECT count(*) FROM docs")
         .fetch_one(pool).await?;
     if agent_count!=1 || conn_count!=value.connections.len() as i64
-        || prompt_count!=value.prompts.len() as i64 || doc_count!=(value.docs.len()+legacy_audits.len()) as i64 {
+        || prompt_count!=value.prompts.len() as i64 || doc_count!=(value.docs.len()+legacy_audits.len()+notes.len()) as i64 {
         bail!("Agent database contains foreign rows");
     }
     Ok(())
@@ -400,6 +414,46 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn notes_reopen_preserves_records_and_rejects_foreign_documents() {
+        let dir=tempfile::tempdir().unwrap();
+        let store=Store::open(dir.path()).await.unwrap();
+        store.create_admin_account("admin","fixture-hash","generation").await.unwrap();
+        let metadata=store.seal(&json!({"owner_id":"admin","ability_revision":0})).unwrap();
+        sqlx::query("INSERT INTO agents(id,name,description,provider,model,status,metadata,revision,created_at,updated_at) VALUES('notes_agent','Notes','','openai_subscription','fixture','active',?,1,1,1)")
+            .bind(metadata).execute(&store.agent_pool).await.unwrap();
+        store.migrate_agent_storage(dir.path()).await.unwrap();
+        let agent=store.for_agent("notes_agent").await.unwrap();
+        agent.main_chat_change(0,"notes-startup","fixture",vec![],|state| {
+            state["notes_version"]=json!(1);Ok(Value::Null)
+        }).await.unwrap();
+        let mut state=crate::main_chat::empty();state["agent_id"]=json!("notes_agent");
+        let pending=json!({"request":"pending-startup","state":state,"extra":[],"previous_session":null,"expected_session_revision":null});
+        sqlx::query("INSERT INTO docs(key,value) VALUES('main_chat_pending',?)")
+            .bind(agent.seal(&pending).unwrap()).execute(&agent.agent_pool).await.unwrap();
+        let before=sqlx::query("SELECT key,value FROM docs WHERE key IN ('main_chat','main_chat_pending','main_notes_emitted') ORDER BY key").fetch_all(&agent.agent_pool).await.unwrap()
+            .into_iter().map(|r|(r.get::<String,_>("key"),r.get::<Vec<u8>,_>("value"))).collect::<Vec<_>>();
+        let reopened=Store::open(dir.path()).await.unwrap();
+        reopened.migrate_agent_storage(dir.path()).await.unwrap();
+        let after=sqlx::query("SELECT key,value FROM docs WHERE key IN ('main_chat','main_chat_pending','main_notes_emitted') ORDER BY key").fetch_all(&agent.agent_pool).await.unwrap()
+            .into_iter().map(|r|(r.get::<String,_>("key"),r.get::<Vec<u8>,_>("value"))).collect::<Vec<_>>();
+        assert_eq!(before,after);
+        for (key,value) in [
+            ("main_chat",json!({"agent_id":"other_agent"})),
+            ("main_chat_pending",json!({"state":{"agent_id":"other_agent"}})),
+            ("main_notes_emitted",json!("invalid")),
+            ("foreign_notes",json!({})),
+        ] {
+            sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+                .bind(key).bind(agent.seal(&value).unwrap()).execute(&agent.agent_pool).await.unwrap();
+            assert!(store.migrate_agent_storage(dir.path()).await.is_err());
+            sqlx::query("DELETE FROM docs WHERE key=?").bind(key).execute(&agent.agent_pool).await.unwrap();
+            if let Some((_,bytes))=before.iter().find(|(k,_)|k==key) {
+                sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)").bind(key).bind(bytes).execute(&agent.agent_pool).await.unwrap();
+            }
+        }
+        store.migrate_agent_storage(dir.path()).await.unwrap();
+    }
     #[tokio::test]
     async fn reopen_rejects_malformed_destination_after_marker() {
         let dir=tempfile::tempdir().unwrap();

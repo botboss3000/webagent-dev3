@@ -71,6 +71,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-cert
     && groupadd -g 1100 v3 && useradd -u 1100 -g 1100 -M -s /usr/sbin/nologin v3app \
     && useradd -u 1101 -g 1100 -M -s /usr/sbin/nologin v3tools
 COPY --from=preview_tunnel /usr/local/bin/cloudflared /usr/local/bin/cloudflared
+# Refresh inherited security packages even when the prepared runtime base is reused.
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
 COPY --from=tested_builder /out/compiler/mold /usr/bin/mold
 COPY --from=tested_builder /out/compiler/mold /usr/bin/ld.mold
@@ -124,6 +127,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 1100 v3 && useradd -u 1100 -g 1100 -M -s /usr/sbin/nologin v3loop
 COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
+# These libraries are inherited from the pinned base rather than installed above.
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 perl-base \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inputs.txt
 COPY --chmod=0444 v3/config/prompts.json v3/config/tool-output-retention.json v3/config/engine-components.json v3/config/administration/native-tools.json /usr/local/share/webagent/defaults/
 RUN chmod 0755 /usr/local/share/webagent/defaults
