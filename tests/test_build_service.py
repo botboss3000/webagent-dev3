@@ -1900,3 +1900,29 @@ class CommandReturnBoundaryTests(unittest.TestCase):
   self.assertTrue(observation.parser.sensitive_continuation)
   observation.feed(b'ok\n');observation.flush(final=True,outcome='completed')
   self.assertNotIn('namespace::fixture',json.dumps(job))
+
+class SourceControlContractTests(unittest.TestCase):
+ def test_coordinated_native_tools_keep_an_exact_closed_contract(self):
+  import copy,shutil
+  host=fixtures.host
+  native=["source_remote_read","source_remote_commit","source_site_create","source_site_status",
+          "source_preview_start","source_preview_stop","source_publish","source_rollback"]
+  tools=["repository_access","git_tool","resolve_conflict","commit_and_push",*native]
+  self.assertEqual(host.GIT_CONTROL_TOOLS,tools)
+  source=Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/git_control"
+  with tempfile.TemporaryDirectory() as temporary:
+   folder=Path(temporary)/"git_control";shutil.copytree(source,folder)
+   manifest=json.loads((folder/"plugin.json").read_bytes());manifest["tools"]=tools
+   catalog=json.loads((folder/"git_control.json").read_bytes());catalog["tools"]=tools
+   (folder/"plugin.json").write_text(json.dumps(manifest));(folder/"git_control.json").write_text(json.dumps(catalog))
+   host.validate_git_control_package(folder)
+   for filename,value in (("plugin.json",manifest),("git_control.json",catalog)):
+    changed=copy.deepcopy(value);changed["tools"].append("unregistered_source_tool")
+    (folder/filename).write_text(json.dumps(changed))
+    with self.assertRaisesRegex(ValueError,"Incompatible Git Control"):
+     host.validate_git_control_package(folder)
+    (folder/filename).write_text(json.dumps(value))
+   changed=copy.deepcopy(manifest);changed["build"]["inputs"].append("unregistered.py")
+   (folder/"plugin.json").write_text(json.dumps(changed))
+   with self.assertRaisesRegex(ValueError,"Incompatible Git Control contract"):
+    host.validate_git_control_package(folder)

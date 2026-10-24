@@ -133,7 +133,9 @@ def validate_diagnostics_package(folder):
         if path.is_file()and path.suffix==".py":compile(path.read_bytes(),str(path),"exec")
 
 GIT_CONTROL_ROOT="v3/plugins/abilities/Administrator/git_control/"
-GIT_CONTROL_TOOLS=["repository_access","git_tool","resolve_conflict","commit_and_push"]
+GIT_CONTROL_TOOLS=["repository_access","git_tool","resolve_conflict","commit_and_push",
+    "source_remote_read","source_remote_commit","source_site_create","source_site_status",
+    "source_preview_start","source_preview_stop","source_publish","source_rollback"]
 GIT_CONTROL_MANIFEST={"version":1,"id":"git_control","protocol":1,"runtime":"python3","entrypoint":"transport.py","interface":1,
     "tools":GIT_CONTROL_TOOLS,"build":{"inputs":["adapter.py","transport.py","file_manager.py","askpass.py"],
     "dependencies":[],"toolchain":"image-python3","flags":["-I","-B"],
