@@ -81,7 +81,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 pub fn is_read(name: &str) -> bool {
-    name=="process_image" || core_vault::is_read(name) || core_visualizer::is_read(name) || core_webhooks::is_read(name) || core_orchestration::is_read(name) || core_ui_admin::is_read(name) || core_agent_management::is_read(name) || name=="list_models" || core_user_files::is_read(name) || name=="main_notes_read" || crate::modules::is_read(name) || matches!(name,"mcp_list_connections"|"mcp_search_servers"|"mcp_inspect_server"|"mcp_list_tools") || matches!(
+    crate::source_control::is_read(name) || name=="process_image" || core_vault::is_read(name) || core_visualizer::is_read(name) || core_webhooks::is_read(name) || core_orchestration::is_read(name) || core_ui_admin::is_read(name) || core_agent_management::is_read(name) || name=="list_models" || core_user_files::is_read(name) || name=="main_notes_read" || crate::modules::is_read(name) || matches!(name,"mcp_list_connections"|"mcp_search_servers"|"mcp_inspect_server"|"mcp_list_tools") || matches!(
         name,
         "task_status" | "task_wait" | "task_cancel"
             | "search_tools" | "list_tools" | "load_tool"

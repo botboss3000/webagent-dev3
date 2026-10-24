@@ -1,18 +1,26 @@
 {
-  "display_name": "Git Control",
+  "display_name": "Source Control",
   "kind": "ability",
   "icon": "git-branch",
   "color": "#9ece6a",
-  "description": "Version control only \u2014 status, diff, commit, push, branch, pull \u2014 without shell access. On by default.",
+  "description": "Git version control, remote GitHub source editing, and Cloudflare website previews and publishing.",
   "skill_summary": null,
-  "migration_note": "Compiled V3 adapter, scoped policy and configuration passed focused tests and authenticated V3 API acceptance. Execution still requires applicable installation, account-tier, agent, membership and session grants.",
+  "migration_note": "Remote provider tools require user-owned connections. Live GitHub/Cloudflare acceptance is pending; configuration and automated tests do not certify provider access.",
   "order": 3,
   "placeholder": false,
   "tools": [
     "repository_access",
     "git_tool",
     "resolve_conflict",
-    "commit_and_push"
+    "commit_and_push",
+    "source_remote_read",
+    "source_remote_commit",
+    "source_site_create",
+    "source_site_status",
+    "source_preview_start",
+    "source_preview_stop",
+    "source_publish",
+    "source_rollback"
   ],
   "readiness": "ready",
   "config": {

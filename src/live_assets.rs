@@ -18,7 +18,7 @@ pub(crate) fn native_schema_snapshot_at(source:Option<&std::path::Path>)->Result
  if bytes.len()>512*1024 {anyhow::bail!("Native schemas exceed limit");}
  let schemas:Vec<Value>=serde_json::from_slice(&bytes).map_err(|_|anyhow!("Invalid native schemas"))?;
  let mut ids=std::collections::BTreeSet::new();
- if schemas.len()!=42 {anyhow::bail!("Invalid native schema set");}
+ if schemas.len()!=42+crate::source_control::TOOLS.len() {anyhow::bail!("Invalid native schema set");}
  for schema in &schemas {
   let name=schema["name"].as_str().ok_or_else(||anyhow!("Invalid native schema identity"))?;
   let Some(object)=schema.as_object() else {anyhow::bail!("Invalid native schema");};

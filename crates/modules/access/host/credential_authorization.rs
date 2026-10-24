@@ -1,6 +1,7 @@
 //! Tool-owned account authorization is never a participant or agent-policy grant.
 use crate::*;
 pub(crate) fn declaration(name: &str) -> Option<Value> {
+    if crate::source_control::needs_approval(name) {return Some(json!({"kind":"source_control_owner"}));}
     tools::schemas()
         .into_iter()
         .find(|s| s["name"] == name)
@@ -18,6 +19,7 @@ pub(crate) async fn resolve(
     name: &str,
     args: &Value,
 ) -> Result<Option<Value>> {
+    if crate::source_control::needs_approval(name) {return Box::pin(crate::source_control::approval_binding(store,run,name,args)).await.map(Some);}
     match declaration(name) {
         Some(requirement) => Ok(Some(binding(store, run, name, args, &requirement).await?)),
         None => Ok(None),
@@ -25,6 +27,10 @@ pub(crate) async fn resolve(
 }
 pub(crate) async fn valid(store: &store::Store, run: &Value, pending: &Value) -> Result<bool> {
     let name = pending["name"].as_str().unwrap_or("");
+    if crate::source_control::needs_approval(name) {
+        let mut selected=run.clone();selected["pending"]=pending.clone();
+        return Ok(Box::pin(crate::source_control::approval_binding(store,&selected,name,&pending["arguments"])).await.is_ok_and(|v|v==pending["authorization"]));
+    }
     let Some(requirement) = declaration(name) else {
         return Ok(pending["authorization"].is_null());
     };

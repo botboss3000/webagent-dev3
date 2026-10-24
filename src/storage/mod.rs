@@ -569,6 +569,7 @@ impl Store {
         if key.starts_with("agent:") || key.starts_with("agent_abilities:") {
             &self.agent_pool
         } else if key=="migration:conversation_privacy_v1" || key.starts_with("module_state:")
+            || key.starts_with("core_source_control:")
             || key.starts_with("core_vault:")
             || key.starts_with("receipt:core_vault:")
             || key.starts_with("core_visual:")
@@ -1528,7 +1529,7 @@ impl Store {
             &metadata
         } else { value };
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-            .bind(key).bind(if key.starts_with("module_state:")||key.starts_with("receipt:module:")||key.starts_with("session_context_assets:"){self.seal(stored)?}else{self.encode_for_pool(self.pool_for(key), stored)?}).execute(&mut **tx).await?;
+            .bind(key).bind(if key.starts_with("core_source_control:")||key.starts_with("module_state:")||key.starts_with("receipt:module:")||key.starts_with("session_context_assets:"){self.seal(stored)?}else{self.encode_for_pool(self.pool_for(key), stored)?}).execute(&mut **tx).await?;
         Ok(())
     }
 

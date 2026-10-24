@@ -1,7 +1,7 @@
 //! Compiled Administrator contracts. Model arguments never choose identity,
 //! agent, workspace, credentials, host origin, or a Docker command.
 pub(crate) fn supported_schema_name(name:&str)->bool {
-    matches!(name,"code_index_scan"|"code_index_lookup"|"code_index_coverage"|"code_index_trace"|"code_index_progress"|"git_tool"|"resolve_conflict"|"commit_and_push"|"terminal_open"|"terminal_read"|"terminal_send"|"terminal_wait"|"terminal_list"|"terminal_close"|"v3_workspace_status"|"v3_workspace_action"|"v3_workspace_receipt"|"v3_cargo_task"|"v3_build_work"|"v3_source_list"|"v3_source_read"|"v3_source_prepare"|"v3_source_apply_prepared"|"v3_source_apply"|"v3_source_receipt"|"v3_build_status"|"v3_build_worker_restart"|"v3_build_image"|"v3_worker_submit"|"v3_worker_job"|"read_diagnostics"|"login_as_current_user"|"login_as_current_user_v3"|"dev_browser_url"|"dev_browser_action"|"dev_browser_record"|"start_tunnel"|"get_tunnel_url"|"repository_access"|"build_work"|"performance_work"|"code_index_maintenance")
+    crate::source_control::owns(name) || matches!(name,"code_index_scan"|"code_index_lookup"|"code_index_coverage"|"code_index_trace"|"code_index_progress"|"git_tool"|"resolve_conflict"|"commit_and_push"|"terminal_open"|"terminal_read"|"terminal_send"|"terminal_wait"|"terminal_list"|"terminal_close"|"v3_workspace_status"|"v3_workspace_action"|"v3_workspace_receipt"|"v3_cargo_task"|"v3_build_work"|"v3_source_list"|"v3_source_read"|"v3_source_prepare"|"v3_source_apply_prepared"|"v3_source_apply"|"v3_source_receipt"|"v3_build_status"|"v3_build_worker_restart"|"v3_build_image"|"v3_worker_submit"|"v3_worker_job"|"read_diagnostics"|"login_as_current_user"|"login_as_current_user_v3"|"dev_browser_url"|"dev_browser_action"|"dev_browser_record"|"start_tunnel"|"get_tunnel_url"|"repository_access"|"build_work"|"performance_work"|"code_index_maintenance")
 }
 
 use crate::*;
@@ -371,6 +371,7 @@ pub async fn execute(app:&App,sid:&str,run_id:&str,name:&str,args:&Value,pending
     let agent=session_agent_id(app,sid).await?;
     let run=app.run(run_id).await?;
     if run["session_id"]!=sid || run["agent_id"].as_str().unwrap_or("shared_default")!=agent {bail!("Current run/session mismatch");}
+    if crate::source_control::owns(name) {return Box::pin(crate::source_control::execute(app,sid,&run,name,args,pending_id,cancel)).await;}
     match name {
         "code_index_maintenance"=>super::code_index_maintenance::execute(app,sid,run_id,args,cancel).await,
         "code_index_lookup"=>{

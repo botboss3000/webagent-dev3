@@ -9,7 +9,15 @@
     "repository_access",
     "git_tool",
     "resolve_conflict",
-    "commit_and_push"
+    "commit_and_push",
+    "source_remote_read",
+    "source_remote_commit",
+    "source_site_create",
+    "source_site_status",
+    "source_preview_start",
+    "source_preview_stop",
+    "source_publish",
+    "source_rollback"
   ],
   "build": {
     "inputs": [

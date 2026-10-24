@@ -1504,5 +1504,403 @@
       "additionalProperties": false
     },
     "strict": false
+  },
+  {
+    "type": "function",
+    "name": "source_remote_read",
+    "description": "Read untrusted source directly from GitHub at an exact commit. No checkout or server-side build.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "connection_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "list_files",
+            "read_file",
+            "log",
+            "diff"
+          ]
+        },
+        "commit_sha": {
+          "type": "string",
+          "minLength": 40,
+          "maxLength": 40
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "base_sha": {
+          "type": "string",
+          "minLength": 40,
+          "maxLength": 40
+        }
+      },
+      "required": [
+        "site_id",
+        "connection_revision",
+        "operation",
+        "commit_sha"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "source_remote_commit",
+    "description": "Commit exact UTF-8 file edits on a webagent/ draft branch through GitHub APIs; never publishes production.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "connection_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "expected_head": {
+          "type": "string",
+          "minLength": 40,
+          "maxLength": 40
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "changes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "content": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 262144
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "site_id",
+        "connection_revision",
+        "request_id",
+        "branch",
+        "expected_head",
+        "message",
+        "changes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "source_site_create",
+    "description": "Configure a caller-owned site connection with public metadata, create a private GitHub repository and static Cloudflare Worker, or connect an existing static site. Configure returns private vault request names; tokens are never tool arguments.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "connection_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "create",
+            "connect",
+            "configure"
+          ]
+        },
+        "configuration": {
+          "type": "object",
+          "properties": {
+            "github_owner": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "github_repo": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "production_branch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "cloudflare_account_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "worker_name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 63
+            },
+            "build_token_uuid": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 36
+            },
+            "root_directory": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "build_command": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          },
+          "required": [
+            "github_owner",
+            "github_repo",
+            "production_branch",
+            "cloudflare_account_id",
+            "worker_name",
+            "build_token_uuid",
+            "root_directory",
+            "build_command"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "site_id",
+        "connection_revision",
+        "request_id",
+        "operation"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "source_site_status",
+    "description": "Inspect saved remote sites, exact build receipts and unresolved effects. With no site_id, lists your sites. No site source is stored locally.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "connection_revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "source_preview_start",
+    "description": "Request a remote Cloudflare build for an exact GitHub draft commit. Return its receipt; inspect status until ready.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "connection_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "commit_sha": {
+          "type": "string",
+          "minLength": 40,
+          "maxLength": 40
+        }
+      },
+      "required": [
+        "site_id",
+        "connection_revision",
+        "request_id",
+        "branch",
+        "commit_sha"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "source_preview_stop",
+    "description": "Cancel/reconcile pending build, delete only the recorded preview and verify its URLs. cleanup_pending is not disabled.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "connection_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      },
+      "required": [
+        "site_id",
+        "connection_revision",
+        "request_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "source_publish",
+    "description": "After explicit human approval, fast-forward production to the reviewed preview commit and request its exact remote build.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "connection_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "commit_sha": {
+          "type": "string",
+          "minLength": 40,
+          "maxLength": 40
+        },
+        "expected_production_sha": {
+          "type": "string",
+          "minLength": 40,
+          "maxLength": 40
+        }
+      },
+      "required": [
+        "site_id",
+        "connection_revision",
+        "request_id",
+        "commit_sha",
+        "expected_production_sha"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "source_rollback",
+    "description": "After explicit human approval, restore the recorded previous Cloudflare version. Source history is preserved.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "site_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "connection_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "version_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "expected_deployment_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      },
+      "required": [
+        "site_id",
+        "connection_revision",
+        "request_id",
+        "version_id",
+        "expected_deployment_id"
+      ],
+      "additionalProperties": false
+    }
   }
 ]

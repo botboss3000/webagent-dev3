@@ -139,6 +139,8 @@ pub(super) fn router(app: App) -> Router {
         .route("/agents/{id}/mcp/search",post(crate::mcp::search))
         .route("/agents/{id}/mcp/inspect",post(crate::mcp::inspect))
         .route("/agents/{id}/mcp/connections/{connection}",put(crate::mcp::put).delete(crate::mcp::remove))
+        .route("/agents/{id}/source-control/sites",get(crate::source_control::settings_get))
+        .route("/agents/{id}/source-control/sites/{site}",put(crate::source_control::settings_put))
         .route("/agents/{id}/repository-connections",get(repository::read))
         .route("/agents/{id}/repository-connections/{connection}",put(repository::put))
         .route("/agents/{id}/abilities",get(ability_admin::read))

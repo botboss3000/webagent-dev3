@@ -1,3 +1,4 @@
+import { buildSourceControlControls } from "./source-control.js";
 // V3 data adapter for the v2 Abilities composition, prompts group, and ability rows.
 import { buildAbilitiesOverview } from './overview.js';
 import { buildAdministratorControls } from './administrator.js';
@@ -28,7 +29,7 @@ export async function renderAbilities(host, request, options) {
   host._abilityGeneration = generation;
   const data = await request(scope + '/abilities');
   const canManage = data.authority?.can_manage === true;
-  const [slotsResult, compositionResult, effective, repository] = await Promise.all([
+  const [slotsResult, compositionResult, effective, repository, sourceSites] = await Promise.all([
     canManage ? request(scope + '/slots').catch(() => ({ slots: [] })) : { slots: [] },
     canManage ? request(scope + '/context-composition').catch(() => ({ tokens: 0 })) : { tokens: 0 },
     (levelId || previewUser) && canManage
@@ -37,6 +38,7 @@ export async function renderAbilities(host, request, options) {
           ...(previewUser ? { user_id: previewUser } : {}),
         })) : data,
     canManage ? request(scope + '/repository-connections').catch(() => ({ load_failed: true })) : null,
+    canManage ? request(scope + '/source-control/sites').catch(() => ({ load_failed: true })) : null,
   ]);
   if (host._abilityGeneration !== generation) return;
   const effectiveAbilities = effective.abilities || [];
@@ -153,6 +155,7 @@ export async function renderAbilities(host, request, options) {
       });
       tools.append(skill.row, skill.body);
     }
+    if (ability.id === "git_control" && canManage) tools.append(buildSourceControlControls({ data: sourceSites, request, scope, enabled: levelId === "operator" && !previewUser, status, rerender }));
     const administrator = buildAdministratorControls({ ability, data, repository, request, scope,
       levelId, previewUser, status, rerender });
     if (administrator) {

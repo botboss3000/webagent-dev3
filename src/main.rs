@@ -37,6 +37,7 @@ mod live_assets;
 mod ability_plugins;
 mod optimization;
 mod mcp;
+#[path = "../plugins/abilities/Administrator/git_control/remote/mod.rs"] mod source_control;
 mod optimization_settings;
 mod optimization_prompt;
 mod services;

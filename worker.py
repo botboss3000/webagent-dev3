@@ -73,7 +73,7 @@ async def stop_workspace_operations(workspace):
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-GIT_CONTROL_TOOLS = ["repository_access", "git_tool", "resolve_conflict", "commit_and_push"]
+GIT_CONTROL_TOOLS = ['repository_access', 'git_tool', 'resolve_conflict', 'commit_and_push', 'source_remote_read', 'source_remote_commit', 'source_site_create', 'source_site_status', 'source_preview_start', 'source_preview_stop', 'source_publish', 'source_rollback']
 
 def git_control_package():
     """Resolve one immutable, validated Git Control package per invocation."""

@@ -1,0 +1,5 @@
+# source_site_create
+
+Use operation=configure first to save public site metadata in the requesting user's Source Control connection. Supply configuration, site_id, request_id, and connection_revision=0 for a new connection (or its current revision when editing). No external repository or Worker is created during configure. The response contains credential_requests: activate Core Visualizer and request one missing name/origin at a time with request_credential, wait for the human save, then confirm with check_credential before requesting the next. Do not batch private forms. Only the human private panel accepts token values; never include secrets in configuration or tool arguments.
+
+After credentials are saved, use operation=create to create a private GitHub repository and static Cloudflare Worker, or connect for an existing static site. Omit configuration for these operations and supply the current connection_revision. Cloudflare GitHub App and a build token require one-time authorization. Reuse request_id for identical retries; reconcile uncertain external effects before new writes.
