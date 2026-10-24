@@ -327,3 +327,111 @@ class WorkspaceInitializationTests(unittest.TestCase):
                 with self.assertRaises(OSError):installer.workspace_directory(other)
                 with patch.dict(installer.CONFIG,{"worker_uid":os.getuid()+1}):
                     with self.assertRaises(PermissionError):installer.workspace_directory(sid)
+
+
+class GateSecurityTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec=importlib.util.spec_from_file_location('gate_lifecycle_tests',PATH.with_name('lifecycle.py'))
+        cls.lifecycle=importlib.util.module_from_spec(spec);spec.loader.exec_module(cls.lifecycle)
+    def gate(self,root):
+        return {'Id':'1'*64,'Image':'sha256:'+'2'*64,'Config':{'User':'1102:1100','Image':'sha256:'+'2'*64,'Hostname':'old','Labels':{},'Env':['V3_GATE_SOCKET=/run/v3/gate/gate.sock']},
+            'HostConfig':{'ReadonlyRootfs':True,'NetworkMode':'none','Privileged':False,'CapDrop':['ALL'],'CapAdd':None,'Devices':[],'DeviceRequests':None,'SecurityOpt':['no-new-privileges:true'],'Memory':64*1024**2,'PidsLimit':32,'NanoCpus':250000000},
+            'Mounts':[{'Type':'bind','Source':str(root/'gate-runtime'),'Destination':'/run/v3/gate','RW':True}], 'State':{'Status':'running','Health':{'Status':'healthy'}}}
+    def test_gate_isolation_refuses_each_authority_expansion(self):
+        import copy
+        root=Path('/fixture');before=self.gate(root);self.lifecycle.gate_boundary(before,root)
+        changes=[('ReadonlyRootfs',False),('NetworkMode','host'),('Privileged',True),('CapAdd',['SYS_ADMIN']),('Devices',[{}]),('DeviceRequests',[{}]),('CapDrop',[]),('SecurityOpt',[]),('Memory',0),('PidsLimit',0),('NanoCpus',0)]
+        for field,value in changes:
+            with self.subTest(field=field):
+                changed=copy.deepcopy(before);changed['HostConfig'][field]=value
+                with self.assertRaises(ValueError):self.lifecycle.gate_boundary(changed,root)
+        for change in ('identity','mount'):
+            changed=copy.deepcopy(before)
+            if change=='identity':changed['Config']['User']='0:0'
+            else:changed['Mounts'].append({'Type':'bind','Source':'/','Destination':'/host','RW':True})
+            with self.assertRaises(ValueError):self.lifecycle.gate_boundary(changed,root)
+    def test_replacement_preserves_captured_configuration(self):
+        import copy
+        before=self.gate(Path('/fixture'));original=copy.deepcopy(before)
+        result=self.lifecycle.gate_container_config(before,'sha256:'+'3'*64,'receipt')
+        self.assertEqual(result['HostConfig'],before['HostConfig']);self.assertEqual(result['Env'],before['Config']['Env']);self.assertEqual(before,original)
+        with self.assertRaises(ValueError):self.lifecycle.gate_container_config(before,'mutable:latest','receipt')
+    def test_gate_refresh_requires_root(self):
+        with patch.object(self.lifecycle.os,'geteuid',return_value=1000):
+            with self.assertRaises(PermissionError):self.lifecycle.gate_security('/unread','task-fixture','a'*36)
+    def workflow(self,fail_health=False):
+        import copy,io,tarfile
+        life=self.lifecycle
+        with tempfile.TemporaryDirectory()as td:
+            root=Path(td);old=self.gate(root);gate_name='gate-fixture';builder_prefix='buildx_buildkit_webagent-gate-security-';rid='a'*8+'-'+ 'a'*4+'-'+ 'a'*4+'-'+ 'a'*4+'-'+ 'a'*12
+            config={'service_dir':str(PATH.parent),'install_root':str(root/'protected/build-service'),'checkout_root':str(root),'gate_container':gate_name,'api_container':'api-fixture','loop_container':'loop-fixture'}
+            states={gate_name:copy.deepcopy(old),'api-fixture':{'Id':'api-id'},'loop-fixture':{'Id':'loop-id'}};events=[];pending={};new_image='sha256:'+'3'*64
+            def find(name):
+                return states.get(name)or next((v for v in states.values()if v.get('Id')==name),None)
+            def output(argv,**kwargs):
+                events.append(list(argv))
+                if argv[:2]==['docker','inspect']:
+                    v=find(argv[2]);assert v is not None,argv;return json.dumps([v]).encode()
+                if argv[:3]==['docker','image','inspect']:return json.dumps([{'Id':'sha256:'+'4'*64}]).encode()
+                if argv[:3]==['docker','buildx','inspect']:
+                    states[builder_prefix+rid+'0']={'Id':'builder-id','Image':'sha256:'+'4'*64,'HostConfig':{'Memory':2*1024**3,'MemorySwap':2*1024**3}};return b''
+                if argv[:2]==['docker','create']:return b'stage-id'
+                if argv[:2]==['docker','cp']:
+                    buf=io.BytesIO();data=b'fixed gate source\n'
+                    with tarfile.open(fileobj=buf,mode='w')as tar:
+                        m=tarfile.TarInfo('input');m.size=len(data);tar.addfile(m,io.BytesIO(data))
+                    return buf.getvalue()
+                if argv[:2]==['docker','run']and '-c'in argv:return json.dumps({p:hashlib.sha256(b'fixed gate source\n').hexdigest()for p in life.GATE_INPUTS}).encode()
+                if argv[:2]==['docker','stop']:find(argv[2])['State']['Status']='exited'
+                if argv[:2]==['docker','start']:find(argv[2])['State']['Status']='running'
+                if argv[:2]==['docker','rename']:
+                    v=find(argv[2]);key=next(k for k,x in states.items()if x is v);del states[key];states[argv[3]]=v
+                return b''
+            def run(argv,**kwargs):
+                if argv[:2]==['docker','inspect']:
+                    v=find(argv[2]);return types.SimpleNamespace(returncode=0 if v else 1,stdout=json.dumps([v]).encode()if v else b'')
+                self.assertEqual(argv[:3],['docker','buildx','build']);Path(argv[argv.index('--iidfile')+1]).write_text(new_image);return types.SimpleNamespace(returncode=0)
+            def request(conn,method,url,body,headers):pending.update(json.loads(body))
+            def response(conn):
+                candidate={'Id':'candidate-id','Image':new_image,'Config':{k:v for k,v in pending.items()if k!='HostConfig'},'HostConfig':pending['HostConfig'],'Mounts':copy.deepcopy(old['Mounts']),'State':{'Status':'created','Health':{'Status':'unhealthy'if fail_health else'healthy'}}};states[gate_name]=candidate
+                return types.SimpleNamespace(status=201,read=lambda:json.dumps({'Id':'candidate-id'}).encode())
+            operator=Mock(return_value={'busy':False,'queued':0,'drained':True,'task_id':'task-fixture'})
+            import http.client
+            original_read=Path.read_text
+            with patch.object(Path,'read_text',lambda p,*a,**kw:'MemAvailable: 33554432 kB\n'if str(p)=='/proc/meminfo'else original_read(p,*a,**kw)),patch.object(life,'gate_builder_limits',return_value={'memory_max':2*1024**3,'swap_max':0,'oom':0,'oom_kill':0}),patch.object(life.os,'geteuid',return_value=0),patch.object(life.cfg,'load',return_value=config),patch.object(life,'secure_dirs',side_effect=lambda p:p.mkdir(parents=True,exist_ok=True)),patch.object(life,'module',side_effect=lambda name,path:types.SimpleNamespace(operator=operator)if path.name=='reconfigure.py'else types.SimpleNamespace(BUILDKIT='pinned@sha256:'+'4'*64)),patch.object(life.subprocess,'check_output',side_effect=output),patch.object(life.subprocess,'run',side_effect=run),patch.object(life.time,'sleep'),patch('shutil.disk_usage',return_value=types.SimpleNamespace(free=32*1024**3)),patch.object(http.client.HTTPConnection,'request',request),patch.object(http.client.HTTPConnection,'getresponse',response):
+                if fail_health:
+                    with self.assertRaisesRegex(RuntimeError,'health'):life.gate_security('/protected','task-fixture',rid)
+                else:
+                    result=life.gate_security('/protected','task-fixture',rid);self.assertEqual(result['status'],'completed')
+                    replay=life.gate_security('/protected','task-fixture',rid);self.assertTrue(replay['replayed'])
+            receipt=json.loads((root/'protected/gate-security'/rid/'receipt.json').read_bytes())
+            self.assertEqual(receipt['status'],'rolled_back'if fail_health else'completed');self.assertEqual(states['api-fixture']['Id'],'api-id');self.assertEqual(states['loop-fixture']['Id'],'loop-id')
+            if fail_health:self.assertEqual(states[gate_name]['Id'],old['Id']);self.assertTrue(any('failed-gate-security' in n for n in states))
+            else:self.assertEqual(states[gate_name]['Image'],new_image);self.assertTrue(any('-gate-security-'in n and n.startswith(gate_name)for n in states))
+            self.assertTrue(any(e[:3]==['docker','buildx','rm']for e in events))
+    def test_gate_only_activation_and_idempotent_receipt(self):self.workflow()
+    def test_unhealthy_candidate_restores_exact_predecessor(self):self.workflow(fail_health=True)
+
+    def test_builder_kernel_limits_fail_closed(self):
+        identity='a'*64;scope='/sys/fs/cgroup/fixture/docker-'+identity+'.scope'
+        values={'/proc/99/cgroup':'0::/fixture/docker-'+identity+'.scope/init\n',scope+'/memory.max':str(2*1024**3),scope+'/memory.swap.max':'0',scope+'/memory.events':'oom 0\noom_kill 0\n'}
+        info={'Id':identity,'State':{'Pid':99}}
+        with patch.object(Path,'read_text',lambda p:values[str(p)]):
+            self.assertEqual(self.lifecycle.gate_builder_limits(info)['swap_max'],0)
+            self.assertEqual(self.lifecycle.gate_builder_limits(info)['scope'],scope)
+            with self.assertRaisesRegex(RuntimeError,'exact Docker scope'):
+                self.lifecycle.gate_builder_limits({'Id':'b'*64,'State':{'Pid':99}})
+            values['/proc/99/cgroup']='0::/fixture/docker-'+identity+'.scope\n'
+            self.assertEqual(self.lifecycle.gate_builder_limits(info)['scope'],scope)
+            for key,bad in [('memory.max','max'),('memory.swap.max','1024'),('memory.events','oom 0\noom_kill 1\n')]:
+                path=scope+'/'+key;before=values[path];values[path]=bad
+                with self.assertRaises(RuntimeError):self.lifecycle.gate_builder_limits(info)
+                values[path]=before
+    def test_idle_drain_is_checked_before_docker_effects(self):
+        life=self.lifecycle
+        for state in [{'busy':True,'queued':0,'drained':True,'task_id':'task-fixture'},{'busy':False,'queued':1,'drained':True,'task_id':'task-fixture'},{'busy':False,'queued':0,'drained':False,'task_id':'task-fixture'},{'busy':False,'queued':0,'drained':True,'task_id':'foreign-task'}]:
+            config={'service_dir':str(PATH.parent)}
+            with patch.object(life.os,'geteuid',return_value=0),patch.object(life.cfg,'load',return_value=config),patch.object(life,'module',return_value=types.SimpleNamespace(operator=Mock(return_value=state))),patch.object(life.subprocess,'check_output')as docker:
+                with self.assertRaisesRegex(RuntimeError,'idle broker drain'):life.gate_security('/protected','task-fixture','a'*36)
+                docker.assert_not_called()

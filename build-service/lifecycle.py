@@ -156,13 +156,181 @@ def resource_policy(config_path,candidate_path,task_id,dry_run=False):
    record.update(status="needs_reconciliation");atomic(receipt,record);raise
   return {"status":"completed","receipt_id":receipt_id,"policy_sha256":desired,"restart_required":False}
 
+GATE_BASE="debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251"
+GATE_INPUTS=("gate_worker.py","tests/test_gate_worker.py","plugins/gates/publication_size_guard_v1/gate.json","plugins/gates/publication_size_guard_v1/handler.py")
+def gate_recipe():
+ """Refresh only the gate OS image while retaining the captured gate implementation."""
+ return ("FROM "+GATE_BASE+"\nRUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 ca-certificates libpcre2-8-0 perl-base libexpat1 && rm -rf /var/lib/apt/lists/* && groupadd -g 1100 v3 && useradd -u 1102 -g 1100 -M -s /usr/sbin/nologin v3gate\nCOPY . /opt/v3/\nRUN chmod -R a+rX /opt/v3 && python3 -B -m unittest discover -s /opt/v3/tests -p test_gate_worker.py\nUSER 1102:1100\nENV V3_GATE_SOCKET=/run/v3/gate/gate.sock\nHEALTHCHECK --interval=10s --timeout=2s --start-period=5s --retries=3 CMD python3 -c 'import os,socket; p=os.environ[\"V3_GATE_SOCKET\"]; assert os.path.exists(p) and socket.socket(socket.AF_UNIX).connect_ex(p)==0'\nCMD [\"/usr/bin/python3\",\"-I\",\"/opt/v3/gate_worker.py\"]\n")
+def gate_boundary(value,root):
+ """Refuse unfamiliar gate authority instead of widening an existing container's access."""
+ h=value["HostConfig"];mounts=value["Mounts"]
+ if (value["Config"]["User"]!="1102:1100"or not h["ReadonlyRootfs"]or h["NetworkMode"]!="none"
+     or h.get("Privileged")or h.get("CapAdd")or h.get("Devices")or h.get("DeviceRequests")
+     or h.get("CapDrop")!=["ALL"]or h.get("SecurityOpt")!=["no-new-privileges:true"]
+     or h.get("Memory")!=64*1024**2 or h.get("PidsLimit")!=32 or h.get("NanoCpus")!=250000000
+     or len(mounts)!=1 or any(mounts[0].get(k)!=v for k,v in {"Type":"bind","Source":str(Path(root)/"gate-runtime"),"Destination":"/run/v3/gate","RW":True}.items())):
+  raise ValueError("Gate isolation differs from the fixed maintenance contract")
+def gate_container_config(previous,image,request_id):
+ """Retain the captured runtime contract; only image and receipt identity change."""
+ import copy,re
+ if not re.fullmatch(r"sha256:[a-f0-9]{64}",image):raise ValueError("Immutable gate image required")
+ result=copy.deepcopy(previous["Config"]);result.update(Image=image,Hostname="")
+ result["Labels"]={**(result.get("Labels")or{}),"webagent.gate-security":request_id}
+ result["HostConfig"]=copy.deepcopy(previous["HostConfig"])
+ return result
+
+def gate_builder_limits(info):
+ """Attest the dedicated builder's kernel cgroup cap and reject OOM before activation."""
+ pid=info['State']['Pid']
+ if type(pid)is not int or pid<1:raise RuntimeError("Builder PID unavailable")
+ groups=[line.split(':',2)[2]for line in Path('/proc/'+str(pid)+'/cgroup').read_text().splitlines()if line.startswith('0::')]
+ if len(groups)!=1 or '..'in Path(groups[0]).parts:raise RuntimeError("Builder cgroup unavailable")
+ import re
+ identity=info.get('Id')
+ if not isinstance(identity,str)or not re.fullmatch(r'[a-f0-9]{64}',identity):raise RuntimeError("Builder identity unavailable")
+ member=Path('/sys/fs/cgroup')/groups[0].lstrip('/')
+ # BuildKit's init subgroup inherits its exact Docker scope's limits.
+ group=next((p for p in [member,*member.parents]if p.name=='docker-'+identity+'.scope'),None)
+ if group is None:raise RuntimeError("Builder PID escaped the exact Docker scope")
+ for p in [group,*group.parents]:
+  if p==Path('/sys/fs/cgroup'):break
+  if p.is_symlink():raise RuntimeError("Builder cgroup symlink")
+ maximum=(group/'memory.max').read_text().strip();swap=(group/'memory.swap.max').read_text().strip()
+ events={k:int(v)for k,v in (line.split()for line in (group/'memory.events').read_text().splitlines())}
+ if maximum!=str(2*1024**3)or swap!='0'or events.get('oom',0)or events.get('oom_kill',0):raise RuntimeError("Builder kernel cap or OOM verification failed")
+ return {'scope':str(group),'memory_max':int(maximum),'swap_max':int(swap),'oom':events.get('oom',0),'oom_kill':events.get('oom_kill',0)}
+
+def gate_security(config_path,task_id,request_id,dry_run=False,rollback=False):
+ """Run root-only, idle-broker gate maintenance with fixed inputs and exact rollback identities."""
+ import copy,io,re,shutil,tarfile,http.client,socket
+ if os.geteuid()!=0:raise PermissionError("Gate maintenance requires the protected root operator")
+ if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id or"")or not re.fullmatch(r"[a-f0-9-]{36}",request_id or""):raise ValueError("Exact task and receipt IDs required")
+ c=cfg.load(config_path);folder=Path(c["service_dir"])
+ if Path(__file__).resolve()!=folder/"lifecycle.py":raise PermissionError("Use the reviewed protected lifecycle installation")
+ operation=module("gate_reconfiguration",folder/"reconfigure.py")
+ state=operation.operator(c,config_path,["maintenance","status"])
+ if state.get("busy")or state.get("queued")or not state.get("drained")or state.get("task_id")!=task_id:raise RuntimeError("Reserve an idle broker drain for this exact task")
+ def command(argv,timeout=90):return subprocess.check_output(argv,timeout=timeout)
+ def inspect(name):return json.loads(command(["docker","inspect",name]))[0]
+ def optional(name):
+  p=subprocess.run(["docker","inspect",name],capture_output=True)
+  return json.loads(p.stdout)[0]if p.returncode==0 else None
+ def healthy(name,image):
+  for _ in range(90):
+   v=inspect(name)
+   if v["Image"]!=image:raise RuntimeError("Gate image identity changed")
+   if v["State"]["Status"]=="running"and v["State"].get("Health",{}).get("Status")=="healthy":return
+   time.sleep(1)
+  raise RuntimeError("Gate health was not confirmed")
+ name=c["gate_container"];old=inspect(name);gate_boundary(old,c["checkout_root"])
+ if dry_run:return {"status":"validated","task_id":task_id,"gate_image":old["Image"],"retained_services":[c["api_container"],c["loop_container"]],"compile_required":False}
+ parent=Path(c["install_root"]).parent/"gate-security";secure_dirs(parent)
+ root=parent/request_id
+ if root.is_symlink():raise PermissionError("Gate receipt symlink")
+ root.mkdir(mode=0o700,exist_ok=True);receipt=root/"receipt.json"
+ def save(value):atomic(receipt,value);receipt.chmod(0o600)
+ if receipt.exists():
+  record=json.loads(receipt.read_bytes())
+  if record["task_id"]!=task_id:raise ValueError("Gate receipt belongs to another task")
+  if record["status"]=="completed":
+   if old["Id"]!=record.get("candidate_id")or old["Image"]!=record["image"]:raise RuntimeError("Completed gate receipt is no longer current")
+   healthy(name,record["image"]);return {"status":"completed","receipt_id":request_id,"image":record["image"],"replayed":True}
+  if not rollback:raise RuntimeError("Reconcile this retained gate receipt with --rollback before another attempt")
+ else:
+  for other in parent.glob('*/receipt.json'):
+   if other!=receipt and json.loads(other.read_bytes()).get('status')not in {'completed','rolled_back','failed_no_application_effects'}:raise RuntimeError("Reconcile earlier gate maintenance before another request")
+  if rollback:raise ValueError("No gate receipt to roll back")
+  healthy(name,old["Image"])
+  others={r:inspect(c[r+"_container"])["Id"]for r in ("api","loop")}
+  record={"task_id":task_id,"request_id":request_id,"status":"preparing","previous":old,"retained":others};save(record)
+ def retained():
+  if any(inspect(c[r+"_container"])["Id"]!=cid for r,cid in record["retained"].items()):raise RuntimeError("Retained API or loop identity changed")
+ backup=name+"-gate-security-"+request_id;failed=name+"-failed-gate-security-"+request_id
+ def restore():
+  retained();previous=record["previous"];current=optional(name)
+  if current and current["Id"]==previous["Id"] and any(current.get(k)!=previous[k]for k in ("Image","Config","HostConfig")):raise RuntimeError("Captured predecessor changed")
+  if current and current["Id"]!=previous["Id"]:
+   if record.get("candidate_id")and current["Id"]!=record["candidate_id"]:raise RuntimeError("Candidate gate identity changed")
+   if current["Image"]!=record.get("image")or(current["Config"].get("Labels")or{}).get("webagent.gate-security")!=request_id:raise RuntimeError("Foreign gate replacement; manual reconciliation required")
+   if optional(failed):raise RuntimeError("Failed gate quarantine already occupied")
+   command(["docker","stop",current["Id"]]);command(["docker","rename",current["Id"],failed])
+  if not current or current["Id"]!=previous["Id"]:
+   original=inspect(backup)
+   if any(original.get(k)!=previous[k]for k in ("Id","Image","Config","HostConfig")):raise RuntimeError("Captured predecessor changed")
+   command(["docker","rename",original["Id"],name])
+  command(["docker","start",previous["Id"]]);healthy(name,previous["Image"]);retained();record["status"]="rolled_back";save(record)
+ if rollback:
+  restore();return {"status":"rolled_back","receipt_id":request_id}
+ builder="webagent-gate-security-"+request_id;stage=None;builder_created=False
+ try:
+  # The idle drain excludes competing broker builds; protect host reserve and bound this builder ancestor.
+  memory=dict(line.split(":",1)for line in Path('/proc/meminfo').read_text().splitlines())
+  if int(memory['MemAvailable'].split()[0])*1024<10*1024**3 or shutil.disk_usage(root).free<16*1024**3:raise RuntimeError("Gate build needs 8 GiB host reserve plus 2 GiB RAM and 16 GiB free disk")
+  pinned=module("gate_fixed_executor",folder/"executor.py").BUILDKIT
+  pinned_id=json.loads(command(["docker","image","inspect",pinned]))[0]["Id"];command(["docker","image","inspect",GATE_BASE])
+  source=root/"source";source.mkdir(mode=0o700)
+  stage=command(["docker","create","--network","none","--entrypoint","/bin/true",old["Image"]]).decode().strip()
+  hashes={}
+  for relative in GATE_INPUTS:
+   raw=command(["docker","cp",stage+":/opt/v3/"+relative,"-"])
+   if len(raw)>2*1024**2:raise ValueError("Gate input archive bound")
+   with tarfile.open(fileobj=io.BytesIO(raw))as archive:
+    items=archive.getmembers()
+    if len(items)!=1 or not items[0].isfile()or items[0].size>1024**2:raise ValueError("Gate input must be one bounded regular file")
+    data=archive.extractfile(items[0]).read()
+   path=source/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data);path.chmod(0o644);hashes[relative]=hashlib.sha256(data).hexdigest()
+  (source/"Dockerfile").write_text(gate_recipe());hashes['Dockerfile']=hashlib.sha256((source/"Dockerfile").read_bytes()).hexdigest();record.update(inputs=hashes,status="building");save(record)
+  command(["docker","buildx","create","--name",builder,"--driver","docker-container","--driver-opt","image="+pinned,"--driver-opt","memory=2147483648","--driver-opt","memory-swap=2147483648","--driver-opt","cpu-period=100000","--driver-opt","cpu-quota=200000"]);builder_created=True
+  command(["docker","buildx","inspect",builder,"--bootstrap"],120)
+  info=inspect("buildx_buildkit_"+builder+"0")
+  if info['Image']!=pinned_id or info['HostConfig']['Memory']!=2*1024**3 or info['HostConfig']['MemorySwap']!=2*1024**3:raise RuntimeError("Gate builder cap not enforced")
+  record['builder_kernel_before']=gate_builder_limits(info)
+  record['builder']={'id':info['Id'],'image':info['Image'],'memory':info['HostConfig']['Memory'],'memory_swap':info['HostConfig']['MemorySwap']};save(record)
+  with (root/"build.log").open('wb')as log:
+   subprocess.run(["docker","buildx","build","--builder",builder,"--load","--progress=plain","--iidfile",str(root/"image.id"),str(source)],stdout=log,stderr=subprocess.STDOUT,timeout=900,check=True)
+  record['builder_kernel_after']=gate_builder_limits(inspect("buildx_buildkit_"+builder+"0"));save(record)
+  image=(root/"image.id").read_text().strip();gate_container_config(old,image,request_id)
+  if {p:hashlib.sha256((source/p).read_bytes()).hexdigest()for p in hashes}!=hashes:raise RuntimeError("Gate build inputs changed")
+  command(["docker","run","--rm","--network","none","--read-only","--user","1102:1100","--cap-drop","ALL","--security-opt","no-new-privileges:true","--memory","64m","--memory-swap","64m","--pids-limit","32","--tmpfs","/tmp:rw,nosuid,nodev,size=16m,uid=1102,gid=1100",image,"python3","-B","-m","unittest","discover","-s","/opt/v3/tests","-p","test_gate_worker.py"])
+  verify="import pathlib,hashlib,json; p=pathlib.Path('/opt/v3'); print(json.dumps({n:hashlib.sha256((p/n).read_bytes()).hexdigest()for n in "+repr(GATE_INPUTS)+"}))"
+  actual=json.loads(command(["docker","run","--rm","--network","none","--read-only","--user","1102:1100","--cap-drop","ALL","--security-opt","no-new-privileges:true","--memory","64m","--memory-swap","64m","--pids-limit","32",image,"python3","-I","-c",verify]))
+  if actual!={p:hashes[p]for p in GATE_INPUTS}:raise RuntimeError("Packaged gate code differs from captured implementation")
+  record['packaged_code_verified']=True;save(record)
+  retained();current=inspect(name)
+  if any(current.get(k)!=old[k]for k in ("Id","Image","Config","HostConfig")):raise RuntimeError("Gate changed during build")
+  record.update(image=image,status="activating");save(record)
+  command(["docker","stop",old['Id']]);command(["docker","rename",old['Id'],backup])
+  class DockerConnection(http.client.HTTPConnection):
+   def connect(self):
+    self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);self.sock.settimeout(30);self.sock.connect('/var/run/docker.sock')
+  conn=DockerConnection('localhost',timeout=30)
+  try:
+   body=json.dumps(gate_container_config(old,image,request_id));conn.request('POST','/containers/create?name='+name,body,{'Content-Type':'application/json'});response=conn.getresponse();value=json.loads(response.read())
+   if response.status!=201:raise RuntimeError("Gate container creation rejected")
+   candidate=value['Id'];record['candidate_id']=candidate;save(record)
+  finally:conn.close()
+  command(["docker","start",candidate]);healthy(name,image);gate_boundary(inspect(name),c['checkout_root']);retained()
+  record.update(status="completed",completed_at=time.time());save(record)
+  return {'status':'completed','receipt_id':request_id,'image':image,'rollback_container':backup,'retained_api_loop':True}
+ except BaseException:
+  record['status']='needs_reconciliation';save(record)
+  if record.get('image'):restore()
+  else:record['status']='failed_no_application_effects';save(record)
+  raise
+ finally:
+  if stage:command(["docker","rm",stage])
+  if builder_created:command(["docker","buildx","rm",builder])
+
 def main():
- parser=argparse.ArgumentParser();parser.add_argument("action",choices=("install","validate","status","start","stop","drain","resume","reconfigure","resource-policy"))
+ parser=argparse.ArgumentParser();parser.add_argument("action",choices=("install","validate","status","start","stop","drain","resume","reconfigure","resource-policy","gate-security"))
  parser.add_argument("--config",default=os.environ.get("WEBAGENT_BUILD_CONFIG"));parser.add_argument("--instance",default="development")
  parser.add_argument("--checkout-root");parser.add_argument("--service-account",default="webagent-build")
  parser.add_argument("--api-container");parser.add_argument("--loop-container");parser.add_argument("--gate-container")
  parser.add_argument("--bind-address",default="127.0.0.1");parser.add_argument("--port",type=int,default=8081);parser.add_argument("--public-origin",default="http://127.0.0.1:8081")
- parser.add_argument("--install-tree");parser.add_argument("--task-id");parser.add_argument("--candidate-config");parser.add_argument("--dry-run",action="store_true");args=parser.parse_args()
+ parser.add_argument("--install-tree");parser.add_argument("--task-id");parser.add_argument("--candidate-config");parser.add_argument("--dry-run",action="store_true");parser.add_argument("--request-id");parser.add_argument("--rollback",action="store_true");args=parser.parse_args()
+ if args.action=="gate-security":
+  if not args.config or not args.task_id or not args.request_id:parser.error("Protected configuration, task and receipt IDs required")
+  print(json.dumps(gate_security(args.config,args.task_id,args.request_id,args.dry_run,args.rollback)));return
  if args.action=="install":install(args);return
  if args.action=="resource-policy":
   if not args.config or not args.candidate_config or not args.task_id:parser.error("Exact current/candidate protected configs and task ID required")
