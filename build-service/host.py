@@ -532,6 +532,58 @@ def context_digest(blob):
     return hashlib.sha256(canonical(entries)).hexdigest(), len(entries)
 
 
+# Terminal failure classification (P2): additive fields next to the reason, never
+# instead of it, so triage does not need to open a megabyte of captured output.
+FAILURE_DRIFT_MARKERS=(
+    "changed application inputs","changed captured application inputs","changed during UI release",
+    "changed during rebase","changed during image build","changed during publication","changed during preparation",
+    "source conflict:","release base changed","frozen release changed","frozen UI release changed",
+    "build inputs changed","changed before deployment","Checkout differs from the deployed release",
+    "release snapshot changed","rebased release snapshot changed","Retained artifact changed","Retained engine")
+FAILURE_TEST_MARKERS=("panicked at","test result: FAILED","failures:","has overflowed its stack","fatal runtime error")
+FAILURE_COMPILE_MARKERS=("error[E","error: could not compile","error: linking with","error: linking")
+FAILURE_LINE_MARKERS=FAILURE_COMPILE_MARKERS+("panicked at","fatal runtime error","has overflowed its stack")
+def failure_fields(error,limit=5):
+    """Return the bounded terminal cause: kind, failing test names and the first error line."""
+    text=str(error)
+    if isinstance(error,PermissionError)or text.startswith("Permission"):kind="authority"
+    elif any(marker in text for marker in FAILURE_DRIFT_MARKERS):kind="input-drift"
+    elif any(marker in text for marker in FAILURE_COMPILE_MARKERS):kind="compile"
+    elif any(marker in text for marker in FAILURE_TEST_MARKERS):kind="test"
+    else:kind="contract"
+    line=""
+    for candidate in text.splitlines():
+        if any(marker in candidate for marker in FAILURE_LINE_MARKERS):
+            line=candidate.strip()[:500];break
+    tests=[]
+    lines=text.splitlines()
+    for index,candidate in enumerate(lines):
+        if candidate.strip()=="failures:":
+            for name in lines[index+1:]:
+                entry=name.strip()
+                if not entry or not name.startswith("    "):break
+                if len(entry)<=160:tests.append(entry)
+                if len(tests)>=limit:break
+            break
+    if not tests:
+        for candidate in lines:
+            match=re.match(r"test (.+?) \.\.\. FAILED",candidate)
+            if match:tests.append(match.group(1)[:160])
+            if len(tests)>=limit:break
+    return {"failure_kind":kind,"failing_tests":tests[:limit],"failure_line":line}
+
+@contextlib.contextmanager
+def host_phase(job,name):
+    """Attribute host-side publication and packaging work in phase_timings (P3)."""
+    started=time.monotonic();outcome="failed"
+    try:
+        yield
+        outcome="completed"
+    finally:
+        job.setdefault("phase_timings",[]).append({"phase":name,"recipe":"host:v1:"+name,"seconds":round(time.monotonic()-started,3),"outcome":outcome})
+        job["phase_timings"]=job["phase_timings"][-128:]
+
+
 
 def read_sqlite_snapshot(path, offset, limit):
     """Paginated text export from an immutable task backup, never a live DB.
@@ -2150,8 +2202,10 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                     cache.ready(blob)
                     self.job_context.source_blob=blob
                 transform=packaging_cache_module.package_dockerfile if cache is not None and cache.enabled else None
-                packaging=self.executor.package(blob,artifacts,lambda data:release.entries(data,context_digest),role=role,destination=packaging_path,recipe_transform=transform)
-                image,package_log=self._build_packaged(packaging,job_id,role)
+                with host_phase(job,"packaging_"+role):
+                    packaging=self.executor.package(blob,artifacts,lambda data:release.entries(data,context_digest),role=role,destination=packaging_path,recipe_transform=transform)
+                with host_phase(job,"image_build_"+role):
+                    image,package_log=self._build_packaged(packaging,job_id,role)
                 with packaging_path.open("rb") as stream:
                     context_sha256=hashlib.file_digest(stream,"sha256").hexdigest()
             finally:packaging_path.unlink(missing_ok=True)
@@ -2888,7 +2942,7 @@ class Broker:
         except Exception as error:
             job.update(status="failed", phase="admission_failed",
                        reason=scrub(str(error), self.runner.secrets),
-                       finished_at=time.time())
+                       finished_at=time.time(), **failure_fields(error))
             self._save(job)
 
     def _maybe_start_parallel_ui(self):
@@ -3027,7 +3081,7 @@ class Broker:
             except Exception as error:
                 job.update(status="failed", phase="admission_failed",
                            reason=scrub(str(error), self.runner.secrets),
-                           finished_at=time.time())
+                           finished_at=time.time(), **failure_fields(error))
                 self._save(job)
 
     def _cancel_job(self, args, trusted, workspace):
@@ -5700,7 +5754,8 @@ class Broker:
                     stream.write(canonical(previous))
                     stream.flush()
                     os.fsync(stream.fileno())
-                self.runner.export([previous[r]["Image"] for r in ("api", "loop")], private / "rollback-images.tar")
+                with host_phase(job,"rollback_export"):
+                    self.runner.export([previous[r]["Image"] for r in ("api", "loop")], private / "rollback-images.tar")
                 if job.get("isolated"):
                     prepared = release.snapshot(Path(job["release_root"]), CONTEXT, context_digest)
                     if context_digest(prepared)[0] != job["inputs_sha256"]:
@@ -5717,10 +5772,12 @@ class Broker:
                 # Packaging and final preparation may be separated by a rebase.
                 # An absent output must fail while both original consumers still run.
                 self._phase(job, "checking_candidate_images")
-                self.runner.preflight_deploy_images(job["images"],job["job_id"])
+                with host_phase(job,"checking_candidate_images"):
+                    self.runner.preflight_deploy_images(job["images"],job["job_id"])
                 self._phase(job,"checking_runtime_mounts")
                 # Production Runner always implements this gate; legacy test adapters can omit it.
-                if hasattr(self.runner,"preflight_runtime_mounts"):self.runner.preflight_runtime_mounts(job,previous)
+                if hasattr(self.runner,"preflight_runtime_mounts"):
+                    with host_phase(job,"checking_runtime_mounts"):self.runner.preflight_runtime_mounts(job,previous)
                 # Record intent before each externally visible mutation. On a
                 # crash the next broker only reconciles, never retries it.
                 self._phase(job, "stopping_loop")
@@ -5736,40 +5793,47 @@ class Broker:
                     job["effects_started"] = True
                     self._save(job)
                 mutated = True
-                self.runner.stop(TARGETS[1])
+                with host_phase(job,"stopping_loop"):
+                    self.runner.stop(TARGETS[1])
                 self._phase(job, "stopping_api")
-                self.runner.stop(TARGETS[0])
+                with host_phase(job,"stopping_api"):
+                    self.runner.stop(TARGETS[0])
                 self._phase(job, "switching_ui")
-                self.runner.activate_assets(job["job_id"])
+                with host_phase(job,"switching_ui"):
+                    self.runner.activate_assets(job["job_id"])
                 for role, name in zip(("api", "loop"), TARGETS):
                     self._phase(job, "renaming_" + role)
                     self.runner.rename(name, job["rollback"][role])
                     self._phase(job, "creating_" + role)
-                    if job.get("isolated"):
-                        created=self.runner.create(name, job["images"][role], previous[role],
-                                           job["release_root"])
-                        if isinstance(created,str)and re.fullmatch(r"[a-f0-9]{64}",created):
-                            job.setdefault("candidate_containers",{})[role]=created;self._save(job)
-                    else:
-                        self.runner.create(name, job["images"][role], previous[role])
-                    self._phase(job, "starting_" + role)
-                    self.runner.start(name)
+                    with host_phase(job,"recreate_"+role):
+                        if job.get("isolated"):
+                            created=self.runner.create(name, job["images"][role], previous[role],
+                                               job["release_root"])
+                            if isinstance(created,str)and re.fullmatch(r"[a-f0-9]{64}",created):
+                                job.setdefault("candidate_containers",{})[role]=created;self._save(job)
+                        else:
+                            self.runner.create(name, job["images"][role], previous[role])
+                        self._phase(job, "starting_" + role)
+                        self.runner.start(name)
                 # API readiness depends on the loop heartbeat. Start both
                 # replacements before waiting for either, retaining a durable
                 # checkpoint and live lease check for every health phase.
                 for role, name in zip(("api", "loop"), TARGETS):
                     self._phase(job, "checking_" + role)
-                    if not self.runner.healthy(name, job["images"][role]):
-                        raise RuntimeError("replacement V3 " + role + " not healthy; rollback material retained")
+                    with host_phase(job,"checking_"+role):
+                        if not self.runner.healthy(name, job["images"][role]):
+                            raise RuntimeError("replacement V3 " + role + " not healthy; rollback material retained")
                 if self.runner.ui_hot_swappable():
                     self.runner.promote_live_ui(self._current_release_blob(), blob, job.get("changed_paths", ()))
                     self._phase(job, "checking_ui")
-                    self.runner.verify_ui(job.get("changed_paths", ()))
+                    with host_phase(job,"checking_ui"):
+                        self.runner.verify_ui(job.get("changed_paths", ()))
             if hasattr(self.runner,"engine_execution_modes"):
                 job["engine_execution_modes"]=self.runner.engine_execution_modes(job["job_id"])
             if job.get("isolated"):
                 self._phase(job, "promoting_checkout")
-                self.runner.promote_checkout(self._current_release_blob(), blob, job["changed_paths"])
+                with host_phase(job,"promoting_checkout"):
+                    self.runner.promote_checkout(self._current_release_blob(), blob, job["changed_paths"])
                 job["synchronization"] = self._sync_report(blob, blob, ())
             after, _ = context_digest(
                 release.snapshot(Path(job["release_root"]), CONTEXT, context_digest)
@@ -5786,6 +5850,8 @@ class Broker:
             with self.lock:
                 job["status"] = "uncertain" if mutated or job.get("effects_started") else ("cancelled" if isinstance(error, PermissionError) else "failed")
                 job["reason"] = scrub(str(error), self.runner.secrets)
+                job.update({key: (scrub(value, self.runner.secrets) if isinstance(value, str) else [scrub(name, self.runner.secrets) for name in value])
+                           for key, value in failure_fields(error).items()})
                 if getattr(error, "log", None):
                     job["log"] = scrub(job.get("log", "") + error.log, self.runner.secrets)[-MAX_LOG:]
                 job["finished_at"] = time.time()

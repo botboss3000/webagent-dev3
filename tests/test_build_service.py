@@ -1701,6 +1701,49 @@ class InputDriftFailFastTests(unittest.TestCase):
    self.assertEqual(job,snapshot);self.assertEqual(sorted(p.name for p in folder.iterdir()),["base.tar","task.tar"])
 
 
+class FailureFieldTests(unittest.TestCase):
+ """P2: a receipt names its kind, failing tests and the real cause line."""
+ def fields(self,text,error=None):
+  h=fixtures.host
+  return h.failure_fields(error if error is not None else ValueError(text))
+ def test_stack_overflow_is_a_test_failure_with_the_cause_line(self):
+  fields=self.fields("fixed command failed: \nrunning 853 tests\ntest actions::x::y ... ok\nthread 'actions::x::z' has overflowed its stack\nfatal runtime error: stack overflow, aborting\n")
+  self.assertEqual(fields["failure_kind"],"test")
+  self.assertIn("overflowed its stack",fields["failure_line"])
+ def test_failing_tests_are_named_from_libtest_output(self):
+  fields=self.fields("fixed command failed: \ntest alpha ... FAILED\ntest beta ... ok\nfailures:\n    gamma::delta\n    epsilon\n\n")
+  self.assertEqual(fields["failure_kind"],"test")
+  self.assertEqual(fields["failing_tests"],["gamma::delta","epsilon"])
+ def test_compile_drift_and_authority_kinds(self):
+  self.assertEqual(self.fields("error[E0432]: unresolved import `x`")["failure_kind"],"compile")
+  self.assertEqual(self.fields("error: could not compile `webagent-v3` due to previous error")["failure_kind"],"compile")
+  self.assertEqual(self.fields("runtime build inputs changed during UI release")["failure_kind"],"input-drift")
+  self.assertEqual(self.fields("Compilation changed application inputs")["failure_kind"],"input-drift")
+  self.assertEqual(fixtures.host.failure_fields(PermissionError("Installed host source changed after admission"))["failure_kind"],"authority")
+  self.assertEqual(self.fields("Sealed engine descriptor changed")["failure_kind"],"contract")
+ def test_fields_stay_bounded(self):
+  self.assertLessEqual(len(self.fields("panicked at 'x'\n"+"A"*600)["failure_line"]),500)
+  fields=self.fields("failures:\n"+"".join("    name-%d\n"%i for i in range(7)))
+  self.assertLessEqual(len(fields["failing_tests"]),5)
+
+
+class HostPhaseTimingTests(unittest.TestCase):
+ """P3: host-side publication and packaging work appears in phase_timings."""
+ def test_completed_and_failed_outcomes_are_recorded(self):
+  h=fixtures.host;job={}
+  with h.host_phase(job,"rollback_export"):pass
+  with self.assertRaises(ValueError):
+   with h.host_phase(job,"recreate_api"):raise ValueError("stop")
+  self.assertEqual([t["phase"] for t in job["phase_timings"]],["rollback_export","recreate_api"])
+  self.assertEqual([t["outcome"] for t in job["phase_timings"]],["completed","failed"])
+  self.assertTrue(all(t["recipe"].startswith("host:v1:") and t["seconds"]>=0 for t in job["phase_timings"]))
+ def test_phase_timings_stay_bounded(self):
+  h=fixtures.host;job={"phase_timings":[{"phase":"x"} for _ in range(200)]}
+  with h.host_phase(job,"checking_ui"):pass
+  self.assertLessEqual(len(job["phase_timings"]),128)
+  self.assertEqual(job["phase_timings"][-1]["phase"],"checking_ui")
+
+
 class InstalledInventoryEnginePublicationTests(unittest.TestCase):
  def test_maintenance_requires_exact_installed_engine_and_operator(self):
   with tempfile.TemporaryDirectory()as tmp:
