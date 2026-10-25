@@ -11,6 +11,10 @@
 #app-settings-page .app-settings-switch:focus-visible .conn-toggle-track{outline:2px solid var(--accent);outline-offset:2px}
 #app-settings-page .app-settings-switch:disabled{cursor:wait}
 #tab-app .agent-detail-panel{display:block}
+/* Shared agents.css caps detail content at 520px with an inner scroller; App pages
+   grow to their natural height and scroll with #main-panel. File Manager keeps its own fill layout. */
+#tab-app .agent-detail-content{height:auto}
+#tab-app .agent-detail-body:not(#app-files-page){overflow-y:visible}
 #tab-app .agent-config-topics{padding:0}
 #tab-app .agent-config-star{align-self:center;margin-right:18px;padding:0;border:0;background:transparent;color:var(--agent-config-icon);cursor:pointer}
 #tab-app .agent-config-star:focus-visible{outline:2px solid var(--agent-config-icon);outline-offset:2px}
