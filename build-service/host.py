@@ -5482,6 +5482,12 @@ class Broker:
             job["phase_history"] = job["phase_history"][-32:]
             self._save(job)
 
+    @contextlib.contextmanager
+    def host_phase(self, job, name):
+        """Attribute host-side publication work in phase_timings (P3b)."""
+        with host_phase(job, name):
+            yield
+
     def _rebase_after_ui(self, job, blob, tested_runtime=False, live_blob=None, precompile=False):
         """Rebase a candidate onto the live release, or with precompile only prove the rebase is still safe."""
         live = self._current_release_blob()if live_blob is None else live_blob

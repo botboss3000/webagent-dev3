@@ -155,8 +155,11 @@ class UIPublication:
                 evidence.update(tests=[],conservative=False)
             test_started=clock()
             if not host_only:self.broker._phase(job,"frontend_tests")
-            test_result=({"status":"not_required","tests":[],"reason":"host-only broker candidate leaves UI assets unchanged"}
-                         if host_only else self.broker.runner.validate_selected_tests(job["job_id"],destination,evidence))
+            if host_only:
+                test_result={"status":"not_required","tests":[],"reason":"host-only broker candidate leaves UI assets unchanged"}
+            else:
+                with self.broker.host_phase(job,"frontend_tests"):
+                    test_result=self.broker.runner.validate_selected_tests(job["job_id"],destination,evidence)
             with self.broker.lock:
                 job.setdefault("ui_verification_history",[]).append({"attempt":attempt,"base_release_id":revision,"result":test_result})
                 job["ui_test_evidence"]=test_result
