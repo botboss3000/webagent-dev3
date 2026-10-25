@@ -3,6 +3,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),crypto=require('node:crypto');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const ROOT=process.env.SOURCE_ROOT||path.resolve(__dirname,'../../..');
+const CSP="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
 /** Serve the actual modules with a bounded synthetic journal, never application state. */
 async function fixture(t,{mobile=false,dark=false,reduced=false}={}) {
  const inputs=[];
@@ -12,7 +13,7 @@ async function fixture(t,{mobile=false,dark=false,reduced=false}={}) {
  const hashes=()=>inputs.map(p=>[p,crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')]);const before=hashes();
  const server=http.createServer((req,res)=>{
   const url=new URL(req.url,'http://localhost');
-  if(url.pathname==='/'){res.setHeader('content-type','text/html');return res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>:root{--fg-3:#777;--fg-2:#444;--accent:#369;--bg-tint:#eee;--bg-2:#fff;--border-width:1px;--border:#aaa;--r-sm:6px}body{background:'+(dark?'#151515':'white')+'}</style><main id="messages"><div data-public-id="q">Question</div></main>');}
+  if(url.pathname==='/'){res.setHeader('content-type','text/html');res.setHeader('content-security-policy',CSP);return res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>:root{--fg-3:#777;--fg-2:#444;--accent:#369;--bg-tint:#eee;--bg-2:#fff;--border-width:1px;--border:#aaa;--r-sm:6px}body{background:'+(dark?'#151515':'white')+'}</style><main id="messages"><div data-public-id="q">Question</div></main>');}
   const file=path.resolve(ROOT,'ui',url.pathname.replace(/^\/v3-ui\//,''));
   if(!file.startsWith(path.join(ROOT,'ui')+path.sep)){res.writeHead(403);return res.end();}
   fs.readFile(file,(e,b)=>{res.writeHead(e?404:200,{'content-type':file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/plain'});res.end(e?'missing':b);});
@@ -75,4 +76,29 @@ test('broker metadata renders inside expanded tool details with inert values',as
  assert.match(await details.textContent(),/<img src=x onerror=alert\(1\)>/);
  await p.evaluate(()=>{brokerRow.events.push({kind:'tool_result',payload:{output:'ordinary result'}});patchBroker(brokerNode,brokerRow);});
  assert.equal(await details.isVisible(),false);
+});
+
+
+test('bundled DOMPurify renders chat and mini Markdown under deployed CSP',async t=>{
+ const p=await fixture(t);
+ await p.addScriptTag({url:'/v3-ui/vendor/marked.min.js'});
+ await p.addScriptTag({url:'/v3-ui/vendor/purify.min.js'});
+ await p.evaluate(async()=>{
+  view.disconnect();
+  const {createMessage}=await import('/v3-ui/chat/core/message-view.js');
+  const {createTranscriptRow}=await import('/v3-ui/chat/elements/mini-transcript/rows.js');
+  const text='**Safe bold** [link](https://example.com)\n\n<span style="color:red">Styled text</span><img src=x onerror="window.__sanitizerXss=true"><script>window.__sanitizerXss=true</script>';
+  window.chatNode=createMessage({id:'chat-markdown',seq:1,run_id:'r',role:'assistant',content:text});
+  window.miniNode=createTranscriptRow({id:'mini-markdown',category:'messages',label:'Agent',text,events:[{kind:'agent_step_end',created_at:'2026-01-01T00:00:00Z',payload:{}}]});
+  document.querySelector('#messages').replaceChildren(chatNode,miniNode);
+ });
+ assert.equal(await p.evaluate(()=>DOMPurify.version),'3.4.17');
+ assert.equal(await p.evaluate(()=>window.__sanitizerXss),undefined);
+ for(const selector of ['.chat-bubble .md-body','.v2-mini-message .v2-mini-content']){
+  const body=p.locator(selector);await body.waitFor();
+  assert.equal(await body.locator('strong').textContent(),'Safe bold');
+  assert.match(await body.textContent(),/Styled text/);
+  assert.equal(await body.locator('script,[onerror],[style]').count(),0);
+  const link=body.locator('a').first();assert.equal(await link.getAttribute('target'),'_blank');assert.equal(await link.getAttribute('rel'),'noopener noreferrer');
+ }
 });
