@@ -367,6 +367,10 @@ $('guest-login').onclick=async()=>{const btn=$('guest-login');btn.disabled=true;
 function out(){if(document.body.classList.contains('app-restricted'))return;issues.stop();disposeSessionsPage();widget?.hide();accountMe=null;agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
 async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;$('shutoff').querySelector('span').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}if(!$('rules').children.length)for(const [tool,rule]of Object.entries(state.policy?.rules||{})){const label=document.createElement('label');label.textContent=tool;const select=document.createElement('select');select.name=tool;for(const value of ['allow','deny','require_approval']){const option=document.createElement('option');option.value=value;option.textContent=value.replaceAll('_',' ');select.append(option);}select.value=rule;label.append(select);$('rules').append(label);}chat.runs(state.runs||[]);}
 // Explicit role administration replaces the legacy default-model form for every agent.
+// app-settings ui.mobile_mode.full_height toggles the mobile edge-to-edge shell (app.css).
+function applyMobileFullHeight(enabled){
+  document.body.classList.toggle('mobile-full-height',enabled===true);
+}
 async function boot(){
   const me=await api('/auth/me');
   csrf=me.csrf_token;
@@ -376,6 +380,7 @@ async function boot(){
   // Boot defaults are applied once per sign-in, never by live refresh over a user's drag.
   const bootUi=await api('/auth/ui-config');
   const panel=bootUi.app_ui?.chat_panel||{width:45,unit:'%'};
+  applyMobileFullHeight(bootUi.app_ui?.mobile_mode?.full_height===true);
   desktopChatVisible=panel.width!==0;
   if(!desktopChatVisible){mobileView='main';widget.hide();}
   chatResize.configure(panel);syncLayout();
@@ -719,8 +724,10 @@ function setupHeaderPullRefresh(){
     try{
       const response=await fetch('/api/v3/auth/ui-config',{credentials:'same-origin',cache:'no-store'});
       if(!response.ok)return;
-      const value=(await response.json()).app_ui?.pull_to_refresh?.start_zone_px;
+      const appUi=(await response.json()).app_ui;
+      const value=appUi?.pull_to_refresh?.start_zone_px;
       if(typeof value==='number'&&Number.isFinite(value)&&value>=0)pullZone=value;
+      applyMobileFullHeight(appUi?.mobile_mode?.full_height===true);
     }catch{}finally{configLoading=false;}
   }
   setInterval(refreshPullZone,5000);

@@ -44,9 +44,26 @@ pub fn chat_panel(settings: &Value) -> Result<Value> {
     Ok(json!({"width":width,"unit":unit}))
 }
 
+/// Mobile edge-to-edge switch; the inset shell remains the default.
+pub fn mobile_full_height(settings: &Value) -> Result<bool> {
+    let Some(mode) = settings.get("ui").and_then(|ui| ui.get("mobile_mode")) else {
+        return Ok(false);
+    };
+    if !mode.is_object() {
+        return Err(anyhow!("Invalid mobile mode settings"));
+    }
+    match mode.get("full_height") {
+        None => Ok(false),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| anyhow!("Mobile mode full_height must be a boolean")),
+    }
+}
+
 pub fn validate_app_settings(settings: &Value) -> Result<()> {
     chat_panel(settings)?;
     pull_refresh_start_zone(settings)?;
+    mobile_full_height(settings)?;
     if let Some(dev) = settings.get("development") {
         if !dev.is_object() || dev.get("live_ui_editing").is_some_and(|v| !v.is_boolean()) {
             return Err(anyhow!("Invalid development settings"));
@@ -103,8 +120,9 @@ pub async fn ui_config(chat_path: &Path, state: &Path) -> Result<Value, Error> {
     let settings = app_settings(state).map_err(Error::Settings)?;
     let start_zone_px = pull_refresh_start_zone(&settings).map_err(Error::Settings)?;
     let panel = chat_panel(&settings).map_err(Error::Settings)?;
+    let full_height = mobile_full_height(&settings).map_err(Error::Settings)?;
     Ok(
-        json!({"chat_ui":chat_ui,"app_ui":{"chat_panel":panel,"pull_to_refresh":{"start_zone_px":start_zone_px}}}),
+        json!({"chat_ui":chat_ui,"app_ui":{"chat_panel":panel,"pull_to_refresh":{"start_zone_px":start_zone_px},"mobile_mode":{"full_height":full_height}}}),
     )
 }
 
@@ -122,6 +140,21 @@ mod tests {
             json!({"ui":{"pull_to_refresh":{"start_zone_px":null}}}),
         ] {
             assert!(pull_refresh_start_zone(&settings).is_err());
+            assert!(validate_app_settings(&settings).is_err());
+        }
+    }
+    #[test]
+    fn mobile_full_height_defaults_and_validation_belong_to_webapp() {
+        assert!(!mobile_full_height(&json!({})).unwrap());
+        assert!(mobile_full_height(&json!({"ui":{"mobile_mode":{"full_height":true}}})).unwrap());
+        for settings in [
+            json!({"ui":{"mobile_mode":false}}),
+            json!({"ui":{"mobile_mode":[]}}),
+            json!({"ui":{"mobile_mode":{"full_height":"yes"}}}),
+            json!({"ui":{"mobile_mode":{"full_height":1}}}),
+            json!({"ui":{"mobile_mode":{"full_height":null}}}),
+        ] {
+            assert!(mobile_full_height(&settings).is_err());
             assert!(validate_app_settings(&settings).is_err());
         }
     }
@@ -182,7 +215,7 @@ mod tests {
             let result = ui_config(&chat, root.path()).await.unwrap();
             assert_eq!(
                 result["app_ui"],
-                json!({"chat_panel":{"width":45.0,"unit":"%"},"pull_to_refresh":{"start_zone_px":zone}})
+                json!({"chat_panel":{"width":45.0,"unit":"%"},"pull_to_refresh":{"start_zone_px":zone},"mobile_mode":{"full_height":false}})
             );
             assert_eq!(
                 result["chat_ui"]["chat_common"]["execution_mode"]["default_mode"],
@@ -194,6 +227,15 @@ mod tests {
                 value.to_string()
             );
         }
+        std::fs::write(
+            &settings,
+            json!({"ui":{"mobile_mode":{"full_height":true}}}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            ui_config(&chat, root.path()).await.unwrap()["app_ui"]["mobile_mode"],
+            json!({"full_height":true})
+        );
         for value in [
             json!({"ui":false}),
             json!({"ui":{"pull_to_refresh":{"start_zone_px":-1}}}),
@@ -208,6 +250,10 @@ mod tests {
             ui_config(&chat, root.path()).await.unwrap()["app_ui"]["pull_to_refresh"]
                 ["start_zone_px"],
             50.0
+        );
+        assert_eq!(
+            ui_config(&chat, root.path()).await.unwrap()["app_ui"]["mobile_mode"]["full_height"],
+            false
         );
         std::fs::write(&chat, "{}").unwrap();
         assert!(matches!(

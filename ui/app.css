@@ -227,6 +227,20 @@ body { padding: 0; }
 }
 /* The keyboard covers the home-indicator region on browsers retaining its inset. */
 body.kb-open #app { padding-bottom: 0; }
+/* app-settings ui.mobile_mode.full_height: mobile edge-to-edge. The shell drops its
+   safe-area padding so the chat transcript paints behind the system bars; the app
+   header overlays the transcript below the status bar while the chat header and
+   composer pad to the bars, so their measured transcript clearances follow. */
+@media (max-width:800px){
+  body.mobile-full-height #app{padding:0}
+  body.mobile-full-height #app:not([data-mobile-view="chat"]) #main-header{padding-top:var(--app-safe-top)}
+  body.mobile-full-height #app:not([data-mobile-view="chat"]) #main-panel{padding-bottom:var(--app-safe-bottom)}
+  body.mobile-full-height #ptr-indicator{padding-top:var(--app-safe-top)}
+  body.mobile-full-height #app[data-mobile-view="chat"] #main-header{position:absolute;top:var(--app-safe-top);left:0;right:0;z-index:3;background:var(--bg-0)}
+  /* 56px mirrors #main-header's min-height; the chat header's measured clearance follows this padding. */
+  body.mobile-full-height #app[data-mobile-view="chat"] #chat-header{padding-top:calc(var(--app-safe-top) + 56px)}
+  body.mobile-full-height #chat-input-area{padding-bottom:var(--app-safe-bottom)}
+}
 #notice { top: calc(12px + var(--app-safe-top)); max-width: calc(90vw - var(--app-safe-left) - var(--app-safe-right)); }
 body #app-restricted-overlay {
   padding-top: max(clamp(24px, 6vw, 72px), var(--app-safe-top));

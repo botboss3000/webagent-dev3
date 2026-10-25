@@ -17,6 +17,10 @@
     "pull_to_refresh": {
       "start_zone_px": 50,
       "_instructions": "Gesture start band measured in CSS pixels from the viewport top, inclusive. Nonnegative number; missing defaults to 50. The API rereads data/config/app-settings.json per request. Visible signed-in pages adopt changes within five seconds, or when returning to the page, without reload, compilation or server restart."
+    },
+    "mobile_mode": {
+      "full_height": false,
+      "_instructions": "true renders the mobile chat edge-to-edge: the transcript paints behind the status and navigation bars while the app header, chat header and composer stay inset over it. false keeps the current inset shell. Boolean; missing defaults to false. The API rereads data/config/app-settings.json per request; signed-in mobile pages adopt changes within five seconds. Desktop layout is unaffected."
     }
   },
   "authentication": {
