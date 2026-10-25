@@ -171,7 +171,7 @@ class UIPublication:
                     reused_files=manifest.get("indexing",{}).get("reused_files"),dependency_sha256=evidence["sha256"],
                     conservative_validation=evidence["conservative"],required_tests=evidence["tests"])
                 job["prepared_assets"]=str(destination);self.broker._save(job)
-            self.broker.review_policy.defer_by_policy(job,destination,pending)
+            if self.broker.review_policy.defer_by_policy():pending=[]
             if pending and self.broker.review_policy.allows(job,destination):
                 with self.broker.lock:
                     job["deferred_documentation"]["pending_paths"]=pending

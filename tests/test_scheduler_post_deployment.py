@@ -66,7 +66,7 @@ class PostDeploymentTests(unittest.TestCase):
         self.index_state(job,"indexed")
         self.assertEqual(before,self.runner.calls)
         self.assertEqual(result,self.call("build_work",request))
-        self.post_review(job);self.complete(job)
+        self.assertNotIn("deferred_documentation",self.broker.jobs[job])
 
     def test_post_deployment_recovers_missing_candidate_from_attested_execution_source(self):
         self.configure()

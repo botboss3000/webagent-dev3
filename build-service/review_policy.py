@@ -40,32 +40,12 @@ class ReviewPolicy:
         state = self.broker.scheduler.store.get(job["ownership_id"])
         return state["epoch"] == binding["ownership_epoch"] and state["generation"] == binding["source_generation"] and state["state"] == "owned"
 
-    def defer_by_policy(self, job, folder, pending):
-        """Bind post-deployment review obligations to this exact validated candidate.
+    def defer_by_policy(self):
+        """Post-deployment policy publishes without recording documentation or review obligations.
 
         Config: scheduler.documentation_review_order is protected release policy.
-        Functional/safety checks and complete fresh indexing run before this call.
         """
-        order = self.broker.scheduler.config.get("scheduler", {}).get("documentation_review_order", "before_deployment")
-        if order != "after_deployment" or not pending:
-            return False
-        binding, _manifest = self._binding(job, folder)
-        with self.broker.lock:
-            self.broker._lease(job)
-            self.broker.scheduler.assert_job(job)
-            state = self.broker.scheduler.store.get(job["ownership_id"])
-            if state["state"] != "owned" or state["epoch"] != binding["ownership_epoch"] or state["generation"] != binding["source_generation"]:
-                raise PermissionError("Post-deployment review ownership changed")
-            previous = job.get("deferred_documentation", {})
-            # Reuse an identical obligation; never carry completion across a rebase.
-            if previous.get("binding") != binding:
-                previous = {"binding": binding, "approved_at": time.time(),
-                            "review_order_source": "protected_policy",
-                            "deferred_checks": ["Code Index reviews", "documentation reviews"]}
-            previous["pending_paths"] = list(pending)
-            job["deferred_documentation"] = previous
-            self.broker._save(job)
-        return True
+        return self.broker.scheduler.config.get("scheduler", {}).get("documentation_review_order", "before_deployment") == "after_deployment"
 
     def task_keys(self):
         """Reuse completed assertions only through the scanner's source/dependency checks."""

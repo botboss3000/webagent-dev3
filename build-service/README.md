@@ -1,10 +1,10 @@
 # Current v3 broker workflow
 
 Deployment runs the applicable functional/safety tests and exact source/artifact,
-ownership, compatibility, synchronization and health checks first. Code Index
-construction, documentation maintenance and Code Index/documentation reviews
-follow deployment as agent-initiated work. There is no automatic background
-indexing on deployment or broker restart.
+ownership, compatibility, synchronization and health checks. Code Index
+construction, documentation maintenance and Code Index/documentation reviews are
+not part of the release workflow: publication records no review obligations and
+nothing waits on them. There is no automatic indexing on deployment or restart.
 
 After verifying and committing exact promoted bytes, release source write claims
 with build_work release_claims and the release commit. Reserve only modules
@@ -12,12 +12,12 @@ fundamental to the actual edit; acquire other affected paths when changing them
 and release them when their deployed changes are safely committed. Pending
 metadata work retains source-bound completion authority without write scopes.
 
-An authorized operator explicitly requests retry_post_deployment with task_id,
-job_id and request_id to construct an index for the exact deployed snapshot.
-It does not deploy or change application source. Until an index exists, lookup
-reports unavailable. Reviews follow against that exact source/index; task closure
-still requires the applicable maintenance. Earlier strict ordering below is
-historical wherever it conflicts with this current workflow.
+An operator may optionally request retry_post_deployment with task_id, job_id
+and request_id to construct an index for the exact deployed snapshot. It does not
+deploy or change application source. Until an index exists, lookup reports
+unavailable. Task acceptance, claim release and completion never require an
+index or reviews. Earlier review ordering, approval and deferral text below
+describes the protected before_deployment policy and legacy jobs only.
 
 # Host build service
 All maintained host build and legacy source-workspace code lives here.
@@ -131,8 +131,6 @@ an earlier candidate under the final job revision.
 A successful build retains its source reservation until the agent verifies
 acceptance, commits its exact promoted inputs and explicitly completes ownership.
 The canonical maintenance ledger retains historical task/retry evidence under a bounded 512 MiB broker budget; scoped synchronization still limits each review transaction.
-Complete Code Index review mutations while the task is open, before finish closes
-it; use a supported continuation or ledger publication for later review work.
 Between broker installation and source promotion, use the exact protected installed
 buildctl.py so its configuration parser matches the installed broker.
 
@@ -628,6 +626,7 @@ approval_note and request_id. This does not resume a job automatically.
 A source rebase, sealed descriptor change or ownership/source generation change
 invalidates the approval. A build or generic resume is never approval.
 
+This approval path applies only to the protected before_deployment policy.
 After normal publication, record Code Index/documentation assertions with
 code_index_maintenance deployed_job_id selecting that exact owned release.
 The host selects its immutable source; the index is never rewritten. Call
@@ -635,7 +634,7 @@ finish_deferred_documentation with task_id, job_id and request_id after all
 applicable reviews, including removed/renamed units, are complete. The host
 projects fresh evidence in memory and persists an exact completion receipt.
 Any later review mutation invalidates that receipt. Task acceptance/completion
-and project finalization require the completed reviews. Later builds reuse only
+and project finalization never wait for these reviews. Later builds reuse only
 source/dependency-matching assertions; they cannot inherit stale approval.
 
 
