@@ -26,7 +26,7 @@ zero gaps, stale files and unindexed supported files are required. The exact
 source and index travel together under one durable atomic release pointer.
 Restoring a failed current paired release restores both, but an older successful
 release is undone through a compensating release preserving later changes.
-Implementation publication does not require Code Index construction or reviews. A release without its approved follow-up index reports navigation unavailable; a later index publication must satisfy the exact-source freshness checks above.
+Publication never requires Code Index construction, documentation maintenance or reviews, and records no review obligations. A release without an explicitly requested index reports navigation unavailable; a later index must satisfy the exact-source freshness checks above.
 
 New workspace seeds pin that release once and carry a private bootstrap index.
 Existing initialized workspaces are never reseeded. Private scans remain immediate
@@ -129,13 +129,13 @@ Use `code_index_maintenance` for durable review progress. The protected broker o
 
 Follow [comment_maintenance](skills/comment_maintenance.skill.md) for the full review procedure and structured examples. Inspect outstanding work; synchronize the exact isolated broker task; claim a bounded unit; trace implementation, callers and configuration; update comments and metadata; rescan; record checks against the current source hash and revision; release with concrete remaining-work notes before stopping. Source changes invalidate completed reviews for that file; metadata dependencies can also invalidate reviews. Review removed units explicitly and reconcile deletions or renames. Never transfer completion across an ambiguous rename.
 
-Implementation completion, claim release and project closure do not wait for documentation or Code Index work. Complete functional/safety, authorization, source integrity, deployment health, promotion, recovery and exact-commit checks, close the implementation work, and leave a bounded handoff awaiting user review. Do not start scans or reviews automatically after deployment. The user's review confirmation or direct maintenance request authorizes this separate follow-up.
+Code Index scans, maintenance and reviews are optional tools, not workflow requirements. Implementation, deployment, claim release, acceptance, completion and project closure never wait for them, and no handoff is needed. Use them only when the user directly asks for that scope.
 
 Use the protected broker's release-bound maintenance activity for an immutable completed release, or a distinct isolated metadata task when publishing a feature-map/guidance correction against current source. Keep the original implementation task closed; never require its owner session, source claims or active lease. Release-bound operations have durable asynchronous receipts and progress polling. The host derives released scopes; review IDs and hashes must come from the chosen source namespace. Legacy prepared/deployed selectors may still exist, but do not use them to revive closed implementation ownership or impose a predeployment review gate. Complete this maintenance activity's applicable assertions truthfully and report scoped gaps independently of implementation status.
 
 `code_index_progress` reports scan history. `code_index_maintenance` reports review status, attributed evidence, claims and remaining work. These are separate histories. Canonical maintenance history survives rebuilds; publication projects matching reviews into the paired immutable source/index snapshot. Rebase changes invalidate mismatching evidence. Claims coordinate maintainers without granting source editing permission.
 
-Qualifying ledger-only, feature-map and allowlisted Code Index guidance releases use the broker's `index_deploy` lane, with UI priority and no compilation or container replacement. UI plus allowed index metadata can publish together. Source comments, parsers, schemas, policy, executable code and broker changes require the appropriate full release. The final candidate still passes the zero-gap/stale/unindexed gate. Guidance resolves from the active published snapshot; schema and access remain image-pinned.
+Qualifying ledger-only, feature-map and allowlisted Code Index guidance releases use the broker's `index_deploy` lane, with UI priority and no compilation or container replacement. UI plus allowed index metadata can publish together. Source comments, parsers, schemas, policy, executable code and broker changes require the appropriate full release. Guidance resolves from the active published snapshot; schema and access remain image-pinned.
 
 ## Operator project checkpoints
 

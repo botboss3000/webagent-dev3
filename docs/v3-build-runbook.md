@@ -85,11 +85,13 @@ status never reveals other callers' jobs; administrator Builds views may compare
 all callers. Only path names and fingerprints are examined, never credentials
 or runtime databases. Behavioral conflicts across different files still need tests.
 
-## Published Code Index gate
+## Optional Code Index
 
-Full and UI-only deployment stage `indexing_source` after final candidate
-rebasing, while holding the existing deployment/publication lock. This runs
-independently of Cargo and image builds. The protected installed
+The current protected policy (`post_deployment_indexing`, `after_deployment`)
+publishes source with an immutable source receipt and no index, and records no
+review obligations. An index is built only when an operator explicitly requests
+`retry_post_deployment`. The text below describes how an index is built and
+verified, and the legacy indexed publication mode. The protected installed
 `index-scanner.py` parses candidate source as data in a networkless, read-only,
 unprivileged Docker process with memory, process and time bounds; candidate
 Python code is never imported.
@@ -100,7 +102,7 @@ complete source digest, SQLite digest, schema/index version, parser code digest 
 parser dependency versions. Enumeration/scanner limits reject the release;
 supported files cannot be silently omitted. Unsupported/generated/directory
 exclusions and uncertain/limited parsers are recorded explicitly. Zero physical
-line gaps, stale files and unindexed supported files are mandatory.
+line gaps, stale files and unindexed supported files are mandatory for an index.
 
 Activation validates the pair before atomic pointer replacement and directory
 fsync. Failed staging or an interrupted switch retains the prior pair. Rollback

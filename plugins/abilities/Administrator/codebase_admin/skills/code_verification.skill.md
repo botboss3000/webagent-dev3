@@ -127,6 +127,9 @@ stale files and unindexed supported files for a freshness claim. Reads do not
 silently rescan. Derived scans may be used when permitted by the review scope;
 published snapshots are immutable and cannot be rescanned in place.
 
+Code Index coverage and maintenance reviews are not release-readiness
+requirements; do not report their absence as a release blocker.
+
 Distinguish derived indexing from human maintenance certification. A review-only
 request does not authorize source comments, feature-map edits, claims or ledger
 completion writes. Inspect existing maintenance evidence and report missing
