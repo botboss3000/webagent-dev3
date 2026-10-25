@@ -1,6 +1,6 @@
-// @code-index {"version":1,"feature":"chat-ui-config","aliases":["live chat settings","live chat.json"],"purpose":"Refreshes authenticated mounted chats from the live UI configuration endpoint without reload or compilation. Config: data/config/chat.json -> chat_common.live_reload.enabled/interval_ms; UI settings retain common and surface profile merging.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/live_reload/enabled","/chat_common/live_reload/interval_ms"]}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-ui-config","aliases":["live chat settings","live chat.json"],"purpose":"Refreshes authenticated mounted chats from the live UI configuration endpoint without reload or compilation. Config: data/config/chat.json -> chat_common.live_reload.enabled/interval_ms; the same poll re-reads component JSON such as session-dropdown.json; UI settings retain common and surface profile merging.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/live_reload/enabled","/chat_common/live_reload/interval_ms"]}],"opportunities":[]}}
 /** Watches visible native chats serially; teardown aborts fetches and prevents stale adoption. */
-export function watchChatConfig({getConfig,onConfig,isMounted}) {
+export function watchChatConfig({getConfig,onConfig,isMounted,refreshComponents=async()=>false,onComponents=()=>{}}) {
   let stopped = false, timer = null, controller = null;
   let previous = JSON.stringify(getConfig());
   /** Reads the opt-in interval, bounded to prevent accidental request floods. */
@@ -20,6 +20,8 @@ export function watchChatConfig({getConfig,onConfig,isMounted}) {
     controller = new AbortController();
     const active = controller, timeout = setTimeout(() => active.abort(),10000);
     try {
+      // Component-owned JSON shares this poll so its settings adopt without reload.
+      if (await refreshComponents(active.signal) && !stopped && isMounted()) onComponents();
       const response = await fetch('/api/v3/auth/ui-config',{credentials:'same-origin',cache:'no-store',signal:active.signal});
       if (!response.ok) return;
       const data = await response.json(), config = data.chat_ui || data;

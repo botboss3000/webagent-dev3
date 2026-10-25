@@ -133,10 +133,6 @@ function headerControl(name) {
     minimize.onclick = () => surfaceActions.minimize ? surfaceActions.minimize() : byId('chat-toggle-btn')?.click();
     headerNodes.minimize = minimize;
     const close=document.createElement('button');close.type='button';close.className='chat-header-minimize';close.title='Close chat';close.setAttribute('aria-label','Close chat');close.textContent='×';close.onclick=()=>surfaceActions.close?.();headerNodes.close=close;
-    const title=document.createElement('span');title.textContent=surfaceActions.title||'WebAgent';headerNodes.title=title;
-    const icon=document.createElement('span');icon.textContent='◉';icon.setAttribute('aria-hidden','true');headerNodes.icon=icon;
-    const status=document.createElement('span');status.textContent='';headerNodes.status=status;
-    const dot=document.createElement('span');dot.className='agent-status-dot';headerNodes.dot=dot;
   }
   return sharedControls[name] || headerNodes[name];
 }
@@ -152,7 +148,8 @@ function applyHeader(profile) {
   headerControl('agent_name');
   headerNodes.session_dropdown.configure?.(sessionDropdownConfig(surfaceName()));
   headerNodes.session_dropdown._sessionDropdownController?.close({immediate:true});
-  // Preserve durable element mounts while rebuilding only configured control rows.
+  // Preserve durable element mounts while rebuilding only configured control rows;
+  // chat_header.controls.<extension>.enabled=false hides a mount without disposing it.
   const extensions=[...header.children].filter(node=>node.dataset.headerExtension);
   header.replaceChildren();
   for (const row of rows) {
@@ -175,6 +172,7 @@ function applyHeader(profile) {
     }
     if (line.querySelector('.chat-header-zone:not(:empty)')) header.append(line);
   }
+  for (const node of extensions) node.style.display = config.controls?.[node.dataset.headerExtension]?.enabled === false ? 'none' : '';
   header.append(...extensions);
 }
 
@@ -341,6 +339,8 @@ export async function initChatConfig({config:provided,root=null} = {}) {
     getConfig: () => documentConfig,
     isMounted: () => panel.isConnected && byId('chat-panel') === panel,
     onConfig: config => { documentConfig = config; currentSurface = ''; currentFooterMode = ''; applyChatConfig(); },
+    refreshComponents: loadSessionDropdownConfig,
+    onComponents: () => { currentSurface = ''; applyChatConfig(); },
   });
   if (!listenersBound) {
     listenersBound = true;

@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown config"],"purpose":"Loads component settings from ui/chat/controls/session-dropdown/session-dropdown.json -> common and desktop/mobile/widget overlays; reload adoption.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/controls/session-dropdown/session-dropdown.json","pointers":["/common","/desktop","/mobile","/widget"]}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown config"],"purpose":"Loads component settings from ui/chat/controls/session-dropdown/session-dropdown.json -> common and desktop/mobile/widget overlays; live adoption through the chat.json poll.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/controls/session-dropdown/session-dropdown.json","pointers":["/common","/desktop","/mobile","/widget"]}],"opportunities":[]}}
 let documentConfig = {};
 /** Merge component objects without letting absent surface settings erase common values. */
 function merge(base, overlay) {
@@ -9,15 +9,17 @@ function merge(base, overlay) {
   }
   return result;
 }
-/** Load the independently published component JSON; failed reloads retain the last valid settings. */
-export async function loadSessionDropdownConfig() {
+/** Load the independently published component JSON and report whether it changed; failed reloads retain the last valid settings. */
+export async function loadSessionDropdownConfig(signal) {
   try {
-    const response = await fetch('/v3-ui/chat/controls/session-dropdown/session-dropdown.json', {credentials:'same-origin',cache:'no-store'});
+    const response = await fetch('/v3-ui/chat/controls/session-dropdown/session-dropdown.json', {credentials:'same-origin',cache:'no-store',signal});
     if (!response.ok) throw Error('Session dropdown configuration unavailable');
     const value = await response.json();
     if (!value?.common || typeof value.common !== 'object' || Array.isArray(value.common)) throw Error('Invalid session dropdown configuration');
+    const changed = JSON.stringify(value) !== JSON.stringify(documentConfig);
     documentConfig = value;
-  } catch (error) { console.warn('Session dropdown configuration could not be loaded', error.message); }
+    return changed;
+  } catch (error) { console.warn('Session dropdown configuration could not be loaded', error.message); return false; }
 }
 /** Resolve only the known active surface; chat.json no longer supplies dropdown internals. */
 export function sessionDropdownConfig(surface) {

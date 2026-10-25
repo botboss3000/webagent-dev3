@@ -70,7 +70,7 @@ async function mountChat(){
   root.replaceChildren(template.content);
 }
 await mountChat();
-const mainNotes=enableMainNotes?createMainNotes({request}):null;if(mainNotes){mainNotes.element.dataset.headerExtension='main-notes';$('chat-header').append(mainNotes.element);}
+const mainNotes=enableMainNotes?createMainNotes({request}):null;if(mainNotes){mainNotes.element.dataset.headerExtension='main_notes';$('chat-header').append(mainNotes.element);}
 // Display activity uses authoritative selected-session run states and live publications.
 const screenAwake=mountScreenAwake(root,{getProfile:currentChatProfile});
 const notifications=mountChatNotifications({root,guard,request,note});
