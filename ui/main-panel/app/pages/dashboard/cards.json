@@ -352,6 +352,19 @@
         "Disk free"
       ],
       "backend": "connected"
+    },
+    {
+      "id": "network",
+      "label": "Network",
+      "icon": "network",
+      "w": 3,
+      "h": 3,
+      "order": 24,
+      "sections": [
+        "network"
+      ],
+      "fields": [],
+      "backend": "connected"
     }
   ]
 }

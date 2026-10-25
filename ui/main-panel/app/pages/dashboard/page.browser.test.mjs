@@ -7,8 +7,11 @@ const root=path.resolve(new URL('../../../../..',import.meta.url).pathname);
 let mode='live',calls=0;const windows=[];
 const sample=()=>({schema_version:1,sampled_at_unix_ms:Date.now(),metrics:{
  cpu:{available:true,logical_processors:8,utilization_available:mode!=='warm',utilization_percent:mode==='warm'?null:24.5},
- memory:{available:true,total_bytes:8589934592,used_bytes:2147483648,utilization_percent:25},
- disks:{available:mode!=='missing',filesystems:[{mount:'/',usage:{available:true,available_bytes:10737418240}}]},
+ memory:{available:true,total_bytes:8589934592,used_bytes:2147483648,utilization_percent:25,swap:{available:true,total_bytes:2147483648,free_bytes:1073741824,used_bytes:1073741824}},
+ disks:{available:mode!=='missing',filesystems:[{mount:'/',usage:{available:true,available_bytes:10737418240,total_bytes:21474836480,used_bytes:5368709120,utilization_percent:25}}]},
+ network:{available:true,interfaces:[
+  {name:'lo',loopback:true,rx_bytes:1e9,tx_bytes:1e9,rx_errors:0,tx_errors:0,rx_dropped:0,tx_dropped:0,rates_available:true,rx_bytes_per_second:1e9,tx_bytes_per_second:1e9},
+  {name:'eth0',loopback:false,rx_bytes:1073741824,tx_bytes:536870912,rx_errors:1,tx_errors:0,rx_dropped:2,tx_dropped:0,rates_available:mode!=='warm',rx_bytes_per_second:mode==='warm'?null:2048,tx_bytes_per_second:mode==='warm'?null:1024}]},
  uptime:{available:true,seconds:176400}
 }});
 const server=http.createServer(async(req,res)=>{
@@ -72,9 +75,18 @@ try{
   assert.equal(await page.locator('[data-card=user_mgmt] a').getAttribute('href'),'/app?tab=app&appView=users');
   assert.match(await page.locator('[data-card=db_latency]').innerText(),/Read-only probes/);
   assert.match(await page.locator('[data-card=memory]').innerText(),/25.0%/);
+  assert.match(await page.locator('[data-card=memory]').innerText(),/swap 1.00 GiB \/ 2.00 GiB/);
   assert.match(await page.locator('[data-card=storage]').innerText(),/10.00 GiB/);
+  assert.match(await page.locator('[data-card=storage]').innerText(),/5.00 GiB used of 20.00 GiB \(25.0%\)/);
   assert.match(await page.locator('[data-card=uptime]').innerText(),/2d 1h 0m/);
-  assert.equal(await page.locator('.dashboard-tile').count(),25);
+  const network=page.locator('[data-card=network]');
+  assert.equal(await network.getAttribute('data-state'),'live');
+  assert.match(await network.innerText(),/In 2.0 KiB\/s · Out 1.0 KiB\/s/);
+  assert.match(await network.innerText(),/1 non-loopback interface · received 1.00 GiB · sent 0.50 GiB · errors 1 · dropped 2/);
+  const health=page.locator('[data-card=health_board]');
+  assert.equal(await health.getAttribute('data-state'),'live');
+  for(const text of [/API readiness\s+Ready/,/CPU\s+24.5%/,/RAM\s+25.0%/,/Disk used on \/\s+25.0%/,/Database pools\s+1 \/ 1 responding/])assert.match(await health.innerText(),text);
+  assert.equal(await page.locator('.dashboard-tile').count(),26);
   assert.equal(await system.getAttribute('data-state'),'partial');
   assert.equal(await system.locator('.dashboard-field[data-available="true"]').count(),8);
   assert.equal(await page.locator('[data-card=metric_chart] svg').count(),1);
@@ -99,6 +111,8 @@ try{
   await move.focus();mode='warm';
   await page.waitForFunction(()=>document.querySelector('[data-card=cpu]')?.dataset.state==='unavailable');
   assert.match(await cpu.innerText(),/Warming up/);assert.equal(await move.evaluate(el=>el===document.activeElement),true);
+  assert.equal(await network.getAttribute('data-state'),'unavailable');assert.match(await network.innerText(),/Warming up/);
+  assert.equal(await health.getAttribute('data-state'),'partial');assert.match(await health.innerText(),/CPU\s+Unavailable/);
   mode='missing';
   await page.waitForFunction(()=>document.querySelector('[data-card=storage]')?.dataset.state==='unavailable');
   assert.match(await page.locator('[data-card=storage]').innerText(),/Unavailable/);
@@ -106,6 +120,7 @@ try{
   await page.waitForFunction(()=>document.querySelector('[data-card=cpu] .dashboard-pending')?.textContent==='Administrator access required');
   assert.equal(await cpu.locator('.dashboard-value').innerText(),'—');
   assert.equal(await system.locator('[data-available="true"]').count(),0);
+  assert.equal(await network.locator('.dashboard-value').innerText(),'—');
   mode='invalid';
   await page.waitForFunction(()=>document.querySelector('[data-card=cpu] .dashboard-pending')?.textContent==='Invalid system metrics response');
   mode='live';
@@ -121,5 +136,5 @@ try{
   const detached=calls;await page.waitForTimeout(5300);assert.equal(calls,detached);
   assert.deepEqual(errors,[]);await context.close();
  }
- console.log('PASS dashboard: live values, warmup, unavailable, 403 clearing, invalid response, retry, focus, partial red, themes, mobile, hidden/dispose/detach');
+ console.log('PASS dashboard: live values, network/swap/disk detail, combined health, warmup, unavailable, 403 clearing, invalid response, retry, focus, partial red, themes, mobile, hidden/dispose/detach');
 }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}

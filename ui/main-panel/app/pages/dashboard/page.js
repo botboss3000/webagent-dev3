@@ -58,22 +58,29 @@ export async function mountDashboard(host) {
   const updateDashboard=()=>paintDashboard(activityViews,dashboardData,metricSelect.value,node);
   const activityViews=new Map();
   let sample=null,failure='Loading system resources…',inFlight=false;
-  const resources=new Set(['cpu','memory','storage','uptime','system_resources']);
+  const resources=new Set(['cpu','memory','storage','uptime','network','system_resources']);
   const views=new Map();
   const number=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0;
   const bytes=value=>number(value)?(value/1073741824).toFixed(2)+' GiB':'Unavailable';
   const percent=value=>number(value)?value.toFixed(1)+'%':'Unavailable';
   const duration=value=>number(value)?Math.floor(value/86400)+'d '+Math.floor(value/3600)%24+'h '+Math.floor(value/60)%60+'m':'Unavailable';
+  const speed=value=>number(value)?(value>=1048576?(value/1048576).toFixed(2)+' MiB/s':(value/1024).toFixed(1)+' KiB/s'):'Unavailable';
+  const sum=(items,key)=>items.reduce((total,item)=>total+(number(item[key])?item[key]:0),0);
   /** Update values in place so automatic refresh preserves keyboard focus and layout. */
   function updateMetrics(){
-    const m=sample?.metrics||{},cpu=m.cpu,memory=m.memory,uptime=m.uptime;
+    const m=sample?.metrics||{},cpu=m.cpu,memory=m.memory,uptime=m.uptime,swap=memory?.swap;
     const disk=m.disks?.available?m.disks.filesystems?.find(item=>item.mount==='/')?.usage:null;
+    const nics=m.network?.available&&Array.isArray(m.network.interfaces)?m.network.interfaces.filter(item=>item&&!item.loopback):null;
+    const rated=Boolean(nics?.length)&&nics.every(item=>item.rates_available&&number(item.rx_bytes_per_second)&&number(item.tx_bytes_per_second));
     const cpuValue=cpu?.available&&cpu.utilization_available?percent(cpu.utilization_percent):cpu?.available?'Warming up':'Unavailable';
+    const swapText=swap?.available?(number(swap.total_bytes)&&swap.total_bytes>0?' · swap '+bytes(swap.used_bytes)+' / '+bytes(swap.total_bytes):' · no swap'):' · swap unavailable';
     const values={
       cpu:[cpuValue,cpu?.available&&number(cpu.logical_processors)?cpu.logical_processors+' logical processors':'Unavailable'],
-      memory:[memory?.available?percent(memory.utilization_percent):'Unavailable',memory?.available?bytes(memory.used_bytes)+' used / '+bytes(memory.total_bytes):'Unavailable'],
+      memory:[memory?.available?percent(memory.utilization_percent):'Unavailable',memory?.available?bytes(memory.used_bytes)+' used / '+bytes(memory.total_bytes)+swapText:'Unavailable'],
       uptime:[uptime?.available?duration(uptime.seconds):'Unavailable','System uptime'],
-      storage:[disk?.available?bytes(disk.available_bytes):'Unavailable','Available on /']
+      storage:[disk?.available?bytes(disk.available_bytes):'Unavailable',disk?.available?'Available on / · '+bytes(disk.used_bytes)+' used of '+bytes(disk.total_bytes)+' ('+percent(disk.utilization_percent)+')':'Available on /'],
+      network:[rated?'In '+speed(sum(nics,'rx_bytes_per_second'))+' · Out '+speed(sum(nics,'tx_bytes_per_second')):nics?.length?'Warming up':'Unavailable',
+        nics?.length?nics.length+' non-loopback interface'+(nics.length===1?'':'s')+' · received '+bytes(sum(nics,'rx_bytes'))+' · sent '+bytes(sum(nics,'tx_bytes'))+' · errors '+(sum(nics,'rx_errors')+sum(nics,'tx_errors'))+' · dropped '+(sum(nics,'rx_dropped')+sum(nics,'tx_dropped')):'No non-loopback interface counters']
     };
     const fields={
       'CPU cores':cpu?.available&&number(cpu.logical_processors)?String(cpu.logical_processors):null,
@@ -87,9 +94,9 @@ export async function mountDashboard(host) {
     };
     for(const [id,view] of views){
       const combined=id==='system_resources';
-      const available=combined?Object.values(fields).some(Boolean):id==='cpu'?cpu?.available&&cpu.utilization_available&&number(cpu.utilization_percent):id==='memory'?memory?.available&&number(memory.utilization_percent):id==='storage'?disk?.available&&number(disk.available_bytes):uptime?.available&&number(uptime.seconds);
+      const available=combined?Object.values(fields).some(Boolean):id==='cpu'?cpu?.available&&cpu.utilization_available&&number(cpu.utilization_percent):id==='memory'?memory?.available&&number(memory.utilization_percent):id==='storage'?disk?.available&&number(disk.available_bytes):id==='network'?rated:uptime?.available&&number(uptime.seconds);
       view.tile.dataset.state=failure?'error':available?(combined?'partial':'live'):'unavailable';
-      view.badge.textContent=failure||(!available?(id==='cpu'&&cpu?.available?'Warming up':'Unavailable'):combined?'Live · server resources and scoped runs':'Live');
+      view.badge.textContent=failure||(!available?((id==='cpu'&&cpu?.available)||(id==='network'&&nics?.length)?'Warming up':'Unavailable'):combined?'Live · server resources and scoped runs':'Live');
       if(combined){
         for(const [label,valueNode] of view.fields){
           const value=failure?null:fields[label];
@@ -102,10 +109,24 @@ export async function mountDashboard(host) {
       }
     }
   }
+  /** Combine readiness with resource and database readings already polled; no alert thresholds are inferred. */
+  function health(data){
+    const m=failure?{}:sample?.metrics||{},disk=m.disks?.available?m.disks.filesystems?.find(item=>item.mount==='/')?.usage:null;
+    const probes=Array.isArray(dashboardData?.database?.probes)?dashboardData.database.probes:null;
+    const rows=[...data.rows,
+      ['CPU',m.cpu?.available&&m.cpu.utilization_available?percent(m.cpu.utilization_percent):'Unavailable'],
+      ['RAM',m.memory?.available?percent(m.memory.utilization_percent):'Unavailable'],
+      ['Disk used on /',disk?.available?percent(disk.utilization_percent):'Unavailable'],
+      ['Database pools',probes?.length?probes.filter(probe=>probe?.available===true).length+' / '+probes.length+' responding':'Unavailable']];
+    if(data.state==='unavailable')return {...data,rows};
+    const complete=rows.every(([,value])=>value!=='Unavailable')&&probes.every(probe=>probe?.available===true);
+    return {...data,rows,state:complete?'live':'partial',note:'API readiness, current server resources and read-only database probes. No alert thresholds are applied.'};
+  }
   /** Paint scoped API projections without touching the layout controls. */
   function updateActivity(){
     for(const [id,view] of activityViews){
-      const data=activity.get(id);if(!data)continue;
+      let data=activity.get(id);if(!data)continue;
+      if(id==='health_board')data=health(data);
       view.tile.dataset.state=data.state;
       view.badge.textContent=data.state==='live'?'Live':data.state==='partial'?'Live · limited scope':'Unavailable';
       view.body.replaceChildren();
