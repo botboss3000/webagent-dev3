@@ -374,5 +374,16 @@ class SchedulerBrokerTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.broker.scheduler.store.assert_owned(item["key"],self.broker.scheduler.owner(self.trusted,self.workspace),1,[])
         self.write(target,"README.md","followup\n")
+    def test_task_calls_renew_owned_heartbeat_without_reviving_orphan(self):
+        """P10: any authenticated call naming an owned task is liveness; orphaned ownership still needs recovery."""
+        item=self.begin("liveness-owner");self.write(item,"README.md","held\n")
+        store=self.broker.scheduler.store;stale=time.time()-400
+        with store.transaction()as db:db.execute("UPDATE tasks SET heartbeat=? WHERE id=?",(stale,item["key"]))
+        revision=store.get(item["key"])["revision"]
+        self.call("build_work",{"action":"status","task_id":item["task_id"]})
+        value=store.get(item["key"]);self.assertGreater(value["heartbeat"],stale+300);self.assertEqual(value["revision"],revision)
+        with store.transaction()as db:db.execute("UPDATE tasks SET heartbeat=?,state='orphaned' WHERE id=?",(stale,item["key"]))
+        self.call("build_work",{"action":"status","task_id":item["task_id"]})
+        value=store.get(item["key"]);self.assertEqual(value["state"],"orphaned");self.assertEqual(value["heartbeat"],stale)
 
 if __name__=="__main__":unittest.main()

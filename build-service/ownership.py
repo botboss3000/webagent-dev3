@@ -464,11 +464,11 @@ class Ownership:
             value=self.get(task,db)
             if value["owner"]==owner and value["epoch"]==epoch and value["state"]in {"owned","validating"}:
                 db.execute("UPDATE tasks SET heartbeat=? WHERE id=?",(self.clock(),task))
-    def orphan(self,after=300):
-        """Lost heartbeats retain reservations and fence writes until explicit owner recovery."""
+    def orphan(self,after=300,scoped_after=None):
+        """Lost heartbeats retain reservations and fence writes until explicit owner recovery; scoped_after bounds scope holders."""
         with self.transaction()as db:
             for value in self.list(db):
-                if (value["state"]in {"owned","validating"}or(value["state"]=="waiting"and value["requested"]))and self.clock()-value["heartbeat"]>after:
+                if (value["state"]in {"owned","validating"}or(value["state"]=="waiting"and value["requested"]))and self.clock()-value["heartbeat"]>(after if scoped_after is None or not value["scopes"] else scoped_after):
                     self.update(db,value,state="orphaned")
     def validate(self,task,owner,revision,epoch,evidence,request):
         """Record broker-verified current-generation acceptance; the caller must verify receipts first."""

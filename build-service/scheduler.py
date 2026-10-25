@@ -388,7 +388,15 @@ class Scheduler:
                 self.store.touch(job["ownership_id"],self.owner({"user_id":job["user_id"]},job["workspace"]),job["ownership_epoch"])
             elif job.get("ownership_id")and job.get("status")=="needs_decision"and job.get("phase")=="awaiting_prepared_reviews":
                 self.review_wait(job)
-        self.store.orphan(self.orphan_after)
+        # Scope holders get a 30-minute floor: local checks and commit close-out make no broker call.
+        self.store.orphan(self.orphan_after,max(self.orphan_after,1800))
+    def touch_task(self,args,trusted,workspace):
+        """Treat any authenticated call naming the caller's own task as liveness; never revives orphaned or foreign ownership."""
+        if self.mode!="enforce":return
+        try:key=self.item(args,trusted,workspace)["key"];value=self.store.get(key)
+        except (ValueError,PermissionError):return
+        # Renew at most once a minute so read-heavy polling does not write SQLite on every call.
+        if self.store.clock()-value["heartbeat"]>=60:self.store.touch(key,self.owner(trusted,workspace),value["epoch"])
     def migrate_legacy(self):
         """Derive unfinished legacy claims at cutover; immutable historical generations stay explicitly classified."""
         if self.mode!="enforce":return

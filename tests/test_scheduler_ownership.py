@@ -47,6 +47,13 @@ class OwnershipTests(unittest.TestCase):
         result=self.acquire(self.begin("new-after-held-orphan"),["module:engine","path:src/main.rs"])
         self.assertFalse(result["acquired"]);self.assertEqual(result["blockers"][0]["task_id"],owner["id"])
         self.assertEqual(self.current(owner)["scopes"],["module:engine","path:src"])
+    def test_scope_holders_use_longer_orphan_threshold(self):
+        """P10: a scope holder survives a no-call local check window; a scope-less waiter does not."""
+        owner=self.acquire(self.begin("scoped-owner"),["module:broker"])["task"]
+        waiter=self.begin("scoped-waiter");self.assertFalse(self.acquire(waiter,["module:broker"])["acquired"])
+        self.time+=301;self.store.orphan(300,1800)
+        self.assertEqual(self.current(owner)["state"],"owned");self.assertEqual(self.current(waiter)["state"],"orphaned")
+        self.time+=1500;self.store.orphan(300,1800);self.assertEqual(self.current(owner)["state"],"orphaned")
     def test_unrelated_components_acquire_independently(self):
         for name in ["one","two"]:self.assertTrue(self.acquire(self.begin(name),["module:ability:Developer/"+name])["acquired"])
     def test_correction_invalidates_acceptance_without_releasing_scope(self):

@@ -4613,6 +4613,8 @@ class Broker:
                 context.update(state=item.get("status",context["state"]),summary=item.get("summary",""))
                 result["broker_context"]=context
             return result
+        if isinstance(args.get("task_id"),str):
+            with self.lock:self.scheduler.touch_task(args,trusted,workspace)
         if name in ("workspace_seed","source_review","source_patch","v3_workspace_status","v3_workspace_action") or (name=="v3_cargo_task" and "task_id" not in args):
             return self.workspace_request(name,args,trusted,workspace)
         if name=="code_index_maintenance":

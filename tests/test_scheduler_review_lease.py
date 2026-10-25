@@ -39,13 +39,13 @@ class ReviewLeaseTests(unittest.TestCase):
         self.assertEqual(self.job["review_wait"]["state"],"authorization_expired");self.assertEqual(self.store.get(self.key)["state"],"orphaned")
         self.assertEqual((self.prepared/".code-index/manifest.json").read_bytes(),body)
     def test_revocation_does_not_renew(self):
-        self.start();self.job["revoked"]=True;self.now+=301;self.s.housekeeping()
+        self.start();self.job["revoked"]=True;self.now+=1801;self.s.housekeeping()
         self.assertEqual(self.store.get(self.key)["state"],"orphaned");self.assertEqual(self.job["review_wait"]["state"],"authorization_expired")
     def test_other_decision_states_are_not_renewed(self):
-        self.start();self.job["phase"]="waiting_publication_base";self.now+=301;self.s.housekeeping()
+        self.start();self.job["phase"]="waiting_publication_base";self.now+=1801;self.s.housekeeping()
         self.assertEqual(self.store.get(self.key)["state"],"orphaned")
     def test_polling_cannot_create_a_review_delegation(self):
-        self.now+=301;self.s.housekeeping();self.assertNotIn("review_wait",self.job);self.assertEqual(self.store.get(self.key)["state"],"orphaned")
+        self.now+=1801;self.s.housekeeping();self.assertNotIn("review_wait",self.job);self.assertEqual(self.store.get(self.key)["state"],"orphaned")
     def test_authorized_activity_bootstraps_existing_wait(self):
         self.assertTrue(self.s.review_wait(self.job,activity=True,authority_until=1600))
         self.assertEqual(self.job["review_wait"]["expires_at"],1600)
