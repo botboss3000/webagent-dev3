@@ -110,12 +110,18 @@ def candidate_entries(blob,validate):
     return source,inspection
 
 
+def source_differs(before, after):
+    """Compare (mode, bytes) entries by bytes and executable bit, the only mode receipts bind."""
+    # A private-tree mode rewrite (for example 0664 -> 0600) is not a source change.
+    if before is None or after is None:return before is not after
+    return before[1] != after[1] or (before[0] ^ after[0]) & 0o100 != 0
+
+
 def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False):
     (base,base_inspection),(task,task_inspection),(live,_) = (candidate_entries(value,validate)for value in (base_blob,task_blob,live_blob))
     # Same attested identity without holding private inspection bodies in memory.
     if base_inspection!=task_inspection:raise ValueError("read-only inspection snapshot changed")
-    changed = [name for name in sorted(set(base) | set(task))
-               if base.get(name) != task.get(name)]
+    changed = [name for name in sorted(set(base) | set(task)) if source_differs(base.get(name), task.get(name))]
     if (not changed and not allow_empty) or len(changed) > 256 or any(
             not name.startswith("v3/") or name.startswith("v3/data/")
             for name in changed):

@@ -287,7 +287,7 @@ class Scheduler:
         receipt=Path(self.broker.state)/job["job_id"]/"candidate.tar"
         # The broker's already validated archive reader binds paths to the release snapshot.
         files=self.broker.scheduler_entries(receipt.read_bytes())
-        promoted={}
+        promoted={};base_files=None
         source=self.broker.runner.source
         commit=args.get("commit")
         if not isinstance(commit,str)or not re.fullmatch(r"[a-f0-9]{40}",commit):raise ValueError("Verified release commit required")
@@ -308,7 +308,12 @@ class Scheduler:
             if not historical and(path.is_symlink()or(path.read_bytes()if path.exists()else None)!=data):raise ValueError("Promoted source changed after release")
             result=subprocess.run(["git","-C",str(source),"show",commit+":"+relative],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=10)
             if(result.stdout if result.returncode==0 else None)!=data:raise ValueError("Commit bytes differ from release")
-            if relative not in committed:raise ValueError("Release path absent from selected commit")
+            if relative not in committed:
+                # A content-identical released path (e.g. a mode-only rewrite) has nothing to commit.
+                if base_files is None:base_files=self.broker.scheduler_entries((Path(self.broker.state)/job["job_id"]/"base.tar").read_bytes())
+                prior=base_files.get(archive)
+                # Same rule as release.source_differs: bytes plus the executable bit.
+                if data is None or prior is None or prior[1]!=data or (prior[0]^expected[0])&0o100:raise ValueError("Release path absent from selected commit")
             promoted[relative]=None if data is None else hashlib.sha256(data).hexdigest()
         acceptance=args.get("acceptance")
         if not isinstance(acceptance,list)or not 1<=len(acceptance)<=32 or any(not isinstance(a,dict)or set(a)!={"check","passed"}or not isinstance(a["check"],str)or not 1<=len(a["check"])<=200 or a["passed"]is not True for a in acceptance):

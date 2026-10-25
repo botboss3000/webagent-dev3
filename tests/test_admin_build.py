@@ -265,6 +265,34 @@ class BuildTests(unittest.TestCase):
         (self.state / first["job_id"] / "base.tar").write_bytes(b"invalid archive")
         self.assertEqual(self.broker._queue_preflight(first)["status"], "unavailable")
 
+    def plan_fixture(self):
+        task = self.call("v3_build_work", {"action":"begin", "task_id":"plan-task", "summary":"plan", "mode":"isolated"})
+        Path(task["workspace_path"], "README.md").write_text("planned edit")
+        digest = self.call("v3_build_work", {"action":"status", "task_id":"plan-task"})["own"][0]["workspace_inputs_sha256"]
+        return digest
+
+    def test_preflight_reports_the_release_plan_finish_uses(self):
+        self.runner.blob = context(extra={"v3/README.md":"released"})
+        digest = self.plan_fixture()
+        plan = self.call("v3_build_work", {"action":"preflight", "task_id":"plan-task"})["release_plan"]
+        self.assertEqual(plan["inputs_sha256"], digest)
+        self.assertEqual(plan["changed_paths"], ["v3/README.md"])
+        job = self.call("v3_build_work", {"action":"finish", "task_id":"plan-task", "expected_inputs_sha256":digest,
+            "expected_paths":["README.md"], "expected_operation":plan["operation"]})
+        self.assertEqual(self.broker.jobs[job["job_id"]]["operation"], plan["operation"])
+
+    def test_finish_refuses_a_mismatched_plan_before_any_job(self):
+        self.runner.blob = context(extra={"v3/README.md":"released"})
+        digest = self.plan_fixture()
+        jobs = set(self.broker.jobs)
+        for extra, message in (({"expected_paths":["README.md","docs/other.md"]}, "differ from expected_paths"),
+                               ({"expected_operation":"host_service_deploy"}, "differs from expected_operation"),
+                               ({"expected_paths":[]}, "Bounded expected_paths")):
+            with self.assertRaisesRegex(ValueError, message):
+                self.call("v3_build_work", {"action":"finish", "task_id":"plan-task", "expected_inputs_sha256":digest, **extra})
+        self.assertEqual(set(self.broker.jobs), jobs)
+        self.assertEqual("open", self.call("v3_build_work", {"action":"status", "task_id":"plan-task"})["own"][0]["status"])
+
     def drift_fixture(self):
         self.runner.blob = context(extra={"v3/README.md":"released",
                                           "v3/src/release.rs":"must survive"})

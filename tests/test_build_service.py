@@ -6,6 +6,18 @@ import test_admin_build as fixtures
 def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 config=module("portable_config",Path(__file__).resolve().parents[1]/"build-service/config.py")
+class CandidateModeTests(unittest.TestCase):
+    def test_mode_only_rewrite_is_not_a_change_but_executable_bit_is(self):
+        release=fixtures.host.release;validate=fixtures.host.context_digest
+        base=release.entries(fixtures.context(extra={"v3/docs/a.md":"same","v3/README.md":"echo"}),validate)
+        task=dict(base);task["v3/docs/a.md"]=(0o600,base["v3/docs/a.md"][1])
+        _,changed=release.candidate(release.archive(base,validate),release.archive(task,validate),release.archive(base,validate),validate,allow_empty=True)
+        self.assertEqual(changed,[])
+        task["v3/README.md"]=(base["v3/README.md"][0]|0o111,base["v3/README.md"][1])
+        merged,changed=release.candidate(release.archive(base,validate),release.archive(task,validate),release.archive(base,validate),validate,allow_empty=True)
+        self.assertEqual(changed,["v3/README.md"])
+        self.assertEqual(release.entries(merged,validate)["v3/docs/a.md"],base["v3/docs/a.md"])
+
 class ConfigurationTests(unittest.TestCase):
  def account(self,name):return types.SimpleNamespace(pw_name=name,pw_uid=2301 if name=="builder" else 2402,pw_gid=2301,pw_dir="/srv/build-home")
  def test_arbitrary_account_paths_and_two_instances(self):

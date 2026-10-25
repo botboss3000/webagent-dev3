@@ -3839,7 +3839,7 @@ class Broker:
         if action=="reload_memory_policy":return self.reload_memory_policy(args,request["trusted"])
         if action in self.scheduler.actions:return self.scheduler.handle(args,request["trusted"],request["workspace"])
         allowed = {"action", "task_id", "summary", "expected_inputs_sha256", "sync_decision",
-            "expected_sync_digest", "offset", "job_id", "request_id", "check", "timeout_seconds", "compiler_memory_cap", "package_memory_cap", "test_filter", "feature_profile"}
+            "expected_sync_digest", "offset", "job_id", "request_id", "check", "timeout_seconds", "compiler_memory_cap", "package_memory_cap", "test_filter", "feature_profile", "expected_paths", "expected_operation"}
         if set(args) - allowed: raise ValueError("unsupported build_work argument")
         def call(tool, arguments):
             return self.handle({**request, "name": tool, "arguments": arguments})
@@ -3860,7 +3860,7 @@ class Broker:
             baseline = release.entries((folder / "baseline.tar").read_bytes(), context_digest)
             current = release.entries(release.snapshot(folder, TASK_CONTEXT, context_digest), context_digest)
             paths = [path for path in sorted(set(baseline) | set(current))
-                if baseline.get(path) != current.get(path) and not release.inspection_path(path)]
+                if release.source_differs(baseline.get(path), current.get(path)) and not release.inspection_path(path)]
             patches = []
             for path in paths:
                 old = baseline.get(path, (0, b""))[1].decode("utf-8", "replace")
@@ -3902,6 +3902,47 @@ class Broker:
                     target.chmod(member.mode & 0o755)
                 else:
                     raise ValueError("performance snapshot special file forbidden")
+
+    def _release_plan(self,changed,current_changed,candidate,base_blob,trusted):
+        """Select the release lane once for finish and preflight; reads only, no reservation."""
+        package_changed=[path for path in changed if not hot_source_path(path) and (
+            generic_package_path(path,candidate) or generic_package_path(path,base_blob))]
+        docs_changed=any(path.startswith("v3/docs/")and path.endswith(".md")for path in changed)
+        external_defaults_changed=any(path in {"v3/config/prompts.json","v3/config/tool-output-retention.json","v3/config/administration/native-tools.json"}for path in changed)
+        core_inputs=set();docs_attested=False
+        if package_changed or docs_changed or external_defaults_changed or any(path.startswith("v3/ui/")for path in changed):
+            try:
+                core_inputs=self.runner.core_compile_inputs()
+                docs_attested=isinstance(core_inputs,set)and "v3/src/main.rs"in core_inputs
+                if not isinstance(core_inputs,set):core_inputs=set()
+            except (AttributeError,OSError,RuntimeError,ValueError,TimeoutError):
+                core_inputs=set()
+        # Ordinary notes are assets only when installed compiler evidence excludes them.
+        ui_only = all((hot_source_path(path) or (
+            docs_attested and path.startswith("v3/docs/")and path.endswith(".md")) or (
+            (generic_package_path(path,candidate) or generic_package_path(path,base_blob))
+            and not native_package_migration(path,base_blob)))
+            and path not in core_inputs and not path.startswith(("v3/crates/context-contracts/","v3/crates/background-contracts/","v3/crates/boot-contracts/","v3/crates/assets-contracts/","v3/crates/capability-contracts/","v3/crates/provider-contracts/"))for path in changed)
+        if (package_changed or docs_changed or external_defaults_changed)and not docs_attested:ui_only=False
+        if CONFIG.get("scheduler",{}).get("concurrent_ui_preparation",False)and any(path.startswith("v3/ui/")for path in changed)and not docs_attested:ui_only=False
+        engine_changed=any(engine_component_source_path(path)for path in changed)
+        if engine_changed and not self.runner.engine_hot_swappable():ui_only=False
+        index_only=ui_only and(not changed or any(path in INDEX_METADATA_FILES for path in changed))
+        plugin_only=ui_only and not monitoring_component.only_paths(changed) and any((path.startswith(ABILITY_ROOT) and path not in INDEX_METADATA_FILES) or generic_package_path(path,candidate) or generic_package_path(path,base_blob) or path.startswith("v3/config/") or path=="v3/src/engine/tools/administrator-schemas.json" for path in changed)
+        host_only = self.host_source_only(current_changed,candidate,trusted)
+        operation="host_service_deploy" if host_only else "plugin_deploy" if plugin_only else "index_deploy" if index_only else "ui_deploy" if ui_only else "build_deploy"
+        return {"operation":operation,"changed_paths":sorted(changed),"ui_only":ui_only,"plugin_only":plugin_only,"index_only":index_only,"host_only":host_only}
+
+    def _require_expected_plan(self,args,plan):
+        """Refuse a finish whose broker-computed paths or lane differ from the caller's stated plan."""
+        if "expected_paths" in args:
+            paths=args["expected_paths"]
+            if not isinstance(paths,list)or not 1<=len(paths)<=256 or any(not isinstance(p,str)or not 1<=len(p)<=512 for p in paths):raise ValueError("Bounded expected_paths list required")
+            expected={p if p.startswith("v3/")else "v3/"+p for p in paths}
+            if expected!=set(plan["changed_paths"]):
+                raise ValueError("Release paths differ from expected_paths: unexpected "+json.dumps(sorted(set(plan["changed_paths"])-expected)[:16])+", missing "+json.dumps(sorted(expected-set(plan["changed_paths"]))[:16]))
+        if "expected_operation" in args and args["expected_operation"]!=plan["operation"]:
+            raise ValueError("Release operation "+plan["operation"]+" differs from expected_operation")
 
     def host_source_only(self,changed,blob,trusted):
         # This operator path can publish only already-installed host code and its
@@ -5120,7 +5161,7 @@ class Broker:
                 self._save_work()
                 return dict(receipt)
             if name == "v3_build_work":
-                if set(args) - {"action", "task_id", "summary", "expected_inputs_sha256", "mode", "sync_decision", "expected_sync_digest", "offset", "compiler_memory_cap", "package_memory_cap"}:
+                if set(args) - {"action", "task_id", "summary", "expected_inputs_sha256", "mode", "sync_decision", "expected_sync_digest", "offset", "compiler_memory_cap", "package_memory_cap", "expected_paths", "expected_operation"}:
                     raise ValueError("unsupported work argument")
                 action = args.get("action")
                 if action == "status":
@@ -5176,7 +5217,13 @@ class Broker:
                         raise ValueError("Nonnegative offset required")
                     report = self._sync_report(live, candidate, changed, offset)
                     if action == "preflight":
-                        return {"task_id": task_id, "synchronization": report}
+                        if job:
+                            plan = {"operation": job["operation"], "changed_paths": sorted(job.get("changed_paths", []))}
+                        else:
+                            _, own = release.candidate(base, task, base, context_digest, allow_empty=True)
+                            plan = self._release_plan(own, changed, candidate, base, trusted)
+                        return {"task_id": task_id, "synchronization": report,
+                                "release_plan": {"inputs_sha256": context_digest(task)[0], "operation": plan["operation"], "changed_paths": plan["changed_paths"]}}
                     if not job or job["status"] != "needs_decision":
                         raise ValueError("Only a paused pre-effect job can be decided")
                     if args.get("expected_sync_digest") != report["digest"]:
@@ -5265,7 +5312,7 @@ class Broker:
                     item.update(status="abandoned", finished_at=time.time())
                     self._save_work()
                     return {"task_id": task_id, "status": "abandoned", "open_count": len(self._open_work())}
-                if set(args) - {"action", "task_id", "expected_inputs_sha256", "sync_decision", "expected_sync_digest", "compiler_memory_cap", "package_memory_cap"} or not {"action", "task_id", "expected_inputs_sha256"} <= set(args):
+                if set(args) - {"action", "task_id", "expected_inputs_sha256", "sync_decision", "expected_sync_digest", "compiler_memory_cap", "package_memory_cap", "expected_paths", "expected_operation"} or not {"action", "task_id", "expected_inputs_sha256"} <= set(args):
                     raise ValueError("finish requires task_id and expected_inputs_sha256")
                 expected = args["expected_inputs_sha256"]
                 if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
@@ -5287,6 +5334,15 @@ class Broker:
                         raise ValueError("stale work inputs")
                     base_blob = (folder / "baseline.tar").read_bytes()
                     _, changed = release.candidate(base_blob, task_blob, base_blob, context_digest, allow_empty=True)
+                    if "expected_paths" in args or "expected_operation" in args:
+                        # Refuse a mismatched plan before any reservation or job exists.
+                        live = self._current_release_blob()
+                        try:early, early_changed = release.candidate(base_blob, task_blob, live, context_digest, allow_empty=True)
+                        except ValueError:
+                            early = release.archive({name: value for name, value in release.entries(task_blob, context_digest).items()
+                                                     if not release.inspection_path(name)}, context_digest)
+                            early_changed = changed
+                        self._require_expected_plan(args, self._release_plan(changed, early_changed, early, base_blob, trusted))
                     self.scheduler.submit(item,trusted,workspace,changed,current)
                     live = self._current_release_blob()
                     try:
@@ -5311,36 +5367,15 @@ class Broker:
                             return {"task_id": task_id, "status": "abandoned", "synchronization": report}
                         if decision != "proceed":
                             return {"task_id": task_id, "status": "needs_synchronization" if decision == "synchronize" else "needs_decision", "synchronization": report}
-                    package_changed=[path for path in changed if not hot_source_path(path) and (
-                        generic_package_path(path,candidate) or generic_package_path(path,base_blob))]
-                    docs_changed=any(path.startswith("v3/docs/")and path.endswith(".md")for path in changed)
-                    external_defaults_changed=any(path in {"v3/config/prompts.json","v3/config/tool-output-retention.json","v3/config/administration/native-tools.json"}for path in changed)
-                    core_inputs=set();docs_attested=False
-                    if package_changed or docs_changed or external_defaults_changed or any(path.startswith("v3/ui/")for path in changed):
-                        try:
-                            core_inputs=self.runner.core_compile_inputs()
-                            docs_attested=isinstance(core_inputs,set)and "v3/src/main.rs"in core_inputs
-                            if not isinstance(core_inputs,set):core_inputs=set()
-                        except (AttributeError,OSError,RuntimeError,ValueError,TimeoutError):
-                            core_inputs=set()
-                    # Ordinary notes are assets only when installed compiler evidence excludes them.
-                    ui_only = all((hot_source_path(path) or (
-                        docs_attested and path.startswith("v3/docs/")and path.endswith(".md")) or (
-                        (generic_package_path(path,candidate) or generic_package_path(path,base_blob))
-                        and not native_package_migration(path,base_blob)))
-                        and path not in core_inputs and not path.startswith(("v3/crates/context-contracts/","v3/crates/background-contracts/","v3/crates/boot-contracts/","v3/crates/assets-contracts/","v3/crates/capability-contracts/","v3/crates/provider-contracts/"))for path in changed)
-                    if (package_changed or docs_changed or external_defaults_changed)and not docs_attested:ui_only=False
-                    if CONFIG.get("scheduler",{}).get("concurrent_ui_preparation",False)and any(path.startswith("v3/ui/")for path in changed)and not docs_attested:ui_only=False
-                    engine_changed=any(engine_component_source_path(path)for path in changed)
-                    if engine_changed and not self.runner.engine_hot_swappable():ui_only=False
-                    index_only=ui_only and(not changed or any(path in INDEX_METADATA_FILES for path in changed))
                     package_cap=executor_module.package_cap(args.get("package_memory_cap"))
                     if package_cap is not None and (trusted.get("local_caller")is not True or not self.resources.enabled):raise PermissionError("Enforced package cap requires local operator")
                     cap=executor_module.compiler_cap(args.get("compiler_memory_cap"),CONFIG.get("scheduler",{}))
                     if cap is None and self.resources.enabled:cap=CONFIG.get("scheduler",{}).get("compiler_memory_default_bytes",12*1024**3)
                     if args.get("compiler_memory_cap")is not None and (trusted.get("local_caller")is not True or not self.resources.enabled):raise PermissionError("Enforced compiler cap requires local operator")
-                    plugin_only=ui_only and not monitoring_component.only_paths(changed) and any((path.startswith(ABILITY_ROOT) and path not in INDEX_METADATA_FILES) or generic_package_path(path,candidate) or generic_package_path(path,base_blob) or path.startswith("v3/config/") or path=="v3/src/engine/tools/administrator-schemas.json" for path in changed)
-                    host_only = self.host_source_only(current_changed,candidate,trusted)
+                    plan=self._release_plan(changed,current_changed,candidate,base_blob,trusted)
+                    # Recheck after reservation so a racing publication cannot change the stated plan.
+                    self._require_expected_plan(args,plan)
+                    ui_only,plugin_only,index_only,host_only=plan["ui_only"],plan["plugin_only"],plan["index_only"],plan["host_only"]
                     lease_until, fingerprint = self._incoming_lease(trusted)
                     job_id = str(uuid.uuid4())
                     private = self.state / job_id
@@ -5350,7 +5385,7 @@ class Broker:
                     job = {"job_id": job_id, "request_key": "task-" + key,
                            "body_digest": hashlib.sha256(canonical([task_id, current,cap,package_cap])).hexdigest(),
                            "user_id": trusted["user_id"], "workspace": workspace,
-                           "publication_policy_version":1 if CONFIG.get("scheduler",{}).get("concurrent_ui_preparation",False)else 0, "operation": "host_service_deploy" if host_only else "plugin_deploy" if plugin_only else "index_deploy" if index_only else "ui_deploy" if ui_only else "build_deploy", "task_id":task_id, "isolated": True, "inputs_sha256": current,
+                           "publication_policy_version":1 if CONFIG.get("scheduler",{}).get("concurrent_ui_preparation",False)else 0, "operation": plan["operation"], "task_id":task_id, "isolated": True, "inputs_sha256": current,
                            "created_at": time.time(), "status": "queued", "phase": "waiting", "compiler_memory_cap":cap,"package_memory_cap":package_cap,
                            "images": {}, "log": "", "tool_name": "v3_build_work",
                            "lease_until": max(lease_until, time.time() + 4 * 3600),

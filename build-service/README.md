@@ -19,6 +19,19 @@ unavailable. Task acceptance, claim release and completion never require an
 index or reviews. Earlier review ordering, approval and deferral text below
 describes the protected before_deployment policy and legacy jobs only.
 
+## Release-scope guards
+
+Source changes are compared by bytes and the executable bit only, in task review,
+preflight, finish and acceptance alike. A private-tree mode rewrite (for example
+0664 to 0600) is not a change, so a byte-identical revert leaves the release.
+preflight returns release_plan with the input digest, computed operation and
+changed_paths. Pass the intended set as finish expected_paths (V3-relative) and
+the lane as expected_operation; finish refuses a mismatch before any reservation
+or job exists, and rechecks after reservation. Narrow claims on an open task with
+release_claims and explicit scopes. When scope changes, start a fresh task rather
+than reverting by reverse patch. Acceptance accepts a released path absent from
+the commit only when its released bytes and executable bit equal the job base.
+
 # Host build service
 All maintained host build and legacy source-workspace code lives here.
 Administrator tools are protocol clients. Ordinary shell, browser, Git and live

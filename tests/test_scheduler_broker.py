@@ -224,6 +224,22 @@ class SchedulerBrokerTests(unittest.TestCase):
         self.assertTrue(self.broker.scheduler.retention_allowed(item["key"]))
         available,_=self.action(other["task_id"],"reserve",paths=["README.md"]);self.assertTrue(available["acquired"])
         self.assertEqual(Path(other["workspace_path"],"README.md").read_text(),"published\n")
+    def test_acceptance_allows_content_identical_path_absent_from_commit(self):
+        """A mode-only released path has nothing to commit; a real change still must be committed."""
+        self.runner.blob=fixtures.context(extra={"v3/README.md":"original\n","v3/docs/keep.md":"same\n"})
+        item=self.begin("identical-path-task");self.write(item,"README.md","published\n")
+        tree=Path(item["workspace_path"]).parent;base=(tree/"baseline.tar").read_bytes()
+        job,_=self.publish(item);(self.broker.state/job["job_id"]/"base.tar").write_bytes(base)
+        live=self.runner.source
+        def git(*args):return subprocess.run(["git","-C",str(live),*args],stdout=subprocess.PIPE,check=True).stdout.decode().strip()
+        git("add","docs/keep.md");git("commit","-qm","seed unchanged file")
+        (live/"README.md").write_text("published\n");commit=git("rev-parse","HEAD")
+        job["changed_paths"]=["v3/README.md","v3/docs/keep.md"]
+        with self.assertRaisesRegex(ValueError,"Release path absent"):
+            self.action(item["task_id"],"acceptance",job_id=job["job_id"],commit=commit,acceptance=[{"check":"fixture","passed":True}])
+        (live/"README.md").write_text("other\n");git("commit","-qam","unrelated");(live/"README.md").write_text("published\n");git("commit","-qam","release")
+        result,_=self.action(item["task_id"],"acceptance",job_id=job["job_id"],commit=git("rev-parse","HEAD"),acceptance=[{"check":"fixture","passed":True}])
+        self.assertEqual(result["state"],"validating")
     def test_changed_promoted_source_rejects_completion(self):
         """Fresh completion validation catches an edit made after acceptance."""
         item=self.begin("changed-promoted-task");self.write(item,"README.md","published\n");job,commit=self.publish(item)
