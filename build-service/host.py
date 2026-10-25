@@ -2291,6 +2291,38 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         return False
 
 
+TERMINAL_JOB_STATUS = {"completed", "cancelled"}
+PINNED_JOB = "4f605f3b-4444-4447-a511-3a9d4b9677df"
+
+
+def terminal_scratch_jobs(jobs, work):
+    """Return terminal jobs whose rebuildable scratch is unreferenced and unpinned."""
+    retained = {PINNED_JOB}
+    completed = sorted((job for job in jobs.values() if job.get("status") == "completed"),
+        key=lambda job: job.get("created_at", 0), reverse=True)[:2]
+    retained.update(job.get("job_id", "") for job in completed)
+    for job in jobs.values():
+        resume = job.get("packaging_resume") or {}
+        proof = job.get("legacy_image_proof") or (job.get("lineage") or {}).get("legacy_image_proof") or {}
+        for source in (resume.get("source_job_id"), proof.get("source_job_id")):
+            while isinstance(source, str) and source and source not in retained:
+                retained.add(source)
+                source = ((jobs.get(source) or {}).get("packaging_resume") or {}).get("source_job_id")
+    output = []
+    for job_id, job in jobs.items():
+        if job.get("status") not in TERMINAL_JOB_STATUS or job_id in retained:
+            continue
+        item = next((value for value in work.values() if value.get("job_id") == job_id
+            or (job.get("task_id") and value.get("task_id") == job.get("task_id"))), None)
+        if item is None or item.get("status") == "open":
+            continue
+        notice = item.get("leftover_notice") or {}
+        if notice and notice.get("reviewed_at") is None:
+            continue
+        output.append((job_id, item))
+    return sorted(output, key=lambda pair: pair[0])
+
+
 class Broker:
     """Authenticate callers and durably coordinate isolated source, releases, recovery and ownership."""
     def __init__(self, state=STATE, runner=None, recover=True):
@@ -2566,7 +2598,7 @@ class Broker:
         raise ValueError("Leftover notice changed; refresh before reviewing")
 
     def prune_check_caches(self, now=None):
-        """Expire only rebuildable outputs, never source, logs or job artifacts."""
+        """Expire rebuildable outputs and terminal job scratch, never logs or job receipts."""
         now = time.time() if now is None else now
         def atomic_json(path, value):
             temporary = path.with_suffix(".tmp")
@@ -2613,6 +2645,9 @@ class Broker:
                 if not checkout_target.is_symlink():
                     for name in ("debug", "release", "cargo-home", "session-naming-check/debug"):
                         candidates.append((checkout_target / name, {}, "rebuildable_checkout_cache"))
+                for job_id, item in terminal_scratch_jobs(self.jobs, self.work):
+                    for area in ("execution", "checks"):
+                        candidates.append((self.state / area / job_id, item, "terminal_job_scratch"))
                 for key, item in self.work.items():
                     if not self.scheduler.retention_allowed(key):
                         continue
@@ -2645,14 +2680,21 @@ class Broker:
                     resolved = cache.resolve()
                     if any(resolved == m or resolved in m.parents or m in resolved.parents for m in mounts):
                         continue
-                    newest = max(cache.stat().st_mtime, item.get("last_activity_at", 0))
-                    entries = 0
-                    for directory, dirs, files in os.walk(cache, followlinks=False):
-                        for entry in (*dirs, *files):
-                            entries += 1
-                            newest = max(newest, (Path(directory) / entry).lstat().st_mtime)
-                        if entries > 100000 or now - newest < 7200:
-                            break
+                    if kind == "terminal_job_scratch":
+                        # Terminal builds never write here again; a stat replaces the walk.
+                        job = self.jobs.get(cache.name) or {}
+                        newest = max(cache.stat().st_mtime, job.get("finished_at", 0),
+                            item.get("last_activity_at", 0))
+                        entries = 1
+                    else:
+                        newest = max(cache.stat().st_mtime, item.get("last_activity_at", 0))
+                        entries = 0
+                        for directory, dirs, files in os.walk(cache, followlinks=False):
+                            for entry in (*dirs, *files):
+                                entries += 1
+                                newest = max(newest, (Path(directory) / entry).lstat().st_mtime)
+                            if entries > 100000 or now - newest < 7200:
+                                break
                     if entries > 100000 or now - newest < 7200:
                         continue
                     # Recheck external activity immediately before deletion.

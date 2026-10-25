@@ -1969,3 +1969,43 @@ class SourceControlContractTests(unittest.TestCase):
    (folder/"plugin.json").write_text(json.dumps(changed))
    with self.assertRaisesRegex(ValueError,"Incompatible Git Control contract"):
     host.validate_git_control_package(folder)
+
+
+class TerminalScratchRetentionTests(unittest.TestCase):
+ """Terminal job scratch expires without touching retry, open or retained evidence."""
+ def setUp(self):
+  self.host=module("build_host_scratch",Path(__file__).resolve().parents[1]/"build-service/host.py")
+ def job(self,ident,status="completed",created_at=0):
+  return {"job_id":ident,"status":status,"created_at":created_at,"task_id":"task-"+ident}
+ def item(self,ident,**extra):
+  return {"key":ident.replace("-","")[:64],"job_id":ident,"task_id":"task-"+ident,"status":"closed",**extra}
+ def eligible(self,jobs,work):
+  return [pair[0] for pair in self.host.terminal_scratch_jobs(jobs,work)]
+ def test_terminal_job_scratch_is_eligible(self):
+  job=self.job("11111111-1111-1111-1111-111111111111",status="cancelled")
+  self.assertEqual([job["job_id"]],self.eligible({job["job_id"]:job},{job["job_id"]:self.item(job["job_id"])}))
+ def test_two_newest_completed_jobs_are_retained(self):
+  jobs={ident:self.job(ident,created_at=index)for index,ident in enumerate((
+   "11111111-1111-1111-1111-111111111111","22222222-2222-2222-2222-222222222222","33333333-3333-3333-3333-333333333333"))}
+  work={ident:self.item(ident)for ident in jobs}
+  self.assertEqual(["11111111-1111-1111-1111-111111111111"],self.eligible(jobs,work))
+ def test_resume_source_and_its_chain_are_retained(self):
+  source="11111111-1111-1111-1111-111111111111";middle="22222222-2222-2222-2222-222222222222"
+  jobs={source:self.job(source,created_at=1),middle:self.job(middle,created_at=2),
+   "33333333-3333-3333-3333-333333333333":self.job("33333333-3333-3333-3333-333333333333",created_at=3),
+   "44444444-4444-4444-4444-444444444444":{**self.job("44444444-4444-4444-4444-444444444444",status="failed",created_at=4),
+    "packaging_resume":{"source_job_id":middle}},
+   "55555555-5555-5555-5555-555555555555":{**self.job("55555555-5555-5555-5555-555555555555",status="failed",created_at=5),
+    "packaging_resume":{"source_job_id":source}}}
+  work={ident:self.item(ident)for ident in jobs}
+  self.assertEqual([],self.eligible(jobs,work))
+ def test_open_task_notice_and_failed_job_are_retained(self):
+  open_job=self.job("11111111-1111-1111-1111-111111111111")
+  noticed=self.job("22222222-2222-2222-2222-222222222222")
+  failed=self.job("33333333-3333-3333-3333-333333333333",status="failed")
+  running=self.job("44444444-4444-4444-4444-444444444444",status="running")
+  jobs={job["job_id"]:job for job in (open_job,noticed,failed,running)}
+  work={open_job["job_id"]:self.item(open_job["job_id"],status="open"),
+   noticed["job_id"]:self.item(noticed["job_id"],leftover_notice={"id":"n"*64,"reviewed_at":None}),
+   failed["job_id"]:self.item(failed["job_id"]),running["job_id"]:self.item(running["job_id"])}
+  self.assertEqual([],self.eligible(jobs,work))
