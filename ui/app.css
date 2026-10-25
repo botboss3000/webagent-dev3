@@ -248,3 +248,11 @@ body #app-restricted-overlay {
   padding-bottom: max(clamp(24px, 6vw, 72px), var(--app-safe-bottom));
   padding-left: max(20px, var(--app-safe-left));
 }
+/* Shared scrollbar, Firefox half: Chromium/Safari draw design-system.css's
+   ::-webkit-scrollbar pill and skip this; Firefox reads only these properties.
+   Overrides that file's scrollbar-width:thin hack, which renders a ~2px hairline.
+   Components that set scrollbar-width:none keep it (higher specificity). */
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: auto; scrollbar-color: rgba(var(--brand-rgb), 0.38) transparent; }
+  body.light-mode * { scrollbar-color: rgba(var(--brand-rgb), 0.45) transparent; }
+}
