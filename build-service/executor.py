@@ -26,6 +26,38 @@ TEST_STACK_BYTES=32*1024*1024
 # Single named tests (focused checks) keep one thread: parallelism is meaningless
 # there. Evidence: identical pass/fail/ignored counts at 1 vs 4 threads.
 TEST_THREADS=4
+# Paths whose change can alter linked-vs-live equivalence: the build recipe, the
+# features it selects, main.rs wiring, and the engine/context mode-execution code.
+# Changes outside this set reuse a stored proof for the same Rust source.
+EQUIVALENCE_RELEVANT_PREFIXES=(
+    "v3/Cargo.toml","v3/Cargo.lock","v3/build.rs","v3/src/main.rs","v3/Dockerfile",
+    "v3/crates/modules/engine/","v3/crates/context-assembly/","v3/crates/context-service/",
+    "v3/crates/context-contracts/","v3/build-service/")
+def equivalence_relevant(changed_paths):
+    """Whether a change can affect linked-vs-live equivalence."""
+    for path in (changed_paths or []):
+        p=path if path.startswith("v3/") else "v3/"+path
+        if p in EQUIVALENCE_RELEVANT_PREFIXES or any(p.startswith(pref) for pref in EQUIVALENCE_RELEVANT_PREFIXES):
+            return True
+        if p.endswith("Cargo.toml"):
+            return True
+    return False
+# Paths whose change can alter linked-vs-live equivalence: the build recipe, the
+# features it selects, main.rs wiring, and the engine/context mode-execution code.
+# Changes outside this set reuse a stored proof for the same Rust source.
+EQUIVALENCE_RELEVANT_PREFIXES=(
+    "v3/Cargo.toml","v3/Cargo.lock","v3/build.rs","v3/src/main.rs","v3/Dockerfile",
+    "v3/crates/modules/engine/","v3/crates/context-assembly/","v3/crates/context-service/",
+    "v3/crates/context-contracts/","v3/build-service/")
+def equivalence_relevant(changed_paths):
+    """Whether a change can affect linked-vs-live equivalence."""
+    for path in (changed_paths or []):
+        p=path if path.startswith("v3/") else "v3/"+path
+        if p in EQUIVALENCE_RELEVANT_PREFIXES or any(p.startswith(pref) for pref in EQUIVALENCE_RELEVANT_PREFIXES):
+            return True
+        if p.endswith("Cargo.toml"):
+            return True
+    return False
 MOLD_VERSION="1.10.1+dfsg-1"
 MOLD_SHA256="f85b0102cabeaee34b76ab195aacfa9ff9442d670948c88f6f353dd666ea5b64"
 MOLD_COMPILER_DOCKERFILE_SHA256="129a45c426d4683ab5a563ebdf764bf829826a415305dce15ab36c780a3ba815"
@@ -1052,6 +1084,14 @@ class Executor:
             job["linked_stable"]=json.loads((artifacts/"stable/smoke.json").read_text())
             job["optimized_mode_equivalence"]=json.loads((artifacts/"stable/mode-equivalence.json").read_text())
             job["compiler_artifact_reuse"]=old["job_id"]
+            try:
+                rust_digest=self.verification_source(blob)
+                proof_store=Path(self.config["state_root"])/"equivalence-proofs"/(rust_digest[:16])
+                if not (proof_store/"mode-equivalence.json").is_file() and (artifacts/"stable"/"mode-equivalence.json").is_file():
+                    proof_store.mkdir(parents=True,exist_ok=True)
+                    (proof_store/"mode-equivalence.json").write_text((artifacts/"stable"/"mode-equivalence.json").read_text())
+            except (OSError,ValueError,json.JSONDecodeError):
+                pass
             job["linker_proof"]=self.metadata_receipt(artifacts/"stable/linker-proof.json")
             return artifacts,logs
         seeded=self.seed_cargo_cache(job,blob,output)
@@ -1071,6 +1111,21 @@ class Executor:
         if not any(counts):raise ValueError("Suite executed no tests")
         job["suite_counts"]={"passed":counts[0],"failed":counts[1],"ignored":counts[2]}
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Tests left changed application inputs")
+        # P7: skip the live equivalence build when the change cannot affect it.
+        rust_digest=self.verification_source(blob)
+        changed=job.get("changed_paths",[]) or []
+        relevant=equivalence_relevant(changed)
+        proof_store=Path(self.config["state_root"])/"equivalence-proofs"/(rust_digest[:16])
+        stored=None
+        if proof_store.is_dir() and (proof_store/"mode-equivalence.json").is_file():
+            try:
+                stored=json.loads((proof_store/"mode-equivalence.json").read_text())
+                if not isinstance(stored,dict) or "linked" not in stored or "live" not in stored:
+                    stored=None
+            except (json.JSONDecodeError,OSError,ValueError):
+                stored=None
+        skip_live=(not relevant) and (stored is not None)
+        # Linked build (needed for deployment) always runs.
         logs+=self.phase(job,"compile_linked","engine",application,output,self.linked_recipe(),"engine:rust1.90:linked-release")
         stable=output/"stable";stable.mkdir(exist_ok=True)
         shutil.copyfile(output/"target/release/webagent-v3",stable/"webagent-v3");(stable/"webagent-v3").chmod(0o555)
@@ -1084,12 +1139,24 @@ class Executor:
         (stable/"smoke.json").write_text(json.dumps(job["linked_stable"],sort_keys=True)+"\n")
         getattr(self.runner,"resource_progress",lambda _:None)(job)
         self.attest_release_base(job,context_blob)
-        logs+=self.phase(job,"compile_release","engine",application,output,self.live_recipe(),"engine:rust1.90:release")
-        logs+=self.phase(job,"live_smoke","test",application,output,self.smoke_recipe("live"),"engine:rust1.90:live-smoke",90)
-        live_proof=self.live_smoke(self.smoke_artifact(stable/"live-smoke-result.json"),proof)
-        job["optimized_mode_equivalence"]={"status":"passed","linked":proof,"live":live_proof}
-        (stable/"mode-equivalence.json").write_text(json.dumps(job["optimized_mode_equivalence"],sort_keys=True)+"\n")
-        getattr(self.runner,"resource_progress",lambda _:None)(job)
+        if skip_live:
+            logs+="Equivalence verification skipped: change does not affect equivalence boundaries; reusing stored proof.\n"
+            stored_live=stored.get("live")
+            job["optimized_mode_equivalence"]={"status":"skipped","reason":"unchanged-inputs","linked":proof,"live":stored_live}
+            (stable/"mode-equivalence.json").write_text(json.dumps(job["optimized_mode_equivalence"],sort_keys=True)+"\n")
+            getattr(self.runner,"resource_progress",lambda _:None)(job)
+        else:
+            logs+=self.phase(job,"compile_release","engine",application,output,self.live_recipe(),"engine:rust1.90:release")
+            logs+=self.phase(job,"live_smoke","test",application,output,self.smoke_recipe("live"),"engine:rust1.90:live-smoke",90)
+            live_proof=self.live_smoke(self.smoke_artifact(stable/"live-smoke-result.json"),proof)
+            job["optimized_mode_equivalence"]={"status":"passed","linked":proof,"live":live_proof}
+            (stable/"mode-equivalence.json").write_text(json.dumps(job["optimized_mode_equivalence"],sort_keys=True)+"\n")
+            getattr(self.runner,"resource_progress",lambda _:None)(job)
+            try:
+                proof_store.mkdir(parents=True,exist_ok=True)
+                (proof_store/"mode-equivalence.json").write_text(json.dumps({"linked":proof,"live":live_proof},sort_keys=True)+"\n")
+            except (OSError,ValueError):
+                pass
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Compilation changed application inputs")
         artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
         self.collect_runtime_artifacts(application,output,artifacts,legacy_automation,self.context_component_recipe(blob))
