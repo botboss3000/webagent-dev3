@@ -1981,6 +1981,18 @@ class TerminalScratchRetentionTests(unittest.TestCase):
   return {"key":ident.replace("-","")[:64],"job_id":ident,"task_id":"task-"+ident,"status":"closed",**extra}
  def eligible(self,jobs,work):
   return [pair[0] for pair in self.host.terminal_scratch_jobs(jobs,work)]
+
+ def test_container_mounts_batches_and_projects(self):
+  calls=[]
+  class Runner:
+   def command(self,argv,timeout=0,private_raw=False):
+    calls.append(argv)
+    return "".join('[{"Source":"/mnt/%s/%s","Destination":"/x"}]\n'%(len(calls),index) for index,_ in enumerate(argv[4:]))+'[]\n'
+  rows=self.host.container_mounts(Runner(),[str(index)for index in range(70)])
+  self.assertEqual([32,32,6],[len(argv)-4 for argv in calls])
+  self.assertEqual(70,len(rows))
+  self.assertTrue(all("--format" in argv for argv in calls))
+  self.assertEqual(Path("/mnt/1/0"),rows[0])
  def test_terminal_job_scratch_is_eligible(self):
   job=self.job("11111111-1111-1111-1111-111111111111",status="cancelled")
   self.assertEqual([job["job_id"]],self.eligible({job["job_id"]:job},{job["job_id"]:self.item(job["job_id"])}))

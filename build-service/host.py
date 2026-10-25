@@ -2291,6 +2291,18 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         return False
 
 
+def container_mounts(runner, ids, batch=32):
+    """Read only container mounts in bounded batches; full inspect bodies exceed the payload cap."""
+    rows = []
+    for start in range(0, len(ids), batch):
+        body = runner.command(["docker", "inspect", "--format", "{{json .Mounts}}", *ids[start:start + batch]],
+            timeout=10, private_raw=True)
+        for line in body.splitlines():
+            if line.strip():
+                rows.extend(json.loads(line))
+    return [Path(row["Source"]).resolve() for row in rows if isinstance(row, dict) and row.get("Source")]
+
+
 TERMINAL_JOB_STATUS = {"completed", "cancelled"}
 PINNED_JOB = "4f605f3b-4444-4447-a511-3a9d4b9677df"
 
@@ -2619,9 +2631,8 @@ class Broker:
                    for p in processes.splitlines()):
                 return {"status": "deferred", "reason": "compiler active"}
             ids = self.runner.command(["docker", "ps", "-aq", "--filter", "name="+TARGETS[0]], timeout=5).split()
-            containers = json.loads(self.runner.command(["docker", "inspect", *ids], timeout=10, private_raw=True)) if ids else []
-            mounts = [Path(m["Source"]).resolve() for c in containers
-                      for m in c.get("Mounts", []) if m.get("Source") and Path(m["Source"]).resolve() != self.state.parent.resolve()]
+            mounts = [path for path in container_mounts(self.runner, ids)
+                      if path != self.state.parent.resolve()]
             removed = []
             # The host terminal-artifact pruner shares this lock. Its task and
             # release retention remains independent from rebuildable cache expiry.
@@ -2702,9 +2713,8 @@ class Broker:
                     if any(p.strip() in {"cargo", "rustc", "rustdoc", "buildx"} for p in processes.splitlines()):
                         return {"status": "deferred", "reason": "compiler started", "removed": removed}
                     current_ids = self.runner.command(["docker", "ps", "-aq", "--filter", "name="+TARGETS[0]], timeout=5).split()
-                    current_containers = json.loads(self.runner.command(["docker", "inspect", *current_ids], timeout=10, private_raw=True)) if current_ids else []
-                    current_mounts = [Path(m["Source"]).resolve() for c in current_containers
-                        for m in c.get("Mounts", []) if m.get("Source") and Path(m["Source"]).resolve() != self.state.parent.resolve()]
+                    current_mounts = [path for path in container_mounts(self.runner, current_ids)
+                        if path != self.state.parent.resolve()]
                     if any(resolved == m or resolved in m.parents or m in resolved.parents for m in current_mounts):
                         continue
                     size = int(self.runner.command(["du", "-s", "-B1", "--one-file-system", "--", str(cache)], timeout=10).split()[0])
