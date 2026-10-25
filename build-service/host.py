@@ -3207,7 +3207,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install") if key in job}
         for key in ("publication_wait","resource_waiting"):
             if view.get(key,{}).get("state","waiting")=="waiting"and view.get(key,{}).get("since"):
                 view[key]={**view[key],"elapsed_seconds":round(max(0,time.time()-view[key]["since"]),3)}
@@ -3931,10 +3931,19 @@ class Broker:
         plugin_only=ui_only and not monitoring_component.only_paths(changed) and any((path.startswith(ABILITY_ROOT) and path not in INDEX_METADATA_FILES) or generic_package_path(path,candidate) or generic_package_path(path,base_blob) or path.startswith("v3/config/") or path=="v3/src/engine/tools/administrator-schemas.json" for path in changed)
         host_only = self.host_source_only(current_changed,candidate,trusted)
         operation="host_service_deploy" if host_only else "plugin_deploy" if plugin_only else "index_deploy" if index_only else "ui_deploy" if ui_only else "build_deploy"
-        return {"operation":operation,"changed_paths":sorted(changed),"ui_only":ui_only,"plugin_only":plugin_only,"index_only":index_only,"host_only":host_only}
+        broker_paths=[p for p in current_changed if p.startswith("v3/build-service/")and not p.startswith("v3/build-service/shared-ui/")]
+        refusal=None
+        if not host_only and broker_paths and set(current_changed)<=self.host_source_scope()[1]:
+            # A build_deploy would rebuild unchanged app images and still not install the broker.
+            refusal=("Broker-only change is not installed: build_deploy would rebuild app images and leave the old broker running. "
+                     +("Install this task tree while idle (lifecycle.py install --install-tree <task tree hash>), then finish again to publish as host_service_deploy."
+                       if trusted.get("local_caller")else"A local operator must install the task tree and publish it."))
+        return {"operation":operation,"changed_paths":sorted(changed),"ui_only":ui_only,"plugin_only":plugin_only,"index_only":index_only,"host_only":host_only,
+                "refusal":refusal,"broker_install_required":bool(broker_paths)and not host_only}
 
     def _require_expected_plan(self,args,plan):
         """Refuse a finish whose broker-computed paths or lane differ from the caller's stated plan."""
+        if plan.get("refusal"):raise ValueError(plan["refusal"])
         if "expected_paths" in args:
             paths=args["expected_paths"]
             if not isinstance(paths,list)or not 1<=len(paths)<=256 or any(not isinstance(p,str)or not 1<=len(p)<=512 for p in paths):raise ValueError("Bounded expected_paths list required")
@@ -3944,15 +3953,20 @@ class Broker:
         if "expected_operation" in args and args["expected_operation"]!=plan["operation"]:
             raise ValueError("Release operation "+plan["operation"]+" differs from expected_operation")
 
-    def host_source_only(self,changed,blob,trusted):
-        # This operator path can publish only already-installed host code and its
-        # own docs/tests and paired ownership classifier. Each changed executable
-        # must match protected installation. Worker, policy and app changes still build.
+    def host_source_scope(self):
+        """Broker modules and their docs/tests that the host-only lane may publish."""
         review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
         allowed={"v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_scheduler_broker.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
+        return review_modules,allowed
+
+    def host_source_only(self,changed,blob,trusted):
+        # This operator path can publish only already-installed host code and its
+        # own docs/tests and paired ownership classifier. Each changed executable
+        # must match protected installation. Worker, policy and app changes still build.
+        review_modules,allowed=self.host_source_scope()
         if not trusted.get("local_caller") or not changed or not set(changed)<=allowed:return False
         try:files=release.entries(blob,context_digest)
         except (ValueError,tarfile.TarError):return False
@@ -5223,7 +5237,8 @@ class Broker:
                             _, own = release.candidate(base, task, base, context_digest, allow_empty=True)
                             plan = self._release_plan(own, changed, candidate, base, trusted)
                         return {"task_id": task_id, "synchronization": report,
-                                "release_plan": {"inputs_sha256": context_digest(task)[0], "operation": plan["operation"], "changed_paths": plan["changed_paths"]}}
+                                "release_plan": {"inputs_sha256": context_digest(task)[0], "operation": plan["operation"], "changed_paths": plan["changed_paths"],
+                                    "refusal": plan.get("refusal"), "broker_install_required": plan.get("broker_install_required", False)}}
                     if not job or job["status"] != "needs_decision":
                         raise ValueError("Only a paused pre-effect job can be decided")
                     if args.get("expected_sync_digest") != report["digest"]:
@@ -5334,15 +5349,14 @@ class Broker:
                         raise ValueError("stale work inputs")
                     base_blob = (folder / "baseline.tar").read_bytes()
                     _, changed = release.candidate(base_blob, task_blob, base_blob, context_digest, allow_empty=True)
-                    if "expected_paths" in args or "expected_operation" in args:
-                        # Refuse a mismatched plan before any reservation or job exists.
-                        live = self._current_release_blob()
-                        try:early, early_changed = release.candidate(base_blob, task_blob, live, context_digest, allow_empty=True)
-                        except ValueError:
-                            early = release.archive({name: value for name, value in release.entries(task_blob, context_digest).items()
-                                                     if not release.inspection_path(name)}, context_digest)
-                            early_changed = changed
-                        self._require_expected_plan(args, self._release_plan(changed, early_changed, early, base_blob, trusted))
+                    # Refuse a mismatched or uninstalled-broker plan before any reservation or job exists.
+                    live = self._current_release_blob()
+                    try:early, early_changed = release.candidate(base_blob, task_blob, live, context_digest, allow_empty=True)
+                    except ValueError:
+                        early = release.archive({name: value for name, value in release.entries(task_blob, context_digest).items()
+                                                 if not release.inspection_path(name)}, context_digest)
+                        early_changed = changed
+                    self._require_expected_plan(args, self._release_plan(changed, early_changed, early, base_blob, trusted))
                     self.scheduler.submit(item,trusted,workspace,changed,current)
                     live = self._current_release_blob()
                     try:
@@ -5395,6 +5409,10 @@ class Broker:
                     job["synchronization"] = report
                     if host_only:
                         job["rust_tests"]={"status":"not_required","summary":"Exact installed host broker and its docs/tests only; application runtime unchanged"}
+                        job["broker_install"]={"service_dir":CONFIG["service_dir"],"paths":[p for p in current_changed if p.startswith("v3/build-service/")]}
+                    elif plan["broker_install_required"]:
+                        job["broker_install"]={"required":True,"paths":[p for p in current_changed if p.startswith("v3/build-service/")],
+                            "note":"This release does not install the broker; install the task tree and restart it"}
                     if ui_only:
                         job["rust_tests"] = {"status": "not_required",
                             "summary": "Compatible assets/plugin; no core Rust build required"}

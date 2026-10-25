@@ -31,6 +31,12 @@ or job exists, and rechecks after reservation. Narrow claims on an open task wit
 release_claims and explicit scopes. When scope changes, start a fresh task rather
 than reverting by reverse patch. Acceptance accepts a released path absent from
 the commit only when its released bytes and executable bit equal the job base.
+A change limited to host-lane broker files is refused unless its tree is already
+installed (lifecycle.py install --install-tree), because build_deploy would
+rebuild unchanged app images and leave the old broker running; preflight shows
+the refusal. Any other release touching build-service/ records
+broker_install.required, and a host_service_deploy records the installed
+service_dir.
 
 # Host build service
 All maintained host build and legacy source-workspace code lives here.

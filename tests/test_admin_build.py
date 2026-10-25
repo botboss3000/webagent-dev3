@@ -293,6 +293,31 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(set(self.broker.jobs), jobs)
         self.assertEqual("open", self.call("v3_build_work", {"action":"status", "task_id":"plan-task"})["own"][0]["status"])
 
+    def broker_fixture(self, files):
+        self.runner.blob = context(extra={"v3/README.md":"released", "v3/build-service/README.md":"broker"})
+        task = self.call("v3_build_work", {"action":"begin", "task_id":"broker-task", "summary":"broker", "mode":"isolated"})
+        for name, text in files.items():Path(task["workspace_path"], name).write_text(text)
+        return self.call("v3_build_work", {"action":"status", "task_id":"broker-task"})["own"][0]["workspace_inputs_sha256"]
+
+    def test_uninstalled_broker_only_change_is_refused_before_any_job(self):
+        digest = self.broker_fixture({"build-service/README.md":"broker edit"})
+        plan = self.call("v3_build_work", {"action":"preflight", "task_id":"broker-task"})["release_plan"]
+        self.assertEqual(plan["operation"], "build_deploy");self.assertTrue(plan["broker_install_required"])
+        self.assertIn("Broker-only change is not installed", plan["refusal"])
+        jobs = set(self.broker.jobs)
+        with self.assertRaisesRegex(ValueError, "Broker-only change is not installed"):
+            self.call("v3_build_work", {"action":"finish", "task_id":"broker-task", "expected_inputs_sha256":digest})
+        self.assertEqual(set(self.broker.jobs), jobs)
+        self.assertEqual("open", self.call("v3_build_work", {"action":"status", "task_id":"broker-task"})["own"][0]["status"])
+
+    def test_mixed_broker_change_builds_and_records_pending_install(self):
+        digest = self.broker_fixture({"build-service/README.md":"broker edit", "README.md":"app edit"})
+        plan = self.call("v3_build_work", {"action":"preflight", "task_id":"broker-task"})["release_plan"]
+        self.assertIsNone(plan["refusal"]);self.assertTrue(plan["broker_install_required"])
+        job = self.call("v3_build_work", {"action":"finish", "task_id":"broker-task", "expected_inputs_sha256":digest})
+        self.assertEqual(self.broker.jobs[job["job_id"]]["broker_install"]["required"], True)
+        self.assertEqual(self.broker.jobs[job["job_id"]]["broker_install"]["paths"], ["v3/build-service/README.md"])
+
     def drift_fixture(self):
         self.runner.blob = context(extra={"v3/README.md":"released",
                                           "v3/src/release.rs":"must survive"})
