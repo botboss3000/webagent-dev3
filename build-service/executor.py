@@ -21,6 +21,11 @@ RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"
 # Rust test harness threads need explicit stack headroom: an overflow aborts the
 # whole binary (853 tests) and costs a retry, while the extra stack is virtual.
 TEST_STACK_BYTES=32*1024*1024
+# Suite and retained-binary replays run the whole workspace harness; parallel
+# test threads must stay a pinned recipe value so test_proof stays deterministic.
+# Single named tests (focused checks) keep one thread: parallelism is meaningless
+# there. Evidence: identical pass/fail/ignored counts at 1 vs 4 threads.
+TEST_THREADS=4
 MOLD_VERSION="1.10.1+dfsg-1"
 MOLD_SHA256="f85b0102cabeaee34b76ab195aacfa9ff9442d670948c88f6f353dd666ea5b64"
 MOLD_COMPILER_DOCKERFILE_SHA256="129a45c426d4683ab5a563ebdf764bf829826a415305dce15ab36c780a3ba815"
@@ -120,6 +125,14 @@ class Executor:
     def test_stack_env(phase):
         """Give Rust test-harness phases stack headroom; other phases keep the default."""
         return ["-e","RUST_MIN_STACK="+str(TEST_STACK_BYTES)]if phase=="test"else[]
+    @staticmethod
+    def suite_totals(output):
+        """Sum one cargo test run's result counts; an empty run proves nothing executed."""
+        totals=[0,0,0]
+        for line in output.splitlines():
+            match=re.search(r"test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored",line)
+            if match:totals=[current+int(value) for current,value in zip(totals,match.groups())]
+        return totals
     def phase(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False):
         """Expose bounded phase timing and current work without command text or private paths."""
         started=time.monotonic();token=uuid.uuid4().hex;outcome="failed"
@@ -1020,9 +1033,14 @@ class Executor:
                 logs="Exact source, toolchain and fixture proof matched; complete workspace test evidence reused from "+old["job_id"]+".\n"+old["test_log"]
             else:
                 logs+=self.focused_tests(job,application,output,retained=artifacts)
+                replayed=0;results=0
                 for binary in sorted((artifacts/"tests").iterdir()):
                     if not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",binary.name):raise ValueError("Cached test executable name invalid")
-                    logs+=self.phase(job,"test","test",application,output,["/output/artifacts/tests/"+binary.name,"--test-threads=1"],"engine:rust1.90:test")
+                    run=self.phase(job,"test","test",application,output,["/output/artifacts/tests/"+binary.name,"--test-threads="+str(TEST_THREADS)],"engine:rust1.90:test")
+                    logs+=run;replayed+=1;results+=len(re.findall(r"test result:",run))
+                if replayed!=results:raise ValueError("Parallel replay skipped a retained test binary")
+                counts=Executor.suite_totals(logs)
+                job["suite_counts"]={"passed":counts[0],"failed":counts[1],"ignored":counts[2]}
             if self.runner.execution_source_digest(source)!=self.runner.execution_source_digest_blob(blob):
                 raise ValueError("Cached tests changed candidate source")
             logs=logs.replace("locked Rust tests previously passed on identical compiled inputs.","current candidate ran retained tests from identical compiled inputs.")
@@ -1047,7 +1065,11 @@ class Executor:
         self.retain_test_manifest(output,artifacts)
         logs+=self.focused_tests(job,application,output,fresh_tests=artifacts)
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Focused tests changed captured application inputs")
-        logs+=self.phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads=1"],"engine:rust1.90:test")
+        suite_output=self.phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads="+str(TEST_THREADS)],"engine:rust1.90:test")
+        logs+=suite_output
+        counts=Executor.suite_totals(suite_output)
+        if not any(counts):raise ValueError("Suite executed no tests")
+        job["suite_counts"]={"passed":counts[0],"failed":counts[1],"ignored":counts[2]}
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Tests left changed application inputs")
         logs+=self.phase(job,"compile_linked","engine",application,output,self.linked_recipe(),"engine:rust1.90:linked-release")
         stable=output/"stable";stable.mkdir(exist_ok=True)

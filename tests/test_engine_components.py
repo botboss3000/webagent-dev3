@@ -240,6 +240,22 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(executor.Executor.test_stack_env("test"),["-e","RUST_MIN_STACK=33554432"])
         for phase in ("compile_test","compile_linked","compile_release","linked_smoke","live_smoke","dependency","engine_metadata"):
             self.assertEqual(executor.Executor.test_stack_env(phase),[])
+    def test_suite_gate_runs_parallel_and_single_tests_stay_serial(self):
+        self.assertEqual(executor.TEST_THREADS,4)
+        source=(ROOT/"build-service/executor.py").read_text()
+        engine=source[source.index("    def engine(self,job,blob,extract,digest):"):]
+        self.assertIn('"--test-threads="+str(TEST_THREADS)',engine)
+        self.assertEqual(engine.count('"--test-threads=1"'),0)
+        # focused single-test sites outside engine() keep one thread: a named
+        # test cannot use parallelism, and those recipes predate the gate change.
+        focused=source[:source.index("    def engine(self,job,blob,extract,digest):")]
+        self.assertGreaterEqual(focused.count('"--test-threads=1"'),3)
+    def test_suite_totals_sums_and_detects_empty_runs(self):
+        output="\n".join(["test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured",
+                          "test result: FAILED. 2 passed; 3 failed; 1 ignored; 0 measured"])
+        self.assertEqual(executor.Executor.suite_totals(output),[7,3,1])
+        self.assertEqual(executor.Executor.suite_totals(""),[0,0,0])
+        self.assertEqual(executor.Executor.suite_totals("no results here"),[0,0,0])
 class EngineRebaseAttestationOrderTests(unittest.TestCase):
     """The deferred publication rebase is re-proved before each optimized compile, not after the suite."""
     def test_attestation_precedes_compile_test_and_compile_release(self):
@@ -263,7 +279,8 @@ class EngineRebaseAttestationOrderTests(unittest.TestCase):
                 if name=="engine_metadata":
                     compiler=output/"compiler";compiler.mkdir(exist_ok=True);(compiler/"mold").write_bytes(b"mold")
                     for mode in ("linked","live"):(output/(mode+"-comment.txt")).write_bytes(b"mold 1.10.1")
-                return ""
+                # P4's count guard parses the suite phase output like a real run.
+                return "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured\n"
             worker.phase=phase
             worker.validate_compiler_recipe=Mock(return_value=False);worker.cached_engine=Mock(return_value=None)
             worker.seed_cargo_cache=Mock(return_value=False);worker.dependencies=Mock(return_value="offline ready\n")
