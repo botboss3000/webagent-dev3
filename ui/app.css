@@ -248,10 +248,35 @@ body #app-restricted-overlay {
   padding-bottom: max(clamp(24px, 6vw, 72px), var(--app-safe-bottom));
   padding-left: max(20px, var(--app-safe-left));
 }
-/* Shared scrollbar, Firefox half: Chromium/Safari draw design-system.css's
-   ::-webkit-scrollbar pill and skip this; Firefox reads only these properties.
-   Overrides that file's scrollbar-width:thin hack, which renders a ~2px hairline.
-   Components that set scrollbar-width:none keep it (higher specificity). */
+/* Shared desktop scrollbar: a persistent 6px rounded thumb on a transparent
+   track in every browser. Chromium/Safari draw it from the layer below; desktop
+   Firefox draws the same thumb (.wa-scrollbar) from /v3-ui/shared/scrollbars.js.
+   Layered !important outranks every unlayered !important, so page-specific
+   widths and colours yield. Bars hidden with scrollbar-width:none stay hidden,
+   and touch devices keep their native bars. */
+body {
+  --wa-scrollbar-size: 6px;
+  --wa-scrollbar-thumb: rgba(var(--brand-rgb), 0.35);
+  --wa-scrollbar-thumb-hover: rgba(var(--brand-rgb), 0.55);
+}
+@layer wa-scrollbar {
+  @media (hover: hover) and (pointer: fine) {
+    *::-webkit-scrollbar { width: var(--wa-scrollbar-size) !important; height: var(--wa-scrollbar-size) !important; background: transparent !important; }
+    *::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent !important; border: 0 !important; box-shadow: none !important; }
+    *::-webkit-scrollbar-thumb { background: var(--wa-scrollbar-thumb) !important; border: 0 !important; border-radius: calc(var(--wa-scrollbar-size) / 2) !important; }
+    *::-webkit-scrollbar-thumb:hover, *::-webkit-scrollbar-thumb:active { background: var(--wa-scrollbar-thumb-hover) !important; }
+  }
+}
+.wa-scrollbar {
+  position: absolute !important; top: 0 !important; left: 0 !important; z-index: 5; margin: 0 !important; padding: 0 !important;
+  box-sizing: border-box; width: var(--wa-scrollbar-size); height: var(--wa-scrollbar-size);
+  border-radius: calc(var(--wa-scrollbar-size) / 2); background: var(--wa-scrollbar-thumb);
+  pointer-events: auto; touch-action: none; will-change: transform;
+}
+.wa-scrollbar:hover, .wa-scrollbar.dragging { background: var(--wa-scrollbar-thumb-hover); }
+.wa-scrollbar[hidden] { display: none !important; }
+/* Firefox scrollers the component leaves native (text editors, touch): full
+   width instead of design-system.css's scrollbar-width:thin hairline. */
 @supports not selector(::-webkit-scrollbar) {
   * { scrollbar-width: auto; scrollbar-color: rgba(var(--brand-rgb), 0.38) transparent; }
   body.light-mode * { scrollbar-color: rgba(var(--brand-rgb), 0.45) transparent; }
