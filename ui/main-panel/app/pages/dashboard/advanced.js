@@ -39,13 +39,13 @@ export function paintDashboard(views,data,metric,node){
  if(!data)return;
  const set=(id,rows,note,state='live',draw=null)=>{
   const view=views.get(id);if(!view)return;
-  view.tile.dataset.state=state;view.badge.textContent=state==='live'?'Live':state==='warming'?'Collecting samples':state==='partial'?'Live · partial measurement':'Unavailable';
+  view.tile.dataset.state=state;view.badge.textContent=state==='live'?'Live':state==='warming'?'Collecting samples':state==='loading'?'Loading…':state==='partial'?'Live · partial measurement':'Unavailable';
   view.body.replaceChildren();
   for(const [label,value] of rows){const row=node('div',undefined,'dashboard-field');row.append(node('span',String(label)),node('span',String(value)));view.body.append(row);}
   if(draw)draw(view.body);
   view.needs.textContent=note;
  };
- if(data.loading){for(const id of advancedIds)set(id,[],'Loading selected window…','warming');return;}
+ if(data.loading){for(const id of advancedIds)set(id,[],'Loading selected window…','loading');return;}
  if(data.error){for(const id of advancedIds)set(id,[],data.error,'unavailable');return;}
  const scope='History is collected on dashboard requests; gaps are not filled. Retained for 7 days at 30-second resolution.';
  set('metric_chart',[],scope,'live',body=>chart(body,data.history.points,metric,node,data.history.plot_interval_seconds||30));

@@ -57,7 +57,7 @@ export async function mountDashboard(host) {
   let activity=new Map(),nextActivityAt=0,dashboardData=null;
   const updateDashboard=()=>paintDashboard(activityViews,dashboardData,metricSelect.value,node);
   const activityViews=new Map();
-  let sample=null,failure='Loading system resources…',inFlight=false;
+  let sample=null,failure='',loading=true,inFlight=false;
   const resources=new Set(['cpu','memory','storage','uptime','network','system_resources']);
   const views=new Map();
   const number=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0;
@@ -93,6 +93,7 @@ export async function mountDashboard(host) {
       'Open descriptors':number(dashboardData?.runtime?.open_descriptors)?String(dashboardData.runtime.open_descriptors):null
     };
     for(const [id,view] of views){
+      if(loading){view.tile.dataset.state='loading';view.badge.textContent='Loading…';continue;}
       const combined=id==='system_resources';
       const available=combined?Object.values(fields).some(Boolean):id==='cpu'?cpu?.available&&cpu.utilization_available&&number(cpu.utilization_percent):id==='memory'?memory?.available&&number(memory.utilization_percent):id==='storage'?disk?.available&&number(disk.available_bytes):id==='network'?rated:uptime?.available&&number(uptime.seconds);
       view.tile.dataset.state=failure?'error':available?(combined?'partial':'live'):'unavailable';
@@ -156,9 +157,9 @@ export async function mountDashboard(host) {
       if(!response.ok)throw Error(response.status===401?'Sign in required':response.status===403?'Administrator access required':'System metrics unavailable ('+response.status+')');
       const data=await response.json();
       if(data.schema_version!==1||!data.metrics||!number(data.sampled_at_unix_ms))throw Error('Invalid system metrics response');
-      if(!stopped){sample=data;failure='';}
+      if(!stopped){sample=data;failure='';loading=false;}
     }catch(error){
-      if(!stopped){sample=null;failure=error.name==='AbortError'?'System metrics request timed out':error.message;}
+      if(!stopped){sample=null;loading=false;failure=error.name==='AbortError'?'System metrics request timed out':error.message;}
     }finally{
       if(pendingActivity){const result=await pendingActivity;if(!stopped){activity=result;nextActivityAt=Date.now()+30000;}}
       const dashboardResult=await pendingDashboard;if(!stopped&&requestedWindow===windowSelect.value)dashboardData=dashboardResult;
@@ -172,19 +173,21 @@ export async function mountDashboard(host) {
     for(const [index,id] of selected.entries()){
       const card=catalog.cards.find(item=>item.id===id);
       const tile=node('article',undefined,'dashboard-tile');tile.dataset.card=id;tile.style.setProperty('--tile-span',card.w);
-      const title=node('h3',card.label),badge=node('p','Loading…','dashboard-pending');
+      // Only tiles without a wired backend stay red before data arrives.
+      const wired=card.backend==='connected';tile.dataset.state=wired?'loading':'pending';
+      const title=node('h3',card.label),badge=node('p',wired?'Loading…':'Not connected yet','dashboard-pending');
       const body=node('div',undefined,'dashboard-preview');
       if(card.id==='metric_chart'||card.id==='db_latency_chart'){const plot=node('div','Loading sampled history…','dashboard-chart-empty');body.append(plot);}
       for(const label of card.fields){const row=node('div',undefined,'dashboard-field');row.append(node('span',label),node('span','—'));body.append(row);}
       if(!card.fields.length)body.append(node('div','—','dashboard-value'));
-      const needs=node('p','Loading dashboard data…','dashboard-needs');
+      const needs=node('p',wired?'Loading dashboard data…':'Backend not wired up yet.','dashboard-needs');
       tile.append(title,badge,body,needs);
-      if(resources.has(id)){
+      if(wired&&resources.has(id)){
         if(id!=='system_resources')body.replaceChildren(node('div','—','dashboard-value'));
         const fields=new Map([...body.querySelectorAll('.dashboard-field')].map(row=>[row.firstElementChild.textContent,row.lastElementChild]));
         views.set(id,{tile,badge,needs,fields,value:body.querySelector('.dashboard-value')});
       }
-      if(!resources.has(id))activityViews.set(id,{tile,badge,body,needs});
+      if(wired&&!resources.has(id))activityViews.set(id,{tile,badge,body,needs});
       if(editing){
         const actions=node('div',undefined,'dashboard-tile-actions');
         for(const [label,delta] of [['Move earlier',-1],['Move later',1],['Remove tile',0]]){

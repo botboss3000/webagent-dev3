@@ -4,7 +4,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(new URL('../../../../..',import.meta.url).pathname);
-let mode='live',calls=0;const windows=[];
+let mode='live',calls=0,delay=0;const windows=[];
 const sample=()=>({schema_version:1,sampled_at_unix_ms:Date.now(),metrics:{
  cpu:{available:true,logical_processors:8,utilization_available:mode!=='warm',utilization_percent:mode==='warm'?null:24.5},
  memory:{available:true,total_bytes:8589934592,used_bytes:2147483648,utilization_percent:25,swap:{available:true,total_bytes:2147483648,free_bytes:1073741824,used_bytes:1073741824}},
@@ -18,6 +18,7 @@ const server=http.createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');
  if(url.pathname==='/api/v3/admin/system/summary'){
   calls++;res.setHeader('content-type','application/json');
+  if(delay)await new Promise(resolve=>setTimeout(resolve,delay));
   if(mode==='denied'){res.statusCode=403;res.end('{}');return;}
   if(mode==='invalid'){res.end('{"schema_version":99}');return;}
   res.end(JSON.stringify(sample()));return;
@@ -61,9 +62,14 @@ try{
  for(const mobile of [false,true]){
   const context=await browser.newContext({viewport:mobile?{width:390,height:844}:{width:1280,height:900},isMobile:mobile,hasTouch:mobile});
   const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  mode='live';
+  mode='live';delay=2000;
   await page.goto('http://127.0.0.1:'+server.address().port+'/fixture');
   const cpu=page.locator('[data-card=cpu]'),system=page.locator('[data-card=system_resources]');
+  await page.waitForFunction(()=>document.querySelectorAll('.dashboard-tile').length===26);
+  assert.deepEqual(await page.evaluate(()=>[...new Set([...document.querySelectorAll('.dashboard-tile')].map(tile=>tile.dataset.state))]),['loading']);
+  assert.equal(await cpu.locator('.dashboard-pending').evaluate(el=>getComputedStyle(el,'::before').animationName),'dashboard-spin');
+  assert.notEqual(await cpu.evaluate(el=>getComputedStyle(el).borderColor),await page.evaluate(()=>{const probe=document.createElement('div');probe.className='dashboard-tile';probe.dataset.state='unavailable';document.querySelector('.dashboard-grid').append(probe);const color=getComputedStyle(probe).borderColor;probe.remove();return color;}));
+  delay=0;
   await page.waitForFunction(()=>document.querySelector('[data-card=cpu]')?.dataset.state==='live');
   assert.match(await cpu.innerText(),/24.5%/);
   await page.waitForFunction(()=>document.querySelector('[data-card=agents_panel]')?.dataset.state==='live');
@@ -136,5 +142,5 @@ try{
   const detached=calls;await page.waitForTimeout(5300);assert.equal(calls,detached);
   assert.deepEqual(errors,[]);await context.close();
  }
- console.log('PASS dashboard: live values, network/swap/disk detail, combined health, warmup, unavailable, 403 clearing, invalid response, retry, focus, partial red, themes, mobile, hidden/dispose/detach');
+ console.log('PASS dashboard: neutral loading spinner, live values, network/swap/disk detail, combined health, warmup, unavailable, 403 clearing, invalid response, retry, focus, partial red, themes, mobile, hidden/dispose/detach');
 }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
