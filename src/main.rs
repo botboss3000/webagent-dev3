@@ -6,6 +6,7 @@ compile_error!("Choose exactly one engine mode: linked-context or live-context")
 #[cfg(not(any(feature="linked-context",feature="live-context")))]
 compile_error!("Choose an engine mode: linked-context or live-context");
 use webagent_access as access;
+use webagent_usage as usage;
 use webagent_engine::output as engine_output;
 #[path = "../crates/modules/access/host/policy.rs"] mod access_policy;
 #[path = "../crates/modules/engine/host/mod.rs"] mod engine_runtime;
@@ -69,7 +70,6 @@ mod workflow;
 #[path = "api/progress.rs"] mod task_progress;
 #[path = "gates/protocol.rs"] mod gate_protocol;
 mod promotion;
-mod usage;
 #[path = "../crates/modules/models/host/provider/mod.rs"] mod provider;
 #[path = "../crates/modules/models/host/selection.rs"] mod model_selection;
 #[path = "../crates/modules/models/host/platform_catalog.rs"] mod platform_catalog;

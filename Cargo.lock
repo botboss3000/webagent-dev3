@@ -2594,6 +2594,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-usage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sqlx",
+ "tokio",
+]
+
+[[package]]
 name = "webagent-v3"
 version = "0.1.0"
 dependencies = [
@@ -2645,6 +2655,7 @@ dependencies = [
  "webagent-provider-contracts",
  "webagent-provider-projection",
  "webagent-system",
+ "webagent-usage",
  "webagent-webapp",
 ]
 

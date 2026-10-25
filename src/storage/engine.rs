@@ -45,25 +45,23 @@ impl NotificationEffects for Store {
  fn stage_notification<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,event_key:&'a str,kind:&'a str,sid:&'a str,rid:Option<&'a str>,status:Option<&'a str>)->impl std::future::Future<Output=Result<()>>+Send+'a where 'c:'a {Store::stage_notification(self,tx,event_key,kind,sid,rid,status)}
 }
 impl UsageEffects for Store {
- fn stage_run_usage_in<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,run:&'a Value)->impl std::future::Future<Output=Result<Value>>+Send+'a where 'c:'a {async move {
+ fn stage_run_usage_in<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,run:&'a Value)->impl std::future::Future<Output=Result<Value>>+Send+'a where 'c:'a {webagent_usage::stage_session_total(self,tx,run)}
+}
+impl webagent_usage::SessionRecords for Store {
+ async fn previous_run_usage(&self,tx:&mut sqlx::Transaction<'_,sqlx::Sqlite>,run:&Value)->Result<Value> {
         let view_key=format!("run_view:{}",run["id"].as_str().unwrap());
         let previous:Option<Vec<u8>>=sqlx::query_scalar("SELECT value FROM docs WHERE key=?").bind(&view_key).fetch_optional(&mut **tx).await?;
-        let previous=previous.map(|raw|self.unseal(&raw)).transpose()?.unwrap_or(Value::Null);
-        let new_usage=crate::usage::public(&run["usage"]);
-        if new_usage.is_object() && previous["usage"]!=new_usage {
-            let usage_key=format!("session_usage:{}",run["session_id"].as_str().unwrap());
-            let raw:Option<Vec<u8>>=sqlx::query_scalar("SELECT value FROM docs WHERE key=?").bind(&usage_key).fetch_optional(&mut **tx).await?;
-            let mut total=raw.map(|raw|self.unseal(&raw)).transpose()?.unwrap_or(serde_json::json!({}));
-            for field in ["input_tokens","output_tokens","cached_input_tokens","reported_calls","unreported_calls","unknown_cost_calls","unknown_cache_calls"]{
-                total[field]=serde_json::json!(total[field].as_u64().unwrap_or(0).saturating_sub(previous["usage"][field].as_u64().unwrap_or(0)).saturating_add(new_usage[field].as_u64().unwrap_or(0)));
-            }
-            total["known_cost_usd"]=serde_json::json!((total["known_cost_usd"].as_f64().unwrap_or(0.)-previous["usage"]["known_cost_usd"].as_f64().unwrap_or(0.)+new_usage["known_cost_usd"].as_f64().unwrap_or(0.)).max(0.));
-            sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(&usage_key).bind(self.encode_user_record(&total)?).execute(&mut **tx).await?;
-            // Aggregates are read from the database; they must not use the doc cache.
-            self.cache.lock().unwrap().invalidate(&[usage_key]);
-        }
-        Ok(new_usage)
- }}
+        Ok(previous.map(|raw|self.unseal(&raw)).transpose()?.map_or(Value::Null,|view|view["usage"].clone()))
+ }
+ async fn read_total(&self,tx:&mut sqlx::Transaction<'_,sqlx::Sqlite>,sid:&str)->Result<Option<Value>> {
+        let raw:Option<Vec<u8>>=sqlx::query_scalar("SELECT value FROM docs WHERE key=?").bind(format!("session_usage:{sid}")).fetch_optional(&mut **tx).await?;
+        raw.map(|raw|self.unseal(&raw)).transpose()
+ }
+ async fn write_total(&self,tx:&mut sqlx::Transaction<'_,sqlx::Sqlite>,sid:&str,total:&Value)->Result<()> {
+        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(format!("session_usage:{sid}")).bind(self.encode_user_record(total)?).execute(&mut **tx).await?;
+        Ok(())
+ }
+ fn invalidate_total(&self,sid:&str){self.cache.lock().unwrap().invalidate(&[format!("session_usage:{sid}")]);}
 }
 
 impl webagent_engine::runtime::ports::ScopedStorage for Store {
