@@ -1658,6 +1658,49 @@ class RuntimeDocumentationRebaseTests(unittest.TestCase):
   self.assertIn("v3/docs/new.md",entries);self.assertNotIn("v3/docs/note.md",entries)
 
 
+class InputDriftFailFastTests(unittest.TestCase):
+ """Prove the deferred rebase is re-attested before compilation instead of after the suite."""
+ def attest(self,live_extra,job_extra=None):
+  h=fixtures.host
+  with tempfile.TemporaryDirectory()as temporary:
+   root=Path(temporary);runner=fixtures.FakeRunner();broker=h.Broker(root/"jobs",runner)
+   base=fixtures.context(extra={"v3/src/main.rs":"fn main(){}","v3/ui/panel.js":"old ui"})
+   proposal=fixtures.context(extra={"v3/src/main.rs":"fn main(){}","v3/ui/panel.js":"old ui","v3/src/change.rs":"task change"})
+   live_files={"v3/src/main.rs":"fn main(){}","v3/ui/panel.js":"old ui",**live_extra}
+   live=fixtures.context(extra={n:v for n,v in live_files.items()if v is not None})
+   job={"job_id":str(uuid.uuid4()),"operation":"build_deploy","isolated":True,"base_inputs_sha256":h.context_digest(base)[0],"inputs_sha256":h.context_digest(proposal)[0]}
+   job.update(job_extra or {})
+   folder=broker.state/job["job_id"];folder.mkdir();(folder/"base.tar").write_bytes(base);(folder/"task.tar").write_bytes(proposal)
+   runner.core_compile_inputs=lambda:{"v3/src/main.rs"}
+   try:
+    with patch.object(broker,"_current_release_blob",return_value=live):return broker.attest_release_base(job,proposal)
+   finally:broker.shutdown()
+ def test_concurrent_runtime_change_fails_with_the_publication_class(self):
+  with self.assertRaisesRegex(ValueError,"runtime build inputs changed during UI release"):
+   self.attest({"v3/src/main.rs":"fn main(){panic!()}"})
+ def test_concurrent_hot_and_note_changes_stay_rebasable(self):
+  self.attest({"v3/ui/panel.js":"new ui","v3/docs/note.md":"new note"})
+ def test_unchanged_live_base_and_non_publication_jobs_are_skipped(self):
+  self.attest({})
+  self.attest({"v3/src/main.rs":"fn main(){panic!()}"},{"operation":"build"})
+  self.attest({"v3/src/main.rs":"fn main(){panic!()}"},{"prepared_publication":True})
+ def test_attestation_leaves_the_job_and_its_state_folder_untouched(self):
+  h=fixtures.host
+  with tempfile.TemporaryDirectory()as temporary:
+   root=Path(temporary);runner=fixtures.FakeRunner();broker=h.Broker(root/"jobs",runner)
+   base=fixtures.context(extra={"v3/src/main.rs":"fn main(){}"})
+   proposal=fixtures.context(extra={"v3/src/main.rs":"fn main(){}","v3/src/change.rs":"task change"})
+   live=fixtures.context(extra={"v3/src/main.rs":"fn main(){}","v3/ui/panel.js":"new ui"})
+   job={"job_id":str(uuid.uuid4()),"operation":"build_deploy","isolated":True,"base_inputs_sha256":h.context_digest(base)[0],"inputs_sha256":h.context_digest(proposal)[0]}
+   folder=broker.state/job["job_id"];folder.mkdir();(folder/"base.tar").write_bytes(base);(folder/"task.tar").write_bytes(proposal)
+   runner.core_compile_inputs=lambda:{"v3/src/main.rs"}
+   snapshot=dict(job)
+   try:
+    with patch.object(broker,"_current_release_blob",return_value=live):broker.attest_release_base(job,proposal)
+   finally:broker.shutdown()
+   self.assertEqual(job,snapshot);self.assertEqual(sorted(p.name for p in folder.iterdir()),["base.tar","task.tar"])
+
+
 class InstalledInventoryEnginePublicationTests(unittest.TestCase):
  def test_maintenance_requires_exact_installed_engine_and_operator(self):
   with tempfile.TemporaryDirectory()as tmp:

@@ -5376,7 +5376,8 @@ class Broker:
             job["phase_history"] = job["phase_history"][-32:]
             self._save(job)
 
-    def _rebase_after_ui(self, job, blob, tested_runtime=False, live_blob=None):
+    def _rebase_after_ui(self, job, blob, tested_runtime=False, live_blob=None, precompile=False):
+        """Rebase a candidate onto the live release, or with precompile only prove the rebase is still safe."""
         live = self._current_release_blob()if live_blob is None else live_blob
         live_digest = context_digest(live)[0]
         if live_digest == job["base_inputs_sha256"]:
@@ -5394,8 +5395,10 @@ class Broker:
             old_ui = release.entries(blob, context_digest)
             new_ui = release.entries(merged, context_digest)
             core_inputs=self.runner.core_compile_inputs()if hasattr(self.runner,"core_compile_inputs")else set()
-            built_inputs=job.get("linked_stable",{}).get("compiled_inputs",{})
-            docs_attested=isinstance(core_inputs,set)and "v3/src/main.rs"in core_inputs and isinstance(built_inputs,dict)and "v3/src/main.rs"in built_inputs
+            # Before compilation no built-input attestation exists yet; exempting notes early
+            # only defers a late failure, it can never create one.
+            built_inputs={}if precompile else job.get("linked_stable",{}).get("compiled_inputs",{})
+            docs_attested=isinstance(core_inputs,set)and "v3/src/main.rs"in core_inputs and (precompile or isinstance(built_inputs,dict)and "v3/src/main.rs"in built_inputs)
             def ordinary_note(name):
                 # Both installed and built compiler evidence must exclude a note.
                 return docs_attested and name.startswith("v3/docs/")and name.endswith(".md")and name not in core_inputs and name not in built_inputs
@@ -5413,6 +5416,8 @@ class Broker:
                 raise ValueError("Compiler-attested runtime input changed during rebase")
             if any(old_ui.get(name) != new_ui.get(name) for name in RUST_UI_FIXTURES):
                 raise ValueError("Rust test fixture changed during image build")
+            if precompile:
+                return merged
             job["built_inputs_sha256"] = job["inputs_sha256"]
             job["rust_tests"] = {"status": "passed",
                 "summary": "Runtime inputs tested before UI asset rebase; UI assets validated separately"}
@@ -5437,6 +5442,12 @@ class Broker:
                 self._save(member)
             self._save(job)
         return merged
+
+    def attest_release_base(self,job,blob):
+        """Fail in seconds when a concurrent release already makes this job's deferred rebase unsafe."""
+        if job.get("operation")!="build_deploy"or not job.get("isolated")or job.get("prepared_publication"):
+            return
+        self._rebase_after_ui(job,blob,tested_runtime=True,precompile=True)
 
     @contextlib.contextmanager
     def boot_effect_lease(self,job=None):

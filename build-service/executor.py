@@ -983,9 +983,14 @@ class Executor:
         debug=output/"target/debug";debug.mkdir(parents=True,exist_ok=True)
         for item in [manifest["support"],*manifest.get("additional_support",[])]:
             target=output/item["destination"];shutil.copyfile(artifacts/item["file"],target);target.chmod(0o555)
+    def attest_release_base(self,job,blob):
+        """Re-attest the deferred publication rebase before expensive work; optional on non-broker runners."""
+        attest=getattr(self.runner,"attest_release_base",None)
+        if attest is not None:attest(job,blob)
     def engine(self,job,blob,extract,digest):
         """Compile/test once, retain input attestations and produce the complete existing image artifact set."""
         job["artifact_component"]="engine"
+        context_blob=blob;self.attest_release_base(job,context_blob)
         blob=self.runner.execution_application_blob(blob);legacy_automation=self.validate_compiler_recipe(blob)
         root=Path(self.config["state_root"])/"execution"/job["job_id"];source=root/"source";output=root/"output"
         if (root/"verified.json").exists():
@@ -1029,6 +1034,7 @@ class Executor:
         inputs=digest(blob);before=self.runner.execution_source_digest(source)
         logs=self.dependencies(job,application,output,prepare=True)
         if seeded:logs+=self.phase(job,"dependency","dependency",application,output,["cargo","clean","--package","webagent-v3"],"engine:rust1.90:clean-root",600)
+        self.attest_release_base(job,context_blob)
         logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"],"engine:rust1.90:compile_test")
         artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
         self.retain_test_manifest(output,artifacts)
@@ -1048,6 +1054,7 @@ class Executor:
         job["linked_stable"]={"mode":"linked","target_directory":"target","compiled_inputs":linked_inputs,"artifact_sha256":hashlib.sha256((stable/"webagent-v3").read_bytes()).hexdigest(),"smoke":proof,"retained_artifact":"stable/webagent-v3","deployed":False}
         (stable/"smoke.json").write_text(json.dumps(job["linked_stable"],sort_keys=True)+"\n")
         getattr(self.runner,"resource_progress",lambda _:None)(job)
+        self.attest_release_base(job,context_blob)
         logs+=self.phase(job,"compile_release","engine",application,output,self.live_recipe(),"engine:rust1.90:release")
         logs+=self.phase(job,"live_smoke","test",application,output,self.smoke_recipe("live"),"engine:rust1.90:live-smoke",90)
         live_proof=self.live_smoke(self.smoke_artifact(stable/"live-smoke-result.json"),proof)

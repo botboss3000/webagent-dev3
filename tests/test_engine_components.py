@@ -235,4 +235,44 @@ class EngineTests(unittest.TestCase):
             metadata={"packages":[package('root','webagent-v3'),package('contracts','contracts'),package('service','service')],"resolve":{"nodes":[{"id":"root","deps":[{"pkg":"contracts","dep_kinds":[{"kind":None}]}]},{"id":"contracts","deps":[]},{"id":"service","deps":[]}]}}
             actual=executor.Executor.core_dependencies(metadata,target)
             self.assertEqual(actual,{'src/main.rs','crates/context-contracts/src/lib.rs'})
+class EngineRebaseAttestationOrderTests(unittest.TestCase):
+    """The deferred publication rebase is re-proved before each optimized compile, not after the suite."""
+    def test_attestation_precedes_compile_test_and_compile_release(self):
+        import test_admin_build as fixtures
+        import uuid
+        from unittest.mock import Mock,patch
+        timeline=[];attested=[]
+        runner=types.SimpleNamespace(execution_application_blob=fixtures.host.Runner.execution_application_blob,execution_entries=fixtures.host.Runner.execution_entries,
+            execution_source_digest=lambda root:"source-digest",compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64},
+            resource_progress=lambda job:None,core_compile_inputs=lambda:{"v3/src/main.rs"},
+            attest_release_base=lambda job,blob:attested.append(blob)or timeline.append("attest"))
+        with tempfile.TemporaryDirectory()as temporary:
+            worker=executor.Executor(runner,None,{"state_root":temporary});job={"job_id":str(uuid.uuid4())}
+            created=(Path(temporary)/"execution"/job["job_id"]/"output/cargo/registry");created.mkdir(parents=True)
+            def phase(job,name,kind,source,output,argv,profile,timeout=3600,network=False):
+                timeline.append(name)
+                if name=="compile_linked":
+                    (output/"target/release").mkdir(parents=True,exist_ok=True);(output/"target/release/webagent-v3").write_bytes(b"binary")
+                if name=="compile_release":
+                    (output/"artifacts").mkdir(exist_ok=True);(output/"artifacts/webagent-v3").write_bytes(b"live")
+                if name=="engine_metadata":
+                    compiler=output/"compiler";compiler.mkdir(exist_ok=True);(compiler/"mold").write_bytes(b"mold")
+                    for mode in ("linked","live"):(output/(mode+"-comment.txt")).write_bytes(b"mold 1.10.1")
+                return ""
+            worker.phase=phase
+            worker.validate_compiler_recipe=Mock(return_value=False);worker.cached_engine=Mock(return_value=None)
+            worker.seed_cargo_cache=Mock(return_value=False);worker.dependencies=Mock(return_value="offline ready\n")
+            worker.retain_test_manifest=Mock();worker.focused_tests=Mock(return_value="")
+            worker.linked_dependencies=Mock(return_value={});worker.linked_smoke=Mock(return_value={"mode":"linked"});worker.live_smoke=Mock(return_value={"mode":"live"})
+            worker.smoke_artifact=Mock(return_value={});worker.metadata_receipt=Mock(return_value={"packages":[],"resolve":{"nodes":[]}})
+            worker.core_dependencies=Mock(return_value={"v3/src/main.rs"});worker.compiler_dependencies=Mock(return_value={"src/main.rs"})
+            worker.collect_runtime_artifacts=Mock();worker.context_component_recipe=Mock(return_value="recipe");worker.artifact_hashes=Mock(return_value={})
+            worker.retain_engine=Mock();worker.test_proof=Mock(return_value="proof")
+            blob=fixtures.context(extra={"v3/src/main.rs":"fn main(){}"})
+            with patch.object(executor,"MOLD_SHA256",hashlib.sha256(b"mold").hexdigest()):
+                worker.engine(job,blob,lambda root,data:root.mkdir(parents=True,exist_ok=True),lambda data:"d"*64)
+            self.assertEqual(timeline.count("attest"),3)
+            self.assertIs(attested[0],blob)
+            self.assertEqual([name for name in timeline if name in("attest","compile_test","test","compile_release")],
+                ["attest","attest","compile_test","test","attest","compile_release"])
 if __name__=='__main__':unittest.main()
