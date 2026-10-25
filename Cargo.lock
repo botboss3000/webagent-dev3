@@ -2254,6 +2254,60 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-background-contracts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+]
+
+[[package]]
+name = "webagent-background-dispatch"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "webagent-background-contracts",
+]
+
+[[package]]
+name = "webagent-background-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "webagent-background-contracts",
+ "webagent-background-dispatch",
+ "webagent-engine-service",
+]
+
+[[package]]
+name = "webagent-boot-contracts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+]
+
+[[package]]
+name = "webagent-boot-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "webagent-boot-contracts",
+ "webagent-boot-supervisor",
+ "webagent-engine-service",
+]
+
+[[package]]
+name = "webagent-boot-supervisor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "webagent-boot-contracts",
+]
+
+[[package]]
 name = "webagent-capability-context"
 version = "0.1.0"
 dependencies = [
@@ -2282,6 +2336,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-chat"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "fs2",
+ "hex",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "webagent-access",
+ "webagent-configuration",
+ "webagent-models",
+]
+
+[[package]]
+name = "webagent-configuration"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fs2",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "webagent-context"
 version = "0.1.0"
 dependencies = [
@@ -2307,12 +2396,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-context-assembly"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "webagent-context-contracts",
+]
+
+[[package]]
 name = "webagent-context-assets"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde_json",
  "webagent-assets-contracts",
+]
+
+[[package]]
+name = "webagent-context-contracts"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "webagent-context-service"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "webagent-context-assembly",
+ "webagent-context-contracts",
 ]
 
 [[package]]
@@ -2337,6 +2460,52 @@ dependencies = [
  "uuid",
  "webagent-context",
  "webagent-models",
+]
+
+[[package]]
+name = "webagent-engine"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "fs2",
+ "futures-util",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "webagent-abilities",
+ "webagent-access",
+ "webagent-assets-contracts",
+ "webagent-background-contracts",
+ "webagent-background-dispatch",
+ "webagent-boot-contracts",
+ "webagent-boot-supervisor",
+ "webagent-capability-context",
+ "webagent-capability-contracts",
+ "webagent-configuration",
+ "webagent-context",
+ "webagent-context-assembly",
+ "webagent-context-assets",
+ "webagent-context-contracts",
+ "webagent-models",
+ "webagent-provider-contracts",
+ "webagent-provider-projection",
+]
+
+[[package]]
+name = "webagent-engine-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2417,154 +2586,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "webagent-boot-contracts"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
-]
-
-[[package]]
-name = "webagent-boot-supervisor"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "webagent-boot-contracts",
-]
-
-[[package]]
-name = "webagent-boot-service"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde_json",
- "webagent-boot-contracts",
- "webagent-boot-supervisor",
- "webagent-engine-service",
-]
-
-[[package]]
-name = "webagent-background-contracts"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
-]
-
-[[package]]
-name = "webagent-background-dispatch"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "webagent-background-contracts",
-]
-
-[[package]]
-name = "webagent-engine"
-version = "0.1.0"
-dependencies = [
- "webagent-abilities",
- "aes-gcm",
- "anyhow",
- "fs2",
- "futures-util",
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "uuid",
- "webagent-access",
- "webagent-assets-contracts",
- "webagent-background-contracts",
- "webagent-background-dispatch",
- "webagent-boot-contracts",
- "webagent-boot-supervisor",
- "webagent-capability-context",
- "webagent-capability-contracts",
- "webagent-configuration",
- "webagent-context",
- "webagent-context-assembly",
- "webagent-context-assets",
- "webagent-context-contracts",
- "webagent-models",
- "webagent-provider-contracts",
- "webagent-provider-projection",
-]
-
-[[package]]
-name = "webagent-engine-service"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "webagent-background-service"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde_json",
- "webagent-background-contracts",
- "webagent-background-dispatch",
- "webagent-engine-service",
-]
-
-[[package]]
-name = "webagent-configuration"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fs2",
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "uuid",
-]
-
-[[package]]
-name = "webagent-context-assembly"
-version = "0.2.1"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "webagent-context-contracts",
-]
-
-[[package]]
-name = "webagent-context-contracts"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "hex",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "webagent-context-service"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "webagent-context-assembly",
- "webagent-context-contracts",
-]
-
-[[package]]
 name = "webagent-system"
 version = "0.1.0"
 dependencies = [
@@ -2612,6 +2633,7 @@ dependencies = [
  "webagent-boot-supervisor",
  "webagent-capability-context",
  "webagent-capability-contracts",
+ "webagent-chat",
  "webagent-configuration",
  "webagent-context-assembly",
  "webagent-context-assets",

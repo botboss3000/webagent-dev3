@@ -25,13 +25,7 @@ pub(crate) fn validate(id:&str,value:&Value)->Result<()> {
         "app_settings"=>{crate::store::admin_encryption_enabled(value)?;
             webagent_webapp::configuration::validate_app_settings(value)?;
         },
-        "chat"=>{
-            for key in ["max_file_size_mb","max_per_message"]{
-                let v=&value["chat_limits"]["attachments"][key];
-                if !v.is_null()&&v.as_u64().is_none_or(|n|n==0||usize::try_from(n).is_err()||(key=="max_file_size_mb"&&n.checked_mul(1024*1024).is_none())){anyhow::bail!("Invalid attachment limit");}
-            }
-            for v in [&value["chat_limits"],&value["chat_limits"]["attachments"]]{if !v.is_null()&&!v.is_object(){anyhow::bail!("Invalid chat limits");}}
-        },
+        "chat"=>webagent_chat::configuration::validate_chat_config(value).map_err(|_|anyhow::anyhow!("Invalid chat configuration"))?,
         "loop_runtime"=>serde_json::from_value::<loop_runtime::Config>(value.clone())?.validate()?,
         "context_compaction"=>serde_json::from_value::<context_compaction::Config>(value.clone())?.validate()?,
         "tool_output_retention"=>serde_json::from_value::<tool_output::Policy>(value.clone())?.validate()?,
