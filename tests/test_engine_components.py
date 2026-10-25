@@ -235,6 +235,11 @@ class EngineTests(unittest.TestCase):
             metadata={"packages":[package('root','webagent-v3'),package('contracts','contracts'),package('service','service')],"resolve":{"nodes":[{"id":"root","deps":[{"pkg":"contracts","dep_kinds":[{"kind":None}]}]},{"id":"contracts","deps":[]},{"id":"service","deps":[]}]}}
             actual=executor.Executor.core_dependencies(metadata,target)
             self.assertEqual(actual,{'src/main.rs','crates/context-contracts/src/lib.rs'})
+    def test_only_rust_test_phases_receive_stack_headroom(self):
+        self.assertEqual(executor.TEST_STACK_BYTES,32*1024*1024)
+        self.assertEqual(executor.Executor.test_stack_env("test"),["-e","RUST_MIN_STACK=33554432"])
+        for phase in ("compile_test","compile_linked","compile_release","linked_smoke","live_smoke","dependency","engine_metadata"):
+            self.assertEqual(executor.Executor.test_stack_env(phase),[])
 class EngineRebaseAttestationOrderTests(unittest.TestCase):
     """The deferred publication rebase is re-proved before each optimized compile, not after the suite."""
     def test_attestation_precedes_compile_test_and_compile_release(self):

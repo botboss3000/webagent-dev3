@@ -18,6 +18,9 @@ def check_argv(task,profile=None):
 RUST="rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f"
 COMPILER_RECIPE=RUST+":jobs3:debug0:mold1.10.1:complete-tests-v8"
 RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"
+# Rust test harness threads need explicit stack headroom: an overflow aborts the
+# whole binary (853 tests) and costs a retry, while the extra stack is virtual.
+TEST_STACK_BYTES=32*1024*1024
 MOLD_VERSION="1.10.1+dfsg-1"
 MOLD_SHA256="f85b0102cabeaee34b76ab195aacfa9ff9442d670948c88f6f353dd666ea5b64"
 MOLD_COMPILER_DOCKERFILE_SHA256="129a45c426d4683ab5a563ebdf764bf829826a415305dce15ab36c780a3ba815"
@@ -113,6 +116,10 @@ class Executor:
         getattr(self.runner,"resource_progress",lambda _:None)(job)
         return job["packaging_preflight"]
 
+    @staticmethod
+    def test_stack_env(phase):
+        """Give Rust test-harness phases stack headroom; other phases keep the default."""
+        return ["-e","RUST_MIN_STACK="+str(TEST_STACK_BYTES)]if phase=="test"else[]
     def phase(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False):
         """Expose bounded phase timing and current work without command text or private paths."""
         started=time.monotonic();token=uuid.uuid4().hex;outcome="failed"
@@ -145,7 +152,7 @@ class Executor:
             "--network","bridge"if network else"none","--mount","type=bind,src="+str(source)+",dst=/build"+(""if phase=="test"else",readonly"),
             "--mount","type=bind,src="+str(output)+",dst=/output","-w","/build",
             "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=3","-e","CARGO_INCREMENTAL=0","--env","RUSTFLAGS="+RUSTFLAGS,
-            "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",image,"sleep","infinity"]
+            "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",*self.test_stack_env(phase),image,"sleep","infinity"]
         if cap is not None:create[create.index(image):create.index(image)]=["--memory",str(cap),"--memory-swap",str(cap)]
         try:
             self.runner.command(create,timeout=30,private_raw=True)
