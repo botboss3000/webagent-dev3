@@ -777,7 +777,10 @@ const systemTheme=matchMedia('(prefers-color-scheme: light)');
 let themeChoice='system';
 try{const saved=localStorage.getItem('v3-theme');if(['light','dark','system'].includes(saved))themeChoice=saved;}catch{}
 function applyAccountTheme(){
-  document.body.classList.toggle('light-mode',themeChoice==='light'||themeChoice==='system'&&systemTheme.matches);
+  const light=themeChoice==='light'||themeChoice==='system'&&systemTheme.matches;
+  document.body.classList.toggle('light-mode',light);
+  // Mirrors --bg-0 (design-system.css) so OS status/nav bars match the app theme.
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content',light?'#ffffff':'#000000');
   for(const option of accountMenu.querySelectorAll('.theme-option')){
     const active=option.dataset.theme===themeChoice;
     option.classList.toggle('active',active);option.setAttribute('aria-pressed',String(active));
