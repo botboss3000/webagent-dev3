@@ -1012,9 +1012,12 @@ class Executor:
                         dependencies.update(shlex.split(line.split(":",1)[1]))
         return dependencies
     @staticmethod
-    def smoke_recipe(mode):
+    def smoke_recipe(mode,linked=None):
         """Write only fixed mode-proof artifacts; structured JSON never enters public log scrubbing."""
-        if mode=="linked":return ["sh","-c","set -e\ntest ! -L /output/stable/linked-smoke-result.json\n/output/target/debug/webagent-v3 --context-smoke > /output/stable/linked-smoke-result.json"]
+        if mode=="linked"and linked=="/output/target/debug/webagent-v3":return ["sh","-c","set -e\ntest ! -L /output/stable/linked-smoke-result.json\n/output/target/debug/webagent-v3 --context-smoke > /output/stable/linked-smoke-result.json"]
+        # The root test binary writes the proof through its ignored hook; a filter that
+        # matches nothing writes no file, which the caller detects.
+        if mode=="linked"and linked is not None and re.fullmatch(r"/output/artifacts/tests/webagent_v3-[a-f0-9]{16}",linked):return ["sh","-c","set -e\ntest ! -L /output/stable/linked-smoke-result.json\nrm -f /output/stable/linked-smoke-result.json\nWEBAGENT_CONTEXT_SMOKE_OUT=/output/stable/linked-smoke-result.json "+linked+" engine_components::smoke_probe::context_smoke_to_file --exact --ignored --test-threads=1"]
         if mode=="live":return ["sh","-c","set -e\ntest ! -L /output/stable/live-smoke-result.json\n/output/target/release/webagent-v3 --context-smoke > /output/stable/live-smoke-result.json"]
         raise ValueError("Fixed context smoke mode required")
     @staticmethod
@@ -1318,6 +1321,12 @@ class Executor:
         if {p.relative_to(artifacts).as_posix()for p in (artifacts/"tests").iterdir()}!={item["file"]for item in value["tests"]}:raise ValueError("Retained test manifest inventory mismatch")
         return value
     @staticmethod
+    def linked_test_binary(manifest):
+        """The retained unit-test executable of the root app binary, in its default (linked) features."""
+        found=[item["file"]for item in manifest["tests"]if item.get("target_name")=="webagent-v3"and item.get("kind")==["bin"]and item.get("source_path")=="/build/src/main.rs"]
+        if len(found)!=1:raise ValueError("Linked root test binary missing")
+        return "/output/artifacts/"+found[0]
+    @staticmethod
     def restore_test_support(output,artifacts,manifest):
         """Restore only attested debug support at Cargo's fixed integration-test executable path."""
         debug=output/"target/debug";debug.mkdir(parents=True,exist_ok=True)
@@ -1342,8 +1351,8 @@ class Executor:
         job["compiler_recipe"]=self.compiler_recipe()
         blob=self.runner.execution_application_blob(blob)
         root.mkdir(parents=True,exist_ok=True);extract(source,blob);application=source/"v3";output.mkdir(exist_ok=True)
-        stable=job.get("release_mode")=="stable"
-        cached=self.cached_engine(blob,output,"stable"if stable else"dev")
+        stable_release=job.get("release_mode")=="stable"
+        cached=self.cached_engine(blob,output,"stable"if stable_release else"dev")
         if cached:
             artifacts,old=cached;logs="Verified compiler artifacts reused; locked Rust tests previously passed on identical compiled inputs.\n"
             manifest=self.test_manifest(artifacts)
@@ -1390,16 +1399,22 @@ class Executor:
         if seeded:logs+=self.phase(job,"dependency","dependency",application,output,["cargo","clean","--package","webagent-v3"],"engine:rust1.90:clean-root",600)
         else:logs+=self.dependency_snapshot(job,application,output);logs+=self.workspace_snapshot(job,application,output)
         self.attest_release_base(job,context_blob)
-        logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"],"engine:rust1.90:compile_test")
+        logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --exclude webagent-v3 --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"],"engine:rust1.90:compile_test")
         artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
-        self.retain_test_manifest(output,artifacts)
+        manifest=self.retain_test_manifest(output,artifacts)
         logs+=self.focused_tests(job,application,output,fresh_tests=artifacts)
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Focused tests changed captured application inputs")
-        # Linked reference: the default-features (linked) debug binary that compile_test
-        # built, and that the suite exercises, runs the context smoke. Nothing ships or
-        # runs a linked release binary, so none is compiled.
+        # Linked reference: the root crate's default-features (linked) debug test binary,
+        # which compile_test built and the suite runs, executes the context smoke through
+        # an ignored test hook. No separate debug app binary or linked release is compiled.
         stable=output/"stable";stable.mkdir(exist_ok=True)
-        logs+=self.phase(job,"linked_smoke","test",application,output,self.smoke_recipe("linked"),"engine:rust1.90:linked-smoke",60)
+        linked=self.linked_test_binary(manifest)
+        logs+=self.phase(job,"linked_smoke","test",application,output,self.smoke_recipe("linked",linked),"engine:rust1.90:linked-smoke",60)
+        if not (stable/"linked-smoke-result.json").exists():
+            # Sources without the hook run nothing; build the debug app once, as before.
+            logs+=self.phase(job,"linked_smoke","engine",application,output,["cargo","build","--locked","--offline","-p","webagent-v3","--bin","webagent-v3"],"engine:rust1.90:compile_test")
+            linked="/output/target/debug/webagent-v3"
+            logs+=self.phase(job,"linked_smoke","test",application,output,self.smoke_recipe("linked",linked),"engine:rust1.90:linked-smoke",60)
         proof=self.linked_smoke(self.smoke_artifact(stable/"linked-smoke-result.json"))
         # The full suite runs beside the live (deployed) release compile. Tests mount the
         # application writable, so the compile reads a verified private copy that
@@ -1410,7 +1425,7 @@ class Executor:
         if self.runner.execution_source_digest(linked_source)!=before:raise ValueError("Compile source copy differs from captured inputs")
         self.attest_release_base(job,context_blob)
         suite=self.concurrent_phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads="+str(TEST_THREADS)],"engine:rust1.90:test")
-        try:live_log=self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(stable),"engine:rust1.90:release")
+        try:live_log=self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(stable_release),"engine:rust1.90:release")
         finally:
             try:suite_output=suite.result()
             finally:shutil.rmtree(linked_source,ignore_errors=True)
@@ -1449,7 +1464,7 @@ class Executor:
         (artifacts/"stable/smoke.json").write_text(json.dumps(job["linked_stable"],sort_keys=True)+"\n")
         if "v3/src/main.rs"not in {self.local_dependency(name)for name in dependencies}:raise ValueError("Compiler dependency attestation missing")
         logs+=self.phase(job,"engine_metadata","dependency",application,output,
-            ["sh","-c","set -e\nreadelf -p .comment /output/target/debug/webagent-v3 > /output/linked-comment.txt\nreadelf -p .comment /output/target/release/webagent-v3 > /output/live-comment.txt\nmkdir -p /output/compiler\ninstall -m755 /usr/bin/mold /output/compiler/mold\ninstall -m644 /usr/share/doc/mold/copyright /usr/share/doc/mold/LICENSE.gz /output/compiler/"],"engine:rust1.90:mold-proof",60)
+            ["sh","-c","set -e\nreadelf -p .comment "+linked+" > /output/linked-comment.txt\nreadelf -p .comment /output/target/release/webagent-v3 > /output/live-comment.txt\nmkdir -p /output/compiler\ninstall -m755 /usr/bin/mold /output/compiler/mold\ninstall -m644 /usr/share/doc/mold/copyright /usr/share/doc/mold/LICENSE.gz /output/compiler/"],"engine:rust1.90:mold-proof",60)
         comments={}
         for mode in ("linked","live"):
             body=(output/(mode+"-comment.txt")).read_bytes()
@@ -1458,7 +1473,7 @@ class Executor:
         if hashlib.sha256((output/"compiler/mold").read_bytes()).hexdigest()!=MOLD_SHA256:raise ValueError("Packaged Mold executable differs from compiler")
         shutil.copytree(output/"compiler",artifacts/"compiler")
         job["linker_proof"]={"compiler_recipe":self.compiler_recipe(),"comments":comments,
-            "linked_sha256":hashlib.sha256((output/"target/debug/webagent-v3").read_bytes()).hexdigest(),"linked_profile":"debug",
+            "linked_sha256":hashlib.sha256((output/linked.removeprefix("/output/")).read_bytes()).hexdigest(),"linked_profile":"debug","linked_binary":linked,
             "live_sha256":hashlib.sha256((artifacts/"webagent-v3").read_bytes()).hexdigest(),"mold_sha256":MOLD_SHA256}
         (artifacts/"stable/linker-proof.json").write_text(json.dumps(job["linker_proof"],sort_keys=True)+"\n")
         hashes=self.artifact_hashes(artifacts);self.retain_engine(job,blob,dependencies,hashes,logs)

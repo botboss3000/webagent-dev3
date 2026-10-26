@@ -18,7 +18,11 @@ class EngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory()as temporary:
             path=Path(temporary)/"linked-smoke-result.json";path.write_text(raw)
             self.assertEqual(executor.Executor.linked_smoke(executor.Executor.smoke_artifact(path)),proof)
-            self.assertEqual(executor.Executor.smoke_recipe("linked")[-1].splitlines()[-1],"/output/target/debug/webagent-v3 --context-smoke > /output/stable/linked-smoke-result.json")
+            hook=executor.Executor.smoke_recipe("linked","/output/artifacts/tests/webagent_v3-0123456789abcdef")[-1].splitlines()[-1]
+            self.assertEqual(hook,"WEBAGENT_CONTEXT_SMOKE_OUT=/output/stable/linked-smoke-result.json /output/artifacts/tests/webagent_v3-0123456789abcdef engine_components::smoke_probe::context_smoke_to_file --exact --ignored --test-threads=1")
+            self.assertEqual(executor.Executor.smoke_recipe("linked","/output/target/debug/webagent-v3")[-1].splitlines()[-1],"/output/target/debug/webagent-v3 --context-smoke > /output/stable/linked-smoke-result.json")
+            for unsafe in (None,"/output/artifacts/tests/../x","/output/artifacts/tests/webagent_v3-0123456789abcdef;id"):
+                with self.assertRaises(ValueError):executor.Executor.smoke_recipe("linked",unsafe)
             self.assertIn("/output/stable/live-smoke-result.json",executor.Executor.smoke_recipe("live")[-1])
     def test_smoke_artifact_rejects_symlink_hardlink_and_oversize(self):
         import os
@@ -257,13 +261,19 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(executor.Executor.suite_totals(output),[7,3,1])
         self.assertEqual(executor.Executor.suite_totals(""),[0,0,0])
         self.assertEqual(executor.Executor.suite_totals("no results here"),[0,0,0])
+ROOT_TEST="tests/webagent_v3-0123456789abcdef"
+ROOT_MANIFEST={"tests":[{"file":ROOT_TEST,"target_name":"webagent-v3","source_path":"/build/src/main.rs","kind":["bin"]}]}
 class EngineRebaseAttestationOrderTests(unittest.TestCase):
     """The deferred publication rebase is re-proved before each optimized compile, not after the suite."""
     def test_attestation_precedes_compile_test_and_compile_release(self):
+        self.run_engine(hook=True)
+    def test_sources_without_smoke_hook_build_the_debug_app_once(self):
+        self.run_engine(hook=False)
+    def run_engine(self,hook):
         import test_admin_build as fixtures
         import uuid
         from unittest.mock import Mock,patch
-        timeline=[];attested=[]
+        timeline=[];attested=[];calls=[]
         runner=types.SimpleNamespace(execution_application_blob=fixtures.host.Runner.execution_application_blob,execution_entries=fixtures.host.Runner.execution_entries,
             execution_source_digest=lambda root:"source-digest",compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64},
             resource_progress=lambda job:None,core_compile_inputs=lambda:{"v3/src/main.rs"},
@@ -273,8 +283,12 @@ class EngineRebaseAttestationOrderTests(unittest.TestCase):
             created=(Path(temporary)/"execution"/job["job_id"]/"output/cargo/registry");created.mkdir(parents=True)
             def phase(job,name,kind,source,output,argv,profile,timeout=3600,network=False):
                 timeline.append(name)
+                calls.append((name,argv))
                 if name=="compile_test":
+                    (output/"artifacts/tests").mkdir(parents=True,exist_ok=True);(output/"artifacts"/ROOT_TEST).write_bytes(b"linked test binary")
+                if name=="linked_smoke"and argv[0]=="cargo":
                     (output/"target/debug").mkdir(parents=True,exist_ok=True);(output/"target/debug/webagent-v3").write_bytes(b"debug linked binary")
+                if name=="linked_smoke"and argv[0]=="sh"and(hook or"--context-smoke"in argv[-1]):(output/"stable/linked-smoke-result.json").write_text("{}")
                 if name=="compile_release":
                     (output/"artifacts").mkdir(exist_ok=True);(output/"artifacts/webagent-v3").write_bytes(b"live")
                 if name=="engine_metadata":
@@ -285,7 +299,7 @@ class EngineRebaseAttestationOrderTests(unittest.TestCase):
             worker.phase=phase
             worker.validate_compiler_recipe=Mock(return_value=False);worker.cached_engine=Mock(return_value=None)
             worker.seed_cargo_cache=Mock(return_value=False);worker.dependencies=Mock(return_value="offline ready\n")
-            worker.retain_test_manifest=Mock();worker.focused_tests=Mock(return_value="")
+            worker.retain_test_manifest=Mock(return_value=ROOT_MANIFEST);worker.focused_tests=Mock(return_value="")
             worker.linked_dependencies=Mock(return_value={});worker.linked_smoke=Mock(return_value={"mode":"linked"});worker.live_smoke=Mock(return_value={"mode":"live"})
             worker.smoke_artifact=Mock(return_value={});worker.metadata_receipt=Mock(return_value={"packages":[],"resolve":{"nodes":[]}})
             worker.core_dependencies=Mock(return_value={"src/main.rs"});worker.compiler_dependencies=Mock(return_value={"src/main.rs"})
@@ -302,6 +316,17 @@ class EngineRebaseAttestationOrderTests(unittest.TestCase):
             self.assertNotIn("compile_linked",timeline)
             self.assertEqual(job["linked_stable"]["compiled_inputs"],{"v3/src/main.rs":hashlib.sha256(b"fn main(){}").hexdigest()})
             self.assertEqual((job["optimized_mode_equivalence"]["status"],job["optimized_mode_equivalence"]["linked_profile"]),("passed","debug"))
+            # compile_test never builds the root app binary; only hookless sources fall back to it.
+            compile_test=[argv for name,argv in calls if name=="compile_test"][0][-1]
+            self.assertIn("--exclude webagent-v3",compile_test.splitlines()[-1])
+            # A dev job builds the live release without the stable feature (the stable/ folder is not a flag).
+            release=[argv for name,argv in calls if name=="compile_release"][0][-1]
+            self.assertIn("--features webagent-v3/live-context\n",release+"\n");self.assertNotIn("stable-abilities",release)
+            builds=[argv for name,argv in calls if name=="linked_smoke"and argv[0]=="cargo"]
+            self.assertEqual(builds,[]if hook else[["cargo","build","--locked","--offline","-p","webagent-v3","--bin","webagent-v3"]])
+            linked=b"linked test binary"if hook else b"debug linked binary"
+            self.assertEqual(job["linker_proof"]["linked_sha256"],hashlib.sha256(linked).hexdigest())
+            self.assertEqual(job["linker_proof"]["linked_binary"],"/output/artifacts/"+ROOT_TEST if hook else"/output/target/debug/webagent-v3")
 class ComponentReuseKeyTests(unittest.TestCase):
     """Root manifest/lock edits outside a component's reach keep its key; reachable ones change it."""
     MANIFEST="""[package]
@@ -411,7 +436,7 @@ class EngineSuiteOverlapTests(unittest.TestCase):
             worker.phase=phase
             worker.validate_compiler_recipe=Mock(return_value=False);worker.cached_engine=Mock(return_value=None)
             worker.seed_cargo_cache=Mock(return_value=False);worker.dependencies=Mock(return_value="offline ready\n");worker.dependency_snapshot=Mock(return_value="")
-            worker.retain_test_manifest=Mock();worker.focused_tests=Mock(return_value="")
+            worker.retain_test_manifest=Mock(return_value=ROOT_MANIFEST);worker.focused_tests=Mock(return_value="")
             worker.linked_dependencies=Mock(return_value={});worker.linked_smoke=Mock(return_value={"mode":"linked"})
             worker.smoke_artifact=Mock(return_value={});worker.metadata_receipt=Mock(return_value={"packages":[],"resolve":{"nodes":[]}})
             blob=fixtures.context(extra={"v3/src/main.rs":"fn main(){}"})

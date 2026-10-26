@@ -95,3 +95,12 @@ pub(crate) async fn prepare<'a>(app:&App,run:&Value,request:context_input::Reque
   app.stop.cancel();tokio::time::timeout(Duration::from_secs(1),service).await.unwrap().unwrap();
  }
 }
+#[cfg(test)] mod smoke_probe {
+ /// Broker linked-mode proof: this debug test binary is the linked reference, so the
+ /// pipeline needs no separate debug build of the app. Runs only when selected by name.
+ #[tokio::test(flavor="multi_thread")] #[ignore]
+ async fn context_smoke_to_file(){
+  let path=std::env::var_os("WEBAGENT_CONTEXT_SMOKE_OUT").expect("smoke output path");
+  std::fs::write(path,format!("{}\n",super::context_smoke().await.unwrap())).unwrap();
+ }
+}
