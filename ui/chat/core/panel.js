@@ -35,7 +35,7 @@ const mountedPanels = new WeakMap();
  * Reports session/run/sent changes through onEvent and returns the mounted panel API.
  * Missing or incomplete partial markup and synchronous setup failures propagate to the shell.
  */
-export async function mountChatPanel({root = document.getElementById('chat-panel'), createStream, resolveAsset, enableMainNotes=true, onEvent = () => {}, request, guard, note, clearNoticeFrom, issues, keyId, forgetKey, refresh, getState, getAgentId, getIdentity=()=>({})}) {
+export async function mountChatPanel({root = document.getElementById('chat-panel'), createStream, resolveAsset, enableMainNotes=true, onEvent = () => {}, request, guard, note, clearNoticeFrom, issues, keyId, forgetKey, refresh, getState, getAgentId, getIdentity=()=>({}), onLogin=null}) {
   mountedPanels.get(root)?.destroy();
   // Resolves partial element IDs only within this panel root.
   const $ = id => root.querySelector('#' + id);
@@ -361,7 +361,8 @@ async function submit(text,clearInput=false){
   }finally{submitting=false;await refresh();}
 }
 // Sends the current composer draft on form submission.
-$('composer').onsubmit=guard(()=>submit($('chat-input').value.trim(),true));
+// A host that supports sign-in handles "/login" itself; it is never sent to the agent.
+$('composer').onsubmit=guard(()=>{const text=$('chat-input').value.trim();if(onLogin&&text.toLowerCase()==='/login'){$('chat-input').value='';return onLogin();}return submit(text,true);});
 // Continue is a new user turn, not an automatic retry of an exhausted run.
 $('chat-continue-btn').onclick=guard(()=>submit('Continue'));
 // Enter submits unless Shift is held or IME composition is active.

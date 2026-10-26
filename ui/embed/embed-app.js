@@ -3,6 +3,7 @@ import {vibrationConfigReady,getVibrationConfig} from '../shared/vibrate.js';
 import {mountChatPanel} from '../chat/core/panel.js';
 import {initChatConfig,setChatSurfaceActions} from '../chat/controls/chat-config.js';
 import {watchAuthorization} from './auth-handoff.js';
+import {openSignInPanel} from '../chat/core/credential-panel.js';
 import {createFetchStream} from '../chat/core/fetch-stream.js';
 const params=new URL(location.href).searchParams,hostOrigin=params.get('origin'),agentId=decodeURIComponent(location.pathname.split('/').pop());
 const root=document.getElementById('chat-panel');root.dataset.embedVisible='false';window.__CHAT_PORTAL__=true;
@@ -52,13 +53,13 @@ async function ensureAuthenticated(){if(credential&&Date.now()/1000<expires)retu
 const descriptor=await publicRequest('/embed/'+encodeURIComponent(agentId)+'/descriptor?origin='+encodeURIComponent(hostOrigin));
 document.getElementById('embed-agent-name').textContent=descriptor.agent.name||'WebAgent';
 setChatSurfaceActions({title:descriptor.agent.name||'WebAgent',minimize:()=>emit('minimize'),close:()=>emit('close')});
-chat=await mountChatPanel({root,resolveAsset,enableMainNotes:false,request,guard,note,keyId,forgetKey:key=>ids.delete(key),refresh,getState:()=>state,getAgentId:()=>agentId,getIdentity:()=>identity,onEvent:emit,createStream:url=>createFetchStream(url,{headers:()=>({Authorization:'Bearer '+credential})})});
+chat=await mountChatPanel({root,resolveAsset,enableMainNotes:false,request,guard,note,keyId,forgetKey:key=>ids.delete(key),refresh,getState:()=>state,getAgentId:()=>agentId,getIdentity:()=>identity,onLogin:()=>login(),onEvent:emit,createStream:url=>createFetchStream(url,{headers:()=>({Authorization:'Bearer '+credential})})});
 await initChatConfig({config:descriptor.chat_ui,root});
 const access=await publicRequest('/auth/access-mode').catch(()=>({guest_access:false}));document.getElementById('embed-guest').hidden=!(access.guest_access&&descriptor.config?.guest_access);
 let theme;try{theme=localStorage.getItem('v3-theme')}catch{}document.body.classList.toggle('light-mode',theme==='light');
 document.getElementById('embed-guest').onclick=guard(guest);
 // @code-index {"version":1,"feature":"chat-embed-auth","aliases":["embedded chat authorization","PKCE popup handoff","embed sign in"],"purpose":"Locates popup consent, PKCE challenge creation, one-use redemption, and popup-origin/source validation for embedded chat authorization.","span_lines":40,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Origin binding, channel checks, one-use authorization and command validation are security invariants; they must not become UI bypass settings."}}
-document.getElementById('embed-connect').onclick=guard(async()=>{
+const signIn=guard(async()=>{
  if(authBusy)throw Error('Connection is pending');
  popup=window.open('about:blank','webagent-widget-signin','popup,width=580,height=720');if(!popup)throw Error('Allow the sign-in popup to connect');
  authBusy=true;try{const bytes=crypto.getRandomValues(new Uint8Array(32)),verifier=[...bytes].map(x=>x.toString(16).padStart(2,'0')).join('');
@@ -76,6 +77,9 @@ document.getElementById('embed-connect').onclick=guard(async()=>{
  window.addEventListener('message',complete,{signal:abort.signal});
  }catch(error){authBusy=false;popup.close();throw error}
 });
+document.getElementById('embed-connect').onclick=signIn;
+// Purpose: Show the sign-in panel for "/login"; its Sign in button starts the same first-party popup flow.
+function login(){const connected=credential&&Date.now()/1000<expires;openSignInPanel({agent:descriptor.agent.name||'WebAgent',website:hostOrigin,identity:connected?(identity.is_guest?'Guest':identity.user):'',signIn,guest:!connected&&access.guest_access&&descriptor.config?.guest_access?guard(guest):null});}
 // Parent commands are serialized; the bounded receipt journal replays identical IDs and rejects changed input.
 const receipts=new Map();let queue=Promise.resolve();
 // Purpose: Dispatch the exact supported parent command set, validate command-specific fields, and require current authentication before session actions.
@@ -83,6 +87,7 @@ const receipts=new Map();let queue=Promise.resolve();
 async function action(command,args){
  if(command==='visibility'){if(typeof args.visible!=='boolean')throw Error('Visibility must be boolean');root.dataset.embedVisible=String(args.visible);document.dispatchEvent(new Event('v3:chat-visibility'));return {visible:args.visible}}
  if(command==='setDraft'){chat.setDraft(args.text);return {updated:true}}
+ if(command==='send'&&typeof args.text==='string'&&args.text.trim().toLowerCase()==='/login'){login();return {login:true}}
  if(command==='send'){chat.setDraft(args.text);try{await ensureAuthenticated();return await chat.send(args.text)}catch(error){note(error.message);throw error}}
  if(command==='setElementContext'){chat.setElementContext(args.text);return {updated:true};}
  await ensureAuthenticated();
