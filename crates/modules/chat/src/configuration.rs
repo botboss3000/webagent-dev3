@@ -38,19 +38,19 @@ pub fn parse_chat_preferences(document: &Value) -> Result<ChatModePreferences> {
     })
 }
 
-pub async fn chat_preferences(path: &Path) -> Result<ChatModePreferences> {
-    let bytes = match tokio::fs::read(path).await {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(ChatModePreferences {
-                default_mode: None,
-                confirm_auto_mode: true,
-            })
+/// Read the installation chat.json on every use; per-agent overlays merge over this base.
+/// A missing file means defaults; an unreadable or invalid one fails closed rather than
+/// falling back to a compiled default.
+pub async fn read_chat_document(path: &Path) -> Result<Value> {
+    match tokio::fs::read(path).await {
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes).map_err(|_| anyhow!("Chat configuration invalid"))
         }
-        Err(error) => return Err(error.into()),
-    };
-    let document: Value = serde_json::from_slice(&bytes)?;
-    parse_chat_preferences(&document)
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(Value::Object(Default::default()))
+        }
+        Err(_) => Err(anyhow!("Chat configuration unavailable")),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -121,7 +121,10 @@ pub(super) async fn descriptor(
     {
         return Err(denied());
     }
-    let chat = chat_ui_config(State(app.clone())).await?.0["chat_ui"].clone();
+    // The embed's agent overlay applies exactly as in the authenticated UI response.
+    let mut ui = ui_config_value(&app).await?;
+    crate::chat_config::apply_to_ui_config(&app.store, &id, &mut ui).await?;
+    let chat = ui["chat_ui"].clone();
     let name: Option<String> = sqlx::query_scalar("SELECT name FROM agents WHERE id=?")
         .bind(&id)
         .fetch_optional(&admin_agent_view(&app, &id).await?.store.agent_pool)

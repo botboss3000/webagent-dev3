@@ -48,8 +48,8 @@ async fn choices(app: &App, sid: &str) -> Result<Value, ApiError> {
         })
         .collect();
     let mode = session_mode(app, sid).await?;
-    let chat=webagent_chat::configuration::chat_preferences(&app.chat_ui_config_path).await?;
-    let attachment_limits = uploads::limits(app).await?;
+    let chat=crate::chat_config::preferences(app,&agent).await?;
+    let attachment_limits = uploads::limits(app,sid).await?;
     Ok(
         json!({"composer":{"attachments":true,"voice":true,"attachment_limits":{"max_file_size_mb":attachment_limits.max_file_size_mb,"max_per_message":attachment_limits.max_per_message}},"agent_id":agent,"model":saved,"models":models,"mode":{"mode":mode["mode"],"execution_mode":mode["execution_mode"],"revision":mode["revision"]},
         "execution_modes":modes,"confirm_auto_mode":chat.confirm_auto_mode}),

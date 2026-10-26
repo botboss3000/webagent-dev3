@@ -30,6 +30,7 @@ mod actions;
 mod background_tasks;
 mod background_followup;
 #[path = "../crates/modules/chat/host/followup_queue.rs"] mod followup_queue;
+#[path = "../crates/modules/chat/host/agent_config.rs"] mod chat_config;
 #[path = "../crates/modules/chat/host/session_messaging.rs"] mod session_messaging;
 mod abilities;
 mod live_assets;

@@ -96,7 +96,7 @@ pub async fn execute(
             if !api::uploads::allowed_media(&media) {
                 return Err(anyhow!("Unsupported file media type"));
             }
-            let limits = api::uploads::limits(app).await.map_err(|e| anyhow!(e.1))?;
+            let limits = api::uploads::limits(app, sid).await.map_err(|e| anyhow!(e.1))?;
             if limits
                 .max_file_size_mb
                 .is_some_and(|n| bytes.len() > n.saturating_mul(1024 * 1024))

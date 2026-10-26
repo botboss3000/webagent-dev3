@@ -5,21 +5,7 @@ use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::path::Path;
 pub use webagent_chat::configuration::AttachmentLimits;
-
-/// Read the installation chat.json on every admission; browsers cannot raise admission bounds.
-/// Chat owns the meaning of these limits. A missing file means unrestricted; an unreadable or
-/// invalid one fails closed rather than falling back to a compiled default.
-pub async fn read_limits(chat_config: &Path) -> Result<AttachmentLimits> {
-    let config = match tokio::fs::read(chat_config).await {
-        Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
-            .map_err(|_| anyhow!("Chat configuration invalid"))?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
-        Err(_) => return Err(anyhow!("Chat configuration unavailable")),
-    };
-    webagent_chat::configuration::parse_attachment_limits(&config)
-}
 
 /// Bound the base64 JSON envelope before parsing, using the same configured file size.
 pub fn envelope_limit(limits: AttachmentLimits) -> usize {

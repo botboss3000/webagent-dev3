@@ -108,7 +108,7 @@ async fn prepare_message_inner(app:&App,id:&str,body:&Value,supplied_session:Opt
     if participation["active"]!=true {
         let run_id=message_run_id(app,id,body);
         let mut prepared=attachments::prepare(body.get("attachments"),id,&run_id).map_err(|_|bad("Invalid attachments"))?;
-        uploads::prepare_uploads(app,id,&run_id,body.get("attachment_ids"),&mut prepared).await?;
+        uploads::prepare_uploads(app,id,&agent_id,&run_id,body.get("attachment_ids"),&mut prepared).await?;
         if text.trim().is_empty() && prepared.metadata.is_empty(){return Err(bad("Message text or attachments required"));}
         let message=json!({"role":"user","content":text,"run_id":run_id,"author_id":crate::shared_chat::actor(app),"participation_generation":participation["generation"].as_u64().unwrap_or(0)});
         let mut docs=prepared.records;docs.push((format!("message_attachments:{run_id}"),json!(prepared.metadata)));
@@ -132,7 +132,7 @@ async fn prepare_message_inner(app:&App,id:&str,body:&Value,supplied_session:Opt
     // when the loop later hydrates context for the model.
     let mut prepared = attachments::prepare(body.get("attachments"), &id, &run_id)
         .map_err(|_| bad("Invalid or unsupported attachments"))?;
-    uploads::prepare_uploads(&app,&id,&run_id,body.get("attachment_ids"),&mut prepared).await?;
+    uploads::prepare_uploads(&app,&id,&agent_id,&run_id,body.get("attachment_ids"),&mut prepared).await?;
     if text.trim().is_empty() && prepared.metadata.is_empty() {
         return Err(bad("Message text or attachments required"));
     }

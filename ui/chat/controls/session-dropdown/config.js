@@ -1,5 +1,5 @@
 // @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown config"],"purpose":"Loads component settings from ui/chat/controls/session-dropdown/session-dropdown.json -> common and desktop/mobile/widget overlays; live adoption through the chat.json poll.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/controls/session-dropdown/session-dropdown.json","pointers":["/common","/desktop","/mobile","/widget"]}],"opportunities":[]}}
-let documentConfig = {};
+let documentConfig = {}, agentOverlay = {};
 /** Merge component objects without letting absent surface settings erase common values. */
 function merge(base, overlay) {
   const result = {...base};
@@ -21,7 +21,12 @@ export async function loadSessionDropdownConfig(signal) {
     return changed;
   } catch (error) { console.warn('Session dropdown configuration could not be loaded', error.message); return false; }
 }
+/** Sets the open agent's overlay (from ui-config components.session_dropdown), merged over the published file. */
+export function setSessionDropdownOverlay(overlay) {
+  agentOverlay = overlay && typeof overlay === 'object' && !Array.isArray(overlay) ? overlay : {};
+}
 /** Resolve only the known active surface; chat.json no longer supplies dropdown internals. */
 export function sessionDropdownConfig(surface) {
-  return merge(documentConfig.common, documentConfig[{chat_desktop:'desktop',chat_mobile:'mobile',chat_widget:'widget'}[surface]]);
+  const value = merge(documentConfig, agentOverlay);
+  return merge(value.common, value[{chat_desktop:'desktop',chat_mobile:'mobile',chat_widget:'widget'}[surface]]);
 }

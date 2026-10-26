@@ -5,17 +5,24 @@ use super::*;
 pub(crate) use webagent_files::uploads::{allowed_media, metadata, AttachmentLimits};
 use webagent_files::uploads::{self as files, Rejected, UploadInput};
 use webagent_files::{attachment_key, message_files_key, QUOTA_KEY};
-pub(crate) async fn limits(app: &App) -> Result<AttachmentLimits, ApiError> {
-    files::read_limits(&app.chat_ui_config_path).await
+/// Limits come from the session agent's effective chat.json on every admission; browsers cannot raise them.
+pub(crate) async fn limits(app: &App, sid: &str) -> Result<AttachmentLimits, ApiError> {
+    let agent = session_agent_id(app, sid).await
+        .map_err(|_| ApiError(StatusCode::NOT_FOUND, "Session not found".into()))?;
+    limits_for(app, &agent).await
+}
+pub(crate) async fn limits_for(app: &App, agent: &str) -> Result<AttachmentLimits, ApiError> {
+    crate::chat_config::effective_chat(&app.store, &app.chat_ui_config_path, agent).await
+        .and_then(|config| webagent_chat::configuration::parse_attachment_limits(&config))
         .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))
 }
-pub(crate) async fn request_body(app: &App, request: Request) -> Result<Value, ApiError> {
+pub(crate) async fn request_body(app: &App, sid: &str, request: Request) -> Result<Value, ApiError> {
     let media = request.headers().get("content-type").and_then(|v|v.to_str().ok())
         .unwrap_or("").split(';').next().unwrap_or("").trim().to_ascii_lowercase();
     if media != "application/json" && !(media.starts_with("application/") && media.ends_with("+json")) {
         return Err(ApiError(StatusCode::UNSUPPORTED_MEDIA_TYPE,"Attachment upload requires JSON".into()));
     }
-    let maximum = files::envelope_limit(limits(app).await?);
+    let maximum = files::envelope_limit(limits(app, sid).await?);
     let bytes = axum::body::to_bytes(request.into_body(),maximum).await
         .map_err(|_| ApiError(StatusCode::PAYLOAD_TOO_LARGE,"Attachment request exceeds configured limit".into()))?;
     serde_json::from_slice(&bytes).map_err(|_| bad("Invalid attachment JSON"))
@@ -25,7 +32,7 @@ pub(crate) async fn upload(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> Api {
-    let limits = limits(&app).await?;
+    let limits = limits(&app, &sid).await?;
     let uploader = crate::shared_chat::actor(&app).to_owned();
     let aid = required(&body, "client_upload_id", 64)?;
     if !files::upload_id_ok(aid) {
@@ -156,12 +163,14 @@ pub(crate) async fn upload_content(
 pub(crate) async fn prepare_uploads(
     app: &App,
     sid: &str,
+    agent: &str,
     rid: &str,
     value: Option<&Value>,
     prepared: &mut attachments::Prepared,
 ) -> Result<(), ApiError> {
     if value.is_none() && prepared.metadata.is_empty() { return Ok(()); }
-    let limits = limits(app).await?;
+    // The session may still be pending admission, so its agent is supplied by the caller.
+    let limits = limits_for(app, agent).await?;
     let empty = json!([]);
     let ids = value.unwrap_or(&empty).as_array().ok_or_else(|| bad("Attachment IDs must be an array"))?;
     files::check_message_limits(limits, ids.len(), prepared).map_err(|message| bad(&message))?;

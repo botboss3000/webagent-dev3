@@ -1,5 +1,5 @@
 // @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"Applies the V3 chat surface profile from data/config/chat.json (runtime /state/config/chat.json, or V3_CHAT_UI_CONFIG_PATH), including live_reload, chat_common, desktop/mobile/widget overlays, and chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
-import {loadSessionDropdownConfig, sessionDropdownConfig} from './session-dropdown/config.js';
+import {loadSessionDropdownConfig, sessionDropdownConfig, setSessionDropdownOverlay} from './session-dropdown/config.js';
 import { watchChatConfig } from './chat-config-live.js';
 import { applyBubblePaint } from '../core/bubble-paint.js';
 import { applyChatPillLayout, disposeChatPillLayout } from './chat-pill-config.js';
@@ -30,6 +30,37 @@ let panelObserver = null;
 let observedPanel = null;
 let geometryFrame = null;
 let stopLiveConfig = null, configGeneration = 0;
+// Agent whose chat.json overlay applies; null serves the installation base.
+let configAgent = null, configProvided = false, liveOptions = null;
+/** UI configuration URL for the current config agent. */
+function uiConfigUrl() { return '/api/v3/auth/ui-config' + (configAgent ? '?agent_id=' + encodeURIComponent(configAgent) : ''); }
+/** Reads the agent-scoped configuration, falling back to the base when that agent is not usable here. */
+async function fetchUiConfig(signal) {
+  let response = await fetch(uiConfigUrl(), { credentials: 'same-origin', cache: 'no-store', signal });
+  if (!response.ok && configAgent) response = await fetch('/api/v3/auth/ui-config', { credentials: 'same-origin', cache: 'no-store', signal });
+  return response.ok ? response.json() : null;
+}
+/** Adopts one UI response: the effective chat document and the session-dropdown overlay. */
+function adoptUiConfig(data) {
+  const config = data?.chat_ui || data;
+  if (!config?.chat_common) return false;
+  documentConfig = config;
+  setSessionDropdownOverlay(data?.components?.session_dropdown);
+  currentSurface = ''; currentFooterMode = '';
+  return true;
+}
+/** Switches the chat surface to an agent's configuration and reapplies it when the agent changes. */
+export async function setChatConfigAgent(id) {
+  const next = id || null;
+  if (next === configAgent) return;
+  configAgent = next;
+  if (configProvided || !liveOptions) return;
+  const generation = configGeneration;
+  const data = await fetchUiConfig().catch(() => null);
+  if (generation !== configGeneration || next !== configAgent || !adoptUiConfig(data)) return;
+  applyChatConfig();
+  stopLiveConfig?.(); stopLiveConfig = watchChatConfig({...liveOptions, initial: data});
+}
 
 /** Coalesces geometry notifications; height-only changes keep the resolved layout cache. */
 function scheduleChatGeometry() {
@@ -315,17 +346,9 @@ export async function initChatConfig({config:provided,root=null} = {}) {
   if (footerNodes && footerNodes.input !== byId('chat-input')) { disposeChatPillLayout(footerNodes.pill); headerNodes=null; footerNodes=null; footerControls=null; currentSurface=''; currentFooterMode=''; }
   await loadSessionDropdownConfig();
   if (generation !== configGeneration) return;
-  let data=provided;
-  if(!data){
-  const response = await fetch('/api/v3/auth/ui-config', { credentials: 'same-origin', cache: 'no-store' });
-  if (!response.ok) return;
-  data = await response.json();
-  }
-  const config = data.chat_ui || data;
-  if (generation !== configGeneration || !config?.chat_common) return;
-  documentConfig = config;
-  currentSurface = '';
-  currentFooterMode = '';
+  configProvided = !!provided; liveOptions = null;
+  const data = provided || await fetchUiConfig();
+  if (generation !== configGeneration || !adoptUiConfig(data)) return;
   applyChatConfig();
   const panel = byId('chat-panel');
   if (observedPanel !== panel) {
@@ -335,13 +358,17 @@ export async function initChatConfig({config:provided,root=null} = {}) {
     panelObserver = new ResizeObserver(scheduleChatGeometry);
     panelObserver.observe(panel);
   }
-  if (!provided) stopLiveConfig = watchChatConfig({
-    getConfig: () => documentConfig,
-    isMounted: () => panel.isConnected && byId('chat-panel') === panel,
-    onConfig: config => { documentConfig = config; currentSurface = ''; currentFooterMode = ''; applyChatConfig(); },
-    refreshComponents: loadSessionDropdownConfig,
-    onComponents: () => { currentSurface = ''; applyChatConfig(); },
-  });
+  if (!provided) {
+    liveOptions = {
+      getConfig: () => documentConfig,
+      isMounted: () => panel.isConnected && byId('chat-panel') === panel,
+      fetchConfig: fetchUiConfig,
+      onConfig: data => { if (adoptUiConfig(data)) applyChatConfig(); },
+      refreshComponents: loadSessionDropdownConfig,
+      onComponents: () => { currentSurface = ''; applyChatConfig(); },
+    };
+    stopLiveConfig = watchChatConfig({...liveOptions, initial: data});
+  }
   if (!listenersBound) {
     listenersBound = true;
     window.addEventListener('resize', scheduleChatGeometry);

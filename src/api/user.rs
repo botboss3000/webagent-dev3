@@ -171,7 +171,7 @@ path_arg!(attachment => attachment_get, (String, String));
 async fn upload(Extension(app): Extension<App>, Path(sid): Path<String>,
     request: axum::extract::Request) -> Response {
     let app = match session_app(app, &sid).await { Ok(app) => app, Err(error) => return error.into_response() };
-    let body = match crate::api::uploads::request_body(&app,request).await {
+    let body = match crate::api::uploads::request_body(&app,&sid,request).await {
         Ok(body) => body, Err(error) => return error.into_response(),
     };
     if let Err(error)=guard_access(&app,true,false){return error.into_response();}

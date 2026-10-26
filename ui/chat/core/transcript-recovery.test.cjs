@@ -95,6 +95,6 @@ test('background history reopen reports matching recovery and ignores a supersed
 test('privacy lookup failure cannot abort the chat shell when its optional notice is absent',async()=>{
  const source=fs.readFileSync(path.join(__dirname,'panel.js'),'utf8');
  const code=source.slice(source.indexOf('  let privacyMode=null;'),source.indexOf('/** Fetches, validates, and mounts'));
- const context=vm.createContext({session:null,$:()=>null,getAgentId:()=> 'shared_default',request:async()=>{throw Error('signed out');}});
+ const context=vm.createContext({session:null,$:()=>null,getAgentId:()=> 'shared_default',setChatConfigAgent:()=>{},request:async()=>{throw Error('signed out');}});
  vm.runInContext(code,context);await context.loadAgentPrivacy();
 });

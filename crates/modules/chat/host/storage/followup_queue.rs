@@ -407,12 +407,11 @@ impl Store {
             .iter()
             .map(|e| e["attachments"].as_array().unwrap().len())
             .sum::<usize>();
-        let config = match std::fs::read(self.root.join("config/chat.json")) {
-            Ok(bytes) => serde_json::from_slice::<Value>(&bytes)?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
-            Err(e) => return Err(e.into()),
-        };
-        // Chat owns attachment-limit semantics; queued batches use the same parser as upload admission.
+        // Queued batches use the session agent's effective chat.json, as upload admission does.
+        let session: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+            .bind(format!("session:{s}")).fetch_one(&mut *t).await?;
+        let agent = self.unseal(&session)?["agent_id"].as_str().unwrap_or("shared_default").to_owned();
+        let config = crate::chat_config::effective_chat(self, &self.root.join("config/chat.json"), &agent).await?;
         let maximum = webagent_chat::configuration::parse_attachment_limits(&config)?.max_per_message;
         if text.len() > 65536 || maximum.is_some_and(|max| attachment_count > max) {
             q["held"] = json!(true);

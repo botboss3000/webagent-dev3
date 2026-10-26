@@ -56,11 +56,11 @@ async fn raw(pool: &SqlitePool, key: &str) -> Option<Vec<u8>> {
         .unwrap()
 }
 
-#[tokio::test]
-async fn limits_follow_live_chat_json_and_fail_closed() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("chat.json");
-    let open = read_limits(&path).await.unwrap();
+#[test]
+fn envelope_follows_chat_attachment_limits() {
+    // Chat reads chat.json (with per-agent overlays) and owns the limit semantics.
+    let parse = |value: Value| webagent_chat::configuration::parse_attachment_limits(&value);
+    let open = parse(json!({})).unwrap();
     assert_eq!(
         (
             open.max_file_size_mb,
@@ -69,13 +69,9 @@ async fn limits_follow_live_chat_json_and_fail_closed() {
         ),
         (None, None, usize::MAX)
     );
-    std::fs::write(
-        &path,
-        json!({"chat_limits":{"attachments":{"max_file_size_mb":1,"max_per_message":2}}})
-            .to_string(),
-    )
-    .unwrap();
-    let limits = read_limits(&path).await.unwrap();
+    let limits =
+        parse(json!({"chat_limits":{"attachments":{"max_file_size_mb":1,"max_per_message":2}}}))
+            .unwrap();
     assert_eq!(
         (limits.max_file_size_mb, limits.max_per_message),
         (Some(1), Some(2))
@@ -84,28 +80,11 @@ async fn limits_follow_live_chat_json_and_fail_closed() {
         envelope_limit(limits),
         (1024 * 1024usize).div_ceil(3) * 4 + 65536
     );
-    std::fs::write(&path, b"{not json").unwrap();
-    assert_eq!(
-        read_limits(&path).await.unwrap_err().to_string(),
-        "Chat configuration invalid"
-    );
-    std::fs::write(
-        &path,
-        json!({"chat_limits":{"attachments":{"max_file_size_mb":0}}}).to_string(),
-    )
-    .unwrap();
-    assert!(read_limits(&path)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("positive integer"));
-    std::fs::create_dir(dir.path().join("dir.json")).unwrap();
-    assert_eq!(
-        read_limits(&dir.path().join("dir.json"))
-            .await
+    assert!(
+        parse(json!({"chat_limits":{"attachments":{"max_file_size_mb":0}}}))
             .unwrap_err()
-            .to_string(),
-        "Chat configuration unavailable"
+            .to_string()
+            .contains("positive integer")
     );
 }
 

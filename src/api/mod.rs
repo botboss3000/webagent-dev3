@@ -119,6 +119,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/access/registration", get(registration::access_mode).put(registration::set_mode))
         .route("/workflow/policy", get(workflow_policy_get).put(workflow_policy_set))
         .route("/agents/{id}/model", get(agent_model).put(agent_model_set))
+        .route("/agents/{id}/chat-config/{document}",get(crate::chat_config::get).patch(crate::chat_config::patch).delete(crate::chat_config::reset))
         .route("/policy", get(policy_get).put(policy_set))
         .route("/abilities", get(ability_catalog))
         .route("/provider/login", post(provider_start))
@@ -244,5 +245,6 @@ pub(crate) fn core_tools_router()->Router<App> {
         .route("/agents/{id}/abilities/{ability}/visibility",put(ability_admin::visibility_set))
         .route("/agents/{id}/abilities/{ability}/tools/{tool}/mode",put(ability_admin::tool_set))
         .route("/agents/{id}/slots/{name}",get(ability_admin::slot).put(ability_admin::slot_put))
+        .route("/agents/{id}/chat-config/{document}",get(crate::chat_config::get).patch(crate::chat_config::patch).delete(crate::chat_config::reset))
         .merge(user_api::router())
 }

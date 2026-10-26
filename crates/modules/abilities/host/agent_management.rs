@@ -16,6 +16,7 @@ pub fn owns(name: &str) -> bool {
             | "edit_agent_prompt"
             | "set_agent_ability"
             | "manage_agent_skills"
+            | "manage_agent_chat_config"
             | "list_user_sessions"
             | "manage_user_session"
             | "create_user_session"
@@ -45,6 +46,7 @@ pub fn schemas() -> Vec<Value> {
  ("edit_agent_prompt","Edit one unlocked prompt slot for an agent the caller manages. Request: content, expected_revision, optional order_index, lock, merge_mode.",json!({"agent_id":{"type":"string","maxLength":128},"slot":{"type":"string","maxLength":128},"request":object}),vec!["agent_id","slot","request"]),
  ("set_agent_ability","Set availability for one installed ability without granting new authority. Request: visibility and expected_revision.",json!({"agent_id":{"type":"string","maxLength":128},"ability_id":{"type":"string","maxLength":128},"request":object}),vec!["agent_id","ability_id","request"]),
  ("manage_agent_skills","List, read, save or remove an agent's self-authored selectable skills. Writes require agent administration and exact skill revision.",json!({"agent_id":{"type":"string","maxLength":128},"action":{"type":"string","enum":["list","read","save","remove"]},"name":{"type":"string","maxLength":64},"description":{"type":"string","maxLength":256},"instructions":{"type":"string","maxLength":16384},"expected_revision":{"type":"integer","minimum":0}}),vec!["agent_id","action"]),
+ ("manage_agent_chat_config","Read, merge-patch or reset an agent's overlay of chat.json (chat) or the session dropdown JSON (session_dropdown); base JSON fills everything not overridden. Patch null removes a key. Requires agent administration and the current overlay revision for writes.",json!({"agent_id":{"type":"string","maxLength":128},"action":{"type":"string","enum":["read","patch","reset"]},"document":{"type":"string","enum":["chat","session_dropdown"]},"patch":object,"expected_revision":{"type":"integer","minimum":0}}),vec!["agent_id","action","document"]),
  ("list_user_sessions","List this caller's accessible active conversations.",json!({}),vec![]),
  ("manage_user_session","Rename, pin, recycle or restore a caller-owned session. Request: expected_revision plus title/pinned for update. Recycling is reversible.",json!({"session_id":{"type":"string","format":"uuid"},"action":{"type":"string","enum":["update","recycle","restore"]},"request":object}),vec!["session_id","action","request"]),
  ("kick_user_session","Send a caller-attributed message to an owner-private session through normal queue admission. Requires exact owner approval; returns admission, not a completed answer.",json!({"target_session_id":{"type":"string","format":"uuid"},"text":{"type":"string","minLength":1,"maxLength":65536},"delivery":{"type":"string","enum":["queue","steer","interrupt"]}}),vec!["target_session_id","text"]),
@@ -67,6 +69,8 @@ struct Args {
     description: Option<String>,
     instructions: Option<String>,
     expected_revision: Option<i64>,
+    document: Option<String>,
+    patch: Option<Value>,
     prompt: Option<String>,
     expires_ms: Option<u64>,
 }
@@ -214,6 +218,24 @@ pub async fn execute(
                         .await?
                 }
                 _ => return Err(anyhow!("Unknown skill action")),
+            }
+        }
+        "manage_agent_chat_config" => {
+            let agent = part(q.agent_id.as_deref())?;
+            let document = match q.document.as_deref() {
+                Some(document @ ("chat" | "session_dropdown")) => document,
+                _ => return Err(anyhow!("Unknown chat configuration document")),
+            };
+            let path = format!("/agents/{agent}/chat-config/{document}");
+            let revision = || q.expected_revision.ok_or_else(|| anyhow!("Chat configuration revision required"));
+            match q.action.as_deref() {
+                Some("read") => request(app, "GET", path, json!({})).await?,
+                Some("patch") => {
+                    let patch = q.patch.clone().ok_or_else(|| anyhow!("Chat configuration patch required"))?;
+                    request(app, "PATCH", path, json!({"patch":patch,"expected_revision":revision()?})).await?
+                }
+                Some("reset") => request(app, "DELETE", path, json!({"expected_revision":revision()?})).await?,
+                _ => return Err(anyhow!("Unknown chat configuration action")),
             }
         }
         "watch_sessions" => {

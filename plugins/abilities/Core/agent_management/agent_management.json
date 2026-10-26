@@ -13,6 +13,7 @@
     "edit_agent_prompt",
     "set_agent_ability",
     "manage_agent_skills",
+    "manage_agent_chat_config",
     "list_user_sessions",
     "manage_user_session",
     "create_user_session",

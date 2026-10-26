@@ -138,21 +138,42 @@ mod configuration {
     async fn live_chat_json_edits_apply_on_next_read_and_invalid_files_fail_closed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("chat.json");
-        assert!(chat_preferences(&path).await.unwrap().confirm_auto_mode);
+        let preferences = |document: Value| parse_chat_preferences(&document);
+        assert_eq!(read_chat_document(&path).await.unwrap(), json!({}));
+        assert!(
+            preferences(read_chat_document(&path).await.unwrap())
+                .unwrap()
+                .confirm_auto_mode
+        );
         std::fs::write(
             &path,
             br#"{"chat_common":{"execution_mode":{"confirm_auto_mode":false}}}"#,
         )
         .unwrap();
-        assert!(!chat_preferences(&path).await.unwrap().confirm_auto_mode);
+        assert!(
+            !preferences(read_chat_document(&path).await.unwrap())
+                .unwrap()
+                .confirm_auto_mode
+        );
         std::fs::write(&path, b"{not json").unwrap();
-        assert!(chat_preferences(&path).await.is_err());
+        assert_eq!(
+            read_chat_document(&path).await.unwrap_err().to_string(),
+            "Chat configuration invalid"
+        );
         std::fs::write(
             &path,
             br#"{"chat_common":{"execution_mode":{"default_mode":7}}}"#,
         )
         .unwrap();
-        assert!(chat_preferences(&path).await.is_err());
+        assert!(preferences(read_chat_document(&path).await.unwrap()).is_err());
+        std::fs::create_dir(dir.path().join("dir.json")).unwrap();
+        assert_eq!(
+            read_chat_document(&dir.path().join("dir.json"))
+                .await
+                .unwrap_err()
+                .to_string(),
+            "Chat configuration unavailable"
+        );
     }
 
     #[test]
@@ -840,5 +861,264 @@ mod main_chat {
                 ["review_required"],
             true
         );
+    }
+}
+
+mod agent_config {
+    use super::*;
+    use crate::agent_config::*;
+
+    fn base() -> Value {
+        json!({"chat_common":{"chat_header":{"rows":[{"left":["agent_name"]}],"enabled":true},"composer":{"x":1}},
+            "chat_widget":{"chat_header":{"rows":[{"right":["close"]}]}},
+            "chat_limits":{"attachments":{"max_file_size_mb":10,"max_per_message":4}}})
+    }
+
+    #[test]
+    fn merge_follows_client_profile_rules_and_patch_null_falls_back() {
+        let overlay = json!({"chat_widget":{"chat_header":{"rows":[{"left":["new_session"]}]}},"chat_common":{"composer":{"y":2}}});
+        let merged = effective("chat", &base(), &overlay);
+        assert_eq!(
+            merged["chat_widget"]["chat_header"]["rows"],
+            json!([{"left":["new_session"]}])
+        );
+        assert_eq!(merged["chat_common"]["composer"], json!({"x":1,"y":2}));
+        assert_eq!(merged["chat_common"]["chat_header"]["enabled"], true);
+        let mut stored = overlay.as_object().cloned().unwrap();
+        merge_patch(
+            &mut stored,
+            json!({"chat_common":{"composer":{"y":null}},"extra":5})
+                .as_object()
+                .unwrap(),
+        );
+        // The emptied composer and chat_common objects are pruned so base values return.
+        assert_eq!(
+            Value::Object(stored.clone()),
+            json!({"chat_widget":{"chat_header":{"rows":[{"left":["new_session"]}]}},"extra":5})
+        );
+        merge_patch(
+            &mut stored,
+            json!({"chat_widget":null,"extra":null})
+                .as_object()
+                .unwrap(),
+        );
+        assert!(stored.is_empty());
+        assert_eq!(effective("chat", &base(), &Value::Object(stored)), base());
+    }
+
+    #[test]
+    fn attachment_limits_only_tighten() {
+        let raised =
+            json!({"chat_limits":{"attachments":{"max_file_size_mb":50,"max_per_message":2}}});
+        let limits =
+            crate::configuration::parse_attachment_limits(&effective("chat", &base(), &raised))
+                .unwrap();
+        assert_eq!(
+            (limits.max_file_size_mb, limits.max_per_message),
+            (Some(10), Some(2))
+        );
+        let open = json!({"chat_common":{}});
+        let set = json!({"chat_limits":{"attachments":{"max_per_message":3}}});
+        let limits =
+            crate::configuration::parse_attachment_limits(&effective("chat", &open, &set)).unwrap();
+        assert_eq!(
+            (limits.max_file_size_mb, limits.max_per_message),
+            (None, Some(3))
+        );
+        // Replacing the limits object with a non-object cannot remove the base limit.
+        assert!(validate("chat", &base(), &json!({"chat_limits":{"attachments":7}})).is_err());
+        assert!(validate(
+            "chat",
+            &base(),
+            &json!({"chat_limits":{"attachments":{"max_file_size_mb":0}}})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn invalid_overlays_are_rejected_or_ignored() {
+        assert!(validate("chat", &base(), &json!([])).is_err());
+        assert!(validate(
+            "chat",
+            &base(),
+            &json!({"chat_common":{"execution_mode":{"confirm_auto_mode":"no"}}})
+        )
+        .is_err());
+        assert!(validate(
+            "chat",
+            &base(),
+            &json!({"chat_common":{"execution_mode":{"confirm_auto_mode":false}}})
+        )
+        .is_ok());
+        assert!(validate(
+            "chat",
+            &base(),
+            &json!({"chat_common":{"__proto__":{"x":1}}})
+        )
+        .is_err());
+        assert!(validate(
+            "chat",
+            &base(),
+            &json!({"big":"x".repeat(MAX_OVERLAY_BYTES)})
+        )
+        .is_err());
+        assert!(validate(
+            "session_dropdown",
+            &json!({}),
+            &json!({"common":{"menu":{"rename":false}},"mobile":{}})
+        )
+        .is_ok());
+        assert!(validate("session_dropdown", &json!({}), &json!({"other":{}})).is_err());
+        assert!(validate("session_dropdown", &json!({}), &json!({"common":true})).is_err());
+        assert!(validate("other", &json!({}), &json!({})).is_err());
+        // Read time: an overlay that the current base no longer accepts falls back to base.
+        let stale = json!({"chat_common":{"execution_mode":{"confirm_auto_mode":7}}});
+        assert_eq!(effective("chat", &base(), &stale), base());
+        let broken = json!({"chat_limits":{"attachments":{"max_file_size_mb":"x"}}});
+        assert_eq!(
+            effective(
+                "chat",
+                &broken,
+                &json!({"chat_limits":{"attachments":{"max_file_size_mb":5}}})
+            ),
+            broken
+        );
+    }
+
+    #[tokio::test]
+    async fn revision_fenced_saves_reset_and_agent_isolation() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(pool(dir.path()).await);
+        // Production agent pools use WAL with a busy timeout; model that writer contention.
+        let options = SqliteConnectOptions::new()
+            .filename(dir.path().join("chat.db"))
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .connect_with(options)
+            .await
+            .unwrap();
+        let read = |agent: &'static str, document: &'static str| {
+            let pool = pool.clone();
+            async move {
+                crate::agent_config::read(&pool, &TaggedCodec, agent, document)
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(
+            read("one", "chat").await,
+            json!({"overlay":{},"revision":0,"updated_at":null,"updated_by":null})
+        );
+        let patch = json!({"chat_common":{"composer":{"y":2}}});
+        let saved = save(
+            &pool,
+            &TaggedCodec,
+            "one",
+            "chat",
+            Change::Patch(&patch),
+            0,
+            &base(),
+            "admin",
+            7,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            saved,
+            json!({"overlay":patch,"revision":1,"updated_at":7,"updated_by":"admin"})
+        );
+        assert_eq!(read("one", "chat").await, saved);
+        // Records are sealed, keyed per agent and document.
+        assert_eq!(raw(&pool, &key("one", "chat")).await[0], b'S');
+        assert_eq!(read("two", "chat").await["revision"], 0);
+        assert_eq!(read("one", "session_dropdown").await["revision"], 0);
+        assert!(matches!(
+            save(
+                &pool,
+                &TaggedCodec,
+                "one",
+                "chat",
+                Change::Patch(&patch),
+                0,
+                &base(),
+                "admin",
+                8
+            )
+            .await,
+            Err(SaveError::Conflict)
+        ));
+        let invalid = json!({"chat_common":{"execution_mode":{"default_mode":7}}});
+        assert!(matches!(
+            save(
+                &pool,
+                &TaggedCodec,
+                "one",
+                "chat",
+                Change::Patch(&invalid),
+                1,
+                &base(),
+                "admin",
+                8
+            )
+            .await,
+            Err(SaveError::Invalid(_))
+        ));
+        assert!(matches!(
+            save(
+                &pool,
+                &TaggedCodec,
+                "one",
+                "chat",
+                Change::Patch(&json!([1])),
+                1,
+                &base(),
+                "admin",
+                8
+            )
+            .await,
+            Err(SaveError::Invalid(_))
+        ));
+        assert_eq!(read("one", "chat").await, saved);
+        let reset = save(
+            &pool,
+            &TaggedCodec,
+            "one",
+            "chat",
+            Change::Reset,
+            1,
+            &base(),
+            "admin",
+            9,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (reset["overlay"].clone(), reset["revision"].clone()),
+            (json!({}), json!(2))
+        );
+        // Concurrent writers with the same revision: exactly one commits.
+        let attempt = |n: i64| {
+            let pool = pool.clone();
+            async move {
+                let patch = json!({"chat_common":{"composer":{"n":n}}});
+                save(
+                    &pool,
+                    &TaggedCodec,
+                    "one",
+                    "chat",
+                    Change::Patch(&patch),
+                    2,
+                    &base(),
+                    "admin",
+                    n,
+                )
+                .await
+            }
+        };
+        let (a, b) = tokio::join!(attempt(1), attempt(2));
+        assert_eq!([a.is_ok(), b.is_ok()].iter().filter(|ok| **ok).count(), 1);
+        assert!(matches!(a.err().or(b.err()), Some(SaveError::Conflict)));
+        assert_eq!(read("one", "chat").await["revision"], 3);
     }
 }
