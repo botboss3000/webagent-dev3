@@ -29,6 +29,25 @@ def installation_entry(folder):
   if candidate.is_symlink():raise PermissionError("Installer entry symlink")
   if candidate.is_file():return candidate
  raise FileNotFoundError("Reviewed lifecycle installer unavailable")
+def stale_tree(tree,installed):
+ """Broker files a tree would revert: it differs from the installed release and did not start from it.
+
+ A task tree is cut from the checkout at begin (baseline.tar). If another release
+ was installed afterwards, the tree still carries the older bytes for files it never
+ edited; installing it would silently drop that release's changes."""
+ import tarfile
+ tree,installed=Path(tree),Path(installed)
+ with tarfile.open(tree/"baseline.tar") as archive:
+  base={m.name[len("v3/build-service/"):]:archive.extractfile(m).read() for m in archive.getmembers()
+        if m.isfile() and m.name.startswith("v3/build-service/") and "/" not in m.name[len("v3/build-service/"):]}
+ stale=[]
+ for path in sorted(installed.iterdir()):
+  name="install.py" if path.name=="bootstrap.py" else path.name
+  candidate=tree/"v3/build-service"/name
+  if not path.is_file() or path.is_symlink() or not candidate.is_file():continue
+  current=path.read_bytes()
+  if candidate.read_bytes()!=current and base.get(name)!=current:stale.append(name)
+ return stale
 def install(args):
  if os.geteuid()!=0:raise PermissionError("Installation requires root")
  source=Path(__file__).resolve().parent;checkout=Path(args.checkout_root or source.parent)
@@ -51,6 +70,13 @@ def install(args):
   if job.get("status") in {"queued","running","needs_decision"}:raise RuntimeError("Build queue must be idle before installation")
  if args.install_tree and (len(args.install_tree)!=64 or any(c not in "0123456789abcdef" for c in args.install_tree)):raise ValueError("Exact reviewed tree hash required")
  reviewed=Path(value["state_root"])/"coordination/trees"/args.install_tree/"v3/build-service" if args.install_tree else source
+ if args.install_tree and args.config and Path(args.config).exists():
+  installed=Path(json.loads(Path(args.config).read_text()).get("service_dir",""))
+  if installed.is_dir():
+   stale=stale_tree(reviewed.parent.parent,installed)
+   if stale and not args.allow_stale_tree:
+    raise RuntimeError("Tree would revert the installed broker release ("+installed.name[:8]+") in: "+", ".join(stale)
+                       +"; begin a fresh task from checkout HEAD and re-apply, or pass --allow-stale-tree for a deliberate rollback")
  digest=hashlib.sha256()
  for p in sorted(reviewed.glob("*.py")):
   if p.is_symlink():raise PermissionError("Reviewed source symlink")
@@ -327,7 +353,8 @@ def main():
  parser.add_argument("--checkout-root");parser.add_argument("--service-account",default="webagent-build")
  parser.add_argument("--api-container");parser.add_argument("--loop-container");parser.add_argument("--gate-container")
  parser.add_argument("--bind-address",default="127.0.0.1");parser.add_argument("--port",type=int,default=8081);parser.add_argument("--public-origin",default="http://127.0.0.1:8081")
- parser.add_argument("--install-tree");parser.add_argument("--task-id");parser.add_argument("--candidate-config");parser.add_argument("--dry-run",action="store_true");parser.add_argument("--request-id");parser.add_argument("--rollback",action="store_true");args=parser.parse_args()
+ parser.add_argument("--install-tree");parser.add_argument("--task-id");parser.add_argument("--candidate-config");parser.add_argument("--dry-run",action="store_true");parser.add_argument("--request-id");parser.add_argument("--rollback",action="store_true")
+ parser.add_argument("--allow-stale-tree",action="store_true",help="install even if the tree lacks changes in the installed release");args=parser.parse_args()
  if args.action=="gate-security":
   if not args.config or not args.task_id or not args.request_id:parser.error("Protected configuration, task and receipt IDs required")
   print(json.dumps(gate_security(args.config,args.task_id,args.request_id,args.dry_run,args.rollback)));return

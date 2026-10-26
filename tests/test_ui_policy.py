@@ -49,3 +49,17 @@ class UIDependencyPolicyTests(unittest.TestCase):
   files=self.files(**{"a.test.mjs":"import './helper.js';","helper.js":"fetch(variable)","other.js":"const a=1;"})
   result=policy.dependencies(files,["v3/ui/helper.js"])
   self.assertTrue(result["test_inputs"]["v3/ui/a.test.mjs"]["conservative"])
+
+
+class UnresolvedFixtureScopeTests(unittest.TestCase):
+    """An unresolved fixture depends on the mounted UI trees only, never on backend sources."""
+    def proof(self,files):
+        return policy.dependencies(files,["v3/src/main.rs"])["test_inputs"]["v3/ui/a.test.mjs"]
+    def test_backend_change_keeps_and_ui_change_breaks_the_proof(self):
+        files={"v3/ui/a.test.mjs":(420,b"import fs from 'node:fs'; fs.readFileSync(variable);"),"v3/ui/b.js":(420,b"export const b=1;"),
+               "ui/shared/c.js":(420,b"export const c=1;"),"v3/src/main.rs":(420,b"fn main(){}")}
+        base=self.proof(files)
+        self.assertTrue(base["conservative"]);self.assertNotIn("v3/src/main.rs",base["dependencies"])
+        self.assertEqual(self.proof({**files,"v3/src/main.rs":(420,b"fn main(){changed()}")})["sha256"],base["sha256"])
+        self.assertNotEqual(self.proof({**files,"v3/ui/b.js":(420,b"export const b=2;")})["sha256"],base["sha256"])
+        self.assertNotEqual(self.proof({**files,"ui/shared/c.js":(420,b"export const c=2;")})["sha256"],base["sha256"])

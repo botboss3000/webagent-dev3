@@ -286,14 +286,17 @@ Source-stability and compiled-input checks still use raw file hashes.
 
 ## Cross-release UI fixture reuse
 
-A frontend fixture runs with no network, credentials or API, mounting only the
-candidate's UI files, so its result depends on those files, the pinned test
-image, the runner recipe and identity. When a fixture's input proof fully
-resolved (`conservative: false`), its pass is recorded under
+A frontend fixture runs with no network, credentials or API, against a scratch
+copy of only the candidate's UI trees (`v3/ui/` and `ui/`), removed afterwards.
+Its result therefore depends on those files, the pinned test image, the runner
+recipe and identity. A resolved fixture's input proof lists its import closure;
+an unresolved one (dynamic loads or file reads) covers every file in the two UI
+trees, never backend sources. Its pass is recorded under
 `build-jobs/ui-test-evidence/<reuse key>.json` and a later release with the
-same key reuses it, whatever runtime images it ships. The runtime images stay
-in each fixture's provenance binding. Conservative fixtures always run; any
-test-image or recipe change invalidates every record. The most recent 4096
+same key reuses it, whatever runtime images it ships, so a backend-only
+release reuses every fixture. The runtime images stay in each fixture's
+provenance binding. Any UI-tree, test-image or recipe change invalidates the
+affected records. The most recent 4096
 records are kept; the store is rebuildable and safe to delete.
 
 ## Suite and live compile overlap
@@ -306,6 +309,15 @@ digest check is unchanged. A suite failure is reported before a compile failure.
 Admission lets phases of one job share their component; other jobs still
 serialize per component. Each phase records its own execution history; the live
 `execution_observation` shows whichever phase reported last.
+
+## Stale-tree install guard
+
+`lifecycle.py install --install-tree HASH` compares each broker file in the tree
+with the installed release. A file that differs while the task's `baseline.tar`
+also differs from the installed bytes means the tree was cut before that release
+and would silently revert it; the install is refused and names the files. Begin
+a fresh task from checkout HEAD and re-apply, or pass `--allow-stale-tree` for a
+deliberate rollback.
 
 ## Explicit owner claim release
 

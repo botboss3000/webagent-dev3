@@ -86,6 +86,15 @@ class MeasuredIndexExecutionTests(unittest.TestCase):
     def test_selected_frontend_tests_reuse_only_matching_dependency_runtime_and_recipe(self):
         (self.root/"ui_policy.py").write_text("# protected fixture recipe\n")
         candidate=self.root/"candidate";test=candidate/"v3/ui/a.test.cjs";test.parent.mkdir(parents=True);test.write_text("fixed fixture\n")
+        (candidate/"v3/src").mkdir();(candidate/"v3/src/backend.rs").write_text("not visible to fixtures")
+        self.seen_mounts=[];normal=self.runner.command
+        def snapshot(args,**kwargs):
+            if args[:2]==["docker","create"]:
+                src=next(a for a in args if a.endswith(",dst=/candidate,readonly"))[len("type=bind,src="):-len(",dst=/candidate,readonly")]
+                self.seen_mounts.append(sorted(p.relative_to(src).as_posix()for p in Path(src).rglob("*")if p.is_file()))
+            return normal(args,**kwargs)
+        self.runner.command=snapshot
+        state=patch.object(fixtures.host,"STATE",self.root/"state");state.start();self.addCleanup(state.stop)
         evidence={"tests":["v3/ui/a.test.cjs"],"sha256":"b"*64}
         with patch.dict(fixtures.host.CONFIG["scheduler"],ui_test_image="sha256:"+"c"*64):
             first=self.runner.validate_selected_tests(self.runner.job_context.job["job_id"],candidate,evidence)
@@ -97,7 +106,11 @@ class MeasuredIndexExecutionTests(unittest.TestCase):
             self.assertFalse(refreshed["reused"]);self.assertGreater(len(self.calls),commands)
         create=next(call[1]for call in self.calls if call[0]=="command"and call[1][:2]==["docker","create"])
         self.assertIn("none",create);self.assertIn("--read-only",create);self.assertIn("--user",create)
-        self.assertIn("type=bind,src="+str(candidate)+",dst=/candidate,readonly",create)
+        # The container mounts a scratch copy of the UI trees only, removed afterwards.
+        mount=next(a for a in create if a.startswith("type=bind,src=")and a.endswith(",dst=/candidate,readonly"))
+        self.assertTrue(mount.startswith("type=bind,src="+str(self.root/"state"/"ui-test-mounts")))
+        self.assertFalse(Path(mount[len("type=bind,src="):-len(",dst=/candidate,readonly")]).exists())
+        self.assertEqual(self.seen_mounts[0],["v3/ui/a.test.cjs"])
         command=next(call[1]for call in self.calls if call[0]=="command"and call[1][:2]==["docker","exec"])
         self.assertIn("--test-concurrency=1",command);self.assertIn("--experimental-vm-modules",command)
 
@@ -114,12 +127,12 @@ class MeasuredIndexExecutionTests(unittest.TestCase):
             first_job=release();first=self.runner.validate_selected_tests(first_job,candidate,evidence)
             self.assertEqual(first["executed_tests"],[a,b])
             second=self.runner.validate_selected_tests(release(),candidate,{**evidence,"runtime_images":{"api":"sha256:"+"2"*64}})
-            self.assertEqual((second["reused_tests"],second["executed_tests"]),([a],[b]))
+            self.assertEqual((second["reused_tests"],second["executed_tests"]),([a,b],[]))
             self.assertEqual(second["fixtures"][a]["reused_from"],first_job)
             changed=self.runner.validate_selected_tests(release(),candidate,{**evidence,"test_inputs":{**evidence["test_inputs"],a:{"sha256":"9"*64,"conservative":False}}})
             self.assertIn(a,changed["executed_tests"])
             record=next((self.root/"state/ui-test-evidence").glob("*.json"));record.write_text('{"status":"passed"}')
-            self.assertEqual(len(list((self.root/"state/ui-test-evidence").glob("*.json"))),2)
+            self.assertEqual(len(list((self.root/"state/ui-test-evidence").glob("*.json"))),3)
         with patch.object(fixtures.host,"STATE",self.root/"state"),patch.dict(fixtures.host.CONFIG["scheduler"],ui_test_image="sha256:"+"d"*64):
             image_changed=self.runner.validate_selected_tests(release(),candidate,evidence)
             self.assertEqual(image_changed["executed_tests"],[a,b])

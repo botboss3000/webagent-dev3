@@ -5,7 +5,8 @@ from pathlib import Path, PurePosixPath
 import posixpath
 import re
 
-VERSION = 2
+VERSION = 3
+UI_TREES = ("v3/ui/", "ui/")  # the only candidate trees mounted into the UI fixture container
 IMPORT = re.compile(r"(?:\bimport\s+(?:[^;]+?\s+from\s+)?|\bexport\s+[^;]+?\s+from\s+|\bimport\s*\()\s*['\"]([^'\"]+)['\"]")
 ASSET = re.compile(r"(?:src|href)\s*=\s*['\"]([^'\"]+)['\"]|(?:url\(|@import\s+)\s*['\"]?([^)'\"\s;]+)", re.I)
 DYNAMIC = re.compile(r"\bimport\s*\(\s*[^'\"\s]|\b(?:fetch|loadPartial|loadHTML)\s*\(")
@@ -75,7 +76,9 @@ def dependencies(files, changed):
                     inputs.add(dependency); queue.append(dependency)
         unresolved = sorted(inputs & unknown)
         if unresolved:
-            inputs = set(files)
+            # The fixture container sees only the UI trees, so an unresolved fixture
+            # depends on at most those files (plus the pinned image and recipe).
+            inputs = {p for p in files if p.startswith(UI_TREES)}
         inventory = {p: {"sha256": hashlib.sha256(files[p][1]).hexdigest(), "mode": files[p][0]}
                      for p in sorted(inputs) if p in files}
         proof = {"version": VERSION, "policy_sha256": policy_hash, "test": test,

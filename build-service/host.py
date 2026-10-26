@@ -22,6 +22,7 @@ from pathlib import Path
 import re
 import signal
 import shutil
+import tempfile
 import socket
 import stat
 import struct
@@ -1844,7 +1845,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         """Execute dependency-selected frontend fixtures in one isolated browser-capable worker."""
         tests=evidence["tests"]
         image=CONFIG.get("scheduler",{}).get("ui_test_image")
-        recipe="node:experimental-vm-modules:test-concurrency=1:network-none:fixture-inputs-v2"
+        recipe="node:experimental-vm-modules:test-concurrency=1:network-none:ui-trees-v1"
         import inspect
         recipe_sha256=hashlib.sha256(inspect.getsource(Runner.validate_selected_tests).encode()).hexdigest()
         environment={"uid":CONFIG["app_uid"],"gid":CONFIG["app_gid"]}
@@ -1856,10 +1857,10 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             proof=evidence.get("test_inputs",{}).get(test)
             dependency=proof["sha256"] if proof else evidence["sha256"]
             binding=hashlib.sha256(canonical({"dependencies":dependency,"runtime_images":evidence.get("runtime_images",{}),"image":image,"recipe":recipe,"recipe_sha256":recipe_sha256,"environment":environment,"test":test})).hexdigest()
-            # Cross-release reuse leaves out runtime images (the fixture container mounts only
-            # candidate UI files) and applies only to fixtures whose inputs fully resolved.
+            # Cross-release reuse leaves out runtime images: the fixture container sees only
+            # the UI trees, and even an unresolved fixture's proof covers exactly those trees.
             reuse_key=(hashlib.sha256(canonical({"dependencies":dependency,"image":image,"recipe":recipe,"recipe_sha256":recipe_sha256,"environment":environment,"test":test})).hexdigest()
-                if proof and proof.get("conservative") is False else None)
+                if proof else None)
             saved=prior.get(test,{})
             stored=Runner.ui_test_record(store,reuse_key)if reuse_key else None
             if saved.get("status")=="passed" and saved.get("binding")==binding:
@@ -1874,15 +1875,29 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             if not isinstance(image,str)or not re.fullmatch(r"sha256:[a-f0-9]{64}",image):raise ValueError("Protected pinned UI test runtime required")
             if len(tests)>256 or len(set(tests))!=len(tests)or any(not p.startswith("v3/ui/")or ".."in Path(p).parts or not(root/p).is_file()for p in tests):raise ValueError("Bounded selected frontend fixtures required")
         if pending:
-            # No application credentials, mounts, authentication state or external network.
-            self.index_command(["docker","run","--rm","--network","none","--init","--read-only","--cap-drop","ALL",
-                "--security-opt","no-new-privileges","--user",str(CONFIG["app_uid"])+":"+str(CONFIG["app_gid"]),
-                "--memory","1g","--pids-limit","256","--cpus","1","--shm-size","256m",
-                "--tmpfs","/tmp:rw,size=512m,mode=1777","--env","HOME=/tmp","--env","NODE_PATH=/opt/ui-tests/node_modules",
-                "--env","PLAYWRIGHT_MODULE=/opt/ui-tests/playwright-entry.cjs",
-                "--env","CHROMIUM_PATH=/opt/ui-tests/chromium","--env","BROWSER_EXECUTABLE=/opt/ui-tests/chromium",
-                "--mount","type=bind,src="+str(root)+",dst=/candidate,readonly","--workdir","/candidate/v3",
-                "--entrypoint","node",image,"--experimental-vm-modules","--test","--test-concurrency=1",*["/candidate/"+p for p in pending]],timeout=self.ui_test_timeout(pending),kind="ui_test")
+            # The container sees only the candidate's UI trees: fixture results cannot
+            # depend on backend sources, which lets fixtures reuse evidence across
+            # backend-only releases.
+            scratch=STATE/"ui-test-mounts";scratch.mkdir(mode=0o700,parents=True,exist_ok=True)
+            if scratch.is_symlink():raise ValueError("UI test mount directory symlink")
+            mount=Path(tempfile.mkdtemp(dir=scratch))
+            try:
+                for tree in ("v3/ui","ui"):
+                    if (root/tree).is_symlink():raise ValueError("UI tree symlink")
+                    if (root/tree).is_dir():shutil.copytree(root/tree,mount/tree,symlinks=True)
+                for path in [mount,*mount.rglob("*")]:
+                    if path.is_dir()and not path.is_symlink():path.chmod(0o755)
+                # No application credentials, mounts, authentication state or external network.
+                self.index_command(["docker","run","--rm","--network","none","--init","--read-only","--cap-drop","ALL",
+                    "--security-opt","no-new-privileges","--user",str(CONFIG["app_uid"])+":"+str(CONFIG["app_gid"]),
+                    "--memory","1g","--pids-limit","256","--cpus","1","--shm-size","256m",
+                    "--tmpfs","/tmp:rw,size=512m,mode=1777","--env","HOME=/tmp","--env","NODE_PATH=/opt/ui-tests/node_modules",
+                    "--env","PLAYWRIGHT_MODULE=/opt/ui-tests/playwright-entry.cjs",
+                    "--env","CHROMIUM_PATH=/opt/ui-tests/chromium","--env","BROWSER_EXECUTABLE=/opt/ui-tests/chromium",
+                    "--mount","type=bind,src="+str(mount)+",dst=/candidate,readonly","--workdir","/candidate/v3",
+                    "--entrypoint","node",image,"--experimental-vm-modules","--test","--test-concurrency=1",*["/candidate/"+p for p in pending]],timeout=self.ui_test_timeout(pending),kind="ui_test")
+            finally:
+                shutil.rmtree(mount,ignore_errors=True)
             for test in pending:
                 fixtures[test].update(status="passed",verified_job_id=job_id,verified_at=time.time())
                 if fixtures[test].get("reuse_key"):Runner.record_ui_test(store,fixtures[test]["reuse_key"],test,job_id,fixtures[test]["verified_at"])
@@ -4295,7 +4310,7 @@ class Broker:
         review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
         allowed={"v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_scheduler_broker.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
-                 "v3/tests/test_context_component_builds.py","v3/tests/test_engine_components.py",
+                 "v3/tests/test_context_component_builds.py","v3/tests/test_engine_components.py","v3/tests/test_build_lifecycle_entry.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
                  "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
         return review_modules,allowed

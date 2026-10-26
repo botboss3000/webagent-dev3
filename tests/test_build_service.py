@@ -1387,6 +1387,7 @@ class SameJobPhaseOverlapTests(unittest.TestCase):
  def test_engine_component_tests_publish_through_the_host_lane(self):
   _,allowed=fixtures.host.Broker.host_source_scope(None)
   self.assertIn("v3/tests/test_engine_components.py",allowed)
+  self.assertIn("v3/tests/test_build_lifecycle_entry.py",allowed)
  def test_receipt_save_retries_a_snapshot_changed_by_an_overlapping_phase(self):
   from unittest.mock import patch
   with tempfile.TemporaryDirectory()as folder:
@@ -1660,8 +1661,10 @@ class UIFixtureEvidenceReuseTests(unittest.TestCase):
         second=self.run_tests();self.assertTrue(second["reused"]);self.assertEqual(len(self.calls),before)
     def test_failed_or_legacy_evidence_never_reuses(self):
         first=self.run_tests();self.job["ui_test_evidence"]={**first,"status":"failed"}
+        import shutil;shutil.rmtree(self.root/"state/ui-test-evidence")  # judge the job's own evidence only
         self.assertFalse(self.run_tests()["reused"])
         self.job["ui_test_evidence"]={"status":"passed","binding":first["binding"]}
+        shutil.rmtree(self.root/"state/ui-test-evidence")
         self.assertFalse(self.run_tests()["reused"])
     def test_execution_exception_records_no_new_success(self):
         first=self.run_tests();self.job["ui_test_evidence"]=first
@@ -1675,7 +1678,7 @@ class UIFixtureEvidenceReuseTests(unittest.TestCase):
         # Fixtures never mount or reach runtime images: a resolved fixture reuses its
         # cross-release record; the unresolved fixture still runs.
         changed=self.run_tests({"api":"sha256:"+"5"*64,"loop":"sha256:"+"3"*64})
-        self.assertEqual((changed["reused_tests"],changed["executed_tests"]),(["v3/ui/a.test.mjs"],["v3/ui/b.test.mjs"]))
+        self.assertEqual((sorted(changed["reused_tests"]),changed["executed_tests"]),(["v3/ui/a.test.mjs","v3/ui/b.test.mjs"],[]))
         self.files["v3/ui/a.test.mjs"]=(420,b"import './a.js'; // new assertions")
         self.assertIn("v3/ui/a.test.mjs",self.run_tests()["executed_tests"])
         self.files["v3/ui/a.test.mjs"]=(420,b"import './a.js';")
