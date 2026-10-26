@@ -98,3 +98,9 @@ path = "src/plugin_packages/optimization/main.rs"
 [[bin]]
 name = "webagent-outbound-notifications"
 path = "src/plugin_packages/outbound_notifications/main.rs"
+
+# The root crate is mostly HTTP/serde glue and dominates every Rust build
+# (about 83% of its compile is LLVM code generation). Level 2 cuts its release
+# compile by about a sixth; module and dependency crates keep level 3.
+[profile.release.package.webagent-v3]
+opt-level = 2
