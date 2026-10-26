@@ -318,8 +318,8 @@ Test helpers are deterministic fixtures, not proof of live runtime behavior.
 | `closeAccountMenu` | Hide account menu and reset account-button aria-expanded. |
 | `closeMobileNav` | Hide mobile navigation and reset its toggle aria-expanded. |
 | `disposeSessionsPage` | Increment sessions-page generation, destroy its mounted instance and clear its shell view class. |
-| `end` | Nested pull-refresh completion handler: cancel unarmed gesture, reload normal pull or invoke sign-out/browser purge for hard pull. |
-| `hardRefresh` | Serialize browser-data reset; optional sign-out must succeed before purge, then force cache-busting navigation. |
+| `end` | Nested pull-refresh completion handler: cancel unarmed gesture, reload normal pull or invoke browser purge for hard pull. |
+| `hardRefresh` | Serialize browser-data reset, keeping the sign-in, then force cache-busting navigation. |
 | `loadAccountControls` | Mount available models and load session policy/sign-ins; render revocation controls and local failure status. |
 | `loadAgentRoster` | Read /models/agents, select an accessible fallback when necessary, update route and render cards. |
 | `loadAgentTabs` | Mark preferences unready, request current user favorites and apply revisioned snapshot. |
@@ -341,7 +341,7 @@ Test helpers are deterministic fixtures, not proof of live runtime behavior.
 | `request` | Nested saveAgentTabs queued write; suppress stale identity/generation work and restore preferences after failure. |
 | `saveAgentTabs` | Queue revision-fenced favorite writes with captured user/generation; reload authoritative preferences after a write failure. |
 | `selectAgent` | Change configuration agent and route, render cards and remount role/model views without reopening the current conversation. |
-| `setupHeaderPullRefresh` | Install top-25px-band mobile pull gesture with normal reload at 50% viewport and hard refresh/sign-out at 85%; preserve ordinary scrolling. Immutable released baseline has pullZone=25. |
+| `setupHeaderPullRefresh` | Install top-25px-band mobile pull gesture with normal reload at 50% viewport and hard refresh (browser purge, sign-in kept) at 85%; preserve ordinary scrolling. Immutable released baseline has pullZone=25. |
 | `showAccountPanel` | Delegate account navigation to showMainPage using supplied history mode. |
 | `showAgentView` | Select an allowed configuration panel, update ARIA/tab/route state, and fetch Identity or Abilities as selected. |
 | `showMainPage` | Validate main page/admin Builds access, update visible page/module/session/account lifecycle and browser route/mobile view. |

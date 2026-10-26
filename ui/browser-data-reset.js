@@ -2,8 +2,7 @@
 
 /**
  * Shared V3 browser-data reset, adapted from v2's header refresh button.
- * The header keeps the HttpOnly V3 session cookie; mobile long-pull signs out
- * first when a fresh anonymous start is requested.
+ * The header button and mobile long-pull both keep the HttpOnly V3 session cookie.
  *
  * Remove service workers, Cache Storage, IndexedDB databases, web storage,
  * and script-readable cookies on this origin before the cache-busting reload.
@@ -11,8 +10,7 @@
  * V3 has no persistent client-side database connections to close.
  *
  * Limits of the browser sandbox — not oversights:
- *  - HttpOnly cookies are invisible to page script; callers choose whether to
- *    revoke the V3 session before clearing browser-accessible data.
+ *  - HttpOnly cookies are invisible to page script, so the V3 sign-in survives.
  *  - Other origins' data and the HTTP cache are out of reach; those need the
  *    browser's own site-data settings.
  *  - An IndexedDB deletion blocked by another tab is bounded by a timeout

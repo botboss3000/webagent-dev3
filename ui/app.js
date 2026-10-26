@@ -700,24 +700,10 @@ $('chat-float-btn').onclick=()=>{widget.float();syncLayout();};
 $('chat-toggle-btn').onclick=()=>{if(widget.floating){widget.open();syncLayout();return;}if(mobileLayout.matches){showMobileView('chat');}else{desktopChatVisible=!desktopChatVisible;syncLayout();}};
 
 let browserResetInProgress=false;
-async function hardRefresh(signOut=false){
+async function hardRefresh(){
   if(browserResetInProgress)return;
   browserResetInProgress=true;
-  const refreshButton=$('header-refresh-browser');
-  refreshButton.disabled=true;
-  if(signOut){
-    try {
-      const response=await fetch('/api/v3/auth/logout',{method:'POST',credentials:'same-origin',headers:{'x-csrf-token':csrf}});
-      if(!response.ok&&response.status!==401)throw Error('Sign-out failed');
-    } catch (_) {
-      browserResetInProgress=false;
-      refreshButton.disabled=false;
-      $('ptr-indicator').classList.remove('loading');
-      $('ptr-indicator').hidden=true;
-      note('Could not end this sign-in. Browser data was not cleared. Try again.');
-      return;
-    }
-  }
+  $('header-refresh-browser').disabled=true;
   try { await purgeAllBrowserData(); } finally {
     const url=new URL(location.href);
     url.searchParams.set('_',String(Date.now()));
@@ -755,7 +741,7 @@ function setupHeaderPullRefresh(){
     indicator.classList.add('loading');
     hint.textContent=action===2?'CLEARING BROWSER DATA':'REFRESHING';hint.classList.add('show');
     if(action===1)setTimeout(()=>location.reload(),120);
-    if(action===2)void hardRefresh(true);
+    if(action===2)void hardRefresh();
   }
   document.addEventListener('touchstart',event=>{
     if(!mobileLayout.matches||window.scrollY>5||indicator.classList.contains('loading')||!event.touches.length)return;
@@ -777,7 +763,7 @@ function setupHeaderPullRefresh(){
     if(raw>=hard){
       stage=2;blue.setAttribute('stroke-dashoffset','0');red.style.display='';
       red.setAttribute('stroke-dashoffset',String(fullDash*(1-Math.min((raw-normal)/(hard-normal),1))));
-      hint.textContent='HARD REFRESH · SIGN OUT';hint.classList.add('show');
+      hint.textContent='HARD REFRESH';hint.classList.add('show');
     }else if(raw>=normal){
       stage=1;blue.setAttribute('stroke-dashoffset','0');red.style.display='none';
       hint.textContent='RELEASE TO REFRESH';hint.classList.add('show');
