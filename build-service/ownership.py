@@ -3,7 +3,7 @@
 Only broker-derived owners, scopes and verified evidence enter this store.
 Config: protected build-service.json -> scheduler ownership heartbeat policy.
 """
-import fnmatch,contextlib,hashlib,json,os,posixpath,re,sqlite3,stat,tarfile,time,tomllib
+import fnmatch,contextlib,hashlib,json,os,posixpath,re,sqlite3,stat,subprocess,tarfile,tempfile,time,tomllib
 from pathlib import Path
 
 ACTIVE={"owned","validating","orphaned","takeover_pending"}
@@ -32,7 +32,7 @@ def overlap(left,right):
 
 def scope_overlap(left,right):
     """Retain legacy UI module exclusions when a new task requests only write paths."""
-    # Old broad reservations and unknown/shared source still fence every Rust owner.
+    # Nothing derives module:engine any more; claims taken under the old rules still fence every Rust owner.
     rust=lambda scope:scope=="module:general"or scope.startswith(("module:backend:","module:crate:","module:engine-component:"))
     if (left=="module:engine"and rust(right))or(right=="module:engine"and rust(left)):return True
     if left.startswith("module:ui:")and right.startswith("path:ui/"):
@@ -41,15 +41,55 @@ def scope_overlap(left,right):
         return scope_overlap(right,left)
     return left==right if left.startswith("module:")or right.startswith("module:")else overlap(left[5:],right[5:])
 
+def layout_scopes(path):
+    """Owner implied by the source layout alone, so missing or invalid Cargo metadata never widens a claim."""
+    parts=path.split("/")
+    if parts[0]=="src":
+        return {"module:backend:diagnostics"}if(path+"/").startswith("src/plugin_packages/diagnostics/")else{"module:general"}
+    if parts[0]!="crates"or len(parts)<2:return None
+    if parts[1]=="modules":return {"module:backend:"+parts[2]}if len(parts)>2 else None
+    # The shared wrapper is compiled into every engine component service.
+    if parts[1]=="engine-service":return {"module:engine-component:"+c for c in COMPONENT_CRATES}
+    component=next((c for c,crates in COMPONENT_CRATES.items()if parts[1]in crates),None)
+    return {"module:engine-component:"+component}if component else{"module:crate:crates/"+parts[1]}
+
 class Components:
     """Write ownership follows edited paths; build dependency impact is checked separately."""
     def __init__(self,root,compile_inputs=(),ui_file_reservations=False):
         """Bind task source declarations to compiler-attested dependency paths."""
         self.root=Path(root);self.compile_inputs={source_path(p)for p in compile_inputs}
         self.ui_file_reservations=ui_file_reservations
-    def package_graph(self):
-        """Union baseline/current Cargo membership so deletions retain their source owner."""
-        if hasattr(self,"_packages"):return self._packages
+    def patched_manifests(self,patch):
+        """Return the Cargo manifests a checked patch touches, as it leaves them (None when deleted)."""
+        names=set(re.findall(r"^(?:\+\+\+ b|--- a)/(\S*Cargo\.toml)$",patch or"",re.M))
+        if not names:return {}
+        for name in names:source_path(name)
+        with tempfile.TemporaryDirectory()as temp:
+            for name in names:
+                p=self.root/name
+                if any(x.is_symlink()for x in [p,*p.parents]if x!=self.root.parent):raise PermissionError("Cargo manifest symlink rejected")
+                if p.is_file():
+                    if p.stat().st_size>262144:raise ValueError("Bounded regular Cargo manifest required")
+                    copy=Path(temp)/name;copy.parent.mkdir(parents=True,exist_ok=True);copy.write_bytes(p.read_bytes())
+            # The ceiling keeps git from treating an enclosing checkout as the patch target.
+            env={"PATH":os.environ.get("PATH","/usr/bin:/bin"),"GIT_CEILING_DIRECTORIES":str(Path(temp).parent),"GIT_CONFIG_NOSYSTEM":"1","HOME":temp}
+            try:result=subprocess.run(["git","-c","core.hooksPath=/dev/null","apply","--include=*Cargo.toml","-"],
+                cwd=temp,env=env,input=patch.encode(),capture_output=True,timeout=30)
+            except (OSError,subprocess.SubprocessError)as error:raise ValueError("Patched Cargo manifests unavailable")from error
+            if result.returncode:raise ValueError("Patched Cargo manifests unavailable")
+            patched={}
+            for name in names:
+                p=Path(temp)/name
+                if p.is_file()and p.stat().st_size>262144:raise ValueError("Bounded regular Cargo manifest required")
+                patched[name]=p.read_bytes()if p.is_file()else None
+            return patched
+    def package_graph(self,patch=None):
+        """Union baseline/current Cargo membership so deletions retain their source owner.
+
+        Current manifests are read as the checked patch leaves them, so a crate the same
+        patch registers owns its files at the first apply."""
+        graphs=self.__dict__.setdefault("_graphs",{})
+        if patch in graphs:return graphs[patch]
         baseline=self.root.parent/"baseline.tar";prior={}
         if baseline.is_symlink():raise PermissionError("Baseline manifest symlink rejected")
         if baseline.exists():
@@ -73,6 +113,9 @@ class Components:
             if p.exists():
                 if not p.is_file()or p.stat().st_size>262144:raise ValueError("Bounded regular Cargo manifest required")
                 current[name]=p.read_bytes()
+        for name,raw in self.patched_manifests(patch).items():
+            if raw is None:current.pop(name,None)
+            else:current[name]=raw
         packages={};edges={};declared={"."}
         for files in [prior,current]:
             docs={name:tomllib.loads(raw.decode())for name,raw in files.items()}
@@ -88,7 +131,7 @@ class Components:
                     scope="module:backend:"+folder.split("/")[2]
                 elif folder=="src/plugin_packages/diagnostics":scope="module:backend:diagnostics"
                 elif folder.startswith("plugins/abilities/"):scope="module:ability:"+"/".join(folder.split("/")[2:4])
-                elif folder=="crates/engine-service":scope="module:engine"
+                elif folder=="crates/engine-service":continue  # layout_scopes assigns it to every component it is built into
                 else:
                     component=next((key for key,values in COMPONENT_CRATES.items()if folder in {"crates/"+x for x in values}),None)
                     scope="module:engine-component:"+component if component else("module:general"if folder=="."else"module:crate:"+folder)
@@ -111,90 +154,40 @@ class Components:
             more={dep for owner in declared for dep in edges.get(owner,set())}-declared
             if not more:break
             declared.update(more)
-        self._packages=({k:v for k,v in packages.items()if k in declared},{k:v for k,v in edges.items()if k in declared});return self._packages
+        graphs[patch]=({k:v for k,v in packages.items()if k in declared},{k:v for k,v in edges.items()if k in declared});return graphs[patch]
     def package_scopes(self,path,patch=None):
         """Reserve owners of selected files/subtrees, never unedited Cargo consumers."""
         if not path.startswith(("crates/","src/")):return None
-        try:packages,_=self.package_graph()
-        except (ValueError,OSError,UnicodeError,tarfile.TarError,TypeError,AttributeError):return {"module:engine"}
+        try:packages,_=self.package_graph(patch)
+        except (ValueError,OSError,UnicodeError,tarfile.TarError,TypeError,AttributeError):return layout_scopes(path)
         matches=[p for p in packages if p!="."and overlap(path,p)]
-        if not matches:
-            return {"module:general"}if"."in packages and path.startswith("src/")else None
+        if not matches:return layout_scopes(path)
         folders={x for x in matches if path==x or path.startswith(x+"/")}or set(matches)
         if (self.root/path).is_symlink():raise PermissionError("Source symlink rejected")
         # Public API edits may rebuild consumers, but do not grant or require write ownership of them.
         return {packages[x]for x in folders}
-    def deleted_isolated(self,path,parts):
-        """Read a bounded prior manifest from the broker baseline only when executable source is deleted."""
-        target=self.root/path
-        if target.exists()or target.is_symlink():return False
-        baseline=self.root.parent/"baseline.tar"
-        if baseline.is_symlink():raise PermissionError("Baseline manifest symlink rejected")
-        if not baseline.exists():return False
-        fd=os.open(baseline,os.O_RDONLY|os.O_NOFOLLOW)
-        with os.fdopen(fd,"rb")as stream:
-            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):raise PermissionError("Regular sealed baseline required")
-            with tarfile.open(fileobj=stream,mode="r:")as archive:
-                try:member=archive.getmember("v3/"+"/".join(parts[:4])+"/plugin.json")
-                except KeyError:return False
-                if not member.isfile()or not 0<member.size<=65536:return False
-                with archive.extractfile(member)as body:
-                    try:return json.loads(body.read(65537)).get("dispatch")=="isolated"
-                    except (ValueError,AttributeError):return False
     def scopes(self,paths,patch=None):
-        """Return canonical module and path claims, retaining core ownership for embedded inputs."""
+        """Return owner and path claims for the edited files only.
+
+        Consumers of an edit are protected by the build, synchronization and promotion
+        gates, not by write claims, so no path reserves a global scope. Compiler
+        attestations decide the release lane and never widen these claims."""
         output=set()
         for raw in paths:
             path=source_path(raw);parts=path.split("/");output.add("path:"+path)
             package=self.package_scopes(path,patch)
-            if package is not None:
-                output.update(package)
-            elif path.startswith("plugins/abilities/")and len(parts)>=4:
-                output.add("module:ability:"+"/".join(parts[2:4]))
-                manifest=self.root.joinpath(*parts[:4],"plugin.json")
-                isolated=False
-                if manifest.is_file()and not manifest.is_symlink()and manifest.stat().st_size<=65536:
-                    try:isolated=json.loads(manifest.read_bytes()).get("dispatch")=="isolated"
-                    except (ValueError,AttributeError):pass
-                elif not manifest.exists()and not manifest.is_symlink():
-                    isolated=self.deleted_isolated(path,parts)
-                if path in self.compile_inputs or(path.endswith(".rs")and not isolated):output.add("module:engine")
-            elif path.startswith("plugins/engine/")or path.startswith((
-                "crates/context-service/","crates/context-assembly/","crates/context-contracts/",
-                "crates/background-service/","crates/background-dispatch/","crates/background-contracts/",
-                "crates/boot-service/","crates/boot-supervisor/","crates/boot-contracts/",
-                "crates/assets-service/","crates/context-assets/","crates/assets-contracts/",
-                "crates/capability-service/","crates/capability-context/","crates/capability-contracts/",
-                "crates/provider-service/","crates/provider-projection/","crates/provider-contracts/",
-                "crates/engine-service/")):
-                # Shared wrapper changes affect each dependent service; contracts also require the host.
-                components=COMPONENT_CRATES
-                shared=path.startswith("crates/engine-service/")
-                matched=False
-                for component,crates in components.items():
-                    if path.startswith("plugins/engine/"+component+"/")or any(path.startswith("crates/"+name+"/")for name in crates)or(shared and component!="context-assembly"):
-                        output.add("module:engine-component:"+component);matched=True
-                if not matched and path!="plugins/engine/catalog.json":output.add("module:engine")
-                if path=="plugins/engine/catalog.json":
-                    output.update("module:engine-component:"+component for component in components)
-                if path in self.compile_inputs or any(path.startswith("crates/"+name+"/")for name in (
-                    "context-contracts","background-contracts","boot-contracts",
-                    "assets-contracts","capability-contracts","provider-contracts")):
-                    output.add("module:engine")
+            if package is not None:output.update(package)
+            elif path.startswith("plugins/abilities/")and len(parts)>=4:output.add("module:ability:"+"/".join(parts[2:4]))
+            elif path=="plugins/engine/catalog.json":output.update("module:engine-component:"+c for c in COMPONENT_CRATES)
+            elif path.startswith("plugins/engine/")and len(parts)>3:output.add("module:engine-component:"+parts[2])
             elif path.startswith("build-service/")or path.startswith("tests/test_build")or path.startswith("tests/test_scheduler")or path in {"tests/test_code_index_maintenance.py","tests/test_published_code_index.py","tests/test_index_queue.py","tests/test_ui_policy.py","tests/test_admin_build_install.py"}:
-                # These Python suites validate broker/index contracts, not the Rust engine.
                 output.add("module:broker")
-                if any(overlap(path,p)for p in self.compile_inputs):output.add("module:engine")
-            elif path.startswith("services/system-monitoring/"):
-                output.add("module:service:system-monitoring")
-                if any(overlap(path,p)for p in self.compile_inputs):output.add("module:engine")
+            elif path.startswith("services/system-monitoring/"):output.add("module:service:system-monitoring")
             elif path.startswith("ui/"):
-                if not self.ui_file_reservations:output.add("module:ui:"+ (parts[1]if len(parts)>1 else "shell"))
-                # Compiler attestations override UI eligibility, including subtree claims.
-                if any(overlap(path,p)for p in self.compile_inputs):output.add("module:engine")
-            elif path.startswith("docs/")or(path.startswith("config/")and path.endswith(".json")and path not in self.compile_inputs):
-                output.add("module:asset:"+path)
-            else:output.add("module:engine")
+                if not self.ui_file_reservations:output.add("module:ui:"+(parts[1]if len(parts)>1 else"shell"))
+            elif path.startswith("docs/")or(path.startswith("config/")and path.endswith(".json")):output.add("module:asset:"+path)
+            # Shared build files (Cargo.toml/lock, build.rs, Dockerfile, ...) and unknown paths fence only each other.
+            else:output.add("module:workspace")
         return sorted(output)
 
 class Connection(sqlite3.Connection):

@@ -247,19 +247,26 @@ class Scheduler:
                                          item["ownership_epoch"],inputs,token)
         item["source_generation"]=current["generation"];item["ownership_revision"]=current["revision"]
         item["ownership_inputs_sha256"]=inputs;self.broker._save_work()
-    def list(self,trusted,workspace,administrator=False,offset=0,limit=20):
-        """Expose reservation metadata only; private source, evidence bodies and chat text stay private."""
+    def list(self,trusted,workspace,administrator=False,offset=0,limit=20,task_id=None):
+        """Expose reservation metadata only; private source, evidence bodies and chat text stay private.
+
+        A task_id selects that task's rows with complete scope lists; the unfiltered
+        inventory caps each list at 32 and says how to read the rest."""
         if type(offset)is not int or type(limit)is not int or not 0<=offset<=1000 or not 1<=limit<=50:raise ValueError("Bounded reservation page required")
+        if task_id is not None and(not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)):raise ValueError("Bounded task ID required")
         self.housekeeping();rows=self.store.list()
         result=[]
         for r in rows:
             if r["state"]in {"complete","abandoned"}:continue
             result.append({k:r[k]for k in ["id","label","state","revision","epoch","generation","heartbeat","created","scopes","requested"]}|{"owned_by_caller":r["owner"]==self.owner(trusted,workspace)})
+        if task_id is not None:result=[r for r in result if r["label"]==task_id]
         legacy=[{"task_id":i["task_id"],"state":"legacy_review_required"}for i in self.broker.work.values()if i.get("mode")=="isolated"and i.get("status")!="abandoned"and not any(r["id"]==i["key"]for r in rows)]
         total=len(result);paged=result[offset:offset+limit]
         for r in paged:
             for key in ("scopes","requested"):
-                if len(r[key])>32:r[key+"_count"]=len(r[key]);r[key]=r[key][:32];r[key+"_truncated"]=True
+                if task_id is None and len(r[key])>32:
+                    r[key+"_count"]=len(r[key]);r[key]=r[key][:32];r[key+"_truncated"]=True
+                    r[key+"_notice"]=f"{key} truncated to 32 of {r[key+'_count']}; use reservations with task_id or takeover_preview for the full list"
         return {"mode":self.mode,"tasks":paged,"total":total,"offset":offset,"next_offset":offset+len(paged)if offset+len(paged)<total else None,"legacy":legacy[:20]if administrator else [r for r in legacy if any(i["task_id"]==r["task_id"]and self.broker._owned(i,trusted,workspace)for i in self.broker.work.values())]}
     def item(self,args,trusted,workspace,administrator=False):
         """Normal actions require the sealed owner; takeover uses an explicitly administrative lookup."""
@@ -440,9 +447,10 @@ class Scheduler:
         if job.get("operation")=="check"and job.get("check_task")in {"dependencies","runtime_readability"}:return set()
         if job.get("ownership_id"):
             value=self.store.get(job["ownership_id"])
-            return {s for s in value["scopes"]if s.startswith("module:")}|({"module:engine"}if job["operation"]in {"build","build_deploy","check"}else set())
+            return {s for s in value["scopes"]if s.startswith("module:")}|({"execution:rust-build"}if job["operation"]in {"build","build_deploy","check"}else set())
+        # One Rust compile runs at a time; this execution token never touches source write claims.
         # Legacy unclassified executable work is conservative until explicit recovery.
-        return {"module:engine"}if job["operation"]=="build_deploy"else{"module:legacy-publication"}
+        return {"execution:rust-build"}if job["operation"]=="build_deploy"else{"module:legacy-publication"}
     def assert_job(self,job):
         """A revoked/transferred source epoch cannot publish a previously compiled candidate."""
         value=self.store.get(job["ownership_id"])
@@ -685,7 +693,7 @@ class Scheduler:
         allowed={"action","task_id","task_key","paths","request_id","expected_revision","expected_epoch","job_id","commit","acceptance","target_task_id","reason","offset","limit"}
         if set(args)-allowed or action not in self.actions:raise ValueError("Unsupported scheduler arguments")
         admin=trusted.get("local_caller")is True or trusted["user_id"]=="admin"
-        if action=="reservations":return self.list(trusted,workspace,admin,args.get("offset",0),args.get("limit",20))
+        if action=="reservations":return self.list(trusted,workspace,admin,args.get("offset",0),args.get("limit",20),args.get("task_id"))
         takeover=action in {"takeover","takeover_preview"}
         if takeover and not admin:raise PermissionError("Administrator takeover required")
         item=self.item(args,trusted,workspace,takeover)

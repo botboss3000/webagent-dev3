@@ -115,23 +115,23 @@ class OwnershipTests(unittest.TestCase):
     def test_manifest_cannot_hide_compiled_input(self):
         root=Path(self.root.name);folder=root/"plugins/abilities/Developer/test";folder.mkdir(parents=True)
         (folder/"plugin.json").write_text(json.dumps({"dispatch":"isolated"}));p="plugins/abilities/Developer/test/src/main.rs"
-        self.assertNotIn("module:engine",m.Components(root).scopes([p]));self.assertIn("module:engine",m.Components(root,[p]).scopes([p]))
+        expected=["module:ability:Developer/test","path:"+p]
+        self.assertEqual(m.Components(root).scopes([p]),expected);self.assertEqual(m.Components(root,[p]).scopes([p]),expected)
     def test_deleted_isolated_manifest_retains_plugin_scope_without_hiding_core_inputs(self):
-        """Deletion uses the sealed baseline only for removed files and never overrides compiler dependencies."""
+        """Ability files reserve their ability whether native, isolated, deleted or compiler-attested."""
         import io,tarfile
         root=Path(self.root.name)/"v3";root.mkdir();package="plugins/abilities/Developer/removed"
         path=package+"/main.rs";baseline=root.parent/"baseline.tar"
         body=json.dumps({"dispatch":"isolated"}).encode()
         with tarfile.open(baseline,"w")as archive:
             member=tarfile.TarInfo("v3/"+package+"/plugin.json");member.size=len(body);archive.addfile(member,io.BytesIO(body))
-        self.assertNotIn("module:engine",m.Components(root).scopes([path]))
-        self.assertIn("module:engine",m.Components(root,[path]).scopes([path]))
+        expected=["module:ability:Developer/removed","path:"+path]
+        self.assertEqual(m.Components(root).scopes([path]),expected)
+        self.assertEqual(m.Components(root,[path]).scopes([path]),expected)
         folder=root/package;folder.mkdir(parents=True);(folder/"main.rs").write_text("new source")
-        self.assertIn("module:engine",m.Components(root).scopes([path]))
+        self.assertEqual(m.Components(root).scopes([path]),expected)
         (folder/"main.rs").unlink();(folder/"plugin.json").write_text('{"dispatch":"native"}')
-        self.assertIn("module:engine",m.Components(root).scopes([path]))
-        (folder/"plugin.json").unlink();baseline.rename(root.parent/"original.tar");baseline.symlink_to(root.parent/"original.tar")
-        with self.assertRaises(PermissionError):m.Components(root).scopes([path])
+        self.assertEqual(m.Components(root).scopes([path]),expected)
     def test_symlink_database_rejected(self):
         p=Path(self.root.name)/"link";p.symlink_to(self.store.path)
         with self.assertRaises(PermissionError):m.Ownership(p)
@@ -166,10 +166,10 @@ class BrokerTestClassificationTests(unittest.TestCase):
   with tempfile.TemporaryDirectory()as root:
    for p in ("tests/test_code_index_maintenance.py","tests/test_published_code_index.py","tests/test_index_queue.py","tests/test_ui_policy.py"):
     self.assertEqual(m.Components(root).scopes([p]),["module:broker","path:"+p])
-    self.assertIn("module:engine",m.Components(root,[p]).scopes([p]))
- def test_unrelated_tests_keep_conservative_engine_scope(self):
+    self.assertEqual(m.Components(root,[p]).scopes([p]),["module:broker","path:"+p])
+ def test_unrelated_tests_reserve_only_the_shared_workspace_scope(self):
   with tempfile.TemporaryDirectory()as root:
-   self.assertIn("module:engine",m.Components(root).scopes(["tests/test_worker.py"]))
+   self.assertEqual(m.Components(root).scopes(["tests/test_worker.py"]),["module:workspace","path:tests/test_worker.py"])
 
 class UIPathTests(unittest.TestCase):
  def test_ui_files_are_independent_but_legacy_remains_broad(self):
@@ -178,12 +178,11 @@ class UIPathTests(unittest.TestCase):
    b=m.Components(root,ui_file_reservations=True).scopes(["ui/chat/b.js"])
    self.assertFalse(set(a)&set(b))
    self.assertIn("module:ui:chat",m.Components(root).scopes(["ui/chat/a.js"]))
- def test_compiler_attestation_dominates_file_and_directory_claims(self):
+ def test_compiler_attestation_does_not_widen_file_and_directory_claims(self):
   with tempfile.TemporaryDirectory()as root:
    c=m.Components(root,["ui/chat/embedded.js"],ui_file_reservations=True)
-   self.assertIn("module:engine",c.scopes(["ui/chat"]))
-   self.assertIn("module:engine",c.scopes(["ui/chat/embedded.js"]))
-   self.assertNotIn("module:engine",c.scopes(["ui/chat/unrelated.js"]))
+   self.assertEqual(c.scopes(["ui/chat"]),["path:ui/chat"])
+   self.assertEqual(c.scopes(["ui/chat/embedded.js"]),["path:ui/chat/embedded.js"])
 
 class LegacyUIReservationTests(unittest.TestCase):
  def test_legacy_module_still_excludes_new_disjoint_paths_in_that_component(self):
@@ -275,10 +274,10 @@ class CargoModuleReservationTests(unittest.TestCase):
         self.write('Cargo.toml','[package]\nname="app"\nversion="0.1.0"\n')
         (self.root/'crates/modules/models/Cargo.toml').unlink()
         self.assertEqual(self.scopes('crates/modules/models/Cargo.toml'),['module:backend:models','path:crates/modules/models/Cargo.toml'])
-    def test_unknown_or_invalid_inventory_is_conservative(self):
-        self.assertIn('module:engine',self.scopes('crates/unknown/src/lib.rs'))
+    def test_unknown_or_invalid_inventory_uses_the_source_layout(self):
+        self.assertEqual(self.scopes('crates/unknown/src/lib.rs'),['module:crate:crates/unknown','path:crates/unknown/src/lib.rs'])
         self.write('crates/modules/models/Cargo.toml','invalid toml = [')
-        self.assertIn('module:engine',self.scopes('crates/modules/models/src/private.rs'))
+        self.assertEqual(self.scopes('crates/modules/models/src/private.rs'),['module:backend:models','path:crates/modules/models/src/private.rs'])
     def test_legacy_engine_fences_new_scopes_in_both_directions(self):
         for scope in ['module:backend:models','module:general','module:crate:crates/helper']:
             self.assertTrue(m.scope_overlap('module:engine',scope));self.assertTrue(m.scope_overlap(scope,'module:engine'))
@@ -305,7 +304,7 @@ class CargoModuleReservationTests(unittest.TestCase):
         self.assertIn('module:engine-component:boot-supervisor',self.scopes('crates/boot-service/src/helper.rs'))
     def test_symlink_inventory_cannot_narrow_claims(self):
         p=self.root/'crates/modules/models/Cargo.toml';p.rename(p.with_suffix('.real'));p.symlink_to(p.with_suffix('.real').name)
-        self.assertIn('module:engine',self.scopes('crates/modules/models/src/private.rs'))
+        self.assertEqual(self.scopes('crates/modules/models/src/private.rs'),['module:backend:models','path:crates/modules/models/src/private.rs'])
 
     def test_general_owns_unsplit_application_source(self):
         self.write('src/chat.rs','fn chat() {}')
@@ -315,7 +314,47 @@ class CargoModuleReservationTests(unittest.TestCase):
         self.write('crates/modules/models/child/src/helper.rs','fn helper() {}')
         self.assertIn('module:backend:models',self.scopes('crates/modules/models/child/src/helper.rs'))
         self.assertNotIn('module:crate:crates/modules/models/child',self.scopes('crates/modules/models/child/src/helper.rs'))
-    def test_invalid_cargo_table_falls_back_to_global_without_blocking_repair(self):
+    def patch_for(self,changes):
+        """Build a git-style patch that changes or adds these files."""
+        import difflib
+        out=[]
+        for path,new in changes.items():
+            p=self.root/path;old=p.read_text().splitlines(True)if p.exists()else[]
+            body=difflib.unified_diff(old,new.splitlines(True),'a/'+path if old else'/dev/null','b/'+path)
+            out.append(f'diff --git a/{path} b/{path}\n'+(''if old else'new file mode 100644\n')+''.join(body))
+        return ''.join(out)
+    def test_crate_registered_by_the_patch_reserves_its_own_scope(self):
+        root=(self.root/'Cargo.toml').read_text().replace('"crates/modules/diagnostics"]','"crates/modules/diagnostics","crates/modules/storage"]')
+        patch=self.patch_for({'Cargo.toml':root,'crates/modules/storage/Cargo.toml':'[package]\nname="storage"\nversion="0.1.0"\n'})
+        self.assertEqual(self.scopes('crates/modules/storage/src/lib.rs',patch),
+            ['module:backend:storage','path:crates/modules/storage/src/lib.rs'])
+        self.assertEqual(self.scopes('crates/modules/storage/src/lib.rs'),['module:backend:storage','path:crates/modules/storage/src/lib.rs'])
+        self.assertFalse((self.root/'crates/modules/storage').exists())
+    def test_unregistered_crate_in_patch_cannot_split_an_owner(self):
+        patch=self.patch_for({'crates/modules/models/child/Cargo.toml':'[package]\nname="child"\nversion="0.1.0"\n'})
+        scopes=self.scopes('crates/modules/models/child/src/helper.rs',patch)
+        self.assertIn('module:backend:models',scopes);self.assertNotIn('module:crate:crates/modules/models/child',scopes)
+    def test_manifest_patch_that_does_not_apply_falls_back_to_the_layout(self):
+        patch=self.patch_for({'crates/modules/models/Cargo.toml':'[package]\nname="models"\nversion="0.2.0"\n'})
+        self.write('crates/modules/models/Cargo.toml','[package]\nname="models-moved"\nversion="0.1.0"\n')
+        self.assertEqual(self.scopes('crates/modules/models/src/private.rs',patch),['module:backend:models','path:crates/modules/models/src/private.rs'])
+    def test_shared_build_files_fence_only_each_other(self):
+        db=m.Ownership(Path(self.temp.name)/'workspace-claims.sqlite')
+        def acquire(name,path):
+            v=db.begin(identity(name),name,name,'begin-'+name)
+            return db.acquire(v['id'],name,v['revision'],v['epoch'],self.scopes(path),'claim-'+name)['acquired']
+        self.assertEqual(self.scopes('Cargo.lock'),['module:workspace','path:Cargo.lock'])
+        self.assertTrue(acquire('lock','Cargo.lock'))
+        self.assertTrue(acquire('models','crates/modules/models/src/private.rs'))
+        self.assertTrue(acquire('general','src/app.rs'))
+        self.assertFalse(acquire('manifest','Cargo.toml'))
+    def test_no_path_derives_the_legacy_global_scope(self):
+        self.write('crates/modules/models/Cargo.toml','invalid toml = [')
+        for path in ['Cargo.toml','Cargo.lock','build.rs','Dockerfile','crates/unknown/src/lib.rs','crates/modules/models/src/private.rs',
+            'crates/engine-service/src/lib.rs','crates/context-contracts/src/lib.rs','src/main.rs','tests/test_worker.py',
+            'plugins/engine/new/component.json','plugins/abilities/Core/base/runtime.rs','config/chat.json']:
+            self.assertNotIn('module:engine',m.Components(self.root,[path]).scopes([path]),path)
+    def test_invalid_cargo_table_falls_back_to_the_layout_without_blocking_repair(self):
         self.write('crates/modules/models/Cargo.toml','[package]\nname="models"\nversion="0.1.0"\ntarget=1\n')
         self.write('Cargo.toml','target=1\n[package]\nname="app"\nversion="0.1.0"\n[dependencies]\nmodels={path="crates/modules/models"}\n')
-        self.assertIn('module:engine',self.scopes('crates/modules/models/Cargo.toml'))
+        self.assertEqual(self.scopes('crates/modules/models/Cargo.toml'),['module:backend:models','path:crates/modules/models/Cargo.toml'])

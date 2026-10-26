@@ -38,8 +38,8 @@ class MonitoringTests(unittest.TestCase):
     def test_only_fixed_subtree_is_independent(self):
         claims=ownership.Components(self.root/"v3").scopes(["services/system-monitoring/src/main.rs"])
         self.assertIn("module:service:system-monitoring",claims);self.assertNotIn("module:engine",claims)
-        self.assertIn("module:engine",ownership.Components(self.root/"v3",["services/system-monitoring/src/main.rs"]).scopes(["services/system-monitoring/src/main.rs"]))
-        self.assertIn("module:engine",ownership.Components(self.root/"v3").scopes(["services/unknown/src/main.rs"]))
+        self.assertEqual(ownership.Components(self.root/"v3",["services/system-monitoring/src/main.rs"]).scopes(["services/system-monitoring/src/main.rs"]),claims)
+        self.assertEqual(ownership.Components(self.root/"v3").scopes(["services/unknown/src/main.rs"]),["module:workspace","path:services/unknown/src/main.rs"])
     def test_fixed_publication_path(self):
         self.assertTrue(m.package_path(m.PREFIX+"src/main.rs"))
         self.assertFalse(m.package_path("v3/services/system-monitoring-other/src/main.rs"))

@@ -57,6 +57,17 @@ class SchedulerBrokerTests(unittest.TestCase):
             "inputs_sha256":self.broker.scheduler_digest(blob),"operation":"plugin_deploy","rust_tests":{"status":"not_required"}}
         self.broker.jobs[job_id]=job;item.update(status="closed",job_id=job_id);self.broker._save_work()
         return job,commit
+    def test_reservations_task_filter_is_complete_and_listing_flags_truncation(self):
+        item=self.begin("reservation-list-fixture");self.write(item,"README.md","claimed\n")
+        store=self.broker.scheduler.store;value=store.get(item["key"])
+        scopes=sorted(set(value["scopes"])|{f"path:docs/fixture-{n:02}.md"for n in range(40)})
+        self.assertTrue(store.acquire(value["id"],value["owner"],value["revision"],value["epoch"],scopes,"fixture-many-scopes")["acquired"])
+        listed=next(t for t in self.call("build_work",{"action":"reservations"})["tasks"]if t["label"]=="reservation-list-fixture")
+        self.assertTrue(listed["scopes_truncated"]);self.assertEqual(listed["scopes_count"],len(scopes))
+        self.assertEqual(len(listed["scopes"]),32);self.assertIn("takeover_preview",listed["scopes_notice"])
+        selected=self.call("build_work",{"action":"reservations","task_id":"reservation-list-fixture"})["tasks"]
+        self.assertEqual([t["scopes"]for t in selected],[scopes]);self.assertNotIn("scopes_truncated",selected[0])
+        self.assertEqual(self.call("build_work",{"action":"reservations","task_id":"missing-fixture-task"})["tasks"],[])
     def test_begin_persists_baseline_before_registering_task(self):
         """An acknowledged task must retain its baseline across a host restart."""
         import os
@@ -112,8 +123,8 @@ class SchedulerBrokerTests(unittest.TestCase):
             self.assertEqual(blocked["status"],"queued")
         self.broker.active_jobs.clear();self.broker.active=None
 
-    def test_cargo_check_retains_engine_claim_after_execution(self):
-        """A durable check returns promptly, replays one job, and retains engine ownership after execution."""
+    def test_cargo_check_retains_its_claims_after_execution(self):
+        """A durable check returns promptly, replays one job, and retains its owner claims after execution."""
         import threading
         item=self.begin("engine-check-owner");other=self.begin("engine-check-waiter")
         tree=Path(item["workspace_path"]).parent
@@ -138,7 +149,8 @@ class SchedulerBrokerTests(unittest.TestCase):
                 job=self.broker.jobs[result["job_id"]]
                 self.assertEqual(job["ownership_id"],item["key"])
                 self.assertEqual(item["last_check_job_id"],job["job_id"])
-                self.assertIn("module:engine",self.broker.scheduler.store.get(item["key"])["scopes"])
+                held=self.broker.scheduler.store.get(item["key"])["scopes"]
+                self.assertIn("module:workspace",held);self.assertNotIn("module:engine",held)
                 other_tree=Path(other["workspace_path"]).parent
                 other_digest=self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(other_tree))
                 with self.assertRaises(fixtures.host.scheduler_module.Conflict):

@@ -116,10 +116,10 @@ class AcquisitionRecoveryTests(unittest.TestCase):
         value=self.broker.scheduler.store.get(item["key"]);self.counter+=1
         return self.call("build_work",{"action":"release_claims","task_id":item["task_id"],"scopes":value["scopes"],"reason":"Fixture phased ownership","expected_revision":value["revision"],"expected_epoch":value["epoch"],"request_id":"fixture-release-"+str(self.counter)})
     def waiting(self):
-        """Preserve an edited released draft, then let it wait behind another engine owner."""
+        """Preserve an edited released draft, then let it wait behind another owner of the same crate."""
         blocker=self.begin("recovery-blocker")
         item=self.begin("edited-waiter");self.write(item,"README.md","preserved unpublished edit\n");self.release(item)
-        self.action(blocker["task_id"],"reserve",paths=["src/blocked.rs"])
+        self.action(blocker["task_id"],"reserve",paths=["crates/pilot/src/blocked.rs"])
         result,args=self.action(item["task_id"],"reserve",paths=["crates/pilot/src/lib.rs"])
         self.assertFalse(result["acquired"]);self.release(blocker)
         return item,args
@@ -211,7 +211,7 @@ class AcquisitionRecoveryTests(unittest.TestCase):
         self.stuck();args=self.recovery();result=self.call("build_work",args)
         self.action(self.item["task_id"],"reserve",paths=["src/later.rs"])
         self.assertEqual(self.call("build_work",args),result)
-        self.assertIn("module:engine",self.broker.scheduler.store.get(self.item["key"])["scopes"])
+        self.assertIn("path:src/later.rs",self.broker.scheduler.store.get(self.item["key"])["scopes"])
     def test_new_request_payload_cannot_reuse_a_completed_recovery_id(self):
         self.stuck();args=self.recovery();self.call("build_work",args)
         with self.assertRaisesRegex(ValueError,"Request ID reused"):self.call("build_work",{**args,"expected_epoch":99})

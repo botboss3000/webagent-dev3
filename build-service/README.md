@@ -54,9 +54,8 @@ myapp --api-container myapp-api --loop-container myapp-loop --public-origin
 https://dev.example.com as root. A missing default webagent-build service
 account is created. Use --service-account for an existing Docker-enabled account.
 Source ownership is resolved from the checkout independently of service identity.
-A deleted standalone plugin file uses its sealed task-baseline manifest to retain
-ability ownership when its current manifest is also removed. Existing undeclared
-Rust files and compiler-attested inputs retain conservative engine ownership.
+Write claims follow the edited files' owners only; see Cargo module source
+reservations below.
 Operators run buildctl as the configured service account (sudo -u ACCOUNT when
 needed); Unix peer identity authenticates this operator channel.
 Root-owned configuration under /etc/webagent/<instance>/ owns paths and identities.
@@ -224,7 +223,9 @@ source as privileged service code or bypass publication/classification gates.
 ## Explicit owner claim release
 
 Operators may use `buildctl schedule --input request.json` with action
-`release_claims`, task_id, an explicit scopes array copied from reservations,
+`release_claims`, task_id, an explicit scopes array copied from `takeover_preview`
+or from `reservations` with that task_id (the unfiltered listing caps each scope
+list at 32 and marks it `scopes_truncated` with a notice),
 a bounded reason, stable request_id and current expected_revision/expected_epoch.
 The authenticated owner can release some or all exactly held claims without
 completing or deleting the draft. Active, interrupted or uncertain task execution
@@ -672,28 +673,30 @@ ownership away from its parent. Root application Rust uses
 include a real Cargo manifest and verify their actual derived scope; a folder
 name or a ledger entry alone is not an independent package.
 
-Private implementation files can be edited independently. Cargo manifests,
-compiler-attested non-Rust inputs and possible public/impl/macro/attribute Rust surfaces
-also reserve transitive consumers. This is deliberately conservative, not a Rust
-ABI parser: a body-only edit in a public file may still reserve its consumers.
-The checked patch is included before writing so newly introduced exports cannot
-avoid consumer reservations. Baseline and current Cargo dependency edges are
-unioned, including target/workspace/dev/build dependencies and prior exported
-surfaces; deleting or editing a
-manifest cannot erase a prior consumer. Invalid/unknown metadata falls back to
-`module:engine`, and old broad Engine claims conflict with new Rust scopes.
-Existing component/ability publication rules remain conservative when no separate
-package owns the path. No manifest field can declare itself exempt from conflicts.
+Claims cover only the owners of the edited files; consumers are protected by the
+build, synchronization and promotion gates, which rebuild and retest against the
+current source before anything is promoted. Cargo manifests are read as the
+checked patch leaves them, so a crate registered by the same patch reserves its
+own module scope at the first apply. When Cargo metadata is missing, invalid or
+cannot be reconstructed, the owner comes from the source layout instead
+(`crates/modules/<name>/`, component crates, `crates/<name>/`, `src/`), never from
+a global fence. Shared build files (`Cargo.toml`, `Cargo.lock`, `build.rs`,
+`Dockerfile`, ...) and unknown top-level paths reserve `module:workspace`, which
+conflicts only with other `module:workspace` claims. Compiler attestations decide
+the release lane, not write claims. No path derives `module:engine` any more;
+claims taken under the old rules still fence every Rust owner until released.
+No manifest field can declare itself exempt from conflicts.
 
 This changes source editing reservations, not execution concurrency, resource
 ceilings, promotion freshness, source attestation, acceptance or deployment gates.
-Full application builds still serialize through their existing Engine build scope.
+Rust builds and checks serialize through the `execution:rust-build` execution
+token, which never blocks source edits.
 For each future module separation record: actual Cargo root and scope, dependency
 contracts/consumers, independent-edit and contract-conflict tests, legacy overlap,
 and the release/commit proving the installed classifier recognizes the boundary.
 
 Unsplit backend application source uses General (`module:general`); exact UI,
 asset, ability, broker and service reservations retain their established rules.
-Shared workspace/build files and unsafe or unknown classification retain the
-conservative global `module:engine` fence. Cargo ownership does not replace
+Shared workspace/build files and unknown paths use `module:workspace`; there is
+no global source fence. Cargo ownership does not replace
 explicit runtime/IPC component contracts or deployment lifecycle coordination.
