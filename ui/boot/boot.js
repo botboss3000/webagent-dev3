@@ -16,11 +16,21 @@ window.WA_BG?.whenReady('bullet-grid', function (renderer) {
       if (curtainDone) return;
       curtainDone = true;
       if (!curtain) return;
-      // Remove every boot visual before releasing the app's visibility gate.
-      window.WA_BG?._get('bullet-grid')?.stop();
-      remove();
-      window.dispatchEvent(new CustomEvent('wa-boot-pointerend'));
+      // Release the app under the curtain, then fade the black scene out over it.
       document.body.classList.remove('is-booting');
+      var finished = false;
+      function finish() {
+        if (finished) return;
+        finished = true;
+        window.WA_BG?._get('bullet-grid')?.stop();
+        remove();
+        window.dispatchEvent(new CustomEvent('wa-boot-pointerend'));
+      }
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) { finish(); return; }
+      curtain.addEventListener('transitionend', finish, { once: true });
+      // transitionend never fires in a hidden tab; cap the wait just past the 0.5s fade.
+      setTimeout(finish, 700);
+      curtain.classList.add('is-lifting');
     }
     function announceAppReady() {
       if (appReadyDone) return;

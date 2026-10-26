@@ -43,7 +43,7 @@ try{
   for(const route of ['/','/app','/?tab=agents&agentView=identity&appView=files&agent=shared_default','/?tab=automation']){
    await page.goto('http://127.0.0.1:'+server.address().port+route);
    await page.getByRole('button',{name:'Sign in',exact:true}).waitFor();
-   assert.equal(await page.locator('#boot-curtain').count(),0);
+   await page.locator('#boot-curtain').waitFor({state:'detached',timeout:2000});
    assert.equal(await page.locator('#app').isVisible(),false);
    assert.equal(await page.locator('#app-restricted-overlay').isVisible(),true);
    await page.getByRole('button',{name:'Sign in',exact:true}).click();

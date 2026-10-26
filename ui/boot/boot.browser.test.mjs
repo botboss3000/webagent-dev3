@@ -27,12 +27,17 @@ try{
   assert.equal(await page.locator('#boot-curtain').isVisible(),true);
   assert.equal(await page.locator('#app').isVisible(),false);
   assert.equal(await page.evaluate(()=>window.__boot.revealed),false);
+  // The app's theme applying mid-boot must not recolour the black scene.
+  assert.equal(await page.evaluate(()=>{document.body.classList.add('light-mode');return getComputedStyle(document.getElementById('boot-curtain')).backgroundColor;}),'rgb(0, 0, 0)');
   await page.evaluate(()=>{
    window.readyEvents=0;window.addEventListener('webagent-app-ready',()=>window.readyEvents++);
    document.getElementById('app').hidden=false;window.__boot.shellReady();
   });
-  assert.equal(await page.locator('#boot-curtain').count(),0);
+  // The app is released at once; the curtain fades over it (reduced motion removes it immediately).
   assert.equal(await page.getByRole('heading',{name:'App shell'}).isVisible(),true);
+  if(reducedMotion==='reduce')assert.equal(await page.locator('#boot-curtain').count(),0);
+  else assert.equal(await page.locator('#boot-curtain.is-lifting').count(),1);
+  await page.locator('#boot-curtain').waitFor({state:'detached',timeout:2000});
   assert.equal(await page.evaluate(()=>window.readyEvents),0);
   await page.evaluate(()=>{window.__boot.appReady();window.__boot.appReady();});
   assert.equal(await page.evaluate(()=>window.readyEvents),1);
