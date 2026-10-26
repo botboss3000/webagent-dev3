@@ -1,5 +1,5 @@
 """Independent cache assertions: actual compiled inputs and complete artifact bytes govern reuse."""
-import hashlib,importlib.util,tempfile,types,unittest,uuid
+import hashlib,importlib.util,tempfile,types,unittest,unittest.mock,uuid
 from pathlib import Path
 import test_admin_build as fixtures
 spec=importlib.util.spec_from_file_location("scheduler_executor",Path(__file__).parents[1]/"build-service/executor.py")
@@ -577,7 +577,7 @@ class HostFocusedVerificationTests(unittest.TestCase):
             if phase=="compile_linked":raise RuntimeError("optimized pipeline reached")
             return "test result: ok. 1 passed; 0 failed\n"
         manifest={"tests":[{"file":"tests/webagent_v3-0123456789abcdef","target_name":"webagent-v3","source_path":"/build/src/main.rs","kind":["bin"],"package_id":"path+file:///build#webagent-v3@0.1.0"},{"file":"tests/webagent_engine-fedcba9876543210","target_name":"webagent_engine","source_path":"/build/crates/modules/engine/src/lib.rs","kind":["lib"],"package_id":"path+file:///build/crates/modules/engine#webagent-engine@0.1.0"}]}
-        with patch.object(self.worker,"retain_test_manifest",return_value=manifest)as retain,patch.object(self.worker,"test_manifest",return_value=manifest),patch.object(self.worker,"validate_compiler_recipe",return_value=False),patch.object(self.worker,"cached_engine",return_value=None),patch.object(self.worker,"seed_cargo_cache",return_value=False),patch.object(self.worker,"dependencies",side_effect=dependency),patch.object(self.worker,"phase",side_effect=phase):
+        with patch.object(self.worker,"dependency_snapshot",return_value=""),patch.object(self.worker,"retain_test_manifest",return_value=manifest)as retain,patch.object(self.worker,"test_manifest",return_value=manifest),patch.object(self.worker,"validate_compiler_recipe",return_value=False),patch.object(self.worker,"cached_engine",return_value=None),patch.object(self.worker,"seed_cargo_cache",return_value=False),patch.object(self.worker,"dependencies",side_effect=dependency),patch.object(self.worker,"phase",side_effect=phase):
             with self.assertRaisesRegex((ValueError,RuntimeError),"optimized pipeline reached"if success else"host regression"):
                 self.worker.engine(job,self.blob,lambda root,blob:fixtures.host.release.extract(root,blob,fixtures.host.context_digest),fixtures.host.context_digest)
         retain.assert_called_once()
@@ -641,3 +641,97 @@ class ExecutionObservationProbeTests(unittest.TestCase):
             self.assertIn("--test-threads=1",args[5][2])
             self.assertNotIn("/build/",args[5][2])
             self.assertLessEqual(args[7],90)
+
+class DependencySnapshotTests(unittest.TestCase):
+    """Compiled third-party objects come only from stubbed workspaces and reach jobs as verified copies."""
+    def setUp(self):
+        import contextlib,json
+        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
+        self.source=self.root/"source";(self.source/"src").mkdir(parents=True);(self.source/"crates/chat/src").mkdir(parents=True)
+        (self.source/"Cargo.toml").write_text('[package]\nname="webagent-v3"\n[workspace]\nmembers=["crates/chat"]\n')
+        (self.source/"Cargo.lock").write_text("version = 4\n");(self.source/"crates/chat/Cargo.toml").write_text('[package]\nname="webagent-chat"\n')
+        (self.source/"src/main.rs").write_text("fn main(){task_code()}");(self.source/"crates/chat/src/lib.rs").write_text("pub fn task_code(){}")
+        self.runner=types.SimpleNamespace(compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64},plugin_build_lock=lambda name:contextlib.nullcontext())
+        self.worker=module.Executor(self.runner,None,{"state_root":str(self.root/"state"),"scheduler":{"disk_min_free_bytes":0}})
+        headroom=unittest.mock.patch.object(module,"SNAPSHOT_HEADROOM",0);headroom.start();self.addCleanup(headroom.stop)
+        binding=self.worker.dependency_binding(self.source)
+        registry=self.root/"state/cargo-dependencies"/hashlib.sha256(json.dumps(binding,sort_keys=True).encode()).hexdigest()/"cargo/registry"
+        registry.mkdir(parents=True);(registry/"serde.crate").write_bytes(b"locked")
+        self.members=[("webagent-v3",[("webagent-v3",["bin"],"/build/src/main.rs"),("build-script-build",["custom-build"],"/build/build.rs")]),
+            ("webagent-chat",[("webagent_chat",["lib"],"/build/crates/chat/src/lib.rs"),("flow",["test"],"/build/crates/chat/tests/flow.rs")])]
+        self.calls=[];self.leftover=False
+    def tearDown(self):
+        self.temp.cleanup()
+    def metadata(self,output,members=None):
+        import json
+        packages=[{"id":name+" 0.1.0","name":name,"targets":[{"name":label,"kind":kind,"src_path":path}for label,kind,path in targets]}for name,targets in members or self.members]
+        packages.append({"id":"serde 1.0","name":"serde","targets":[{"name":"serde","kind":["lib"],"src_path":"/output/cargo/registry/src/serde/lib.rs"}]})
+        output.mkdir(parents=True,exist_ok=True)
+        (output/"dependency-metadata.json").write_text(json.dumps({"workspace_members":[p["id"]for p in packages if p["name"]!="serde"],"packages":packages}))
+        return output
+    def phase(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False):
+        self.calls.append((phase,kind,source,argv[-1]))
+        self.assertEqual((source/"src/main.rs").read_text(),"#![allow(warnings)]\nfn main(){}\n")
+        self.assertEqual((source/"crates/chat/src/lib.rs").read_text(),"#![allow(warnings)]\n")
+        self.assertTrue((output/"cargo/registry/serde.crate").is_file())
+        deps=output/"target/release/deps";deps.mkdir(parents=True);(deps/"libserde-0123.rlib").write_bytes(b"third party")
+        fingerprint=output/"target/debug/.fingerprint/serde-4567";fingerprint.mkdir(parents=True);(fingerprint/"lib-serde").write_text("x")
+        if self.leftover:(deps/"libwebagent_chat-89ab.rlib").write_bytes(b"stub")
+        return "built\n"
+    def run_job(self):
+        job={"job_id":str(uuid.uuid4())};output=self.metadata(self.root/uuid.uuid4().hex)
+        self.worker.phase=self.phase
+        log=self.worker.dependency_snapshot(job,self.source,output)
+        return job,output,log
+    def test_stub_replaces_every_workspace_target_and_copies_exact_manifests(self):
+        stub=self.root/"stub";stub.mkdir()
+        names,packages=self.worker.snapshot_stub(self.source,self.metadata(self.root/"meta")/"dependency-metadata.json",stub)
+        self.assertEqual(packages,["webagent-chat","webagent-v3"])
+        self.assertIn("flow",names);self.assertIn("webagent_chat",names)
+        self.assertEqual((stub/"Cargo.toml").read_bytes(),(self.source/"Cargo.toml").read_bytes())
+        self.assertEqual((stub/"build.rs").read_text(),"#![allow(warnings)]\nfn main(){}\n")
+        self.assertNotIn("task_code",(stub/"crates/chat/src/lib.rs").read_text())
+    def test_stub_rejects_targets_outside_the_workspace(self):
+        for path in ("/build/../escape.rs","/etc/escape.rs","/build/Cargo.toml","/build/src/../../x.rs"):
+            stub=self.root/uuid.uuid4().hex;stub.mkdir()
+            with self.assertRaises(ValueError):
+                self.worker.snapshot_stub(self.source,self.metadata(self.root/uuid.uuid4().hex,[("webagent-v3",[("webagent-v3",["bin"],path)])])/"dependency-metadata.json",stub)
+    def test_leftovers_name_stub_products_and_ignore_third_party(self):
+        target=self.root/"target"
+        for name in ("debug/.fingerprint/webagent-v3-0011","release/deps/libwebagent_chat-22.rlib","debug/webagent-v3","release/deps/serde-33.d","debug/build/libsqlite3-sys-44"):
+            path=target/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text("x")
+        self.assertEqual(self.worker.snapshot_leftovers(target,["webagent-v3","webagent_chat"]),
+            ["debug/.fingerprint/webagent-v3-0011","debug/webagent-v3","release/deps/libwebagent_chat-22.rlib"])
+    def test_prepared_snapshot_is_reused_as_a_verified_private_copy(self):
+        job,output,log=self.run_job()
+        self.assertEqual(job["dependency_snapshot"]["decision"],"prepared");self.assertEqual(len(self.calls),1)
+        phase,kind,_,script=self.calls[0]
+        self.assertEqual((phase,kind),("dependency","engine"))
+        self.assertIn("cargo clean --release --locked --offline -p webagent-chat -p webagent-v3",script)
+        self.assertEqual((output/"target/release/deps/libserde-0123.rlib").read_bytes(),b"third party")
+        second,copy,_=self.run_job()
+        self.assertEqual(second["dependency_snapshot"]["decision"],"hit");self.assertEqual(len(self.calls),1)
+        self.assertEqual(self.worker.artifact_hashes(copy/"target"),self.worker.artifact_hashes(output/"target"))
+        (copy/"target/release/deps/libserde-0123.rlib").write_bytes(b"poisoned private copy")
+        third,fresh,_=self.run_job()
+        self.assertEqual(third["dependency_snapshot"]["decision"],"hit")
+        self.assertEqual((fresh/"target/release/deps/libserde-0123.rlib").read_bytes(),b"third party")
+    def test_changed_shared_snapshot_or_surviving_stub_leaves_cold_target(self):
+        self.leftover=True
+        job,output,log=self.run_job()
+        self.assertEqual(job["dependency_snapshot"]["decision"],"unavailable");self.assertFalse((output/"target").exists())
+        self.assertEqual([p for p in (self.root/"state/compiled-dependencies").iterdir()],[])
+        self.leftover=False;self.run_job()
+        shared=next((self.root/"state/compiled-dependencies").iterdir())
+        (shared/"target/release/deps/libserde-0123.rlib").write_bytes(b"tampered")
+        job,output,log=self.run_job()
+        self.assertEqual(job["dependency_snapshot"]["decision"],"unavailable");self.assertFalse((output/"target").exists())
+    def test_changed_lockfile_selects_a_new_snapshot_and_cancellation_propagates(self):
+        self.run_job()
+        (self.source/"Cargo.lock").write_text("version = 4\n# changed\n")
+        job,output,_=self.run_job()
+        self.assertEqual(job["dependency_snapshot"]["decision"],"unavailable")
+        self.assertIn("Verified downloads unavailable",job["dependency_snapshot"]["detail"])
+        def cancelled(*args,**kwargs):raise PermissionError("cancelled")
+        self.worker.dependency_binding=cancelled
+        with self.assertRaises(PermissionError):self.worker.dependency_snapshot({"job_id":"x"},self.source,self.metadata(self.root/"c"))

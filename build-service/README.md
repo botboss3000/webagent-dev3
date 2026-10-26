@@ -234,6 +234,21 @@ remaining-time range. Classes are the work actually done (operation, compiled or
 reused artifacts, tests run or reused), computed from completed receipts. The
 read follows the same ownership rule as `buildctl job` and never returns logs.
 
+## Compiled-dependency snapshots
+
+Engine compiles start from a verified copy of third-party objects instead of an
+empty target. The first job for a key (locked downloads, manifests, compiler
+image, flags and compile recipes) builds `build-jobs/compiled-dependencies/<key>`
+from a stub workspace: exact manifests, every workspace target replaced by an
+empty file, the engine's test, linked and live compiles, then `cargo clean` of
+every member and a check that no stub product survived. No task source is
+compiled into it. Each job copies the snapshot into its private target and
+verifies every file's hash against the receipt; Cargo fingerprints still decide
+freshness and all test, smoke and equivalence gates are unchanged. Any failure
+leaves an empty target and the job compiles cold (`dependency_snapshot` in the
+receipt records hit, prepared, skipped or unavailable). The three most recent
+keys are kept; the cache is rebuildable and safe to delete while no job runs.
+
 ## Explicit owner claim release
 
 Operators may use `buildctl schedule --input request.json` with action
