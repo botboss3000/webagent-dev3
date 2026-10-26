@@ -782,6 +782,17 @@ class WorkspaceSnapshotTests(unittest.TestCase):
         self.assertEqual(hashes["src/main.rs"],hashlib.sha256(b"fn main(){task_code()}").hexdigest())
         job,_=self.run_job(module_build=True)
         self.assertEqual(job["workspace_snapshot"]["decision"],"unavailable");self.assertIn("build-script-free",job["workspace_snapshot"]["detail"])
+    def test_root_leftovers_ignore_module_crates_sharing_a_root_binary_name(self):
+        target=self.root/"target"
+        for name in ("debug/.fingerprint/webagent-diagnostics-313d","debug/deps/libwebagent_diagnostics-313d.rlib","debug/deps/webagent_diagnostics-313d.d",
+                     "debug/deps/libwebagent_diagnostics-313d.rmeta","debug/.fingerprint/webagent-chat-1"):
+            path=target/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text("module")
+        names=["build-script-build","webagent-diagnostics","webagent-v3"]
+        self.assertEqual(self.worker.root_leftovers(target,names),[])
+        for name in ("debug/.fingerprint/webagent-v3-9","release/build/webagent-v3-8","debug/deps/webagent_diagnostics-77","debug/deps/webagent_diagnostics-77.d","debug/webagent-diagnostics","release/deps/webagent_v3-5"):
+            path=target/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text("root")
+        self.assertEqual(self.worker.root_leftovers(target,names),["debug/.fingerprint/webagent-v3-9","debug/deps/webagent_diagnostics-77","debug/deps/webagent_diagnostics-77.d",
+                                                                     "debug/webagent-diagnostics","release/build/webagent-v3-8","release/deps/webagent_v3-5"])
     def test_freshen_freezes_only_unchanged_files(self):
         hashes={"src/main.rs":hashlib.sha256(b"fn main(){task_code()}").hexdigest(),"crates/chat/src/lib.rs":"0"*64}
         self.assertEqual(self.worker.freshen(self.source,hashes),1)

@@ -669,6 +669,28 @@ class Executor:
         return sorted(names),hashes
 
     @staticmethod
+    def root_leftovers(target,names):
+        """Root package products left in a workspace snapshot: its fingerprints and build
+        script, and its binaries' executables and dep-info. Module crates may share a name
+        with a root binary (webagent-diagnostics), so a deps entry counts only when no
+        library artifact with the same hash sits beside it."""
+        bins={name.replace("-","_")for name in names if name!="build-script-build"}
+        found=[]
+        for profile in ("debug","release"):
+            base=target/profile
+            if not base.is_dir():continue
+            for folder in (".fingerprint","build"):
+                if (base/folder).is_dir():found+=[p.relative_to(target).as_posix()for p in (base/folder).iterdir()if p.name.rsplit("-",1)[0]=="webagent-v3"]
+            deps=base/"deps"
+            if deps.is_dir():
+                for p in deps.iterdir():
+                    stem=p.name[:-2]if p.name.endswith(".d")else p.name
+                    if "."in stem or p.name.startswith("lib")or stem.rsplit("-",1)[0]not in bins:continue
+                    if not any((deps/("lib"+stem+suffix)).exists()for suffix in (".rlib",".rmeta",".so")):found.append(p.relative_to(target).as_posix())
+            found+=[p.relative_to(target).as_posix()for p in base.iterdir()if p.is_file()and p.name.split(".",1)[0].replace("-","_")in bins]
+        return sorted(found)
+
+    @staticmethod
     def freshen(root,hashes):
         """Give files whose bytes match the snapshot record FROZEN_MTIME; changed and new files stay newer."""
         frozen=0
@@ -730,7 +752,7 @@ class Executor:
                         log=self.phase(job,"dependency","engine",stub,work,["sh","-c",SNAPSHOT_COMPILES+"\ncargo clean --locked --offline -p webagent-v3\ncargo clean --release --locked --offline -p webagent-v3"],"compiled-workspace:rust1.90:stub-root-v1")
                         built=work/"target"
                         if built.is_symlink()or not built.is_dir():raise ValueError("Workspace snapshot target missing")
-                        leftovers=self.snapshot_leftovers(built,names)
+                        leftovers=self.root_leftovers(built,names)
                         if leftovers:raise ValueError("Root stub products survived cleaning: "+", ".join(leftovers[:6]))
                         inventory=self.artifact_hashes(built);built.rename(temporary/"target")
                         with (temporary/"receipt.json").open("x")as stream:
