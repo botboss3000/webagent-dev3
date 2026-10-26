@@ -1,10 +1,13 @@
 //! Durable storage for the three owners: application, agent, and user.
 //! A run revision and a time-limited lease stop stale processes from replacing
 //! newer progress. See docs/code-tour.md before following the SQL below.
+#[path = "../../crates/modules/chat/host/storage/session.rs"]
 pub(crate) mod session;
+#[path = "../../crates/modules/chat/host/storage/conversation_history.rs"]
 pub(crate) mod conversation_history;
 mod agent_pages;
 mod app_pages;
+#[path = "../../crates/modules/chat/host/storage/search.rs"]
 pub(crate) mod search;
 pub(crate) mod own_skills;
 pub(crate) mod base_task;
@@ -13,11 +16,15 @@ mod execution_metadata;
 mod agent_memberships;
 mod account_levels;
 mod agent_encryption;
+#[path = "../../crates/modules/chat/host/storage/conversation_privacy.rs"]
 mod conversation_privacy;
+#[path = "../../crates/modules/chat/host/storage/naming.rs"]
 mod naming;
 mod background_tasks;
 mod background_followup;
+#[path = "../../crates/modules/chat/host/storage/followup_queue.rs"]
 mod followup_queue;
+#[path = "../../crates/modules/chat/host/storage/session_messaging.rs"]
 mod session_messaging;
 #[path = "../../crates/modules/abilities/host/webhook_storage.rs"]
 mod core_webhooks;
@@ -25,12 +32,16 @@ mod core_webhooks;
 mod core_vault;
 mod reasoning_cleanup;
 pub(crate) mod notifications;
+#[path = "../../crates/modules/chat/host/storage/shared_chat.rs"]
 pub(crate) mod shared_chat;
+#[path = "../../crates/modules/chat/host/storage/participation.rs"]
 pub(crate) mod participation;
+#[path = "../../crates/modules/chat/host/storage/shared_read.rs"]
 mod shared_read;
 mod requester_quota;
 mod actions;
 mod module_records;
+#[path = "../../crates/modules/chat/host/storage/main_notes.rs"]
 mod main_notes;
 pub(crate) mod context_assets;
 mod engine;

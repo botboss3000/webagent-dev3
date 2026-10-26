@@ -1197,7 +1197,7 @@ async fn admit(app: &App, id: &str, gen: &str, admission: &Value) -> Result<Valu
         let mut bytes = [0u8; 16];
         bytes.copy_from_slice(&hash[..16]);
         Some(
-            crate::api::sessions::prepare_session_id(
+            crate::api::chat_sessions::prepare_session_id(
                 &scoped,
                 &body,
                 Some(Uuid::from_bytes(bytes).to_string()),
@@ -2055,7 +2055,7 @@ mod automation_evidence_privacy_tests {
     async fn first_admission_keeps_source_out_of_public_chat_and_search() {
         let (_root, app) = crate::runtime_tests::fixture().await;
         let body = json!({"client_message_id":uuid(),"text":model_text(),"agent_id":"shared_default","title":"Evidence test"});
-        let session = crate::api::sessions::prepare_session_id(&app, &body, None)
+        let session = crate::api::chat_sessions::prepare_session_id(&app, &body, None)
             .await
             .unwrap();
         let sid = session.result["id"].as_str().unwrap();

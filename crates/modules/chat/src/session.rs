@@ -35,6 +35,7 @@ pub fn with_session_metadata(value: &Value, activity: Option<i64>) -> Result<Val
     let object = value
         .as_object_mut()
         .ok_or_else(|| anyhow!("Invalid session document"))?;
+    // Zero denotes unknown legacy creation time; never fabricate old activity.
     object.entry("created_at").or_insert_with(|| json!(0));
     let created = object
         .get("created_at")
@@ -102,6 +103,7 @@ pub struct SessionLifecycle {
 #[derive(Debug)]
 pub struct RecycledSession;
 impl std::fmt::Display for RecycledSession {
+    /// Hide recycled-session existence behind the same public not-found message.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Session not found")
     }
@@ -120,12 +122,10 @@ pub fn public_session(value: &Value) -> Result<Value> {
     let metadata: SessionMetadata = serde_json::from_value(value.clone())?;
     let mut summary = serde_json::to_value(metadata)?;
     summary["id"] = value["id"].clone();
-    summary["main_chat"] = json!(
-        value["main_chat"] == true && value["main_chat_agent_id"] == value["agent_id"]
-    );
-    summary["can_delete"] = json!(
-        !(value["main_chat"] == true && value["main_chat_agent_id"] == value["agent_id"])
-    );
+    summary["main_chat"] =
+        json!(value["main_chat"] == true && value["main_chat_agent_id"] == value["agent_id"]);
+    summary["can_delete"] =
+        json!(!(value["main_chat"] == true && value["main_chat_agent_id"] == value["agent_id"]));
     summary["history_revision"] = json!(value["history_revision"].as_u64().unwrap_or(0));
     summary["agent_id"] = json!(value["agent_id"].as_str().unwrap_or("shared_default"));
     Ok(summary)
@@ -153,6 +153,7 @@ pub async fn read_summary_in(
     Ok(summary)
 }
 
+/// Called only after a newly inserted public chat row, in its transaction.
 pub async fn touch_session_activity<C: RecordCodec>(
     codec: &C,
     tx: &mut Transaction<'_, Sqlite>,
@@ -172,7 +173,8 @@ pub async fn touch_session_activity<C: RecordCodec>(
             .bind(sid)
             .fetch_one(&mut **tx)
             .await?;
-    session["last_active_at"] = json!(timestamp.max(session["last_active_at"].as_i64().unwrap_or(0)));
+    session["last_active_at"] =
+        json!(timestamp.max(session["last_active_at"].as_i64().unwrap_or(0)));
     sqlx::query("UPDATE docs SET value=? WHERE key=?")
         .bind(codec.encode_user_record(&session)?)
         .bind(&key)
@@ -181,6 +183,7 @@ pub async fn touch_session_activity<C: RecordCodec>(
     Ok(())
 }
 
+/// Check under the caller's write transaction, never a cached snapshot.
 pub async fn require_active_session<C: RecordCodec>(
     codec: &C,
     tx: &mut Transaction<'_, Sqlite>,
@@ -223,6 +226,7 @@ pub async fn prepare_session_document<C: RecordCodec>(
         if previous["status"] == "deleted" {
             return Err(RecycledSession.into());
         }
+        // Checkpoints retain the current trusted role, including demotion.
         object.insert("main_chat".into(), json!(previous["main_chat"] == true));
         object.insert(
             "main_chat_agent_id".into(),
@@ -238,6 +242,7 @@ pub async fn prepare_session_document<C: RecordCodec>(
                 .and_then(Value::as_u64)
                 .unwrap_or(0)
         {
+            // A pre-Undo snapshot must not restore the discarded compaction context.
             for field in [
                 "history_revision",
                 "checkpoint_input",
@@ -250,6 +255,7 @@ pub async fn prepare_session_document<C: RecordCodec>(
                 }
             }
         }
+        // Participation and queue are independently revisioned authorities.
         for (field, revision) in [
             ("participation", "revision"),
             ("message_queue", "queue_revision"),
@@ -291,6 +297,8 @@ pub async fn prepare_session_document<C: RecordCodec>(
         if !reads.is_empty() {
             object.insert("participant_reads".into(), Value::Object(reads));
         }
+        // A runner may carry a full session snapshot from before a metadata
+        // edit. Preserve the newer metadata while accepting its checkpoint.
         let stale = previous["metadata_revision"].as_u64().unwrap_or(0)
             > object
                 .get("metadata_revision")
@@ -347,6 +355,7 @@ pub async fn prepare_session_document<C: RecordCodec>(
     with_session_metadata(&next, None)
 }
 
+/// Project active or recycled public sessions and order pins, activity and identities deterministically.
 pub async fn ordered_sessions_status<C: RecordCodec>(
     pool: &SqlitePool,
     codec: &C,
@@ -373,7 +382,11 @@ pub async fn ordered_sessions_status<C: RecordCodec>(
         b["pinned"]
             .as_bool()
             .cmp(&a["pinned"].as_bool())
-            .then_with(|| b["last_active_at"].as_i64().cmp(&a["last_active_at"].as_i64()))
+            .then_with(|| {
+                b["last_active_at"]
+                    .as_i64()
+                    .cmp(&a["last_active_at"].as_i64())
+            })
             .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
     });
     Ok(summaries)

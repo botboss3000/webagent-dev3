@@ -3,12 +3,7 @@ use crate::*;
 fn successor_id(app: &App, sid: &str, entry: &Value) -> Result<String> {
     webagent_engine::runtime::followup::successor_id(app.store.current_user_id(),sid,entry)
 }
-pub(crate) fn public_entry(e: &Value) -> Value {
-    json!({"id":e["id"],"message_id":e["message_id"],"revision":e["revision"],"choice":e["choice"],"status":if e["status"]=="pending"&&e["interrupt_committed"]==true {json!("interrupting")}else{e["status"].clone()},"content":e["content"],"attachments":e["attachments"],"consuming_run_id":e["consuming_run_id"],"batch_id":e["batch_id"],"review_status":e["review_status"]})
-}
-pub(crate) fn public(q: &Value) -> Value {
-    json!({"queue":q["entries"].as_array().into_iter().flatten().map(public_entry).collect::<Vec<_>>(),"queue_state":{"held":q["held"],"reason":q["reason"],"revision":q["revision"]}})
-}
+pub(crate) use webagent_chat::followup::{public, public_entry};
 pub(crate) async fn should_queue(app: &App, s: &str) -> Result<bool> {
     let q = app.store.followup_queue(s).await?;
     Ok(q["held"] == true

@@ -53,20 +53,9 @@ fn published_root_at(ui:&std::path::Path)->Result<PathBuf> {webagent_configurati
 /// Explicit call snapshots and configured publication are authoritative; only an unconfigured installation uses packaged defaults.
 fn default_source(source:Option<&std::path::Path>)->Result<Option<PathBuf>> {webagent_configuration::prompts::default_source(source)}
 
-/// Main Chat guidance has no compiled or last-good fallback. An installation
-/// JSON file, when present, is authoritative even when it omits these skills.
+/// Main Chat guidance semantics are Chat-owned; the host supplies the installed defaults directory.
 pub(crate) fn main_chat_prompts(root:&std::path::Path)->Result<Value> {
-    let saved=root.join("config/prompts.json");
-    let source=default_source(None)?;
-    fn section(path:&std::path::Path)->Result<Option<Value>> {
-        let meta=std::fs::symlink_metadata(path)?;
-        if !meta.is_file()||meta.file_type().is_symlink()||meta.len()>4*1024*1024{anyhow::bail!("Invalid Main Chat prompts");}
-        let value:Value=serde_json::from_slice(&std::fs::read(path)?)?;
-        Ok(value.get("main_chat_skills").cloned())
-    }
-    if saved.exists(){if let Some(value)=section(&saved)?{return Ok(value);}}
-    let defaults:Value=serde_json::from_slice(&prompt_defaults_at(source.as_deref())?)?;
-    Ok(defaults.get("main_chat_skills").cloned().unwrap_or(Value::Null))
+    webagent_chat::configuration::main_chat_prompts_at(root,None,&fallback_directory())
 }
 /// Atomically acknowledge the revision actually held by an API or loop catalog.
 pub(crate) fn record_adoption(root:&std::path::Path,role:&str,catalog:&abilities::Catalog)->Result<()> {
@@ -235,7 +224,7 @@ pub(crate) fn catalog(fallback:&Arc<abilities::Catalog>) -> Result<Arc<abilities
 }
 
 /// The root test crate supplies its own source fixture directory explicitly.
-fn fallback_directory()->PathBuf {
+pub(crate) fn fallback_directory()->PathBuf {
  if cfg!(test) {PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config")}
  else {PathBuf::from("/usr/local/share/webagent/defaults")}
 }

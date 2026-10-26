@@ -1,5 +1,4 @@
-//! Chat history request validation and attachment-reference remapping helpers.
-use anyhow::{anyhow, Result};
+//! Undo/fork request shape and attachment-reference remapping for independent history snapshots.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -12,27 +11,7 @@ pub struct HistoryRequest {
     pub expected_last_seq: i64,
 }
 
-impl HistoryRequest {
-    pub fn validate(&self) -> std::result::Result<(), &'static str> {
-        if self.client_request_id.is_empty()
-            || self.client_request_id.len() > 128
-            || self.client_request_id.trim() != self.client_request_id
-            || self.client_request_id.chars().any(char::is_control)
-            || self.message_id.is_empty()
-            || self.message_id.len() > 256
-            || self.expected_last_seq < 1
-        {
-            return Err("Invalid history request");
-        }
-        Ok(())
-    }
-}
-
-pub fn validate_history_request(request: &HistoryRequest) -> Result<()> {
-    request.validate().map_err(|_| anyhow!("Invalid history request"))?;
-    Ok(())
-}
-
+// Update structured attachment identifiers without rewriting ordinary conversation prose.
 pub fn remap_attachment_references(value: &mut Value, ids: &HashMap<String, String>) {
     match value {
         Value::Object(fields) => {

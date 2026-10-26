@@ -2,233 +2,54 @@
 use super::*;
 use anyhow::bail;
 impl Store {
+    /// App-plane directory repository owned by Chat; this Store supplies the pool and codec.
+    fn directory_repository(&self) -> webagent_chat::shared::DirectoryRepository<'_, Store> {
+        webagent_chat::shared::DirectoryRepository::new(&self.app_pool, self)
+    }
     pub async fn shared_schema(&self) -> Result<()> {
-        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS shared_sessions(session_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,agent_id TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS shared_participants(session_id TEXT NOT NULL,user_id TEXT NOT NULL,joined_at INTEGER NOT NULL,read_through_seq INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(session_id,user_id));
- CREATE TABLE IF NOT EXISTS shared_invitations(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,issuer_id TEXT NOT NULL,request_id TEXT NOT NULL,expires_at INTEGER NOT NULL,requested_ttl INTEGER NOT NULL,redeemed_by TEXT,revoked INTEGER NOT NULL DEFAULT 0,UNIQUE(session_id,issuer_id,request_id));
- CREATE TABLE IF NOT EXISTS shared_observation_audit(session_id TEXT NOT NULL,actor_id TEXT NOT NULL,observed_at INTEGER NOT NULL);").execute(&self.app_pool).await?;
-        Ok(())
+        self.directory_repository().schema().await
     }
     pub async fn register_shared_session(&self, owner: &str, sid: &str, agent: &str) -> Result<()> {
-        if !crate::access::valid_id(owner)
-            || sid.is_empty()
-            || sid.len() > 128
-            || !crate::access::valid_agent_id(agent)
-        {
-            bail!("Invalid shared session");
-        }
-        self.shared_schema().await?;
-        sqlx::query("INSERT OR IGNORE INTO shared_sessions VALUES(?,?,?)")
-            .bind(sid)
-            .bind(owner)
-            .bind(agent)
-            .execute(&self.app_pool)
-            .await?;
-        let dir = self.shared_directory(sid).await?.unwrap();
-        if dir["owner_id"] != owner || dir["agent_id"] != agent {
-            bail!("Session directory conflict");
-        }
-        Ok(())
+        self.directory_repository().register_session(owner, sid, agent).await
     }
     pub async fn shared_directory(&self, sid: &str) -> Result<Option<Value>> {
-        self.shared_schema().await?;
-        Ok(sqlx::query("SELECT owner_id,agent_id FROM shared_sessions WHERE session_id=?").bind(sid).fetch_optional(&self.app_pool).await?.map(|r|json!({"session_id":sid,"owner_id":r.get::<String,_>("owner_id"),"agent_id":r.get::<String,_>("agent_id")})))
+        self.directory_repository().directory(sid).await
     }
     pub async fn shared_is_participant(&self, sid: &str, user: &str) -> Result<bool> {
-        self.shared_schema().await?;
-        Ok(sqlx::query_scalar::<_, i64>(
-            "SELECT 1 FROM shared_participants WHERE session_id=? AND user_id=?",
-        )
-        .bind(sid)
-        .bind(user)
-        .fetch_optional(&self.app_pool)
-        .await?
-        .is_some())
+        self.directory_repository().is_participant(sid, user).await
     }
     pub async fn shared_sessions_for(&self, user: &str) -> Result<Vec<Value>> {
-        self.shared_schema().await?;
-        Ok(sqlx::query("SELECT s.session_id,s.owner_id,s.agent_id FROM shared_sessions s WHERE s.owner_id=? OR EXISTS(SELECT 1 FROM shared_participants p WHERE p.session_id=s.session_id AND p.user_id=?) ORDER BY s.session_id").bind(user).bind(user).fetch_all(&self.app_pool).await?.into_iter().map(|r|json!({"session_id":r.get::<String,_>("session_id"),"owner_id":r.get::<String,_>("owner_id"),"agent_id":r.get::<String,_>("agent_id")})).collect())
+        self.directory_repository().sessions_for(user).await
     }
     pub async fn shared_all_sessions(&self) -> Result<Vec<Value>> {
-        self.shared_schema().await?;
-        Ok(sqlx::query("SELECT session_id,owner_id,agent_id FROM shared_sessions ORDER BY session_id LIMIT 1000").fetch_all(&self.app_pool).await?.into_iter().map(|r|json!({"session_id":r.get::<String,_>("session_id"),"owner_id":r.get::<String,_>("owner_id"),"agent_id":r.get::<String,_>("agent_id")})).collect())
+        self.directory_repository().all_sessions().await
     }
     pub async fn shared_participants(&self, sid: &str) -> Result<Vec<Value>> {
-        self.shared_schema().await?;
-        let dir = self
-            .shared_directory(sid)
-            .await?
-            .ok_or_else(|| anyhow!("Session not found"))?;
-        let mut members = vec![json!({"user_id":dir["owner_id"],"role":"owner"})];
-        for r in sqlx::query("SELECT user_id,joined_at,read_through_seq FROM shared_participants WHERE session_id=? ORDER BY joined_at,user_id").bind(sid).fetch_all(&self.app_pool).await?{members.push(json!({"user_id":r.get::<String,_>("user_id"),"joined_at":r.get::<i64,_>("joined_at"),"read_through_seq":r.get::<i64,_>("read_through_seq"),"role":"participant"}));}
-        Ok(members)
+        self.directory_repository().participants(sid).await
     }
     pub async fn shared_join(&self, sid: &str, user: &str) -> Result<bool> {
-        self.shared_schema().await?;
-        let directory = self
-            .shared_directory(sid)
-            .await?
-            .ok_or_else(|| anyhow!("Session not found"))?;
-        if directory["owner_id"] == user {
-            return Ok(false);
-        }
-        Ok(sqlx::query(
-            "INSERT OR IGNORE INTO shared_participants(session_id,user_id,joined_at) VALUES(?,?,?)",
-        )
-        .bind(sid)
-        .bind(user)
-        .bind(crate::now() as i64)
-        .execute(&self.app_pool)
-        .await?
-        .rows_affected()
-            == 1)
+        self.directory_repository().join(sid, user, crate::now()).await
     }
-    pub async fn shared_invite_issue(
-        &self,
-        sid: &str,
-        issuer: &str,
-        request: &str,
-        ttl: u64,
-    ) -> Result<Value> {
-        self.shared_schema().await?;
-        if request.is_empty() || request.len() > 128 || ttl == 0 || ttl > 30 * 86400 {
-            bail!("Invalid invitation");
-        }
-        let mut tx = self.app_pool.begin().await?;
-        // Reserve the app writer before key initialization and receipt lookup.
-        let mut random = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut random);
-        sqlx::query("INSERT OR IGNORE INTO docs(key,value) VALUES('shared_invitation_key',?)")
-            .bind(self.seal(&json!(hex::encode(random)))?)
-            .execute(&mut *tx)
-            .await?;
-        let raw: Vec<u8> =
-            sqlx::query_scalar("SELECT value FROM docs WHERE key='shared_invitation_key'")
-                .fetch_one(&mut *tx)
-                .await?;
-        let secret = self.unseal(&raw)?;
-        let secret = hex::decode(
-            secret
-                .as_str()
-                .ok_or_else(|| anyhow!("Invalid invitation key"))?,
-        )?;
-        let existing=sqlx::query("SELECT id,expires_at,requested_ttl FROM shared_invitations WHERE session_id=? AND issuer_id=? AND request_id=?").bind(sid).bind(issuer).bind(request).fetch_optional(&mut *tx).await?;
-        let (id, expires) = if let Some(row) = existing {
-            if row.get::<i64, _>("requested_ttl") != ttl as i64 {
-                bail!("Invitation request ID reused with different input");
-            }
-            (row.get::<String, _>("id"), row.get::<i64, _>("expires_at"))
-        } else {
-            (
-                uuid::Uuid::new_v4().to_string(),
-                crate::now()
-                    .checked_add(ttl)
-                    .ok_or_else(|| anyhow!("Expiration overflow"))? as i64,
-            )
-        };
-        // HMAC-SHA256 permits identical retries without retaining plaintext tokens.
-        let mut inner = [0x36u8; 64];
-        let mut outer = [0x5cu8; 64];
-        if secret.len() != 32 {
-            bail!("Invalid invitation key");
-        }
-        for (i, b) in secret.iter().enumerate() {
-            inner[i] ^= b;
-            outer[i] ^= b;
-        }
-        let mut hash = Sha256::new();
-        hash.update(inner);
-        hash.update(serde_json::to_vec(&json!([
-            "shared-chat-invitation-v1",
-            id,
-            sid,
-            issuer,
-            request,
-            expires
-        ]))?);
-        let mut result = Sha256::new();
-        result.update(outer);
-        result.update(hash.finalize());
-        let token = hex::encode(result.finalize());
-        sqlx::query("INSERT OR IGNORE INTO shared_invitations(id,session_id,token_hash,issuer_id,request_id,expires_at,requested_ttl) VALUES(?,?,?,?,?,?,?)").bind(&id).bind(sid).bind(format!("{:x}",Sha256::digest(token.as_bytes()))).bind(issuer).bind(request).bind(expires).bind(ttl as i64).execute(&mut *tx).await?;
-        tx.commit().await?;
-        Ok(json!({"id":id,"token":token,"expires_at":expires}))
+    pub async fn shared_invite_issue(&self, sid: &str, issuer: &str, request: &str, ttl: u64) -> Result<Value> {
+        self.directory_repository().invite_issue(sid, issuer, request, ttl, crate::now()).await
     }
     pub async fn shared_invites(&self, sid: &str) -> Result<Vec<Value>> {
-        self.shared_schema().await?;
-        Ok(sqlx::query("SELECT id,issuer_id,expires_at,redeemed_by,revoked FROM shared_invitations WHERE session_id=? ORDER BY expires_at DESC LIMIT 200").bind(sid).fetch_all(&self.app_pool).await?.into_iter().map(|r|json!({"id":r.get::<String,_>("id"),"issuer_id":r.get::<String,_>("issuer_id"),"expires_at":r.get::<i64,_>("expires_at"),"redeemed":r.get::<Option<String>,_>("redeemed_by").is_some(),"revoked":r.get::<i64,_>("revoked")==1})).collect())
+        self.directory_repository().invites(sid).await
     }
     pub async fn shared_invite_session(&self, token: &str) -> Result<Option<String>> {
-        self.shared_schema().await?;
-        if token.len() != 64 {
-            return Ok(None);
-        }
-        Ok(sqlx::query_scalar("SELECT session_id FROM shared_invitations WHERE token_hash=? AND revoked=0 AND (redeemed_by IS NULL) AND expires_at>?").bind(format!("{:x}",Sha256::digest(token.as_bytes()))).bind(crate::now() as i64).fetch_optional(&self.app_pool).await?)
+        self.directory_repository().invite_session(token, crate::now()).await
     }
     pub async fn shared_invite_redeem(&self, token: &str, user: &str) -> Result<(String, bool)> {
-        self.shared_schema().await?;
-        if token.len() != 64 {
-            bail!("Invalid invitation");
-        }
-        let hash = format!("{:x}", Sha256::digest(token.as_bytes()));
-        let mut tx = self.app_pool.begin().await?;
-        sqlx::query("UPDATE shared_invitations SET revoked=revoked WHERE token_hash=?")
-            .bind(&hash)
-            .execute(&mut *tx)
-            .await?;
-        let row=sqlx::query("SELECT session_id,redeemed_by,revoked,expires_at FROM shared_invitations WHERE token_hash=?").bind(&hash).fetch_optional(&mut *tx).await?.ok_or_else(||anyhow!("Invalid invitation"))?;
-        let sid: String = row.get("session_id");
-        let redeemed: Option<String> = row.get("redeemed_by");
-        if redeemed.as_deref() == Some(user) {
-            tx.commit().await?;
-            return Ok((sid, false));
-        }
-        if redeemed.is_some()
-            || row.get::<i64, _>("revoked") != 0
-            || row.get::<i64, _>("expires_at") <= crate::now() as i64
-        {
-            bail!("Invitation expired or used");
-        }
-        sqlx::query("UPDATE shared_invitations SET redeemed_by=? WHERE token_hash=?")
-            .bind(user)
-            .bind(hash)
-            .execute(&mut *tx)
-            .await?;
-        let added = sqlx::query(
-            "INSERT OR IGNORE INTO shared_participants(session_id,user_id,joined_at) VALUES(?,?,?)",
-        )
-        .bind(&sid)
-        .bind(user)
-        .bind(crate::now() as i64)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected()
-            == 1;
-        tx.commit().await?;
-        Ok((sid, added))
+        self.directory_repository().invite_redeem(token, user, crate::now()).await
     }
     pub async fn shared_invite_revoke(&self, sid: &str, id: &str) -> Result<()> {
-        self.shared_schema().await?;
-        sqlx::query("UPDATE shared_invitations SET revoked=1 WHERE session_id=? AND id=? AND redeemed_by IS NULL").bind(sid).bind(id).execute(&self.app_pool).await?;
-        Ok(())
+        self.directory_repository().invite_revoke(sid, id).await
     }
     pub async fn shared_observe_audit(&self, sid: &str, user: &str) -> Result<()> {
-        self.shared_schema().await?;
-        let mut tx = self.app_pool.begin().await?;
-        sqlx::query("INSERT INTO shared_observation_audit VALUES(?,?,?)")
-            .bind(sid)
-            .bind(user)
-            .bind(crate::now() as i64)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("DELETE FROM shared_observation_audit WHERE observed_at<? OR rowid NOT IN (SELECT rowid FROM shared_observation_audit ORDER BY observed_at DESC,rowid DESC LIMIT 100000)").bind(crate::now().saturating_sub(30*86400) as i64).execute(&mut *tx).await?;
-        tx.commit().await?;
-        Ok(())
+        self.directory_repository().observe_audit(sid, user, crate::now()).await
     }
     pub async fn shared_acknowledge_read(&self, sid: &str, user: &str, through: u64) -> Result<()> {
-        self.shared_schema().await?;
-        sqlx::query("UPDATE shared_participants SET read_through_seq=MAX(read_through_seq,?) WHERE session_id=? AND user_id=?").bind(through as i64).bind(sid).bind(user).execute(&self.app_pool).await?;
-        Ok(())
+        self.directory_repository().acknowledge_read(sid, user, through).await
     }
 }
 
@@ -413,16 +234,8 @@ impl Store {
 }
 
 impl Store {
-    pub async fn shared_invite_session_for(
-        &self,
-        token: &str,
-        user: &str,
-    ) -> Result<Option<String>> {
-        self.shared_schema().await?;
-        if token.len() != 64 {
-            return Ok(None);
-        }
-        Ok(sqlx::query_scalar("SELECT session_id FROM shared_invitations WHERE token_hash=? AND ((revoked=0 AND redeemed_by IS NULL AND expires_at>?) OR redeemed_by=?)").bind(format!("{:x}",Sha256::digest(token.as_bytes()))).bind(crate::now() as i64).bind(user).fetch_optional(&self.app_pool).await?)
+    pub async fn shared_invite_session_for(&self, token: &str, user: &str) -> Result<Option<String>> {
+        self.directory_repository().invite_session_for(token, user, crate::now()).await
     }
 }
 

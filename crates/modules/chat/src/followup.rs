@@ -96,11 +96,16 @@ pub async fn legacy_followup_fence<C: RecordCodec>(
     require_participation_in(codec, t, &fence).await
 }
 
-pub fn legacy_message_meta_doc(owner_user_id: &str, entry: &Value, eligible: bool) -> Result<(String, Value)> {
+pub fn legacy_message_meta_doc(
+    owner_user_id: &str,
+    entry: &Value,
+    eligible: bool,
+) -> Result<(String, Value)> {
     let id = entry["id"]
         .as_str()
         .ok_or_else(|| anyhow!("Followup id missing"))?;
-    let mut meta = json!({"author_id":owner_user_id,"context_eligible":eligible,"queued":!eligible});
+    let mut meta =
+        json!({"author_id":owner_user_id,"context_eligible":eligible,"queued":!eligible});
     if entry["agent_message"].is_object() {
         meta["agent_message"] = entry["agent_message"].clone();
         meta["message_kind"] = json!("agent_message");

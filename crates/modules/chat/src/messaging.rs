@@ -13,7 +13,11 @@ pub fn starts(name: &str) -> bool {
 }
 
 pub fn owns(name: &str) -> bool {
-    starts(name) || matches!(name, "message_other_session" | "kick_user_session" | "message_spawn")
+    starts(name)
+        || matches!(
+            name,
+            "message_other_session" | "kick_user_session" | "message_spawn"
+        )
 }
 
 /// Project defaults for legacy saved policies; explicit denials remain authoritative.
@@ -136,43 +140,27 @@ pub async fn require_spawn_capacity<C: RecordCodec>(
         if receipt["result"]["session_created"] != true {
             continue;
         }
-        let Some(child) = receipt["result"]["target_session_id"].as_str() else {
-            continue;
-        };
-        let Some(raw) =
-            sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-                .bind(format!("session:{child}"))
-                .fetch_optional(&mut **tx)
-                .await?
-        else {
-            continue;
-        };
-        if codec.unseal(&raw)?["status"] != "active" {
-            continue;
-        }
         total += 1;
-        let running: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')",
-        )
-        .bind(child)
-        .fetch_one(&mut **tx)
-        .await?;
-        let pending = crate::followup::queue_read_tx(codec, tx, child).await?[
-            "entries"
-        ]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|e| matches!(e["status"].as_str(), Some("pending" | "reviewing" | "held")));
-        if running > 0 || pending {
+        let id = receipt["result"]["session_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Child identity missing"))?;
+        let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed','stopped')")
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?;
+        let q = crate::followup::queue_read_tx(codec, tx, id).await?;
+        if runs > 0
+            || q["entries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|v| matches!(v["status"].as_str(), Some("pending" | "reviewing" | "held")))
+        {
             active += 1;
         }
     }
-    if total >= max_children {
-        bail!("Helper child limit reached");
-    }
-    if active >= max_active {
-        bail!("Active helper limit reached");
+    if active >= max_active || depth > 0 && total >= max_children {
+        bail!("Helper capacity reached");
     }
     Ok(())
 }

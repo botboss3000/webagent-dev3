@@ -1,12 +1,7 @@
 //! Persistent participation and follow-up admission share the conversation writer.
 #[cfg(test)] use crate::State;
 use super::*;
-fn state(session: &Value) -> Value {
-    session
-        .get("participation")
-        .cloned()
-        .unwrap_or_else(|| json!({"active":true,"revision":0,"generation":0}))
-}
+use webagent_chat::shared::participation_state as state;
 impl Store {
     pub(crate) async fn shared_model_context(&self, sid: &str) -> Result<Vec<Value>> {
         let rows =
@@ -119,21 +114,7 @@ impl Store {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         run: &Value,
     ) -> Result<()> {
-        let sid = run["session_id"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Run session missing"))?;
-        let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(format!("session:{sid}"))
-            .fetch_one(&mut **tx)
-            .await?;
-        let current = state(&self.unseal(&raw)?);
-        if current["active"] != true
-            || current["generation"].as_u64().unwrap_or(0)
-                != run["participation_generation"].as_u64().unwrap_or(0)
-        {
-            return Err(anyhow!("Agent participation changed"));
-        }
-        Ok(())
+        webagent_chat::shared::require_participation_in(self, tx, run).await
     }
     pub(crate) async fn set_participation(
         &self,

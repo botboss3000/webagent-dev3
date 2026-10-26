@@ -1,23 +1,32 @@
 //! HTTP admission, administration, and routing. Rust checks authority before a run is queued.
+#[path = "../../crates/modules/chat/host/api/shared_chat.rs"]
 pub(crate) mod shared_chat;
 use super::*;
 mod auth;
 pub(crate) mod embed;
 mod admin;
 pub(crate) mod sessions;
+#[path = "../../crates/modules/chat/host/api/sessions.rs"]
+pub(crate) mod chat_sessions;
+#[path = "../../crates/modules/chat/host/api/conversation_history.rs"]
 pub(crate) mod conversation_history;
 pub(crate) use conversation_history::*;
 mod promotions;
 pub(crate) mod chat;
+#[path = "../../crates/modules/chat/host/api/followup_queue.rs"]
 pub(crate) mod followup_queue;
+#[path = "../../crates/modules/chat/host/api/session_messaging.rs"]
 pub(crate) mod session_messaging;
 pub(crate) mod direct_messages;
+#[path = "../../crates/modules/chat/host/api/chat_controls.rs"]
 mod chat_controls;
 pub(crate) mod media_lane;
 pub(crate) mod uploads;
 mod voice;
 #[cfg(test)]mod composer_tests;
-#[cfg(test)]mod session_deletion_tests;
+#[cfg(test)]
+#[path = "../../crates/modules/chat/host/api/session_deletion_tests.rs"]
+mod session_deletion_tests;
 mod ability_admin;
 mod agent_members;
 mod service_admin;
@@ -45,6 +54,7 @@ pub(crate) mod repository;
 pub(crate) use auth::*;
 pub(crate) use admin::*;
 pub(crate) use sessions::*;
+pub(crate) use chat_sessions::*;
 pub(crate) use promotions::*;
 pub(crate) use chat::*;
 pub(crate) use chat_controls::*;

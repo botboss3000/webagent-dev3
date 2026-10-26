@@ -5,33 +5,8 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default, deny_unknown_fields)]
-pub struct SharedChatPolicy {
-    pub shareable: bool,
-    pub admin_view: bool,
-    pub admin_join: bool,
-    pub help: bool,
-    pub initial_active: bool,
-}
-impl Default for SharedChatPolicy {
-    fn default() -> Self {
-        Self {
-            shareable: false,
-            admin_view: false,
-            admin_join: false,
-            help: false,
-            initial_active: true,
-        }
-    }
-}
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum AccessKind {
-    Owner,
-    Participant,
-    Observer,
-}
+pub use webagent_chat::shared::{AccessKind, SessionAuthorityDenied, SharedChatPolicy};
+/// Resolved conversation binding. It stays in the host because it implements the Engine `SessionBinding` port.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionAccess {
     pub actor_id: String,
@@ -69,12 +44,6 @@ pub async fn policy(store: &Store, agent: &str) -> Result<SharedChatPolicy> {
 pub async fn staff(store: &Store, user: &str, agent: &str) -> Result<bool> {
     Ok(store.agent_authority(user, agent).await?["can_manage"] == true)
 }
-#[derive(Debug)]
-pub(crate) struct SessionAuthorityDenied;
-impl std::fmt::Display for SessionAuthorityDenied {
-    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {f.write_str("Conversation authority unavailable")}
-}
-impl std::error::Error for SessionAuthorityDenied {}
 pub async fn resolve(app: &App, sid: &str, user: &str) -> Result<SessionAccess> {
     resolve_internal(app, sid, user, false, false).await
 }
@@ -98,23 +67,6 @@ pub async fn scope(app: App, sid: &str) -> Result<App> {
     scoped.chat_actor = Some(actor);
     scoped.chat_access = Some(access);
     Ok(scoped)
-}
-pub fn observer_projection(value: &mut Value) {
-    if let Some(map) = value.as_object_mut() {
-        for field in [
-            "checkpoint",
-            "input",
-            "diagnostics",
-            "pending",
-            "approval",
-            "approvals",
-            "tool_calls",
-            "context",
-            "recovery",
-        ] {
-            map.remove(field);
-        }
-    }
 }
 
 pub async fn live_access(

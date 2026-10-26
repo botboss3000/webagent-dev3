@@ -23,7 +23,7 @@ async fn change(app: App, id: String, body: HistoryRequest, fork: bool) -> Api {
             .get(&key("session", &id))
             .await?
             .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Session not found".into()))?;
-        let prepared = super::sessions::prepare_session(
+        let prepared = super::chat_sessions::prepare_session(
             &app,
             &json!({"agent_id":session["agent_id"],"title":"Fork"}),
         )

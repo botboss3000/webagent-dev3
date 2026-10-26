@@ -130,15 +130,13 @@ pub fn main_chat_prompts_at(
             return Ok(value);
         }
     }
-    let defaults: Value = serde_json::from_slice(
-        &webagent_configuration::prompts::prompt_defaults_at(source.as_deref(), fallback_directory)?,
-    )?;
+    let defaults: Value =
+        serde_json::from_slice(&webagent_configuration::prompts::prompt_defaults_at(
+            source.as_deref(),
+            fallback_directory,
+        )?)?;
     Ok(defaults
         .get("main_chat_skills")
         .cloned()
         .unwrap_or(Value::Null))
-}
-
-pub fn default_fallback_directory() -> std::path::PathBuf {
-    std::path::PathBuf::from("/usr/local/share/webagent/defaults")
 }

@@ -1,45 +1,9 @@
 //! Native Base cross-session delivery. Identity and delegation stay in the host.
 use crate::*;
 use anyhow::bail;
-use serde::Deserialize;
 
-pub(crate) fn starts(name:&str)->bool {matches!(name,"start_session"|"spawn_agent"|"delegate_task_to_agent"|"delegate_to_agent")}
-pub(crate) fn owns(name:&str)->bool {starts(name)||matches!(name,"message_other_session"|"kick_user_session"|"message_spawn")}
-/// Project defaults for legacy saved policies; explicit denials remain authoritative.
-pub(crate) fn policy_defaults(mut policy:Value)->Value{
- for name in ["message_other_session","start_session"]{if policy["rules"].get(name).is_none(){policy["rules"][name]=json!("allow");}}
- policy
-}
-pub(crate) fn schemas()->Vec<Value>{
- vec![
- json!({"type":"function","name":"message_other_session","description":"Send an attributed agent message to another owner-private session. Queue by default; steer at the next boundary; interrupt requires exact owner approval. Returns admission, not the recipient answer.","parameters":{"type":"object","properties":{"target_session_id":{"type":"string","format":"uuid"},"text":{"type":"string","minLength":1,"maxLength":65536},"delivery":{"type":"string","enum":["queue","steer","interrupt"]}},"required":["target_session_id","text"],"additionalProperties":false}}),
- json!({"type":"function","name":"start_session","description":"Create an owner-private session and its first attributed agent message atomically. Requires owner approval. Fresh context; omitted agent_id uses this agent. Returns admission, not the answer.","parameters":{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":65536},"agent_id":{"type":"string","maxLength":128},"title":{"type":"string","maxLength":200}},"required":["text"],"additionalProperties":false}})
- ]
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MessageArgs{target_session_id:String,text:String,#[serde(default="queue")]delivery:String}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StartArgs{text:String,agent_id:Option<String>,title:Option<String>}
-fn queue()->String{"queue".into()}
-fn checked_text(text:&str)->Result<()>{
- if text.trim().is_empty()||text.len()>65536||text.chars().any(|c|c.is_control()&&!matches!(c,'\n'|'\r'|'\t')){bail!("Invalid message text");}Ok(())
-}
-fn stable_id(domain:&str,value:&Value)->String{
- let hash=digest(&json!([domain,value]));let mut bytes=[0u8;16];
- for(i,b)in bytes.iter_mut().enumerate(){*b=u8::from_str_radix(&hash[i*2..i*2+2],16).unwrap();}
- bytes[6]=(bytes[6]&15)|80;bytes[8]=(bytes[8]&63)|128;
- uuid::Uuid::from_bytes(bytes).to_string()
-}
-
-#[derive(Debug)]
-struct AuthorityChanged(&'static str);
-impl std::fmt::Display for AuthorityChanged {
- fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{f.write_str(self.0)}
-}
-impl std::error::Error for AuthorityChanged {}
-fn authority_changed(reason:&'static str)->anyhow::Error{AuthorityChanged(reason).into()}
+pub(crate) use webagent_chat::messaging::{owns, policy_defaults, schemas, starts};
+use webagent_chat::messaging::{authority_changed, checked_text, stable_id, AuthorityChanged, MessageArgs, StartArgs};
 /// Directory repair follows committed owner-plane admission and cannot change its outcome.
 async fn reconcile_directory(app:&App,sid:&str,agent:&str)->Result<()>{
  if let Some(directory)=app.store.shared_directory(sid).await? {
@@ -82,7 +46,7 @@ pub(crate) async fn binding(app:&App,run:&Value,name:&str,args:&Value)->Result<V
   if !app.store.live_access(app.store.current_user_id(),&agent).await?.admitted(){bail!("Agent unavailable");}
   let mut body=json!({"agent_id":agent});
   if let Some(title)=&a.title{body["title"]=json!(title);}
-  let prepared=api::sessions::prepare_session_id(app,&body,Some(stable_id("agent-new-session",&json!([source,run["id"],run["pending"]["call_id"]])))).await.map_err(|e|anyhow!(e.1))?;
+  let prepared=api::chat_sessions::prepare_session_id(app,&body,Some(stable_id("agent-new-session",&json!([source,run["id"],run["pending"]["call_id"]])))).await.map_err(|e|anyhow!(e.1))?;
   let mode=prepared.docs.iter().find(|(k,_)|k.starts_with("session_mode:")).unwrap().1.clone();
   (prepared.result["id"].as_str().unwrap().to_owned(),agent,"queue".to_owned(),mode,prepared.value["participation"].clone(),a.text,a.title)
  }else{
@@ -189,7 +153,7 @@ pub(crate) async fn execute(app:&App,sid:&str,rid:&str,generation:&str,pending_i
  let mut created=Value::Null;let mut docs=vec![];
  let mut prepared=if starts(name){
   let mut session_body=json!({"agent_id":b["target_agent_id"]});if b["title"].is_string(){session_body["title"]=b["title"].clone();}
-  let s=api::sessions::prepare_session_id(&target_app,&session_body,Some(target.into())).await.map_err(|e|anyhow!(e.1))?;
+  let s=api::chat_sessions::prepare_session_id(&target_app,&session_body,Some(target.into())).await.map_err(|e|anyhow!(e.1))?;
   created=s.result.clone();docs=s.docs;
   if b["spawn_limits"].is_object() {
    let origin=app.store.get(&format!("core_spawn_origin:{sid}")).await?.unwrap_or(json!({}));

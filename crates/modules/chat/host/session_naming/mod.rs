@@ -2,71 +2,11 @@
 use crate::*;
 pub(crate) mod config;
 /// Validate administrator naming settings with the same parser used by queued jobs.
-pub(crate) fn validate_settings(value:&Value)->Result<()> {config::Config::parse(value).map(|_|())}
-pub(crate) fn validate_source_settings(value:&Value)->Result<()> {config::Config::parse_complete(value).map(|_|())}
-/// Build a Unicode-safe placeholder title from normalized first-message text when model naming is unavailable.
-pub(crate) fn fallback(text: &str) -> String {
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let excerpt: String = normalized
-        .chars()
-        .filter(|ch| !ch.is_control())
-        .take(60)
-        .collect();
-    format!(
-        "New: {}",
-        if excerpt.is_empty() {
-            "Attachments"
-        } else {
-            &excerpt
-        }
-    )
-}
-/// Select the first nonempty generated title and apply word, character and byte limits before metadata publication.
-fn clean(raw: &str) -> String {
-    let line = raw
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("")
-        .trim();
-    let line = line
-        .trim_matches(['"', '\''])
-        .trim()
-        .trim_end_matches(['.', ',', '!', '?', ';', ':']);
-    let words = line
-        .split_whitespace()
-        .take(10)
-        .collect::<Vec<_>>()
-        .join(" ");
-    let mut title = String::new();
-    // Keep v2's 80-character cap and v3's 200-byte title contract.
-    for ch in words.chars().filter(|ch| !ch.is_control()).take(80) {
-        if title.len() + ch.len_utf8() > 200 {
-            break;
-        }
-        title.push(ch);
-    }
-    title.trim().to_owned()
-}
-/// Build a private naming run from the pinned role plan and its independent failover cursor, preserving requester/participation identity.
+pub(crate) fn validate_settings(value:&Value)->Result<()> {webagent_chat::naming::validate_settings_at(value,None,&crate::live_assets::fallback_directory())}
+pub(crate) use webagent_chat::naming::{fallback, validate_source_settings};
+use webagent_chat::naming::clean;
 fn dispatch(session: &Value, state: &model_selection::FailoverState) -> Result<Value> {
-    let plan: model_selection::SelectionPlan =
-        serde_json::from_value(session["auto_naming"]["system_plan"].clone())?;
-    if plan.role != config::Config::for_session(session)?.model_role
-        || plan.agent_id != session["agent_id"].as_str().unwrap_or("")
-    {
-        return Err(anyhow!("Invalid naming System plan"));
-    }
-    let candidate = plan
-        .candidates
-        .get(state.candidate_index)
-        .ok_or_else(|| anyhow!("Naming candidates exhausted"))?;
-    Ok(
-        json!({"id":session["auto_naming"]["run_id"],"session_id":session["id"],"agent_id":session["agent_id"],
-        "requester_user_id":session["auto_naming"]["requester_user_id"],
-        "participation_generation":session["auto_naming"]["participation_generation"].as_u64().unwrap_or(0),
-        "selection_plan":plan,"failover_state":state,"provider_selection":provider::ProviderSelection { limits:candidate.limits.clone(),
-            provider:candidate.transport.provider_id(),model:candidate.upstream_model.clone()}.value()}),
-    )
+    webagent_chat::naming::dispatch_at(session, state, None, &crate::live_assets::fallback_directory())
 }
 /// Recheck naming claim, participation, shared-chat access, model authorization and global shutdown before using a private title result.
 async fn permitted(app: &App, session: &Value, run: &Value) -> bool {
@@ -87,7 +27,7 @@ async fn permitted(app: &App, session: &Value, run: &Value) -> bool {
 }
 /// Reuse the matching pinned naming role or claim-fence a freshly authorized selection plan without changing the chat run's plan.
 async fn prepare_plan(app: &App, session: &Value) -> Result<Value> {
-    let settings = config::Config::for_session(session)?;
+    let settings = config::for_session(session)?;
     let existing = serde_json::from_value::<model_selection::SelectionPlan>(
         session["auto_naming"]["system_plan"].clone()).ok();
     if existing.as_ref().is_some_and(|plan| plan.role == settings.model_role) {
@@ -110,7 +50,7 @@ async fn prepare_plan(app: &App, session: &Value) -> Result<Value> {
 async fn generate(app: &App, original: &Value) -> Result<String> {
     let pinned = prepare_plan(app, original).await?;
     let session = &pinned;
-    let settings = config::Config::for_session(session)?;
+    let settings = config::for_session(session)?;
     let sid = session["id"]
         .as_str()
         .ok_or_else(|| anyhow!("Missing naming session"))?;
@@ -360,7 +300,7 @@ mod acceptance_tests {
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         app.provider = provider::Provider::for_test(format!("http://{addr}/responses"));
-        let mut settings = config::Config::defaults().unwrap();
+        let mut settings = config::defaults().unwrap();
         settings.request_timeout_seconds = 1;
         settings.attempts_per_job = 1;
         settings.max_job_attempts = 1;
@@ -386,7 +326,7 @@ mod acceptance_tests {
     #[tokio::test]
     async fn settings_snapshot_retry_cap_and_next_job_reload() {
         let (root, app) = fixture().await;
-        let mut settings = config::Config::defaults().unwrap();
+        let mut settings = config::defaults().unwrap();
         settings.prompt = "First naming prompt".into();
         settings.max_job_attempts = 2;
         settings.recovery_retry_delay_seconds = 7;
@@ -426,7 +366,7 @@ mod acceptance_tests {
     #[tokio::test]
     async fn configured_role_plan_is_independent_and_claim_fenced() {
         let (root, app) = fixture().await;
-        let mut settings = config::Config::defaults().unwrap();
+        let mut settings = config::defaults().unwrap();
         settings.model_role = model_selection::ModelRole::Standard;
         write_settings(root.path(), &settings);
         let sid = create(&app, None).await;
@@ -586,7 +526,7 @@ mod acceptance_tests {
         let (root, app) = fixture().await;
         for recovery in [false, true] {
             // Start with a valid job, then model its legacy unsnapshotted state.
-            write_settings(root.path(), &config::Config::defaults().unwrap());
+            write_settings(root.path(), &config::defaults().unwrap());
             let sid = create(&app, None).await;
             let mut run = accept(&app, &sid, "Legacy title fallback").await;
             finish(&app, &mut run).await;
@@ -770,7 +710,7 @@ mod acceptance_tests {
     #[tokio::test]
     async fn live_provider_uses_first_user_input_and_retries_blank_without_publishing() {
         let (root, mut app) = fixture().await;
-        let mut settings = config::Config::defaults().unwrap();
+        let mut settings = config::defaults().unwrap();
         settings.prompt = "Configured title instruction".into();
         settings.attempts_per_job = 2;
         settings.retry_delay_ms = 0;

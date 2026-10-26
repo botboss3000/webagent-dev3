@@ -95,7 +95,7 @@ impl Store {
             };
             self.unseal(&raw)?
         };
-        let settings = match crate::session_naming::config::Config::load(&self.root) {
+        let settings = match crate::session_naming::config::load(&self.root) {
             Ok(settings) => settings,
             // Optional title generation must not roll back the completed run.
             Err(_) => return self.skip_naming_configuration(tx, sid, &mut session).await,
@@ -163,7 +163,7 @@ impl Store {
         }
         // Legacy pending jobs gain one durable snapshot on their first claim.
         if session["auto_naming"]["config"].is_null() {
-            let settings = match crate::session_naming::config::Config::load(&self.root) {
+            let settings = match crate::session_naming::config::load(&self.root) {
                 Ok(settings) => settings,
                 Err(_) => {
                     self.skip_naming_configuration(&mut tx, sid, &mut session).await?;
@@ -174,7 +174,7 @@ impl Store {
             };
             session["auto_naming"]["config"] = json!(settings);
         }
-        let settings = crate::session_naming::config::Config::for_session(&session)?;
+        let settings = crate::session_naming::config::for_session(&session)?;
         if session["auto_naming"]["attempts"].as_u64().unwrap_or(0) >= settings.max_job_attempts {
             session["auto_naming"]["stage"] = json!("exhausted");
             session["auto_naming"]["claim"] = Value::Null;
@@ -210,7 +210,7 @@ impl Store {
         let Some(mut session) = self.naming_session(&mut tx, sid).await? else { return Ok(false); };
         if !naming_owned(&session, claim) { return Ok(false); }
         let selected: crate::model_selection::SelectionPlan = serde_json::from_value(plan.clone())?;
-        let settings = crate::session_naming::config::Config::for_session(&session)?;
+        let settings = crate::session_naming::config::for_session(&session)?;
         if selected.role != settings.model_role || selected.agent_id != session["agent_id"].as_str().unwrap_or("") {
             return Err(anyhow!("Invalid naming plan"));
         }
@@ -263,7 +263,7 @@ impl Store {
         if !naming_owned(&session, claim) {
             return Ok(false);
         }
-        let settings = crate::session_naming::config::Config::for_session(&session)?;
+        let settings = crate::session_naming::config::for_session(&session)?;
         let exhausted = title.is_none()
             && session["auto_naming"]["attempts"].as_u64().unwrap_or(0) >= settings.max_job_attempts;
         session["auto_naming"]["stage"] = json!(if title.is_some() {
@@ -301,33 +301,13 @@ impl Store {
         Ok(true)
     }
 }
+// Naming eligibility rules are Chat-owned; the host supplies the clock.
 fn naming_due(session: &Value, recovery: bool) -> bool {
-    if session["status"] != "active" || !naming_participation(session) {
-        return false;
-    }
-    let naming = &session["auto_naming"];
-    match naming["stage"].as_str() {
-        Some("queued") => true,
-        Some("failed") => {
-            recovery && naming["retry_at"].as_u64().unwrap_or(u64::MAX) <= crate::now()
-        }
-        Some("generating") => {
-            recovery && naming["lease_until"].as_u64().unwrap_or(u64::MAX) <= crate::now()
-        }
-        _ => false,
-    }
+    webagent_chat::naming::naming_due(session, recovery, crate::now())
 }
-fn naming_participation(session: &Value) -> bool {
-    session["participation"]["active"]!=false
-        && session["participation"]["generation"].as_u64().unwrap_or(0)
-            ==session["auto_naming"]["participation_generation"].as_u64().unwrap_or(0)
-}
+use webagent_chat::naming::naming_participation;
 fn naming_owned(session: &Value, claim: &str) -> bool {
-    session["status"] == "active"
-        && naming_participation(session)
-        && session["auto_naming"]["stage"] == "generating"
-        && session["auto_naming"]["claim"] == claim
-        && session["auto_naming"]["lease_until"].as_u64().unwrap_or(0) > crate::now()
+    webagent_chat::naming::naming_owned(session, claim, crate::now())
 }
 
 #[cfg(test)]

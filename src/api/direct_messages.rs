@@ -57,7 +57,7 @@ pub(crate) async fn send(
     let mut bytes=[0u8;16]; bytes.copy_from_slice(&hash[..16]);
     bytes[6]=(bytes[6]&0x0f)|0x50; bytes[8]=(bytes[8]&0x3f)|0x80;
     let sid=uuid::Uuid::from_bytes(bytes).to_string();
-    let session = super::sessions::prepare_session_id(&app, &body, Some(sid)).await?;
+    let session = super::chat_sessions::prepare_session_id(&app, &body, Some(sid)).await?;
     let sid = session.result["id"].as_str().unwrap();
     let agent = session.result["agent_id"].as_str().unwrap();
     app.store = app.store.for_agent(agent).await?;
@@ -318,7 +318,7 @@ mod tests {
     #[tokio::test]
     async fn storage_failure_rolls_back_session_receipt_and_notification() {
         let (_root, app) = crate::runtime_tests::fixture().await;
-        let prepared = super::super::sessions::prepare_session(&app, &json!({}))
+        let prepared = super::super::chat_sessions::prepare_session(&app, &json!({}))
             .await
             .unwrap();
         let sid = prepared.result["id"].as_str().unwrap();

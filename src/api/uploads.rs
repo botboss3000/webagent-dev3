@@ -1,43 +1,18 @@
 //! Authenticated encrypted uploads; ownership and admission links stay in the user plane.
 use super::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
-#[derive(Clone, Copy)]
-pub(crate) struct AttachmentLimits {
-    pub(crate) max_file_size_mb: Option<usize>,
-    pub(crate) max_per_message: Option<usize>,
-}
-impl AttachmentLimits {
-    fn bytes(self) -> Option<usize> { self.max_file_size_mb.map(|mb| mb * 1024 * 1024) }
-}
+pub(crate) use webagent_chat::configuration::AttachmentLimits;
 pub(crate) async fn limits(app: &App) -> Result<AttachmentLimits, ApiError> {
     // Installation chat.json owns these limits; browsers cannot raise admission bounds.
+    // Chat owns their meaning; upload admission stays here.
     let config = match tokio::fs::read(&app.chat_ui_config_path).await {
         Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
             .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "Chat configuration invalid".into()))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
         Err(_) => return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "Chat configuration unavailable".into())),
     };
-    if !config["chat_limits"].is_null() && !config["chat_limits"].is_object() {
-        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE,"Chat limits configuration invalid".into()));
-    }
-    let settings = &config["chat_limits"]["attachments"];
-    if !settings.is_null() && !settings.is_object() {
-        return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, "Attachment configuration invalid".into()));
-    }
-    let number = |name: &str| -> Result<Option<usize>, ApiError> {
-        // Missing/null is unrestricted. Only machine-representable positive integers are valid.
-        if settings[name].is_null() { return Ok(None); }
-        let value = settings[name].as_u64().filter(|n| *n > 0)
-            .and_then(|n| usize::try_from(n).ok())
-            .ok_or_else(|| ApiError(StatusCode::SERVICE_UNAVAILABLE,
-                format!("Attachment {name} must be a positive integer or null")))?;
-        if name == "max_file_size_mb" && value.checked_mul(1024 * 1024).is_none() {
-            return Err(ApiError(StatusCode::SERVICE_UNAVAILABLE,"Attachment size exceeds machine address range".into()));
-        }
-        Ok(Some(value))
-    };
-    Ok(AttachmentLimits { max_file_size_mb: number("max_file_size_mb")?,
-        max_per_message: number("max_per_message")? })
+    webagent_chat::configuration::parse_attachment_limits(&config)
+        .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))
 }
 pub(crate) async fn request_body(app: &App, request: Request) -> Result<Value, ApiError> {
     let media = request.headers().get("content-type").and_then(|v|v.to_str().ok())

@@ -111,7 +111,7 @@ async fn session_statistics(Extension(app): Extension<App>, Query(args): Query<S
 }
 
 async fn session_search(Extension(app): Extension<App>, identity:Option<Extension<Value>>, Query(args): Query<crate::SessionSearchArgs>) -> Response {
-    let result=crate::api::sessions::session_search_scoped(app,args,identity.as_ref().and_then(|v|v.0["_embed_agent"].as_str())).await;
+    let result=crate::api::chat_sessions::session_search_scoped(app,args,identity.as_ref().and_then(|v|v.0["_embed_agent"].as_str())).await;
     match result {Ok(mut value)=>{if let Some(agent)=identity.as_ref().and_then(|v|v.0["_embed_agent"].as_str()) {if let Some(items)=value.0["results"].as_array_mut(){items.retain(|s|s["agent_id"].as_str().unwrap_or("shared_default")==agent);}}value.into_response()},Err(e)=>e.into_response()}
 }
 json_arg!(create_session => create_session);

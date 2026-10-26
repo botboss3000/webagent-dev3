@@ -37,24 +37,6 @@ pub enum AccessKind {
     Observer,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SessionAccess {
-    pub actor_id: String,
-    pub owner_id: String,
-    pub session_id: String,
-    pub agent_id: String,
-    pub kind: AccessKind,
-}
-
-impl SessionAccess {
-    pub fn can_write(&self) -> bool {
-        self.kind != AccessKind::Observer
-    }
-    pub fn is_owner(&self) -> bool {
-        self.kind == AccessKind::Owner
-    }
-}
-
 #[derive(Debug)]
 pub struct SessionAuthorityDenied;
 impl std::fmt::Display for SessionAuthorityDenied {
@@ -275,6 +257,7 @@ impl<'a, C: RecordCodec> DirectoryRepository<'a, C> {
             bail!("Invalid invitation");
         }
         let mut tx = self.app_pool.begin().await?;
+        // Reserve the app writer before key initialization and receipt lookup.
         let mut random = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut random);
         sqlx::query("INSERT OR IGNORE INTO docs(key,value) VALUES('shared_invitation_key',?)")
@@ -309,6 +292,7 @@ impl<'a, C: RecordCodec> DirectoryRepository<'a, C> {
                     .ok_or_else(|| anyhow!("Expiration overflow"))? as i64,
             )
         };
+        // HMAC-SHA256 permits identical retries without retaining plaintext tokens.
         let mut inner = [0x36u8; 64];
         let mut outer = [0x5cu8; 64];
         if secret.len() != 32 {

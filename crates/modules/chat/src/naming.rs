@@ -60,6 +60,7 @@ impl Config {
         source: Option<&Path>,
         fallback_directory: &Path,
     ) -> Result<Self> {
+        // Accept the earlier prompt-only format; missing settings use shipped defaults.
         let supplied = if value.is_string() {
             json!({"prompt":value})
         } else {
@@ -107,11 +108,7 @@ impl Config {
     }
 }
 
-pub fn initialize_at(
-    root: &Path,
-    source: Option<&Path>,
-    fallback_directory: &Path,
-) -> Result<()> {
+pub fn initialize_at(root: &Path, source: Option<&Path>, fallback_directory: &Path) -> Result<()> {
     let directory = root.join("config");
     std::fs::create_dir_all(&directory)?;
     let lock = std::fs::OpenOptions::new()
@@ -129,9 +126,10 @@ pub fn initialize_at(
     };
     let mut prompts: Value = match original.as_deref() {
         Some(bytes) => serde_json::from_slice(bytes)?,
-        None => serde_json::from_slice(
-            &webagent_configuration::prompts::prompt_defaults_at(source, fallback_directory)?,
-        )?,
+        None => serde_json::from_slice(&webagent_configuration::prompts::prompt_defaults_at(
+            source,
+            fallback_directory,
+        )?)?,
     };
     let object = prompts
         .as_object_mut()
@@ -145,7 +143,9 @@ pub fn initialize_at(
     );
     let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
     if let Ok(metadata) = std::fs::metadata(&path) {
-        temporary.as_file().set_permissions(metadata.permissions())?;
+        temporary
+            .as_file()
+            .set_permissions(metadata.permissions())?;
     }
     serde_json::to_writer_pretty(&mut temporary, &prompts)?;
     temporary.write_all(b"\n")?;
@@ -208,6 +208,7 @@ pub fn clean(raw: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     let mut title = String::new();
+    // Keep v2's 80-character cap and v3's 200-byte title contract.
     for ch in words.chars().filter(|ch| !ch.is_control()).take(80) {
         if title.len() + ch.len_utf8() > 200 {
             break;

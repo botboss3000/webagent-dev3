@@ -107,11 +107,7 @@ impl Contribution {
                 .condition
                 .as_ref()
                 .is_some_and(|v| v.len() > 2048)
-            || self
-                .entry
-                .progress
-                .as_ref()
-                .is_some_and(|v| v.len() > 4096)
+            || self.entry.progress.as_ref().is_some_and(|v| v.len() > 4096)
             || self.entry.outcome.as_ref().is_some_and(|v| v.len() > 4096)
             || ![
                 "open",
@@ -153,7 +149,13 @@ pub fn target(state: &Value, c: &Contribution) -> String {
         .unwrap_or_else(|| c.topic_id.clone())
 }
 
-pub fn apply(state: &mut Value, c: &Contribution, origin: &str, approved: bool, now: u64) -> Result<Value> {
+pub fn apply(
+    state: &mut Value,
+    c: &Contribution,
+    origin: &str,
+    approved: bool,
+    now: u64,
+) -> Result<Value> {
     c.validate()?;
     let id = target(state, c);
     let new = state["topics"].get(&id).is_none();
@@ -163,6 +165,7 @@ pub fn apply(state: &mut Value, c: &Contribution, origin: &str, approved: bool, 
     if state["changes"].as_object().is_none_or(|v| v.len() >= 4096) {
         return Err(anyhow!("Change history capacity reached"));
     }
+    // Fold independent IDs only for the same unfinished intent and timing.
     let entries = &state["topics"][&id]["entries"];
     let entry_id = if entries.get(&c.entry.id).is_some() {
         c.entry.id.clone()
@@ -233,6 +236,8 @@ pub fn apply(state: &mut Value, c: &Contribution, origin: &str, approved: bool, 
     state["topics"][&id]["revision"] = json!(revision);
     let version = state["notes_version"].as_u64().unwrap_or(0) + 1;
     state["notes_version"] = json!(version);
+    // Only state/progress transitions from the coordinator are quiet. Changed intent,
+    // timing, conditions or scope still wakes review even when Main Chat authored it.
     let progress_only = !new
         && !scope_changed
         && !topic_changed
@@ -352,6 +357,7 @@ pub fn request_fields(body: &Value) -> Result<(u64, String)> {
     Ok((revision, request.into()))
 }
 
+/// Stable agent qualification keeps subscriptions/actions distinct across agents.
 pub fn review_id(agent: &str) -> String {
     format!("main-notes-review-{}", &digest(&json!(agent))[..40])
 }

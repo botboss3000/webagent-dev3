@@ -1,82 +1,26 @@
 //! Durable encrypted followups, serialized against publication in the user file.
 use super::*;
-fn empty(s: &str) -> Value {
-    json!({"schema_version":1,"session_id":s,"revision":0,"held":false,"reason":null,"entries":[]})
-}
 impl Store {
     async fn legacy_followup_fence(&self,t:&mut sqlx::Transaction<'_,sqlx::Sqlite>,sid:&str,template:&Value)->Result<()> {
-        if template["requester_user_id"].as_str().is_some_and(|actor|actor!=self.current_user_id()) {return Err(anyhow!("Private followup requester mismatch"));}
-        if template["session_id"].as_str().is_some_and(|session|session!=sid) {return Err(anyhow!("Private followup session mismatch"));}
-        let mut fence=template.clone();if !fence.is_object(){fence=json!({});}fence["session_id"]=json!(sid);
-        self.require_participation(t,&fence).await
+        webagent_chat::followup::legacy_followup_fence(self,self.current_user_id(),t,sid,template).await
     }
     pub(super) async fn legacy_message_meta(&self,t:&mut sqlx::Transaction<'_,sqlx::Sqlite>,entry:&Value,eligible:bool)->Result<()> {
-        let id=entry["id"].as_str().ok_or_else(||anyhow!("Followup id missing"))?;
-        let mut meta=json!({"author_id":self.current_user_id(),"context_eligible":eligible,"queued":!eligible});
-        if entry["agent_message"].is_object(){meta["agent_message"]=entry["agent_message"].clone();meta["message_kind"]=json!("agent_message");meta["author_name"]=json!(format!("Message from {} · {}",entry["agent_message"]["source_agent_id"].as_str().unwrap_or("agent"),entry["agent_message"]["source_title"].as_str().unwrap_or("conversation")));}
-        if eligible {meta["context_content"]=entry["context_content"].clone();}
-        self.write_document(t,&format!("message_meta:{id}"),&meta).await
+        let (key,meta)=webagent_chat::followup::legacy_message_meta_doc(self.current_user_id(),entry,eligible)?;
+        self.write_document(t,&key,&meta).await
     }
     pub(super) async fn queue_read_tx(
         &self,
         t: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         s: &str,
     ) -> Result<Value> {
-        let r: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(format!("followup_queue:{s}"))
-            .fetch_optional(&mut **t)
-            .await?;
-        let q = r
-            .map(|v| self.unseal(&v))
-            .transpose()?
-            .unwrap_or_else(|| empty(s));
-        if q["schema_version"] != 1
-            || q["session_id"] != s
-            || q["revision"].as_u64().is_none()
-            || q["held"].as_bool().is_none()
-            || q["entries"].as_array().is_none_or(|entries| {
-                entries.iter().any(|e| {
-                    e["id"].as_str().is_none()
-                        || e["revision"].as_u64().is_none()
-                        || e["content"].as_str().is_none()
-                        || e["context_content"].as_str().is_none()
-                        || e["attachments"].as_array().is_none()
-                        || !matches!(
-                            e["choice"].as_str(),
-                            Some("queue" | "steer" | "interrupt" | "cancel")
-                        )
-                        || !matches!(
-                            e["status"].as_str(),
-                            Some(
-                                "pending"
-                                    | "reviewing"
-                                    | "held"
-                                    | "delivered"
-                                    | "cancelled"
-                                    | "rejected"
-                            )
-                        )
-                })
-            })
-        {
-            return Err(anyhow!("Invalid or unsupported followup queue record"));
-        }
-        Ok(q)
+        webagent_chat::followup::queue_read_tx(self, t, s).await
     }
     pub(super) async fn queue_write_tx(
         &self,
         t: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         q: &mut Value,
     ) -> Result<()> {
-        q["revision"] = json!(q["revision"].as_u64().unwrap_or(0) + 1);
-        let s = q["session_id"].as_str().unwrap();
-        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(format!("followup_queue:{s}")).bind(self.seal(q)?).execute(&mut **t).await?;
-        sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,'queue_updated',?)")
-            .bind(s)
-            .bind(self.encode_user_record(&json!({"revision":q["revision"]}))?)
-            .execute(&mut **t)
-            .await?;
-        Ok(())
+        webagent_chat::followup::queue_write_tx(self, t, q).await
     }
     /// Called inside the session lifecycle transaction, including repeated recycle.
     pub(super) async fn cancel_session_followups(
@@ -119,18 +63,7 @@ impl Store {
         t: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         s: &str,
     ) -> Result<()> {
-        sqlx::query("UPDATE docs SET key=key WHERE key=?")
-            .bind(format!("session:{s}"))
-            .execute(&mut **t)
-            .await?;
-        let present: i64 = sqlx::query_scalar("SELECT count(*) FROM docs WHERE key=?")
-            .bind(format!("session:{s}"))
-            .fetch_one(&mut **t)
-            .await?;
-        if present == 0 {
-            return Err(anyhow!("Session not found"));
-        }
-        self.require_active_session(t, s).await
+        webagent_chat::followup::queue_reserve(self, t, s).await
     }
     pub(crate) async fn followup_last_run(&self, s: &str) -> Result<Option<Value>> {
         let id: Option<String> = sqlx::query_scalar(
@@ -479,18 +412,9 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
             Err(e) => return Err(e.into()),
         };
-        let configured = &config["chat_limits"]["attachments"]["max_per_message"];
-        let maximum = if configured.is_null() {
-            None
-        } else {
-            Some(
-                configured
-                    .as_u64()
-                    .filter(|n| *n > 0)
-                    .ok_or_else(|| anyhow!("Invalid attachment count limit"))?,
-            )
-        };
-        if text.len() > 65536 || maximum.is_some_and(|max| attachment_count as u64 > max) {
+        // Chat owns attachment-limit semantics; queued batches use the same parser as upload admission.
+        let maximum = webagent_chat::configuration::parse_attachment_limits(&config)?.max_per_message;
+        if text.len() > 65536 || maximum.is_some_and(|max| attachment_count > max) {
             q["held"] = json!(true);
             q["reason"]=json!("Combined queued input exceeds message or attachment limits; cancel messages to reduce it");
             self.queue_write_tx(&mut t, &mut q).await?;
