@@ -79,7 +79,7 @@ const signIn=guard(async()=>{
 });
 document.getElementById('embed-connect').onclick=signIn;
 // Purpose: Show the sign-in panel for "/login"; its Sign in button starts the same first-party popup flow.
-function login(){const connected=credential&&Date.now()/1000<expires;openSignInPanel({agent:descriptor.agent.name||'WebAgent',website:hostOrigin,identity:connected?(identity.is_guest?'Guest':identity.user):'',signIn,guest:!connected&&access.guest_access&&descriptor.config?.guest_access?guard(guest):null});}
+function login(){const connected=credential&&Date.now()/1000<expires;openSignInPanel({agent:descriptor.agent.name||'WebAgent',message:'Sign in on '+location.host+' in a secure popup to use your account access on '+hostOrigin+'. Your password is never entered on this website.',identity:connected?(identity.is_guest?'Guest':identity.user):'',signIn,guest:!connected&&access.guest_access&&descriptor.config?.guest_access?guard(guest):null});}
 // Parent commands are serialized; the bounded receipt journal replays identical IDs and rejects changed input.
 const receipts=new Map();let queue=Promise.resolve();
 // Purpose: Dispatch the exact supported parent command set, validate command-specific fields, and require current authentication before session actions.

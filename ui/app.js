@@ -17,6 +17,8 @@ import { authorizeEmbedPopup } from './embed/authorize.js';
 import { mountChatResize } from './shared/chat-resize.js';
 import { initChatConfig } from './chat/controls/chat-config.js';
 import { mountChatPanel } from './chat/core/panel.js';
+import { openSignInPanel } from './chat/core/credential-panel.js';
+import { showLeftOverlay } from './chat/controls/login-hook.js';
 
 // v2 dom-utils imports v1 auth and uploads; v3 uses text nodes and its own transport.
 import { renderIdentity } from './main-panel/agents/pages/identity/page.js';
@@ -252,7 +254,7 @@ const note=(text,source='')=>{
 const clearNoticeFrom=source=>{if(noticeSource===source)note('');};
 async function api(path,method='GET',body){const response=await fetch('/api/v3'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...(method==='GET'?{}:{'x-csrf-token':csrf})},...(body===undefined?{}:{body:JSON.stringify(body)})});const data=await response.json().catch(()=>({}));if(!response.ok){if(response.status===401&&path!=='/auth/login')out();const error=Error(data.error||data.message||'Request failed ('+response.status+')');error.status=response.status;throw error;}return data;}
 const guard=fn=>async event=>{event?.preventDefault();try{await fn(event);note('');}catch(error){note(error.message);}};
-const chat = await mountChatPanel({request:api, guard, note, clearNoticeFrom, issues, keyId, forgetKey:key=>ids.delete(key), refresh, getState:()=>state, getAgentId:()=>agentId, getIdentity:()=>accountMe});
+const chat = await mountChatPanel({request:api, guard, note, clearNoticeFrom, issues, keyId, forgetKey:key=>ids.delete(key), refresh, getState:()=>state, getAgentId:()=>agentId, getIdentity:()=>accountMe, onLogin:()=>openSignInPanel({agent:agentRoster.find(agent=>agent.id===agentId)?.name||'WebAgent',message:'Sign in with your WebAgent account to use your access to this agent. Your current session ends first.',identity:accountMe?(accountMe.role==='guest'?'Guest':accountMe.user):'',signIn:guard(async()=>{await signOut();showLeftOverlay();}),guest:null})});
 await loadMainPages();
 
 function disposeSessionsPage(){++sessionsGeneration;sessionsPage?.destroy();sessionsPage=null;$('tab-agents').classList.remove('sessions-view');}
@@ -779,7 +781,8 @@ function setupHeaderPullRefresh(){
   document.addEventListener('touchcancel',()=>{dragging=false;indicator.hidden=true;},{passive:true});
 }
 setupHeaderPullRefresh();
-$('logout').onclick=guard(async()=>{await api('/auth/logout','POST',{});out();});
+async function signOut(){await api('/auth/logout','POST',{});out();}
+$('logout').onclick=guard(signOut);
 const systemTheme=matchMedia('(prefers-color-scheme: light)');
 let themeChoice='system';
 try{const saved=localStorage.getItem('v3-theme');if(['light','dark','system'].includes(saved))themeChoice=saved;}catch{}

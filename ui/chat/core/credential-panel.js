@@ -18,11 +18,11 @@ export function openCredentialPanel({request,session,name,origin,requestId,revis
   document.body.append(dialog);dialog.showModal();input.focus();
 }
 // Sign-in runs only in the first-party popup started by signIn; this panel never collects a password.
-export function openSignInPanel({agent,website,identity,signIn,guest}){
+export function openSignInPanel({agent,message,identity,signIn,guest}){
   closeCredentialPanel();
   const dialog=document.createElement('dialog');dialog.dataset.coreCredential='true';dialog.className='wa-confirm-panel';
   const title=document.createElement('h2');title.textContent='Sign in to '+agent;
-  const purpose=document.createElement('p');purpose.textContent='Sign in on '+location.host+' in a secure popup to use your account access on '+website+'. Your password is never entered on this website.';
+  const purpose=document.createElement('p');purpose.textContent=message;
   const status=document.createElement('p');status.setAttribute('role','status');status.textContent=identity?'Signed in as '+identity:'';
   const actions=document.createElement('div');
   // Run after close so a popup opened by signIn keeps this click's user activation.
