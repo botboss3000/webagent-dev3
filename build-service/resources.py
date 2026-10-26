@@ -189,7 +189,8 @@ class Resources:
             component="ui-browser"if kind=="ui_test"else"index:"+job["job_id"]if kind=="index"else job.get("artifact_component","engine"if kind=="engine"else profile)
             def eligible():
                 """Require an available component and sufficient measured global headroom."""
-                conflict=any(r.get("component")==component and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
+                # Phases of one job may overlap deliberately; other jobs still serialize per component.
+                conflict=any(r.get("component")==component and r["job_id"]!=job["job_id"]and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
                 task_id=job.get("task_id")
                 task_conflict=any(r.get("task_id")==task_id and task_id is not None and(ram_packaging or r.get("ram_packaging"))and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}for r in self.rows.values())
                 nonlocal disk_wait,cpu_wait

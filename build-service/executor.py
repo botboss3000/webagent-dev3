@@ -1,5 +1,5 @@
 """Attributable compilation/testing and artifact-fed packaging in the pinned toolchain."""
-import contextlib,hashlib,io,json,os,posixpath,re,shlex,shutil,stat,subprocess,tarfile,time,uuid,tomllib
+import contextlib,hashlib,io,json,os,posixpath,re,shlex,shutil,stat,subprocess,tarfile,threading,time,types,uuid,tomllib
 from pathlib import Path
 FEATURE_PROFILES={"default":(),"live":("--no-default-features","--features","live-context")}
 def check_profile(value=None):
@@ -170,17 +170,37 @@ class Executor:
             match=re.search(r"test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored",line)
             if match:totals=[current+int(value) for current,value in zip(totals,match.groups())]
         return totals
+    def job_lock(self):
+        """Serialize read-modify-write job updates with receipt saves while phases overlap."""
+        return getattr(self.runner,"observation_lock",None)or contextlib.nullcontext()
+    def concurrent_phase(self,job,*args,**kwargs):
+        """Start one phase on a thread carrying this job's context; join with result()."""
+        shared=getattr(self.runner,"job_context",None)
+        context={key:value for key,value in vars(shared).items()if key not in {"phase_container","observation_scope","verification_id","last_observation"}}if shared is not None else {}
+        outcome={}
+        def run():
+            for key,value in context.items():setattr(shared,key,value)
+            try:outcome["value"]=self.phase(job,*args,**kwargs)
+            except BaseException as error:outcome["error"]=error
+        worker=threading.Thread(target=run,name="phase-"+args[0],daemon=True);worker.start()
+        def result():
+            worker.join()
+            if "error"in outcome:raise outcome["error"]
+            return outcome["value"]
+        return types.SimpleNamespace(result=result)
     def phase(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False):
         """Expose bounded phase timing and current work without command text or private paths."""
         started=time.monotonic();token=uuid.uuid4().hex;outcome="failed"
         job["active_verification"]={"id":token,"phase":phase,"recipe":profile,"started_at":time.time()}
+        if getattr(self.runner,"job_context",None)is not None:self.runner.job_context.verification_id=token
         getattr(self.runner,"resource_progress",lambda _:None)(job)
         try:
             result=self._phase_workload(job,phase,kind,source,output,argv,profile,timeout,network)
             outcome="completed";return result
         finally:
-            job.setdefault("phase_timings",[]).append({"phase":phase,"recipe":profile,"seconds":round(time.monotonic()-started,3),"outcome":outcome})
-            job["phase_timings"]=job["phase_timings"][-128:]
+            with self.job_lock():
+                job.setdefault("phase_timings",[]).append({"phase":phase,"recipe":profile,"seconds":round(time.monotonic()-started,3),"outcome":outcome})
+                job["phase_timings"]=job["phase_timings"][-128:]
             if job.get("active_verification",{}).get("id")==token:job.pop("active_verification",None)
             getattr(self.runner,"resource_progress",lambda _:None)(job)
 
@@ -225,15 +245,18 @@ class Executor:
             # Docker wait reports exit status as data. Logs and counters remain available afterward.
             self.runner.job_context.observation_scope={"phase":phase,"recipe":profile,"kind":kind,
                 "target":job.get("test_filter")or("workspace"if "--workspace"in argv else phase),
-                "verification_id":job.get("active_verification",{}).get("id"),"admission_seconds":round(admission_seconds,3)}
+                "verification_id":getattr(self.runner.job_context,"verification_id",None),"admission_seconds":round(admission_seconds,3)}
+            self.runner.job_context.last_observation=None
             try:
                 logs=self.runner.command(["docker","exec",name,*argv],timeout=timeout)
             finally:
                 self.runner.job_context.observation_scope=None
-                observed=job.get("execution_observation")
+                # This thread's own observation: a concurrent phase of the job may own the shared one.
+                observed=getattr(self.runner.job_context,"last_observation",None)
                 if observed:
-                    job.setdefault("execution_history",[]).append({k:v for k,v in observed.items()if k!="events"})
-                    job["execution_history"]=job["execution_history"][-32:]
+                    with self.job_lock():
+                        job.setdefault("execution_history",[]).append({k:v for k,v in observed.items()if k!="events"})
+                        job["execution_history"]=job["execution_history"][-32:]
             self.persist_phase_log(job,logs)
             success=True;return logs
         except BaseException as error:
@@ -874,7 +897,7 @@ class Executor:
             return body.decode("utf-8")
     def persist_phase_log(self,job,logs):
         """Retain already-scrubbed successful phase output before later recipe validation can fail."""
-        job["log"]=(job.get("log","")+logs).encode("utf-8")[-1024*1024:].decode("utf-8","ignore")
+        with self.job_lock():job["log"]=(job.get("log","")+logs).encode("utf-8")[-1024*1024:].decode("utf-8","ignore")
         getattr(self.runner,"resource_progress",lambda _:None)(job)
 
     @staticmethod
@@ -1237,7 +1260,18 @@ class Executor:
         self.retain_test_manifest(output,artifacts)
         logs+=self.focused_tests(job,application,output,fresh_tests=artifacts)
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Focused tests changed captured application inputs")
-        suite_output=self.phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads="+str(TEST_THREADS)],"engine:rust1.90:test")
+        # The full suite runs beside the linked release compile. Tests mount the
+        # application writable, so the compile reads a verified private copy that
+        # no test container mounts; the post-suite digest check still applies.
+        linked_source=root/"linked-source"
+        if linked_source.exists():shutil.rmtree(linked_source)
+        shutil.copytree(source,linked_source,symlinks=True)
+        if self.runner.execution_source_digest(linked_source)!=before:raise ValueError("Linked source copy differs from captured inputs")
+        suite=self.concurrent_phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads="+str(TEST_THREADS)],"engine:rust1.90:test")
+        try:linked_log=self.phase(job,"compile_linked","engine",linked_source/"v3",output,self.linked_recipe(),"engine:rust1.90:linked-release")
+        finally:
+            try:suite_output=suite.result()
+            finally:shutil.rmtree(linked_source,ignore_errors=True)
         logs+=suite_output
         counts=Executor.suite_totals(suite_output)
         if not any(counts):raise ValueError("Suite executed no tests")
@@ -1257,8 +1291,8 @@ class Executor:
             except (json.JSONDecodeError,OSError,ValueError):
                 stored=None
         skip_live=(not relevant) and (stored is not None)
-        # Linked build (needed for deployment) always runs.
-        logs+=self.phase(job,"compile_linked","engine",application,output,self.linked_recipe(),"engine:rust1.90:linked-release")
+        # Linked build (needed for deployment) always runs, overlapped with the suite above.
+        logs+=linked_log
         stable=output/"stable";stable.mkdir(exist_ok=True)
         shutil.copyfile(output/"target/release/webagent-v3",stable/"webagent-v3");(stable/"webagent-v3").chmod(0o555)
         logs+=self.phase(job,"linked_smoke","test",application,output,self.smoke_recipe("linked"),"engine:rust1.90:linked-smoke",60)

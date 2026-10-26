@@ -492,6 +492,8 @@ class CommandObservation:
             value["events"] = (previous.get("events", []) + self.events)[-self.max_events:]
             self.events = []
             self.job["execution_observation"] = value
+            # The phase thread keeps its own copy: overlapping phases share the job's.
+            self.runner.job_context.last_observation = value
             getattr(self.runner, "resource_progress", lambda _: None)(self.job)
 
 
@@ -2696,9 +2698,17 @@ class Broker:
         job["status_updated_at"] = time.time()
         path = self.state / (job["job_id"] + ".json")
         temporary = self.state / (job["job_id"] + ".tmp")
+        for attempt in range(8):
+            # An overlapping phase thread may add a key mid-serialization; retry the snapshot.
+            try:
+                data = canonical(job)
+                break
+            except RuntimeError:
+                if attempt == 7:
+                    raise
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "wb") as stream:
-            stream.write(canonical(job))
+            stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)

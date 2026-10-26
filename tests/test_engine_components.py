@@ -297,4 +297,49 @@ class EngineRebaseAttestationOrderTests(unittest.TestCase):
             self.assertIs(attested[0],blob)
             self.assertEqual([name for name in timeline if name in("attest","compile_test","test","compile_release")],
                 ["attest","attest","compile_test","test","attest","compile_release"])
+class EngineSuiteOverlapTests(unittest.TestCase):
+    """The full suite runs beside the linked compile, which reads a private verified source copy."""
+    def run_engine(self,suite_error=None,linked_error=None):
+        import test_admin_build as fixtures
+        import threading,uuid
+        from unittest.mock import Mock,patch
+        seen={};linked_started=threading.Event()
+        runner=types.SimpleNamespace(execution_application_blob=fixtures.host.Runner.execution_application_blob,execution_entries=fixtures.host.Runner.execution_entries,
+            execution_source_digest=lambda root:"source-digest",compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64},
+            resource_progress=lambda job:None,core_compile_inputs=lambda:{"v3/src/main.rs"},attest_release_base=lambda job,blob:None,
+            job_context=types.SimpleNamespace(job=None,event=None))
+        with tempfile.TemporaryDirectory()as temporary:
+            worker=executor.Executor(runner,None,{"state_root":temporary});job={"job_id":str(uuid.uuid4())}
+            root=Path(temporary)/"execution"/job["job_id"];(root/"output/cargo/registry").mkdir(parents=True)
+            def phase(job,name,kind,source,output,argv,profile,timeout=3600,network=False):
+                if name=="test":
+                    seen["suite_thread"]=threading.current_thread().name
+                    seen["overlapped"]=linked_started.wait(5)
+                    if suite_error:raise RuntimeError(suite_error)
+                if name=="compile_linked":
+                    seen["linked_source"]=source;seen["copy_present"]=source.parent.is_dir();linked_started.set()
+                    if linked_error:raise RuntimeError(linked_error)
+                    (output/"target/release").mkdir(parents=True,exist_ok=True);(output/"target/release/webagent-v3").write_bytes(b"binary")
+                if name=="compile_release":raise RuntimeError("stop after overlap")
+                return "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured\n"
+            worker.phase=phase
+            worker.validate_compiler_recipe=Mock(return_value=False);worker.cached_engine=Mock(return_value=None)
+            worker.seed_cargo_cache=Mock(return_value=False);worker.dependencies=Mock(return_value="offline ready\n");worker.dependency_snapshot=Mock(return_value="")
+            worker.retain_test_manifest=Mock();worker.focused_tests=Mock(return_value="")
+            worker.linked_dependencies=Mock(return_value={});worker.linked_smoke=Mock(return_value={"mode":"linked"})
+            worker.smoke_artifact=Mock(return_value={});worker.metadata_receipt=Mock(return_value={"packages":[],"resolve":{"nodes":[]}})
+            blob=fixtures.context(extra={"v3/src/main.rs":"fn main(){}"})
+            with self.assertRaises(RuntimeError)as raised:
+                worker.engine(job,blob,lambda root,data:(root/"v3").mkdir(parents=True,exist_ok=True),lambda data:"d"*64)
+            seen["error"]=str(raised.exception);seen["copy_removed"]=not (root/"linked-source").exists();seen["root"]=root
+        return seen
+    def test_suite_overlaps_linked_compile_from_private_copy(self):
+        seen=self.run_engine()
+        self.assertEqual(seen["error"],"stop after overlap")
+        self.assertTrue(seen["overlapped"]);self.assertEqual(seen["suite_thread"],"phase-test")
+        self.assertEqual(seen["linked_source"],seen["root"]/"linked-source/v3");self.assertTrue(seen["copy_present"]);self.assertTrue(seen["copy_removed"])
+    def test_suite_failure_wins_and_linked_failure_still_fails(self):
+        self.assertEqual(self.run_engine(suite_error="suite failed",linked_error="link failed")["error"],"suite failed")
+        seen=self.run_engine(linked_error="link failed")
+        self.assertEqual(seen["error"],"link failed");self.assertTrue(seen["copy_removed"])
 if __name__=='__main__':unittest.main()

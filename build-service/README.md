@@ -249,6 +249,17 @@ leaves an empty target and the job compiles cold (`dependency_snapshot` in the
 receipt records hit, prepared, skipped or unavailable). The three most recent
 keys are kept; the cache is rebuildable and safe to delete while no job runs.
 
+## Suite and linked compile overlap
+
+After the focused tests, the full workspace suite and the linked release compile
+run at the same time. Tests mount the application writable, so the compile reads
+a private copy of the captured sources, verified against the same digest and
+mounted by no test container; the copy is removed afterwards and the post-suite
+digest check is unchanged. A suite failure is reported before a compile failure.
+Admission lets phases of one job share their component; other jobs still
+serialize per component. Each phase records its own execution history; the live
+`execution_observation` shows whichever phase reported last.
+
 ## Explicit owner claim release
 
 Operators may use `buildctl schedule --input request.json` with action

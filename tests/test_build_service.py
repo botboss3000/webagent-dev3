@@ -1347,6 +1347,28 @@ class PublicationWaitUnitTests(unittest.TestCase):
   self.pub._admit=lambda *args:self.pub.acquire(self.job)
   self.assertIsNone(self.pub.admit(self.job,b"source"));self.assertEqual(self.job["status"],"needs_decision");self.assertFalse(self.job.get("effects_started"))
 
+class SameJobPhaseOverlapTests(unittest.TestCase):
+ def test_phases_of_one_job_share_a_component_while_other_jobs_wait(self):
+  from test_scheduler_resources import Fake,G
+  with tempfile.TemporaryDirectory()as folder:
+   runner=Fake();scheduler=fixtures.host.resource_module.Resources(folder,runner,{"mode":"enforce"},sampler=lambda:{"available":20*G,"total":24*G,"pressure":{}})
+   runner.resource_progress=lambda job:None
+   job={"job_id":"engine-job","lease_until":time.time()+60,"artifact_component":"engine"}
+   scheduler.enter("suite",job,"test","engine:rust1.90:test","test",timeout=.2)
+   scheduler.enter("linked",job,"compile_linked","engine:rust1.90:linked-release","engine",timeout=.2)
+   try:
+    other={"job_id":"other-job","lease_until":time.time()+60,"artifact_component":"engine"}
+    with self.assertRaisesRegex(TimeoutError,"component_busy"):scheduler.enter("other",other,"compile_test","engine:rust1.90:compile_test","engine",timeout=.02)
+   finally:scheduler.finish("suite",True);scheduler.finish("linked",True)
+ def test_receipt_save_retries_a_snapshot_changed_by_an_overlapping_phase(self):
+  from unittest.mock import patch
+  with tempfile.TemporaryDirectory()as folder:
+   broker=types.SimpleNamespace(state=Path(folder));job={"job_id":"overlap"}
+   real=fixtures.host.canonical
+   with patch.object(fixtures.host,"canonical",side_effect=[RuntimeError("dictionary changed size during iteration"),real({"job_id":"overlap"})]):
+    fixtures.host.Broker._save(broker,job)
+   self.assertEqual(json.loads((Path(folder)/"overlap.json").read_text()),{"job_id":"overlap"})
+
 class BrowserAdmissionReceiptTests(unittest.TestCase):
  def test_owner_timeout_and_cancelled_wait_receipts_are_retained(self):
   import threading
