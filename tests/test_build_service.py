@@ -1360,6 +1360,9 @@ class SameJobPhaseOverlapTests(unittest.TestCase):
     other={"job_id":"other-job","lease_until":time.time()+60,"artifact_component":"engine"}
     with self.assertRaisesRegex(TimeoutError,"component_busy"):scheduler.enter("other",other,"compile_test","engine:rust1.90:compile_test","engine",timeout=.02)
    finally:scheduler.finish("suite",True);scheduler.finish("linked",True)
+ def test_engine_component_tests_publish_through_the_host_lane(self):
+  _,allowed=fixtures.host.Broker.host_source_scope(None)
+  self.assertIn("v3/tests/test_engine_components.py",allowed)
  def test_receipt_save_retries_a_snapshot_changed_by_an_overlapping_phase(self):
   from unittest.mock import patch
   with tempfile.TemporaryDirectory()as folder:

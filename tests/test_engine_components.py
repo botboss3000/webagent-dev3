@@ -241,7 +241,7 @@ class EngineTests(unittest.TestCase):
         for phase in ("compile_test","compile_linked","compile_release","linked_smoke","live_smoke","dependency","engine_metadata"):
             self.assertEqual(executor.Executor.test_stack_env(phase),[])
     def test_suite_gate_runs_parallel_and_single_tests_stay_serial(self):
-        self.assertEqual(executor.TEST_THREADS,4)
+        self.assertEqual(executor.TEST_THREADS,8)
         source=(ROOT/"build-service/executor.py").read_text()
         engine=source[source.index("    def engine(self,job,blob,extract,digest):"):]
         self.assertIn('"--test-threads="+str(TEST_THREADS)',engine)

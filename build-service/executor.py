@@ -25,7 +25,7 @@ TEST_STACK_BYTES=32*1024*1024
 # test threads must stay a pinned recipe value so test_proof stays deterministic.
 # Single named tests (focused checks) keep one thread: parallelism is meaningless
 # there. Evidence: identical pass/fail/ignored counts at 1 vs 4 threads.
-TEST_THREADS=4
+TEST_THREADS=8
 # Compiled-dependency snapshots: stub compiles mirror the engine profiles exactly.
 SNAPSHOT_RECIPE="compiled-dependencies-v1"
 SNAPSHOT_COMPILES="set -e\ncargo test --workspace --locked --offline --no-run\ncargo build --workspace --locked --offline --bins\ncargo build --release --locked --offline --bin webagent-v3\ncargo build --workspace --release --locked --offline --no-default-features --features webagent-v3/live-context"
