@@ -180,14 +180,19 @@ impl Store {
                 states.insert(user_id.to_owned(),state.clone()); state
             }
         }};
+        let migrated=state.migrated.clone();
         let handle = Self {app_pool:self.app_pool.clone(),pool:state.pool,
             agent_pool:self.agent_pool.clone(),root:self.root.clone(),
             user_id:user_id.to_owned(),agent_id:self.agent_id.clone(),
             user_states:self.user_states.clone(),agent_states:self.agent_states.clone(),
             codec:self.codec.clone(),agent_cipher:self.agent_cipher.clone(),agent_keys:self.agent_keys.clone(),cache:state.cache,
             context_cache:state.context_cache,context_gate:state.context_gate};
-        handle.migrate_session_metadata().await?;
-        handle.pin_conversation_privacy().await?;
+        // Marker-guarded migrations never revert; scans call for_user for every account each tick.
+        if !migrated.load(std::sync::atomic::Ordering::Acquire) {
+            handle.migrate_session_metadata().await?;
+            handle.pin_conversation_privacy().await?;
+            migrated.store(true,std::sync::atomic::Ordering::Release);
+        }
         Ok(handle)
     }
     /// Select a registered agent database without changing the canonical conversation user authority.

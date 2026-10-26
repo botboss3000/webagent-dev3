@@ -20,10 +20,10 @@ impl Store {
   for owner in self.all_user_ids().await? {
    let path=self.root.join("user_data").join(&owner).join(format!("{owner}.db"));
    if !path.exists(){continue;}
-   let options=SqliteConnectOptions::new().filename(path).read_only(true);
-   let pool=sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(options).await?;
-   let rows=sqlx::query("SELECT key,value FROM docs WHERE key LIKE 'run:%' OR key LIKE 'manager_review:%' OR key LIKE 'followup_queue:%'").fetch_all(&pool).await?;
-   pool.close().await;
+   // Reuse the account's cached pool: a fresh connection per account on every admission
+   // spawned a thread and reopened the database. Range bounds use the docs key index.
+   let pool=self.for_user(&owner).await?.pool;
+   let rows=sqlx::query("SELECT key,value FROM docs WHERE (key>='run:' AND key<'run;') OR (key>='manager_review:' AND key<'manager_review;') OR (key>='followup_queue:' AND key<'followup_queue;')").fetch_all(&pool).await?;
    for row in rows {
     let key:String=row.get("key");let value=self.unseal(&row.get::<Vec<u8>,_>("value"))?;
     if key.starts_with("followup_queue:") {

@@ -11,7 +11,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::Path,
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicBool, Arc, Mutex},
 };
 use tokio::sync::RwLock;
 
@@ -142,6 +142,8 @@ pub struct UserPlane {
     pub cache: Arc<Mutex<Cache>>,
     pub context_cache: Arc<Mutex<ContextCache>>,
     pub context_gate: Arc<RwLock<()>>,
+    /// Set once this process has verified the account's one-time migration markers.
+    pub migrated: Arc<AtomicBool>,
 }
 
 impl UserPlane {
@@ -152,6 +154,7 @@ impl UserPlane {
             cache: Arc::new(Mutex::new(Cache::new(64 * 1024 * 1024))),
             context_cache: Arc::new(Mutex::new(ContextCache::new(16 * 1024 * 1024))),
             context_gate: Arc::new(RwLock::new(())),
+            migrated: Arc::new(AtomicBool::new(false)),
         }
     }
 }
