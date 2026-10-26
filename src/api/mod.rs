@@ -21,6 +21,7 @@ pub(crate) mod direct_messages;
 #[path = "../../crates/modules/chat/host/api/chat_controls.rs"]
 mod chat_controls;
 pub(crate) mod media_lane;
+#[path = "../../crates/modules/files/host/api/uploads.rs"]
 pub(crate) mod uploads;
 mod voice;
 #[cfg(test)]mod composer_tests;
@@ -39,6 +40,7 @@ mod account_models;
 mod agent_pages;
 #[path = "../../crates/modules/webapp/host/app_pages.rs"]
 mod app_pages;
+#[path = "../../crates/modules/files/host/api/file_manager.rs"]
 mod file_manager;
 mod build_dashboard;
 #[path = "../../crates/modules/configuration/host/app_settings.rs"]
@@ -59,7 +61,7 @@ pub(crate) use promotions::*;
 pub(crate) use chat::*;
 pub(crate) use chat_controls::*;
 pub(crate) use voice::*;
-pub(crate) use uploads::{upload,upload_delete,upload_content,upload_describe};
+pub(crate) use uploads::{attachment_get,upload,upload_delete,upload_content,upload_describe};
 // CONTEXT-CONFIG AUTHORITY: one validated data-root JSON serves seeded defaults
 // and live updates. Model boundaries reread it; existing runs keep their history.
 async fn context_config_get(State(app): State<App>) -> Api {

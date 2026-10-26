@@ -2509,6 +2509,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-files"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "hex",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "webagent-chat",
+]
+
+[[package]]
 name = "webagent-manager"
 version = "0.1.0"
 dependencies = [
@@ -2650,6 +2666,7 @@ dependencies = [
  "webagent-context-contracts",
  "webagent-diagnostics",
  "webagent-engine",
+ "webagent-files",
  "webagent-manager",
  "webagent-models",
  "webagent-provider-contracts",

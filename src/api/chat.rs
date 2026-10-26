@@ -220,20 +220,6 @@ async fn prepare_message_inner(app:&App,id:&str,body:&Value,supplied_session:Opt
     docs.push((key("run", &run_id), run));
     Ok(PreparedMessage {docs,kind:"message",message,result})
 }
-// Only the owning session can read this encrypted attachment record. The
-// model-facing copy was already saved with the message at admission.
-pub(crate) async fn attachment_get(State(app): State<App>, Path((sid, aid)): Path<(String, String)>) -> Api {
-    if Uuid::parse_str(&aid).is_err() {
-        return Err(ApiError(StatusCode::NOT_FOUND, "Attachment not found".into()));
-    }
-    let record = app.store.get(&key("attachment", &aid)).await?
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Attachment not found".into()))?;
-    if record["session_id"] != sid || !matches!(record["schema_version"].as_u64(),Some(1|2)) || record["run_id"].is_null() {
-        return Err(ApiError(StatusCode::NOT_FOUND,"Attachment not found".into()));
-    }
-    Ok(Json(json!({"id":record["id"],"run_id":record["run_id"],"name":record["name"],
-        "media_type":record["media_type"],"bytes":record["bytes"],"sha256":record["sha256"],"text":record["text"],"described_by":record["described_by"]})))
-}
 // Memory writes require a completed run in this same session. The API owns
 // the decision; neither model text nor a Python tool can save memory directly.
 pub(crate) async fn memory_list(State(app): State<App>, Path(sid): Path<String>) -> Api {

@@ -57,7 +57,7 @@ mod administrator_services;
 #[path = "../crates/modules/accounts/host/acceptance_tests.rs"] mod account_acceptance_tests;
 #[path = "storage/cache.rs"] mod cache;
 #[path = "engine/context/compaction.rs"] mod context_compaction;
-mod attachments;
+use webagent_files::attachments;
 #[path = "engine/context/memory.rs"] mod memory;
 #[path = "engine/context/assembly.rs"] mod context_assembly;
 #[path = "engine/context/input.rs"] mod context_input;

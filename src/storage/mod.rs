@@ -41,6 +41,8 @@ mod shared_read;
 mod requester_quota;
 mod actions;
 mod module_records;
+#[path = "../../crates/modules/files/host/storage/attachments.rs"]
+mod attachments;
 #[path = "../../crates/modules/chat/host/storage/main_notes.rs"]
 mod main_notes;
 pub(crate) mod context_assets;
@@ -1615,22 +1617,6 @@ impl Store {
     /// List bounded recent session runs or application-wide failures using redacted stored views.
     pub async fn recent_runs(&self, sid: Option<&str>) -> Result<Vec<Value>> {
         self.engine_repository().recent_runs(sid).await
-    }
-    /// Remove only an unclaimed upload owned by this session and decrement its quota atomically.
-    pub(crate) async fn delete_pending_upload(&self,sid:&str,aid:&str)->Result<()>{
-        let mut tx=self.pool.begin().await?;
-        sqlx::query("UPDATE docs SET value=value WHERE key='attachment_quota'").execute(&mut *tx).await?;
-        let raw:Option<Vec<u8>>=sqlx::query_scalar("SELECT value FROM docs WHERE key=?").bind(format!("attachment:{aid}")).fetch_optional(&mut *tx).await?;
-        let Some(raw)=raw else{return Ok(())};
-        let record=self.unseal(&raw)?;
-        if record["session_id"]!=sid||!record["run_id"].is_null(){return Err(anyhow!("Attachment removal unavailable"));}
-        let quota:Option<Vec<u8>>=sqlx::query_scalar("SELECT value FROM docs WHERE key='attachment_quota'").fetch_optional(&mut *tx).await?;
-        let used=quota.map(|raw|self.unseal(&raw)).transpose()?.and_then(|v|v["bytes"].as_u64()).unwrap_or(0);
-        sqlx::query("UPDATE docs SET value=? WHERE key='attachment_quota'").bind(self.encode_user_record(&json!({"bytes":used.saturating_sub(record["bytes"].as_u64().unwrap_or(0))}))?).execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM docs WHERE key=?").bind(format!("attachment:{aid}")).execute(&mut *tx).await?;
-        tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[format!("attachment:{aid}"),"attachment_quota".into()]);
-        Ok(())
     }
     /// Delete a namespace document and any owned recovery rows together before invalidating caches.
     pub async fn delete(&self, key: &str) -> Result<()> {
