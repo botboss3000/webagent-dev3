@@ -32,9 +32,7 @@ def overlap(left,right):
 
 def scope_overlap(left,right):
     """Retain legacy UI module exclusions when a new task requests only write paths."""
-    # Nothing derives module:engine any more; claims taken under the old rules still fence every Rust owner.
-    rust=lambda scope:scope=="module:general"or scope.startswith(("module:backend:","module:crate:","module:engine-component:"))
-    if (left=="module:engine"and rust(right))or(right=="module:engine"and rust(left)):return True
+    # A stored legacy module:engine is an ordinary token: it conflicts only with itself, never with Rust owners.
     if left.startswith("module:ui:")and right.startswith("path:ui/"):
         return overlap("ui/"+left.removeprefix("module:ui:"),right[5:])
     if right.startswith("module:ui:")and left.startswith("path:ui/"):

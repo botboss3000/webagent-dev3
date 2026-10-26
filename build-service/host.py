@@ -2397,9 +2397,11 @@ def timed(name):
     return wrap
 
 
-def record_request(name, seconds, read, written):
-    """Aggregate request cost per validated operation name; arguments are never recorded."""
+def record_request(name, seconds, read, written, action=None):
+    """Aggregate request cost per validated operation name and action; arguments are never recorded."""
     key = name if isinstance(name, str) and re.fullmatch(r"[a-z0-9_]{1,64}", name) else "other"
+    if key != "other" and isinstance(action, str) and re.fullmatch(r"[a-z_]{1,40}", action):
+        key += "." + action
     with _PERF_LOCK:
         row = _PERF["requests"].setdefault(key, {"count": 0, "seconds": 0.0, "read": 0, "written": 0})
         row["count"] += 1
@@ -2506,6 +2508,8 @@ def job_progress(job, baselines, now):
     remaining = names[names.index(current) + 1:] if current in names else [n for n in names if n not in finished]
     low = max(0, (stat or {}).get("p50", 0) - elapsed) + sum(stats[s]["p50"] for s in remaining)
     high = max(0, (stat or {}).get("p90", 0) - elapsed) + sum(stats[s]["p90"] for s in remaining)
+    if job.get("status") not in {"queued", "running"}:
+        low = high = 0
     return {"job_id": job.get("job_id"), "status": job.get("status"), "class": cls, "class_provisional": not known,
             "stage": current, "stage_index": names.index(current) + 1 if current in names else len(finished) + 1,
             "stage_count": len(names), "stage_seconds": round(elapsed), "stage_normal": stat and [stat["p50"], stat["p90"]],
@@ -3510,6 +3514,23 @@ class Broker:
         if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
             raise ValueError("host access fingerprint required")
         return deadline, fingerprint
+
+    def _tree_inputs_digest(self, root):
+        """Task tree input digest; reuse the last one while every file's path, inode, mtime, size and mode match."""
+        stamp = hashlib.sha256()
+        for directory, dirs, files in os.walk(root):
+            dirs.sort()
+            for name in sorted(files):
+                path = os.path.join(directory, name)
+                info = os.lstat(path)
+                stamp.update(f"{os.path.relpath(path, root)}\0{info.st_ino}\0{info.st_mtime_ns}\0{info.st_size}\0{info.st_mode}\n".encode())
+        cache = self.__dict__.setdefault("_tree_digests", {})
+        cached = cache.get(str(root))
+        if cached and cached[0] == stamp.hexdigest():
+            return cached[1]
+        digest = context_digest(release.snapshot(root, TASK_CONTEXT, context_digest))[0]
+        cache[str(root)] = (stamp.hexdigest(), digest)
+        return digest
 
     def _owned(self, job, trusted, workspace):
         return job["user_id"] == trusted["user_id"] and job["workspace"] == workspace
@@ -5363,8 +5384,7 @@ class Broker:
                                 inputs_sha256=i.get("inputs_sha256"), job_id=i.get("job_id"), last_check_job_id=i.get("last_check_job_id"),
                                 mode=i.get("mode", "shared"), workspace_path=i.get("workspace_path"),
                                 synchronization=i.get("synchronization"),
-                                workspace_inputs_sha256=(context_digest(release.snapshot(
-                                    self.work_dir / "trees" / i["key"], TASK_CONTEXT, context_digest))[0]
+                                workspace_inputs_sha256=(self._tree_inputs_digest(self.work_dir / "trees" / i["key"])
                                     if i.get("mode") == "isolated" and i["status"] == "open" else None))
                            for i in self.work.values() if self._owned(i, trusted, workspace)
                            and (selected is None or i["task_id"] == selected)]
@@ -6198,7 +6218,8 @@ async def serve(broker, listener, bridge_listener=None):
                 result = await asyncio.to_thread(broker.handle, request)
             finally:
                 record_request(request.get("name"), time.monotonic() - started,
-                               *(now - before for now, before in zip(_process_io(), (read, written))))
+                               *(now - before for now, before in zip(_process_io(), (read, written))),
+                               action=(request.get("arguments") or {}).get("action") if isinstance(request.get("arguments"), dict) else None)
             response = {"id": request.get("id"), "status": "success", "output": result}
         except Exception as error:
             response = {"id": request.get("id") if isinstance(request, dict) else None,

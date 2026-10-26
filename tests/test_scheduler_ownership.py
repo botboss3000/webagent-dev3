@@ -278,9 +278,10 @@ class CargoModuleReservationTests(unittest.TestCase):
         self.assertEqual(self.scopes('crates/unknown/src/lib.rs'),['module:crate:crates/unknown','path:crates/unknown/src/lib.rs'])
         self.write('crates/modules/models/Cargo.toml','invalid toml = [')
         self.assertEqual(self.scopes('crates/modules/models/src/private.rs'),['module:backend:models','path:crates/modules/models/src/private.rs'])
-    def test_legacy_engine_fences_new_scopes_in_both_directions(self):
-        for scope in ['module:backend:models','module:general','module:crate:crates/helper']:
-            self.assertTrue(m.scope_overlap('module:engine',scope));self.assertTrue(m.scope_overlap(scope,'module:engine'))
+    def test_legacy_engine_is_an_ordinary_token(self):
+        for scope in ['module:backend:models','module:general','module:crate:crates/helper','module:engine-component:loop','path:src/main.rs']:
+            self.assertFalse(m.scope_overlap('module:engine',scope));self.assertFalse(m.scope_overlap(scope,'module:engine'))
+        self.assertTrue(m.scope_overlap('module:engine','module:engine'))
         self.assertFalse(m.scope_overlap('module:backend:models','module:backend:diagnostics'))
         self.assertFalse(m.scope_overlap('module:engine','module:broker'))
     def test_compiler_attestation_does_not_turn_private_rust_into_shared_contract(self):

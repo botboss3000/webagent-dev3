@@ -575,6 +575,20 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.call("v3_build_progress", {"job_id": "live", "extra": 1})
 
+    def test_pending_journal_scan_sees_new_and_rewritten_records(self):
+        scheduler = self.broker.scheduler
+        folder = self.broker.work_dir / "scheduler-requests"; folder.mkdir(parents=True, exist_ok=True)
+        for i in range(3):
+            scheduler.write_record(folder / f"{i:064x}.json", {"state": "done", "task_key": "k", "request_id": f"done-{i}"})
+        self.assertIsNone(scheduler.pending("k"))
+        path = folder / ("f" * 64 + ".json")
+        scheduler.write_record(path, {"state": "pending", "task_key": "k", "request_id": "retry-me"})
+        self.assertEqual(scheduler.pending("k"), "retry-me")
+        self.assertIsNone(scheduler.pending("k", except_path=path))
+        scheduler.write_record(path, {"state": "done", "task_key": "k", "request_id": "retry-me"})
+        self.assertIsNone(scheduler.pending("k"))
+        path.unlink(); self.assertIsNone(scheduler.pending("k"))
+
     def wait(self, job):
         for _ in range(100):
             value = self.call("v3_worker_job", {"job_id": job["job_id"]})

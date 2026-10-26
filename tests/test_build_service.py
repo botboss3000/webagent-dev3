@@ -517,7 +517,7 @@ class ReleaseClaimsBrokerTests(unittest.TestCase):
   key=hashlib.sha256(fixtures.host.canonical([self.trusted["user_id"],self.sid,"frozen-release-fixture"])).hexdigest()
   item=self.broker.work[key];store=self.broker.scheduler.store;owner=self.broker.scheduler.owner(self.trusted,self.sid)
   value=store.get(key)
-  value=store.acquire(key,owner,value["revision"],value["epoch"],["module:broker","module:engine","path:src/fixture.rs"],"frozen-acquire")["task"]
+  value=store.acquire(key,owner,value["revision"],value["epoch"],["module:broker","module:general","path:src/fixture.rs"],"frozen-acquire")["task"]
   identity=str(uuid.uuid4());blob=self.broker.scheduler_task_snapshot(Path(item["workspace_path"]).parent)
   folder=self.state/identity;folder.mkdir();(folder/"candidate.tar").write_bytes(blob)
   item.update(status="closed",job_id=identity)
@@ -527,12 +527,21 @@ class ReleaseClaimsBrokerTests(unittest.TestCase):
   with patch.object(self.broker,"_start_next"):
    result=self.call("build_work",args)
   self.assertEqual(result["epoch"],value["epoch"])
-  self.assertEqual(result["scopes"],["module:engine","path:src/fixture.rs"])
+  self.assertEqual(result["scopes"],["module:general","path:src/fixture.rs"])
   self.assertEqual(self.call("build_work",args),result)
   self.broker.scheduler.assert_job(job)
-  args.update(scopes=["module:engine"],request_id="reject-promotion-release",expected_revision=result["revision"])
+  args.update(scopes=["module:general"],request_id="reject-promotion-release",expected_revision=result["revision"])
   with self.assertRaisesRegex(ValueError,"promotion"):self.call("build_work",args)
   self.assertIsNone(self.broker.scheduler.pending(key))
+
+ def test_tree_inputs_digest_reuses_only_unchanged_trees(self):
+  import hashlib
+  self.call("v3_build_work",{"action":"begin","task_id":"tree-digest-fixture","summary":"Digest fixture","mode":"isolated"})
+  key=hashlib.sha256(fixtures.host.canonical([self.trusted["user_id"],self.sid,"tree-digest-fixture"])).hexdigest()
+  root=self.broker.work_dir/"trees"/key;first=self.broker._tree_inputs_digest(root)
+  self.assertEqual(self.broker._tree_inputs_digest(root),first)
+  source=Path(self.broker.work[key]["workspace_path"])/"src"/"digest_fixture.rs";source.parent.mkdir(parents=True,exist_ok=True);source.write_text("fn changed() {}\n")
+  self.assertNotEqual(self.broker._tree_inputs_digest(root),first)
 
  def test_legacy_pending_release_rejects_active_job_terminally(self):
   import hashlib

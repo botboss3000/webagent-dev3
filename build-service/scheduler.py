@@ -518,10 +518,20 @@ class Scheduler:
         """Fence edits while a previous ownership transition needs exact-request recovery."""
         folder=self.broker.work_dir/"scheduler-requests"
         if not folder.exists():return None
-        for path in sorted(folder.glob("*.json")):
-            if path==except_path:continue
-            value=json.loads(path.read_text())
-            if value.get("task_key")==key and value["state"]=="pending":return value["request_id"]
+        # Journals accumulate for idempotency; reparse only records whose inode, mtime or size changed.
+        cache=self.__dict__.setdefault("_journal_states",{})
+        entries=sorted((e for e in os.scandir(folder)if e.name.endswith(".json")),key=lambda e:e.name)
+        cache_keys={e.path for e in entries}
+        for gone in set(cache)-cache_keys:cache.pop(gone,None)
+        for entry in entries:
+            if Path(entry.path)==except_path:continue
+            info=entry.stat()
+            stamp=(info.st_ino,info.st_mtime_ns,info.st_size)
+            if cache.get(entry.path,(None,))[0]!=stamp:
+                value=json.loads(Path(entry.path).read_text())
+                cache[entry.path]=(stamp,value.get("task_key"),value["state"],value.get("request_id"))
+            _,task_key,state,request_id=cache[entry.path]
+            if task_key==key and state=="pending":return request_id
         return None
     def handle(self,args,trusted,workspace):
         """Journal mutations so retries survive both ownership and filesystem transition crashes."""

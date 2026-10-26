@@ -225,7 +225,7 @@ source as privileged service code or bypass publication/classification gates.
 The background cycle and request handler record content-free timings: step and
 operation names, durations and process read/write byte counts, never arguments
 or output. Each cycle rewrites `build-jobs/coordination/performance.json` (last
-300 steps plus per-operation request totals since start). Use it to attribute
+300 steps plus request totals since start, keyed by operation and action). Use it to attribute
 idle broker load; it carries no authority and is safe to delete.
 
 `buildctl progress JOB_ID` returns stage k of N for a job, each finished stage's
@@ -697,8 +697,10 @@ cannot be reconstructed, the owner comes from the source layout instead
 a global fence. Shared build files (`Cargo.toml`, `Cargo.lock`, `build.rs`,
 `Dockerfile`, ...) and unknown top-level paths reserve `module:workspace`, which
 conflicts only with other `module:workspace` claims. Compiler attestations decide
-the release lane, not write claims. No path derives `module:engine` any more;
-claims taken under the old rules still fence every Rust owner until released.
+the release lane, not write claims. No path derives `module:engine` any more,
+and a stored legacy `module:engine` claim or request is an ordinary token that
+conflicts only with itself; acquisition always derives scopes from the paths being
+edited and never replays stored requests.
 No manifest field can declare itself exempt from conflicts.
 
 This changes source editing reservations, not execution concurrency, resource
