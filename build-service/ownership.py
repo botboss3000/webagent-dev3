@@ -435,7 +435,7 @@ class Ownership:
         return self.mutate(request,["release_frozen_scopes",task,owner,revision,epoch,scopes,binding],operation)
 
     def release_deployed_scopes(self,task,owner,revision,epoch,scopes,evidence,request):
-        """Drop deployed write reservations while retaining read-only completion authority."""
+        """Drop deployed write reservations; freeing the last one completes the verified task."""
         if not isinstance(scopes,list)or not scopes or len(scopes)>256 or len(scopes)!=len(set(scopes)):raise ValueError("Explicit held scopes required")
         if not isinstance(evidence,dict)or not evidence.get("release_id")or not evidence.get("commit"):raise ValueError("Verified deployed source/commit required")
         def operation(db):
@@ -444,7 +444,8 @@ class Ownership:
             if value["state"]not in {"owned","validating"}or evidence.get("generation")!=value["generation"]:raise ValueError("Deployed generation changed")
             if not set(scopes)<=set(value["scopes"]):raise ValueError("Only held scopes can be released")
             held=sorted(set(value["scopes"])-set(scopes))
-            result=self.update(db,value,state="owned",scopes=held,requested=[],heartbeat=self.clock(),
+            # The caller verified release, commit and health; acceptance/complete would only repeat it.
+            result=self.update(db,value,state="owned"if held else"complete",scopes=held,requested=[],heartbeat=self.clock(),
                                evidence={"post_deployment_release":evidence["release_id"],"deployment":evidence})
             db.execute("INSERT INTO events(task,at,event)VALUES(?,?,?)",(task,self.clock(),canonical({"deployed_write_scopes_released":sorted(scopes),"release_id":evidence["release_id"],"owner":owner})))
             return result

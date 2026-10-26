@@ -224,6 +224,20 @@ class SchedulerBrokerTests(unittest.TestCase):
         self.assertTrue(self.broker.scheduler.retention_allowed(item["key"]))
         available,_=self.action(other["task_id"],"reserve",paths=["README.md"]);self.assertTrue(available["acquired"])
         self.assertEqual(Path(other["workspace_path"],"README.md").read_text(),"published\n")
+    def test_release_claims_with_commit_completes_deployed_task(self):
+        """One verified release of every claim frees the code and closes the task."""
+        item=self.begin("release-close-task");other=self.begin("release-waiting-task")
+        self.write(item,"README.md","published\n");job,commit=self.publish(item)
+        value=self.broker.scheduler.store.get(item["key"])
+        request={"action":"release_claims","task_id":item["task_id"],"scopes":value["scopes"],"reason":"Deployed and committed",
+            "commit":commit,"request_id":"release-close","expected_revision":value["revision"],"expected_epoch":value["epoch"]}
+        with patch.object(self.broker,"_start_next"):
+            done=self.call("build_work",request)
+            self.assertEqual(self.call("build_work",request),done)
+        self.assertEqual((done["state"],done["scopes"]),("complete",[]))
+        self.assertEqual(done["evidence"]["deployment"]["commit"],commit)
+        self.assertTrue(self.broker.scheduler.retention_allowed(item["key"]))
+        available,_=self.action(other["task_id"],"reserve",paths=["README.md"]);self.assertTrue(available["acquired"])
     def test_acceptance_allows_content_identical_path_absent_from_commit(self):
         """A mode-only released path has nothing to commit; a real change still must be committed."""
         self.runner.blob=fixtures.context(extra={"v3/README.md":"original\n","v3/docs/keep.md":"same\n"})

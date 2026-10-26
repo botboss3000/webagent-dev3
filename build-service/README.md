@@ -7,10 +7,13 @@ not part of the release workflow: publication records no review obligations and
 nothing waits on them. There is no automatic indexing on deployment or restart.
 
 After verifying and committing exact promoted bytes, release source write claims
-with build_work release_claims and the release commit. Reserve only modules
-fundamental to the actual edit; acquire other affected paths when changing them
-and release them when their deployed changes are safely committed. Pending
-metadata work retains source-bound completion authority without write scopes.
+with build_work release_claims and the release commit. The broker verifies the
+completed synchronized release, commit bytes and health; releasing the last held
+claim this way completes the task, with no separate acceptance or complete call.
+A partial release keeps the task owned. Reserve only modules fundamental to the
+actual edit; acquire other affected paths when changing them and release them
+when their deployed changes are safely committed. Post-deployment metadata work
+does not need an open task.
 
 An operator may optionally request retry_post_deployment with task_id, job_id
 and request_id to construct an index for the exact deployed snapshot. It does not

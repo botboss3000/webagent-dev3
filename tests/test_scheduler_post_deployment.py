@@ -109,17 +109,21 @@ class PostDeploymentTests(unittest.TestCase):
             job=self.finish("deferred-doc-task");self.assertEqual(self.wait([job])[0]["status"],"failed")
         self.assertEqual(before,self.runner.current_asset_id());self.assertFalse(self.index_calls)
 
-    def test_post_deployed_write_reservations_release_without_losing_metadata_identity(self):
+    def test_post_deployed_partial_release_stays_owned_and_last_release_completes(self):
         store=self.broker.scheduler.store;owner='fixture-owner'
         task="a"*64;state=store.begin(task,owner,"metadata-scope-fixture","metadata-scope-begin")
         acquired=store.acquire(task,owner,state["revision"],state["epoch"],["module:broker","path:build-service/host.py"],"metadata-scope-acquire")["task"]
         evidence={"release_id":"11111111-1111-4111-8111-111111111111","commit":"c"*40,"generation":acquired["generation"]}
-        released=store.release_deployed_scopes(task,owner,acquired["revision"],acquired["epoch"],acquired["scopes"],evidence,"metadata-scope-release")
-        self.assertEqual(released["state"],"owned");self.assertEqual(released["scopes"],[])
-        self.assertEqual(released["epoch"],acquired["epoch"])
-        touched=store.heartbeat(task,owner,released["revision"],released["epoch"],"metadata-scope-heartbeat")
+        partial=store.release_deployed_scopes(task,owner,acquired["revision"],acquired["epoch"],["path:build-service/host.py"],evidence,"metadata-scope-partial")
+        self.assertEqual(partial["state"],"owned");self.assertEqual(partial["scopes"],["module:broker"])
+        self.assertEqual(partial["epoch"],acquired["epoch"])
+        with self.assertRaises(PermissionError):store.assert_owned(task,owner,partial["epoch"],["path:build-service/host.py"])
+        touched=store.heartbeat(task,owner,partial["revision"],partial["epoch"],"metadata-scope-heartbeat")
         self.assertEqual(touched["state"],"owned")
-        with self.assertRaises(PermissionError):store.assert_owned(task,owner,touched["epoch"],["path:build-service/host.py"])
+        done=store.release_deployed_scopes(task,owner,touched["revision"],touched["epoch"],["module:broker"],evidence,"metadata-scope-release")
+        self.assertEqual(done["state"],"complete");self.assertEqual((done["scopes"],done["requested"]),([],[]))
+        self.assertEqual(done["evidence"]["post_deployment_release"],evidence["release_id"])
+        with self.assertRaisesRegex(ValueError,"not renewable"):store.heartbeat(task,owner,done["revision"],done["epoch"],"metadata-scope-late-heartbeat")
 
 
     def test_workspace_seed_uses_exact_source_while_index_is_pending(self):

@@ -3702,8 +3702,8 @@ class Broker:
                 deployed=self.jobs.get(item.get("job_id"),{})
                 if frozen is not None:
                     result=self.scheduler.store.release_frozen_scopes(item["key"],owner,args["expected_revision"],args["expected_epoch"],args["scopes"],frozen,token)
-                elif deployed.get("status")=="completed"and(deployed.get("post_deployment")or deployed.get("deferred_documentation")):
-                    evidence=self.scheduler.verified(item,{"job_id":deployed["job_id"],"commit":args.get("commit"),"acceptance":[{"check":"Healthy exact committed deployment; metadata follows without source write reservations","passed":True}]},deployment_only=True)
+                elif deployed.get("status")=="completed"and args.get("commit"):
+                    evidence=self.scheduler.verified(item,{"job_id":deployed["job_id"],"commit":args.get("commit"),"acceptance":[{"check":"Healthy exact committed deployment","passed":True}]},deployment_only=True)
                     result=self.scheduler.store.release_deployed_scopes(item["key"],owner,args["expected_revision"],args["expected_epoch"],args.get("scopes"),evidence,token)
                 else:
                     result=self.scheduler.store.release_scopes(item["key"],owner,args["expected_revision"],args["expected_epoch"],args.get("scopes"),args.get("reason"),token)
