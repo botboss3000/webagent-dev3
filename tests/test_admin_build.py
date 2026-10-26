@@ -658,6 +658,40 @@ class BuildTests(unittest.TestCase):
                             patch_text.encode())
         self.assertEqual("before\nconst note=text=>2;\nafter\n", target.read_text())
 
+    def test_checked_patch_accepts_binary_ui_assets_only(self):
+        root = self.state / "binary-repo"
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        source = root / "v3/build-jobs/coordination/trees/task/v3"
+        source.mkdir(parents=True)
+        scratch = self.state / "binary-scratch"
+        scratch.mkdir()
+        subprocess.run(["git", "init", "-q", str(scratch)], check=True)
+        data = b"\x89PNG\r\n\x1a\n\0" + bytes(range(256)) * 4
+
+        def binary_patch(name):
+            target = scratch / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            subprocess.run(["git", "-C", str(scratch), "add", name], check=True)
+            text = subprocess.run(["git", "-C", str(scratch), "diff", "--cached", "--binary", "--", name],
+                                  check=True, capture_output=True, text=True).stdout
+            subprocess.run(["git", "-C", str(scratch), "rm", "-q", "--cached", name], check=True)
+            return text
+
+        asset = binary_patch("ui/og-card.png")
+        self.assertIn("GIT binary patch", asset)
+        with patch.object(host, "SOURCE", root):
+            self.assertEqual(["ui/og-card.png"], host.inspect_source_patch(source, asset))
+            host.source_git(source, ["apply", "--unidiff-zero", "--whitespace=error", "-"], asset.encode())
+            self.assertEqual(data, (source / "ui/og-card.png").read_bytes())
+            for name in ("src/og-card.png", "ui/og-card.bin"):
+                with self.assertRaisesRegex(ValueError, "limited to ui/ image and font assets"):
+                    host.inspect_source_patch(source, binary_patch(name))
+            with self.assertRaisesRegex(ValueError, "binary or move patch denied"):
+                host.inspect_source_patch(source, "diff --git a/ui/x.png b/ui/x.png\n"
+                                          "new file mode 100644\nBinary files /dev/null and b/ui/x.png differ\n")
+
     def test_loop_live_plugin_mount_preserves_runtime_and_readonly_source(self):
         previous = {"ReadonlyRootfs": True, "Memory": 768 * 1024 * 1024,
                     "Mounts": [{"Type": "bind", "Source": "/state", "Target": "/state"},

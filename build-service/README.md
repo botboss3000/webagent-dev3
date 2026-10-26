@@ -24,6 +24,12 @@ describes the protected before_deployment policy and legacy jobs only.
 
 ## Release-scope guards
 
+Checked source patches are text unified diffs, except that image and font assets
+under `ui/` (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.ico`, `.woff`, `.woff2`)
+may be added or replaced with Git binary hunks from `git diff --binary`. Binary
+hunks elsewhere, data-less `Binary files ... differ` diffs, renames and copies are
+refused. The 1 MiB operator patch bound applies to the encoded patch.
+
 Source changes are compared by bytes and the executable bit only, in task review,
 preflight, finish and acceptance alike. A private-tree mode rewrite (for example
 0664 to 0600) is not a change, so a byte-identical revert leaves the release.

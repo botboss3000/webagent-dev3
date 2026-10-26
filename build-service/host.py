@@ -788,6 +788,9 @@ def source_patch_text_counts(patch):
     return added, removed
 
 
+BINARY_ASSET_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico", ".woff", ".woff2"}
+
+
 def inspect_source_patch(root, patch):
     """Confine a checked text diff to V3 source; proposals stay separate until here."""
     paths, _corrected = inspect_source_patch_corrected(root, patch)
@@ -808,7 +811,8 @@ def inspect_source_patch_corrected(root, patch):
         raise ValueError("source patch must be a Git unified diff starting with diff --git; apply_patch markers are unsupported")
     if not patch.startswith("diff --git a/"):
         raise ValueError("source patch must start with diff --git a/<V3-relative-path> b/<V3-relative-path>")
-    if any(line.startswith(("GIT binary patch", "Binary files ", "rename from ",
+    # Binary hunks must carry their bytes (git diff --binary); "Binary files ... differ" has none.
+    if any(line.startswith(("Binary files ", "rename from ",
                             "rename to ", "copy from ", "copy to "))
            for line in patch.splitlines()):
         raise ValueError("binary or move patch denied")
@@ -830,10 +834,12 @@ def inspect_source_patch_corrected(root, patch):
     allowed_dirs = {"crates", "src", "plugins", "tests", "ui", "docs", "config", "build-service"}
     for record in records:
         fields = record.split(b"\t", 2)
-        if len(fields) != 3 or not fields[0].isdigit() or not fields[1].isdigit():
+        binary = len(fields) == 3 and fields[:2] == [b"-", b"-"]
+        if len(fields) != 3 or not binary and (not fields[0].isdigit() or not fields[1].isdigit()):
             raise ValueError("unsupported source patch")
-        counted_added += int(fields[0])
-        counted_removed += int(fields[1])
+        if not binary:
+            counted_added += int(fields[0])
+            counted_removed += int(fields[1])
         name = fields[2].decode("utf-8")
         try:
             prefix = root.relative_to(SOURCE).as_posix() + "/"
@@ -850,6 +856,8 @@ def inspect_source_patch_corrected(root, patch):
                 or not (name in allowed_files or parts[0] in allowed_dirs and len(parts) > 1
                         or monitoring_component.package_path("v3/"+name))):
             raise ValueError("source patch path denied")
+        if binary and not (parts[0] == "ui" and Path(name).suffix.lower() in BINARY_ASSET_SUFFIXES):
+            raise ValueError("binary source patch limited to ui/ image and font assets")
         cursor = root
         for index, part in enumerate(parts):
             cursor = cursor / part
