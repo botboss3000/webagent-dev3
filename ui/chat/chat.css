@@ -40,6 +40,8 @@ body.light-mode .chat-notification{background:var(--chat-pill-bg,color-mix(in ok
 /* Configured paint wins over the shared user/agent theme rules. No color fallback. */
 #chat-messages-inner .chat-bubble.v3-config-bubble{background:var(--message-bg-dark)}
 body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:var(--message-bg-light)}
+/* Set by chat/core/chat-zoom.js; children only so header/footer clearance padding stays unscaled. */
+#chat-messages-inner>*{zoom:var(--v3-chat-zoom,1)}
 /* Shared row owns alignment/width; only its bubble paints the message surface. */
 #chat-messages-inner .message-row{width:fit-content;max-width:90%;flex-shrink:0;margin:0;gap:0;align-self:flex-start}
 #chat-messages-inner .message-row.user{align-self:flex-end}

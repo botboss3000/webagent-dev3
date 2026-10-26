@@ -756,6 +756,8 @@ function setupHeaderPullRefresh(){
   },{passive:true});
   document.addEventListener('touchmove',event=>{
     if(!dragging||!event.touches.length)return;
+    // A second finger makes this a chat pinch-zoom, never a refresh.
+    if(event.touches.length>1){dragging=false;stage=0;indicator.hidden=true;hint.classList.remove('show');return;}
     const raw=event.touches[0].clientY-startY;
     if(raw<=0){indicator.hidden=true;dragging=false;return;}
     const height=window.innerHeight,normal=height*normalAt,hard=height*hardAt;
