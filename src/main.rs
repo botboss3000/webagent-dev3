@@ -55,7 +55,7 @@ mod administrator_services;
 #[path = "../crates/modules/accounts/host/authentication.rs"] mod account_authentication;
 #[cfg(test)]
 #[path = "../crates/modules/accounts/host/acceptance_tests.rs"] mod account_acceptance_tests;
-#[path = "storage/cache.rs"] mod cache;
+use webagent_storage::cache;
 #[path = "engine/context/compaction.rs"] mod context_compaction;
 use webagent_files::attachments;
 #[path = "engine/context/memory.rs"] mod memory;

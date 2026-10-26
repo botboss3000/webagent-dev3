@@ -2602,6 +2602,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-storage"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "rand 0.8.8",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "webagent-system"
 version = "0.1.0"
 dependencies = [
@@ -2671,6 +2686,7 @@ dependencies = [
  "webagent-models",
  "webagent-provider-contracts",
  "webagent-provider-projection",
+ "webagent-storage",
  "webagent-system",
  "webagent-usage",
  "webagent-webapp",

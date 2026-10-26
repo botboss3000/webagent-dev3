@@ -1,93 +1,33 @@
 //! Each agent has a random data key; only the trusted storage boundary unwraps it.
+//! Storage owns the envelope format and key conversion; this view selects the key.
 use super::*;
-use aes_gcm::aead::Payload;
 
 impl Store {
     pub(crate) fn seal_agent(&self,value:&Value)->Result<Vec<u8>> {
         self.seal_agent_for(&self.agent_id,value)
     }
-    pub(crate) fn seal_agent_for(&self,agent:&str,value:&Value)->Result<Vec<u8>> {
+    /// Select the bound view's key first, then the shared registry.
+    fn agent_key(&self,agent:&str)->Result<AgentCipher> {
         let keys=self.agent_keys.read().map_err(|_|anyhow!("Agent key registry unavailable"))?;
-        let cipher=if agent==self.agent_id {self.agent_cipher.as_ref().or_else(||keys.get(agent))} else {keys.get(agent)}
-            .ok_or_else(||anyhow!("Agent key unavailable"))?;
-        let mut nonce=[0;12];rand::thread_rng().fill_bytes(&mut nonce);
-        let mut result=b"WAAGENT1".to_vec();result.extend(nonce);
-        result.extend(cipher.encrypt(Nonce::from_slice(&nonce),Payload{msg:&serde_json::to_vec(value)?,aad:agent.as_bytes()})
-            .map_err(|_|anyhow!("Agent encryption failed"))?);
-        Ok(result)
+        if agent==self.agent_id {self.agent_cipher.as_ref().or_else(||keys.get(agent))} else {keys.get(agent)}
+            .cloned().ok_or_else(||anyhow!("Agent key unavailable"))
+    }
+    pub(crate) fn seal_agent_for(&self,agent:&str,value:&Value)->Result<Vec<u8>> {
+        self.agent_key(agent)?.seal(agent,value)
     }
     pub(crate) fn unseal_agent(&self,data:&[u8])->Result<Value> {
         self.unseal_agent_for(&self.agent_id,data)
     }
     pub(crate) fn unseal_agent_for(&self,agent:&str,data:&[u8])->Result<Value> {
-        if data.len()<36 || !data.starts_with(b"WAAGENT1") {return Err(anyhow!("Invalid agent record envelope"));}
-        let keys=self.agent_keys.read().map_err(|_|anyhow!("Agent key registry unavailable"))?;
-        let cipher=if agent==self.agent_id {self.agent_cipher.as_ref().or_else(||keys.get(agent))} else {keys.get(agent)}
-            .ok_or_else(||anyhow!("Agent key unavailable"))?;
-        let plain=cipher.decrypt(Nonce::from_slice(&data[8..20]),Payload{msg:&data[20..],aad:agent.as_bytes()})
-            .map_err(|_|anyhow!("Agent record authentication failed"))?;
-        Ok(serde_json::from_slice(&plain)?)
+        if data.len()<36 || !webagent_storage::codec::is_agent_envelope(data) {return Err(anyhow!("Invalid agent record envelope"));}
+        self.agent_key(agent)?.unseal(agent,data)
     }
     pub(crate) async fn initialize_agent_encryption(&mut self)->Result<()> {
         if let Some(cipher)=self.agent_keys.read().map_err(|_|anyhow!("Agent key registry unavailable"))?.get(&self.agent_id).cloned() {
             self.agent_cipher=Some(cipher);return Ok(());
         }
-        sqlx::query("CREATE TABLE IF NOT EXISTS agent_key_envelopes(id INTEGER PRIMARY KEY CHECK(id=1),envelope BLOB NOT NULL)")
-            .execute(&self.agent_pool).await?;
-        let mut tx=self.agent_pool.begin().await?;
-        sqlx::query("UPDATE agents SET revision=revision WHERE id=?").bind(&self.agent_id).execute(&mut *tx).await?;
-        let envelope:Option<Vec<u8>>=sqlx::query_scalar("SELECT envelope FROM agent_key_envelopes WHERE id=1").fetch_optional(&mut *tx).await?;
-        let (key,convert)=match envelope {
-            Some(bytes)=>{
-                let value=self.unseal(&bytes)?;
-                if value["version"]!=1 || value["agent_id"]!=self.agent_id {return Err(anyhow!("Agent key identity mismatch"));}
-                let key:Vec<u8>=serde_json::from_value(value["key"].clone())?;
-                (key,false)
-            },
-            None=>{
-                // A completed conversion must never be repaired by silently creating another key.
-                let exists:Option<Vec<u8>>=sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-                    .bind(format!("agent:{}:encryption_v1",self.agent_id)).fetch_optional(&mut *tx).await?;
-                if exists.is_some() {return Err(anyhow!("Agent key missing for existing encrypted data"));}
-                let mut key=vec![0;32];rand::thread_rng().fill_bytes(&mut key);
-                let wrapped=self.seal(&json!({"version":1,"agent_id":self.agent_id,"key":key}))?;
-                sqlx::query("INSERT INTO agent_key_envelopes VALUES(1,?)").bind(wrapped).execute(&mut *tx).await?;
-                (key,true)
-            }
-        };
-        let cipher=Arc::new(Aes256Gcm::new_from_slice(&key).map_err(|_|anyhow!("Invalid agent key"))?);
+        let cipher=webagent_storage::codec::initialize_agent_key(&self.agent_pool,&self.codec,&self.agent_id).await?;
         self.agent_cipher=Some(cipher.clone());
-
-        if convert {
-            // Fixed schema only; convert each payload and its key envelope in one transaction.
-            for (table,column) in [("agents","metadata"),("agent_connections","config"),("agent_prompts","content"),("docs","value"),("prompt_slots","content"),("agent_memberships","value")] {
-                let exists:Option<String>=sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name=?").bind(table).fetch_optional(&mut *tx).await?;
-                if exists.is_none() {continue;}
-                let query=match table {
-                    "agents"=>format!("SELECT rowid,{column} FROM {table} WHERE id=?"),
-                    "docs"=>format!("SELECT rowid,{column} FROM {table} WHERE key=? OR key=? OR substr(key,1,?)=? OR key LIKE 'capability_audit:%' OR key LIKE 'ability_policy_audit:%' OR key LIKE 'ability_visibility_audit:%'"),
-                    "prompt_slots"=>format!("SELECT rowid,{column} FROM {table}"),
-                    _=>format!("SELECT rowid,{column} FROM {table} WHERE agent_id=?"),
-                };
-                let query=sqlx::query(&query);
-                let query=if table=="docs" {
-                    let prefix=format!("agent:{}:",self.agent_id);
-                    query.bind(format!("agent:{}",self.agent_id)).bind(format!("agent_abilities:{}",self.agent_id)).bind(prefix.len() as i64).bind(prefix)
-                }else if table=="prompt_slots" {query}else{query.bind(&self.agent_id)};
-                let rows=query.fetch_all(&mut *tx).await?;
-                for row in rows {
-                    let bytes:Vec<u8>=row.get(column);
-                    let value=self.unseal(&bytes)?;
-                    let sealed=self.seal_agent(&value)?;
-                    sqlx::query(&format!("UPDATE {table} SET {column}=? WHERE rowid=?"))
-                        .bind(&sealed).bind(row.get::<i64,_>("rowid")).execute(&mut *tx).await?;
-                    if self.unseal_agent(&sealed)?!=value {return Err(anyhow!("Agent conversion verification failed"));}
-                }
-            }
-            sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)").bind(format!("agent:{}:encryption_v1",self.agent_id))
-                .bind(self.seal_agent(&json!({"version":1}))?).execute(&mut *tx).await?;
-        }
-        tx.commit().await?;
         self.agent_keys.write().map_err(|_|anyhow!("Agent key registry unavailable"))?.insert(self.agent_id.clone(),cipher);
         Ok(())
     }

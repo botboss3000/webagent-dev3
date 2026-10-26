@@ -50,70 +50,22 @@ mod engine;
 
 use crate::access;
 use crate::cache::{Cache, ContextCache};
-use aes_gcm::{
-    aead::{Aead, KeyInit, Payload},
-    Aes256Gcm, Nonce,
-};
 use anyhow::{anyhow, bail, Context, Result};
-use rand::RngCore;
-use sha2::{Digest, Sha256};
 use serde_json::{json, Value};
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteRow, SqliteSynchronous},
+    sqlite::{SqliteConnectOptions, SqliteRow},
     Row, SqlitePool,
 };
 use std::{collections::HashMap, sync::{Arc, Mutex}};
-use std::{
-    fs::{File, OpenOptions},
-    io::Write,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
 
-// RECOVERY-MANIFEST: hashes are committed inside AEAD-sealed metadata, never
-// trusted from a caller or an unencrypted side table. Pair content and ciphertext
-// digests to compare current input without decrypting unchanged retained rows.
-fn recovery_digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
-// RECOVERY-HASH-STREAM: serde writes canonical compact JSON directly into the
-// digest. No history-sized temporary JSON buffer is allocated for comparison.
-// The digest must match recovery_digest(serde_json::to_vec(item)) exactly.
-fn recovery_item_digest(item: &Value) -> Result<String> {
-    struct HashWriter(Sha256);
-    impl std::io::Write for HashWriter {
-        /// Stream canonical JSON bytes into the recovery digest without retaining a history-sized buffer.
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.update(bytes);
-            Ok(bytes.len())
-        }
-        /// Finish the Write contract; this digest writer has no buffered bytes to flush.
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-    }
-    let mut writer = HashWriter(Sha256::new());
-    serde_json::to_writer(&mut writer, item)?;
-    Ok(format!("{:x}", writer.0.finalize()))
-}
-
-/// Optional extension of the v1 split format. Old records validate by decryption;
-/// malformed manifests fail closed instead of silently falling back to that path.
-fn recovery_manifest(reference: &Value, count: usize) -> Result<Option<Vec<(String, String)>>> {
-    match reference.get("manifest") {
-        None => Ok(None),
-        Some(value) => {
-            let pairs: Vec<(String, String)> = serde_json::from_value(value.clone())
-                .map_err(|_| anyhow!("Invalid recovery input manifest"))?;
-            if pairs.len() != count || pairs.iter().any(|(plain, sealed)|
-                [plain, sealed].iter().any(|hash| hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()))) {
-                return Err(anyhow!("Invalid recovery input manifest"));
-            }
-            Ok(Some(pairs))
-        }
-    }
-}
+use webagent_storage::recovery::recovery_item_digest;
+#[cfg(test)]
+use webagent_storage::{codec::load_or_create_key, recovery::recovery_digest};
+use webagent_storage::{codec::{AgentCipher, AgentKeys, Codec}, docs, pool::UserPlane, routing::Planes};
+// The app-settings policy is Storage-owned; existing callers keep the crate::store path.
+pub(crate) use webagent_storage::settings::{admin_encryption_enabled, read_app_settings};
 
 /// Project retrieval diagnostics onto fixed content-free status and stage enums.
 
@@ -130,213 +82,33 @@ pub struct Store {
     pub(crate) root: PathBuf,
     user_id: String,
     agent_id: String,
-    user_states: Arc<RwLock<HashMap<String, UserState>>>,
+    user_states: Arc<RwLock<HashMap<String, UserPlane>>>,
     agent_states: Arc<RwLock<HashMap<String, SqlitePool>>>,
-    cipher: Aes256Gcm,
+    codec: Codec,
     // Store views share immutable expanded keys instead of copying large key schedules into futures.
-    agent_cipher: Option<Arc<Aes256Gcm>>,
-    agent_keys: Arc<std::sync::RwLock<HashMap<String,Arc<Aes256Gcm>>>>,
+    agent_cipher: Option<AgentCipher>,
+    agent_keys: AgentKeys,
     cache: Arc<Mutex<Cache>>,
     context_cache: Arc<Mutex<ContextCache>>,
     context_gate: Arc<RwLock<()>>,
 }
 
-#[derive(Clone)]
-struct UserState {
-    pool: SqlitePool,
-    cache: Arc<Mutex<Cache>>,
-    context_cache: Arc<Mutex<ContextCache>>,
-    context_gate: Arc<RwLock<()>>,
-}
-impl UserState {
-    /// Keep one user pool and its cache invalidation gate shared across Store clones.
-    fn new(pool: SqlitePool) -> Self {
-        Self {pool, cache:Arc::new(Mutex::new(Cache::new(64*1024*1024))),
-            context_cache:Arc::new(Mutex::new(ContextCache::new(16*1024*1024))),
-            context_gate:Arc::new(RwLock::new(()))}
-    }
-}
-
-/// Publish one complete private encryption key atomically; never replace a missing key for existing databases.
-fn load_or_create_key(root: &Path) -> Result<Vec<u8>> {
-    let keypath = root.join("encryption.key");
-    let key = match std::fs::read(&keypath) {
-        Ok(key) => key,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            if [
-                "runtime.sqlite",
-                "runtime.sqlite-wal",
-                "runtime.sqlite-shm",
-                "db/app.db",
-                "user_data/admin/admin.db",
-                "agent_data/shared_default/shared_default.db",
-            ]
-            .iter()
-            .any(|name| root.join(name).exists())
-            {
-                return Err(anyhow!(
-                    "Storage encryption key is missing for existing database"
-                ));
-            }
-            let mut key = vec![0; 32];
-            rand::thread_rng().fill_bytes(&mut key);
-            let temp_path = root.join(format!(".encryption.key.{}.tmp", uuid::Uuid::new_v4()));
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&temp_path)?;
-            let published = (|| -> Result<bool> {
-                file.write_all(&key)?;
-                file.sync_all()?;
-                match std::fs::hard_link(&temp_path, &keypath) {
-                    Ok(()) => {
-                        File::open(root)?.sync_all()?;
-                        Ok(true)
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-                    Err(e) => Err(e.into()),
-                }
-            })();
-            drop(file);
-            let _ = std::fs::remove_file(&temp_path);
-            if published? {
-                key
-            } else {
-                std::fs::read(&keypath)?
-            }
-        }
-        Err(e) => return Err(e.into()),
-    };
-    if key.len() != 32 {
-        return Err(anyhow!("Invalid storage encryption key"));
-    }
-    Ok(key)
-}
-
-/// Open a durable WAL authority with bounded connections, profile permissions and the tables its owner needs.
+/// Open a storage authority and add the notification tables its plane stages.
 pub(crate) async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePool> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("Database path has no parent"))?;
-    std::fs::create_dir_all(parent)?;
-    // Checkout data remains editable by the administrator worker. Only other
-    // user/agent profiles keep private modes; fixed admin profiles are exceptions.
-    let family = parent.parent().and_then(Path::file_name);
-    let profile = parent.file_name();
-    let private_profile = (family == Some(std::ffi::OsStr::new("user_data"))
-        && profile != Some(std::ffi::OsStr::new("admin")))
-        || (family == Some(std::ffi::OsStr::new("agent_data"))
-            && profile != Some(std::ffi::OsStr::new("shared_default")));
-    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(if private_profile { 0o700 } else { 0o770 }))?;
-    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
-        .create_if_missing(true)
-        .foreign_keys(true)
-        .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Full)
-        .busy_timeout(std::time::Duration::from_secs(5));
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        // IDLE-POOL-BOUND: release idle connections without closing pools that
-        // active Store clones still use. Reconnection remains transparent.
-        .min_connections(0)
-        .idle_timeout(std::time::Duration::from_secs(60))
-        .max_connections(4)
-        .connect_with(options)
-        .await?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(if private_profile { 0o600 } else { 0o660 }))?;
-    sqlx::query("CREATE TABLE IF NOT EXISTS docs (key TEXT PRIMARY KEY, value BLOB NOT NULL)")
-        .execute(&pool)
-        .await?;
+    let pool = webagent_storage::pool::open_pool(path, events, runs).await?;
     if events {
         notifications::schema(&pool, runs).await?;
-        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, kind TEXT NOT NULL, payload BLOB NOT NULL);
-            CREATE INDEX IF NOT EXISTS events_session ON events(session_id,seq);
-            CREATE TABLE IF NOT EXISTS legacy_event_map(legacy_seq INTEGER PRIMARY KEY,new_seq INTEGER NOT NULL UNIQUE);")
-            .execute(&pool).await?;
-    }
-    if events && !runs {
-        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS loop_heartbeat(
-            singleton INTEGER PRIMARY KEY CHECK(singleton=1),owner TEXT NOT NULL,
-            protocol_version INTEGER NOT NULL CHECK(protocol_version=1),updated_at INTEGER NOT NULL)")
-            .execute(&pool).await?;
-    }
-    if runs {
-        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS action_lock(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision INTEGER NOT NULL); INSERT OR IGNORE INTO action_lock VALUES(1,0); CREATE TABLE IF NOT EXISTS action_index(id TEXT PRIMARY KEY,resource TEXT NOT NULL,intent_key TEXT NOT NULL,state TEXT NOT NULL); CREATE INDEX IF NOT EXISTS action_intent ON action_index(resource,intent_key);").execute(&pool).await?;
-        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS run_index(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,status TEXT NOT NULL,updated_at INTEGER NOT NULL);
-            CREATE INDEX IF NOT EXISTS runs_status ON run_index(status,updated_at);
-            CREATE INDEX IF NOT EXISTS runs_session ON run_index(session_id,updated_at);
-            CREATE TABLE IF NOT EXISTS interactions(seq INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,run_id TEXT NOT NULL,step TEXT NOT NULL,item BLOB NOT NULL,created_at INTEGER NOT NULL,UNIQUE(run_id,step));
-            CREATE INDEX IF NOT EXISTS interactions_session ON interactions(session_id,seq);
-            CREATE TABLE IF NOT EXISTS activity_boundaries(interaction_seq INTEGER PRIMARY KEY,boundary_item_id TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS chat_context_boundaries(message_id TEXT PRIMARY KEY,through_seq INTEGER NOT NULL);
-            CREATE INDEX IF NOT EXISTS activity_boundary_item ON activity_boundaries(boundary_item_id);
-            CREATE TABLE IF NOT EXISTS chat(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL,run_id TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN (\'user\',\'assistant\')),content BLOB NOT NULL,created_at INTEGER NOT NULL,terminal_run_id TEXT UNIQUE);
-            CREATE INDEX IF NOT EXISTS chat_session ON chat(session_id,seq);
-            CREATE TABLE IF NOT EXISTS loop_commands(seq INTEGER PRIMARY KEY AUTOINCREMENT,command_id TEXT NOT NULL UNIQUE,run_id TEXT NOT NULL,schema_version INTEGER NOT NULL CHECK(schema_version=1),kind TEXT NOT NULL,payload BLOB NOT NULL,created_at INTEGER NOT NULL,acknowledged_at INTEGER);
-            CREATE INDEX IF NOT EXISTS loop_commands_run ON loop_commands(run_id,seq);
-            CREATE TABLE IF NOT EXISTS loop_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,run_id TEXT NOT NULL,schema_version INTEGER NOT NULL CHECK(schema_version=1),kind TEXT NOT NULL,payload BLOB NOT NULL,created_at INTEGER NOT NULL);
-            CREATE INDEX IF NOT EXISTS loop_events_run ON loop_events(run_id,seq);
-            CREATE TABLE IF NOT EXISTS publication_outbox(run_id TEXT PRIMARY KEY,schema_version INTEGER NOT NULL CHECK(schema_version=1),payload BLOB NOT NULL,created_at INTEGER NOT NULL);")
-            .execute(&pool).await?;
-        // Recovery input is encrypted item-by-item, separate from small run
-        // metadata. Both are committed atomically; interactions remain untouched.
-        sqlx::query("CREATE TABLE IF NOT EXISTS recovery_input(run_id TEXT NOT NULL,ordinal INTEGER NOT NULL,item BLOB NOT NULL,PRIMARY KEY(run_id,ordinal))")
-            .execute(&pool).await?;
-        sqlx::query("CREATE TABLE IF NOT EXISTS reasoning_cleanup(segment_id TEXT PRIMARY KEY,session_id TEXT NOT NULL,payload BLOB NOT NULL)")
-            .execute(&pool).await?;
-        let interaction_columns=sqlx::query("PRAGMA table_info(interactions)").fetch_all(&pool).await?;
-        if !interaction_columns.iter().any(|row|row.get::<String,_>("name")=="execution_metadata") {
-            sqlx::query("ALTER TABLE interactions ADD COLUMN execution_metadata BLOB").execute(&pool).await?;
-        }
-        let columns = sqlx::query("PRAGMA table_info(run_index)").fetch_all(&pool).await?;
-        if !columns.iter().any(|r| r.get::<String,_>("name") == "enqueue_seq") {
-            sqlx::query("ALTER TABLE run_index ADD COLUMN enqueue_seq INTEGER").execute(&pool).await?;
-        }
-        sqlx::query("UPDATE run_index SET enqueue_seq=rowid WHERE enqueue_seq IS NULL").execute(&pool).await?;
-        for (name, declaration) in [
-            ("lease_epoch", "INTEGER NOT NULL DEFAULT 0"),
-            ("lease_owner", "TEXT"),
-            ("lease_expires_at", "INTEGER NOT NULL DEFAULT 0"),
-        ] {
-            if !columns.iter().any(|r| r.get::<String,_>("name") == name) {
-                sqlx::query(&format!("ALTER TABLE run_index ADD COLUMN {name} {declaration}")).execute(&pool).await?;
-            }
-        }
     }
     Ok(pool)
-}
-
-// Both API and loop processes read the same data-root policy. A missing file
-// keeps encryption on; a malformed policy stops writes instead of exposing data.
-pub(crate) fn read_app_settings(root: &Path) -> Result<Value> {
-    match std::fs::read(root.join("config/app-settings.json")) {
-        Ok(bytes) => {
-            let value: Value = serde_json::from_slice(&bytes)?;
-            if !value.is_object() { return Err(anyhow!("app-settings.json must be an object")); }
-            Ok(value)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// Validate the optional administrator encryption switch; absence keeps encryption enabled.
-pub(crate) fn admin_encryption_enabled(settings: &Value) -> Result<bool> {
-    match settings.get("admin_database_encryption") {
-        None => Ok(true),
-        Some(value) => value["enabled"].as_bool()
-            .ok_or_else(|| anyhow!("app-settings.json requires admin_database_encryption.enabled boolean")),
-    }
 }
 
 impl Store {
     /// Initialize the three storage authorities, migrations and shared per-owner handles under one encryption key.
     pub async fn open(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root)?;
-        admin_encryption_enabled(&read_app_settings(root)?)?;
-        let key = load_or_create_key(root)?;
+        let codec = Codec::open(root)?;
         // Keep the administrator's original data path during migration.
-        let admin_state = UserState::new(open_pool(&root.join("user_data/admin/admin.db"),true,true).await?);
+        let admin_state = UserPlane::new(open_pool(&root.join("user_data/admin/admin.db"),true,true).await?);
         let mut user_states = HashMap::new();
         user_states.insert("admin".to_owned(),admin_state.clone());
         let shared_agent_pool = open_pool(&root.join("agent_data/shared_default/shared_default.db"),false,false).await?;
@@ -351,10 +123,9 @@ impl Store {
             agent_id: "shared_default".to_owned(),
             user_states: Arc::new(RwLock::new(user_states)),
             agent_states: Arc::new(RwLock::new(agent_states)),
-            cipher: Aes256Gcm::new_from_slice(&key)
-                .map_err(|_| anyhow!("Invalid encryption key"))?,
+            codec,
             agent_cipher: None,
-            agent_keys: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            agent_keys: AgentKeys::default(),
             cache: admin_state.cache,
             context_cache: admin_state.context_cache,
             context_gate: admin_state.context_gate,
@@ -399,16 +170,9 @@ impl Store {
         let state = match existing {Some(state)=>state,None=>{
             let mut states=self.user_states.write().await;
             if let Some(state)=states.get(user_id) {state.clone()} else {
-                // INACTIVE-USER-HANDLES: keep at most 64 idle registry entries.
-                // The gate's sole owner is the registry only when no Store clone
-                // can still use this user. Never evict active gates or close their
-                // pools; that would split context invalidation synchronization.
-                if states.len() >= 64 {
-                    states.retain(|id,state| id == "admin"
-                        || Arc::strong_count(&state.context_gate) > 1);
-                }
+                webagent_storage::pool::retain_active_users(&mut states);
                 let path=self.root.join("user_data").join(user_id).join(format!("{user_id}.db"));
-                let mut state=UserState::new(open_pool(&path,true,true).await?);
+                let mut state=UserPlane::new(open_pool(&path,true,true).await?);
                 // Every user shares one retained-cache budget per Store family.
                 // User-qualified context keys prevent cross-account collisions.
                 state.cache=self.cache.clone();
@@ -420,7 +184,7 @@ impl Store {
             agent_pool:self.agent_pool.clone(),root:self.root.clone(),
             user_id:user_id.to_owned(),agent_id:self.agent_id.clone(),
             user_states:self.user_states.clone(),agent_states:self.agent_states.clone(),
-            cipher:self.cipher.clone(),agent_cipher:self.agent_cipher.clone(),agent_keys:self.agent_keys.clone(),cache:state.cache,
+            codec:self.codec.clone(),agent_cipher:self.agent_cipher.clone(),agent_keys:self.agent_keys.clone(),cache:state.cache,
             context_cache:state.context_cache,context_gate:state.context_gate};
         handle.migrate_session_metadata().await?;
         handle.pin_conversation_privacy().await?;
@@ -449,7 +213,7 @@ impl Store {
             agent_pool:pool,root:self.root.clone(),
             user_id:self.user_id.clone(),agent_id:agent_id.to_owned(),
             user_states:self.user_states.clone(),agent_states:self.agent_states.clone(),
-            cipher:self.cipher.clone(),agent_cipher:None,agent_keys:self.agent_keys.clone(),
+            codec:self.codec.clone(),agent_cipher:None,agent_keys:self.agent_keys.clone(),
             cache:self.cache.clone(),context_cache:self.context_cache.clone(),
             context_gate:self.context_gate.clone()};
         view.initialize_agent_encryption().await?;
@@ -565,84 +329,15 @@ impl Store {
     }
     /// Reject document access naming an agent other than this handle owns.
     fn validate_agent_doc_key(&self,key:&str) -> Result<()> {
-        if let Some(rest)=key.strip_prefix("agent:") {
-            if rest!=self.agent_id && !rest.starts_with(&format!("{}:",self.agent_id)) {
-                return Err(anyhow!("Agent view mismatch"));
-            }
-        }
-        if let Some(rest)=key.strip_prefix("agent_abilities:") {
-            if rest!=self.agent_id {
-                return Err(anyhow!("Agent view mismatch"));
-            }
-        }
-        Ok(())
+        webagent_storage::routing::validate_agent_doc_key(&self.agent_id,key)
     }
-    /// Route each known namespace to its user, agent or application authority; conversation assets stay user-owned.
+    /// Borrow this view's three authorities for Storage routing.
+    fn planes(&self) -> Planes<'_> {
+        Planes {application:&self.app_pool,user:&self.pool,agent:&self.agent_pool}
+    }
+    /// Route each known namespace to its user, agent or application authority.
     fn pool_for(&self, key: &str) -> &SqlitePool {
-        if key.starts_with("agent:") || key.starts_with("agent_abilities:") {
-            &self.agent_pool
-        } else if key=="migration:conversation_privacy_v1" || key.starts_with("module_state:")
-            || key.starts_with("core_source_control:")
-            || key.starts_with("core_vault:")
-            || key.starts_with("receipt:core_vault:")
-            || key.starts_with("core_visual:")
-            || key.starts_with("core_tool:")
-            || key.starts_with("core_profile:")
-            || key.starts_with("core_rating:")
-            || key.starts_with("core_webhook:")
-            || key.starts_with("core_webhook_log:")
-            || key.starts_with("core_spawn_origin:")
-            || key.starts_with("base_checkpoint:")
-            || key.starts_with("base_component:")
-            || key.starts_with("receipt:base:")
-            || key.starts_with("receipt:core_image:")
-            || key.starts_with("receipt:module:")
-            || key.starts_with("session:")
-            || key.starts_with("manager_review:")
-            || key.starts_with("manager_pending:")
-            || key.starts_with("followup_queue:")
-            || key.starts_with("messaging_route:")
-            || key.starts_with("receipt:agent_message:")
-            || key.starts_with("receipt:messaging_route:")
-            || key.starts_with("receipt:queue:")
-            || key.starts_with("user_agent_page_preferences:")
-            || key.starts_with("user_app_page_preferences:")
-            || key.starts_with("message_meta:")
-            || key.starts_with("shared_help:")
-            || key.starts_with("receipt:shared_help:")
-            || key.starts_with("receipt:participation:")
-            || key.starts_with("session_mode:")
-            || key.starts_with("session_chat_controls:")
-            || key.starts_with("session_naming:")
-            || key.starts_with("receipt:chat_controls:")
-            || key.starts_with("compaction_segment:")
-            || key.starts_with("session_ability_state:")
-            || key.starts_with("session_context_assets:")
-            || key.starts_with("action:")
-            || key.starts_with("background_task:")
-            || key.starts_with("run:")
-            || key.starts_with("run_view:")
-            || key.starts_with("administrator_receipt:")
-            || key.starts_with("administrator_browser:")
-            || key.starts_with("administrator_host:")
-            || key.starts_with("administrator_notice:")
-            || key.starts_with("attachment:")
-            || key.starts_with("session_usage:")
-            || key=="attachment_quota"
-            || key.starts_with("message_attachments:")
-            || key.starts_with("memory:")
-            || key.starts_with("promotion:")
-            || key.starts_with("receipt:session:")
-            || key.starts_with("receipt:direct_message:")
-            || key.starts_with("receipt:message:")
-            || key.starts_with("receipt:run:")
-            || key.starts_with("receipt:session_mode:")
-            || key.starts_with("receipt:approval:")
-        {
-            &self.pool
-        } else {
-            &self.app_pool
-        }
+        self.planes().for_key(key)
     }
     /// Reject ambiguous, reserved or oversized prompt-slot identities before agent-table access.
     fn validate_prompt_slot_name(name: &str) -> Result<()> {
@@ -900,251 +595,14 @@ impl Store {
         tx.commit().await?;
         Ok(true)
     }
-    /// Copy legacy public messages idempotently and reject conflicting destination identities or contents.
-    async fn migrate_legacy_chat(&self, sid: &str, session: &Value) -> Result<()> {
-        let Some(messages) = session["messages"].as_array() else {
-            return Ok(());
-        };
-        for (ordinal, message) in messages.iter().enumerate() {
-            let role = message["role"]
-                .as_str()
-                .ok_or_else(|| anyhow!("Legacy chat role is missing"))?;
-            if role != "user" && role != "assistant" {
-                return Err(anyhow!("Unsupported legacy chat role"));
-            }
-            let content = message
-                .get("content")
-                .ok_or_else(|| anyhow!("Legacy chat content is missing"))?;
-            let id = format!("legacy:{sid}:{ordinal}");
-            let run_id = message["run_id"].as_str().unwrap_or("");
-            let created_at = message["created_at"]
-                .as_i64()
-                .or_else(|| session["created_at"].as_i64())
-                .unwrap_or(0);
-            sqlx::query("INSERT OR IGNORE INTO chat(id,session_id,run_id,role,content,created_at,terminal_run_id) VALUES(?,?,?,?,?,?,NULL)")
-                .bind(&id).bind(sid).bind(run_id).bind(role).bind(self.encode_user_record(content)?)
-                .bind(created_at).execute(&self.pool).await?;
-            let row = sqlx::query(
-                "SELECT session_id,run_id,role,content,created_at FROM chat WHERE id=?",
-            )
-            .bind(&id)
-            .fetch_one(&self.pool)
-            .await?;
-            if row.get::<String, _>("session_id") != sid
-                || row.get::<String, _>("run_id") != run_id
-                || row.get::<String, _>("role") != role
-                || row.get::<i64, _>("created_at") != created_at
-                || self.unseal(&row.get::<Vec<u8>, _>("content"))? != *content
-            {
-                return Err(anyhow!("Conflicting migrated chat record"));
-            }
-        }
-        Ok(())
-    }
-    /// Preserve legacy event identity across split-storage retries without reusing another mapped sequence.
-    async fn migrate_legacy_event(
-        &self,
-        destination: &SqlitePool,
-        legacy_seq: i64,
-        sid: &str,
-        kind: &str,
-        raw: &[u8],
-        upgrading_v1: bool,
-    ) -> Result<()> {
-        let value = self.unseal(raw)?;
-        if !upgrading_v1 {
-            sqlx::query(
-                "INSERT OR IGNORE INTO events(seq,session_id,kind,payload) VALUES(?,?,?,?)",
-            )
-            .bind(legacy_seq)
-            .bind(sid)
-            .bind(kind)
-            .bind(raw)
-            .execute(destination)
-            .await?;
-            let existing = sqlx::query("SELECT session_id,kind,payload FROM events WHERE seq=?")
-                .bind(legacy_seq)
-                .fetch_one(destination)
-                .await?;
-            if existing.get::<String, _>("session_id") != sid
-                || existing.get::<String, _>("kind") != kind
-                || self.unseal(&existing.get::<Vec<u8>, _>("payload"))? != value
-            {
-                return Err(anyhow!("Conflicting migrated event: {legacy_seq}"));
-            }
-            return Ok(());
-        }
-        let mut tx = destination.begin().await?;
-        let mapped =
-            sqlx::query_scalar::<_, i64>("SELECT new_seq FROM legacy_event_map WHERE legacy_seq=?")
-                .bind(legacy_seq)
-                .fetch_optional(&mut *tx)
-                .await?;
-        let new_seq = if let Some(seq) = mapped {
-            seq
-        } else {
-            let sequence_claimed = sqlx::query_scalar::<_, i64>(
-                "SELECT legacy_seq FROM legacy_event_map WHERE new_seq=?",
-            )
-            .bind(legacy_seq)
-            .fetch_optional(&mut *tx)
-            .await?
-            .is_some();
-            let same_seq = sqlx::query("SELECT session_id,kind,payload FROM events WHERE seq=?")
-                .bind(legacy_seq)
-                .fetch_optional(&mut *tx)
-                .await?;
-            let already_copied = if let Some(row) = same_seq {
-                !sequence_claimed
-                    && row.get::<String, _>("session_id") == sid
-                    && row.get::<String, _>("kind") == kind
-                    && self.unseal(&row.get::<Vec<u8>, _>("payload"))? == value
-            } else {
-                false
-            };
-            let seq = if already_copied {
-                legacy_seq
-            } else {
-                sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,?,?)")
-                    .bind(sid)
-                    .bind(kind)
-                    .bind(raw)
-                    .execute(&mut *tx)
-                    .await?
-                    .last_insert_rowid()
-            };
-            sqlx::query("INSERT INTO legacy_event_map(legacy_seq,new_seq) VALUES(?,?)")
-                .bind(legacy_seq)
-                .bind(seq)
-                .execute(&mut *tx)
-                .await?;
-            seq
-        };
-        let existing = sqlx::query("SELECT session_id,kind,payload FROM events WHERE seq=?")
-            .bind(new_seq)
-            .fetch_one(&mut *tx)
-            .await?;
-        if existing.get::<String, _>("session_id") != sid
-            || existing.get::<String, _>("kind") != kind
-            || self.unseal(&existing.get::<Vec<u8>, _>("payload"))? != value
-        {
-            return Err(anyhow!("Conflicting migrated event mapping: {legacy_seq}"));
-        }
-        tx.commit().await?;
-        Ok(())
-    }
-    /// Copy and verify legacy documents, events and run indexes before publishing the completed split marker.
+    /// Copy and verify the legacy single database into the split authorities once.
     async fn migrate_legacy(&self, root: &Path) -> Result<()> {
-        let legacy_path: PathBuf = root.join("runtime.sqlite");
-        let marker_version = self
-            .get("storage:split_migrated")
-            .await?
-            .and_then(|marker| marker["version"].as_u64())
-            .unwrap_or(0);
-        if !legacy_path.exists() || marker_version >= 2 {
-            return Ok(());
-        }
-        let upgrading_v1 = marker_version == 1;
-        let legacy = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(
-                SqliteConnectOptions::from_str(&format!("sqlite://{}", legacy_path.display()))?
-                    .read_only(true),
-            )
-            .await?;
-        let result = async {
-            // Each row is idempotent. The marker is written only after all three
-            // authorities have received and verified their legacy records.
-            let mut last_key: Option<String> = None;
-            loop {
-                let rows = sqlx::query("SELECT key,value FROM docs WHERE (? IS NULL OR key>?) ORDER BY key LIMIT 128")
-                    .bind(&last_key).bind(&last_key).fetch_all(&legacy).await?;
-                if rows.is_empty() { break; }
-                for row in rows {
-                    let key: String = row.get("key");
-                    last_key = Some(key.clone());
-                    if key == "storage:split_migrated" { continue; }
-                    let raw: Vec<u8> = row.get("value");
-                    let mut value = self.unseal(&raw)?;
-                    if key.starts_with("session:") && value["checkpoint_input"].is_null() {
-                        if let Some(context) = value["context"].as_array() {
-                            value["checkpoint_input"] = json!(context);
-                            value["checkpoint_through"] = json!(0);
-                        }
-                    }
-                    let destination = self.pool_for(&key);
-                    sqlx::query("INSERT OR IGNORE INTO docs(key,value) VALUES(?,?)")
-                        .bind(&key).bind(self.seal(&value)?).execute(destination).await?;
-                    let existing: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-                        .bind(&key).fetch_one(destination).await?;
-                    if self.unseal(&existing)? != value {
-                        if upgrading_v1 && (std::ptr::eq(destination, &self.app_pool)
-                            || std::ptr::eq(destination, &self.agent_pool)) {
-                            continue;
-                        }
-                        return Err(anyhow!("Conflicting migrated document: {key}"));
-                    }
-                    if key.starts_with("session:") {
-                        let sid = key.strip_prefix("session:").unwrap();
-                        self.migrate_legacy_chat(sid, &value).await?;
-                    }
-                }
-            }
-            let mut last_seq = 0i64;
-            loop {
-                let rows = sqlx::query("SELECT seq,session_id,kind,payload FROM events WHERE seq>? ORDER BY seq LIMIT 128")
-                    .bind(last_seq).fetch_all(&legacy).await?;
-                if rows.is_empty() { break; }
-                for row in rows {
-                    let seq: i64 = row.get("seq");
-                    let sid: String = row.get("session_id");
-                    let kind: String = row.get("kind");
-                    let raw: Vec<u8> = row.get("payload");
-                    self.unseal(&raw)?;
-                    last_seq = seq;
-                    let destination = if sid.is_empty() { &self.app_pool } else { &self.pool };
-                    self.migrate_legacy_event(destination, seq, &sid, &kind, &raw, upgrading_v1).await?;
-                }
-            }
-            let mut last_id: Option<String> = None;
-            loop {
-                let rows = sqlx::query("SELECT id,session_id,status,updated_at FROM run_index WHERE (? IS NULL OR id>?) ORDER BY id LIMIT 128")
-                    .bind(&last_id).bind(&last_id).fetch_all(&legacy).await?;
-                if rows.is_empty() { break; }
-                for row in rows {
-                    let id: String = row.get("id");
-                    let sid: String = row.get("session_id");
-                    let status: String = row.get("status");
-                    let updated_at: i64 = row.get("updated_at");
-                    last_id = Some(id.clone());
-                    sqlx::query("INSERT OR IGNORE INTO run_index(id,session_id,status,updated_at) VALUES(?,?,?,?)")
-                        .bind(&id).bind(&sid).bind(&status).bind(updated_at).execute(&self.pool).await?;
-                    let existing = sqlx::query("SELECT session_id,status,updated_at FROM run_index WHERE id=?")
-                        .bind(&id).fetch_one(&self.pool).await?;
-                    if existing.get::<String,_>("session_id") != sid
-                        || existing.get::<String,_>("status") != status
-                        || existing.get::<i64,_>("updated_at") != updated_at
-                    {
-                        return Err(anyhow!("Conflicting migrated run index: {id}"));
-                    }
-                }
-            }
-            self.put("storage:split_migrated", &json!({"version":2})).await
-        }.await;
-        legacy.close().await;
-        result
+        webagent_storage::migration::migrate_legacy_split(root, self.planes(), self).await
     }
     // Only user-plane writers may call this. seal() remains encrypted for
     // application/agent secrets and authenticated search continuation cursors.
     fn encode_user_record(&self, value: &Value) -> Result<Vec<u8>> {
-        if self.user_id != "admin" { return self.seal(value); }
-        if admin_encryption_enabled(&read_app_settings(&self.root)?)? { return self.seal(value); }
-        let mut nonce = [0; 12];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        let aad = serde_json::to_vec(&json!(["v3-admin-plaintext-v1", value]))?;
-        let tag = self.cipher.encrypt(Nonce::from_slice(&nonce), Payload { msg: &[], aad: &aad })
-            .map_err(|_| anyhow!("Storage authentication failed"))?;
-        Ok(serde_json::to_vec(&json!({"format":"v3-admin-plaintext-v1","value":value,"nonce":nonce,"tag":tag}))?)
+        self.codec.encode_user_record(&self.root, &self.user_id, value)
     }
     /// Apply optional administrator plaintext policy only to user-plane records; other authorities always seal.
     fn encode_for_pool(&self, pool: &SqlitePool, value: &Value) -> Result<Vec<u8>> {
@@ -1153,43 +611,12 @@ impl Store {
     }
     /// Encode a JSON value with a fresh AES-GCM nonce and authenticated ciphertext.
     pub fn seal(&self, value: &Value) -> Result<Vec<u8>> {
-        let mut nonce = [0; 12];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        let mut data = nonce.to_vec();
-        data.extend(
-            self.cipher
-                .encrypt(
-                    Nonce::from_slice(&nonce),
-                    serde_json::to_vec(value)?.as_ref(),
-                )
-                .map_err(|_| anyhow!("Encryption failed"))?,
-        );
-        Ok(data)
+        self.codec.seal(value)
     }
-    /// Authenticate and decode either encrypted records or the explicitly versioned administrator plaintext envelope.
+    /// Authenticate and decode agent, encrypted or explicitly versioned administrator plaintext records.
     pub fn unseal(&self, data: &[u8]) -> Result<Value> {
-        if data.starts_with(b"WAAGENT1") {return self.unseal_agent(data);}
-        // A nonce in the legacy binary format can begin with '{'; only a
-        // parsed, explicitly versioned envelope selects the plaintext reader.
-        if let Ok(record) = serde_json::from_slice::<Value>(data) {
-            if record["format"] == "v3-admin-plaintext-v1" {
-                let nonce: [u8; 12] = serde_json::from_value(record["nonce"].clone())?;
-                let tag: Vec<u8> = serde_json::from_value(record["tag"].clone())?;
-                let value = record.get("value").ok_or_else(|| anyhow!("Invalid plaintext record"))?;
-                let aad = serde_json::to_vec(&json!(["v3-admin-plaintext-v1", value]))?;
-                self.cipher.decrypt(Nonce::from_slice(&nonce), Payload { msg: &tag, aad: &aad })
-                    .map_err(|_| anyhow!("Storage authentication failed"))?;
-                return Ok(value.clone());
-            }
-        }
-        if data.len() < 28 {
-            return Err(anyhow!("Invalid encrypted record"));
-        }
-        let plain = self
-            .cipher
-            .decrypt(Nonce::from_slice(&data[..12]), &data[12..])
-            .map_err(|_| anyhow!("Storage authentication failed"))?;
-        Ok(serde_json::from_slice(&plain)?)
+        if webagent_storage::codec::is_agent_envelope(data) {return self.unseal_agent(data);}
+        self.codec.unseal(data)
     }
     /// Reset the shared disposable caches, applying limits to existing and future
     /// user handles alike. Database pools and active request copies are not covered.
@@ -1439,37 +866,8 @@ impl Store {
         Ok(())
     }
     /// Reconstruct a split recovery record under the reader's transaction.
-    /// Legacy records contain input inline and need no migration on read. Missing
-    /// rows or gaps are corruption, never an excuse to resume with partial input.
     async fn decode_document(&self, connection: &mut sqlx::SqliteConnection, raw: &[u8]) -> Result<Value> {
-        let mut value = self.unseal(raw)?;
-        if let Some(reference) = value.get("_recovery_input").cloned() {
-            if reference["version"] != 1 { return Err(anyhow!("Unsupported recovery input version")); }
-            let rid = value["id"].as_str().ok_or_else(||anyhow!("Recovery record has no run id"))?;
-            let count = reference["count"].as_u64().ok_or_else(||anyhow!("Invalid recovery input count"))?;
-            let rows = sqlx::query("SELECT ordinal,item FROM recovery_input WHERE run_id=? ORDER BY ordinal")
-                .bind(rid).fetch_all(&mut *connection).await?;
-            if rows.len() as u64 != count { return Err(anyhow!("Incomplete recovery input")); }
-            let manifest = recovery_manifest(&reference, rows.len())?;
-            let mut input = Vec::with_capacity(rows.len());
-            for (ordinal,row) in rows.iter().enumerate() {
-                if row.get::<i64,_>("ordinal") != ordinal as i64 { return Err(anyhow!("Recovery input ordinal gap")); }
-                let sealed = row.get::<Vec<u8>,_>("item");
-                let item = self.unseal(&sealed)?;
-                // RECOVERY-MANIFEST-READ: reconstruction verifies both commitments;
-                // save optimization never weakens the authoritative read path.
-                if let Some(pairs) = &manifest {
-                    if pairs[ordinal].1 != recovery_digest(&sealed) ||
-                        pairs[ordinal].0 != recovery_item_digest(&item)? {
-                        return Err(anyhow!("Recovery input manifest mismatch"));
-                    }
-                }
-                input.push(item);
-            }
-            value.as_object_mut().unwrap().remove("_recovery_input");
-            value["input"] = Value::Array(input);
-        }
-        Ok(value)
+        webagent_storage::recovery::read_document(connection, self, raw).await
     }
 
     /// Persist a document and its recovery-input delta in one transaction.
@@ -1486,63 +884,13 @@ impl Store {
             session_value = self.prepare_session_document(tx, key, value).await?;
             &session_value
         } else { value };
-        let mut metadata;
+        let metadata;
         let stored = if key.starts_with("run:") && value["input"].is_array() {
-            let rid = value["id"].as_str().ok_or_else(||anyhow!("Run has no id"))?;
-            if key != format!("run:{rid}") { return Err(anyhow!("Recovery run identity mismatch")); }
-            let input = value["input"].as_array().unwrap();
-            let rows = sqlx::query("SELECT ordinal,item FROM recovery_input WHERE run_id=? ORDER BY ordinal")
-                .bind(rid).fetch_all(&mut **tx).await?;
-            // RECOVERY-MANIFEST-SAVE: verify every previous ciphertext against
-            // sealed metadata before any mutation. Legacy records decrypt once to
-            // establish content hashes; manifest-backed saves skip that decryption.
-            let mut prior_manifest = None;
-            if let Some(raw) = sqlx::query_scalar::<_,Vec<u8>>("SELECT value FROM docs WHERE key=?")
-                .bind(key).fetch_optional(&mut **tx).await? {
-                let previous = self.unseal(&raw)?;
-                if let Some(reference) = previous.get("_recovery_input") {
-                    if reference["version"] != 1 || reference["count"].as_u64() != Some(rows.len() as u64) {
-                        return Err(anyhow!("Incomplete or unsupported recovery input"));
-                    }
-                    prior_manifest = recovery_manifest(reference, rows.len())?;
-                }
-            }
-            let mut previous_hashes = Vec::with_capacity(rows.len());
-            for (ordinal,row) in rows.iter().enumerate() {
-                if row.get::<i64,_>("ordinal") != ordinal as i64 {
-                    return Err(anyhow!("Recovery input ordinal gap"));
-                }
-                let sealed = row.get::<Vec<u8>,_>("item");
-                let sealed_hash = recovery_digest(&sealed);
-                let plain_hash = if let Some(pairs) = &prior_manifest {
-                    if pairs[ordinal].1 != sealed_hash { return Err(anyhow!("Recovery input manifest mismatch")); }
-                    pairs[ordinal].0.clone()
-                } else {
-                    recovery_item_digest(&self.unseal(&sealed)?)?
-                };
-                previous_hashes.push((plain_hash, sealed_hash));
-            }
-            let mut manifest = Vec::with_capacity(input.len());
-            for (ordinal,item) in input.iter().enumerate() {
-                let plain_hash = recovery_item_digest(item)?;
-                if let Some(pair) = previous_hashes.get(ordinal).filter(|pair| pair.0 == plain_hash) {
-                    manifest.push(pair.clone());
-                } else {
-                    let sealed = self.encode_user_record(item)?;
-                    manifest.push((plain_hash, recovery_digest(&sealed)));
-                    sqlx::query("INSERT INTO recovery_input(run_id,ordinal,item) VALUES(?,?,?) ON CONFLICT(run_id,ordinal) DO UPDATE SET item=excluded.item")
-                        .bind(rid).bind(ordinal as i64).bind(sealed).execute(&mut **tx).await?;
-                }
-            }
-            sqlx::query("DELETE FROM recovery_input WHERE run_id=? AND ordinal>=?")
-                .bind(rid).bind(input.len() as i64).execute(&mut **tx).await?;
-            metadata = Value::Object(value.as_object().ok_or_else(||anyhow!("Invalid run document"))?
-                .iter().filter(|(key,_)|key.as_str() != "input").map(|(key,value)|(key.clone(),value.clone())).collect());
-            metadata["_recovery_input"] = json!({"version":1,"count":input.len(),"manifest":manifest});
+            metadata = webagent_storage::recovery::save_run_input(tx, self, key, value).await?;
             &metadata
         } else { value };
-        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-            .bind(key).bind(if key.starts_with("core_source_control:")||key.starts_with("module_state:")||key.starts_with("receipt:module:")||key.starts_with("session_context_assets:"){self.seal(stored)?}else{self.encode_for_pool(self.pool_for(key), stored)?}).execute(&mut **tx).await?;
+        let encoded = if webagent_storage::routing::always_sealed(key) {self.seal(stored)?} else {self.encode_for_pool(self.pool_for(key), stored)?};
+        docs::upsert(tx, key, &encoded).await?;
         Ok(())
     }
 
@@ -1561,10 +909,8 @@ impl Store {
             cache.epoch
         };
         let mut tx = self.pool_for(key).begin().await?;
-        let row = sqlx::query("SELECT value FROM docs WHERE key=?")
-            .bind(key).fetch_optional(&mut *tx).await?;
-        let result = match row {
-            Some(row) => Some(self.decode_document(&mut tx, &row.get::<Vec<u8>,_>("value")).await?),
+        let result = match docs::read(&mut tx, key).await? {
+            Some(raw) => Some(self.decode_document(&mut tx, &raw).await?),
             None => None,
         };
         tx.commit().await?;
@@ -1627,14 +973,8 @@ impl Store {
         } else {
             None
         };
-        // The split input is owned by this recovery record, not the transcript.
-        // Delete both together so recreating a run cannot retain orphaned items.
         let mut tx = self.pool_for(key).begin().await?;
-        sqlx::query("DELETE FROM docs WHERE key=?").bind(key).execute(&mut *tx).await?;
-        if let Some(rid) = key.strip_prefix("run:") {
-            sqlx::query("DELETE FROM recovery_input WHERE run_id=?")
-                .bind(rid).execute(&mut *tx).await?;
-        }
+        docs::remove(&mut tx, key).await?;
         tx.commit().await?;
         self.cache.lock().unwrap().invalidate(&[key.into()]);
         if let Some(sid) = session_id {
@@ -1646,10 +986,9 @@ impl Store {
     pub async fn list(&self, prefix: &str) -> Result<Vec<Value>> {
         self.validate_agent_doc_key(prefix)?;
         let mut tx = self.pool_for(prefix).begin().await?;
-        let rows = sqlx::query("SELECT value FROM docs WHERE key LIKE ? ORDER BY key")
-            .bind(format!("{prefix}%")).fetch_all(&mut *tx).await?;
+        let rows = docs::scan(&mut tx, prefix).await?;
         let mut values = Vec::with_capacity(rows.len());
-        for row in rows { values.push(self.decode_document(&mut tx,&row.get::<Vec<u8>,_>("value")).await?); }
+        for raw in rows { values.push(self.decode_document(&mut tx,&raw).await?); }
         tx.commit().await?;
         Ok(values)
     }
@@ -1660,13 +999,7 @@ impl Store {
         } else {
             &self.pool
         };
-        sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,?,?)")
-            .bind(sid)
-            .bind(kind)
-            .bind(self.encode_for_pool(destination, payload)?)
-            .execute(destination)
-            .await?;
-        Ok(())
+        docs::append_event(destination, sid, kind, &self.encode_for_pool(destination, payload)?).await
     }
     // Save one checkpoint only if the caller still has the revision and, for
     // loop execution, the live lease it read. The override below is reserved
@@ -1708,9 +1041,8 @@ impl Store {
     }
     /// Read a bounded authenticated session-event delta after a sequence cursor.
     pub async fn events(&self, sid: &str, after: i64) -> Result<Vec<Value>> {
-        let rows=sqlx::query("SELECT seq,kind,payload FROM events WHERE session_id=? AND seq>? ORDER BY seq LIMIT 200")
-            .bind(sid).bind(after).fetch_all(&self.pool).await?;
-        rows.iter().map(|r|Ok(json!({"seq":r.get::<i64,_>("seq"),"kind":r.get::<String,_>("kind"),"payload":self.unseal(&r.get::<Vec<u8>,_>("payload"))?}))).collect()
+        docs::session_events(&self.pool, sid, after).await?.into_iter()
+            .map(|(seq,kind,payload)|Ok(json!({"seq":seq,"kind":kind,"payload":self.unseal(&payload)?}))).collect()
     }
     // Save related documents and their event together. For message admission,
     // this includes the queued run and retry receipt: either all exist or none do.
@@ -3297,6 +2629,13 @@ mod admin_storage_policy_tests {
         std::fs::write(root.path().join("config/app-settings.json"), br#"{"admin_database_encryption":{"enabled":"false"}}"#).unwrap();
         assert!(Store::open(root.path()).await.is_err());
     }
+}
+
+// Storage primitives decode through this handle's agent key and plaintext policy.
+impl webagent_storage::ScopedCodec for Store {
+    fn seal(&self,value:&Value)->Result<Vec<u8>> {Store::seal(self,value)}
+    fn unseal(&self,data:&[u8])->Result<Value> {Store::unseal(self,data)}
+    fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {Store::encode_user_record(self,value)}
 }
 
 // Access borrows the existing cipher, identities and pools; no resource is duplicated.
