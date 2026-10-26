@@ -72,7 +72,13 @@
       <nav id="mobile-nav-items" class="mobile-nav-items">
       </nav>
       <!-- syncLayout() moves the header's account control here in mobile mode (as V2 does). -->
-      <footer id="mobile-nav-footer" class="mobile-nav-footer"></footer>
+      <footer id="mobile-nav-footer" class="mobile-nav-footer">
+        <div class="theme-toggle-group" role="group" aria-label="Theme">
+          <button class="theme-option" data-theme="light" type="button" title="Light" aria-label="Light" aria-pressed="false"><svg class="lucide-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button>
+          <button class="theme-option" data-theme="dark" type="button" title="Dark" aria-label="Dark" aria-pressed="false"><svg class="lucide-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z"/></svg></button>
+          <button class="theme-option" data-theme="system" type="button" title="System" aria-label="System" aria-pressed="false"><svg class="lucide-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg></button>
+        </div>
+      </footer>
     </aside>
     <div id="user-dropdown-menu" class="user-dropdown-menu" aria-label="Account menu" hidden>
       <div class="user-dropdown-current-row"><span class="v3-account-avatar" aria-hidden="true"><svg class="lucide-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-7 8-7s8 3 8 7"/></svg></span><div class="user-dropdown-current-info"><strong id="account-name" class="user-dropdown-current-name"></strong><span id="account-username" class="user-dropdown-current-email"></span></div></div>

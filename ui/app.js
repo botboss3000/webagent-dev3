@@ -795,17 +795,19 @@ $('logout').onclick=guard(async()=>{await api('/auth/logout','POST',{});out();})
 const systemTheme=matchMedia('(prefers-color-scheme: light)');
 let themeChoice='system';
 try{const saved=localStorage.getItem('v3-theme');if(['light','dark','system'].includes(saved))themeChoice=saved;}catch{}
+// The account menu and the mobile sidebar footer each have a theme switch; both stay in sync.
+const themeOptions=document.querySelectorAll('#user-dropdown-menu .theme-option, #mobile-nav-footer .theme-option');
 function applyAccountTheme(){
   const light=themeChoice==='light'||themeChoice==='system'&&systemTheme.matches;
   document.body.classList.toggle('light-mode',light);
   // Mirrors --bg-0 (design-system.css) so OS status/nav bars match the app theme.
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content',light?'#ffffff':'#000000');
-  for(const option of accountMenu.querySelectorAll('.theme-option')){
+  for(const option of themeOptions){
     const active=option.dataset.theme===themeChoice;
     option.classList.toggle('active',active);option.setAttribute('aria-pressed',String(active));
   }
 }
-for(const option of accountMenu.querySelectorAll('.theme-option'))option.onclick=()=>{
+for(const option of themeOptions)option.onclick=()=>{
   themeChoice=option.dataset.theme;
   try{localStorage.setItem('v3-theme',themeChoice);}catch{}
   applyAccountTheme();
