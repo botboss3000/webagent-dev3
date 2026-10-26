@@ -297,6 +297,21 @@ class EngineRebaseAttestationOrderTests(unittest.TestCase):
             self.assertIs(attested[0],blob)
             self.assertEqual([name for name in timeline if name in("attest","compile_test","test","compile_release")],
                 ["attest","attest","compile_test","test","attest","compile_release"])
+class ActivePhaseTests(unittest.TestCase):
+    def test_every_running_phase_is_listed_until_it_ends(self):
+        runner=types.SimpleNamespace(job_context=types.SimpleNamespace(),resource_progress=lambda job:None)
+        worker=executor.Executor(runner,None,{"state_root":"/nonexistent"});job={"job_id":"j","active_phases":[{"id":"other","phase":"test"}]}
+        seen=[]
+        def workload(job,phase,*args):
+            seen.append([a["phase"]for a in job["active_phases"]])
+            if phase=="compile_linked":raise RuntimeError("compile failed")
+            return "ok"
+        worker._phase_workload=workload
+        worker.phase(job,"test","test",None,None,["cargo","test"],"engine:rust1.90:test")
+        with self.assertRaises(RuntimeError):worker.phase(job,"compile_linked","engine",None,None,["cargo"],"engine:rust1.90:linked-release")
+        self.assertEqual(seen,[["test","test"],["test","compile_linked"]])
+        self.assertEqual(job["active_phases"],[{"id":"other","phase":"test"}])
+
 class EngineSuiteOverlapTests(unittest.TestCase):
     """The full suite runs beside the linked compile, which reads a private verified source copy."""
     def run_engine(self,suite_error=None,linked_error=None):

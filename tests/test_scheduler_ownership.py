@@ -278,6 +278,10 @@ class CargoModuleReservationTests(unittest.TestCase):
         self.assertEqual(self.scopes('crates/unknown/src/lib.rs'),['module:crate:crates/unknown','path:crates/unknown/src/lib.rs'])
         self.write('crates/modules/models/Cargo.toml','invalid toml = [')
         self.assertEqual(self.scopes('crates/modules/models/src/private.rs'),['module:backend:models','path:crates/modules/models/src/private.rs'])
+    def test_broker_tests_reserve_module_broker_not_workspace(self):
+        for path in ['tests/test_engine_components.py','tests/test_admin_build.py','tests/test_build_service.py']:
+            self.assertEqual(self.scopes(path),['module:broker','path:'+path])
+        self.assertIn('module:workspace',self.scopes('tests/test_python_build.py'))
     def test_legacy_engine_is_an_ordinary_token(self):
         for scope in ['module:backend:models','module:general','module:crate:crates/helper','module:engine-component:loop','path:src/main.rs']:
             self.assertFalse(m.scope_overlap('module:engine',scope));self.assertFalse(m.scope_overlap(scope,'module:engine'))

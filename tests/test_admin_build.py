@@ -551,15 +551,15 @@ class BuildTests(unittest.TestCase):
         def receipt(job_id, status, start, steps, phases, finished=None):
             return {"job_id": job_id, "status": status, "operation": "build_deploy", "user_id": self.trusted["user_id"],
                     "workspace": self.workspace, "created_at": start, "started_at": start, "finished_at": finished,
-                    "log": "private build output", "phase_timings": [{"phase": p, "seconds": 120} for p, _ in steps],
-                    "execution_history": [{"phase": p, "started_at": start + t} for p, t in steps],
+                    "log": "private build output", "phase_timings": [{"phase": p, "seconds": 120} for p, *_ in steps],
+                    "execution_history": [{"phase": p, "started_at": start + t, "elapsed_seconds": d} for p, t, d in steps],
                     "phase_history": [{"phase": p, "at": start + t} for p, t in phases]}
-        steps = [("dependency", 0), ("compile_test", 10), ("test", 300), ("compile_linked", 900), ("compile_release", 1300)]
+        steps = [("dependency", 0, 10), ("compile_test", 10, 290), ("test", 300, 600), ("compile_linked", 900, 400), ("compile_release", 1300, 400)]
         phases = [("building_api", 0), ("building_loop", 1700), ("frontend_tests", 1800)]
         for i in range(5):
             self.broker.jobs[f"done-{i}"] = receipt(f"done-{i}", "completed", 1000.0 * i, steps, phases, 1000.0 * i + 1900)
         now = time.time()
-        self.broker.jobs["live"] = dict(receipt("live", "running", now - 400, steps[:3], phases[:1]),
+        self.broker.jobs["live"] = dict(receipt("live", "running", now - 400, steps[:2], phases[:1]),
             execution_observation={"phase": "test", "elapsed_seconds": 100})
         value = self.call("v3_build_progress", {"job_id": "live"})
         self.assertEqual((value["class"], value["stage"], value["stage_index"]), ("build_deploy/compile/tests-ran", "run tests", 3))
@@ -574,6 +574,29 @@ class BuildTests(unittest.TestCase):
             self.call("v3_build_progress", {"job_id": "live"}, trusted=other, workspace=self.workspace)
         with self.assertRaises(ValueError):
             self.call("v3_build_progress", {"job_id": "live", "extra": 1})
+
+    def test_progress_shows_overlapping_phases_and_files_late_steps_under_their_phase(self):
+        now = 10000.0
+        job = {"job_id": "overlap", "status": "running", "operation": "build_deploy", "started_at": now - 600,
+               "phase_history": [{"phase": "building_api", "at": now - 600}],
+               "execution_history": [{"phase": "compile_test", "started_at": now - 590, "elapsed_seconds": 200}],
+               "active_phases": [{"id": "a", "phase": "test", "recipe": "engine:rust1.90:test", "started_at": now - 380},
+                                 {"id": "b", "phase": "compile_linked", "recipe": "engine:rust1.90:linked-release", "started_at": now - 380}],
+               "execution_observation": {"phase": "test", "elapsed_seconds": 380}}
+        value = host.job_progress(job, {}, now)
+        self.assertEqual([r["stage"] for r in value["running_stages"]], ["run tests", "linked release build"])
+        self.assertEqual((value["stage"], value["stage_seconds"]), ("linked release build", 380))
+        self.assertEqual([d["stage"] for d in value["finished_stages"]], ["compile tests"])
+        finished = {"job_id": "plugins", "status": "completed", "operation": "build_deploy", "started_at": 0, "finished_at": 400,
+                    "phase_history": [{"phase": "building_api", "at": 0}, {"phase": "preparing_plugins", "at": 100}, {"phase": "frontend_tests", "at": 300}],
+                    "execution_history": [{"phase": "dependency", "started_at": 1, "elapsed_seconds": 9},
+                                          {"phase": "dependency", "started_at": 150, "elapsed_seconds": 5},
+                                          {"phase": "plugin_compile", "started_at": 160, "elapsed_seconds": 20}],
+                    "active_phases": [{"id": "stale", "phase": "test", "started_at": 5}]}
+        spans = host.stage_spans(finished)
+        self.assertEqual(spans["dependencies"], [1, 10])
+        self.assertEqual(spans["prepare plugins"], [100, 300])
+        self.assertNotIn("run tests", spans)
 
     def test_pending_journal_scan_sees_new_and_rewritten_records(self):
         scheduler = self.broker.scheduler

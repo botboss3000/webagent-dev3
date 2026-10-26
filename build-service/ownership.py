@@ -178,7 +178,8 @@ class Components:
             elif path.startswith("plugins/abilities/")and len(parts)>=4:output.add("module:ability:"+"/".join(parts[2:4]))
             elif path=="plugins/engine/catalog.json":output.update("module:engine-component:"+c for c in COMPONENT_CRATES)
             elif path.startswith("plugins/engine/")and len(parts)>3:output.add("module:engine-component:"+parts[2])
-            elif path.startswith("build-service/")or path.startswith("tests/test_build")or path.startswith("tests/test_scheduler")or path in {"tests/test_code_index_maintenance.py","tests/test_published_code_index.py","tests/test_index_queue.py","tests/test_ui_policy.py","tests/test_admin_build_install.py"}:
+            elif path.startswith("build-service/")or path.startswith("tests/test_build")or path.startswith("tests/test_scheduler")or path in {"tests/test_code_index_maintenance.py","tests/test_published_code_index.py","tests/test_index_queue.py","tests/test_ui_policy.py","tests/test_admin_build_install.py",
+                "tests/test_admin_build.py","tests/test_admin_workspace.py","tests/test_engine_components.py","tests/test_context_component_builds.py","tests/test_buildctl_wait.py"}:
                 output.add("module:broker")
             elif path.startswith("services/system-monitoring/"):output.add("module:service:system-monitoring")
             elif path.startswith("ui/"):

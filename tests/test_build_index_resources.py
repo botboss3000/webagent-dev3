@@ -101,6 +101,29 @@ class MeasuredIndexExecutionTests(unittest.TestCase):
         command=next(call[1]for call in self.calls if call[0]=="command"and call[1][:2]==["docker","exec"])
         self.assertIn("--test-concurrency=1",command);self.assertIn("--experimental-vm-modules",command)
 
+    def test_resolved_fixtures_reuse_passed_evidence_across_releases_and_runtime_images(self):
+        (self.root/"ui_policy.py").write_text("# protected fixture recipe\n")
+        candidate=self.root/"candidate";(candidate/"v3/ui").mkdir(parents=True)
+        a,b="v3/ui/a.test.cjs","v3/ui/b.test.cjs"
+        for path in (a,b):(candidate/path).write_text("fixed fixture\n")
+        evidence={"tests":[a,b],"sha256":"b"*64,"runtime_images":{"api":"sha256:"+"1"*64},
+                  "test_inputs":{a:{"sha256":"e"*64,"conservative":False},b:{"sha256":"f"*64,"conservative":True}}}
+        def release():
+            self.runner.job_context.job={"job_id":str(uuid.uuid4())};return self.runner.job_context.job["job_id"]
+        with patch.object(fixtures.host,"STATE",self.root/"state"),patch.dict(fixtures.host.CONFIG["scheduler"],ui_test_image="sha256:"+"c"*64):
+            first_job=release();first=self.runner.validate_selected_tests(first_job,candidate,evidence)
+            self.assertEqual(first["executed_tests"],[a,b])
+            second=self.runner.validate_selected_tests(release(),candidate,{**evidence,"runtime_images":{"api":"sha256:"+"2"*64}})
+            self.assertEqual((second["reused_tests"],second["executed_tests"]),([a],[b]))
+            self.assertEqual(second["fixtures"][a]["reused_from"],first_job)
+            changed=self.runner.validate_selected_tests(release(),candidate,{**evidence,"test_inputs":{**evidence["test_inputs"],a:{"sha256":"9"*64,"conservative":False}}})
+            self.assertIn(a,changed["executed_tests"])
+            record=next((self.root/"state/ui-test-evidence").glob("*.json"));record.write_text('{"status":"passed"}')
+            self.assertEqual(len(list((self.root/"state/ui-test-evidence").glob("*.json"))),2)
+        with patch.object(fixtures.host,"STATE",self.root/"state"),patch.dict(fixtures.host.CONFIG["scheduler"],ui_test_image="sha256:"+"d"*64):
+            image_changed=self.runner.validate_selected_tests(release(),candidate,evidence)
+            self.assertEqual(image_changed["executed_tests"],[a,b])
+
     def test_selected_frontend_tests_require_protected_pinned_runtime(self):
         with patch.dict(fixtures.host.CONFIG["scheduler"],ui_test_image=None):
             with self.assertRaisesRegex(ValueError,"pinned UI test runtime"):

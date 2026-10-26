@@ -66,6 +66,7 @@ _maintenance_spec=importlib.util.spec_from_file_location("code_index_maintenance
 maintenance_engine=importlib.util.module_from_spec(_maintenance_spec);_maintenance_spec.loader.exec_module(maintenance_engine)
 
 STATE = Path(CONFIG["state_root"])
+UI_TEST_EVIDENCE_KEEP = 4096  # passed frontend fixture records reused across releases
 SOCKET = Path(CONFIG["runtime_root"])/"build.sock"
 BRIDGE_SOCKET = Path(CONFIG["runtime_root"])/"python.sock"
 BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
@@ -1817,6 +1818,27 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         """Bound the serial aggregate by selected fixture count, retaining every required fixture."""
         return min(900,max(300,45*len(tests)))
 
+    @staticmethod
+    def ui_test_record(store,key):
+        """A broker-written passed fixture record for this exact reuse key, or None."""
+        path=store/(key+".json")
+        if store.is_symlink()or path.is_symlink()or not path.is_file()or path.stat().st_size>4096:return None
+        try:value=json.loads(path.read_bytes())
+        except (OSError,ValueError):return None
+        if value.get("reuse_key")!=key or value.get("status")!="passed"or not isinstance(value.get("verified_job_id"),str):return None
+        os.utime(path)
+        return value
+
+    @staticmethod
+    def record_ui_test(store,key,test,job_id,verified_at):
+        """Publish one verified fixture pass atomically; keep the most recent records only."""
+        if store.is_symlink():raise ValueError("UI test evidence store symlink")
+        store.mkdir(mode=0o700,parents=True,exist_ok=True)
+        temporary=store/(key+".tmp-"+uuid.uuid4().hex)
+        temporary.write_text(json.dumps({"reuse_key":key,"test":test,"status":"passed","verified_job_id":job_id,"verified_at":verified_at},sort_keys=True))
+        os.replace(temporary,store/(key+".json"))
+        for old in sorted(store.glob("*.json"),key=lambda p:p.stat().st_mtime)[:-UI_TEST_EVIDENCE_KEEP]:old.unlink(missing_ok=True)
+
     def validate_selected_tests(self,job_id,root,evidence):
         """Execute dependency-selected frontend fixtures in one isolated browser-capable worker."""
         tests=evidence["tests"]
@@ -1828,16 +1850,24 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         job=getattr(self.job_context,"job",None)
         previous=(job or {}).get("ui_test_evidence",{})
         prior=previous.get("fixtures",{}) if previous.get("status")=="passed" else {}
-        fixtures={};pending=[];reused=[]
+        fixtures={};pending=[];reused=[];store=STATE/"ui-test-evidence"
         for test in tests:
             proof=evidence.get("test_inputs",{}).get(test)
             dependency=proof["sha256"] if proof else evidence["sha256"]
             binding=hashlib.sha256(canonical({"dependencies":dependency,"runtime_images":evidence.get("runtime_images",{}),"image":image,"recipe":recipe,"recipe_sha256":recipe_sha256,"environment":environment,"test":test})).hexdigest()
+            # Cross-release reuse leaves out runtime images (the fixture container mounts only
+            # candidate UI files) and applies only to fixtures whose inputs fully resolved.
+            reuse_key=(hashlib.sha256(canonical({"dependencies":dependency,"image":image,"recipe":recipe,"recipe_sha256":recipe_sha256,"environment":environment,"test":test})).hexdigest()
+                if proof and proof.get("conservative") is False else None)
             saved=prior.get(test,{})
+            stored=Runner.ui_test_record(store,reuse_key)if reuse_key else None
             if saved.get("status")=="passed" and saved.get("binding")==binding:
                 fixtures[test]={**saved,"reused":True};reused.append(test)
+            elif stored:
+                fixtures[test]={"binding":binding,"reuse_key":reuse_key,"status":"passed","reused":True,"reused_from":stored["verified_job_id"],
+                    "verified_job_id":stored["verified_job_id"],"verified_at":stored["verified_at"],"conservative":False};reused.append(test)
             else:
-                fixtures[test]={"binding":binding,"status":"pending","reused":False,"conservative":proof.get("conservative",True)if proof else True}
+                fixtures[test]={"binding":binding,"reuse_key":reuse_key,"status":"pending","reused":False,"conservative":proof.get("conservative",True)if proof else True}
                 pending.append(test)
         if tests:
             if not isinstance(image,str)or not re.fullmatch(r"sha256:[a-f0-9]{64}",image):raise ValueError("Protected pinned UI test runtime required")
@@ -1854,6 +1884,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 "--entrypoint","node",image,"--experimental-vm-modules","--test","--test-concurrency=1",*["/candidate/"+p for p in pending]],timeout=self.ui_test_timeout(pending),kind="ui_test")
             for test in pending:
                 fixtures[test].update(status="passed",verified_job_id=job_id,verified_at=time.time())
+                if fixtures[test].get("reuse_key"):Runner.record_ui_test(store,fixtures[test]["reuse_key"],test,job_id,fixtures[test]["verified_at"])
         binding=hashlib.sha256(canonical({p:row["binding"]for p,row in fixtures.items()})).hexdigest()
         return {"binding":binding,"image":image,"recipe":recipe,"tests":tests,"status":"passed"if tests else"not_applicable",
                 "reused":bool(tests)and not pending,"reused_tests":reused,"executed_tests":pending,"fixtures":fixtures}
@@ -2441,20 +2472,40 @@ STAGE_ORDER = ["dependencies", "compile tests", "run tests", "linked release bui
     "package images", "build loop image", "prepare plugins", "prepare UI", "UI tests", "deploy and health checks"]
 
 
-def stage_marks(job, now=None):
-    """Ordered (time, stage) marks from a receipt; image packaging after building_api stays in its phase."""
-    history = [(e.get("phase"), e.get("at")) for e in job.get("phase_history") or [] if e.get("at")]
-    steps = [(e.get("phase"), e.get("started_at")) for e in job.get("execution_history") or [] if e.get("started_at")]
-    live = job.get("execution_observation") or {}
-    if live.get("phase") and job.get("status") in {"queued", "running"} and now is not None:
-        steps.append((live["phase"], now - (live.get("elapsed_seconds") or 0)))
+def stage_spans(job, now=None):
+    """{stage: [start, end or None]} from step records, running phases and job phases.
+
+    Phases that overlap (the full suite beside the linked compile) keep their own
+    spans. Steps started inside a later job phase (loop image packaging, plugin
+    component builds) belong to that phase's stage."""
+    history = sorted((e.get("at"), e.get("phase")) for e in job.get("phase_history") or [] if e.get("at"))
+    terminal = job.get("status") not in {"queued", "running"}
     def phase_at(t):
-        before = [(at, p) for p, at in history if at <= t]
-        return max(before)[1] if before else None
-    marks = [(t, None if p == "package" and phase_at(t) not in (None, "building_api") else
-              STAGE_OF.get(p, None if p in STAGE_SKIP else "deploy and health checks")) for p, t in steps]
-    marks += [(t, STAGE_OF.get(p, None if p in STAGE_SKIP else "deploy and health checks")) for p, t in history]
-    return sorted((t, s) for t, s in marks if s)
+        before = [p for at, p in history if at <= t]
+        return before[-1] if before else None
+    def stage(phase, t):
+        if phase_at(t) not in (None, "building_api"):
+            return None
+        return STAGE_OF.get(phase, None if phase in STAGE_SKIP else "deploy and health checks")
+    spans = {}
+    def add(name, a, b):
+        if name:
+            lo, hi = spans.get(name, (a, b))
+            spans[name] = [min(lo, a), None if b is None or hi is None else max(hi, b)]
+    for e in job.get("execution_history") or []:
+        if e.get("started_at"):
+            add(stage(e.get("phase"), e["started_at"]), e["started_at"], e["started_at"] + (e.get("elapsed_seconds") or 0))
+    if not terminal:
+        running = [(a.get("phase"), a.get("started_at")) for a in job.get("active_phases") or [] if a.get("started_at")]
+        live = job.get("execution_observation") or {}
+        if not running and live.get("phase") and now is not None:
+            running = [(live["phase"], now - (live.get("elapsed_seconds") or 0))]
+        for phase, t in running:
+            add(stage(phase, t), t, None)
+    for i, (at, phase) in enumerate(history):
+        nxt = history[i + 1][0] if i + 1 < len(history) else (job.get("finished_at") if terminal else None)
+        add(STAGE_OF.get(phase, None if phase in STAGE_SKIP else "deploy and health checks"), at, nxt)
+    return spans
 
 
 def job_class(job):
@@ -2476,18 +2527,11 @@ def stage_baselines(jobs):
     for job in jobs:
         if job.get("status") != "completed" or not job.get("execution_history") or not job.get("finished_at"):
             continue
-        marks = stage_marks(job) + [(job["finished_at"], None)]
-        spans, current, since = {}, None, None
-        for t, s in marks:
-            if s == current:
-                continue
-            if current is not None:
-                spans[current] = spans.get(current, 0) + max(0, t - since)
-            current, since = s, t
         c = classes.setdefault(job_class(job), {"walls": [], "spans": {}})
         c["walls"].append(job["finished_at"] - job["started_at"])
-        for stage, seconds in spans.items():
-            c["spans"].setdefault(stage, []).append(seconds)
+        for name, (lo, hi) in stage_spans(job).items():
+            if hi is not None:
+                c["spans"].setdefault(name, []).append(max(0, hi - lo))
     return {name: {"jobs": len(c["walls"]), "wall": {"p50": pct(c["walls"], .5), "p90": pct(c["walls"], .9)},
                    "stages": [{"stage": s, "n": len(c["spans"][s]), "p50": pct(c["spans"][s], .5), "p90": pct(c["spans"][s], .9)}
                               for s in STAGE_ORDER if len(c["spans"].get(s, [])) * 5 >= len(c["walls"])]}
@@ -2495,35 +2539,44 @@ def stage_baselines(jobs):
 
 
 def job_progress(job, baselines, now):
-    """Stage k of N with durations against class p50-p90; names and timings only, never logs."""
+    """Finished, running and upcoming stages against class p50-p90; names and timings only, never logs."""
     now = job.get("finished_at") or now  # a finished job's clock stops at its end
-    phases = {e.get("phase") for e in job.get("execution_history") or []} | {(job.get("execution_observation") or {}).get("phase")}
+    phases = ({e.get("phase") for e in job.get("execution_history") or []} | {(job.get("execution_observation") or {}).get("phase")}
+              | {t.get("phase") for t in job.get("phase_timings") or []})
     known = job.get("operation") != "build_deploy" or bool(phases & {"compile_test", "compile_linked", "compile_release", "package"})
     cls = job_class(job) if known or job.get("status") not in {"queued", "running"} else "build_deploy/compile/tests-ran"
+    if job.get("status") in {"queued", "running"} and cls.endswith("/tests-reused") and "test" in {a.get("phase") for a in job.get("active_phases") or []} | phases | ({"test"} if "package" not in phases else set()):
+        cls = cls.replace("/tests-reused", "/tests-ran")  # a running job's suite has not reported yet
     plan = baselines.get(cls, {"stages": [], "wall": {}})
     stats = {s["stage"]: s for s in plan["stages"]}
     names = [s["stage"] for s in plan["stages"]]
     started = next((t for t in (job.get("started_at"), job.get("created_at")) if t is not None), now)
-    done, current, since = [], "queued", started
-    for t, s in stage_marks(job, now):
-        if s != current:
-            if current != "queued":
-                done.append({"stage": current, "seconds": round(t - since)})
-            current, since = s, t
-    elapsed = now - since
-    stat = stats.get(current)
+    spans = stage_spans(job, now)
+    order = names + sorted((s for s in spans if s not in names), key=lambda s: spans[s][0])
+    def normal(name):
+        return stats.get(name) and [stats[name]["p50"], stats[name]["p90"]]
+    finished, running, upcoming = [], [], []
+    for name in order:
+        if name not in spans:
+            upcoming.append({"stage": name, "normal": normal(name)})
+        elif spans[name][1] is None:
+            running.append({"stage": name, "seconds": round(now - spans[name][0]), "normal": normal(name)})
+        else:
+            finished.append({"stage": name, "seconds": round(spans[name][1] - spans[name][0]), "normal": normal(name)})
+    current = running[-1] if running else None
+    elapsed = current["seconds"] if current else 0
+    stat = stats.get(current["stage"]) if current else None
     verdict = ("no baseline" if stat is None else "on track" if elapsed <= stat["p50"]
                else "on track, slower than median" if elapsed <= stat["p90"] else "slow, past p90")
-    finished = {d["stage"] for d in done}
-    remaining = names[names.index(current) + 1:] if current in names else [n for n in names if n not in finished]
-    low = max(0, (stat or {}).get("p50", 0) - elapsed) + sum(stats[s]["p50"] for s in remaining)
-    high = max(0, (stat or {}).get("p90", 0) - elapsed) + sum(stats[s]["p90"] for s in remaining)
+    low = sum(max(0, (stats.get(r["stage"]) or {}).get("p50", 0) - r["seconds"]) for r in running) + sum((stats.get(u["stage"]) or {}).get("p50", 0) for u in upcoming)
+    high = sum(max(0, (stats.get(r["stage"]) or {}).get("p90", 0) - r["seconds"]) for r in running) + sum((stats.get(u["stage"]) or {}).get("p90", 0) for u in upcoming)
     if job.get("status") not in {"queued", "running"}:
         low = high = 0
+    stage_name = current["stage"] if current else ("queued" if not finished else finished[-1]["stage"])
     return {"job_id": job.get("job_id"), "status": job.get("status"), "class": cls, "class_provisional": not known,
-            "stage": current, "stage_index": names.index(current) + 1 if current in names else len(finished) + 1,
-            "stage_count": len(names), "stage_seconds": round(elapsed), "stage_normal": stat and [stat["p50"], stat["p90"]],
-            "verdict": verdict, "finished_stages": [dict(d, normal=stats.get(d["stage"]) and [stats[d["stage"]]["p50"], stats[d["stage"]]["p90"]]) for d in done],
+            "stage": stage_name, "stage_index": order.index(stage_name) + 1 if stage_name in order else len(finished) + 1,
+            "stage_count": len(order), "stage_seconds": round(elapsed), "stage_normal": normal(stage_name),
+            "verdict": verdict, "finished_stages": finished, "running_stages": running, "upcoming_stages": upcoming,
             "job_seconds": round(now - started), "job_normal": plan["wall"] and [plan["wall"]["p50"], plan["wall"]["p90"]],
             "remaining_seconds": [round(low), round(high)]}
 

@@ -193,6 +193,8 @@ class Executor:
         started=time.monotonic();token=uuid.uuid4().hex;outcome="failed"
         job["active_verification"]={"id":token,"phase":phase,"recipe":profile,"started_at":time.time()}
         if getattr(self.runner,"job_context",None)is not None:self.runner.job_context.verification_id=token
+        # Every running phase is listed: overlapping phases share one live observation.
+        with self.job_lock():job["active_phases"]=[a for a in job.get("active_phases",[])if a.get("id")!=token]+[{"id":token,"phase":phase,"recipe":profile,"started_at":time.time()}]
         getattr(self.runner,"resource_progress",lambda _:None)(job)
         try:
             result=self._phase_workload(job,phase,kind,source,output,argv,profile,timeout,network)
@@ -201,6 +203,7 @@ class Executor:
             with self.job_lock():
                 job.setdefault("phase_timings",[]).append({"phase":phase,"recipe":profile,"seconds":round(time.monotonic()-started,3),"outcome":outcome})
                 job["phase_timings"]=job["phase_timings"][-128:]
+                job["active_phases"]=[a for a in job.get("active_phases",[])if a.get("id")!=token]
             if job.get("active_verification",{}).get("id")==token:job.pop("active_verification",None)
             getattr(self.runner,"resource_progress",lambda _:None)(job)
 
@@ -256,7 +259,7 @@ class Executor:
                 if observed:
                     with self.job_lock():
                         job.setdefault("execution_history",[]).append({k:v for k,v in observed.items()if k!="events"})
-                        job["execution_history"]=job["execution_history"][-32:]
+                        job["execution_history"]=job["execution_history"][-128:]
             self.persist_phase_log(job,logs)
             success=True;return logs
         except BaseException as error:
@@ -370,7 +373,7 @@ class Executor:
                 observed=job.get("execution_observation",{})
                 if observed.get("phase")=="package":
                     job.setdefault("execution_history",[]).append({k:v for k,v in observed.items()if k!="events"})
-                    job["execution_history"]=job["execution_history"][-32:]
+                    job["execution_history"]=job["execution_history"][-128:]
         except BaseException as error:
             primary=True;job.setdefault("package_failures",[]).append({"role":role,"stage":stage,"exception_type":type(error).__name__})
             getattr(self.runner,"resource_progress",lambda _:None)(job);raise

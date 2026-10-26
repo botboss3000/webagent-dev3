@@ -1609,6 +1609,7 @@ class UIFixtureEvidenceReuseTests(unittest.TestCase):
         self.runner=types.SimpleNamespace(job_context=types.SimpleNamespace(job=self.job),
             index_command=lambda argv,**kwargs:self.calls.append(argv),ui_test_timeout=lambda tests:120)
         self.config={**fixtures.host.CONFIG,"scheduler":{**fixtures.host.CONFIG.get("scheduler",{}),"ui_test_image":"sha256:"+"1"*64}}
+        state=patch.object(fixtures.host,"STATE",self.root/"state");state.start();self.addCleanup(state.stop)
     def run_tests(self,images=None):
         evidence=fixtures.host.ui_policy_module.dependencies(self.files,["v3/ui/a.js"])
         evidence["runtime_images"]=images or {"api":"sha256:"+"2"*64,"loop":"sha256:"+"3"*64}
@@ -1647,11 +1648,16 @@ class UIFixtureEvidenceReuseTests(unittest.TestCase):
 
     def test_runtime_image_policy_and_fixture_changes_invalidate(self):
         first=self.run_tests();self.job["ui_test_evidence"]=first
-        self.assertEqual(set(self.run_tests({"api":"sha256:"+"5"*64,"loop":"sha256:"+"3"*64})["executed_tests"]),set(first["tests"]))
+        # Fixtures never mount or reach runtime images: a resolved fixture reuses its
+        # cross-release record; the unresolved fixture still runs.
+        changed=self.run_tests({"api":"sha256:"+"5"*64,"loop":"sha256:"+"3"*64})
+        self.assertEqual((changed["reused_tests"],changed["executed_tests"]),(["v3/ui/a.test.mjs"],["v3/ui/b.test.mjs"]))
         self.files["v3/ui/a.test.mjs"]=(420,b"import './a.js'; // new assertions")
         self.assertIn("v3/ui/a.test.mjs",self.run_tests()["executed_tests"])
         self.files["v3/ui/a.test.mjs"]=(420,b"import './a.js';")
         self.job["ui_test_evidence"]={**first,"fixtures":{p:{**row,"binding":"old recipe"}for p,row in first["fixtures"].items()}}
+        # A real recipe change also changes every cross-release key; model it by dropping the old records.
+        import shutil;shutil.rmtree(self.root/"state/ui-test-evidence")
         self.assertEqual(set(self.run_tests()["executed_tests"]),set(first["tests"]))
 
 class InstalledUIPolicyPublicationTests(unittest.TestCase):

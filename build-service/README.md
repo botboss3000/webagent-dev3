@@ -234,11 +234,15 @@ or output. Each cycle rewrites `build-jobs/coordination/performance.json` (last
 300 steps plus request totals since start, keyed by operation and action). Use it to attribute
 idle broker load; it carries no authority and is safe to delete.
 
-`buildctl progress JOB_ID` returns stage k of N for a job, each finished stage's
-duration and the running stage's elapsed time against its class p50/p90, and a
-remaining-time range. Classes are the work actually done (operation, compiled or
-reused artifacts, tests run or reused), computed from completed receipts. The
-read follows the same ownership rule as `buildctl job` and never returns logs.
+`buildctl progress JOB_ID` returns finished, running and upcoming stages for a
+job, each against its class p50/p90, plus a remaining-time range. Stages are
+built from step spans (`execution_history`, last 128 steps) and the job's
+`active_phases` list, so overlapping phases such as the full suite beside the
+linked compile both show as running; steps started inside a later job phase
+(loop image packaging, engine component plugin builds) count toward that phase.
+Classes are the work actually done (operation, compiled or reused artifacts,
+tests run or reused), computed from completed receipts. The read follows the
+same ownership rule as `buildctl job` and never returns logs.
 
 ## Compiled-dependency snapshots
 
@@ -254,6 +258,18 @@ freshness and all test, smoke and equivalence gates are unchanged. Any failure
 leaves an empty target and the job compiles cold (`dependency_snapshot` in the
 receipt records hit, prepared, skipped or unavailable). The three most recent
 keys are kept; the cache is rebuildable and safe to delete while no job runs.
+
+## Cross-release UI fixture reuse
+
+A frontend fixture runs with no network, credentials or API, mounting only the
+candidate's UI files, so its result depends on those files, the pinned test
+image, the runner recipe and identity. When a fixture's input proof fully
+resolved (`conservative: false`), its pass is recorded under
+`build-jobs/ui-test-evidence/<reuse key>.json` and a later release with the
+same key reuses it, whatever runtime images it ships. The runtime images stay
+in each fixture's provenance binding. Conservative fixtures always run; any
+test-image or recipe change invalidates every record. The most recent 4096
+records are kept; the store is rebuildable and safe to delete.
 
 ## Suite and linked compile overlap
 
@@ -329,8 +345,10 @@ read-only with no external network, application data, credentials or Docker
 socket; profiles and local fixture servers live only in their container. Node
 uses experimental VM modules and test concurrency one. One measured browser
 worker admits globally; index scans have measured independent admission. Tests
-are reused only when source/dependencies, runtime images and verification recipe
-match. A selection manifest alone never reports tests passed.
+are reused only when their inputs, test image and verification recipe match;
+within one job the binding also includes runtime images, and across releases a
+fully resolved fixture reuses its record whatever runtime images ship (see
+Cross-release UI fixture reuse). A selection manifest alone never reports tests passed.
 
 ### Project queue and sealed review continuation
 
