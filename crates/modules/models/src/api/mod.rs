@@ -21,5 +21,6 @@ pub async fn administrator<C:crate::storage::RuntimeStorage>(app:&crate::runtime
     Ok(())
 }
 pub mod selection;
+pub mod credentials;
 pub mod account_catalog;
 pub mod platform_catalog;

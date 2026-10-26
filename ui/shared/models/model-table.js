@@ -541,10 +541,14 @@ export function mountModelTable(host, opts = {}) {
   let validatedCredential = '';
   let credentialValidationTimer = null;
   const credentialSaveCheck = makeCheck();
+  const credentialLabelInput = document.createElement('input');
+  credentialLabelInput.type = 'text'; credentialLabelInput.className = 'ac-input ac-input-sm';
+  credentialLabelInput.placeholder = 'Key name'; credentialLabelInput.maxLength = 80; credentialLabelInput.autocomplete = 'off';
+  credentialLabelInput.setAttribute('aria-label', 'Saved key display name');
   const credentialSelect = document.createElement('select');
   credentialSelect.className = 'ac-input ac-input-sm'; credentialSelect.setAttribute('aria-label', 'Saved credentials');
   credentialSelect.hidden = true;
-  keyCtrl.append(keyInput, loadCredentialBtn, saveCredentialBtn, credentialSaveCheck, credentialSelect, keyCheck);
+  keyCtrl.append(keyInput, loadCredentialBtn, credentialLabelInput, saveCredentialBtn, credentialSaveCheck, credentialSelect, keyCheck);
   keyRow.appendChild(keyCtrl);
   table.appendChild(keyRow);
 
@@ -1301,7 +1305,9 @@ export function mountModelTable(host, opts = {}) {
     // Reuse the API row's credential controls, feedback, and picker in the
     // subscription row; the OAuth secret stays entirely server-side.
     const credentialHost = subscription ? subscriptionActions : keyCtrl;
-    [loadCredentialBtn, saveCredentialBtn, credentialSaveCheck, credentialSelect].forEach(control => credentialHost.appendChild(control));
+    [loadCredentialBtn, credentialLabelInput, saveCredentialBtn, credentialSaveCheck, credentialSelect].forEach(control => credentialHost.appendChild(control));
+    // Subscription credentials are saved under a fixed name; only API keys take a display name.
+    credentialLabelInput.hidden = subscription;
     const vaultName = subscriptionScope === 'agent' ? "this agent's" : subscriptionScope === 'platform' ? "the app's" : 'your personal';
     saveCredentialBtn.title = `Save this validated credential to ${vaultName} vault`;
     updateCredentialSaveState();
@@ -1603,10 +1609,12 @@ export function mountModelTable(host, opts = {}) {
     });
     return credentials;
   }
-  async function showCredentialPicker() {
+  // quiet: offered automatically on provider selection, so stay hidden and silent when empty.
+  async function showCredentialPicker(options = {}) {
+    const quiet = options.quiet === true;
     const provider = currentCredentialProvider();
     if (!provider || provider === 'webagent_catalog') {
-      setModelStatus('Select a provider to load its saved credentials.');
+      if (!quiet) setModelStatus('Select a provider to load its saved credentials.');
       return;
     }
     loadCredentialBtn.disabled = true;
@@ -1616,8 +1624,9 @@ export function mountModelTable(host, opts = {}) {
         : await listSavedCredentials();
       const kind = isSubscriptionProvider() ? 'subscription' : 'api_key';
       const matches = (Array.isArray(data?.credentials) ? data.credentials : []).filter((credential) => credential.kind === kind && credential.provider === provider);
+      if (quiet && (!matches.length || provider !== currentCredentialProvider())) return;
       credentialSelect.replaceChildren();
-      const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = matches.length ? 'Select saved credential…' : `No saved ${provider} credentials`;
+      const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = matches.length ? 'Use a saved key or enter a new one…' : `No saved ${provider} credentials`;
       credentialSelect.appendChild(placeholder);
       matches.forEach((credential) => {
         const option = document.createElement('option'); option.value = credential.label;
@@ -1626,8 +1635,8 @@ export function mountModelTable(host, opts = {}) {
       });
       credentialSelect.hidden = false;
       if (!matches.length) setModelStatus(`No saved credentials for ${provider}.`);
-      else credentialSelect.focus();
-    } catch (error) { setModelStatus(error.message || 'Could not load saved credentials.'); }
+      else if (!quiet) credentialSelect.focus();
+    } catch (error) { if (!quiet) setModelStatus(error.message || 'Could not load saved credentials.'); }
     finally { loadCredentialBtn.disabled = false; }
   }
   async function applySavedCredential(label) {
@@ -1659,6 +1668,7 @@ export function mountModelTable(host, opts = {}) {
       const credential = data?.credential || {};
       if (!data?.api_key) throw new Error('Saved credential is unavailable.');
       keyInput.value = data.api_key;
+      credentialLabelInput.value = credential.label || '';
       if (credential.base_url) urlInput.value = credential.base_url;
       credentialSelect.hidden = true; credentialSelect.value = '';
       keyInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1736,7 +1746,7 @@ export function mountModelTable(host, opts = {}) {
     const provider = currentCredentialProvider();
     if (!apiKey || validatedCredential !== credentialFingerprint()) return setModelStatus('Enter and validate the provider credential before saving.');
     if (!provider || provider === 'webagent_catalog' || isSubscriptionProvider()) return setModelStatus('Select an API-key provider before saving.');
-    const label = `${S.presets[provider]?.name || provider} credential`;
+    const label = credentialLabelInput.value.trim() || `${S.presets[provider]?.name || provider} key`;
     saveCredentialBtn.disabled = true;
     try {
       const data = await saveSavedCredential({ label, provider, base_url: urlInput.value.trim(), api_key: apiKey });
@@ -3240,7 +3250,7 @@ export function mountModelTable(host, opts = {}) {
     urlInput.value = (saved && saved.base_url) || S.presets[S.currentProvider]?.base_url || '';
     keyInput.value = ''; keyInput.placeholder = 'sk-...';
     validatedCredential = ''; clearTimeout(credentialValidationTimer);
-    credentialSelect.hidden = true; credentialSelect.replaceChildren();
+    credentialSelect.hidden = true; credentialSelect.replaceChildren(); credentialLabelInput.value = '';
     S.selectedModel = inlineCatalogAdd ? '' : ((saved && saved.model) || '');
     modelSearch.value = inlineCatalogAdd ? '' : S.selectedModel;
     setModelStatus(inlineCatalogAdd ? '' : (S.selectedModel ? `Selected: ${S.selectedModel}` : ''), true);
@@ -3251,6 +3261,8 @@ export function mountModelTable(host, opts = {}) {
     // selection. A failed request restores Retry verification code.
     if (isSubscriptionProvider() && !activeSubscriptionVerification()
         && !matchingSubscriptionRow()?.credential_configured) startSubscriptionLogin();
+    // Offer this provider's saved API keys; typing a new key remains available.
+    if (!isSubscriptionProvider()) showCredentialPicker({ quiet: true });
     loadModels();
     autosaveSingle(provCheck);
   });

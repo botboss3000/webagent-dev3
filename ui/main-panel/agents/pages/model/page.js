@@ -28,14 +28,16 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   function markPending(el){if(el)el.classList.add('v3-pending-feature');}
   function pending(){
     if(stopped)return;
-    for(const el of group.querySelectorAll('.ac-saved-usage-th,.ac-saved-usage,.ac-model-meta-aliases,.ac-directives-section-title,.ac-directive-hint,.ac-saved-credentials .ac-ability-name'))markPending(el);
+    for(const el of group.querySelectorAll('.ac-saved-usage-th,.ac-saved-usage,.ac-model-meta-aliases,.ac-directives-section-title,.ac-directive-hint'))markPending(el);
     for(const el of group.querySelectorAll('.ac-model-alias-add')){el.disabled=true;markPending(el);}
     for(const el of group.querySelectorAll('.ac-model-meta-editable')){
       if(el.closest('.ac-model-meta-nameline'))continue;
       const line=el.closest('.ac-model-meta-line');markPending(line);el.setAttribute('aria-disabled','true');el.tabIndex=-1;el.style.pointerEvents='none';
     }
+    // Saved subscription credentials remain unported; API keys use the agent vault.
     for(const row of tableHost.querySelectorAll('.ac-model-cfg-row')){
-      for(const btn of row.querySelectorAll('button'))if(['Load','Save'].includes(btn.textContent)){btn.hidden=true;btn.style.display='none';btn.disabled=true;}
+      const unported=row.querySelector('.ac-ability-name')?.textContent==='Connection';
+      for(const btn of row.querySelectorAll('button'))if(['Load','Save'].includes(btn.textContent)){btn.hidden=unported;btn.style.display=unported?'none':'';}
     }
     markPending(analyticsHost);
     for(const row of group.querySelectorAll('.ac-directive-row'))markPending(row.querySelector('.ac-ability-name')||row);

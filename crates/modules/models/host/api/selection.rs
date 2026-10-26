@@ -90,6 +90,13 @@ async fn member_set(State(app): State<App>, Extension(identity): Extension<Value
 }
 
 
+// AGENT-VAULT: named API keys are owner-private records in the managed agent's database.
+use webagent_models::api::credentials::{self as vault,Label,Save};
+async fn credentials(State(app):State<App>,Extension(identity):Extension<Value>,Path(id):Path<String>)->Api { vault::list(&app.models_runtime(),identity,id).await.map_err(Into::into) }
+async fn credential_save(State(app):State<App>,Extension(identity):Extension<Value>,Path(id):Path<String>,Json(body):Json<Save>)->Api { vault::save(&app.models_runtime(),identity,id,body).await.map_err(Into::into) }
+async fn credential_load(State(app):State<App>,Extension(identity):Extension<Value>,Path(id):Path<String>,Json(body):Json<Label>)->Api { vault::load(&app.models_runtime(),identity,id,body).await.map_err(Into::into) }
+async fn credential_delete(State(app):State<App>,Extension(identity):Extension<Value>,Path(id):Path<String>,Json(body):Json<Label>)->Api { vault::delete(&app.models_runtime(),identity,id,body).await.map_err(Into::into) }
+
 async fn discover(State(app):State<App>,Extension(identity):Extension<Value>,Json(input):Json<Discovery>)->Api { webagent_models::api::selection::discover(&app.models_runtime(),identity,input).await.map_err(Into::into) }
 
 /// Nest only under the authenticated browser API (including its CSRF middleware).
@@ -97,6 +104,8 @@ pub fn router() -> Router<App> {
     Router::new().route("/catalog", get(read).put(save))
         .route("/discovery", axum::routing::post(discover))
         .route("/agents/{id}/members", get(members).put(member_set))
+        .route("/agents/{id}/credentials", get(credentials).put(credential_save).delete(credential_delete))
+        .route("/agents/{id}/credentials/load", axum::routing::post(credential_load))
         .route("/connections/{id}", get(connection_status))
         .route("/connections/authorization/pending", get(pending_subscription_authorization))
         .route("/connections/{id}/models", get(subscription_models))

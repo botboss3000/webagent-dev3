@@ -37,6 +37,7 @@ export function createModelAdapter(request, agentId, onAssignment) {
   let queue=Promise.resolve();
   const drafts=new Map();
   const scope='/models/catalog?agent_id='+encodeURIComponent(agentId);
+  const vault='/models/agents/'+encodeURIComponent(agentId)+'/credentials';
   async function read(){
     if(!agentId) throw Error('Select an authorized agent first');
     data=await request(scope);catalog=data.catalog;return data;
@@ -185,10 +186,11 @@ export function createModelAdapter(request, agentId, onAssignment) {
       }
       account=await request('/models/me/catalog/default','PUT',{expected_revision:account.revision,default_entry_id:sourceId||null});return account;
     },
-    listCredentials:async()=>reject('named credential library'),
-    loadCredential:async()=>reject('named credential library'),
-    saveCredential:async()=>reject('credential library validation/save'),
-    deleteCredential:async()=>reject('credential library deletion'),
+    // Named API keys live in this agent's vault; values come back only to their owner.
+    listCredentials:()=>request(vault),
+    loadCredential:label=>request(vault+'/load','POST',{label}),
+    saveCredential:({label,provider,base_url,api_key})=>request(vault,'PUT',{label,provider,base_url,api_key}),
+    deleteCredential:label=>request(vault,'DELETE',{label}),
     resetSubscriptionCredentials:async()=>{
       if(destroyed)throw Error('Models page closed');
       const result=await request('/models/connections/subscription/reset?agent_id='+encodeURIComponent(agentId),'POST');
@@ -200,6 +202,12 @@ export function createModelAdapter(request, agentId, onAssignment) {
       // The reference control keeps its V2 paths; only this bridge reaches V3.
       if(destroyed)throw Error('Models page closed');
       const url=new URL(path,location.origin);const entryId=url.searchParams.get('entry_id');
+      if(url.pathname.endsWith('/model-credentials/validate')){
+        // A key validates when the provider accepts it for model discovery.
+        const {provider,api_key}=JSON.parse(options.body||'{}');
+        try{await request('/models/discovery','POST',{provider,api_key});return response({validated:true});}
+        catch(error){return response({detail:error.message||'Credential validation failed'},400);}
+      }
       if(url.pathname.endsWith('/login/start')){
         if(!data.can_manage)throw Error('Read-only agent');
         const pending=await request('/models/connections/authorization/pending?agent_id='+encodeURIComponent(agentId));
