@@ -23,6 +23,7 @@ import re
 import signal
 import shutil
 import tempfile
+import tomllib
 import socket
 import stat
 import struct
@@ -68,7 +69,9 @@ maintenance_engine=importlib.util.module_from_spec(_maintenance_spec);_maintenan
 
 STATE = Path(CONFIG["state_root"])
 UI_TEST_EVIDENCE_KEEP = 4096
-SEO_BLOCK_MAX = 16 * 1024  # server-rendered head block allowed in the /app shell  # passed frontend fixture records reused across releases
+SEO_BLOCK_MAX = 16 * 1024
+ADMIN_WORKSPACE = "00000000-0000-0000-0000-000000000000"
+STABLE_FEATURE = "stable-abilities"  # root Cargo feature that links ability crates into the binary  # server-rendered head block allowed in the /app shell  # passed frontend fixture records reused across releases
 SOCKET = Path(CONFIG["runtime_root"])/"build.sock"
 BRIDGE_SOCKET = Path(CONFIG["runtime_root"])/"python.sock"
 BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
@@ -2139,6 +2142,18 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         tags = re.findall(rb"<\s*(/?)([A-Za-z!][A-Za-z0-9-]*)", block[:script])
         return all(slash == b"" and name.lower() in (b"meta", b"link") for slash, name in tags) and block.count(b"<script") == 1
 
+    def commit_release(self, paths, message):
+        """Commit exactly a completed rebuild's released checkout paths; never another writer's staged work."""
+        root = CONFIG["checkout_root"]
+        git = ["git", "-C", root]
+        if self.command([*git, "diff", "--cached", "--name-only"], timeout=30).strip():
+            raise ValueError("Checkout has staged changes from another writer; rebuild commit skipped")
+        if paths:
+            self.command([*git, "add", "--", *paths], timeout=60)
+            if self.command([*git, "diff", "--cached", "--name-only", "--", *paths], timeout=30).strip():
+                self.command([*git, "commit", "-q", "-m", message, "--", *paths], timeout=120)
+        return self.command([*git, "rev-parse", "HEAD"], timeout=30).strip()
+
     def verify_ui(self, changed=()):
         # Static routes are public and must serve the exact selected bytes; the
         # app shell may carry one bounded server-rendered SEO head block.
@@ -3723,6 +3738,103 @@ class Broker:
         self._start_next()
         return {"job_id":job["job_id"],"status":"completed","effects_replayed":False}
 
+    def rebuild_checkout(self, args, trusted, workspace):
+        """Release the live checkout as it is through the ordinary isolated task path.
+
+        Every task starts from the deployed release; this one's tree takes the
+        checkout's bytes, so its changes are exactly the checkout's drift. Lane,
+        claims, tests, health and receipts are the normal finish: dev lets the release
+        plan pick the lane (ability-only drift publishes packages), stable forces a
+        full build linking ability crates and needs the root STABLE_FEATURE. A
+        completed rebuild commits its released paths and releases its claims."""
+        admin = trusted["user_id"] == "admin" and workspace == ADMIN_WORKSPACE
+        local = trusted.get("local_caller") is True and trusted["user_id"] == "codex-local" and workspace == LOCAL_WORKSPACE
+        if not (admin or local):
+            raise PermissionError("Administrator rebuild required")
+        if (set(args) != {"mode", "request_id"} or args["mode"] not in ("dev", "stable")
+                or not isinstance(args["request_id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", args["request_id"])):
+            raise ValueError("rebuild requires mode dev or stable and a stable request_id")
+        task_id = "rebuild-" + hashlib.sha256(args["request_id"].encode()).hexdigest()[:24]
+        key = hashlib.sha256(canonical([trusted["user_id"], workspace, task_id])).hexdigest()
+        def call(arguments):
+            return self.handle({"id": str(uuid.uuid4()), "name": "v3_build_work", "arguments": arguments,
+                                "workspace": workspace, "trusted": trusted})
+        existing = self.work.get(key)
+        if existing:
+            # A retried request returns the same task and job; it never queues a second build.
+            return {"task_id": task_id, "mode": existing.get("release_mode"), "status": existing["status"],
+                    "job_id": existing.get("job_id")}
+        if any(job.get("rebuild") and job["status"] in ("queued", "running") for job in self.jobs.values()):
+            raise ValueError("A checkout rebuild is already queued or running")
+        checkout, live = self.runner.snapshot(), self._current_release_blob()
+        _, drift = release.candidate(live, checkout, live, context_digest, allow_empty=True)
+        if args["mode"] == "dev" and not drift:
+            return {"task_id": task_id, "mode": "dev", "status": "no_changes", "changed_paths": []}
+        files = {name: value for name, value in release.entries(checkout, context_digest).items() if not release.inspection_path(name)}
+        if args["mode"] == "stable":
+            try:
+                features = tomllib.loads(files["v3/Cargo.toml"][1].decode()).get("features", {})
+            except (KeyError, UnicodeError, tomllib.TOMLDecodeError):
+                features = {}
+            if STABLE_FEATURE not in features:
+                raise ValueError("Stable release requires the app to declare the webagent-v3 '" + STABLE_FEATURE + "' Cargo feature")
+        begun = call({"action": "begin", "task_id": task_id, "mode": "isolated",
+                      "summary": "Rebuild current checkout (" + args["mode"] + ") requested by " + ("an administrator" if admin else "the local operator")})
+        tree = Path(begun["workspace_path"]).parent
+        if tree.parent != self.work_dir / "trees" or tree.is_symlink():
+            raise ValueError("Rebuild task tree outside the broker work directory")
+        for name in release.entries(release.snapshot(tree, TASK_CONTEXT, context_digest), context_digest):
+            if name not in files and not release.inspection_path(name):
+                (tree / name).unlink()
+        for name, (mode, body) in files.items():
+            path = tree / name
+            if any(part in ("..", "") for part in name.split("/")) or path.is_symlink():
+                raise ValueError("Rebuild path invalid")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+            path.chmod(mode)
+        item = self.work[key]
+        item.update(release_mode=args["mode"], rebuild={"request_id": args["request_id"], "mode": args["mode"],
+                                                         "requested_by": "administrator" if admin else "local-operator"})
+        self._save_work()
+        expected = context_digest(release.snapshot(tree, TASK_CONTEXT, context_digest))[0]
+        finished = call({"action": "finish", "task_id": task_id, "expected_inputs_sha256": expected})
+        report = finished.get("synchronization") or {}
+        if finished.get("status") == "needs_decision" and report.get("digest"):
+            # The checkout drift is exactly what this task releases. Proceed only while the
+            # checkout still equals the tree just built and nothing conflicts at promotion.
+            fresh = {name: value for name, value in release.entries(self.runner.snapshot(), context_digest).items()
+                     if not release.inspection_path(name)}
+            if fresh == files and not report.get("promotion_conflicts"):
+                finished = call({"action": "finish", "task_id": task_id, "expected_inputs_sha256": expected,
+                                 "sync_decision": "proceed", "expected_sync_digest": report["digest"]})
+        return {**finished, "mode": args["mode"], "changed_paths": sorted(drift)}
+
+    def _rebuild_closeout(self, job):
+        """Commit a completed rebuild's released checkout paths, then release its claims with that commit."""
+        try:
+            item = next(i for i in self.work.values() if i.get("job_id") == job["job_id"])
+            paths = sorted(p.removeprefix("v3/") for p in job.get("changed_paths", []) if p.startswith("v3/"))
+            message = ("Rebuild current checkout (" + job.get("release_mode", "dev") + ") requested by "
+                       + job["rebuild"].get("requested_by", "an administrator") + " (broker job " + job["job_id"] + ")")
+            commit = self.runner.commit_release(paths, message)
+            # The broker renews the owner's own identity briefly to close its task; no new authority.
+            local = job["user_id"] == "codex-local"
+            trusted = {"user_id": job["user_id"], "session_id": job["workspace"], "lease_until": time.time() + (600 if local else 30),
+                       "access_fingerprint": job["access_fingerprint"], **({"local_caller": True} if local else {})}
+            row = next(r for r in self.scheduler.store.list() if r["id"] == item["key"])
+            result = self.handle({"id": str(uuid.uuid4()), "name": "build_work", "workspace": job["workspace"], "trusted": trusted,
+                                  "arguments": {"action": "release_claims", "task_id": item["task_id"], "scopes": row["scopes"],
+                                                "reason": "Checkout rebuild " + job["job_id"][:8] + " committed as " + commit[:7],
+                                                "request_id": "rebuild-close-" + job["job_id"], "expected_revision": row["revision"],
+                                                "expected_epoch": row["epoch"], "commit": commit}})
+            job["rebuild_closeout"] = {"status": "complete" if result.get("state") == "complete" else "partial",
+                                       "commit": commit, "claims": result.get("state")}
+        except Exception as error:
+            job["rebuild_closeout"] = {"status": "failed", "reason": scrub(str(error), self.runner.secrets)[:300]}
+        with self.lock:
+            self._save(job)
+
     def _reconcile_build_ui_check(self, job, trusted, workspace):
         # Operator continuation after an uncertain UI check of a build release.
         # Never rebuild, recreate or restart: verify the running release, then
@@ -5075,6 +5187,8 @@ class Broker:
                 return self.unified_build(request, args)
             if name in ("file_list", "file_read", "file_search", "file_edit", "file_write"):
                 return self.unified_files(request, trusted, workspace, args)
+            if name == "v3_build_rebuild_checkout":
+                return self.rebuild_checkout(args, trusted, workspace)
             if name == "v3_build_adopt_release":
                 if (not trusted.get("local_caller") or trusted["user_id"] != "codex-local"
                         or workspace != LOCAL_WORKSPACE or set(args) != {"job_id"}):
@@ -5741,6 +5855,9 @@ class Broker:
                     if cap is None and self.resources.enabled:cap=CONFIG.get("scheduler",{}).get("compiler_memory_default_bytes",12*1024**3)
                     if args.get("compiler_memory_cap")is not None and (trusted.get("local_caller")is not True or not self.resources.enabled):raise PermissionError("Enforced compiler cap requires local operator")
                     plan=self._release_plan(changed,current_changed,candidate,base_blob,trusted)
+                    if item.get("release_mode")=="stable":
+                        # A stable release links ability crates into the binary: always a full build.
+                        plan={**plan,"operation":"build_deploy","ui_only":False,"plugin_only":False,"index_only":False,"host_only":False}
                     # Recheck after reservation so a racing publication cannot change the stated plan.
                     self._require_expected_plan(args,plan)
                     ui_only,plugin_only,index_only,host_only=plan["ui_only"],plan["plugin_only"],plan["index_only"],plan["host_only"]
@@ -5770,7 +5887,9 @@ class Broker:
                     if ui_only:
                         job["rust_tests"] = {"status": "not_required",
                             "summary": "Compatible assets/plugin; no core Rust build required"}
-                    job.update(ownership_id=item["key"],ownership_epoch=item.get("ownership_epoch"),source_generation=item.get("source_generation",0))
+                    job.update(ownership_id=item["key"],ownership_epoch=item.get("ownership_epoch"),source_generation=item.get("source_generation",0),
+                               release_mode=item.get("release_mode","dev"))
+                    if item.get("rebuild"):job["rebuild"]=dict(item["rebuild"])
                     self._save(job)
                     self.jobs[job_id] = job
                     item.update(status="closed", inputs_sha256=current, job_id=job_id,
@@ -6072,6 +6191,8 @@ class Broker:
             job.setdefault("phase_history", []).append(
                 {"phase": "finished", "at": job["finished_at"]})
             self._save(job)
+        if job.get("rebuild"):
+            self._rebuild_closeout(job)
 
     def _run(self, job, blob):
         """Execute a sealed job; hot plugins compile before rebasing and stage immutable assets only afterward."""
@@ -6273,6 +6394,8 @@ class Broker:
                 job["finished_at"] = time.time()
                 job.setdefault("phase_history", []).append({"phase": "finished", "at": job["finished_at"]})
                 self._save(job)
+            if job.get("rebuild") and job["status"] == "completed":
+                self._rebuild_closeout(job)
         except Exception as error:
             with self.lock:
                 job["status"] = "uncertain" if mutated or job.get("effects_started") else ("cancelled" if isinstance(error, PermissionError) else "failed")
@@ -6363,7 +6486,7 @@ async def serve(broker, listener, bridge_listener=None):
                     "access_fingerprint": hashlib.sha256(b"python-v2-build-bridge").hexdigest(),
                     "bridge_caller": True}
             elif uid == CONFIG["service_uid"]:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "code_index_maintenance", "v3_build_progress"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_rebuild_checkout", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "code_index_maintenance", "v3_build_progress"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": "codex-local", "session_id": LOCAL_WORKSPACE,

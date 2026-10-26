@@ -37,6 +37,7 @@ SNAPSHOT_HEADROOM=16*1024**3
 WORKSPACE_RECIPE="compiled-workspace-v1"
 WORKSPACE_KEEP=2
 FROZEN_MTIME=946684800
+STABLE_FEATURE="stable-abilities"  # root feature a stable release adds to link ability crates
 MOLD_VERSION="1.10.1+dfsg-1"
 MOLD_SHA256="f85b0102cabeaee34b76ab195aacfa9ff9442d670948c88f6f353dd666ea5b64"
 MOLD_COMPILER_DOCKERFILE_SHA256="129a45c426d4683ab5a563ebdf764bf829826a415305dce15ab36c780a3ba815"
@@ -976,14 +977,14 @@ class Executor:
         """Detect all core Rust/Cargo source changes and added files, independent of old compiler dependencies."""
         return {name:hashlib.sha256(body).hexdigest()for name,(_,body)in files.items()
             if name in {"v3/Cargo.toml","v3/Cargo.lock","v3/build.rs"}or(name.startswith("v3/crates/")or name.startswith("v3/src/")and(name.endswith(".rs")or name.startswith("v3/src/plugin_packages/")))}
-    def cached_engine(self,blob,output):
-        """Reuse only artifacts whose pinned recipe and complete compiled inputs still match the candidate."""
+    def cached_engine(self,blob,output,mode="dev"):
+        """Reuse only artifacts whose pinned recipe, release mode and complete compiled inputs still match the candidate."""
         cache=Path(self.config["state_root"])/"engine-artifacts";cache.mkdir(mode=0o700,exist_ok=True)
         files=self.runner.execution_entries(blob);rust=self.rust_inputs(files)
         for path in sorted(cache.glob("*.json"),key=lambda p:p.stat().st_mtime,reverse=True)[:64]:
             if path.is_symlink():raise ValueError("Engine cache receipt symlink")
             value=json.loads(path.read_text())
-            if value["recipe"]!=self.compiler_recipe() or value["rust_inputs"]!=rust:continue
+            if value["recipe"]!=self.compiler_recipe() or value["rust_inputs"]!=rust or value.get("release_mode","dev")!=mode:continue
             if any(name not in files or hashlib.sha256(files[name][1]).hexdigest()!=sha for name,sha in value["compiled_inputs"].items()):continue
             if not re.fullmatch(r"[a-f0-9-]{36}",value["job_id"]):raise ValueError("Engine cache job identity invalid")
             source=Path(self.config["state_root"])/"execution"/value["job_id"]/"output/artifacts"
@@ -1059,9 +1060,10 @@ class Executor:
         """Share optimized dependency objects while keeping the linked executable as a frozen artifact."""
         return ["cargo","build","--release","--locked","--offline","--bin","webagent-v3"]
     @staticmethod
-    def live_recipe():
-        """Discard linked root outputs and dep-info, preserving compatible dependency objects and debug tests."""
-        return ["sh","-c","set -e\ncargo clean --release --package webagent-v3 --locked --offline\ncargo build --workspace --release --locked --offline --no-default-features --features webagent-v3/live-context"]
+    def live_recipe(stable=False):
+        """The deployed release build; a stable release also links ability crates (STABLE_FEATURE)."""
+        features="webagent-v3/live-context"+(",webagent-v3/"+STABLE_FEATURE if stable else "")
+        return ["sh","-c","set -e\ncargo clean --release --package webagent-v3 --locked --offline\ncargo build --workspace --release --locked --offline --no-default-features --features "+features]
     def linked_dependencies(self,metadata,target,files):
         """Attest linked implementation inputs separately from the deployed live dependency closure."""
         captured={}
@@ -1146,7 +1148,7 @@ class Executor:
                 if relative not in files:raise ValueError("Compiled local input absent from captured source")
                 inputs[relative]=hashlib.sha256(files[relative][1]).hexdigest()
         value={"recipe":self.compiler_recipe(),"rust_inputs":self.rust_inputs(files),"compiled_inputs":inputs,
-            "artifacts":hashes,"job_id":job["job_id"]}
+            "artifacts":hashes,"job_id":job["job_id"],"release_mode":job.get("release_mode","dev")}
         if log is not None:value.update(test_proof=self.test_proof(blob),test_log=log[-1024*1024:])
         if not inputs:raise ValueError("Compiled input closure missing")
         key=hashlib.sha256(json.dumps({k:v for k,v in value.items()if k not in {"job_id","artifacts","test_proof","test_log"}},sort_keys=True).encode()).hexdigest()
@@ -1340,7 +1342,8 @@ class Executor:
         job["compiler_recipe"]=self.compiler_recipe()
         blob=self.runner.execution_application_blob(blob)
         root.mkdir(parents=True,exist_ok=True);extract(source,blob);application=source/"v3";output.mkdir(exist_ok=True)
-        cached=self.cached_engine(blob,output)
+        stable=job.get("release_mode")=="stable"
+        cached=self.cached_engine(blob,output,"stable"if stable else"dev")
         if cached:
             artifacts,old=cached;logs="Verified compiler artifacts reused; locked Rust tests previously passed on identical compiled inputs.\n"
             manifest=self.test_manifest(artifacts)
@@ -1407,7 +1410,7 @@ class Executor:
         if self.runner.execution_source_digest(linked_source)!=before:raise ValueError("Compile source copy differs from captured inputs")
         self.attest_release_base(job,context_blob)
         suite=self.concurrent_phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads="+str(TEST_THREADS)],"engine:rust1.90:test")
-        try:live_log=self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(),"engine:rust1.90:release")
+        try:live_log=self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(stable),"engine:rust1.90:release")
         finally:
             try:suite_output=suite.result()
             finally:shutil.rmtree(linked_source,ignore_errors=True)

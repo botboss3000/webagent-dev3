@@ -57,6 +57,44 @@ class SchedulerBrokerTests(unittest.TestCase):
             "inputs_sha256":self.broker.scheduler_digest(blob),"operation":"plugin_deploy","rust_tests":{"status":"not_required"}}
         self.broker.jobs[job_id]=job;item.update(status="closed",job_id=job_id);self.broker._save_work()
         return job,commit
+    def test_rebuild_closeout_commits_released_paths_and_releases_claims(self):
+        """A completed rebuild commits exactly its released bytes; the broker's verification then frees the task."""
+        item=self.begin("rebuild-closeout-task");self.write(item,"README.md","rebuilt\n")
+        tree=Path(item["workspace_path"]).parent;blob=self.broker.scheduler_task_snapshot(tree)
+        live=self.root/"live";live.mkdir();(live/"README.md").write_text("original\n")
+        def git(*args):return subprocess.run(["git","-C",str(live),*args],stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True).stdout.decode().strip()
+        git("init","-q");git("config","user.email","fixture@example.invalid");git("config","user.name","Fixture")
+        git("add","README.md");git("commit","-qm","before rebuild")
+        (live/"README.md").write_text("rebuilt\n")  # promoted checkout bytes, not yet committed
+        self.runner.source=live;self.runner.blob=blob
+        job_id=str(uuid.uuid4());folder=self.broker.state/job_id;folder.mkdir()
+        (folder/"candidate.tar").write_bytes(blob);(folder/"task.tar").write_bytes(blob)
+        job={"job_id":job_id,"task_id":item["task_id"],"user_id":item["user_id"],"workspace":item["workspace"],"status":"completed",
+             "synchronization":{"status":"synchronized"},"changed_paths":["v3/README.md"],"inputs_sha256":self.broker.scheduler_digest(blob),
+             "operation":"plugin_deploy","rust_tests":{"status":"not_required"},"release_mode":"dev","access_fingerprint":"f"*64,
+             "rebuild":{"request_id":"rebuild-closeout","mode":"dev","requested_by":"local-operator"}}
+        self.broker.jobs[job_id]=job;item.update(status="closed",job_id=job_id);self.broker._save_work()
+        def commit(paths,message):
+            git("add","--",*paths);git("commit","-qm",message,"--",*paths);return git("rev-parse","HEAD")
+        self.runner.commit_release=commit
+        with patch.object(self.broker,"_start_next"):self.broker._rebuild_closeout(job)
+        self.assertEqual(job["rebuild_closeout"]["status"],"complete",job["rebuild_closeout"])
+        self.assertEqual(git("show","HEAD:README.md"),"rebuilt");self.assertIn(job_id,git("log","-1","--format=%s"))
+        self.assertEqual(self.broker.scheduler.store.get(item["key"])["scopes"],[])
+    def test_commit_release_commits_only_released_paths_and_refuses_staged_work(self):
+        live=self.root/"repo";live.mkdir()
+        def git(*args):return subprocess.run(["git","-C",str(live),*args],stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True).stdout.decode().strip()
+        git("init","-q");git("config","user.email","fixture@example.invalid");git("config","user.name","Fixture")
+        for name in ("a.txt","b.txt"):(live/name).write_text("one\n")
+        git("add","a.txt","b.txt");git("commit","-qm","base")
+        (live/"a.txt").write_text("released\n");(live/"b.txt").write_text("someone else\n")
+        runner=type("R",(),{"command":lambda self,argv,timeout=0,**k:subprocess.run(argv,stdout=subprocess.PIPE,check=True).stdout.decode()})()
+        with patch.dict(fixtures.host.CONFIG,{"checkout_root":str(live)}):
+            head=fixtures.host.Runner.commit_release(runner,["a.txt"],"Rebuild fixture")
+            self.assertEqual(head,git("rev-parse","HEAD"));self.assertEqual(git("show","HEAD:a.txt"),"released")
+            self.assertEqual(git("show","HEAD:b.txt"),"one");self.assertEqual(git("status","--short","b.txt"),"M b.txt")
+            git("add","b.txt")
+            with self.assertRaisesRegex(ValueError,"staged changes"):fixtures.host.Runner.commit_release(runner,["a.txt"],"Rebuild fixture")
     def test_reservations_task_filter_is_complete_and_listing_flags_truncation(self):
         item=self.begin("reservation-list-fixture");self.write(item,"README.md","claimed\n")
         store=self.broker.scheduler.store;value=store.get(item["key"])

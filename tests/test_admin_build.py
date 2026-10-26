@@ -150,6 +150,10 @@ class FakeRunner:
     def promote_live_ui(self, before, after, changed):
         return False
 
+    def commit_release(self, paths, message):
+        self.calls.append(("commit_release", tuple(paths), message))
+        return "c" * 40
+
     def checkout_matches(self, blob, changed):
         return host.release.entries(self.blob, host.context_digest) == host.release.entries(blob, host.context_digest)
 
@@ -1714,6 +1718,77 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(result["inputs_sha256"],
                          host.context_digest(self.broker._current_release_blob())[0])
 
+
+    def admin(self):
+        return {"user_id": "admin", "session_id": host.ADMIN_WORKSPACE, "lease_until": time.time() + 30, "access_fingerprint": "e" * 64}
+
+    def rebuild(self, mode, request_id, trusted=None):
+        trusted = trusted or self.admin()
+        return self.call("v3_build_rebuild_checkout", {"mode": mode, "request_id": request_id}, trusted=trusted, workspace=trusted["session_id"])
+
+    def deployed_baseline(self):
+        """Ship one ordinary isolated release so the checkout can drift from a deployed release."""
+        item = self.call("v3_build_work", {"action": "begin", "task_id": "baseline-release", "summary": "Baseline", "mode": "isolated"})
+        Path(item["workspace_path"], "src").mkdir(exist_ok=True);Path(item["workspace_path"], "src", "base.rs").write_text("base")
+        digest = self.call("v3_build_work", {"action": "status", "task_id": "baseline-release"})["own"][0]["workspace_inputs_sha256"]
+        self.assertEqual(self.wait(self.call("v3_build_work", {"action": "finish", "task_id": "baseline-release", "expected_inputs_sha256": digest}))["status"], "completed")
+
+    def drift(self, **files):
+        entries = host.release.entries(self.broker._current_release_blob(), host.context_digest)
+        entries.update({name: (0o644, body.encode()) for name, body in files.items()})
+        self.runner.blob = host.release.archive(entries, host.context_digest)
+
+    def settle(self, job_id):
+        for _ in range(500):
+            job = self.broker.jobs[job_id]
+            if job["status"] not in ("queued", "running") and not self.broker.active and job.get("rebuild_closeout"):
+                return job
+            time.sleep(.01)
+        return self.broker.jobs[job_id]
+
+    def test_rebuild_requires_an_administrator_and_valid_arguments(self):
+        with self.assertRaises(PermissionError):
+            self.rebuild("dev", "request-one", trusted=self.trusted)
+        for args in ({"mode": "fast", "request_id": "request-one"}, {"mode": "dev", "request_id": "x"}, {"mode": "dev"}):
+            with self.assertRaises(ValueError):
+                self.call("v3_build_rebuild_checkout", args, trusted=self.admin(), workspace=host.ADMIN_WORKSPACE)
+
+    def test_rebuild_without_drift_reports_no_changes(self):
+        self.assertEqual(self.rebuild("dev", "request-nodrift")["status"], "no_changes")
+
+    def test_rebuild_releases_checkout_drift_commits_and_closes(self):
+        self.deployed_baseline();self.drift(**{"v3/src/rebuilt.rs": "fn rebuilt() {}"})
+        first = self.rebuild("dev", "request-drift")
+        self.assertEqual((first["status"], first["changed_paths"]), ("closed", ["v3/src/rebuilt.rs"]))
+        job = self.settle(first["job_id"])
+        self.assertEqual((job["status"], job["release_mode"], job["operation"]), ("completed", "dev", "build_deploy"))
+        # Commit verification against real git is covered in test_scheduler_broker; the fake checkout has none.
+        self.assertIn("status", job["rebuild_closeout"])
+        commits = [c for c in self.runner.calls if c[0] == "commit_release"]
+        self.assertEqual(commits[0][1], ("src/rebuilt.rs",));self.assertIn(job["job_id"], commits[0][2])
+        again = self.rebuild("dev", "request-drift")
+        self.assertEqual(again["job_id"], first["job_id"])
+        self.assertEqual(len([c for c in self.runner.calls if c[0] == "commit_release"]), 1)
+
+    def test_only_one_rebuild_runs_at_a_time(self):
+        self.deployed_baseline();self.drift(**{"v3/src/rebuilt.rs": "fn rebuilt() {}"})
+        gate = threading.Event();self.runner.block = gate
+        try:
+            self.rebuild("dev", "request-first")
+            with self.assertRaisesRegex(ValueError, "already queued or running"):
+                self.rebuild("dev", "request-second")
+        finally:
+            gate.set();self.runner.block = None
+
+    def test_stable_rebuild_needs_the_declared_feature_and_forces_a_full_build(self):
+        with self.assertRaisesRegex(ValueError, "stable-abilities"):
+            self.rebuild("stable", "request-stable-missing")
+        self.deployed_baseline();self.drift(**{"v3/Cargo.toml": "[package]\nname = \"webagent-v3\"\n[features]\nstable-abilities = []\n"})
+        result = self.rebuild("stable", "request-stable")
+        job = self.settle(result["job_id"])
+        self.assertEqual((job["release_mode"], job["operation"]), ("stable", "build_deploy"))
+        self.assertEqual(host.executor_module.Executor.live_recipe(True)[-1].split("--features ")[-1], "webagent-v3/live-context,webagent-v3/stable-abilities")
+        self.assertNotIn("stable-abilities", host.executor_module.Executor.live_recipe()[-1])
 
     def test_operator_continues_build_release_stopped_at_ui_check(self):
         self.runner.hot_assets = True

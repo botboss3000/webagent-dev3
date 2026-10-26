@@ -144,6 +144,9 @@ def main():
     abandon.add_argument("task_id")
     progress = commands.add_parser("progress", help="stage k of N with durations against class history; no logs")
     progress.add_argument("job_id")
+    rebuild = commands.add_parser("rebuild", help="release the live checkout as it is (dev: changed packages or build; stable: full linked build)")
+    rebuild.add_argument("--mode", choices=("dev", "stable"), default="dev")
+    rebuild.add_argument("--request-id", required=True)
     adopt = commands.add_parser("adopt", help="operator continuation for an uncertain release; never replays effects")
     adopt.add_argument("job_id")
     job = commands.add_parser("job")
@@ -218,6 +221,8 @@ def main():
         result = call("v3_build_leftovers", {})
     elif args.command == "review-leftover":
         result = call("v3_build_leftover_review", {"notice_id": args.notice_id})
+    elif args.command == "rebuild":
+        result = call("v3_build_rebuild_checkout", {"mode": args.mode, "request_id": args.request_id})
     elif args.command == "adopt":
         result = call("v3_build_adopt_release", {"job_id": args.job_id})
     elif args.command == "progress":

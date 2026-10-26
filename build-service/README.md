@@ -259,6 +259,26 @@ leaves an empty target and the job compiles cold (`dependency_snapshot` in the
 receipt records hit, prepared, skipped or unavailable). The three most recent
 keys are kept; the cache is rebuildable and safe to delete while no job runs.
 
+## Rebuild current checkout and stable releases
+
+`v3_build_rebuild_checkout {mode, request_id}` (app build socket as the signed-in
+administrator, or `buildctl rebuild --mode dev|stable --request-id ID` as the local
+operator) releases the live checkout as it is. The broker begins an ordinary isolated
+task (whose baseline is the deployed release), gives its tree the checkout's bytes and
+finishes it, so the changes are exactly the checkout's drift and every normal gate
+applies: claims, the release lane, tests, health checks, promotion and receipts. A
+synchronization prompt is answered `proceed` only while the checkout still equals the
+built tree and nothing conflicts at promotion. `dev` lets the release plan choose the
+lane (ability-only drift publishes packages without a restart) and refuses when there
+is no drift; `stable` always runs a full build whose live binary adds the root
+`stable-abilities` feature to link ability crates, and is refused until the root
+package declares that feature. Engine artifact reuse never crosses modes
+(`release_mode` in the job and cache receipt). One rebuild runs at a time and a retried
+`request_id` returns the same job. After success the broker commits exactly the
+released paths (refusing if another writer has staged work) and releases the task's
+claims with that commit through the normal verification; the outcome is
+`rebuild_closeout` in the job.
+
 ## Served app shell verification
 
 After a UI switch the broker requests `/app` and each changed `/v3-ui/` asset and
