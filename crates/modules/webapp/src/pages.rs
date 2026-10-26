@@ -1,7 +1,15 @@
-use axum::{http::StatusCode, response::Response, Router};
+use axum::{
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
+    routing::get,
+    Router,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 #[cfg(test)]
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
@@ -93,10 +101,114 @@ pub fn discover(ui: &Path) -> Result<Value, String> {
     Ok(json!({"main":pages}))
 }
 
+const SEO_DESCRIPTION: &str =
+    "WebAgent is a self-hostable AI agent harness: chat with capable agents, \
+give them tools and automations, and build visual pages \u{2014} all in one app.";
+
+/// Absolute origin for canonical/Open Graph URLs; never taken from the request Host header.
+fn public_origin() -> String {
+    std::env::var("V3_PUBLIC_ORIGIN")
+        .unwrap_or_else(|_| "https://dev.webagent.live".into())
+        .trim_end_matches('/')
+        .to_owned()
+}
+
+fn escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Search and social-preview tags for the app shell. Scrapers reject relative image/page URLs.
+pub fn seo_head(origin: &str) -> String {
+    let home = format!("{origin}/");
+    let structured = json!([
+        {"@context": "https://schema.org", "@type": "Organization", "name": "WebAgent", "url": home,
+         "logo": format!("{origin}/v3-ui/app-icon.svg"), "description": SEO_DESCRIPTION,
+         "sameAs": ["https://github.com/botboss3000/webagent"]},
+        {"@context": "https://schema.org", "@type": "WebSite", "name": "WebAgent", "url": home}
+    ])
+    .to_string()
+    .replace("</", "<\\/");
+    let (home, image, description) = (
+        escape(&home),
+        escape(&format!("{origin}/v3-ui/og-card.png")),
+        escape(SEO_DESCRIPTION),
+    );
+    format!(
+        r#"<meta name="description" content="{description}">
+<link rel="canonical" href="{home}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="WebAgent">
+<meta property="og:title" content="WebAgent">
+<meta property="og:description" content="{description}">
+<meta property="og:url" content="{home}">
+<meta property="og:image" content="{image}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="WebAgent">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="WebAgent">
+<meta name="twitter:description" content="{description}">
+<meta name="twitter:image" content="{image}">
+<script type="application/ld+json">{structured}</script>"#
+    )
+}
+
+pub fn robots(origin: &str) -> String {
+    format!("User-agent: *\nDisallow: /api/\nDisallow: /embed/\nDisallow: /health/\nDisallow: /setup.html\n\nSitemap: {origin}/sitemap.xml\n")
+}
+
+pub fn sitemap(origin: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n  <url><loc>{}/</loc></url>\n</urlset>\n",
+        escape(origin)
+    )
+}
+
+/// `/` and `/app` are one page: both get the same tags with a canonical URL of `/`.
+async fn app_shell(index: PathBuf) -> Response {
+    match tokio::fs::read_to_string(index).await {
+        Ok(html) => (
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            html.replacen(
+                "</title>",
+                &format!("</title>\n{}", seo_head(&public_origin())),
+                1,
+            ),
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 pub fn routes<S: Clone + Send + Sync + 'static>(ui: &Path) -> Router<S> {
+    let index = ui.join("index.html");
+    let shell = get(move || app_shell(index.clone()));
     Router::new()
-        .route_service("/app", ServeFile::new(ui.join("index.html")))
-        .route_service("/", ServeFile::new(ui.join("index.html")))
+        .route("/app", shell.clone())
+        .route("/", shell)
+        .route(
+            "/robots.txt",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                    robots(&public_origin()),
+                )
+            }),
+        )
+        .route(
+            "/sitemap.xml",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "application/xml")],
+                    sitemap(&public_origin()),
+                )
+            }),
+        )
         .route_service("/setup.html", ServeFile::new(ui.join("setup.html")))
         .nest_service("/v3-ui", ServeDir::new(ui))
 }
@@ -230,6 +342,51 @@ mod tests {
         assert!(crate::configuration::live_root(state.path(), ui.path()).is_none());
         fs::remove_file(config_path).unwrap();
         assert!(crate::configuration::live_root(state.path(), ui.path()).is_none());
+    }
+
+    #[tokio::test]
+    async fn app_shell_carries_absolute_seo_tags_and_crawler_files() {
+        let head = seo_head("https://example.test");
+        for tag in [
+            r#"<link rel="canonical" href="https://example.test/">"#,
+            r#"<meta property="og:image" content="https://example.test/v3-ui/og-card.png">"#,
+            r#"<meta name="twitter:card" content="summary_large_image">"#,
+            r#""@type":"WebSite""#,
+        ] {
+            assert!(head.contains(tag), "{tag}");
+        }
+        assert!(
+            robots("https://example.test").contains("Sitemap: https://example.test/sitemap.xml")
+        );
+        assert!(sitemap("https://example.test").contains("<loc>https://example.test/</loc>"));
+        let ui = tempfile::tempdir().unwrap();
+        fs::write(
+            ui.path().join("index.html"),
+            "<head><title>WebAgent</title></head>",
+        )
+        .unwrap();
+        for uri in ["/", "/app", "/robots.txt", "/sitemap.xml"] {
+            let response = routes::<()>(ui.path())
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            if uri == "/" || uri == "/app" {
+                assert!(
+                    body.starts_with("<head><title>WebAgent</title>\n<meta name=\"description\"")
+                );
+                assert!(body.ends_with("</script></head>"));
+            }
+        }
     }
 
     #[test]
