@@ -11,6 +11,7 @@ import concurrent.futures
 import contextlib
 import hashlib
 import fcntl
+import functools
 import http.client
 import io
 import importlib.util
@@ -2345,6 +2346,174 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         return False
 
 
+# Content-free broker timings: step names, durations and process byte counts only.
+_PERF_LOCK = threading.Lock()
+_PERF = {"steps": [], "requests": {}}
+_PERF_LOCAL = threading.local()
+
+
+def _process_io():
+    try:
+        rows = dict(line.split(": ") for line in Path("/proc/self/io").read_text().splitlines())
+        return int(rows["rchar"]), int(rows["wchar"])
+    except (OSError, KeyError, ValueError):
+        return 0, 0
+
+
+def _record_step(step, started, read, written):
+    now_read, now_written = _process_io()
+    with _PERF_LOCK:
+        _PERF["steps"].append({"step": step, "at": int(time.time()), "seconds": round(time.monotonic() - started, 3),
+                               "read": now_read - read, "written": now_written - written})
+        del _PERF["steps"][:-300]
+
+
+def perf_mark(part):
+    """Attribute the enclosing timed step's cost since its previous mark to one named part."""
+    active = getattr(_PERF_LOCAL, "active", None)
+    if active is None:
+        return
+    name, started, read, written = active
+    _record_step(name + "." + part, started, read, written)
+    _PERF_LOCAL.active = (name, time.monotonic(), *_process_io())
+
+
+def timed(name):
+    """Time a broker step in its calling thread; perf_mark inside it splits the cost into parts."""
+    def wrap(function):
+        @functools.wraps(function)
+        def inner(*args, **kwargs):
+            previous = getattr(_PERF_LOCAL, "active", None)
+            started, read, written = time.monotonic(), *_process_io()
+            _PERF_LOCAL.active = (name, started, read, written)
+            try:
+                return function(*args, **kwargs)
+            finally:
+                if _PERF_LOCAL.active[1] != started:
+                    perf_mark("rest")
+                _record_step(name, started, read, written)
+                _PERF_LOCAL.active = previous
+        return inner
+    return wrap
+
+
+def record_request(name, seconds, read, written):
+    """Aggregate request cost per validated operation name; arguments are never recorded."""
+    key = name if isinstance(name, str) and re.fullmatch(r"[a-z0-9_]{1,64}", name) else "other"
+    with _PERF_LOCK:
+        row = _PERF["requests"].setdefault(key, {"count": 0, "seconds": 0.0, "read": 0, "written": 0})
+        row["count"] += 1
+        row["seconds"] = round(row["seconds"] + seconds, 3)
+        row["read"] += read
+        row["written"] += written
+
+
+def write_performance(path):
+    """Persist bounded timings atomically for operators; callers ignore failures."""
+    with _PERF_LOCK:
+        value = {"updated_at": int(time.time()), "steps": list(_PERF["steps"]),
+                 "requests": {k: dict(v) for k, v in _PERF["requests"].items()}}
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(value, sort_keys=True))
+    os.replace(temporary, path)
+
+
+# Stage progress: execution steps and job phases collapse into the stages a person reads.
+STAGE_OF = {"dependency": "dependencies", "compile_test": "compile tests", "test": "run tests",
+    "compile_linked": "linked release build", "linked_smoke": "linked release build",
+    "compile_release": "live release build", "live_smoke": "live release build",
+    "package": "package images", "building_loop": "build loop image", "preparing_plugins": "prepare plugins",
+    "preparing_ui": "prepare UI", "frontend_tests": "UI tests"}
+STAGE_SKIP = {"engine_metadata", "start", "finished", "building_api", "admitted", None}
+STAGE_ORDER = ["dependencies", "compile tests", "run tests", "linked release build", "live release build",
+    "package images", "build loop image", "prepare plugins", "prepare UI", "UI tests", "deploy and health checks"]
+
+
+def stage_marks(job, now=None):
+    """Ordered (time, stage) marks from a receipt; image packaging after building_api stays in its phase."""
+    history = [(e.get("phase"), e.get("at")) for e in job.get("phase_history") or [] if e.get("at")]
+    steps = [(e.get("phase"), e.get("started_at")) for e in job.get("execution_history") or [] if e.get("started_at")]
+    live = job.get("execution_observation") or {}
+    if live.get("phase") and job.get("status") in {"queued", "running"} and now is not None:
+        steps.append((live["phase"], now - (live.get("elapsed_seconds") or 0)))
+    def phase_at(t):
+        before = [(at, p) for p, at in history if at <= t]
+        return max(before)[1] if before else None
+    marks = [(t, None if p == "package" and phase_at(t) not in (None, "building_api") else
+              STAGE_OF.get(p, None if p in STAGE_SKIP else "deploy and health checks")) for p, t in steps]
+    marks += [(t, STAGE_OF.get(p, None if p in STAGE_SKIP else "deploy and health checks")) for p, t in history]
+    return sorted((t, s) for t, s in marks if s)
+
+
+def job_class(job):
+    """Complexity class from the work actually done: operation, compile or reused artifacts, tests run or reused."""
+    if job.get("operation") != "build_deploy":
+        return job.get("operation")
+    timings = [(t.get("phase"), t.get("seconds") or 0) for t in job.get("phase_timings") or []]
+    compiled = any(p in {"compile_test", "compile_linked", "compile_release"} and s > 30 for p, s in timings)
+    tested = any(p == "test" and s > 60 for p, s in timings)
+    return f"build_deploy/{'compile' if compiled else 'artifacts-reused'}/{'tests-ran' if tested else 'tests-reused'}"
+
+
+def stage_baselines(jobs):
+    """p50/p90 seconds per stage and wall per class, from completed receipts with step timestamps."""
+    def pct(values, q):
+        values = sorted(values)
+        return round(values[min(len(values) - 1, int(round(q * (len(values) - 1))))])
+    classes = {}
+    for job in jobs:
+        if job.get("status") != "completed" or not job.get("execution_history") or not job.get("finished_at"):
+            continue
+        marks = stage_marks(job) + [(job["finished_at"], None)]
+        spans, current, since = {}, None, None
+        for t, s in marks:
+            if s == current:
+                continue
+            if current is not None:
+                spans[current] = spans.get(current, 0) + max(0, t - since)
+            current, since = s, t
+        c = classes.setdefault(job_class(job), {"walls": [], "spans": {}})
+        c["walls"].append(job["finished_at"] - job["started_at"])
+        for stage, seconds in spans.items():
+            c["spans"].setdefault(stage, []).append(seconds)
+    return {name: {"jobs": len(c["walls"]), "wall": {"p50": pct(c["walls"], .5), "p90": pct(c["walls"], .9)},
+                   "stages": [{"stage": s, "n": len(c["spans"][s]), "p50": pct(c["spans"][s], .5), "p90": pct(c["spans"][s], .9)}
+                              for s in STAGE_ORDER if len(c["spans"].get(s, [])) * 5 >= len(c["walls"])]}
+            for name, c in classes.items()}
+
+
+def job_progress(job, baselines, now):
+    """Stage k of N with durations against class p50-p90; names and timings only, never logs."""
+    now = job.get("finished_at") or now  # a finished job's clock stops at its end
+    phases = {e.get("phase") for e in job.get("execution_history") or []} | {(job.get("execution_observation") or {}).get("phase")}
+    known = job.get("operation") != "build_deploy" or bool(phases & {"compile_test", "compile_linked", "compile_release", "package"})
+    cls = job_class(job) if known or job.get("status") not in {"queued", "running"} else "build_deploy/compile/tests-ran"
+    plan = baselines.get(cls, {"stages": [], "wall": {}})
+    stats = {s["stage"]: s for s in plan["stages"]}
+    names = [s["stage"] for s in plan["stages"]]
+    started = next((t for t in (job.get("started_at"), job.get("created_at")) if t is not None), now)
+    done, current, since = [], "queued", started
+    for t, s in stage_marks(job, now):
+        if s != current:
+            if current != "queued":
+                done.append({"stage": current, "seconds": round(t - since)})
+            current, since = s, t
+    elapsed = now - since
+    stat = stats.get(current)
+    verdict = ("no baseline" if stat is None else "on track" if elapsed <= stat["p50"]
+               else "on track, slower than median" if elapsed <= stat["p90"] else "slow, past p90")
+    finished = {d["stage"] for d in done}
+    remaining = names[names.index(current) + 1:] if current in names else [n for n in names if n not in finished]
+    low = max(0, (stat or {}).get("p50", 0) - elapsed) + sum(stats[s]["p50"] for s in remaining)
+    high = max(0, (stat or {}).get("p90", 0) - elapsed) + sum(stats[s]["p90"] for s in remaining)
+    return {"job_id": job.get("job_id"), "status": job.get("status"), "class": cls, "class_provisional": not known,
+            "stage": current, "stage_index": names.index(current) + 1 if current in names else len(finished) + 1,
+            "stage_count": len(names), "stage_seconds": round(elapsed), "stage_normal": stat and [stat["p50"], stat["p90"]],
+            "verdict": verdict, "finished_stages": [dict(d, normal=stats.get(d["stage"]) and [stats[d["stage"]]["p50"], stats[d["stage"]]["p90"]]) for d in done],
+            "job_seconds": round(now - started), "job_normal": plan["wall"] and [plan["wall"]["p50"], plan["wall"]["p90"]],
+            "remaining_seconds": [round(low), round(high)]}
+
+
 def container_mounts(runner, ids, batch=32):
     """Read only container mounts in bounded batches; full inspect bodies exceed the payload cap."""
     rows = []
@@ -2663,6 +2832,7 @@ class Broker:
             return {"notice_id": notice["id"], "status": "reviewed"}
         raise ValueError("Leftover notice changed; refresh before reviewing")
 
+    @timed("prune")
     def prune_check_caches(self, now=None):
         """Expire rebuildable outputs and terminal job scratch, never logs or job receipts."""
         now = time.time() if now is None else now
@@ -2687,6 +2857,7 @@ class Broker:
             ids = self.runner.command(["docker", "ps", "-aq", "--filter", "name="+TARGETS[0]], timeout=5).split()
             mounts = [path for path in container_mounts(self.runner, ids)
                       if path != self.state.parent.resolve()]
+            perf_mark("inventory")
             removed = []
             # The host terminal-artifact pruner shares this lock. Its task and
             # release retention remains independent from rebuildable cache expiry.
@@ -2737,6 +2908,7 @@ class Broker:
                     job_id = item.get("job_id", "")
                     if re.fullmatch(r"[0-9a-f-]{36}", job_id):
                         candidates.append((self.state / job_id, item, "reconciled_job_artifacts"))
+                perf_mark("candidates")
                 for cache, item, kind in candidates:
                     if kind in {"reconciled_task_source", "reconciled_job_artifacts"} and not self.scheduler.retention_allowed(item["key"]):
                         continue
@@ -2791,6 +2963,7 @@ class Broker:
                         return {"status": "completed", "removed": removed}
             return {"status": "completed", "removed": removed}
 
+    @timed("leftovers")
     def reconcile_leftovers(self):
         # Disk accounting occurs outside the broker lock with a bounded budget.
         # Delayed counts are accepted only for the same still-unreviewed notice.
@@ -2799,6 +2972,7 @@ class Broker:
             pending = [(key, dict(item["leftover_notice"])) for key, item in self.work.items()
                 if item.get("leftover_notice", {}).get("retained_bytes") is None
                 and item.get("leftover_notice") and item["leftover_notice"].get("reviewed_at") is None]
+        perf_mark("state")
         for key, notice in pending[:4]:
             if not re.fullmatch(r"[0-9a-f]{64}", key):
                 continue
@@ -4711,7 +4885,7 @@ class Broker:
                         self._start_next();self.post_deployment.start()
                 return {**self._maintenance(),"busy":bool(self.active or self.active_ui or self.post_deployment.active or self.maintenance_activities.active or any(j["status"]=="running"for j in self.jobs.values())),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
             read_actions={"heartbeat","status","review","preflight","receipt","list","get","read","search","job","artifact","reservations","resources","takeover_preview"}
-            read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
+            read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_build_progress","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
             if name not in read_names and args.get("action") not in read_actions and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; new work disabled")
             if name == "performance_work":
                 return self.performance.handle(trusted, workspace, args)
@@ -5457,6 +5631,18 @@ class Broker:
                 live = self._current_release_blob()
                 return {"inputs_sha256": digest, "input_files": count, "containers": containers, "jobs": jobs, "busy": self.active is not None or self.active_ui is not None,
                         "synchronization": self._sync_report(live, live, ())}
+            if name == "v3_build_progress":
+                if set(args) != {"job_id"}:
+                    raise ValueError("job_id required")
+                job = self.jobs.get(args["job_id"])
+                participant = any(self._owned(item, trusted, workspace) and item.get("job_id") == args["job_id"]
+                                  for item in self.work.values())
+                if not job or not (self._owned(job, trusted, workspace) or participant):
+                    raise ValueError("job not available to this session")
+                completed = sum(1 for j in self.jobs.values() if j.get("status") == "completed")
+                if getattr(self, "_stage_baselines", (None,))[0] != completed:
+                    self._stage_baselines = (completed, stage_baselines(list(self.jobs.values())))
+                return job_progress(job, self._stage_baselines[1], time.time())
             if name == "v3_worker_job":
                 if "job_id" not in args or set(args) - {"job_id", "log_cursor"}:
                     raise ValueError("job_id and optional log_cursor required")
@@ -5998,7 +6184,7 @@ async def serve(broker, listener, bridge_listener=None):
                     "access_fingerprint": hashlib.sha256(b"python-v2-build-bridge").hexdigest(),
                     "bridge_caller": True}
             elif uid == CONFIG["service_uid"]:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "code_index_maintenance"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "code_index_maintenance", "v3_build_progress"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": "codex-local", "session_id": LOCAL_WORKSPACE,
@@ -6007,7 +6193,12 @@ async def serve(broker, listener, bridge_listener=None):
                     "local_caller": True}
             elif request.get("trusted", {}).get("local_caller") is not None or request.get("trusted", {}).get("bridge_caller") is not None:
                 raise ValueError("local or bridge authority cannot be supplied by the app")
-            result = await asyncio.to_thread(broker.handle, request)
+            started, read, written = time.monotonic(), *_process_io()
+            try:
+                result = await asyncio.to_thread(broker.handle, request)
+            finally:
+                record_request(request.get("name"), time.monotonic() - started,
+                               *(now - before for now, before in zip(_process_io(), (read, written))))
             response = {"id": request.get("id"), "status": "success", "output": result}
         except Exception as error:
             response = {"id": request.get("id") if isinstance(request, dict) else None,
@@ -6063,6 +6254,10 @@ def main():
                 except Exception:
                     # Fixed diagnostic only: Docker inspection contains private configuration.
                     print("Check-cache pruning deferred", flush=True)
+                try:
+                    await asyncio.to_thread(write_performance, broker.work_dir / "performance.json")
+                except Exception:
+                    print("Broker timings unavailable", flush=True)
                 await asyncio.sleep(60)
         notices = asyncio.create_task(notice_postprocess())
         def stop():

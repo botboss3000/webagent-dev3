@@ -220,6 +220,20 @@ newly protected bootstrap's supported --install --install-tree while drained
 and stopped, then verify exact bytes before resuming. Do not execute mutable
 source as privileged service code or bypass publication/classification gates.
 
+## Broker timings
+
+The background cycle and request handler record content-free timings: step and
+operation names, durations and process read/write byte counts, never arguments
+or output. Each cycle rewrites `build-jobs/coordination/performance.json` (last
+300 steps plus per-operation request totals since start). Use it to attribute
+idle broker load; it carries no authority and is safe to delete.
+
+`buildctl progress JOB_ID` returns stage k of N for a job, each finished stage's
+duration and the running stage's elapsed time against its class p50/p90, and a
+remaining-time range. Classes are the work actually done (operation, compiled or
+reused artifacts, tests run or reused), computed from completed receipts. The
+read follows the same ownership rule as `buildctl job` and never returns logs.
+
 ## Explicit owner claim release
 
 Operators may use `buildctl schedule --input request.json` with action

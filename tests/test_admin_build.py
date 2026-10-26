@@ -547,6 +547,34 @@ class BuildTests(unittest.TestCase):
             self.call("v3_build_dashboard", {"unexpected": True}, trusted=dashboard,
                       workspace=dashboard["session_id"])
 
+    def test_progress_reports_stage_against_class_history_without_logs(self):
+        def receipt(job_id, status, start, steps, phases, finished=None):
+            return {"job_id": job_id, "status": status, "operation": "build_deploy", "user_id": self.trusted["user_id"],
+                    "workspace": self.workspace, "created_at": start, "started_at": start, "finished_at": finished,
+                    "log": "private build output", "phase_timings": [{"phase": p, "seconds": 120} for p, _ in steps],
+                    "execution_history": [{"phase": p, "started_at": start + t} for p, t in steps],
+                    "phase_history": [{"phase": p, "at": start + t} for p, t in phases]}
+        steps = [("dependency", 0), ("compile_test", 10), ("test", 300), ("compile_linked", 900), ("compile_release", 1300)]
+        phases = [("building_api", 0), ("building_loop", 1700), ("frontend_tests", 1800)]
+        for i in range(5):
+            self.broker.jobs[f"done-{i}"] = receipt(f"done-{i}", "completed", 1000.0 * i, steps, phases, 1000.0 * i + 1900)
+        now = time.time()
+        self.broker.jobs["live"] = dict(receipt("live", "running", now - 400, steps[:3], phases[:1]),
+            execution_observation={"phase": "test", "elapsed_seconds": 100})
+        value = self.call("v3_build_progress", {"job_id": "live"})
+        self.assertEqual((value["class"], value["stage"], value["stage_index"]), ("build_deploy/compile/tests-ran", "run tests", 3))
+        self.assertEqual(value["stage_normal"], [600, 600])
+        self.assertEqual([d["stage"] for d in value["finished_stages"]], ["dependencies", "compile tests"])
+        self.assertTrue(value["remaining_seconds"][0] > 0 and value["verdict"] == "on track")
+        self.assertNotIn("private build output", json.dumps(value))
+        done = self.call("v3_build_progress", {"job_id": "done-0"})
+        self.assertEqual((done["job_seconds"], done["remaining_seconds"]), (1900, [0, 0]))
+        other = dict(self.trusted, user_id="someone-else")
+        with self.assertRaises(ValueError):
+            self.call("v3_build_progress", {"job_id": "live"}, trusted=other, workspace=self.workspace)
+        with self.assertRaises(ValueError):
+            self.call("v3_build_progress", {"job_id": "live", "extra": 1})
+
     def wait(self, job):
         for _ in range(100):
             value = self.call("v3_worker_job", {"job_id": job["job_id"]})

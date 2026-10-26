@@ -32,6 +32,22 @@ class CacheRetentionTests(unittest.TestCase):
         receipts=list((self.state/"cache-pruning").glob("*.json"))
         self.assertEqual(len(receipts),4)
         self.assertTrue(all(json.loads(p.read_text())["status"]=="removed" for p in receipts))
+    def test_prune_records_content_free_step_timings(self):
+        host = fixtures.host
+        self.cache()
+        host._PERF["steps"].clear(); host._PERF["requests"].clear()
+        self.broker.prune_check_caches()
+        host.record_request("v3_build_status", 0.25, 10, 2)
+        host.record_request("not a name!", 0.1, 1, 1)
+        path = self.broker.work_dir / "performance.json"
+        host.write_performance(path)
+        value = json.loads(path.read_text())
+        steps = {s["step"] for s in value["steps"]}
+        self.assertTrue({"prune", "prune.inventory", "prune.candidates"} <= steps)
+        self.assertTrue(all(s["seconds"] >= 0 and set(s) == {"step", "at", "seconds", "read", "written"} for s in value["steps"]))
+        self.assertEqual(set(value["requests"]), {"v3_build_status", "other"})
+        self.assertEqual(value["requests"]["v3_build_status"]["count"], 1)
+
     def test_active_work_defers(self):
         root=self.cache(); self.processes="rustc"
         self.assertEqual(self.broker.prune_check_caches()["status"],"deferred")

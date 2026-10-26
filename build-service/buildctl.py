@@ -142,6 +142,8 @@ def main():
     decide.add_argument("--sync-digest", required=True)
     abandon = commands.add_parser("abandon")
     abandon.add_argument("task_id")
+    progress = commands.add_parser("progress", help="stage k of N with durations against class history; no logs")
+    progress.add_argument("job_id")
     job = commands.add_parser("job")
     job.add_argument("job_id")
     job.add_argument("--log-cursor", type=int, help="Read only retained events after this job cursor")
@@ -214,6 +216,8 @@ def main():
         result = call("v3_build_leftovers", {})
     elif args.command == "review-leftover":
         result = call("v3_build_leftover_review", {"notice_id": args.notice_id})
+    elif args.command == "progress":
+        result = call("v3_build_progress", {"job_id": args.job_id})
     elif args.command == "job":
         result = call("v3_worker_job", {"job_id": args.job_id, **({"log_cursor": args.log_cursor} if args.log_cursor is not None else {})})
     else:
