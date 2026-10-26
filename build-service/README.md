@@ -273,6 +273,22 @@ authority it re-verifies the running release (active assets, healthy images,
 stopped rollback containers, frozen candidate), then performs only the checked
 source promotion. Nothing is rebuilt, recreated or restarted.
 
+## Workspace snapshots
+
+After the dependency snapshot, a trusted phase reuses module crate objects across
+builds. It copies the newest snapshot for the same dependency key (or seeds from
+the dependency snapshot), copies the current source with only the root package's
+targets stubbed (its build script included, so no task code runs; a module crate
+with a build script or proc-macro refuses the snapshot), compiles the engine's
+test, debug and live profiles, cleans the root package and publishes the result
+under `build-jobs/compiled-workspace/<dependency key>/<key>`. Freshness uses
+Cargo's mtime rule: files whose bytes match the snapshot's record get a fixed old
+mtime in the stub and in the job's source, changed and new files keep their newer
+extraction time, so only changed module crates and their dependents rebuild (the
+root crate always does). The job's target is replaced only after the copy matches
+the receipt's inventory; any failure keeps the dependency snapshot. Two snapshots
+per dependency key are kept; the cache is rebuildable and safe to delete.
+
 ## Engine component reuse keys
 
 Each engine component's artifact is keyed by its crate closure plus digests of

@@ -31,6 +31,12 @@ SNAPSHOT_RECIPE="compiled-dependencies-v2"
 SNAPSHOT_COMPILES="set -e\ncargo test --workspace --locked --offline --no-run\ncargo build --workspace --locked --offline --bins\ncargo build --workspace --release --locked --offline --no-default-features --features webagent-v3/live-context"
 SNAPSHOT_KEEP=3
 SNAPSHOT_HEADROOM=16*1024**3
+# Workspace snapshots: module crate objects reused across builds. Unchanged sources
+# get FROZEN_MTIME so Cargo's mtime freshness keeps their objects; changed or new
+# files keep their extraction time and rebuild with every dependent.
+WORKSPACE_RECIPE="compiled-workspace-v1"
+WORKSPACE_KEEP=2
+FROZEN_MTIME=946684800
 MOLD_VERSION="1.10.1+dfsg-1"
 MOLD_SHA256="f85b0102cabeaee34b76ab195aacfa9ff9442d670948c88f6f353dd666ea5b64"
 MOLD_COMPILER_DOCKERFILE_SHA256="129a45c426d4683ab5a563ebdf764bf829826a415305dce15ab36c780a3ba815"
@@ -572,7 +578,8 @@ class Executor:
             persist("skipped",reason="private_target_present");return ""
         try:
             binding=self.snapshot_binding(source);key=hashlib.sha256(json.dumps(binding,sort_keys=True).encode()).hexdigest()
-            downloads=Path(self.config["state_root"])/"cargo-dependencies"/hashlib.sha256(json.dumps(binding["dependencies"],sort_keys=True).encode()).hexdigest()/"cargo"
+            fetched=hashlib.sha256(json.dumps(binding["dependencies"],sort_keys=True).encode()).hexdigest()
+            downloads=Path(self.config["state_root"])/"cargo-dependencies"/fetched/"cargo"
             root=Path(self.config["state_root"])/"compiled-dependencies"
             if root.is_symlink():raise ValueError("Snapshot directory symlink")
             root.mkdir(mode=0o700,parents=True,exist_ok=True);destination=root/key;log=""
@@ -618,7 +625,7 @@ class Executor:
                 shutil.copytree(destination/"target",target,symlinks=True)
                 if self.artifact_hashes(target)!=saved.get("inventory"):raise ValueError("Snapshot copy verification failed")
                 os.utime(destination)
-            persist(decision,key=key,files=len(saved["inventory"]))
+            persist(decision,key=key,files=len(saved["inventory"]),downloads=fetched)
             return log+"Verified compiled-dependency snapshot "+decision+": "+key+"\n"
         except PermissionError:
             raise
@@ -627,6 +634,138 @@ class Executor:
             elif target.exists():shutil.rmtree(target)
             persist("unavailable",reason=type(error).__name__,detail=str(error)[:300])
             return "Compiled-dependency snapshot unavailable; compiling cold: "+str(error)[:300]+"\n"
+
+    @staticmethod
+    def workspace_stub(source,metadata,stub):
+        """Copy the application with only the root package's targets stubbed; return (root names, real file hashes).
+
+        Module crates compile for real with the real manifests, so feature resolution
+        matches the engine build. A module build script or proc-macro would run task
+        code at compile time, so either refuses the snapshot."""
+        if metadata.is_symlink()or not metadata.is_file()or metadata.stat().st_size>64*1024*1024:raise ValueError("Workspace metadata unavailable")
+        value=json.loads(metadata.read_bytes());members=set(value.get("workspace_members")or[])
+        hashes={}
+        for path in sorted(source.rglob("*")):
+            if path.is_symlink():raise ValueError("Workspace source symlink")
+            if path.is_file():hashes[path.relative_to(source).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()
+        shutil.copytree(source,stub,symlinks=True)
+        names=set();roots=0
+        for package in value.get("packages",[]):
+            if package.get("id")not in members:continue
+            kinds={kind for target in package.get("targets",[])for kind in target.get("kind",[])}
+            if package.get("name")!="webagent-v3":
+                if kinds&{"custom-build","proc-macro"}:raise ValueError("Workspace snapshot requires build-script-free module crates: "+str(package.get("name")))
+                continue
+            roots+=1;names.add("webagent-v3")
+            for target in package.get("targets",[]):
+                path=target.get("src_path");label=target.get("name")
+                if not isinstance(label,str)or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",label)or not isinstance(path,str)or not path.startswith("/build/"):raise ValueError("Workspace root target invalid")
+                relative=posixpath.normpath(path[len("/build/"):])
+                if relative.startswith("..")or relative.startswith("/")or not relative.endswith(".rs")or relative not in hashes:raise ValueError("Workspace root target path invalid")
+                library=any(kind in {"lib","rlib","proc-macro"}for kind in target.get("kind",[]))
+                (stub/relative).write_text("#![allow(warnings)]\n"+(""if library else"fn main(){}\n"))
+                names.add(label)
+        if roots!=1:raise ValueError("Workspace root package missing")
+        return sorted(names),hashes
+
+    @staticmethod
+    def freshen(root,hashes):
+        """Give files whose bytes match the snapshot record FROZEN_MTIME; changed and new files stay newer."""
+        frozen=0
+        for path in root.rglob("*"):
+            if path.is_file()and not path.is_symlink():
+                relative=path.relative_to(root).as_posix()
+                if relative in hashes and hashlib.sha256(path.read_bytes()).hexdigest()==hashes[relative]:
+                    os.utime(path,(FROZEN_MTIME,FROZEN_MTIME),follow_symlinks=False);frozen+=1
+        return frozen
+
+    def workspace_snapshot(self,job,source,output):
+        """Reuse module crate objects compiled from earlier sources in a trusted stub-root phase.
+
+        The phase copies the newest snapshot for this dependency key, rebuilds only the
+        module crates whose sources changed (plus dependents) in a copy of the current
+        source with the root package stubbed and cleaned, and publishes the result.
+        The job's target is replaced only after the copy verifies; any failure keeps
+        the dependency snapshot and the job compiles its modules as before."""
+        started=time.monotonic();dependency=job.get("dependency_snapshot")or{}
+        def persist(decision,**value):
+            job["workspace_snapshot"]={"decision":decision,"seconds":round(time.monotonic()-started,3),**value}
+            getattr(self.runner,"resource_progress",lambda _:None)(job)
+        if dependency.get("decision")not in {"hit","prepared"}:
+            persist("skipped",reason="no_dependency_snapshot");return ""
+        target=output/"target";replacement=output/"workspace-target"
+        try:
+            base=dependency["key"];root=Path(self.config["state_root"])/"compiled-workspace"/base
+            if root.parent.is_symlink()or root.is_symlink():raise ValueError("Workspace snapshot directory symlink")
+            root.mkdir(mode=0o700,parents=True,exist_ok=True);log=""
+            if not re.fullmatch(r"[a-f0-9]{64}",str(dependency.get("downloads",""))):raise ValueError("Dependency download key unavailable")
+            downloads=Path(self.config["state_root"])/"cargo-dependencies"/dependency["downloads"]/"cargo"
+            with self.runner.plugin_build_lock("compiled-workspace-"+base):
+                temporary=root/("preparing-"+uuid.uuid4().hex);temporary.mkdir(mode=0o700)
+                try:
+                    stub=temporary/"stub";work=temporary/"output";work.mkdir()
+                    names,hashes=self.workspace_stub(source,output/"dependency-metadata.json",stub)
+                    binding={"dependency":base,"recipe":WORKSPACE_RECIPE,"compiles":SNAPSHOT_COMPILES,"compiler":self.compiler_recipe()}
+                    key=hashlib.sha256(json.dumps({"binding":binding,"hashes":hashes},sort_keys=True).encode()).hexdigest()
+                    destination=root/key;decision="hit"
+                    if destination.is_symlink():raise ValueError("Workspace snapshot symlink")
+                    if not destination.exists():
+                        reserve=int(self.config.get("scheduler",{}).get("disk_min_free_bytes",5*1024**3))+SNAPSHOT_HEADROOM
+                        if shutil.disk_usage(root).free<reserve:
+                            persist("skipped",reason="insufficient_disk");return ""
+                        previous=None
+                        for candidate in sorted((p for p in root.iterdir()if re.fullmatch(r"[a-f0-9]{64}",p.name)and not p.is_symlink()),key=lambda p:p.stat().st_mtime,reverse=True):
+                            saved=self.workspace_receipt(candidate)
+                            if saved is not None and saved.get("binding")==binding:previous=(candidate,saved);break
+                        # Seed from the previous snapshot (verified against its receipt) or from
+                        # the job's dependency-snapshot target (verified when it was copied).
+                        expected=previous[1]["inventory"]if previous else self.artifact_hashes(target)
+                        shutil.copytree(previous[0]/"target"if previous else target,work/"target",symlinks=True)
+                        if self.artifact_hashes(work/"target")!=expected:raise ValueError("Workspace seed copy verification failed")
+                        if downloads.is_symlink()or not (downloads/"registry").is_dir():raise ValueError("Verified downloads unavailable")
+                        shutil.copytree(downloads/"registry",work/"cargo/registry")
+                        # Unchanged files keep the previous objects fresh; without a previous
+                        # snapshot every module compiles once from the dependency seed.
+                        self.freshen(stub,previous[1]["hashes"]if previous else hashes)
+                        log=self.phase(job,"dependency","engine",stub,work,["sh","-c",SNAPSHOT_COMPILES+"\ncargo clean --locked --offline -p webagent-v3\ncargo clean --release --locked --offline -p webagent-v3"],"compiled-workspace:rust1.90:stub-root-v1")
+                        built=work/"target"
+                        if built.is_symlink()or not built.is_dir():raise ValueError("Workspace snapshot target missing")
+                        leftovers=self.snapshot_leftovers(built,names)
+                        if leftovers:raise ValueError("Root stub products survived cleaning: "+", ".join(leftovers[:6]))
+                        inventory=self.artifact_hashes(built);built.rename(temporary/"target")
+                        with (temporary/"receipt.json").open("x")as stream:
+                            json.dump({"binding":binding,"hashes":hashes,"inventory":inventory,"seeded_from":previous[0].name if previous else "dependency"},stream,sort_keys=True);stream.flush();os.fsync(stream.fileno())
+                        os.rename(temporary,destination);decision="prepared"
+                        entries=[p for p in root.iterdir()if not p.is_symlink()and p!=destination]
+                        stale=sorted((p for p in entries if re.fullmatch(r"[a-f0-9]{64}",p.name)),key=lambda p:p.stat().st_mtime,reverse=True)[WORKSPACE_KEEP-1:]
+                        stale+=[p for p in entries if p.name.startswith("preparing-")and time.time()-p.stat().st_mtime>6*3600]
+                        for path in stale:shutil.rmtree(path,ignore_errors=True)
+                finally:
+                    if temporary.exists():shutil.rmtree(temporary,ignore_errors=True)
+                saved=self.workspace_receipt(destination)
+                if saved is None or saved.get("binding")!=binding or saved.get("hashes")!=hashes:raise ValueError("Workspace snapshot receipt mismatch")
+                if replacement.exists():shutil.rmtree(replacement)
+                shutil.copytree(destination/"target",replacement,symlinks=True)
+                if self.artifact_hashes(replacement)!=saved["inventory"]:raise ValueError("Workspace snapshot copy verification failed")
+                shutil.rmtree(target);replacement.rename(target)
+                os.utime(destination)
+            frozen=self.freshen(source,hashes)
+            persist(decision,key=key,files=len(saved["inventory"]),frozen_sources=frozen)
+            return log+"Verified workspace snapshot "+decision+": "+key+"\n"
+        except PermissionError:
+            raise
+        except (OSError,RuntimeError,ValueError,KeyError,TypeError)as error:
+            if replacement.exists():shutil.rmtree(replacement,ignore_errors=True)
+            persist("unavailable",reason=type(error).__name__,detail=str(error)[:300])
+            return "Workspace snapshot unavailable; module crates compile in the build: "+str(error)[:300]+"\n"
+
+    @staticmethod
+    def workspace_receipt(folder):
+        """A bounded workspace snapshot receipt, or None."""
+        receipt=folder/"receipt.json"
+        if receipt.is_symlink()or not receipt.is_file()or receipt.stat().st_size>64*1024*1024:return None
+        try:return json.loads(receipt.read_bytes())
+        except ValueError:return None
 
     def verification_source(self,blob):
         """Conservatively bind every captured application/fixture file, excluding private inspection data."""
@@ -1224,7 +1363,7 @@ class Executor:
         inputs=digest(blob);before=self.runner.execution_source_digest(source)
         logs=self.dependencies(job,application,output,prepare=True)
         if seeded:logs+=self.phase(job,"dependency","dependency",application,output,["cargo","clean","--package","webagent-v3"],"engine:rust1.90:clean-root",600)
-        else:logs+=self.dependency_snapshot(job,application,output)
+        else:logs+=self.dependency_snapshot(job,application,output);logs+=self.workspace_snapshot(job,application,output)
         self.attest_release_base(job,context_blob)
         logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"],"engine:rust1.90:compile_test")
         artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)

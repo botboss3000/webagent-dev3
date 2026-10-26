@@ -735,3 +735,87 @@ class DependencySnapshotTests(unittest.TestCase):
         def cancelled(*args,**kwargs):raise PermissionError("cancelled")
         self.worker.dependency_binding=cancelled
         with self.assertRaises(PermissionError):self.worker.dependency_snapshot({"job_id":"x"},self.source,self.metadata(self.root/"c"))
+class WorkspaceSnapshotTests(unittest.TestCase):
+    """Module crate objects are reused only from stub-root snapshots and only for unchanged sources."""
+    def setUp(self):
+        import contextlib,json
+        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
+        self.source=self.root/"source";(self.source/"src").mkdir(parents=True);(self.source/"crates/chat/src").mkdir(parents=True)
+        (self.source/"Cargo.toml").write_text('[package]\nname="webagent-v3"\n');(self.source/"Cargo.lock").write_text("version = 4\n")
+        (self.source/"build.rs").write_text("fn main(){task_build_script()}");(self.source/"src/main.rs").write_text("fn main(){task_code()}")
+        (self.source/"crates/chat/Cargo.toml").write_text('[package]\nname="webagent-chat"\n');(self.source/"crates/chat/src/lib.rs").write_text("pub fn chat(){}")
+        self.runner=types.SimpleNamespace(compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64},plugin_build_lock=lambda name:contextlib.nullcontext())
+        self.worker=module.Executor(self.runner,None,{"state_root":str(self.root/"state"),"scheduler":{"disk_min_free_bytes":0}})
+        headroom=unittest.mock.patch.object(module,"SNAPSHOT_HEADROOM",0);headroom.start();self.addCleanup(headroom.stop)
+        downloads=self.root/"state/cargo-dependencies"/("d"*64)/"cargo/registry";downloads.mkdir(parents=True);(downloads/"serde.crate").write_bytes(b"locked")
+        self.calls=[];self.leftover=False;self.chat_build=False
+    def tearDown(self):self.temp.cleanup()
+    def metadata(self,output,module_build=False):
+        import json
+        chat=[{"name":"webagent_chat","kind":["lib"],"src_path":"/build/crates/chat/src/lib.rs"}]+([{"name":"build-script-build","kind":["custom-build"],"src_path":"/build/crates/chat/build.rs"}]if module_build else[])
+        packages=[{"id":"root","name":"webagent-v3","targets":[{"name":"webagent-v3","kind":["bin"],"src_path":"/build/src/main.rs"},{"name":"build-script-build","kind":["custom-build"],"src_path":"/build/build.rs"}]},
+                  {"id":"chat","name":"webagent-chat","targets":chat}]
+        (output/"dependency-metadata.json").write_text(json.dumps({"workspace_members":["root","chat"],"packages":packages}))
+    def phase(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False):
+        self.calls.append(profile)
+        self.assertEqual((source/"src/main.rs").read_text(),"#![allow(warnings)]\nfn main(){}\n")
+        self.assertEqual((source/"build.rs").read_text(),"#![allow(warnings)]\nfn main(){}\n")
+        self.assertNotEqual((source/"crates/chat/src/lib.rs").read_text()[:2],"#!")
+        self.chat_frozen=(source/"crates/chat/src/lib.rs").stat().st_mtime==module.FROZEN_MTIME
+        self.assertTrue((output/"target/release/deps/libserde.rlib").is_file())
+        deps=output/"target/release/deps";(deps/"libwebagent_chat-1.rlib").write_bytes((source/"crates/chat/src/lib.rs").read_bytes())
+        if self.leftover:(deps/"webagent_v3-2").write_bytes(b"stub root")
+        return "built\n"
+    def run_job(self,module_build=False):
+        output=self.root/uuid.uuid4().hex;deps=output/"target/release/deps";deps.mkdir(parents=True);(deps/"libserde.rlib").write_bytes(b"third party")
+        self.metadata(output,module_build)
+        job={"job_id":str(uuid.uuid4()),"dependency_snapshot":{"decision":"hit","key":"k"*64,"downloads":"d"*64}}
+        self.worker.phase=self.phase
+        self.worker.workspace_snapshot(job,self.source,output)
+        return job,output
+    def test_only_root_targets_are_stubbed_and_module_build_scripts_refuse(self):
+        stub=self.root/"stub";output=self.root/"meta";output.mkdir();self.metadata(output)
+        names,hashes=self.worker.workspace_stub(self.source,output/"dependency-metadata.json",stub)
+        self.assertEqual(names,["build-script-build","webagent-v3"])
+        self.assertEqual((stub/"crates/chat/src/lib.rs").read_text(),"pub fn chat(){}")
+        self.assertNotIn("task_code",(stub/"src/main.rs").read_text())
+        self.assertEqual(hashes["src/main.rs"],hashlib.sha256(b"fn main(){task_code()}").hexdigest())
+        job,_=self.run_job(module_build=True)
+        self.assertEqual(job["workspace_snapshot"]["decision"],"unavailable");self.assertIn("build-script-free",job["workspace_snapshot"]["detail"])
+    def test_freshen_freezes_only_unchanged_files(self):
+        hashes={"src/main.rs":hashlib.sha256(b"fn main(){task_code()}").hexdigest(),"crates/chat/src/lib.rs":"0"*64}
+        self.assertEqual(self.worker.freshen(self.source,hashes),1)
+        self.assertEqual((self.source/"src/main.rs").stat().st_mtime,module.FROZEN_MTIME)
+        self.assertNotEqual((self.source/"crates/chat/src/lib.rs").stat().st_mtime,module.FROZEN_MTIME)
+    def test_prepare_then_hit_then_reseed_after_a_module_change(self):
+        job,output=self.run_job()
+        self.assertEqual(job["workspace_snapshot"]["decision"],"prepared");self.assertEqual(len(self.calls),1)
+        self.assertEqual((output/"target/release/deps/libwebagent_chat-1.rlib").read_bytes(),b"pub fn chat(){}")
+        self.assertEqual((self.source/"crates/chat/src/lib.rs").stat().st_mtime,module.FROZEN_MTIME)
+        job,output=self.run_job()
+        self.assertEqual((job["workspace_snapshot"]["decision"],len(self.calls)),("hit",1))
+        (self.source/"crates/chat/src/lib.rs").write_text("pub fn chat(){changed()}")
+        job,output=self.run_job()
+        self.assertEqual((job["workspace_snapshot"]["decision"],len(self.calls)),("prepared",2))
+        self.assertFalse(self.chat_frozen)
+        self.assertEqual((output/"target/release/deps/libwebagent_chat-1.rlib").read_bytes(),b"pub fn chat(){changed()}")
+    def test_surviving_root_objects_or_tampering_keep_the_dependency_target(self):
+        self.leftover=True
+        job,output=self.run_job()
+        self.assertEqual(job["workspace_snapshot"]["decision"],"unavailable")
+        self.assertEqual(sorted(p.name for p in (output/"target/release/deps").iterdir()),["libserde.rlib"])
+        self.leftover=False;self.run_job()
+        shared=next(p for p in (self.root/"state/compiled-workspace"/("k"*64)).iterdir()if len(p.name)==64)
+        (shared/"target/release/deps/libwebagent_chat-1.rlib").write_bytes(b"tampered")
+        job,output=self.run_job()
+        self.assertEqual(job["workspace_snapshot"]["decision"],"unavailable")
+        self.assertEqual(sorted(p.name for p in (output/"target/release/deps").iterdir()),["libserde.rlib"])
+    def test_cancellation_propagates_and_missing_dependency_snapshot_skips(self):
+        job={"job_id":"x","dependency_snapshot":{"decision":"unavailable"}}
+        self.worker.workspace_snapshot(job,self.source,self.root)
+        self.assertEqual(job["workspace_snapshot"]["decision"],"skipped")
+        def cancelled(*args,**kwargs):raise PermissionError("cancelled")
+        self.worker.workspace_stub=cancelled
+        output=self.root/"c";output.mkdir();self.metadata(output)
+        with self.assertRaises(PermissionError):
+            self.worker.workspace_snapshot({"job_id":"y","dependency_snapshot":{"decision":"hit","key":"k"*64,"downloads":"d"*64}},self.source,output)
