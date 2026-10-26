@@ -1,0 +1,7 @@
+{
+  "provider": "gemini",
+  "name": "Gemini",
+  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+  "validated": false,
+  "models": []
+}

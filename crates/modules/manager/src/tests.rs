@@ -344,7 +344,7 @@ mod independent_runtime_io {
                 credential_ref:"provider_credential:fixture".into(), allowed_agents:shared.clone(), revision:1, revoked:false });
             catalog.entries.insert("fixture-model".into(), ModelEntry { id:"fixture-model".into(), owner_id:REQUESTER.into(), connection_id:"fixture-connection".into(),
                 upstream_model:"fixture-model".into(), display_name:"Fixture".into(), capabilities:BTreeSet::from(["text".into()]), allowed_agents:shared, revision:1 });
-            catalog.agent_models.insert(AGENT.into(), AgentModels { limits:BTreeMap::new(), agent_id:AGENT.into(), owner_id:OWNER.into(), entry_ids:vec!["fixture-model".into()], revision:1,
+            catalog.agent_models.insert(AGENT.into(), AgentModels { limits:BTreeMap::new(), efforts:BTreeMap::new(), agent_id:AGENT.into(), owner_id:OWNER.into(), entry_ids:vec!["fixture-model".into()], revision:1,
                 roles:BTreeMap::from([(ModelRole::Standard, RoleAssignment { entry_id:"fixture-model".into(), backup_entry_ids:vec![] }), (ModelRole::System, RoleAssignment { entry_id:"fixture-model".into(), backup_entry_ids:vec![] })]) });
             storage.models().save_model_catalog(&catalog, 0).await.unwrap();
             storage.credential_put("provider_credential:fixture", &json!({"access_token":"synthetic-local-only-token","expires_at":crate::runtime::now()+3600})).await.unwrap();

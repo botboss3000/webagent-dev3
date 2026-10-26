@@ -34,8 +34,20 @@ async fn choices(app: &App, sid: &str) -> Result<Value, ApiError> {
             .get(&first.entry_id)
             .map(|entry| entry.display_name.as_str())
             .unwrap_or(&first.upstream_model);
+        // Effort scales come from the live provider file; the agent's saved default
+        // only counts while that file still supports it.
+        let provider = first.transport.provider_id();
+        let efforts = webagent_models::providers::efforts(provider, &first.upstream_model).unwrap_or_default();
+        let default_effort = webagent_models::providers::supported(provider, &first.upstream_model, first.default_effort.as_deref())
+            .or_else(|| efforts.default.clone());
+        let roles: Vec<_> = catalog.agent_models.get(&agent).into_iter()
+            .flat_map(|roster| &roster.roles)
+            .filter(|(_, assignment)| assignment.entry_id == first.entry_id)
+            .map(|(role, _)| role)
+            .collect();
         models.push(json!({"entry_id":id,"label":if id.is_none(){format!("Standard · {display}")}else{display.to_owned()},
-            "model":first.upstream_model,"connected":connected}));
+            "model":first.upstream_model,"connected":connected,"roles":roles,
+            "efforts":efforts.levels,"default_effort":default_effort,"provider_default_effort":efforts.default}));
     }
     let config = crate::agents_api::modes_config(&app.store, &agent).await?;
     let modes: Vec<Value> = config["execution_modes"]
@@ -73,6 +85,9 @@ pub(crate) struct ChatModelBody {
     pub entry_id: Option<String>,
     pub expected_revision: u64,
     pub client_request_id: String,
+    /// This conversation's effort for the chosen model; omitted means the model's saved default.
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 pub(crate) async fn chat_model_set(
     State(app): State<App>,
@@ -94,7 +109,7 @@ pub(crate) async fn chat_model_set(
         ));
     }
     let options = choices(&app, &sid).await?;
-    let fingerprint = digest(&json!([sid, body.entry_id, body.expected_revision]));
+    let fingerprint = digest(&json!([sid, body.entry_id, body.expected_revision, body.effort]));
     let receipt = format!("receipt:chat_controls:{sid}:{}", body.client_request_id);
     if let Some(saved) = app.store.get(&receipt).await? {
         if saved["digest"] != fingerprint {
@@ -105,19 +120,22 @@ pub(crate) async fn chat_model_set(
     if options["model"]["revision"].as_u64() != Some(body.expected_revision) {
         return Err(conflict("Conversation model changed; reload the picker"));
     }
-    if !options["models"]
+    let Some(chosen) = options["models"]
         .as_array()
         .into_iter()
         .flatten()
-        .any(|entry| entry["entry_id"] == json!(body.entry_id) && entry["connected"] == true)
-    {
+        .find(|entry| entry["entry_id"] == json!(body.entry_id) && entry["connected"] == true)
+    else {
         return Err(conflict("Selected model is unavailable or not connected"));
+    };
+    if body.effort.as_ref().is_some_and(|effort| !chosen["efforts"].as_array().into_iter().flatten().any(|level| level == effort)) {
+        return Err(bad("Effort is not supported by the selected model"));
     }
     let revision = body
         .expected_revision
         .checked_add(1)
         .ok_or_else(|| bad("Model revision exhausted"))?;
-    let saved = json!({"entry_id":body.entry_id,"revision":revision});
+    let saved = json!({"entry_id":body.entry_id,"effort":body.effort,"revision":revision});
     // Later admissions read this preference; accepted runs retain their immutable plans.
     app.store
         .atomic_docs_event(
@@ -156,6 +174,8 @@ pub(crate) async fn apply_chat_model_preference(app:&App,run:&mut Value)->Result
     }.value();
     run["selection_plan"]=json!(plan);
     run["failover_state"]=json!(model_selection::FailoverState::default());
+    // Applies to the chosen entry only; backups use their own defaults.
+    run["chat_effort"]=saved["effort"].clone();
     run["chat_model_revision"]=json!(revision);
     run["attempt"]=json!(0);
     Ok(true)
@@ -187,6 +207,7 @@ mod tests {
             entry_id: Some("two".into()),
             expected_revision: 0,
             client_request_id: request.clone(),
+            effort: None,
         };
         let Json(saved) = chat_model_set(State(app.clone()), Path(sid.clone()), Json(body()))
             .await
@@ -205,7 +226,8 @@ mod tests {
             Json(ChatModelBody {
                 entry_id: Some("one".into()),
                 expected_revision: 0,
-                client_request_id: uuid()
+                client_request_id: uuid(),
+                effort: None
             })
         )
         .await
@@ -226,6 +248,32 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn conversation_effort_is_per_model_validated_and_reset_by_a_model_switch(){
+        let (_root,app)=fixture().await;
+        selection_fixture(&app).await;
+        let Json(session)=create_session(State(app.clone()),Json(json!({"client_request_id":uuid()}))).await.unwrap();
+        let sid=session["id"].as_str().unwrap().to_owned();
+        let Json(options)=chat_controls_get(State(app.clone()),Path(sid.clone())).await.unwrap();
+        let two=options["models"].as_array().unwrap().iter().find(|m|m["entry_id"]=="two").unwrap().clone();
+        let level=two["efforts"][0].as_str().expect("fixture model lists efforts").to_owned();
+        let set=|revision,entry:&str,effort:Option<&str>|ChatModelBody{entry_id:Some(entry.into()),expected_revision:revision,
+            client_request_id:uuid(),effort:effort.map(str::to_owned)};
+        assert!(chat_model_set(State(app.clone()),Path(sid.clone()),Json(set(0,"two",Some("turbo")))).await.is_err());
+        let Json(saved)=chat_model_set(State(app.clone()),Path(sid.clone()),Json(set(0,"two",Some(&level)))).await.unwrap();
+        assert_eq!(saved["effort"],level);
+        let (_,Json(sent))=send(State(app.clone()),Path(sid.clone()),Json(json!({"text":"hi","client_message_id":uuid()}))).await.unwrap();
+        // Admission adopts the saved entry and its effort.
+        let mut run=app.run(sent["run_id"].as_str().unwrap()).await.unwrap();
+        assert_eq!(run["selection_plan"]["custom_entry_id"],"two");
+        assert_eq!(run["chat_effort"],level);
+        // Switching models without an effort returns to that model's saved default.
+        let Json(saved)=chat_model_set(State(app.clone()),Path(sid.clone()),Json(set(1,"one",None))).await.unwrap();
+        assert!(saved["effort"].is_null());
+        assert!(apply_chat_model_preference(&app,&mut run).await.unwrap());
+        assert!(run["chat_effort"].is_null());
+    }
+
+    #[tokio::test]
     async fn composer_model_choice_applies_at_next_loop_boundary_without_a_message(){
         let (_root,app)=fixture().await;
         let catalog=selection_fixture(&app).await;
@@ -235,7 +283,7 @@ mod tests {
         let mut run=app.run(sent["run_id"].as_str().unwrap()).await.unwrap();
         let original=run["selection_plan"].clone();
         let system=run["system_selection_plan"].clone();
-        chat_model_set(State(app.clone()),Path(sid.clone()),Json(ChatModelBody{entry_id:Some("two".into()),expected_revision:0,client_request_id:uuid()})).await.unwrap();
+        chat_model_set(State(app.clone()),Path(sid.clone()),Json(ChatModelBody{entry_id:Some("two".into()),expected_revision:0,client_request_id:uuid(),effort:None})).await.unwrap();
         assert_eq!(app.run(sent["run_id"].as_str().unwrap()).await.unwrap()["selection_plan"],original);
         assert!(apply_chat_model_preference(&app,&mut run).await.unwrap());
         assert_eq!(run["provider_selection"]["model"],"model-two");
@@ -281,7 +329,7 @@ mod tests {
         assert!(app.store.claim_run(&mut run,"fixture-loop","boundary-test").await.unwrap());
         let runner=tokio::spawn(crate::execute_run(app.clone(),rid.clone(),"boundary-test".into(),CancellationToken::new()));
         tokio::time::timeout(Duration::from_secs(10),shared.started.notified()).await.unwrap();
-        chat_model_set(State(app.clone()),Path(sid.clone()),Json(ChatModelBody{entry_id:Some("two".into()),expected_revision:0,client_request_id:uuid()})).await.unwrap();
+        chat_model_set(State(app.clone()),Path(sid.clone()),Json(ChatModelBody{entry_id:Some("two".into()),expected_revision:0,client_request_id:uuid(),effort:None})).await.unwrap();
         session_mode_set(State(app.clone()),Path(sid.clone()),Json(SessionModeBody{mode:"plan".into(),expected_revision:Some(0),confirm_write:false})).await.unwrap();
         shared.release.notify_one();
         tokio::time::timeout(Duration::from_secs(15),runner).await.unwrap().unwrap().unwrap();

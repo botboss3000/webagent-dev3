@@ -1,0 +1,7 @@
+{
+  "provider": "groq",
+  "name": "Groq",
+  "base_url": "https://api.groq.com/openai/v1",
+  "validated": false,
+  "models": []
+}

@@ -1578,7 +1578,15 @@ async fn execute_run_inner(app:Self,id:String,generation:String,cancel:Cancellat
             workflow::record(&mut run, &workflow_policy,
                 &workflow::Input::ContextAssembly(snapshot.clone()), workflow::Decision::Pass)?;
             app.save(&mut run).await?;
-            let core_effort=run["core_model_effort"].as_str().map(str::to_owned);
+            // Effort precedence: this run's model-switcher choice, then the conversation's
+            // choice for the chosen entry, then the agent's default for the candidate in use.
+            // Levels the provider file no longer lists fall back to the provider default.
+            let index=run["failover_state"]["candidate_index"].as_u64().unwrap_or(0) as usize;
+            let candidate=&run["selection_plan"]["candidates"][index];
+            let requested=run["core_model_effort"].as_str()
+                .or_else(||if index==0 {run["chat_effort"].as_str()} else {None})
+                .or_else(||candidate["default_effort"].as_str());
+            let core_effort=webagent_models::providers::supported(selection.provider,&selection.model,requested);
             let prepared_provider=match crate::provider::CallDraft::new(&selection,projected_input,schemas,&sid,&instructions)
                 .with_reasoning_effort(core_effort.as_deref())
                 .prepare(crate::ports::AgentMetadata::root(app.store.records()),&cancel).await {

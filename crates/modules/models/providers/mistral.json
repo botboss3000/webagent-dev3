@@ -1,0 +1,7 @@
+{
+  "provider": "mistral",
+  "name": "Mistral",
+  "base_url": "https://api.mistral.ai/v1",
+  "validated": false,
+  "models": []
+}

@@ -1,0 +1,7 @@
+{
+  "provider": "openai_api",
+  "name": "OpenAI API",
+  "base_url": "https://api.openai.com/v1",
+  "validated": false,
+  "models": []
+}

@@ -43,6 +43,7 @@ pub async fn response<C:RuntimeStorage>(app: &Runtime<'_,C>, identity: &Value, a
         for a in view.agent_models.values_mut() {
             a.entry_ids.retain(|id|available.contains(id));
             a.limits.retain(|id,_|available.contains(id));
+            a.efforts.retain(|id,_|available.contains(id));
             a.roles.retain(|_,r|available.contains(&r.entry_id));
             for r in a.roles.values_mut() {r.backup_entry_ids.retain(|id|available.contains(id));}
         }

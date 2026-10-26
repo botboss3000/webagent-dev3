@@ -1,0 +1,41 @@
+{
+  "provider": "openai_subscription",
+  "name": "ChatGPT Subscription",
+  "base_url": "codex://chatgpt",
+  "validated": true,
+  "efforts": ["low", "medium", "high", "xhigh"],
+  "default_effort": "medium",
+  "models": [
+    {
+      "id": "gpt-6-astra",
+      "name": "GPT-6 Astra",
+      "input": ["text", "image"],
+      "context": 272000,
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "default_effort": "medium"
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "name": "GPT-6.1 Sol",
+      "input": ["text", "image"],
+      "context": 272000,
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "default_effort": "medium"
+    },
+    {
+      "id": "gpt-6-sol",
+      "name": "GPT-6 Sol",
+      "input": ["text", "image"],
+      "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+      "default_effort": "medium"
+    },
+    {
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna",
+      "input": ["text", "image"],
+      "context": 272000,
+      "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+      "default_effort": "medium"
+    }
+  ]
+}

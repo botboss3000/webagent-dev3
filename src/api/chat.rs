@@ -195,6 +195,10 @@ async fn prepare_message_inner(app:&App,id:&str,body:&Value,supplied_session:Opt
     run["system_failover_state"] = json!(model_selection::FailoverState::default());
     run["attachments"] = json!(prepared.metadata.clone());
     run["chat_model_revision"] = json!(saved_model.as_ref().and_then(|v|v["revision"].as_u64()).unwrap_or(0));
+    // The conversation's effort belongs to its saved entry, not a per-message override.
+    run["chat_effort"] = if body.get("model_entry_id").is_none() {
+        saved_model.as_ref().map(|v|v["effort"].clone()).unwrap_or(Value::Null)
+    } else {Value::Null};
     // Freeze memory at admission; later edits cannot rewrite queued context.
     run["memory_context"] = if crate::shared_chat::actor(app)==app.store.current_user_id(){json!(memory::snapshot(app.store.list(&format!("memory:{id}:")).await?)?)}else{Value::Null};
     workflow::record(&mut run, &workflow_policy,

@@ -1323,6 +1323,11 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
 .ac-model-inline-plus:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ac-model-inline-error { grid-column: 2 / 4; color: var(--danger); font-size: 11px; }
 .ac-model-inline-error:empty { display: none; }
+.ac-model-dropdown .ac-model-item[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+/* Effort slider (shared .cml-effort-* styles) inside the add form and saved-row details. */
+.ac-model-effort { grid-column: 1 / -1; min-width: 0; width: 100%; max-width: 320px; }
+.ac-model-effort[hidden] { display: none; }
+.ac-model-meta-effortline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 520px) {
   .ac-model-inline-add { grid-template-columns: minmax(0, 1fr) auto; }
   .ac-model-inline-add label { grid-column: 1 / 3; }

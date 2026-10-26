@@ -12,7 +12,7 @@ pub fn schemas() -> Vec<Value> {
  ("list_models","List this agent's permitted roster and assigned model roles; never returns credentials.",json!({}),vec![]),
  ("set_model","Select one existing model entry for the rest of this run. Applies at the next model boundary; does not edit agent assignments.",json!({"entry_id":{"type":"string","minLength":1,"maxLength":128}}),vec!["entry_id"]),
  ("use_premium_model","Use this agent's assigned Premium role for this run. Requires exact human approval.",json!({}),vec![]),
- ("set_effort","Set reasoning effort for subsequent calls in this run on a supported reasoning transport.",json!({"effort":{"type":"string","enum":["minimal","low","medium","high"]}}),vec!["effort"]),
+ ("set_effort","Set reasoning effort for subsequent calls in this run. Supported levels depend on the current model; list_models shows them.",json!({"effort":{"type":"string","enum":webagent_models::providers::EFFORTS}}),vec!["effort"]),
  ("reset_to_default","Return this run to the assigned Standard model and default reasoning effort.",json!({}),vec![])
  ].into_iter().map(|(name,description,properties,required)|json!({"type":"function","name":name,"description":description,
  "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
@@ -82,8 +82,10 @@ pub async fn execute(
                 }
                 let entry = &catalog.entries[id];
                 let first = &plan.candidates[0];
+                let efforts = webagent_models::providers::efforts(first.transport.provider_id(), &entry.upstream_model).unwrap_or_default();
                 models.push(json!({"entry_id":id,"name":entry.display_name,"model":entry.upstream_model,
-     "capabilities":entry.capabilities,"connected":first.platform.is_some()||app.store.get(&first.credential_ref).await?.is_some()}));
+     "capabilities":entry.capabilities,"connected":first.platform.is_some()||app.store.get(&first.credential_ref).await?.is_some(),
+     "efforts":efforts.levels,"default_effort":first.default_effort.clone().or(efforts.default)}));
             }
         }
         let roles = catalog
@@ -154,6 +156,7 @@ pub async fn execute(
             )?;
             webagent_models::transport::validate_reasoning_effort(
                 selection.provider,
+                &selection.model,
                 Some(&q.effort),
             )?;
             state["state"]["effort"] = json!(q.effort);
@@ -231,15 +234,18 @@ pub async fn apply(app: &App, run: &mut Value) -> Result<bool> {
         .value();
         run["selection_plan"] = json!(plan);
         run["failover_state"] = json!(model_selection::FailoverState::default());
+        // The conversation's effort belonged to the replaced model.
+        run["chat_effort"] = Value::Null;
         run["attempt"] = json!(0);
     }
     let current =
         provider::ProviderSelection::parse(&run["provider_selection"], DEFAULT_AGENT_MODEL)?;
-    webagent_models::transport::validate_reasoning_effort(
+    // An effort chosen for the previous model is dropped when the new one lacks it.
+    run["core_model_effort"] = json!(webagent_models::providers::supported(
         current.provider,
+        &current.model,
         state["state"]["effort"].as_str(),
-    )?;
-    run["core_model_effort"] = state["state"]["effort"].clone();
+    ));
     run["core_model_revision"] = json!(revision);
     Ok(true)
 }

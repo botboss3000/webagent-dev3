@@ -70,7 +70,7 @@ impl<C:RuntimeStorage> Repository<'_,C> {
         catalog.entries.insert(id.clone(),ModelEntry {id:id.clone(),owner_id:"admin".into(),
             connection_id:id.clone(),upstream_model:selection.model,display_name:"Existing default subscription".into(),
             capabilities:std::collections::BTreeSet::from(["text".into()]),allowed_agents:grants,revision:1});
-        catalog.agent_models.insert("shared_default".into(),AgentModels { limits: std::collections::BTreeMap::new(),agent_id:"shared_default".into(),owner_id:"admin".into(),
+        catalog.agent_models.insert("shared_default".into(),AgentModels { limits: std::collections::BTreeMap::new(), efforts: std::collections::BTreeMap::new(),agent_id:"shared_default".into(),owner_id:"admin".into(),
             entry_ids:vec![id.clone()],roles:std::collections::BTreeMap::from([(ModelRole::Standard,
                 RoleAssignment {entry_id:id,backup_entry_ids:vec![]})]),revision:1});
         self.save_model_catalog(&catalog,catalog.revision).await?;

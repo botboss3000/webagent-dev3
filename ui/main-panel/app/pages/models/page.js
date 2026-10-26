@@ -2,14 +2,11 @@
 import { mountModelTable } from '../../../../shared/models/model-table.js';
 import { initModelAnalytics } from '../../../../shared/models/model-analytics.js';
 const MISSING='NEED BACKEND CONTRACT';
-const providers={deepseek:'DeepSeek',openai_api:'OpenAI API',openrouter:'OpenRouter',abacus:'Abacus RouteLLM',gemini:'Gemini',groq:'Groq',together:'Together',mistral:'Mistral',fireworks:'Fireworks',xai:'xAI',perplexity:'Perplexity',deepinfra:'DeepInfra'};
-const bases={deepseek:'https://api.deepseek.com',openai_api:'https://api.openai.com/v1',openrouter:'https://openrouter.ai/api/v1',abacus:'https://routellm.abacus.ai/v1',gemini:'https://generativelanguage.googleapis.com/v1beta/openai',groq:'https://api.groq.com/openai/v1',together:'https://api.together.xyz/v1',mistral:'https://api.mistral.ai/v1',fireworks:'https://api.fireworks.ai/inference/v1',xai:'https://api.x.ai/v1',perplexity:'https://api.perplexity.ai',deepinfra:'https://api.deepinfra.com/v1/openai'};
 const unavailable=async()=>new Response(JSON.stringify({error:MISSING}),{status:501,headers:{'Content-Type':'application/json'}});
 
-providers.typesafe='TypeSafe AI';
-bases.typesafe='https://api.typesafe.ai';
 // Actual reference template + renderer. Draft staging never changes publication or agent roles.
 export async function mountAppModels(host) {
+  let providers={};
   const controller=new AbortController();let disposed=false,table,analytics,observer;
   let scopeGeneration=0,roster,staged=[],dirty=false,busy=false,ready=false;
   const signal=controller.signal;
@@ -61,11 +58,17 @@ export async function mountAppModels(host) {
     api_key:'',decision_capable:e.capabilities.includes('decision'),text_capable:e.capabilities.includes('text'),image_capable:e.capabilities.includes('image_in'),image_out_capable:e.capabilities.includes('image_out'),voice_capable:e.capabilities.includes('voice'),video_capable:e.capabilities.includes('video'),catalog_origin:'platform'}));}
   const adapter={
     loadConfig:async()=>({provider:'deepseek',roster:structuredClone(staged),role_assignments:{}}),
-    loadPresets:async()=>Object.fromEntries(Object.entries(providers).map(([id,name])=>[id,{name,base_url:bases[id]}])),
+    // Provider files on the server name the platform providers; the subscription is per-account only.
+    loadPresets:async()=>{
+      const {providers:files}=await request('/models/providers');
+      providers=Object.fromEntries(files.filter(f=>f.provider!=='openai_subscription').map(f=>[f.provider,{name:f.name,base_url:f.base_url,validated:f.validated}]));
+      return providers;
+    },
     saveRoster:async({providers:next})=>{
       if(busy||roster?.retired||!live())throw Error('Catalog is not editable');
       for(const row of next){
         if(!providers[row.provider])throw Error('Unsupported platform provider');
+        if(!row.entry_id&&providers[row.provider].validated===false)throw Error(providers[row.provider].name+' is not yet validated');
         if(typeof row.model!=='string'||row.model.length<1||row.model.length>200||!/^[!-~]+$/.test(row.model))throw Error('Invalid upstream model ID');
         if(row.alias_group_id||row.reference_cost_input!=null||row.reference_cost_output!=null)throw Error(MISSING+': alias groups and pricing');
         row.entry_id||='model_'+crypto.randomUUID().replaceAll('-','');

@@ -1,6 +1,7 @@
 //! Model catalogs, selection, provider IO and runtime; foreign authority is supplied by its owner.
 pub mod provider;
 pub mod limits;
+pub mod providers;
 
 pub fn valid_model(model:&str)->bool {
     !model.is_empty() && model.len()<=128 && model.bytes().all(|b|

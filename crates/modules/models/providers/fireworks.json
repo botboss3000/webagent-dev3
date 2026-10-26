@@ -1,0 +1,7 @@
+{
+  "provider": "fireworks",
+  "name": "Fireworks",
+  "base_url": "https://api.fireworks.ai/inference/v1",
+  "validated": false,
+  "models": []
+}

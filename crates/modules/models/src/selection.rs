@@ -77,6 +77,13 @@ impl Catalog {
                 if !roster.entry_ids.contains(id) { bail!("Model limits are outside the agent roster"); }
                 limits.validate_for(self.connections[&self.entries[id].connection_id].transport.provider_id(), &self.entries[id].upstream_model)?;
             }
+            // Model-specific support is checked at use against the live provider file,
+            // so editing that file never invalidates a saved roster.
+            for (id, effort) in &roster.efforts {
+                if !roster.entry_ids.contains(id) || !crate::providers::EFFORTS.contains(&effort.as_str()) {
+                    bail!("Invalid default effort for the agent roster");
+                }
+            }
             for (role, appointment) in &roster.roles {
                 let ids = appointment.candidates()?;
                 for id in ids {
@@ -111,7 +118,7 @@ impl Catalog {
                 let connection = self.connections.get_mut(&entry.connection_id).ok_or_else(|| anyhow::anyhow!("Legacy connection missing"))?;
                 if connection.owner_id == assignment.owner_id { connection.allowed_agents.insert(id.clone()); }
             }
-            self.agent_models.insert(id.clone(), AgentModels { limits: std::collections::BTreeMap::new(), agent_id: id.clone(), owner_id: assignment.owner_id.clone(),
+            self.agent_models.insert(id.clone(), AgentModels { limits: std::collections::BTreeMap::new(), efforts: std::collections::BTreeMap::new(), agent_id: id.clone(), owner_id: assignment.owner_id.clone(),
                 entry_ids: ids, roles: BTreeMap::from([(ModelRole::Standard, appointment)]), revision: assignment.revision });
         }
         self.validate()
@@ -169,7 +176,7 @@ impl Catalog {
                 || !entry.allowed_agents.contains(&roster.agent_id) || !connection.allowed_agents.contains(&roster.agent_id) {
                 bail!("Role model is incompatible or not authorized");
             }
-            candidates.push(Candidate { limits:roster.limits.get(id).cloned(), platform:self.platform_sources.get(id).cloned(), entry_id: id.clone(), entry_revision: entry.revision,
+            candidates.push(Candidate { limits:roster.limits.get(id).cloned(), default_effort:roster.efforts.get(id).cloned(), platform:self.platform_sources.get(id).cloned(), entry_id: id.clone(), entry_revision: entry.revision,
                 connection_id: connection.id.clone(), connection_revision: connection.revision,
                 credential_ref: connection.credential_ref.clone(), transport: connection.transport.clone(), upstream_model: entry.upstream_model.clone() });
         }
@@ -371,6 +378,9 @@ impl ModelRole {
 pub struct AgentModels {
     #[serde(default)]
     pub limits: BTreeMap<String, ModelLimits>,
+    /// Per-entry default reasoning effort for this agent; absent means the provider default.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub efforts: BTreeMap<String, String>,
     pub agent_id: String,
     pub owner_id: String,
     pub entry_ids: Vec<String>,
@@ -400,6 +410,8 @@ impl RoleAssignment {
 pub struct Candidate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits: Option<ModelLimits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<String>,
     #[serde(default)]
     pub platform: Option<crate::account_catalog::PlatformPin>,
     pub entry_id: String,
@@ -482,7 +494,7 @@ impl SelectionPlan {
                 bail!("Model candidate is not authorized");
             }
             candidates.push(Candidate {
-                limits:None, platform:None,
+                limits:None, default_effort:None, platform:None,
                 entry_id: entry.id.clone(), entry_revision: entry.revision,
                 connection_id: connection.id.clone(), connection_revision: connection.revision,
                 credential_ref: connection.credential_ref.clone(), transport: connection.transport.clone(),
@@ -582,6 +594,20 @@ mod tests {
         assert_eq!(serde_json::from_value::<SelectionPlan>(serde_json::to_value(&pinned).unwrap()).unwrap(),pinned);
         c.agent_models.get_mut("agent-a").unwrap().limits.insert("outside".into(),
             ModelLimits{input_tokens:100,output_tokens:100});
+        assert!(c.validate().is_err());
+    }
+    #[test]
+    fn default_efforts_pin_per_candidate_and_stay_inside_the_roster() {
+        let mut c = catalog_fixture(); c.migrate_legacy().unwrap();
+        c.agent_models.get_mut("agent-a").unwrap().efforts.insert("a".into(), "high".into());
+        c.validate().unwrap();
+        let plan = c.resolve("agent-a").unwrap();
+        assert_eq!(plan.candidates[0].default_effort.as_deref(), Some("high"));
+        assert!(plan.candidates[1..].iter().all(|c| c.default_effort.is_none()));
+        c.agent_models.get_mut("agent-a").unwrap().efforts.insert("a".into(), "turbo".into());
+        assert!(c.validate().is_err());
+        c.agent_models.get_mut("agent-a").unwrap().efforts.clear();
+        c.agent_models.get_mut("agent-a").unwrap().efforts.insert("outside".into(), "low".into());
         assert!(c.validate().is_err());
     }
     #[test]

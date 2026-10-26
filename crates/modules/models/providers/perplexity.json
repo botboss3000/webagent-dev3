@@ -1,0 +1,7 @@
+{
+  "provider": "perplexity",
+  "name": "Perplexity",
+  "base_url": "https://api.perplexity.ai",
+  "validated": false,
+  "models": []
+}

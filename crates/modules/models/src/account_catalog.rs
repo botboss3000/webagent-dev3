@@ -293,7 +293,7 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_,C> {
         if connection.allowed_agents.insert(agent.into()) {
             connection.revision=connection.revision.checked_add(1).ok_or_else(||anyhow::anyhow!("Revision exhausted"))?;
         }
-        let roster=catalog.agent_models.entry(agent.into()).or_insert_with(||AgentModels{limits:std::collections::BTreeMap::new(),
+        let roster=catalog.agent_models.entry(agent.into()).or_insert_with(||AgentModels{limits:std::collections::BTreeMap::new(),efforts:std::collections::BTreeMap::new(),
             agent_id:agent.into(),owner_id:authority["owner_id"].as_str().unwrap().into(),entry_ids:vec![],roles:BTreeMap::new(),revision:0});
         if !roster.entry_ids.contains(&source.id) {roster.entry_ids.push(source.id.clone());}
         if initial_standard {

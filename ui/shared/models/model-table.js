@@ -6,6 +6,7 @@ import { copyText } from './clipboard.js';
 import { icon } from './icons.js';
 import { advanceDeleteBtn, resetDeleteBtn } from './delete-control.js';
 import { modelAddGuard } from './model-add-guard.js';
+import { createEffortSlider, modelEfforts } from './effort-slider.js';
 
 // COLOR SCHEME → ui/shared/css/design-system.css (single source of truth).
 // Don't write hex/rgb colour literals when styling elements. CSS variables resolve
@@ -628,6 +629,21 @@ export function mountModelTable(host, opts = {}) {
   inlineNameError.className = 'ac-model-inline-error';
   inlineNameError.setAttribute('role', 'status');
   if (inlineCatalogAdd) inlineNameForm.append(inlineNameLabel, displayNameInput, inlineAddBtn, inlineNameError);
+  // Default reasoning effort for the model being added, from its provider file.
+  // Catalog-adopted models set theirs on the saved row, where the real transport is known.
+  let pendingEffort = null;
+  const addEffortWrap = document.createElement('div');
+  addEffortWrap.className = 'chat-model-list-panel ac-model-effort';
+  const addEffort = createEffortSlider({ defaultName: 'Provider default', onCommit: async (level) => { pendingEffort = level; } });
+  addEffortWrap.appendChild(addEffort.element);
+  addEffortWrap.addEventListener('click', (event) => event.stopPropagation());
+  if (inlineCatalogAdd) inlineNameForm.append(addEffortWrap);
+  const updateAddEffort = () => {
+    const { levels, providerDefault } = modelEfforts(S.presets?.[S.currentProvider], S.selectedModel);
+    pendingEffort = null;
+    addEffortWrap.hidden = !S.selectedModel || !levels.length;
+    addEffort.set({ levels, value: null, defaultEffort: providerDefault });
+  };
   displayNameInput.addEventListener('click', (event) => event.stopPropagation());
   inlineNameForm.addEventListener('click', (event) => event.stopPropagation());
   const updateInlineNameState = () => {
@@ -1042,6 +1058,7 @@ export function mountModelTable(host, opts = {}) {
           if (catalogReadOnly || catalogAddBusy) return;
           S.selectedModel = S.selectedModel === m.id ? '' : m.id;
           displayNameInput.value = '';
+          updateAddEffort();
           S.selCaps = { text: m.text_capable !== false, image: !!m.image_capable, imageOut: !!m.image_out_capable, voice: !!m.voice_capable, video: !!m.video_capable };
           setModelStatus('');
           renderModelDropdown(modelSearch.value.toLowerCase());
@@ -1116,13 +1133,14 @@ export function mountModelTable(host, opts = {}) {
         item.style.background = 'rgba(var(--brand-rgb),0.12)';
         item.setAttribute('aria-selected', 'true');
       }
-      const base = S.presets?.[o.value]?.base_url || '';
+      const base = o.disabled ? 'Not yet validated' : (S.presets?.[o.value]?.base_url || '');
       item.innerHTML = `<div class="ac-model-item-row"><span style="font-weight:500;">${esc(providerLabel(o.value))}</span>`
         + (base ? `<span style="color:var(--fg-3);font-size:11px;margin-left:6px;">${esc(base)}</span>` : '')
         + `</div>`;
+      if (o.disabled) item.setAttribute('aria-disabled', 'true');
       // Keep the input focused, so committing never reads as leaving the field.
       item.addEventListener('mousedown', (e) => e.preventDefault());
-      item.addEventListener('click', () => commitProvider(o.value));
+      if (!o.disabled) item.addEventListener('click', () => commitProvider(o.value));
       provDd.appendChild(item);
     });
     positionDropdown(provDd, provInput, hideProviderDropdown);
@@ -1141,7 +1159,7 @@ export function mountModelTable(host, opts = {}) {
   provInput.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { hideProviderDropdown(); syncProviderField(); provInput.blur(); }
     else if (e.key === 'Enter' && provDd.style.display !== 'none') {
-      const first = provDd.querySelector('.ac-model-item');
+      const first = provDd.querySelector('.ac-model-item:not([aria-disabled="true"])');
       if (first) { e.preventDefault(); first.click(); }
     }
   });
@@ -2429,6 +2447,33 @@ export function mountModelTable(host, opts = {}) {
       aliasInput.addEventListener('blur', () => finish(true));
       aliasInput.addEventListener('click', (event) => event.stopPropagation());
     };
+    // DEFAULT-EFFORT: this agent's default reasoning effort for the entry. It preselects
+    // the chat footer for new conversations; levels come from the live provider file.
+    const savedEfforts = modelEfforts(S.presets?.[p.provider], p.model);
+    if (savedEfforts.levels.length) {
+      const effortLine = document.createElement('div');
+      effortLine.className = 'ac-model-meta-line ac-model-meta-effortline';
+      const effortKey = document.createElement('span');
+      effortKey.className = 'ac-model-meta-k'; effortKey.textContent = 'Default effort:';
+      const effortWrap = document.createElement('div');
+      effortWrap.className = 'chat-model-list-panel ac-model-effort';
+      const effortControl = createEffortSlider({ defaultName: 'Provider default', onCommit: async (level) => {
+        const previous = p.default_effort;
+        if (level) p.default_effort = level; else delete p.default_effort;
+        _markSaving(effortLine);
+        try { await saveRoster(); _flashSaveCheck(effortLine, true); }
+        catch (error) {
+          if (previous) p.default_effort = previous; else delete p.default_effort;
+          _flashSaveCheck(effortLine, false, error?.message || 'Save failed');
+          throw error;
+        }
+      } });
+      effortControl.set({ levels: savedEfforts.levels, value: p.default_effort || null, defaultEffort: savedEfforts.providerDefault });
+      effortWrap.appendChild(effortControl.element);
+      effortWrap.addEventListener('click', (event) => event.stopPropagation());
+      effortLine.append(effortKey, effortWrap);
+      aliasLine.after(effortLine);
+    }
     aliasValue.addEventListener('click', (event) => { event.stopPropagation(); startAliasEdit(); });
     aliasValue.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); startAliasEdit(); }
@@ -3183,6 +3228,7 @@ export function mountModelTable(host, opts = {}) {
       const newP = { entry_id: platformCatalog ? S.selectedModel : (subscription && pendingSubscriptionRow?.entry_id ? pendingSubscriptionRow.entry_id : ''), connection_id: subscriptionConnection?.connection_id || '', catalog_source_id: platformCatalog ? S.selectedModel : '', display_name: requestedName, provider, auth_mode: subscription ? 'chatgpt' : 'api_key', base_url: platformCatalog ? '' : (subscription ? 'codex://chatgpt' : baseUrl), api_key: platformCatalog ? '' : apiKey, model: free ? 'openrouter/free' : S.selectedModel, catalog_origin: platformCatalog ? 'platform' : 'byo', catalog_name: platformCatalog ? (chosen.catalog_name || chosen.display_name || '') : '', routing_mode: free ? 'openrouter_free' : '', text_capable: free || capText, image_capable: free ? false : capImage, image_out_capable: free ? false : capImageOut, voice_capable: free ? false : capVoice, high_effort_capable: false, credential_scope: subscription ? subscriptionScope : '', credential_configured: subscription ? !!subscriptionConnection?.credential_configured : true, credential_email: subscription ? (subscriptionConnection?.credential_email || '') : '', credential_plan_type: subscription ? (subscriptionConnection?.credential_plan_type || '') : '', _uid: ++S.uid };
       newP.video_capable = free ? false : !!chosen.video_capable;
       newP.decision_capable = !!chosen.decision_capable;
+      if (pendingEffort) newP.default_effort = pendingEffort;
       const previousRoles = { ...S.roleAssignments };
       const parentModel = aliasTarget;
       const previousGroups = S.providers.map(row => [row, row.alias_group_id]);
@@ -3402,6 +3448,8 @@ export function mountModelTable(host, opts = {}) {
         const option = document.createElement('option');
         option.value = key;
         option.textContent = preset.name;
+        // Provider files mark untested providers; they stay visible but cannot be chosen.
+        option.disabled = preset.validated === false;
         provSel.appendChild(option);
       };
       if (userCatalog) {

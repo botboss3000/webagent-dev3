@@ -36,7 +36,7 @@ pub async fn background_followup(&self,task:&Value)->Result<()> {let app=self;
             "system_failover_state":model_selection::FailoverState::default(),
             "failover_state":model_selection::FailoverState::default()
         });
-        for field in ["selection_plan","provider_selection","system_selection_plan","chat_model_revision","requester_user_id","participation_generation"] {
+        for field in ["selection_plan","provider_selection","system_selection_plan","chat_model_revision","chat_effort","requester_user_id","participation_generation"] {
             follow[field]=origin[field].clone();
         }
         let policy=app.current_workflow_policy().await?;

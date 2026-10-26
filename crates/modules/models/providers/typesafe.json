@@ -1,0 +1,7 @@
+{
+  "provider": "typesafe",
+  "name": "TypeSafe AI",
+  "base_url": "https://api.typesafe.ai",
+  "validated": false,
+  "models": []
+}

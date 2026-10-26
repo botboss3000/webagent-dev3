@@ -1,0 +1,7 @@
+{
+  "provider": "openrouter",
+  "name": "OpenRouter",
+  "base_url": "https://openrouter.ai/api/v1",
+  "validated": false,
+  "models": []
+}

@@ -1,0 +1,7 @@
+{
+  "provider": "abacus",
+  "name": "Abacus RouteLLM",
+  "base_url": "https://routellm.abacus.ai/v1",
+  "validated": false,
+  "models": []
+}

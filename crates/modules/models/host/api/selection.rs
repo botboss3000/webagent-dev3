@@ -97,12 +97,16 @@ async fn credential_save(State(app):State<App>,Extension(identity):Extension<Val
 async fn credential_load(State(app):State<App>,Extension(identity):Extension<Value>,Path(id):Path<String>,Json(body):Json<Label>)->Api { vault::load(&app.models_runtime(),identity,id,body).await.map_err(Into::into) }
 async fn credential_delete(State(app):State<App>,Extension(identity):Extension<Value>,Path(id):Path<String>,Json(body):Json<Label>)->Api { vault::delete(&app.models_runtime(),identity,id,body).await.map_err(Into::into) }
 
+// Provider files are public catalog data (names, models, effort scales); no credentials.
+async fn providers() -> Api { Ok(Json(json!({"providers":webagent_models::providers::load_all()?}))) }
+
 async fn discover(State(app):State<App>,Extension(identity):Extension<Value>,Json(input):Json<Discovery>)->Api { webagent_models::api::selection::discover(&app.models_runtime(),identity,input).await.map_err(Into::into) }
 
 /// Nest only under the authenticated browser API (including its CSRF middleware).
 pub fn router() -> Router<App> {
     Router::new().route("/catalog", get(read).put(save))
         .route("/discovery", axum::routing::post(discover))
+        .route("/providers", get(providers))
         .route("/agents/{id}/members", get(members).put(member_set))
         .route("/agents/{id}/credentials", get(credentials).put(credential_save).delete(credential_delete))
         .route("/agents/{id}/credentials/load", axum::routing::post(credential_load))

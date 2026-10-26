@@ -19,14 +19,20 @@ export function catalogCapabilityFlags(capabilities=[],transport) {
 
 export function createModelAdapter(request, agentId, onAssignment) {
   let data, catalog, account, destroyed=false;
-  // Public GPT-6 choices are a preview until this connection returns its account catalog.
-  const subscriptionPreviewModels=[
-    {id:'gpt-6-astra',name:'GPT-6 Astra',text_capable:true,image_capable:true},
-    {id:'gpt-6.1-sol',name:'GPT-6.1 Sol',text_capable:true,image_capable:true},
-    {id:'gpt-6-sol',name:'GPT-6 Sol',text_capable:true,image_capable:true},
-    {id:'gpt-6-luna',name:'GPT-6 Luna',text_capable:true,image_capable:true},
-  ];
-  const providerPresets={typesafe:{name:'TypeSafe AI',base_url:'https://api.typesafe.ai'},openai_subscription:{name:'ChatGPT Subscription',base_url:'codex://chatgpt'},deepseek:{name:'DeepSeek',base_url:'https://api.deepseek.com'},openai_api:{name:'OpenAI API',base_url:'https://api.openai.com/v1'},openrouter:{name:'OpenRouter',base_url:'https://openrouter.ai/api/v1'},abacus:{name:'Abacus RouteLLM',base_url:'https://routellm.abacus.ai/v1'},gemini:{name:'Gemini',base_url:'https://generativelanguage.googleapis.com/v1beta/openai'},groq:{name:'Groq',base_url:'https://api.groq.com/openai/v1'},together:{name:'Together',base_url:'https://api.together.xyz/v1'},mistral:{name:'Mistral',base_url:'https://api.mistral.ai/v1'},fireworks:{name:'Fireworks',base_url:'https://api.fireworks.ai/inference/v1'},xai:{name:'xAI',base_url:'https://api.x.ai/v1'},perplexity:{name:'Perplexity',base_url:'https://api.perplexity.ai'},deepinfra:{name:'DeepInfra',base_url:'https://api.deepinfra.com/v1/openai'}};
+  // Provider names, models and effort scales come from the server's provider files
+  // (crates/modules/models/providers/*.json), read once per page mount.
+  let providerPresets=null;
+  async function presets(){
+    if(!providerPresets){
+      const {providers}=await request('/models/providers');
+      providerPresets=Object.fromEntries(providers.map(p=>[p.provider,{name:p.name,base_url:p.base_url,validated:p.validated,
+        efforts:p.efforts||[],default_effort:p.default_effort||'',models:p.models||[]}]));
+    }
+    return providerPresets;
+  }
+  // A provider file's models stand in until a key or connection returns the live list.
+  const previewModels=async provider=>((await presets())[provider]?.models||[]).map(m=>({id:m.id,name:m.name||m.id,
+    text_capable:true,image_capable:(m.input||[]).includes('image'),...(m.context?{context:m.context}:{}),...(m.max_output?{max_output:m.max_output}:{})}));
   async function accountChoices(){account=await request('/models/me/catalog');return account;}
   async function adopt(source,alias){
     const saved=await request('/models/agents/'+encodeURIComponent(agentId)+'/adoptions','POST',{
@@ -47,6 +53,7 @@ export function createModelAdapter(request, agentId, onAssignment) {
     return {entry_id:e.id,connection_id:c.id,catalog_source_id:data.adoptions?.[e.id]?.source_id||(catalog.platform_sources?.[e.id]?'':'byo:'+e.id),provider:c.transport,model:e.upstream_model,display_name:data.adoptions?.[e.id]?.alias||e.display_name,
       base_url:c.transport==='deepseek'?'https://api.deepseek.com':'codex://chatgpt',api_key:'',
       ...catalogCapabilityFlags(e.capabilities,c.transport),
+      default_effort:catalog.agent_models?.[agentId]?.efforts?.[e.id]||'',
       credential_configured:!!statuses.get(c.id)?.connected,
       credential_email:c.owner_id===data.caller_id ? (statuses.get(c.id)?.account_email||'') : '',
       catalog_origin:catalog.platform_sources?.[e.id]?'platform':'byo'};
@@ -68,13 +75,14 @@ export function createModelAdapter(request, agentId, onAssignment) {
       }
     }
     const next=structuredClone(catalog);
-    const rowIds=[];
+    const rowIds=[],efforts={},known=await presets();
     const cfg=next.agent_models[agentId]??={agent_id:agentId,owner_id:data.agent_owner_id,entry_ids:[],roles:{},revision:1};
     for(const p of providers){
       if(p.alias_group_id || p.reference_cost_input!=null || p.reference_cost_output!=null)reject('alias groups and reference pricing');
-      if(!Object.hasOwn(providerPresets,p.provider))reject('provider transport');
+      if(!Object.hasOwn(known,p.provider))reject('provider transport');
       let e=next.entries[p.entry_id];
       if(!e){
+        if(known[p.provider].validated===false)throw Error(known[p.provider].name+' is not yet validated');
         const id=p.entry_id||'model-'+crypto.randomUUID(); const connectionId=p.connection_id||drafts.get(id)||'connection-'+crypto.randomUUID();
         if(p.connection_id){
           const connection=next.connections[connectionId];
@@ -90,6 +98,7 @@ export function createModelAdapter(request, agentId, onAssignment) {
         e.capabilities=[['decision',!!p.decision_capable],['text',p.text_capable!==false],['image_in',p.image_capable],['image_out',p.image_out_capable],['voice',p.voice_capable],['video',p.video_capable]].filter(([,enabled])=>enabled).map(([name])=>name);
       }else if(p.display_name!==e.display_name)throw Error('Only the model owner can rename this connection');
       rowIds.push(e.id);
+      if(p.default_effort)efforts[e.id]=p.default_effort;
       if(p.api_key && (p.provider==='openai_subscription' || !/^[!-~]{8,512}$/.test(p.api_key)))throw Error('Invalid API key');
       if(p.api_key && next.connections[e.connection_id].owner_id!==data.caller_id)throw Error('Connection credentials are owner-only');
       if(!/^[!-~]{1,200}$/.test(p.model))throw Error('Invalid upstream model ID');
@@ -97,6 +106,7 @@ export function createModelAdapter(request, agentId, onAssignment) {
     // Keep records when a row is removed; roster removal must not revoke a shared credential.
     cfg.entry_ids=rowIds;
     cfg.limits=Object.fromEntries(Object.entries(cfg.limits||{}).filter(([id])=>rowIds.includes(id)));
+    cfg.efforts=efforts;
     const roles={};
     for(const [role,id] of Object.entries(role_assignments)){
       if(!id)continue;
@@ -123,23 +133,20 @@ export function createModelAdapter(request, agentId, onAssignment) {
   const adapter={
     loadConfig:async()=>{await read();await Promise.all((catalog.agent_models?.[agentId]?.entry_ids||[]).map(async id=>{const c=catalog.connections[catalog.entries[id]?.connection_id];if(c)try{statuses.set(c.id,await request('/models/connections/'+encodeURIComponent(c.id)+'?agent_id='+encodeURIComponent(agentId)));}catch{statuses.delete(c.id);}}));return {provider:'webagent_catalog',roster:rows(),role_assignments:Object.fromEntries(Object.entries(catalog.agent_models?.[agentId]?.roles||{}).map(([r,a])=>[r,a.entry_id]))};},
     saveRoster:payload=>{const work=()=>save(payload);const result=queue.then(work,work);queue=result.catch(()=>{});return result;},
-    loadPresets:async()=>({webagent_catalog:{name:'WebAgent Catalog / Available models',base_url:''},...providerPresets}),
+    loadPresets:async()=>({webagent_catalog:{name:'WebAgent Catalog / Available models',base_url:''},...await presets()}),
     fetchModels:async({provider,api_key,entry_id})=>{
       if(provider==='openai_subscription'){
         const connectionId=catalog.entries[entry_id]?.connection_id||drafts.get(entry_id);
-        if(!connectionId)return {models:subscriptionPreviewModels,preview:true};
+        if(!connectionId)return {models:await previewModels(provider),preview:true};
         try{return await request('/models/connections/'+encodeURIComponent(connectionId)+'/models?agent_id='+encodeURIComponent(agentId));}
         catch(error){
-          if(error.status===428)return {models:subscriptionPreviewModels,preview:true};
+          if(error.status===428)return {models:await previewModels(provider),preview:true};
           return {models:[],error:error.message||'Subscription model catalog unavailable'};
         }
       }
-      // Official catalog preview (2026-10-22); a supplied key always uses live discovery.
+      // Provider-file preview; a supplied key always uses live discovery.
       if(provider==='deepseek'&&!api_key?.trim())return {
-        models:[
-          {id:'deepseek-flash',name:'DeepSeek-V4.1-Flash',text_capable:true,image_capable:true,context:1048576,max_output:393216},
-          {id:'deepseek-v4-pro',name:'DeepSeek-V4-Pro',text_capable:true,image_capable:false,context:1048576,max_output:393216},
-        ],
+        models:await previewModels(provider),
         preview:true,preview_message:'Current DeepSeek models. Enter an API key to confirm account access.',
       };
       if(provider!=='webagent_catalog')return request('/models/discovery','POST',{provider,api_key});

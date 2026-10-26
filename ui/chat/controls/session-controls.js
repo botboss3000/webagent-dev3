@@ -1,5 +1,9 @@
 // @code-index {"version":1,"feature":"chat-run-controls","aliases":["chat footer","run controls","model selection"],"purpose":"Locates session-scoped execution-mode and next-turn model controls Control visibility/layout: data/config/chat.json -> chat_common.{active_footer,idle_footer}.chat_pill.controls.{mode,model_changer,stop,continue}; run state is session-owned. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/active_footer/chat_pill/controls","/chat_common/idle_footer/chat_pill/controls"],"profile_overrides":true}],"opportunities":[]}}
 // V2 cycle/picker presentation with session-scoped, revision-fenced Rust writes.
+import {createEffortSlider} from '../../shared/models/effort-slider.js';
+// Compact role markers on picker rows (V2 footer picker).
+const ROLE_ICONS={standard:['S','Standard'],premium:['P','Premium'],image_in:['👁','Vision'],image_out:['🖼','Image generation'],
+  system:['⚙','System'],voice:['🎤','Voice'],decision:['D','Decision']};
 /** Purpose: Mount execution-mode and model controls for the current conversation. The optional onState callback receives refreshed control data so panel.js can gate composer features. The panel drives open/updateRuns/disconnect/destroy; this module reads client.controls and writes client.mode/client.model. */
 export function mountSessionControls({root,client,guard,note,issues,ensureSession,notifications,onState=()=>{},canWrite=()=>true}) {
     // Resolve controls within this chat root rather than the whole document.
@@ -11,6 +15,8 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
   picker.className='chat-skill-picker chat-model-list-panel v3-chat-model-list';
   picker.hidden=true;picker.setAttribute('role','dialog');picker.setAttribute('aria-label','Conversation model');
   document.body.append(picker);
+  // Persistent effort control below the roster, for the selected model in this conversation.
+  const effort=createEffortSlider({defaultName:'Saved default',onCommit:level=>setEffort(level)});
   model.setAttribute('aria-haspopup','dialog');model.setAttribute('aria-expanded','false');
     // Hide the picker and clear the model button expanded state.
   function close(){picker.hidden=true;model.setAttribute('aria-expanded','false');}
@@ -77,18 +83,35 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
       if(sid===session&&epoch===generation){close();note('Next loop turn will use '+entry.label);}
     }finally{if(sid===session&&epoch===generation){busy=false;await load();paint();}}
   }
+    // Save this conversation's effort for the selected model (null = that model's saved default); the revision fence applies.
+  async function setEffort(level){
+    const sid=session,epoch=generation,entry=state.model.entry_id;
+    await client.model(sid,{entry_id:entry,expected_revision:state.model.revision,client_request_id:crypto.randomUUID(),effort:level});
+    if(sid===session&&epoch===generation){await load();paint();}
+  }
     // Populate and position the permitted-model picker, disabling disconnected entries and preserving composer focus on pointer activation.
   function show(){
     picker.replaceChildren();
     const header=document.createElement('div');header.className='csp-header';header.textContent='Models';picker.append(header);
     const list=document.createElement('div');list.className='csp-list';picker.append(list);
     for(const entry of state.models){
-      const button=document.createElement('button');button.type='button';button.className='cml-item';
-      button.textContent=entry.label+(entry.connected?'':' · Connection required');
+      const active=entry.entry_id===state.model.entry_id;
+      const button=document.createElement('button');button.type='button';button.className='cml-item'+(active?' cml-active csp-active':'');
+      const name=document.createElement('span');name.className='cml-name';
+      name.textContent=entry.label+(entry.connected?'':' · Connection required');button.append(name);
+      const icons=document.createElement('span');icons.className='cml-role-icons';
+      for(const role of entry.roles||[]){
+        const [symbol,title]=ROLE_ICONS[role]||[];if(!symbol)continue;
+        const icon=document.createElement('span');icon.className='cml-role-icon';icon.textContent=symbol;icon.title=title;icon.setAttribute('aria-label',title);icons.append(icon);
+      }
+      if(icons.childElementCount)button.append(icons);
       button.title=entry.model;button.disabled=!entry.connected;
-      button.setAttribute('aria-pressed',String(entry.entry_id===state.model.entry_id));
+      button.setAttribute('aria-pressed',String(active));
       button.onclick=guard(()=>choose(entry));list.append(button);
     }
+    const selected=state.models.find(item=>item.entry_id===state.model.entry_id);
+    effort.set({levels:selected?.efforts||[],value:state.model.effort||null,defaultEffort:selected?.default_effort||'',disabled:busy||!canWrite()});
+    picker.append(effort.element);
     if(!state.models.length){const text=document.createElement('p');text.className='csp-empty';text.textContent='No permitted chat models. Configure this conversation’s agent on Primary Models.';list.append(text);}
     const rect=model.getBoundingClientRect();
     picker.style.bottom=Math.max(8,innerHeight-rect.top+6)+'px';

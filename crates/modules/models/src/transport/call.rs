@@ -108,7 +108,7 @@ impl<'a> CallDraft<'a> {
 
     /// Normalize host-only metadata and budget inputs before sending private context over the pipe.
     fn projection_request(&mut self) -> Result<webagent_provider_contracts::RequestV1> {
-        super::validate_reasoning_effort(self.selection.provider,self.reasoning_effort)?;
+        super::validate_reasoning_effort(self.selection.provider,&self.selection.model,self.reasoning_effort)?;
         if self.instructions.is_empty() {
             return Err(typed_failure(crate::model_selection::FailureKind::MalformedRequest,
                 false, "Invalid provider instructions"));
@@ -194,6 +194,8 @@ impl<'a> CallDraft<'a> {
                 let mut body=compatible_body(self.selection,messages,tools);
                 if let Some(effort)=self.reasoning_effort {
                     if self.selection.provider==ProviderId::Openrouter {body["reasoning"]=json!({"effort":effort});}
+                    // DeepSeek has no "none" level; thinking is switched off instead.
+                    else if self.selection.provider==ProviderId::Deepseek && effort=="none" {body["thinking"]=json!({"type":"disabled"});}
                     else {body["reasoning_effort"]=json!(effort);}
                 }
                 PreparedRequest::Compatible { body, endpoint }
@@ -497,6 +499,24 @@ use crate::transport::Projection;
             assert_eq!(endpoint, provider.chat_endpoint().unwrap());
             assert_eq!(api_key, "api");
         }
+    }
+
+    /// DeepSeek "none" turns thinking off; other levels travel as reasoning_effort; unlisted levels are refused.
+    #[test]
+    fn deepseek_effort_maps_to_thinking_or_reasoning_effort() {
+        let selection = ProviderSelection { limits:None, provider:ProviderId::Deepseek, model:"deepseek-flash".into() };
+        let tokens = json!({"api_key":"api"});
+        let body = |effort| {
+            let ready = CallDraft::new(&selection, vec![json!({"role":"user","content":"hi"})], vec![], "s", "guide")
+                .with_reasoning_effort(Some(effort)).validate()?.bind_credentials(&tokens, &CancellationToken::new())?;
+            let ReadyTransport::Compatible { body, .. } = ready.transport else { panic!("compatible transport expected") };
+            Ok::<_, anyhow::Error>(body)
+        };
+        let off = body("none").unwrap();
+        assert_eq!(off["thinking"], json!({"type":"disabled"}));
+        assert!(off.get("reasoning_effort").is_none());
+        assert_eq!(body("max").unwrap()["reasoning_effort"], "max");
+        assert!(body("medium").is_err());
     }
 
     /// Verify malformed, unsupported, credential-less and cancelled calls cannot reach a local transport listener.

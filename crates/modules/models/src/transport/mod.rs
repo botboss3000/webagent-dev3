@@ -1001,11 +1001,11 @@ pub trait Projection: Sync {
 #[derive(serde::Serialize)]
 struct Reasoning<'a> {effort:&'a str}
 /// Host-selected effort is never supplied by a projection or credential payload.
-pub fn validate_reasoning_effort(provider:ProviderId,effort:Option<&str>)->Result<()> {
+/// Supported levels come from the model's provider file (`providers/*.json`).
+pub fn validate_reasoning_effort(provider:ProviderId,model:&str,effort:Option<&str>)->Result<()> {
     if let Some(effort)=effort {
-        if !matches!(effort,"minimal"|"low"|"medium"|"high")
-            || !matches!(provider,ProviderId::OpenaiSubscription|ProviderId::OpenaiApi|ProviderId::Openrouter) {
-            bail!("Reasoning effort is unsupported for this transport");
+        if !crate::providers::efforts(provider,model)?.levels.iter().any(|level|level==effort) {
+            bail!("Reasoning effort is unsupported for this model");
         }
     }
     Ok(())
@@ -1013,10 +1013,12 @@ pub fn validate_reasoning_effort(provider:ProviderId,effort:Option<&str>)->Resul
 #[cfg(test)]
 mod core_effort_tests {
  use super::*;
- #[test]fn effort_is_bounded_and_not_silently_ignored() {
-  for e in ["minimal","low","medium","high"] {assert!(validate_reasoning_effort(ProviderId::OpenaiSubscription,Some(e)).is_ok());}
-  assert!(validate_reasoning_effort(ProviderId::Deepseek,Some("high")).is_err());
-  assert!(validate_reasoning_effort(ProviderId::OpenaiApi,Some("unbounded")).is_err());
-  assert!(validate_reasoning_effort(ProviderId::Deepseek,None).is_ok());
+ #[test]fn effort_is_bounded_per_model_and_not_silently_ignored() {
+  for e in ["none","low","medium","high","xhigh","max"] {assert!(validate_reasoning_effort(ProviderId::OpenaiSubscription,"gpt-6-luna",Some(e)).is_ok());}
+  assert!(validate_reasoning_effort(ProviderId::OpenaiSubscription,"gpt-6-astra",Some("none")).is_err());
+  assert!(validate_reasoning_effort(ProviderId::Deepseek,"deepseek-flash",Some("max")).is_ok());
+  assert!(validate_reasoning_effort(ProviderId::Deepseek,"deepseek-flash",Some("medium")).is_err());
+  assert!(validate_reasoning_effort(ProviderId::OpenaiApi,"gpt-6-luna",Some("high")).is_err());
+  assert!(validate_reasoning_effort(ProviderId::Deepseek,"deepseek-flash",None).is_ok());
  }
 }

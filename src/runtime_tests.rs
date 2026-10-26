@@ -4384,7 +4384,7 @@ pub(crate) async fn selection_fixture(app: &App) -> model_selection::Catalog {
     // authorizes both the entry and its connection without relying on common ownership.
     for (agent, primary, backup) in [("shared_default", "one", vec![]), ("agent-a", "two", vec!["one".into()])] {
         let revision = catalog.agent_models.get(agent).map(|a|a.revision).unwrap_or(1);
-        catalog.agent_models.insert(agent.into(), AgentModels { limits: std::collections::BTreeMap::new(), agent_id:agent.into(), owner_id:"admin".into(),
+        catalog.agent_models.insert(agent.into(), AgentModels { limits: std::collections::BTreeMap::new(), efforts: std::collections::BTreeMap::new(), agent_id:agent.into(), owner_id:"admin".into(),
             entry_ids:vec!["one".into(), "two".into()], revision,
             roles:BTreeMap::from([
                 (ModelRole::Standard, RoleAssignment { entry_id:primary.into(), backup_entry_ids:backup }),
