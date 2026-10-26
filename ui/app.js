@@ -793,12 +793,17 @@ function applyAccountTheme(){
     option.classList.toggle('active',active);option.setAttribute('aria-pressed',String(active));
   }
 }
+// Cross-fade the whole page into the new theme; unsupported browsers and reduced motion switch instantly.
+function fadeAccountTheme(){
+  if(!document.startViewTransition||matchMedia('(prefers-reduced-motion: reduce)').matches){applyAccountTheme();return;}
+  document.startViewTransition(applyAccountTheme);
+}
 for(const option of themeOptions)option.onclick=()=>{
   themeChoice=option.dataset.theme;
   try{localStorage.setItem('v3-theme',themeChoice);}catch{}
-  applyAccountTheme();
+  fadeAccountTheme();
 };
-systemTheme.addEventListener('change',()=>{if(themeChoice==='system')applyAccountTheme();});
+systemTheme.addEventListener('change',()=>{if(themeChoice==='system')fadeAccountTheme();});
 applyAccountTheme();
 $('shutoff').onclick=guard(async()=>{await api('/control','PUT',{shutoff:!state.shutoff,client_request_id:crypto.randomUUID()});await refresh();});
 $('connect').onclick=guard(async()=>{await api('/provider/login','POST',{});await refresh();$('device').scrollIntoView({block:'nearest'});});
