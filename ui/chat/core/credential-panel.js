@@ -1,7 +1,7 @@
 // Human values travel only to the nonce-bound authenticated credential endpoint.
-export function closeCredentialDialog(){document.querySelector('dialog[data-core-credential]')?.close();}
-export function openCredentialDialog({request,session,name,origin,requestId,revision}){
-  closeCredentialDialog();
+export function closeCredentialPanel(){document.querySelector('dialog[data-core-credential]')?.close();}
+export function openCredentialPanel({request,session,name,origin,requestId,revision}){
+  closeCredentialPanel();
   const dialog=document.createElement('dialog');dialog.dataset.coreCredential='true';dialog.className='wa-confirm-panel';
   const title=document.createElement('h2');title.textContent='Private credential: '+name;
   const purpose=document.createElement('p');purpose.textContent='Service: '+origin+'. The agent and mini apps receive status only. This form does not enable network access.';

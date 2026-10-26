@@ -20,8 +20,8 @@ export function createChatNotification({title,message,details,body,actions=[],do
   for(const item of actions)buttons.append(createChatNotificationAction(item,{documentObject,guard}));
   node.append(buttons);return node;
 }
-export function mountChatNotifications({root,guard,request,note}) {
-  const host=root.querySelector('#chat-notifications');
+export function mountNotificationPanel({root,guard,request,note}) {
+  const host=root.querySelector('#notification-panel');
   const modeSlot=document.createElement('div');
   const toolSlot=document.createElement('div');
   host.append(modeSlot,toolSlot);

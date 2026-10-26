@@ -18,7 +18,7 @@ async function fixture(canWrite=()=>true){
  const root=new E(),row=new E(),host=new E();row.dataset.publicId='user:a';row.dataset.seq='7';root.append(row,host);
  const document={activeElement:null,createElement:tag=>{const node=new E(tag);node.document=document;return node;}};
  const context=vm.createContext({document,Set,Number});
- const mod=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../ui/chat/core/followup-queue.js'),'utf8'),{context});await mod.link(()=>new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../ui/chat/core/chat-notifications.js'),'utf8'),{context}));await mod.evaluate();
+ const mod=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../ui/chat/core/followup-queue.js'),'utf8'),{context});await mod.link(()=>new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../ui/chat/core/notification-panel.js'),'utf8'),{context}));await mod.evaluate();
  let session='one',data={queue:[{id:'a',message_id:'user:a',revision:2,choice:'queue',status:'pending'}],queue_state:{revision:3,held:false}};
  const calls=[],errors=[],keys=new Map();let write=null;
  const client={snapshot:async()=>data,delivery:async(...args)=>{calls.push(args);if(write)return write();data={queue:[{...data.queue[0],choice:args[2].choice,revision:3}],queue_state:{revision:4}};},resumeQueue:async(...args)=>calls.push(args)};

@@ -1,4 +1,4 @@
-import {createChatNotification} from './chat-notifications.js';
+import {createChatNotification} from './notification-panel.js';
 // @code-index {"version":1,"feature":"chat-followup-queue","aliases":["queued message delivery","message followup queue","delivery queue controls"],"purpose":"Projects durable queued-message state beside transcript rows and commits revision-fenced user choices. No chat JSON key is consumed; consider queue status presentation or placement preferences while keeping access and revision checks fixed.","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider configurable queue status labels or placement preferences; access and revision checks remain enforced."]}}
 // Durable delivery state is display-only until a revision-checked user action commits.
 /**

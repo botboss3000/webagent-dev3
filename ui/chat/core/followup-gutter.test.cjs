@@ -20,7 +20,7 @@ test('nested bubble identities keep one delivery label and one set of actions be
   row.dataset.publicId=bubble.dataset.publicId='user:fixture';gutter.className='turn-gutter';row.append(bubble,gutter);root.append(row,host);
   const context=vm.createContext({document:{activeElement:null,createElement:tag=>new Element(tag)},Set,Number});
   const module=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'followup-queue.js'),'utf8'),{context});
-  await module.link(()=>new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'chat-notifications.js'),'utf8'),{context}));await module.evaluate();
+  await module.link(()=>new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'notification-panel.js'),'utf8'),{context}));await module.evaluate();
   const queue=module.namespace.mountFollowupQueue({root,host,client:{},getSession:()=> 'fixture',guard:fn=>fn,note(){},keyId:()=> 'fixture',forgetKey(){},onSnapshot(){}});
   for(const [revision,status,actions]of [[1,'pending',4],[2,'delivered',0],[3,'delivered',0]]){
     queue.update({queue:[{id:'entry',message_id:'user:fixture',revision,choice:'queue',status}],queue_state:{revision}});

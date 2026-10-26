@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../ui/chat/core/administrator-notices.js'),'utf8');
-function load(){const ctx={};vm.createContext(ctx);vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/chat/core/chat-notifications.js'),'utf8').replaceAll('export function','function')+'\n'+source.replace(/^import .*;\n/m,'').replaceAll('export function','function'),ctx);return ctx;}
+function load(){const ctx={};vm.createContext(ctx);vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/chat/core/notification-panel.js'),'utf8').replaceAll('export function','function')+'\n'+source.replace(/^import .*;\n/m,'').replaceAll('export function','function'),ctx);return ctx;}
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
 const flush=async()=>{for(let i=0;i<4;i++)await new Promise(setImmediate);};
 const notice=(sha='a')=>({notice:{snapshot_sha256:sha.repeat(64),dirty:true,ahead:0,observed_at:123,notification:'Repository changed. Review before editing.'}});
@@ -50,7 +50,7 @@ class Element {
 const flatten=node=>[node.textContent,...node.children.map(flatten)].join(' ');
 test('shared repository card never overwrites chat connection errors or uses HTML',()=>{
  const error={textContent:'Connection interrupted'},parent=new Element();
- const document={getElementById:id=>id==='chat-notifications'?parent:error,createElement:tag=>new Element(tag)};
+ const document={getElementById:id=>id==='notification-panel'?parent:error,createElement:tag=>new Element(tag)};
  const render=load().repositoryNoticeRenderer(document);render('<script>literal</script>');
  assert.match(flatten(parent),/<script>literal<\/script>/);assert.match(parent.children[0].className,/chat-notification/);
  assert.equal(error.textContent,'Connection interrupted');render('');assert(parent.children[0].hidden);assert.equal(error.textContent,'Connection interrupted');assert.equal(parent.children.length,1);

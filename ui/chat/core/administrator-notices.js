@@ -1,10 +1,10 @@
 // @code-index {"version":1,"feature":"chat-administrator-notices","aliases":["repository status reminder","retained build notice"],"purpose":"Locates administrator repository and retained-build notices in the chat composer","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider notice presentation preferences; access authority remains enforced by policy."]}}
-import {createChatNotification} from './chat-notifications.js';
+import {createChatNotification} from './notification-panel.js';
 // The poller owns freshness and access; all visible cards come from chat notifications.
 export function repositoryNoticeRenderer(documentObject=globalThis.document) {
   let region=null;
   return text=>{
-    const parent=documentObject?.getElementById('chat-notifications');if(!parent)return;
+    const parent=documentObject?.getElementById('notification-panel');if(!parent)return;
     if(!region||region.parentNode!==parent){
       region=createChatNotification({title:'Repository status',message:'',documentObject});region.className+=' v3-repository-notice';
       region.setAttribute('role','status');region.setAttribute('aria-live','polite');parent.prepend(region);
@@ -15,7 +15,7 @@ export function repositoryNoticeRenderer(documentObject=globalThis.document) {
 export function buildNoticeRenderer(documentObject=globalThis.document) {
   let region=null;
   return(items,review)=>{
-    const parent=documentObject?.getElementById('chat-notifications');if(!parent)return;
+    const parent=documentObject?.getElementById('notification-panel');if(!parent)return;
     if(!region||region.parentNode!==parent){region=documentObject.createElement('div');region.className='v3-build-leftovers v3-repository-notice';region.setAttribute('aria-live','polite');parent.prepend(region);}
     region.replaceChildren();region.hidden=!items.length;
     for(const item of items){

@@ -10,7 +10,7 @@
 #chat-panel #chat-input-area #chat-above-pill{flex-shrink:0;max-height:35dvh;opacity:1;margin:0 auto 6px;overflow:auto;pointer-events:auto;z-index:8}
 /* Keep progress and repository notices visible even without run-control cards. */
 #chat-panel #chat-input-area #chat-above-pill:not(.visible):not(:has(.chat-notification:not([hidden]))){display:none}
-#chat-notifications{padding:0 4px}
+#notification-panel{padding:0 4px}
 /* Mode and tool approvals use one compact composer notification surface. */
 .chat-notification{box-sizing:border-box;width:fit-content;max-width:min(100%,var(--chat-pill-current-width,var(--chat-pill-width,500px)));margin:6px auto;padding:8px 12px;border:var(--border-width) solid color-mix(in oklab,var(--fg-1) 22%,transparent);border-radius:22px;background:var(--chat-pill-bg,color-mix(in oklab,var(--bg-elev) 82%,transparent));color:var(--fg-2);backdrop-filter:blur(12px) saturate(140%);-webkit-backdrop-filter:blur(12px) saturate(140%);font-size:13px;line-height:1.45;text-align:center;overflow-wrap:anywhere}
 body.light-mode .chat-notification{background:var(--chat-pill-bg,color-mix(in oklab,var(--bg-elev) 85%,transparent))}

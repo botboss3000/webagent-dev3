@@ -21,8 +21,8 @@ async function moduleAt(file,host){
  return {api:context,root:{querySelector:()=>host}};
 }
 test('empty or revoked routes never show an idle permission card; real approvals remain visible',async()=>{
- const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host);let routes=[];
- const ui=api.mountChatNotifications({root,guard:fn=>fn,request:async()=>({routes}),note:()=>{}});
+ const host=new E(),{api,root}=await moduleAt('notification-panel.js',host);let routes=[];
+ const ui=api.mountNotificationPanel({root,guard:fn=>fn,request:async()=>({routes}),note:()=>{}});
  ui.messagingRoutes.open('new-chat',true);assert.equal(host.children[2].children[0].hidden,true);await ui.messagingRoutes.refresh();
  assert.equal(host.children[2].hidden,true);assert.equal(host.children[2].children[0].hidden,true);
  ui.showTool({approval:{id:'approval',name:'message_other_session',messaging_binding:{target_title:'Destination'},arguments:{}},run:{id:'run'},expanded:new Set(),decide:()=>{}});
@@ -31,9 +31,9 @@ test('empty or revoked routes never show an idle permission card; real approvals
  ui.destroy();
 });
 test('saved routes remain revocable and revoking the last route hides the entire card',async()=>{
- const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host);let revoked=false;
+ const host=new E(),{api,root}=await moduleAt('notification-panel.js',host);let revoked=false;
  const calls=[],route={key:'route',revision:3,target_title:'Destination',scope:{target_session_id:'target'}};
- const ui=api.mountChatNotifications({root,guard:fn=>fn,request:async(...args)=>{calls.push(args);if(args[1]==='POST')revoked=true;return {routes:revoked?[]:[route]};},note:()=>{}});
+ const ui=api.mountNotificationPanel({root,guard:fn=>fn,request:async(...args)=>{calls.push(args);if(args[1]==='POST')revoked=true;return {routes:revoked?[]:[route]};},note:()=>{}});
  ui.messagingRoutes.open('source',true);await ui.messagingRoutes.refresh();const slot=host.children[2],card=slot.children[0];assert.equal(slot.hidden,true);assert.equal(card.hidden,true);
  ui.showTool({approval:{id:'approval',name:'message_other_session',messaging_binding:{target_title:'Destination'},arguments:{}},run:{id:'run'},expanded:new Set(),decide:()=>{}});assert.equal(slot.hidden,false);assert.equal(card.hidden,false);
  await card.querySelector('button').onclick();await card.querySelector('.chat-notification-deny').onclick();
@@ -41,23 +41,23 @@ test('saved routes remain revocable and revoking the last route hides the entire
  ui.destroy();
 });
 test('late and failed route reads do not reveal a stale card or suppress approval controls',async()=>{
- const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host);let resolve;const errors=[];
- const ui=api.mountChatNotifications({root,guard:fn=>fn,request:()=>new Promise(r=>resolve=r),note:e=>errors.push(e)});
+ const host=new E(),{api,root}=await moduleAt('notification-panel.js',host);let resolve;const errors=[];
+ const ui=api.mountNotificationPanel({root,guard:fn=>fn,request:()=>new Promise(r=>resolve=r),note:e=>errors.push(e)});
  ui.messagingRoutes.open('old',true);const pending=ui.messagingRoutes.refresh();ui.messagingRoutes.disconnect();resolve({routes:[{key:'old',target_title:'Old',scope:{target_session_id:'old'}}]});await pending;
  assert.equal(host.children[2].hidden,true);assert.equal(host.children[2].children[0].hidden,true);ui.destroy();
- const f=await moduleAt('chat-notifications.js',new E());const broken=f.api.mountChatNotifications({root:f.root,guard:fn=>fn,request:async()=>{throw Error('offline');},note:e=>errors.push(e)});
+ const f=await moduleAt('notification-panel.js',new E());const broken=f.api.mountNotificationPanel({root:f.root,guard:fn=>fn,request:async()=>{throw Error('offline');},note:e=>errors.push(e)});
  broken.messagingRoutes.open('new',true);await assert.rejects(broken.messagingRoutes.refresh(),/offline/);assert.equal(f.root.querySelector().children[2].hidden,true);broken.destroy();
 });
 test('an older refresh cannot undo the latest saved-route visibility',async()=>{
- const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host),pending=[];
- const ui=api.mountChatNotifications({root,guard:fn=>fn,request:()=>new Promise(resolve=>pending.push(resolve)),note:()=>{}});
+ const host=new E(),{api,root}=await moduleAt('notification-panel.js',host),pending=[];
+ const ui=api.mountNotificationPanel({root,guard:fn=>fn,request:()=>new Promise(resolve=>pending.push(resolve)),note:()=>{}});
  ui.messagingRoutes.open('source',true);const old=ui.messagingRoutes.refresh(),latest=ui.messagingRoutes.refresh();
  pending[1]({routes:[]});await latest;pending[0]({routes:[{key:'old',scope:{target_session_id:'target'}}]});await old;
  assert.equal(host.children[2].hidden,true);assert.equal(host.children[2].children[0].hidden,true);ui.destroy();
 });
 test('saved permissions are hidden without pending approvals, including nested route cards',async()=>{
- const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host);
- const ui=api.mountChatNotifications({root,guard:fn=>fn,request:async()=>({routes:[{key:'saved',scope:{target_session_id:'target'}}]}),note:()=>{}});
+ const host=new E(),{api,root}=await moduleAt('notification-panel.js',host);
+ const ui=api.mountNotificationPanel({root,guard:fn=>fn,request:async()=>({routes:[{key:'saved',scope:{target_session_id:'target'}}]}),note:()=>{}});
  ui.messagingRoutes.open('source',true);await ui.messagingRoutes.refresh();const slot=host.children[2],card=slot.children[0],list=card.children[1];
  assert.equal(card.hidden,true);assert.equal(list.children[0].hidden,true);
  ui.showTool({approval:{id:'tool',name:'file_write',arguments:{}},run:{id:'run'},expanded:new Set(),decide:()=>{}});
@@ -66,8 +66,8 @@ test('saved permissions are hidden without pending approvals, including nested r
  ui.destroy();
 });
 test('paused and stopped runs stay quiet while observer and recovery notices retain guarded actions',async()=>{
- const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host),calls=[];let guarded=0;
- const ui=api.mountChatNotifications({root,guard:fn=>(...args)=>{guarded++;return fn(...args);}});
+ const host=new E(),{api,root}=await moduleAt('notification-panel.js',host),calls=[];let guarded=0;
+ const ui=api.mountNotificationPanel({root,guard:fn=>(...args)=>{guarded++;return fn(...args);}});
  for(const status of ['paused','stopped'])for(const canControl of [true,false])assert.equal(ui.showRun({run:{id:status,status,error:'Cancelled by user'},canControl}),undefined);
  assert.equal(host.children[3].children.length,0);
  const waiting=ui.showRun({run:{id:'waiting',status:'waiting_approval',pending:{arguments:{secret:'hidden'},can_decide:false}},canControl:false});assert.match(flat(waiting),/Waiting for the authorized user/);assert.doesNotMatch(flat(waiting),/hidden/);

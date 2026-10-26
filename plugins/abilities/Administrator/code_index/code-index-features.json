@@ -293,7 +293,7 @@
       "purpose": "Locates guarded mode confirmations and pending run-approval cards in the composer.",
       "locations": [
         {
-          "path": "ui/chat/core/chat-notifications.js",
+          "path": "ui/chat/core/notification-panel.js",
           "start_line": 1,
           "end_line": 80
         }
@@ -2298,7 +2298,7 @@
           "purpose": "Disclosure, stale response fence and revoke retry"
         },
         {
-          "path": "ui/chat/core/chat-notifications.js",
+          "path": "ui/chat/core/notification-panel.js",
           "start_line": 80,
           "end_line": 115,
           "purpose": "Destination approval and remember control"

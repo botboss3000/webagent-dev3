@@ -113,7 +113,7 @@ panel mounts mountMessagingRoutes in the notification host, opens it only for
 owner-manageable sessions, disconnects before switching sessions and destroys it
 with the panel. load ignores stale generation/session responses. Revoke retains
 one request ID across transport failure and removes it only after confirmed
-success. chat-notifications shows approval binding and bounded checkbox state;
+success. notification-panel shows approval binding and bounded checkbox state;
 message-view renders the agent-origin label rather than calling the sender You.
 These views do not grant authority; the API always rechecks it.
 
@@ -140,7 +140,7 @@ These views do not grant authority; the API always rechecks it.
 | api/chat::approval; shared_projection::messages | Recheck exact owner approval binding and expose durable origin to public transcript projection. |
 | Store::action_origin, conversation_history, purge_session | Exclude agent input as human authority; preserve fork evidence and remove session-owned messaging state on deletion. |
 | mountMessagingRoutes; load; open/disconnect/destroy | Mount disclosure, fence late reads, reset session state and dispose UI callbacks. |
-| mountChatNotifications; showTool; destroy | Display exact destination/approval, retain eligible explicit remember choice across polling and clear it on disposal. |
+| mountNotificationPanel; showTool; destroy | Display exact destination/approval, retain eligible explicit remember choice across polling and clear it on disposal. |
 | createMessage; panel::open, runs, disconnect, destroy | Show origin labels and connect owner route UI and approval callbacks to selected-session lifecycle. |
 
 ## Verification and limits

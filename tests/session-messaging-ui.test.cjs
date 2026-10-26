@@ -20,8 +20,8 @@ async function moduleAt(file,host){
  await mod.link(()=>{});await mod.evaluate();return {api:mod.namespace,root:{querySelector:()=>host}};
 }
 test('messaging approval exposes destination and remembers only an explicit checkbox across polling',async()=>{
- const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host);
- const ui=api.mountChatNotifications({root,guard:fn=>fn}),calls=[];
+ const host=new E(),{api,root}=await moduleAt('notification-panel.js',host);
+ const ui=api.mountNotificationPanel({root,guard:fn=>fn}),calls=[];
  const approval={id:'approve-one',name:'message_other_session',new_intent_confirmation:true,messaging_can_remember:true,messaging_binding:{source_title:'Source',target_title:'Destination',target_session_id:'target',target_agent_id:'agent',delivery:'steer'}};
  const show=()=>ui.showTool({approval,run:{id:'run'},expanded:new Set(),decide:(...args)=>calls.push(args)});
  show();assert.match(flat(host),/Source.*Destination.*steer/);
@@ -34,11 +34,11 @@ test('messaging approval exposes destination and remembers only an explicit chec
  ui.destroy();assert.equal(host.children.length,0);
 });
 test('route revocation is revision fenced and retries retain request identity',async()=>{
- const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host),calls=[],errors=[];
+ const host=new E(),{api,root}=await moduleAt('notification-panel.js',host),calls=[],errors=[];
  const route={key:'route-key',revision:7,target_title:'Recipient',scope:{target_session_id:'target'}};
  let fail=true;
  const request=async(...args)=>{calls.push(args);if(args[1]==='POST'){if(fail)throw Error('connection lost');return {};}return {routes:[route]};};
- const ui=api.mountChatNotifications({root,request,guard:fn=>async()=>{try{await fn();}catch(e){errors.push(e.message);}},note:e=>errors.push(e)});
+ const ui=api.mountNotificationPanel({root,request,guard:fn=>async()=>{try{await fn();}catch(e){errors.push(e.message);}},note:e=>errors.push(e)});
  ui.messagingRoutes.open('source',false);assert.equal(host.children[2].hidden,true);
  ui.messagingRoutes.open('source',true);const disclosure=host.children[2];disclosure.querySelector('button').onclick();await tick();
  assert.match(flat(host),/Recipient/);
@@ -48,15 +48,15 @@ test('route revocation is revision fenced and retries retain request identity',a
  fail=false;await revoke.onclick();assert.equal(errors.length,2);ui.destroy();assert.equal(host.children.length,0);
 });
 test('late route reads cannot populate a newly selected conversation',async()=>{
- const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host);let resolve;
- const ui=api.mountChatNotifications({root,request:()=>new Promise(r=>resolve=r),guard:fn=>fn,note:()=>{}});
+ const host=new E(),{api,root}=await moduleAt('notification-panel.js',host);let resolve;
+ const ui=api.mountNotificationPanel({root,request:()=>new Promise(r=>resolve=r),guard:fn=>fn,note:()=>{}});
  ui.messagingRoutes.open('old',true);const disclosure=host.children[2],toggle=disclosure.querySelector('button');toggle.onclick();await tick();
  ui.messagingRoutes.open('new',true);resolve({routes:[{key:'old',revision:1,target_title:'Old destination',scope:{target_session_id:'old'}}]});await tick();
  const list=disclosure.children[0].children[1];assert.equal(list.children.length,0);assert.equal(list.hidden,true);assert.equal(toggle.attributes['aria-expanded'],'false');ui.destroy();
 });
 test('permissions and tool approvals share card structure and clearing approvals retains permissions',async()=>{
- const host=new E(),{api,root}=await moduleAt('chat-notifications.js',host);
- const ui=api.mountChatNotifications({root,guard:fn=>fn,request:async()=>({routes:[]})});
+ const host=new E(),{api,root}=await moduleAt('notification-panel.js',host);
+ const ui=api.mountNotificationPanel({root,guard:fn=>fn,request:async()=>({routes:[]})});
  ui.messagingRoutes.open('source',true);
  ui.showTool({approval:{id:'tool',name:'file_write',arguments:{}},run:{id:'run'},expanded:new Set(),decide:()=>{}});
  const approval=host.children[1].children[0],permissions=host.children[2].children[0];
