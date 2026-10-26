@@ -118,6 +118,32 @@ pub fn pair_unresolved_calls(input: &mut Vec<Value>) {
         index = end + added;
     }
 }
+/// Identical lone closing statuses tolerated before the run stops; models have
+/// looped on the closer for the whole turn budget without ever replying.
+const CLOSER_REPEAT_LIMIT: u64 = 2;
+/// Consecutive repeats of the same closing status; any other tool clears `closing`.
+fn closer_repeats(run: &Value, status: &Value) -> u64 {
+    if run["closing"] == *status { run["closing_repeats"].as_u64().unwrap_or(0) + 1 } else { 0 }
+}
+
+#[cfg(test)]
+mod closer_repeat_tests {
+    use super::*;
+    #[test]
+    fn only_consecutive_identical_closing_statuses_count_as_repeats() {
+        let done=json!({"flag":"complete","notification":"Done"});
+        let mut run=json!({});
+        for expected in 0..=CLOSER_REPEAT_LIMIT {
+            let repeats=closer_repeats(&run,&done);
+            assert_eq!(repeats,expected);
+            run["closing_repeats"]=json!(repeats);
+            run["closing"]=done.clone();
+        }
+        assert_eq!(closer_repeats(&run,&json!({"flag":"blocked","notification":"Waiting"})),0);
+        run["closing"]=Value::Null; // another tool ran in between
+        assert_eq!(closer_repeats(&run,&done),0);
+    }
+}
 
 #[cfg(test)]
 mod automatic_code_index_journal_tests {
@@ -477,8 +503,11 @@ async fn execute_tool_step(
                     let config=gate_registry::closing_config()?;
                     match gate_controls::closing_status(&args,&config) {
                         Ok(status)=>{
+                            let repeats=closer_repeats(&run,&status);
+                            run["closing_repeats"]=json!(repeats);
                             run["closing"]=status;
-                            json!({"status":"ok","output":"Closing status recorded"})
+                            json!({"status":"ok","output":if repeats==0 {"Closing status recorded"}
+                                else {"Closing status already recorded; reply to the user now in plain text without tool calls"}})
                         },
                         Err(_)=>{
                             run["closing"]=gate_controls::fallback_status(&config);
@@ -487,6 +516,12 @@ async fn execute_tool_step(
                     }
                 };
                 Self::append_tool(&mut run,&result)?;
+                if name=="set_closer_status" && run["closing_repeats"].as_u64().unwrap_or(0)>=CLOSER_REPEAT_LIMIT {
+                    run["status"]=json!("failed");
+                    run["error"]=json!("Model kept repeating its closing status without a final reply");
+                    app.save(&mut run).await?;
+                    return Ok(std::ops::ControlFlow::Break(()));
+                }
                 if let Some(text)=working_text {
                     let message_id=format!("working:{id}:{}:{idx}",run["turns"]);
                     app.store.save_run_observed(&mut run,"working_message",

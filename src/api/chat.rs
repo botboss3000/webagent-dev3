@@ -478,6 +478,8 @@ pub(crate) async fn command(
     }
     match action.as_str() {
         "cancel" | "pause" => {
+            // Storage fences finished runs; report the race instead of a storage failure.
+            if terminal(status(&run)) {return Err(conflict("Run already finished"));}
             run["component_pause"]=Value::Null;
             if let Some(token) = app.active.lock().await.get(&id) {
                 token.cancel();

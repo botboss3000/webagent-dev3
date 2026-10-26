@@ -7393,3 +7393,19 @@ async fn late_single_tool_terminal_storage_keeps_control_fences() {
     app.store.save_run_observed(&mut next,"run_status",&json!({"run_id":id})).await.unwrap();
     assert_eq!(app.run(&id).await.unwrap()["latest_tool_failure"],next["latest_tool_failure"]);
 }
+
+#[tokio::test]
+async fn cancelling_a_finished_run_is_a_conflict_not_a_storage_failure() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    let mut run = app.run(&id).await.unwrap();
+    run["status"] = json!("completed");
+    app.save(&mut run).await.unwrap();
+    for action in ["cancel", "pause"] {
+        let error = command(State(app.clone()), Path((id.clone(), action.into())),
+            Json(json!({"client_request_id":uuid()}))).await.unwrap_err();
+        assert_eq!(error.0, StatusCode::CONFLICT, "{action}");
+    }
+    assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
+}
