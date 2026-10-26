@@ -75,15 +75,16 @@ class ComponentBuildTests(unittest.TestCase):
             (test/"service.rs").write_text("#[test] fn compiler_attested_fixture() {}\n")
             self.assertNotEqual(before,engine.closure(root,engine.ID))
 
-    # Keep shared contracts core-owned while honoring compiler-attested implementation dependencies.
-    def test_new_shared_contracts_require_core_and_implementation_respects_compiler_attestation(self):
+    # Contracts and implementations reserve their component; compiler attestation never widens the claim.
+    def test_contracts_and_implementations_reserve_only_their_component(self):
         with tempfile.TemporaryDirectory()as temporary:
             for identity,(_,service,implementation,contract,_)in NEW.items():
                 path=f"crates/{implementation}/src/lib.rs"
                 scopes=ownership.Components(temporary).scopes([path])
                 self.assertIn("module:engine-component:"+identity,scopes);self.assertNotIn("module:engine",scopes)
-                self.assertIn("module:engine",ownership.Components(temporary,[path]).scopes([path]))
-                self.assertIn("module:engine",ownership.Components(temporary).scopes([f"crates/{contract}/src/lib.rs"]))
+                self.assertEqual(ownership.Components(temporary,[path]).scopes([path]),scopes)
+                self.assertEqual(ownership.Components(temporary).scopes([f"crates/{contract}/src/lib.rs"]),
+                    ["module:engine-component:"+identity,f"path:crates/{contract}/src/lib.rs"])
                 self.assertTrue(engine.package_path("v3/"+path,{}))
             scopes=ownership.Components(temporary).scopes(["crates/engine-service/src/lib.rs"])
             for identity in NEW:self.assertIn("module:engine-component:"+identity,scopes)
