@@ -199,7 +199,7 @@ pub(crate) async fn init(root: &Path, role: &str) {
         return;
     }
     let root = root.to_path_buf();
-    tokio::spawn(async move {
+    tokio::spawn(futures_util::FutureExt::boxed(async move {
         let folder = folder();
         let mut child: Option<Child> = None;
         let mut digest: Option<String> = None;
@@ -267,7 +267,7 @@ pub(crate) async fn init(root: &Path, role: &str) {
                 }
             }
         }
-    });
+    }));
 }
 
 #[cfg(test)]

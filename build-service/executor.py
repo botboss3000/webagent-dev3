@@ -27,42 +27,10 @@ TEST_STACK_BYTES=32*1024*1024
 # there. Evidence: identical pass/fail/ignored counts at 1 vs 4 threads.
 TEST_THREADS=8
 # Compiled-dependency snapshots: stub compiles mirror the engine profiles exactly.
-SNAPSHOT_RECIPE="compiled-dependencies-v1"
-SNAPSHOT_COMPILES="set -e\ncargo test --workspace --locked --offline --no-run\ncargo build --workspace --locked --offline --bins\ncargo build --release --locked --offline --bin webagent-v3\ncargo build --workspace --release --locked --offline --no-default-features --features webagent-v3/live-context"
+SNAPSHOT_RECIPE="compiled-dependencies-v2"
+SNAPSHOT_COMPILES="set -e\ncargo test --workspace --locked --offline --no-run\ncargo build --workspace --locked --offline --bins\ncargo build --workspace --release --locked --offline --no-default-features --features webagent-v3/live-context"
 SNAPSHOT_KEEP=3
 SNAPSHOT_HEADROOM=16*1024**3
-# Paths whose change can alter linked-vs-live equivalence: the build recipe, the
-# features it selects, main.rs wiring, and the engine/context mode-execution code.
-# Changes outside this set reuse a stored proof for the same Rust source.
-EQUIVALENCE_RELEVANT_PREFIXES=(
-    "v3/Cargo.toml","v3/Cargo.lock","v3/build.rs","v3/src/main.rs","v3/Dockerfile",
-    "v3/crates/modules/engine/","v3/crates/context-assembly/","v3/crates/context-service/",
-    "v3/crates/context-contracts/","v3/build-service/")
-def equivalence_relevant(changed_paths):
-    """Whether a change can affect linked-vs-live equivalence."""
-    for path in (changed_paths or []):
-        p=path if path.startswith("v3/") else "v3/"+path
-        if p in EQUIVALENCE_RELEVANT_PREFIXES or any(p.startswith(pref) for pref in EQUIVALENCE_RELEVANT_PREFIXES):
-            return True
-        if p.endswith("Cargo.toml"):
-            return True
-    return False
-# Paths whose change can alter linked-vs-live equivalence: the build recipe, the
-# features it selects, main.rs wiring, and the engine/context mode-execution code.
-# Changes outside this set reuse a stored proof for the same Rust source.
-EQUIVALENCE_RELEVANT_PREFIXES=(
-    "v3/Cargo.toml","v3/Cargo.lock","v3/build.rs","v3/src/main.rs","v3/Dockerfile",
-    "v3/crates/modules/engine/","v3/crates/context-assembly/","v3/crates/context-service/",
-    "v3/crates/context-contracts/","v3/build-service/")
-def equivalence_relevant(changed_paths):
-    """Whether a change can affect linked-vs-live equivalence."""
-    for path in (changed_paths or []):
-        p=path if path.startswith("v3/") else "v3/"+path
-        if p in EQUIVALENCE_RELEVANT_PREFIXES or any(p.startswith(pref) for pref in EQUIVALENCE_RELEVANT_PREFIXES):
-            return True
-        if p.endswith("Cargo.toml"):
-            return True
-    return False
 MOLD_VERSION="1.10.1+dfsg-1"
 MOLD_SHA256="f85b0102cabeaee34b76ab195aacfa9ff9442d670948c88f6f353dd666ea5b64"
 MOLD_COMPILER_DOCKERFILE_SHA256="129a45c426d4683ab5a563ebdf764bf829826a415305dce15ab36c780a3ba815"
@@ -537,7 +505,7 @@ class Executor:
     def snapshot_binding(self,source):
         """Key compiled third-party objects by locked inputs, compiler image, flags and every compile recipe."""
         return {"dependencies":self.dependency_binding(source),"recipe":self.compiler_recipe(),"rustflags":RUSTFLAGS,
-            "version":SNAPSHOT_RECIPE,"compiles":[SNAPSHOT_COMPILES,self.linked_recipe(),self.live_recipe()]}
+            "version":SNAPSHOT_RECIPE,"compiles":[SNAPSHOT_COMPILES,self.live_recipe()]}
 
     @staticmethod
     def snapshot_stub(source,metadata,stub):
@@ -884,7 +852,7 @@ class Executor:
     @staticmethod
     def smoke_recipe(mode):
         """Write only fixed mode-proof artifacts; structured JSON never enters public log scrubbing."""
-        if mode=="linked":return ["sh","-c","set -e\ntest ! -L /output/stable/linked-smoke-result.json\n/output/stable/webagent-v3 --context-smoke > /output/stable/linked-smoke-result.json"]
+        if mode=="linked":return ["sh","-c","set -e\ntest ! -L /output/stable/linked-smoke-result.json\n/output/target/debug/webagent-v3 --context-smoke > /output/stable/linked-smoke-result.json"]
         if mode=="live":return ["sh","-c","set -e\ntest ! -L /output/stable/live-smoke-result.json\n/output/target/release/webagent-v3 --context-smoke > /output/stable/live-smoke-result.json"]
         raise ValueError("Fixed context smoke mode required")
     @staticmethod
@@ -1263,15 +1231,22 @@ class Executor:
         self.retain_test_manifest(output,artifacts)
         logs+=self.focused_tests(job,application,output,fresh_tests=artifacts)
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Focused tests changed captured application inputs")
-        # The full suite runs beside the linked release compile. Tests mount the
+        # Linked reference: the default-features (linked) debug binary that compile_test
+        # built, and that the suite exercises, runs the context smoke. Nothing ships or
+        # runs a linked release binary, so none is compiled.
+        stable=output/"stable";stable.mkdir(exist_ok=True)
+        logs+=self.phase(job,"linked_smoke","test",application,output,self.smoke_recipe("linked"),"engine:rust1.90:linked-smoke",60)
+        proof=self.linked_smoke(self.smoke_artifact(stable/"linked-smoke-result.json"))
+        # The full suite runs beside the live (deployed) release compile. Tests mount the
         # application writable, so the compile reads a verified private copy that
         # no test container mounts; the post-suite digest check still applies.
         linked_source=root/"linked-source"
         if linked_source.exists():shutil.rmtree(linked_source)
         shutil.copytree(source,linked_source,symlinks=True)
-        if self.runner.execution_source_digest(linked_source)!=before:raise ValueError("Linked source copy differs from captured inputs")
+        if self.runner.execution_source_digest(linked_source)!=before:raise ValueError("Compile source copy differs from captured inputs")
+        self.attest_release_base(job,context_blob)
         suite=self.concurrent_phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads="+str(TEST_THREADS)],"engine:rust1.90:test")
-        try:linked_log=self.phase(job,"compile_linked","engine",linked_source/"v3",output,self.linked_recipe(),"engine:rust1.90:linked-release")
+        try:live_log=self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(),"engine:rust1.90:release")
         finally:
             try:suite_output=suite.result()
             finally:shutil.rmtree(linked_source,ignore_errors=True)
@@ -1280,52 +1255,12 @@ class Executor:
         if not any(counts):raise ValueError("Suite executed no tests")
         job["suite_counts"]={"passed":counts[0],"failed":counts[1],"ignored":counts[2]}
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Tests left changed application inputs")
-        # P7: skip the live equivalence build when the change cannot affect it.
-        rust_digest=self.verification_source(blob)
-        changed=job.get("changed_paths",[]) or []
-        relevant=equivalence_relevant(changed)
-        proof_store=Path(self.config["state_root"])/"equivalence-proofs"/(rust_digest[:16])
-        stored=None
-        if proof_store.is_dir() and (proof_store/"mode-equivalence.json").is_file():
-            try:
-                stored=json.loads((proof_store/"mode-equivalence.json").read_text())
-                if not isinstance(stored,dict) or "linked" not in stored or "live" not in stored:
-                    stored=None
-            except (json.JSONDecodeError,OSError,ValueError):
-                stored=None
-        skip_live=(not relevant) and (stored is not None)
-        # Linked build (needed for deployment) always runs, overlapped with the suite above.
-        logs+=linked_log
-        stable=output/"stable";stable.mkdir(exist_ok=True)
-        shutil.copyfile(output/"target/release/webagent-v3",stable/"webagent-v3");(stable/"webagent-v3").chmod(0o555)
-        logs+=self.phase(job,"linked_smoke","test",application,output,self.smoke_recipe("linked"),"engine:rust1.90:linked-smoke",60)
-        proof=self.linked_smoke(self.smoke_artifact(stable/"linked-smoke-result.json"))
-        logs+=self.phase(job,"engine_metadata","dependency",application,output,["sh","-c","cargo metadata --locked --offline --format-version 1 > /output/linked-metadata.json"],"engine:rust1.90:linked-metadata")
-        linked_metadata=self.metadata_receipt(output/"linked-metadata.json")
-        linked_inputs=self.linked_dependencies(linked_metadata,output/"target",self.runner.execution_entries(blob))
-        (stable/"dependencies.json").write_text(json.dumps(linked_inputs,sort_keys=True)+"\n")
-        job["linked_stable"]={"mode":"linked","target_directory":"target","compiled_inputs":linked_inputs,"artifact_sha256":hashlib.sha256((stable/"webagent-v3").read_bytes()).hexdigest(),"smoke":proof,"retained_artifact":"stable/webagent-v3","deployed":False}
-        (stable/"smoke.json").write_text(json.dumps(job["linked_stable"],sort_keys=True)+"\n")
+        logs+=live_log
+        logs+=self.phase(job,"live_smoke","test",application,output,self.smoke_recipe("live"),"engine:rust1.90:live-smoke",90)
+        live_proof=self.live_smoke(self.smoke_artifact(stable/"live-smoke-result.json"),proof)
+        job["optimized_mode_equivalence"]={"status":"passed","linked":proof,"live":live_proof,"linked_profile":"debug"}
+        (stable/"mode-equivalence.json").write_text(json.dumps(job["optimized_mode_equivalence"],sort_keys=True)+"\n")
         getattr(self.runner,"resource_progress",lambda _:None)(job)
-        self.attest_release_base(job,context_blob)
-        if skip_live:
-            logs+="Equivalence verification skipped: change does not affect equivalence boundaries; reusing stored proof.\n"
-            stored_live=stored.get("live")
-            job["optimized_mode_equivalence"]={"status":"skipped","reason":"unchanged-inputs","linked":proof,"live":stored_live}
-            (stable/"mode-equivalence.json").write_text(json.dumps(job["optimized_mode_equivalence"],sort_keys=True)+"\n")
-            getattr(self.runner,"resource_progress",lambda _:None)(job)
-        else:
-            logs+=self.phase(job,"compile_release","engine",application,output,self.live_recipe(),"engine:rust1.90:release")
-            logs+=self.phase(job,"live_smoke","test",application,output,self.smoke_recipe("live"),"engine:rust1.90:live-smoke",90)
-            live_proof=self.live_smoke(self.smoke_artifact(stable/"live-smoke-result.json"),proof)
-            job["optimized_mode_equivalence"]={"status":"passed","linked":proof,"live":live_proof}
-            (stable/"mode-equivalence.json").write_text(json.dumps(job["optimized_mode_equivalence"],sort_keys=True)+"\n")
-            getattr(self.runner,"resource_progress",lambda _:None)(job)
-            try:
-                proof_store.mkdir(parents=True,exist_ok=True)
-                (proof_store/"mode-equivalence.json").write_text(json.dumps({"linked":proof,"live":live_proof},sort_keys=True)+"\n")
-            except (OSError,ValueError):
-                pass
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Compilation changed application inputs")
         artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
         self.collect_runtime_artifacts(application,output,artifacts,legacy_automation,self.context_component_recipe(blob))
@@ -1338,9 +1273,19 @@ class Executor:
         metadata=self.metadata_receipt(output/"core-metadata.json")
         core=self.core_dependencies(metadata,output/"target")
         (artifacts/"core-inputs.txt").write_text("\n".join(sorted(core))+"\n")
+        files=self.runner.execution_entries(blob);compiled_inputs={}
+        for name in core:
+            relative=self.local_dependency(name)
+            if relative is None:continue
+            if relative not in files:raise ValueError("Compiled input absent from captured source")
+            compiled_inputs[relative]=hashlib.sha256(files[relative][1]).hexdigest()
+        if "v3/src/main.rs"not in compiled_inputs:raise ValueError("Live root dependency attestation missing")
+        # Built-input attestation for UI rebases now names the deployed (live) closure.
+        job["linked_stable"]={"mode":"linked","profile":"debug","compiled_inputs":compiled_inputs,"smoke":proof,"deployed":False}
+        (artifacts/"stable/smoke.json").write_text(json.dumps(job["linked_stable"],sort_keys=True)+"\n")
         if "v3/src/main.rs"not in {self.local_dependency(name)for name in dependencies}:raise ValueError("Compiler dependency attestation missing")
         logs+=self.phase(job,"engine_metadata","dependency",application,output,
-            ["sh","-c","set -e\nreadelf -p .comment /output/stable/webagent-v3 > /output/linked-comment.txt\nreadelf -p .comment /output/target/release/webagent-v3 > /output/live-comment.txt\nmkdir -p /output/compiler\ninstall -m755 /usr/bin/mold /output/compiler/mold\ninstall -m644 /usr/share/doc/mold/copyright /usr/share/doc/mold/LICENSE.gz /output/compiler/"],"engine:rust1.90:mold-proof",60)
+            ["sh","-c","set -e\nreadelf -p .comment /output/target/debug/webagent-v3 > /output/linked-comment.txt\nreadelf -p .comment /output/target/release/webagent-v3 > /output/live-comment.txt\nmkdir -p /output/compiler\ninstall -m755 /usr/bin/mold /output/compiler/mold\ninstall -m644 /usr/share/doc/mold/copyright /usr/share/doc/mold/LICENSE.gz /output/compiler/"],"engine:rust1.90:mold-proof",60)
         comments={}
         for mode in ("linked","live"):
             body=(output/(mode+"-comment.txt")).read_bytes()
@@ -1349,7 +1294,7 @@ class Executor:
         if hashlib.sha256((output/"compiler/mold").read_bytes()).hexdigest()!=MOLD_SHA256:raise ValueError("Packaged Mold executable differs from compiler")
         shutil.copytree(output/"compiler",artifacts/"compiler")
         job["linker_proof"]={"compiler_recipe":self.compiler_recipe(),"comments":comments,
-            "linked_sha256":hashlib.sha256((artifacts/"stable/webagent-v3").read_bytes()).hexdigest(),
+            "linked_sha256":hashlib.sha256((output/"target/debug/webagent-v3").read_bytes()).hexdigest(),"linked_profile":"debug",
             "live_sha256":hashlib.sha256((artifacts/"webagent-v3").read_bytes()).hexdigest(),"mold_sha256":MOLD_SHA256}
         (artifacts/"stable/linker-proof.json").write_text(json.dumps(job["linker_proof"],sort_keys=True)+"\n")
         hashes=self.artifact_hashes(artifacts);self.retain_engine(job,blob,dependencies,hashes,logs)

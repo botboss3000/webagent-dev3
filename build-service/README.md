@@ -181,9 +181,9 @@ Local operators may explicitly request compiler_memory_cap=4026531840 for checks
 
 Local operator test checks may supply test_filter as an ASCII Rust unit-name substring (letters, digits, underscore, colon; maximum 160 characters). It selects runtime tests and enables nocapture for bounded diagnosis, never arbitrary Cargo arguments. The filter is bound to the idempotency signature and public receipt; omitted filters retain full-test behavior.
 
-The coordinated engine recipe now compiles an optimized linked-context executable first, executes its fixed offline context-smoke equivalence check, and retains it under stable/webagent-v3 with its hash/mode/proof. The live workspace build runs afterward and remains the deployed artifact. Linked compilation uses its own measured recipe and the explicit compiler cap when requested; optimized smoke uses normal test admission. Cached artifacts must include the linked proof under the new recipe identity.
+The coordinated engine recipe compiles one release root binary: the live (`live-context`) build that is deployed. The linked-mode reference is the default-features debug binary that `compile_test` already builds and the workspace suite exercises; it runs the fixed offline context smoke right after the test compile, and the live smoke must produce identical prepared results (`optimized_mode_equivalence.linked_profile: debug`). No linked release binary is compiled, shipped or run (boot has no linked fallback). The live compile runs beside the full suite from a verified private source copy, after the release base is re-attested. Built-input attestation for UI rebases (`linked_stable.compiled_inputs`) names the deployed live closure. The live binary is always compiled; there is no equivalence-skip path.
 
-Linked optimized compilation uses /output/linked-target and retains separate hashed dep-info inputs beside its stable executable. Live compilation and deployment use /output/target exclusively. Fixed optimized live smoke runs beside the official context service, requires reuse/drain, and compares its two prepared results exactly with linked smoke before certification; both proofs are retained.
+Live compilation and deployment use /output/target. Fixed optimized live smoke runs beside the official context service, requires reuse/drain, and compares its two prepared results exactly with the linked (debug) smoke before certification; both proofs are retained.
 
 Candidate preparation stream-hashes private inspection members by mode, exact size and SHA-256; changed inspection snapshots still fail, while release candidates retain only application source. Full allowlist validation remains mandatory. Attested archives are released after durable source preparation, and the protected snapshot helper clears its last archive on both successful and failed sends. Durable inspection snapshots and source reservations remain unchanged.
 
@@ -238,7 +238,7 @@ idle broker load; it carries no authority and is safe to delete.
 job, each against its class p50/p90, plus a remaining-time range. Stages are
 built from step spans (`execution_history`, last 128 steps) and the job's
 `active_phases` list, so overlapping phases such as the full suite beside the
-linked compile both show as running; steps started inside a later job phase
+live compile both show as running; steps started inside a later job phase
 (loop image packaging, engine component plugin builds) count toward that phase.
 Classes are the work actually done (operation, compiled or reused artifacts,
 tests run or reused), computed from completed receipts. The read follows the
@@ -250,7 +250,7 @@ Engine compiles start from a verified copy of third-party objects instead of an
 empty target. The first job for a key (locked downloads, manifests, compiler
 image, flags and compile recipes) builds `build-jobs/compiled-dependencies/<key>`
 from a stub workspace: exact manifests, every workspace target replaced by an
-empty file, the engine's test, linked and live compiles, then `cargo clean` of
+empty file, the engine's test and live compiles, then `cargo clean` of
 every member and a check that no stub product survived. No task source is
 compiled into it. Each job copies the snapshot into its private target and
 verifies every file's hash against the receipt; Cargo fingerprints still decide
@@ -273,6 +273,17 @@ authority it re-verifies the running release (active assets, healthy images,
 stopped rollback containers, frozen candidate), then performs only the checked
 source promotion. Nothing is rebuilt, recreated or restarted.
 
+## Engine component reuse keys
+
+Each engine component's artifact is keyed by its crate closure plus digests of
+only the root settings that can reach it: workspace settings except member
+lists, patch/replace, and profiles with per-package overrides limited to the
+closure's packages (`Cargo.toml#component`), and the `Cargo.lock` entries
+reachable from the closure's packages (`Cargo.lock#component`; an ambiguous lock
+reference falls back to the whole file). Root-package edits, new workspace
+members and other packages' profile overrides no longer rebuild components.
+Source-stability and compiled-input checks still use raw file hashes.
+
 ## Cross-release UI fixture reuse
 
 A frontend fixture runs with no network, credentials or API, mounting only the
@@ -285,9 +296,9 @@ in each fixture's provenance binding. Conservative fixtures always run; any
 test-image or recipe change invalidates every record. The most recent 4096
 records are kept; the store is rebuildable and safe to delete.
 
-## Suite and linked compile overlap
+## Suite and live compile overlap
 
-After the focused tests, the full workspace suite and the linked release compile
+After the focused tests and the linked reference smoke, the full workspace suite and the live release compile
 run at the same time. Tests mount the application writable, so the compile reads
 a private copy of the captured sources, verified against the same digest and
 mounted by no test container; the copy is removed afterwards and the post-suite

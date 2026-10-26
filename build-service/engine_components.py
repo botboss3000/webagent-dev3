@@ -66,6 +66,54 @@ def closure(root,identity=ID):
                 elif isinstance(dependency,dict)and dependency.get("workspace"):raise ValueError("Inherited dependencies require explicit closure support")
     return {name:hashlib.sha256((root/name).read_bytes()).hexdigest()for name in sorted(result)}
 
+# Root package sections that never reach a confined component crate.
+ROOT_ONLY_KEYS={"package","dependencies","dev-dependencies","build-dependencies","features","bin","lib","test","bench","example","target","badges","lints"}
+
+def reuse_inputs(root,inputs):
+    """Reuse key inputs: the raw root Cargo.toml/Cargo.lock hashes give way to what can affect this closure.
+
+    Cargo.toml keeps workspace settings (except member lists), patch/replace and every
+    profile, with per-package profile overrides limited to the closure's packages.
+    Cargo.lock keeps the entries reachable from the closure's packages; an ambiguous
+    lock reference falls back to the whole file. Source checks still use raw hashes."""
+    names=set()
+    for name in inputs:
+        if name.startswith("crates/")and name.endswith("/Cargo.toml"):
+            names.add(tomllib.loads((root/name).read_text()).get("package",{}).get("name"))
+    names.discard(None)
+    manifest=tomllib.loads((root/"Cargo.toml").read_text())
+    effective={key:value for key,value in manifest.items()if key not in ROOT_ONLY_KEYS}
+    if "workspace"in effective:
+        effective["workspace"]={key:value for key,value in effective["workspace"].items()if key not in {"members","default-members","exclude"}}
+    for profile in (effective.get("profile")or{}).values():
+        if isinstance(profile,dict)and isinstance(profile.get("package"),dict):
+            profile["package"]={key:value for key,value in profile["package"].items()if key=="*"or key in names}
+            if not profile["package"]:del profile["package"]
+    if "profile"in effective:
+        # An empty profile (or profile table) is a no-op for Cargo.
+        effective["profile"]={name:value for name,value in effective["profile"].items()if value!={}}
+        if not effective["profile"]:del effective["profile"]
+    lock=tomllib.loads((root/"Cargo.lock").read_text());packages=lock.get("package",[])
+    def resolve(reference):
+        parts=reference.split(" ");found=[p for p in packages if p.get("name")==parts[0]and(len(parts)<2 or p.get("version")==parts[1])]
+        return found[0]if len(found)==1 else None
+    reachable={};pending=[p for p in packages if p.get("name")in names and "source"not in p]
+    if len(pending)!=len(names):pending=None
+    while pending:
+        package=pending.pop();identity=(package["name"],package.get("version"),package.get("source"))
+        if identity in reachable:continue
+        reachable[identity]=package
+        for reference in package.get("dependencies",[]):
+            target=resolve(reference)
+            if target is None:pending=None;break
+            pending.append(target)
+    if pending is None:lock_digest=inputs["Cargo.lock"]
+    else:lock_digest=hashlib.sha256(json.dumps({"version":lock.get("version"),"packages":[reachable[k]for k in sorted(reachable,key=str)]},sort_keys=True).encode()).hexdigest()
+    keyed={name:sha for name,sha in inputs.items()if name not in {"Cargo.toml","Cargo.lock"}}
+    keyed["Cargo.toml#component"]=hashlib.sha256(json.dumps(effective,sort_keys=True,default=str).encode()).hexdigest()
+    keyed["Cargo.lock#component"]=lock_digest
+    return keyed
+
 def build(runner,job_id,root,state,assets,executor,scheduler):
     """Build every installed registered engine component using its fixed closure."""
     outputs=[]
@@ -79,8 +127,9 @@ def build_one(runner,job_id,root,state,assets,executor,scheduler,identity):
     if not declaration.exists():return []
     value=descriptor(declaration);application=root/"v3";inputs=closure(application,identity)
     recipe_version="v1"if identity in {"boot-supervisor","background-dispatch"}or(identity==ID and value["interface_version"]==1)else"v2"
-    recipe=runner.executor.compiler_recipe()+":engine-"+("context"if identity==ID else identity)+"-"+recipe_version+":release:locked:offline:debug0"
-    key=hashlib.sha256(json.dumps({"inputs":inputs,"recipe":recipe,"build":value["build"]},sort_keys=True).encode()).hexdigest()
+    recipe=runner.executor.compiler_recipe()+":engine-"+("context"if identity==ID else identity)+"-"+recipe_version+":release:locked:offline:debug0:key-v2"
+    keyed=reuse_inputs(application,inputs)
+    key=hashlib.sha256(json.dumps({"inputs":keyed,"recipe":recipe,"build":value["build"]},sort_keys=True).encode()).hexdigest()
     with runner.plugin_build_lock(key):
         artifact=assets/"artifacts"/key;binary=artifact/binary_name;receipt=artifact/"engine-receipt.json"
         reused=False
@@ -104,7 +153,7 @@ def build_one(runner,job_id,root,state,assets,executor,scheduler,identity):
                 if path.is_symlink():raise ValueError("Compiler source symlink")
                 if path.is_dir():shutil.copytree(path,source/name)
                 elif path.is_file():shutil.copyfile(path,source/name)
-            reused_from=seed_cache(cache,assets,state,inputs,recipe,executor)
+            reused_from=seed_cache(cache,assets,state,keyed,recipe,executor)
             cargo=cache/"cargo";cargo.mkdir(exist_ok=True)
             runner.executor.dependencies(active,source,cache,prepare=True)
             def phase(name,argv,network=False):
@@ -131,7 +180,7 @@ def build_one(runner,job_id,root,state,assets,executor,scheduler,identity):
             output=cache/"target/release"/binary_name
             if output.is_symlink()or not output.is_file()or output.stat().st_size>32*1024*1024:raise ValueError("Engine artifact bound")
             artifact.mkdir(parents=True,exist_ok=True);shutil.copyfile(output,binary);binary.chmod(0o555)
-            scheduler.Scheduler.write_record(receipt,{"input_key":key,"recipe":recipe,"compiled_inputs":compiled,"inputs":inputs,"cargo_cache_hashes":{name:executor.Executor.artifact_hashes(cache/name)for name in ("cargo","target")},"reused_from":reused_from,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest()})
+            scheduler.Scheduler.write_record(receipt,{"input_key":key,"recipe":recipe,"compiled_inputs":compiled,"inputs":inputs,"reuse_inputs":keyed,"cargo_cache_hashes":{name:executor.Executor.artifact_hashes(cache/name)for name in ("cargo","target")},"reused_from":reused_from,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest()})
     return [{"package":identity,"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":reused}]
 
 def seal(root,outputs,assets):
@@ -184,9 +233,9 @@ def seed_cache(cache,assets,state,inputs,recipe,executor):
         if receipt.is_symlink():raise ValueError("Engine cache receipt symlink")
         previous=json.loads(receipt.read_bytes());key=previous.get("input_key","")
         if not re.fullmatch(r"[a-f0-9]{64}",key)or previous.get("recipe")!=recipe:continue
-        old_inputs=previous.get("inputs",{})
-        manifests={name:sha for name,sha in inputs.items()if name.endswith("Cargo.toml")or name=="Cargo.lock"}
-        if manifests!={name:sha for name,sha in old_inputs.items()if name.endswith("Cargo.toml")or name=="Cargo.lock"}:continue
+        old_inputs=previous.get("reuse_inputs",{})
+        def manifests(values):return {name:sha for name,sha in values.items()if name.endswith("Cargo.toml")or name.startswith(("Cargo.toml#","Cargo.lock"))}
+        if not old_inputs or manifests(inputs)!=manifests(old_inputs):continue
         source=state/"engine-component-builds"/key
         recorded=previous.get("cargo_cache_hashes")
         if not recorded or source==cache or not all((source/name).is_dir()for name in ("cargo","target")):continue

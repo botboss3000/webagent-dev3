@@ -677,7 +677,7 @@ async fn run_process() -> Result<()> {
         restore_worker_control(&app).await?;
         recover(&app, true).await?;
         app.ready.store(true, Ordering::Release);
-        let mut scheduler=tokio::spawn(scheduler_with_progress(app.clone(),progress));
+        let mut scheduler=tokio::spawn(futures_util::FutureExt::boxed(scheduler_with_progress(app.clone(),progress)));
         let mut signal=tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         tokio::select! {
             _=signal.recv()=>{},
@@ -718,8 +718,8 @@ async fn run_process() -> Result<()> {
     )
     .await?;
     tracing::info!("WebAgent v3 API ready");
-    let notification_relay=tokio::spawn(api::notifications::service(app.clone()));
-    let administrator_watch=tokio::spawn(administrator_services::watch(app.clone()));
+    let notification_relay=tokio::spawn(futures_util::FutureExt::boxed(api::notifications::service(app.clone())));
+    let administrator_watch=tokio::spawn(futures_util::FutureExt::boxed(administrator_services::watch(app.clone())));
     let shutdown = app.clone();
     axum::serve(listener, router(app.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>())
         .with_graceful_shutdown(async move {

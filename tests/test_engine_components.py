@@ -18,7 +18,7 @@ class EngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory()as temporary:
             path=Path(temporary)/"linked-smoke-result.json";path.write_text(raw)
             self.assertEqual(executor.Executor.linked_smoke(executor.Executor.smoke_artifact(path)),proof)
-            self.assertEqual(executor.Executor.smoke_recipe("linked")[-1].splitlines()[-1],"/output/stable/webagent-v3 --context-smoke > /output/stable/linked-smoke-result.json")
+            self.assertEqual(executor.Executor.smoke_recipe("linked")[-1].splitlines()[-1],"/output/target/debug/webagent-v3 --context-smoke > /output/stable/linked-smoke-result.json")
             self.assertIn("/output/stable/live-smoke-result.json",executor.Executor.smoke_recipe("live")[-1])
     def test_smoke_artifact_rejects_symlink_hardlink_and_oversize(self):
         import os
@@ -179,10 +179,11 @@ class EngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory()as temporary:
             assets=Path(temporary)/"assets";state=Path(temporary)/"state";key="a"*64;prior=state/"engine-component-builds"/key;receipt=assets/"artifacts"/key/"engine-receipt.json";receipt.parent.mkdir(parents=True)
             for name in ("cargo","target"):(prior/name).mkdir(parents=True);(prior/name/"fixture").write_bytes(name.encode())
-            inputs={"Cargo.toml":"b"*64,"Cargo.lock":"c"*64,"crates/context-service/src/main.rs":"d"*64};hashes={name:executor.Executor.artifact_hashes(prior/name)for name in ("cargo","target")};receipt.write_text(json.dumps({"input_key":key,"recipe":"fixture-recipe","inputs":inputs,"cargo_cache_hashes":hashes}))
+            inputs={"Cargo.toml#component":"b"*64,"Cargo.lock#component":"c"*64,"crates/context-service/Cargo.toml":"9"*64,"crates/context-service/src/main.rs":"d"*64};hashes={name:executor.Executor.artifact_hashes(prior/name)for name in ("cargo","target")};receipt.write_text(json.dumps({"input_key":key,"recipe":"fixture-recipe","reuse_inputs":inputs,"cargo_cache_hashes":hashes}))
             fresh=state/"engine-component-builds/new";fresh.mkdir();changed={**inputs,"crates/context-service/src/main.rs":"e"*64}
             self.assertEqual(engine.seed_cache(fresh,assets,state,changed,"fixture-recipe",executor),key)
-            self.assertIsNone(engine.seed_cache(state/"different",assets,state,{**changed,"Cargo.lock":"f"*64},"fixture-recipe",executor))
+            self.assertIsNone(engine.seed_cache(state/"different",assets,state,{**changed,"Cargo.lock#component":"f"*64},"fixture-recipe",executor))
+            self.assertIsNone(engine.seed_cache(state/"crate",assets,state,{**changed,"crates/context-service/Cargo.toml":"8"*64},"fixture-recipe",executor))
             (prior/"target/fixture").write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError,"changed"):engine.seed_cache(state/"other",assets,state,changed,"fixture-recipe",executor)
     def test_descriptor_rejects_unsupported_operation_and_recipe(self):
@@ -272,8 +273,8 @@ class EngineRebaseAttestationOrderTests(unittest.TestCase):
             created=(Path(temporary)/"execution"/job["job_id"]/"output/cargo/registry");created.mkdir(parents=True)
             def phase(job,name,kind,source,output,argv,profile,timeout=3600,network=False):
                 timeline.append(name)
-                if name=="compile_linked":
-                    (output/"target/release").mkdir(parents=True,exist_ok=True);(output/"target/release/webagent-v3").write_bytes(b"binary")
+                if name=="compile_test":
+                    (output/"target/debug").mkdir(parents=True,exist_ok=True);(output/"target/debug/webagent-v3").write_bytes(b"debug linked binary")
                 if name=="compile_release":
                     (output/"artifacts").mkdir(exist_ok=True);(output/"artifacts/webagent-v3").write_bytes(b"live")
                 if name=="engine_metadata":
@@ -287,7 +288,7 @@ class EngineRebaseAttestationOrderTests(unittest.TestCase):
             worker.retain_test_manifest=Mock();worker.focused_tests=Mock(return_value="")
             worker.linked_dependencies=Mock(return_value={});worker.linked_smoke=Mock(return_value={"mode":"linked"});worker.live_smoke=Mock(return_value={"mode":"live"})
             worker.smoke_artifact=Mock(return_value={});worker.metadata_receipt=Mock(return_value={"packages":[],"resolve":{"nodes":[]}})
-            worker.core_dependencies=Mock(return_value={"v3/src/main.rs"});worker.compiler_dependencies=Mock(return_value={"src/main.rs"})
+            worker.core_dependencies=Mock(return_value={"src/main.rs"});worker.compiler_dependencies=Mock(return_value={"src/main.rs"})
             worker.collect_runtime_artifacts=Mock();worker.context_component_recipe=Mock(return_value="recipe");worker.artifact_hashes=Mock(return_value={})
             worker.retain_engine=Mock();worker.test_proof=Mock(return_value="proof")
             blob=fixtures.context(extra={"v3/src/main.rs":"fn main(){}"})
@@ -295,8 +296,79 @@ class EngineRebaseAttestationOrderTests(unittest.TestCase):
                 worker.engine(job,blob,lambda root,data:root.mkdir(parents=True,exist_ok=True),lambda data:"d"*64)
             self.assertEqual(timeline.count("attest"),3)
             self.assertIs(attested[0],blob)
-            self.assertEqual([name for name in timeline if name in("attest","compile_test","test","compile_release")],
-                ["attest","attest","compile_test","test","attest","compile_release"])
+            # The release base is re-proved before the deployable compile, which runs beside the suite.
+            order=[name for name in timeline if name in("attest","compile_test","test","compile_release")]
+            self.assertEqual(order[:4],["attest","attest","compile_test","attest"]);self.assertEqual(sorted(order[4:]),["compile_release","test"])
+            self.assertNotIn("compile_linked",timeline)
+            self.assertEqual(job["linked_stable"]["compiled_inputs"],{"v3/src/main.rs":hashlib.sha256(b"fn main(){}").hexdigest()})
+            self.assertEqual((job["optimized_mode_equivalence"]["status"],job["optimized_mode_equivalence"]["linked_profile"]),("passed","debug"))
+class ComponentReuseKeyTests(unittest.TestCase):
+    """Root manifest/lock edits outside a component's reach keep its key; reachable ones change it."""
+    MANIFEST="""[package]
+name = "webagent-v3"
+[dependencies]
+serde = "1"
+[[bin]]
+name = "webagent-v3"
+path = "src/main.rs"
+[workspace]
+members = ["crates/svc", "crates/lib"]
+[workspace.dependencies]
+serde = "1"
+[profile.release]
+opt-level = 3
+"""
+    LOCK="""version = 4
+[[package]]
+name = "svc"
+version = "0.1.0"
+dependencies = ["lib", "serde"]
+[[package]]
+name = "lib"
+version = "0.1.0"
+[[package]]
+name = "serde"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa"
+[[package]]
+name = "unrelated"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb"
+"""
+    def keyed(self,manifest=MANIFEST,lock=LOCK):
+        with tempfile.TemporaryDirectory()as temporary:
+            root=Path(temporary)
+            (root/"Cargo.toml").write_text(manifest);(root/"Cargo.lock").write_text(lock)
+            for name in ("svc","lib"):
+                (root/"crates"/name).mkdir(parents=True);(root/"crates"/name/"Cargo.toml").write_text('[package]\nname = "%s"\n'%name)
+            inputs={n:hashlib.sha256((root/n).read_bytes()).hexdigest()for n in ("Cargo.toml","Cargo.lock","crates/svc/Cargo.toml","crates/lib/Cargo.toml")}
+            return engine.reuse_inputs(root,inputs)
+    def test_unreachable_edits_keep_the_key(self):
+        base=self.keyed()
+        self.assertNotIn("Cargo.toml",base);self.assertNotIn("Cargo.lock",base)
+        for manifest in (self.MANIFEST+"\n[profile.release.package.webagent-v3]\nopt-level = 2\n",
+                         self.MANIFEST.replace('serde = "1"\n[[bin]]','serde = "1"\ntokio = "1"\n[[bin]]'),
+                         self.MANIFEST.replace('members = ["crates/svc", "crates/lib"]','members = ["crates/svc", "crates/lib", "crates/new"]')):
+            self.assertEqual(self.keyed(manifest),base)
+        self.assertEqual(self.keyed(lock=self.LOCK.replace('checksum = "bb"','checksum = "cc"')),base)
+        # The 2026-10-26 case: a root-only override where no [profile.release] table existed.
+        bare=self.MANIFEST.replace("[profile.release]\nopt-level = 3\n","")
+        self.assertEqual(self.keyed(bare+"\n[profile.release.package.webagent-v3]\nopt-level = 2\n"),self.keyed(bare))
+    def test_reachable_edits_change_the_key(self):
+        base=self.keyed()
+        for manifest in (self.MANIFEST.replace("opt-level = 3","opt-level = 2"),
+                         self.MANIFEST.replace('[workspace.dependencies]\nserde = "1"','[workspace.dependencies]\nserde = "1.0.1"'),
+                         self.MANIFEST+"\n[profile.release.package.svc]\nopt-level = 1\n",
+                         self.MANIFEST+"\n[patch.crates-io]\nserde = { path = \"vendor/serde\" }\n"):
+            self.assertNotEqual(self.keyed(manifest),base)
+        self.assertNotEqual(self.keyed(lock=self.LOCK.replace('checksum = "aa"','checksum = "ab"')),base)
+    def test_ambiguous_lock_reference_falls_back_to_the_whole_lock(self):
+        lock=self.LOCK+'[[package]]\nname = "serde"\nversion = "2.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "dd"\n'
+        value=self.keyed(lock=lock)
+        self.assertEqual(value["Cargo.lock#component"],hashlib.sha256(lock.encode()).hexdigest())
+
 class ActivePhaseTests(unittest.TestCase):
     def test_every_running_phase_is_listed_until_it_ends(self):
         runner=types.SimpleNamespace(job_context=types.SimpleNamespace(),resource_progress=lambda job:None)
@@ -331,11 +403,10 @@ class EngineSuiteOverlapTests(unittest.TestCase):
                     seen["suite_thread"]=threading.current_thread().name
                     seen["overlapped"]=linked_started.wait(5)
                     if suite_error:raise RuntimeError(suite_error)
-                if name=="compile_linked":
+                if name=="compile_release":
                     seen["linked_source"]=source;seen["copy_present"]=source.parent.is_dir();linked_started.set()
                     if linked_error:raise RuntimeError(linked_error)
-                    (output/"target/release").mkdir(parents=True,exist_ok=True);(output/"target/release/webagent-v3").write_bytes(b"binary")
-                if name=="compile_release":raise RuntimeError("stop after overlap")
+                if name=="live_smoke":raise RuntimeError("stop after overlap")
                 return "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured\n"
             worker.phase=phase
             worker.validate_compiler_recipe=Mock(return_value=False);worker.cached_engine=Mock(return_value=None)
@@ -344,11 +415,12 @@ class EngineSuiteOverlapTests(unittest.TestCase):
             worker.linked_dependencies=Mock(return_value={});worker.linked_smoke=Mock(return_value={"mode":"linked"})
             worker.smoke_artifact=Mock(return_value={});worker.metadata_receipt=Mock(return_value={"packages":[],"resolve":{"nodes":[]}})
             blob=fixtures.context(extra={"v3/src/main.rs":"fn main(){}"})
+            seen["phases"]=[]
             with self.assertRaises(RuntimeError)as raised:
                 worker.engine(job,blob,lambda root,data:(root/"v3").mkdir(parents=True,exist_ok=True),lambda data:"d"*64)
             seen["error"]=str(raised.exception);seen["copy_removed"]=not (root/"linked-source").exists();seen["root"]=root
         return seen
-    def test_suite_overlaps_linked_compile_from_private_copy(self):
+    def test_suite_overlaps_live_compile_from_private_copy(self):
         seen=self.run_engine()
         self.assertEqual(seen["error"],"stop after overlap")
         self.assertTrue(seen["overlapped"]);self.assertEqual(seen["suite_thread"],"phase-test")

@@ -75,7 +75,9 @@ pub(crate) fn lane_answer<'a>(
     Box::pin(async move {
         let (selection, tokens) = lane_selection(app, run).await?;
         let (tx, mut rx) = mpsc::channel(16);
-        let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let drain = tokio::spawn(futures_util::FutureExt::boxed(async move {
+            while rx.recv().await.is_some() {}
+        }));
         let cancel=app.stop.child_token();
         let result = tokio::time::timeout(
             Duration::from_secs(90),

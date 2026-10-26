@@ -1287,9 +1287,9 @@ pub(crate) async fn service(app: App) {
     let mut workers = tokio::task::JoinSet::new();
     for id in IDS {
         let scoped = app.clone();
-        workers.spawn(async move {
+        workers.spawn(futures_util::FutureExt::boxed(async move {
             package_service(scoped, id).await;
-        });
+        }));
     }
     while workers.join_next().await.is_some() {}
 }
@@ -1370,10 +1370,10 @@ async fn package_service(app: App, id: &'static str) {
                     let startup = !seen.contains(&uid);
                     cursor = cursor.wrapping_add(1);
                     last_dispatched_wake.insert(uid.clone(),wake_sequence);
-                    jobs.spawn(async move {
+                    jobs.spawn(futures_util::FutureExt::boxed(async move {
                         let result = tick_package(&user, id, startup).await;
                         (uid, result)
-                    });
+                    }));
                 }
             }
         }

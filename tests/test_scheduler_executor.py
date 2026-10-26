@@ -574,15 +574,15 @@ class HostFocusedVerificationTests(unittest.TestCase):
         def phase(job,phase,kind,source,output,argv,recipe,*args):
             phases.append((phase,recipe))
             if "focused-v2"in recipe and not success:raise RuntimeError("host regression")
-            if phase=="compile_linked":raise RuntimeError("optimized pipeline reached")
+            if phase=="compile_release":raise RuntimeError("optimized pipeline reached")
             return "test result: ok. 1 passed; 0 failed\n"
         manifest={"tests":[{"file":"tests/webagent_v3-0123456789abcdef","target_name":"webagent-v3","source_path":"/build/src/main.rs","kind":["bin"],"package_id":"path+file:///build#webagent-v3@0.1.0"},{"file":"tests/webagent_engine-fedcba9876543210","target_name":"webagent_engine","source_path":"/build/crates/modules/engine/src/lib.rs","kind":["lib"],"package_id":"path+file:///build/crates/modules/engine#webagent-engine@0.1.0"}]}
-        with patch.object(self.worker,"dependency_snapshot",return_value=""),patch.object(self.worker,"retain_test_manifest",return_value=manifest)as retain,patch.object(self.worker,"test_manifest",return_value=manifest),patch.object(self.worker,"validate_compiler_recipe",return_value=False),patch.object(self.worker,"cached_engine",return_value=None),patch.object(self.worker,"seed_cargo_cache",return_value=False),patch.object(self.worker,"dependencies",side_effect=dependency),patch.object(self.worker,"phase",side_effect=phase):
+        with patch.object(self.worker,"smoke_artifact",return_value="{}"),patch.object(self.worker,"linked_smoke",return_value={"mode":"linked"}),patch.object(self.worker,"dependency_snapshot",return_value=""),patch.object(self.worker,"retain_test_manifest",return_value=manifest)as retain,patch.object(self.worker,"test_manifest",return_value=manifest),patch.object(self.worker,"validate_compiler_recipe",return_value=False),patch.object(self.worker,"cached_engine",return_value=None),patch.object(self.worker,"seed_cargo_cache",return_value=False),patch.object(self.worker,"dependencies",side_effect=dependency),patch.object(self.worker,"phase",side_effect=phase):
             with self.assertRaisesRegex((ValueError,RuntimeError),"optimized pipeline reached"if success else"host regression"):
                 self.worker.engine(job,self.blob,lambda root,blob:fixtures.host.release.extract(root,blob,fixtures.host.context_digest),fixtures.host.context_digest)
         retain.assert_called_once()
         required=[p for p in phases if p[1]=="engine:rust1.90:test"]
-        self.assertEqual(bool(required),success);self.assertEqual(any(p[0]=="compile_linked"for p in phases),success)
+        self.assertEqual(bool(required),success);self.assertEqual(any(p[0]=="compile_release"for p in phases),success)
         self.assertFalse((self.root/"state/execution"/job["job_id"]/"verified.json").exists())
 
     def test_missing_required_source_is_reported_as_failed_input_guard(self):

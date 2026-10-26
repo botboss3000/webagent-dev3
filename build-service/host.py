@@ -2491,11 +2491,11 @@ def write_performance(path):
 
 # Stage progress: execution steps and job phases collapse into the stages a person reads.
 STAGE_OF = {"dependency": "dependencies", "compile_test": "compile tests", "test": "run tests",
-    "compile_linked": "linked release build", "linked_smoke": "linked release build",
+    "compile_linked": "linked release build",
     "compile_release": "live release build", "live_smoke": "live release build",
     "package": "package images", "building_loop": "build loop image", "preparing_plugins": "prepare plugins",
     "preparing_ui": "prepare UI", "frontend_tests": "UI tests"}
-STAGE_SKIP = {"engine_metadata", "start", "finished", "building_api", "admitted", None}
+STAGE_SKIP = {"engine_metadata", "linked_smoke", "start", "finished", "building_api", "admitted", None}
 STAGE_ORDER = ["dependencies", "compile tests", "run tests", "linked release build", "live release build",
     "package images", "build loop image", "prepare plugins", "prepare UI", "UI tests", "deploy and health checks"]
 

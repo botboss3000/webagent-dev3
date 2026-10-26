@@ -331,7 +331,7 @@ pub(crate) async fn init(root: &Path, role: &str) {
         return;
     }
     let root = root.to_path_buf();
-    tokio::spawn(async move {
+    tokio::spawn(futures_util::FutureExt::boxed(async move {
         use std::os::unix::fs::PermissionsExt;
         let state = root.join("optimization");
         if tokio::fs::create_dir_all(&state).await.is_err() {
@@ -398,7 +398,7 @@ pub(crate) async fn init(root: &Path, role: &str) {
                 }
             }
         }
-    });
+    }));
 }
 
 #[cfg(test)]
