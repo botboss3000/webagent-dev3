@@ -169,7 +169,8 @@ pub fn sitemap(origin: &str) -> String {
     )
 }
 
-/// `/` and `/app` are one page: both get the same tags with a canonical URL of `/`.
+/// Serves the landing page (`/`) or app shell (`/app`) with the shared tags; both
+/// canonicalize to `/` so search engines index the landing page.
 async fn app_shell(index: PathBuf) -> Response {
     match tokio::fs::read_to_string(index).await {
         Ok(html) => (
@@ -186,11 +187,10 @@ async fn app_shell(index: PathBuf) -> Response {
 }
 
 pub fn routes<S: Clone + Send + Sync + 'static>(ui: &Path) -> Router<S> {
-    let index = ui.join("index.html");
-    let shell = get(move || app_shell(index.clone()));
+    let (index, landing) = (ui.join("index.html"), ui.join("landing/landing.html"));
     Router::new()
-        .route("/app", shell.clone())
-        .route("/", shell)
+        .route("/app", get(move || app_shell(index.clone())))
+        .route("/", get(move || app_shell(landing.clone())))
         .route(
             "/robots.txt",
             get(|| async {
@@ -365,6 +365,12 @@ mod tests {
             "<head><title>WebAgent</title></head>",
         )
         .unwrap();
+        fs::create_dir(ui.path().join("landing")).unwrap();
+        fs::write(
+            ui.path().join("landing/landing.html"),
+            "<head><title>WebAgent</title></head><body>landing</body>",
+        )
+        .unwrap();
         for uri in ["/", "/app", "/robots.txt", "/sitemap.xml"] {
             let response = routes::<()>(ui.path())
                 .oneshot(
@@ -384,7 +390,11 @@ mod tests {
                 assert!(
                     body.starts_with("<head><title>WebAgent</title>\n<meta name=\"description\"")
                 );
-                assert!(body.ends_with("</script></head>"));
+            }
+            match uri {
+                "/" => assert!(body.ends_with("</script></head><body>landing</body>")),
+                "/app" => assert!(body.ends_with("</script></head>")),
+                _ => {}
             }
         }
     }
