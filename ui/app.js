@@ -152,6 +152,8 @@ async function loadAgentRoster(){
   renderAgentCards();
 }
 let mainPages=[];
+// Lucide names for the mobile sidebar; pages without an entry use a plain square.
+const mobileNavIcons={app:'layout-grid',agents:'bot',account:'user-cog',builds:'hammer','session-metrics':'chart-line'};
 let activeMainPage='';
 const protectedPageStarts=new Map();
 const protectedAsset=path=>typeof path==='string'&&path.startsWith('/api/v3/modules/');
@@ -204,8 +206,11 @@ async function loadMainPages(){
     $('main-tab-select').append(option);
     const mobile=document.createElement('button');
     mobile.id='mobile-nav-'+page.id;mobile.type='button';mobile.className='mobile-nav-item';
-    mobile.textContent=page.label;mobile.onclick=()=>showMainPage(page.id);
+    const icon=document.createElement('i');icon.className='lucide-icon';icon.dataset.lucide=mobileNavIcons[page.id]||'square';
+    const label=document.createElement('span');label.textContent=page.label;
+    mobile.append(icon,label);mobile.onclick=()=>showMainPage(page.id);
     $('mobile-nav-items').append(mobile);
+    window.lucide?.createIcons();
     const mount=document.createElement('div');
     mount.id='tab-'+page.id;mount.className='tab-content';mount.hidden=page.id!==activeMainPage;
     $('main-panel').append(mount);
@@ -529,9 +534,11 @@ const accountMenu=$('user-dropdown-menu');
 document.body.append(accountMenu);
 function positionAccountMenu(){
   if(accountMenu.hidden)return;
-  const anchor=(document.body.classList.contains('mobile-mode')?$('main-header'):$('top-user-id')).getBoundingClientRect();
+  const anchor=$('top-user-id').getBoundingClientRect(),height=accountMenu.offsetHeight;
+  // In the mobile sidebar footer the trigger sits low, so open upward when the menu does not fit below.
+  const below=Math.round(anchor.bottom+6),top=below+height>innerHeight-8?Math.round(anchor.top-height-6):below;
   accountMenu.style.marginTop='0';
-  accountMenu.style.top=Math.max(8,Math.min(Math.round(anchor.bottom+6),innerHeight-accountMenu.offsetHeight-8))+'px';
+  accountMenu.style.top=Math.max(8,Math.min(top,innerHeight-height-8))+'px';
   accountMenu.style.left=Math.max(8,Math.min(Math.round(anchor.left),innerWidth-accountMenu.offsetWidth-8))+'px';
 }
 function closeAccountMenu(){accountMenu.hidden=true;$('top-user-id').setAttribute('aria-expanded','false');}
@@ -666,6 +673,11 @@ function syncLayout(){
   $('mobile-nav-toggle').hidden=!mobileLayout.matches;
   $('mobile-back-main-btn').hidden=!mobileLayout.matches;
   if(!mobileLayout.matches)closeMobileNav();
+  // The desktop tab strip is hidden on mobile, so the account control lives in the sidebar footer there.
+  const account=document.querySelector('.user-dropdown');
+  if(mobileLayout.matches)$('mobile-nav-footer').append(account);
+  else if(account.parentElement!==$('main-tabs'))$('main-tabs').insertBefore(account,$('main-tabs').querySelector('.main-tab'));
+  positionAccountMenu();
   updateMobileNavigation();
   if(widget.floating){if(mobileLayout.matches)$('app').dataset.mobileView='main';else delete $('app').dataset.mobileView;updateMainPageState();$('chat-panel').hidden=false;$('chat-resize-handle').hidden=true;updateChatControl(widget.isOpen);return;}
   if(mobileLayout.matches){$('chat-panel').hidden=false;$('chat-resize-handle').hidden=false;showMobileView(mobileView);}
@@ -679,8 +691,8 @@ function updateMobileNavigation(){
 }
 $('mobile-nav-toggle').onclick=event=>{event.stopPropagation();closeAccountMenu();mobileNav.hidden=!mobileNav.hidden;$('mobile-nav-toggle').setAttribute('aria-expanded',String(!mobileNav.hidden));};
 $('mobile-back-main-btn').onclick=()=>showMainPage(activeMainPage);
-$('mobile-nav-signout').onclick=guard(async()=>{await api('/auth/logout','POST',{});out();});
-document.addEventListener('click',event=>{if(!mobileNav.hidden&&!event.target.closest('#mobile-nav-menu, #mobile-nav-toggle'))closeMobileNav();});
+// The account menu is a body portal opened from the sidebar footer; using it keeps the sidebar open.
+document.addEventListener('click',event=>{if(!mobileNav.hidden&&!event.target.closest('#mobile-nav-menu, #mobile-nav-toggle, #user-dropdown-menu'))closeMobileNav();});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')closeMobileNav();});
 mobileLayout.addEventListener('change',syncLayout);syncLayout();
 window.addEventListener('popstate',()=>location.reload());
