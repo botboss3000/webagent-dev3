@@ -1715,6 +1715,41 @@ class BuildTests(unittest.TestCase):
                          host.context_digest(self.broker._current_release_blob())[0])
 
 
+    def test_operator_continues_build_release_stopped_at_ui_check(self):
+        self.runner.hot_assets = True
+        local = {"user_id": "codex-local", "session_id": host.LOCAL_WORKSPACE, "local_caller": True,
+                 "lease_until": time.time() + 60, "access_fingerprint": "a" * 64}
+        def work(args):
+            return self.call("v3_build_work", args, trusted=local, workspace=host.LOCAL_WORKSPACE)
+        work({"action": "begin", "task_id": "seo-ui-check", "summary": "SEO shell", "mode": "isolated"})
+        status = work({"action": "status", "task_id": "seo-ui-check"})["own"][0]
+        source = Path(status["workspace_path"], "src", "seo.rs")
+        source.parent.mkdir(exist_ok=True)
+        source.write_text("seo")
+        digest = work({"action": "status", "task_id": "seo-ui-check"})["own"][0]["workspace_inputs_sha256"]
+        self.runner.fail_verify_ui = True
+        receipt = work({"action": "finish", "task_id": "seo-ui-check", "expected_inputs_sha256": digest})
+        for _ in range(500):
+            job = self.broker.jobs[receipt["job_id"]]
+            if job["status"] not in ("queued", "running") and not self.broker.active:
+                break
+            time.sleep(.01)
+        self.assertEqual((job["status"], job["phase"], job["operation"]), ("uncertain", "checking_ui", "build_deploy"))
+        mutations = len([c for c in self.runner.calls if c[0] in ("stop", "rename", "create", "start")])
+        other = dict(local, user_id="someone-else")
+        with self.assertRaises(PermissionError):
+            self.call("v3_build_adopt_release", {"job_id": receipt["job_id"]}, trusted=other, workspace=host.LOCAL_WORKSPACE)
+        with self.assertRaisesRegex(RuntimeError, "UI response mismatch"):
+            self.call("v3_build_adopt_release", {"job_id": receipt["job_id"]}, trusted=local, workspace=host.LOCAL_WORKSPACE)
+        self.assertEqual("uncertain", job["status"])
+        self.runner.fail_verify_ui = False
+        accepted = self.call("v3_build_adopt_release", {"job_id": receipt["job_id"]}, trusted=local, workspace=host.LOCAL_WORKSPACE)
+        self.assertEqual((accepted["status"], accepted["effects_replayed"]), ("completed", False))
+        self.assertEqual(job["phase"], "finished")
+        self.assertEqual(mutations, len([c for c in self.runner.calls if c[0] in ("stop", "rename", "create", "start")]))
+        self.assertFalse(self.broker._has_unresolved_release())
+        self.assertEqual(job["inputs_sha256"], host.context_digest(self.broker._current_release_blob())[0])
+
     def test_operator_adopts_healthy_hot_ui_checkout_conflict(self):
         self.runner.hot_assets = True
         task = self.call("v3_build_work", {"action": "begin", "task_id": "adopt-hot-ui",

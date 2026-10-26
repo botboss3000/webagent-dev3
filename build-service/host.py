@@ -66,7 +66,8 @@ _maintenance_spec=importlib.util.spec_from_file_location("code_index_maintenance
 maintenance_engine=importlib.util.module_from_spec(_maintenance_spec);_maintenance_spec.loader.exec_module(maintenance_engine)
 
 STATE = Path(CONFIG["state_root"])
-UI_TEST_EVIDENCE_KEEP = 4096  # passed frontend fixture records reused across releases
+UI_TEST_EVIDENCE_KEEP = 4096
+SEO_BLOCK_MAX = 16 * 1024  # server-rendered head block allowed in the /app shell  # passed frontend fixture records reused across releases
 SOCKET = Path(CONFIG["runtime_root"])/"build.sock"
 BRIDGE_SOCKET = Path(CONFIG["runtime_root"])/"python.sock"
 BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
@@ -2099,8 +2100,33 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             finally:connection.close()
             time.sleep(.25)
         raise RuntimeError("API and loop did not adopt the published catalog")
+    @staticmethod
+    def shell_matches(expected, body):
+        """The app shell is the frozen index.html, optionally with one server-rendered SEO block.
+
+        The block sits directly after the first </title>, as "</title>\\n" + block, and
+        holds only <meta>/<link> tags and one closing JSON-LD script. Every other byte
+        must equal the frozen file."""
+        if body == expected:
+            return True
+        marker = expected.find(b"</title>")
+        if marker < 0:
+            return False
+        head, tail = expected[:marker + 8] + b"\n", expected[marker + 8:]
+        if not (body.startswith(head) and body.endswith(tail)) or len(body) - len(head) - len(tail) <= 0:
+            return False
+        block = body[len(head):len(body) - len(tail)]
+        if len(block) > SEO_BLOCK_MAX or not block.startswith(b'<meta name="description"') or not block.endswith(b"</script>"):
+            return False
+        script = block.rfind(b'<script type="application/ld+json">')
+        if script < 0 or b"<" in block[script + 35:-9]:
+            return False
+        tags = re.findall(rb"<\s*(/?)([A-Za-z!][A-Za-z0-9-]*)", block[:script])
+        return all(slash == b"" and name.lower() in (b"meta", b"link") for slash, name in tags) and block.count(b"<script") == 1
+
     def verify_ui(self, changed=()):
-        # Static routes are public and must serve the exact selected bytes.
+        # Static routes are public and must serve the exact selected bytes; the
+        # app shell may carry one bounded server-rendered SEO head block.
         paths = [("v3/ui/index.html", "/app")]
         paths.extend((name, "/v3-ui/" + name[len(UI_SOURCE_PREFIX):])
                      for name in changed if name.startswith(UI_SOURCE_PREFIX) and
@@ -2115,7 +2141,9 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 body = response.read(16 * 1024 * 1024 + 1)
                 if expected is None and response.status == 404:
                     continue
-                if response.status != 200 or body != expected:
+                matches = (Runner.shell_matches(expected, body) if route == "/app" and expected is not None
+                           else body == expected)
+                if response.status != 200 or not matches:
                     raise RuntimeError("served UI does not match frozen asset release: " + name)
             finally:
                 connection.close()
@@ -3680,6 +3708,49 @@ class Broker:
         self._start_next()
         return {"job_id":job["job_id"],"status":"completed","effects_replayed":False}
 
+    def _reconcile_build_ui_check(self, job, trusted, workspace):
+        # Operator continuation after an uncertain UI check of a build release.
+        # Never rebuild, recreate or restart: verify the running release, then
+        # perform only the remaining checked source promotion.
+        if (job.get("status")!="uncertain" or not job.get("isolated") or not job.get("effects_started")
+                or job.get("batch_members") or "asset_previous" not in job):
+            raise ValueError("Only an interrupted isolated build UI check can continue")
+        deadline,fingerprint=self._incoming_lease(trusted)
+        if (not trusted.get("local_caller") or not self._owned(job,trusted,workspace)
+                or job.get("revoked") or job.get("access_fingerprint")!=fingerprint):
+            raise PermissionError("Fresh matching operator authority required for reconciliation")
+        if self.runner.current_asset_id()!=job["job_id"]:
+            raise ValueError("Active publication changed; reconciliation refused")
+        candidate=(self.state/job["job_id"]/"candidate.tar").read_bytes()
+        if context_digest(candidate)[0]!=job["inputs_sha256"]:
+            raise ValueError("Candidate changed; reconciliation refused")
+        archive=self.state/job["job_id"]/"rollback-images.tar"
+        if set(job.get("rollback",{}))!={"api","loop"}or not archive.is_file()or not archive.stat().st_size:
+            raise ValueError("Rollback material missing; reconciliation refused")
+        for role,name in zip(("api","loop"),TARGETS):
+            if not self.runner.healthy(name,job["images"][role]):
+                raise ValueError("Released "+role+" changed or unhealthy")
+            if self.runner.inspect(job["rollback"][role])["State"]["Status"]!="exited":
+                raise ValueError("Rollback container not retained stopped")
+        self.runner.verify_ui(job.get("changed_paths",()))
+        if hasattr(self.runner,"engine_execution_modes"):
+            job["engine_execution_modes"]=self.runner.engine_execution_modes(job["job_id"])
+        job["lease_until"]=min(deadline,time.time()+180)
+        job["operator_reconciliation_authorized_at"]=time.time()
+        self._save(job)
+        self._phase(job,"promoting_checkout")
+        self.runner.promote_checkout(self._current_release_blob(),candidate,job.get("changed_paths",()))
+        after=context_digest(release.snapshot(Path(job["release_root"]),CONTEXT,context_digest))[0]
+        if after!=job["inputs_sha256"]:
+            raise ValueError("Frozen release root changed; reconciliation incomplete")
+        job.update(status="completed",phase="finished",finished_at=time.time(),operator_reconciled_at=time.time(),
+            reason="Running build release verified and source promoted; no effects replayed",
+            synchronization=self._sync_report(candidate,candidate,()))
+        job.setdefault("phase_history",[]).append({"phase":"finished","at":job["finished_at"]})
+        self._save(job)
+        self._start_next()
+        return {"job_id":job["job_id"],"status":"completed","effects_replayed":False}
+
     def _runtime_release_matches(self, job):
         # An operator may accept a healthy deployed image while checkout
         # promotion remains conflicted; never replay its external effects.
@@ -5002,6 +5073,8 @@ class Broker:
                     raise ValueError("newer uncertain release requires review")
                 if job.get("operation")=="plugin_deploy" and job.get("phase")=="checking_ui":
                     return self._reconcile_plugin_publication(job,trusted,workspace)
+                if job.get("operation")=="build_deploy" and job.get("phase")=="checking_ui":
+                    return self._reconcile_build_ui_check(job,trusted,workspace)
                 if not self._runtime_release_matches(job):
                     raise ValueError("uncertain release does not match healthy runtime")
                 job["operator_adopted_at"] = time.time()

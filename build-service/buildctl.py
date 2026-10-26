@@ -144,6 +144,8 @@ def main():
     abandon.add_argument("task_id")
     progress = commands.add_parser("progress", help="stage k of N with durations against class history; no logs")
     progress.add_argument("job_id")
+    adopt = commands.add_parser("adopt", help="operator continuation for an uncertain release; never replays effects")
+    adopt.add_argument("job_id")
     job = commands.add_parser("job")
     job.add_argument("job_id")
     job.add_argument("--log-cursor", type=int, help="Read only retained events after this job cursor")
@@ -216,6 +218,8 @@ def main():
         result = call("v3_build_leftovers", {})
     elif args.command == "review-leftover":
         result = call("v3_build_leftover_review", {"notice_id": args.notice_id})
+    elif args.command == "adopt":
+        result = call("v3_build_adopt_release", {"job_id": args.job_id})
     elif args.command == "progress":
         result = call("v3_build_progress", {"job_id": args.job_id})
     elif args.command == "job":

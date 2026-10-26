@@ -1347,6 +1347,30 @@ class PublicationWaitUnitTests(unittest.TestCase):
   self.pub._admit=lambda *args:self.pub.acquire(self.job)
   self.assertIsNone(self.pub.admit(self.job,b"source"));self.assertEqual(self.job["status"],"needs_decision");self.assertFalse(self.job.get("effects_started"))
 
+class AppShellVerificationTests(unittest.TestCase):
+ frozen=b'<html><head><title>WebAgent</title>\n<link rel="manifest" href="/m.json">\n</head><body></body></html>'
+ block=(b'<meta name="description" content="WebAgent">\n<meta property="og:title" content="WebAgent">\n'
+        b'<link rel="canonical" href="https://dev.webagent.live/app">\n<script type="application/ld+json">{"@type":"WebApplication"}</script>')
+ def served(self,block=None):
+  marker=self.frozen.index(b"</title>")+8
+  return self.frozen[:marker]+b"\n"+(self.block if block is None else block)+self.frozen[marker:]
+ def test_exact_shell_or_one_bounded_seo_block_after_title(self):
+  match=fixtures.host.Runner.shell_matches
+  self.assertTrue(match(self.frozen,self.frozen));self.assertTrue(match(self.frozen,self.served()))
+ def test_anything_else_fails_like_a_byte_mismatch(self):
+  match=fixtures.host.Runner.shell_matches;block=self.block
+  for body in [self.served(block.replace(b"</script>",b"</script><script>alert(1)</script>")),
+               self.served(block.replace(b'<script type="application/ld+json">',b"<script>")),
+               self.served(block.replace(b'{"@type"',b'<img src=x onerror=1>{"@type"')),
+               self.served(b'<meta name="description" content="x"><iframe src="/"></iframe><script type="application/ld+json">{}</script>'),
+               self.served(b'<meta name="keywords" content="x"><script type="application/ld+json">{}</script>'),
+               self.served(block+b"\n"+block),
+               self.served(b'<meta name="description" content="'+b"x"*(16*1024)+b'"><script type="application/ld+json">{}</script>'),
+               self.served()[:-4]+b"XXXX",
+               self.frozen.replace(b"<head>",b"<head>"+self.block)]:
+   self.assertFalse(match(self.frozen,body))
+  self.assertFalse(match(b"<html>no title</html>",b"<html>no title</html>"+block))
+
 class SameJobPhaseOverlapTests(unittest.TestCase):
  def test_phases_of_one_job_share_a_component_while_other_jobs_wait(self):
   from test_scheduler_resources import Fake,G

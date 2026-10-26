@@ -259,6 +259,20 @@ leaves an empty target and the job compiles cold (`dependency_snapshot` in the
 receipt records hit, prepared, skipped or unavailable). The three most recent
 keys are kept; the cache is rebuildable and safe to delete while no job runs.
 
+## Served app shell verification
+
+After a UI switch the broker requests `/app` and each changed `/v3-ui/` asset and
+compares them with the frozen asset release. Assets must match byte for byte. The
+`/app` shell must equal the frozen `index.html`, except that one server-rendered
+SEO block may follow the first `</title>` as `</title>\n` + block: at most 16 KiB,
+starting with `<meta name="description"`, holding only `<meta>`/`<link>` tags and
+ending with one `<script type="application/ld+json">` whose content has no `<`.
+Anything else fails as before. `buildctl adopt JOB_ID` continues an isolated
+build release that stopped uncertain at this check: with fresh local operator
+authority it re-verifies the running release (active assets, healthy images,
+stopped rollback containers, frozen candidate), then performs only the checked
+source promotion. Nothing is rebuilt, recreated or restarted.
+
 ## Cross-release UI fixture reuse
 
 A frontend fixture runs with no network, credentials or API, mounting only the
