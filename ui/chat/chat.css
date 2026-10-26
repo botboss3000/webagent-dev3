@@ -11,6 +11,8 @@
 /* Keep progress and repository notices visible even without run-control cards. */
 #chat-panel #chat-input-area #chat-above-pill:not(.visible):not(:has(.chat-notification:not([hidden]))){display:none}
 #notification-panel{padding:0 4px}
+/* Credential and sign-in panels: the page reset removes dialog centering and theme text colour. */
+dialog[data-core-credential]{margin:auto;max-width:min(420px,calc(100vw - 32px));color:var(--fg-1)}dialog[data-core-credential]::backdrop{background:rgba(0,0,0,.5)}
 /* Mode and tool approvals use one compact composer notification surface. */
 .chat-notification{box-sizing:border-box;width:fit-content;max-width:min(100%,var(--chat-pill-current-width,var(--chat-pill-width,500px)));margin:6px auto;padding:8px 12px;border:var(--border-width) solid color-mix(in oklab,var(--fg-1) 22%,transparent);border-radius:22px;background:var(--chat-pill-bg,color-mix(in oklab,var(--bg-elev) 82%,transparent));color:var(--fg-2);backdrop-filter:blur(12px) saturate(140%);-webkit-backdrop-filter:blur(12px) saturate(140%);font-size:13px;line-height:1.45;text-align:center;overflow-wrap:anywhere}
 body.light-mode .chat-notification{background:var(--chat-pill-bg,color-mix(in oklab,var(--bg-elev) 85%,transparent))}

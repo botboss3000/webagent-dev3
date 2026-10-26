@@ -55,6 +55,8 @@ document.getElementById('embed-agent-name').textContent=descriptor.agent.name||'
 setChatSurfaceActions({title:descriptor.agent.name||'WebAgent',minimize:()=>emit('minimize'),close:()=>emit('close')});
 chat=await mountChatPanel({root,resolveAsset,enableMainNotes:false,request,guard,note,keyId,forgetKey:key=>ids.delete(key),refresh,getState:()=>state,getAgentId:()=>agentId,getIdentity:()=>identity,onLogin:()=>login(),onEvent:emit,createStream:url=>createFetchStream(url,{headers:()=>({Authorization:'Bearer '+credential})})});
 await initChatConfig({config:descriptor.chat_ui,root});
+// Apply the normal send rules before sign-in; the shell's Send starts disabled and only status refresh re-enables it, so /login could not be clicked.
+chat.runs([]);
 const access=await publicRequest('/auth/access-mode').catch(()=>({guest_access:false}));document.getElementById('embed-guest').hidden=!(access.guest_access&&descriptor.config?.guest_access);
 let theme;try{theme=localStorage.getItem('v3-theme')}catch{}document.body.classList.toggle('light-mode',theme==='light');
 document.getElementById('embed-guest').onclick=guard(guest);
