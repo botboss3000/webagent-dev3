@@ -90,6 +90,35 @@ fn automatic_code_index_journal(
     };
     (calls, results, status)
 }
+/// History reaches a new run only after earlier runs ended. A call they left
+/// unpaired, for example after abandoned recovery, gets a content-free
+/// unknown-outcome result so providers accept the context and nothing is replayed.
+pub fn pair_unresolved_calls(input: &mut Vec<Value>) {
+    let answered: std::collections::HashSet<String> = input.iter()
+        .filter(|item| item["type"] == "function_call_output")
+        .filter_map(|item| item["call_id"].as_str().map(str::to_owned))
+        .collect();
+    let mut index = 0;
+    while index < input.len() {
+        if input[index]["type"] != "function_call" { index += 1; continue; }
+        // Keep one model turn's calls and results together; add missing results after them.
+        let mut end = index;
+        while end < input.len() && matches!(input[end]["type"].as_str(),
+            Some("function_call" | "function_call_output" | "reasoning")) { end += 1; }
+        let missing: Vec<Value> = input[index..end].iter()
+            .filter(|item| item["type"] == "function_call")
+            .filter_map(|item| item["call_id"].as_str())
+            .filter(|id| !answered.contains(*id))
+            .map(|id| json!({"type":"function_call_output","call_id":id,"output":json!({
+                "status":"interrupted","execution_state":"outcome_unknown","no_retry":true,
+                "output":"This call ended without a recorded result. Its outcome is unknown; do not replay it. Check existing effects before further writes."}).to_string()}))
+            .collect();
+        let added = missing.len();
+        input.splice(end..end, missing);
+        index = end + added;
+    }
+}
+
 #[cfg(test)]
 mod automatic_code_index_journal_tests {
     use super::*;
@@ -119,6 +148,21 @@ mod automatic_code_index_journal_tests {
         assert_eq!(output["source_kind"],"untrusted_source_index");
         assert_eq!(output["output"]["ranked_candidates"],evidence["ranked_candidates"]);
         assert!(output["output"].get("query").is_none());
+    }
+    #[test]
+    fn unresolved_history_calls_get_one_unknown_outcome_result_inside_their_turn() {
+        let call=|id:&str|json!({"type":"function_call","call_id":id,"name":"file_write","arguments":"{}"});
+        let output=|id:&str|json!({"type":"function_call_output","call_id":id,"output":"ok"});
+        let mut input=vec![json!({"role":"user","content":"a"}),call("done"),output("done"),
+            json!({"role":"user","content":"b"}),call("lost-1"),call("lost-2"),output("lost-2"),
+            json!({"role":"user","content":"c"})];
+        pair_unresolved_calls(&mut input);
+        let types:Vec<_>=input.iter().map(|i|i["type"].as_str().or(i["role"].as_str()).unwrap().to_owned()).collect();
+        assert_eq!(types,["user","function_call","function_call_output","user","function_call","function_call",
+            "function_call_output","function_call_output","user"]);
+        assert_eq!(input[7]["call_id"],"lost-1");
+        assert!(input[7]["output"].as_str().unwrap().contains("outcome_unknown"));
+        let once=input.clone();pair_unresolved_calls(&mut input);assert_eq!(input,once);
     }
 }
 
@@ -766,6 +810,14 @@ async fn execute_tool_step(
                         run["error"]=Value::Null;
                         app.save(&mut run).await?;
                         return Ok(std::ops::ControlFlow::Break(()));
+                    }
+                    // A definite refusal had no effect; the model receives an error and continues.
+                    if let Some(failure)=tools::failure::refused_before_dispatch(&run["pending"]["failure"]) {
+                        let result=tools::failure::refused_result(&failure);
+                        Self::append_tool(&mut run,&result)?;
+                        app.store.save_run_observed(&mut run,"tool_result",
+                            &json!({"run_id":id,"name":name,"result":result})).await?;
+                        return Ok(std::ops::ControlFlow::Continue(()));
                     }
                     Self::commit_tool_transport_failure(&app, &mut run, &name).await?;
                     return Ok(std::ops::ControlFlow::Break(()));

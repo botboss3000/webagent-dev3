@@ -129,6 +129,26 @@ pub fn request(error: anyhow::Error, args: &Value) -> anyhow::Error {
     failure.into()
 }
 // Preserve historical labels only for records without typed evidence. This is presentation metadata.
+/// A refusal recorded before any request byte left the process proves the call had
+/// no effect. Stop, cancellation and transport failures keep their interruption handling.
+pub fn refused_before_dispatch(value: &Value) -> Option<Failure> {
+    let failure = serde_json::from_value::<Failure>(value.clone()).ok()?;
+    (failure.version == 1
+        && matches!(failure.delivery, Delivery::NotSent)
+        && matches!(
+            failure.code,
+            Code::AuthorizationRejected
+                | Code::LegacyAuthorizationRejected
+                | Code::DeploymentAuthorizationRejected
+                | Code::InvalidRequest
+        ))
+    .then_some(failure)
+}
+/// Content-free tool result for a refusal; the fixed code is the only failure detail.
+pub fn refused_result(failure: &Failure) -> Value {
+    json!({"status":"error","error_kind":"refused_before_dispatch","code":failure.code,
+        "output":"Refused before dispatch: this tool is not authorized or the request is invalid for this agent, mode or account. No effect occurred."})
+}
 pub fn interruption_reason(value: &Value) -> &'static str {
     if value.is_null() {
         return "transport_error";
@@ -274,6 +294,25 @@ pub fn diagnostic_only_update(previous: &Value, next: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_typed_pre_dispatch_refusals_count_as_no_effect() {
+        let refusal = |stage, code, delivery| serde_json::to_value(Failure::new(stage, code, delivery)).unwrap();
+        let legacy = refusal(Stage::Authorization, Code::LegacyAuthorizationRejected, Delivery::NotSent);
+        let failure = refused_before_dispatch(&legacy).unwrap();
+        let result = refused_result(&failure);
+        assert_eq!(result["code"], "legacy_authorization_rejected");
+        assert_eq!(result["status"], "error");
+        for value in [
+            refusal(Stage::Authorization, Code::LegacyAuthorizationRejected, Delivery::PossiblySent),
+            refusal(Stage::Preparation, Code::Cancelled, Delivery::NotSent),
+            refusal(Stage::Authorization, Code::AuthorityStopped, Delivery::NotSent),
+            refusal(Stage::Connect, Code::ConnectionRefused, Delivery::NotSent),
+            json!({"version":2,"stage":"authorization","code":"authorization_rejected","delivery":"not_sent"}),
+            Value::Null,
+        ] {
+            assert!(refused_before_dispatch(&value).is_none(), "{value}");
+        }
+    }
     #[test]
     fn late_single_tool_terminal_diagnostic_exception_rejects_every_other_mutation() {
         let previous = json!({"id":"run","session_id":"session","generation":"generation",

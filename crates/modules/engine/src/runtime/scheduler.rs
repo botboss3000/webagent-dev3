@@ -215,6 +215,7 @@ pub fn scheduler_with_progress(app: Self, progress: watchdog::Progress)->impl st
                             Ok(mut input) => {
                                 // Keep saved notes beside the latest user turn as source data.
                                 if requester==user_app.store.current_user_id(){memory::insert(&mut input,run["memory_context"].as_str());}
+                                super::run::pair_unresolved_calls(&mut input);
                                 run["input"] = json!(input);
                                 run["context_hydration_pending"] = json!(false);
                             },

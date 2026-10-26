@@ -137,8 +137,9 @@ impl Store {
             .await?;
         self.naming_save(tx, sid, session, true).await
     }
+    // Range bounds use the docs primary-key index; case-insensitive LIKE scans every document.
     pub(crate) async fn naming_candidates(&self, recovery: bool) -> Result<Vec<String>> {
-        let rows = sqlx::query("SELECT s.value FROM docs AS job JOIN docs AS s ON s.key='session:' || substr(job.key,16) WHERE job.key LIKE 'session_naming:%' ORDER BY job.key")
+        let rows = sqlx::query("SELECT s.value FROM docs AS job JOIN docs AS s ON s.key='session:' || substr(job.key,16) WHERE job.key >= 'session_naming:' AND job.key < 'session_naming;' ORDER BY job.key")
             .fetch_all(&self.pool)
             .await?;
         let mut result = Vec::new();

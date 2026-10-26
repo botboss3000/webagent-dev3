@@ -251,7 +251,9 @@ pub async fn execute_parallel_batch(
             if current["generation"]!=generation
                 || current["batch"][idx]["pending"]["id"]!=pending_id {continue;}
             if let Err(error)=&result {tools::failure::record(&mut current,error,Some(idx));}
-            let interrupted=match &result {
+            // A definite refusal had no effect; it completes as an error, never as uncertain.
+            let refused=if result.is_err() {tools::failure::refused_before_dispatch(&current["batch"][idx]["pending"]["failure"])} else {None};
+            let interrupted=refused.is_none() && match &result {
                 Ok(value)=>value["uncertain"]==true || matches!(value["status"].as_str(),Some("cancelled"|"timeout"|"uncertain")),
                 Err(_)=>true,
             };
@@ -263,7 +265,8 @@ pub async fn execute_parallel_batch(
             } else {
                 current["batch"][idx]["result"]=match result {
                     Ok(value)=>{current["batch"][idx]["execution_metadata"]=serde_json::to_value(&value.metadata)?;value.content},
-                    Err(_)=>json!({"status":"error","output":"Read tool interrupted"}),
+                    Err(_)=>refused.as_ref().map(tools::failure::refused_result)
+                        .unwrap_or_else(||json!({"status":"error","output":"Read tool interrupted"})),
                 };
                 current["batch"][idx]["state"]=json!("done");
                 if current["status"]=="recovery" && uncertain_count(&current)==0 {

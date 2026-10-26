@@ -302,7 +302,9 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
         // An interrupt selected just as its original run completed becomes the next
         // input; only that entry is consumed, ordinary queue entries remain pending.
         if choice == "interrupt" {
-            next["input"] = json!(app.store.context(&s).await?);
+            let mut input = app.store.context(&s).await?;
+            webagent_engine::runtime::run::pair_unresolved_calls(&mut input);
+            next["input"] = json!(input);
             next["context_hydration_pending"] = json!(false);
         }
         app.store
