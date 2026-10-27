@@ -544,9 +544,9 @@
       "margin_bottom": "24px"
     },
     "live_reload": {
+      "_instructions": "Enabled native open chats reread this file automatically. interval_ms is bounded to 1000–60000ms; provided guest/embed settings keep their existing owner. Disable requires reload to enable again.",
       "enabled": true,
-      "interval_ms": 2000,
-      "_instructions": "Enabled native open chats reread this file automatically. interval_ms is bounded to 1000–60000ms; provided guest/embed settings keep their existing owner. Disable requires reload to enable again."
+      "interval_ms": 2000
     },
     "mark_read_on_visit": false,
     "message_bubbles": {
@@ -1296,10 +1296,14 @@
       }
     },
     "window": {
+      "_instructions": "width, height, min_width, min_height: Window size in CSS pixels, clamped to the viewport. resizable: Allow edge resizing. radius: Outer corner radius in pixels (0-64). background: CSS colour for the window and chat surface; panel tints derive from it; empty keeps the theme colour. theme: light or dark to fix the text theme for that colour; empty follows the visitor preference.",
+      "background": "",
       "height": 620,
       "min_height": 320,
       "min_width": 300,
+      "radius": 16,
       "resizable": true,
+      "theme": "",
       "width": 440
     }
   },
