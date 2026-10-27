@@ -99,6 +99,13 @@ pub fn validate_identity(name: Option<&str>, description: Option<&str>) -> Resul
     Ok(())
 }
 
+/// Recycling-bin statuses: `deleted` (was active) and `deleted_disabled` (was disabled).
+pub fn binned(agent: &Value) -> bool {
+    agent["status"]
+        .as_str()
+        .is_some_and(|status| status.starts_with("deleted"))
+}
+
 pub fn validate_status(revision: u64, status: &str) -> Result<()> {
     if !matches!(status, "active" | "disabled") || revision >= i64::MAX as u64 {
         bail!("Invalid agent status");

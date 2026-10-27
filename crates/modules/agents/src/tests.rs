@@ -562,7 +562,7 @@ async fn recycling_bin_hides_quiesces_restores_and_never_lifts_a_disable() {
         .set_deleted(&id, revision + 1, true)
         .await
         .unwrap_err();
-    assert_eq!(error.to_string(), "Only active agents can be deleted");
+    assert_eq!(error.to_string(), "Agent is already in the recycling bin");
     let restored = f
         .service()
         .set_deleted(&id, revision + 1, false)
@@ -579,15 +579,33 @@ async fn recycling_bin_hides_quiesces_restores_and_never_lifts_a_disable() {
         .set_status(&id, revision + 2, "disabled")
         .await
         .unwrap();
-    assert!(f
+    assert!(
+        f.service()
+            .set_deleted(&id, revision + 3, false)
+            .await
+            .is_err(),
+        "a disabled agent is not in the bin"
+    );
+    let binned = f
         .service()
         .set_deleted(&id, revision + 3, true)
         .await
-        .is_err());
-    assert!(f
+        .unwrap();
+    assert_eq!(binned["status"], "deleted_disabled");
+    let listed = f.service().list().await.unwrap();
+    assert!(listed["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|a| a["id"] != id.as_str()));
+    let restored = f
         .service()
-        .set_deleted(&id, revision + 3, false)
+        .set_deleted(&id, revision + 4, false)
         .await
-        .is_err());
+        .unwrap();
+    assert_eq!(
+        restored["status"], "disabled",
+        "a restore keeps the disable"
+    );
     assert_eq!(bin_status(&f, &id).await["status"], "disabled");
 }

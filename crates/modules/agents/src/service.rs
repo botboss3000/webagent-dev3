@@ -106,7 +106,7 @@ impl<S: Storage, A: Access, E: Effects> Service<'_, S, A, E> {
             };
             let pool = self.storage.agent_pool(&id).await?;
             let mut identity = Repository::new(&pool, &id, self.storage)?.summary().await?;
-            if identity["status"] == "deleted" {
+            if crate::binned(&identity) {
                 continue;
             }
             identity["can_manage"] = rights["can_manage"].clone();

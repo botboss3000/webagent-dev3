@@ -100,7 +100,7 @@ async fn agents(
         let mut value = webagent_agents::repository::Repository::new(&view.agent_pool, &id, &view)?
             .summary()
             .await?;
-        if (value["status"] == "deleted") != query.deleted
+        if webagent_agents::binned(&value) != query.deleted
             || (query.deleted && rights["can_manage"] != true)
         {
             continue;
@@ -476,7 +476,7 @@ async fn set_deleted(app: &App, identity: &Value, id: &str, expected: u64, delet
             let message = error.to_string();
             match message.as_str() {
                 "Agent revision changed" => crate::conflict("Agent changed; reload and try again"),
-                "Only active agents can be deleted" | "Agent is not in the recycling bin" => {
+                "Agent is already in the recycling bin" | "Agent is not in the recycling bin" => {
                     crate::conflict(&message)
                 }
                 "The default agent cannot be deleted" | "Invalid agent status" => {

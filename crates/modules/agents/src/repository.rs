@@ -119,22 +119,31 @@ impl<'a, C: RecordCodec> Repository<'a, C> {
         }
         Ok(json!({"agent_id":self.agent,"status":status,"revision":expected+1}))
     }
-    /// Owner recycling bin: active <-> deleted only, so a restore never lifts an administrator's disable.
+    /// Owner recycling bin. A disabled agent bins as `deleted_disabled` and restores disabled,
+    /// so a restore never lifts an administrator's disable.
     pub async fn set_deleted(&self, expected: u64, deleted: bool) -> Result<Value> {
-        let (from, to) = if deleted {
-            ("active", "deleted")
-        } else {
-            ("deleted", "active")
+        let current = self.status().await?;
+        let to = match (deleted, current["status"].as_str().unwrap_or("")) {
+            (true, "active") => "deleted",
+            (true, "disabled") => "deleted_disabled",
+            (false, "deleted") => "active",
+            (false, "deleted_disabled") => "disabled",
+            _ => "",
         };
-        let changed = sqlx::query("UPDATE agents SET status=?,revision=revision+1,updated_at=strftime('%s','now') WHERE id=? AND revision=? AND status=?")
-            .bind(to).bind(self.agent).bind(expected as i64).bind(from).execute(self.pool).await?;
-        if changed.rows_affected() != 1 {
+        let from = current["status"].as_str().unwrap_or("");
+        let changed = if to.is_empty() {
+            0
+        } else {
+            sqlx::query("UPDATE agents SET status=?,revision=revision+1,updated_at=strftime('%s','now') WHERE id=? AND revision=? AND status=?")
+                .bind(to).bind(self.agent).bind(expected as i64).bind(from).execute(self.pool).await?.rows_affected()
+        };
+        if changed != 1 {
             let current = self.status().await?;
             if current["revision"].as_u64() != Some(expected) {
                 bail!("Agent revision changed");
             }
             bail!(if deleted {
-                "Only active agents can be deleted"
+                "Agent is already in the recycling bin"
             } else {
                 "Agent is not in the recycling bin"
             });
