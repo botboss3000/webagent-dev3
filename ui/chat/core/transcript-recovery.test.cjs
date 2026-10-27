@@ -98,3 +98,12 @@ test('privacy lookup failure cannot abort the chat shell when its optional notic
  const context=vm.createContext({session:null,$:()=>null,getAgentId:()=> 'shared_default',setChatConfigAgent:()=>{},request:async()=>{throw Error('signed out');}});
  vm.runInContext(code,context);await context.loadAgentPrivacy();
 });
+test('unconfigured agent tools notice shows on the chat hint line even for private chats',async()=>{
+ const source=fs.readFileSync(path.join(__dirname,'panel.js'),'utf8');
+ const code=source.slice(source.indexOf('  let privacyMode=null;'),source.indexOf('/** Fetches, validates, and mounts'));
+ const notice={hidden:true,textContent:''},tools="No tools are available: this agent's capability levels aren't configured.";
+ const context=vm.createContext({session:null,$:()=>notice,getAgentId:()=> 'fixture_agent',setChatConfigAgent:()=>{},request:async()=>({conversation_privacy:'private',tools_notice:tools})});
+ vm.runInContext(code,context);await context.loadAgentPrivacy();
+ assert.equal(notice.hidden,false);assert.equal(notice.textContent,tools);
+ context.privacyNotice('private',null);assert.equal(notice.hidden,true);assert.equal(notice.textContent,'');
+});

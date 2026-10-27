@@ -56,9 +56,11 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   const paintActivity=()=>{try{activity.render({sessionId:session,runs:activityRuns.map(r=>({...r,state:({completed:'completed',failed:'failed',stopped:'cancelled',waiting_approval:'running',waiting_gate:'finalizing'})[r.status]||r.status}))},$('chat-messages-inner'));issues?.resolve('activity_display',session);}catch(error){if(issues)issues.fail('activity_display',error,session);else note('Activity display unavailable: '+error.message);}};
   const client = createChatClient({request, note, issues, clearNoticeFrom, createStream});
   let privacyMode=null;
-  function privacyNotice(mode){privacyMode=mode;const notice=$('chat-privacy-notice');if(!notice)return;
-    notice.hidden=mode==='private';notice.textContent=mode==='private'?'':mode==='operator_reviewable'?'Agent Operators can read this conversation and join to reply.':'Conversation privacy is loading…';}
-  async function loadAgentPrivacy(){if(session)return;void setChatConfigAgent(getAgentId());privacyNotice(null);try{const data=await request('/agents/'+encodeURIComponent(getAgentId())+'/access-summary');if(!session)privacyNotice(data.conversation_privacy);}catch(error){if(!session){privacyNotice(null);const notice=$('chat-privacy-notice');if(notice)notice.textContent='Conversation privacy unavailable. Retry before sending.';}}}
+  // The server's tools notice (agent has no saved capability levels) shares the privacy hint line.
+  function privacyNotice(mode,toolsNotice){privacyMode=mode;const notice=$('chat-privacy-notice');if(!notice)return;
+    const privacy=mode==='private'?'':mode==='operator_reviewable'?'Agent Operators can read this conversation and join to reply.':'Conversation privacy is loading…';
+    notice.textContent=[toolsNotice,privacy].filter(Boolean).join(' ');notice.hidden=!notice.textContent;}
+  async function loadAgentPrivacy(){if(session)return;void setChatConfigAgent(getAgentId());privacyNotice(null);try{const data=await request('/agents/'+encodeURIComponent(getAgentId())+'/access-summary');if(!session)privacyNotice(data.conversation_privacy,data.tools_notice);}catch(error){if(!session){privacyNotice(null);const notice=$('chat-privacy-notice');if(notice)notice.textContent='Conversation privacy unavailable. Retry before sending.';}}}
 /** Fetches, validates, and mounts the required V3 chat partial into the supplied root. */
 async function mountChat(){
   const response=await fetch('/v3-ui/chat/chat.html?v=chat-partial-20261007-notifications',{credentials:'same-origin'});
@@ -111,7 +113,7 @@ function syncSnapshot(data){
     if(document.getElementById('chat-input')?.value?.trim()){note('Your draft was preserved. Request navigation again when ready.');return;}
     const url=appViewUrl(detail.destination,detail.agent_id,location.href,detail.target_session_id);if(url)location.assign(url);
   });
-  privacyNotice(data.conversation_privacy);if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}
+  privacyNotice(data.conversation_privacy,data.tools_notice);if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}
   if((data.session?.history_revision||0)!==historyRevision){historyChanged(data.session);return false;}
   if(data.components)components(data.components);
   historyLastSeq=Math.max(historyLastSeq,data.last_seq||0);
