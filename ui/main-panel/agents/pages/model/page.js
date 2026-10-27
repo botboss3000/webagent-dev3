@@ -3,7 +3,7 @@ import { mountModelTable } from '../../../../shared/models/model-table.js';
 import { initModelAnalytics } from '../../../../shared/models/model-analytics.js';
 import { createModelAdapter, usageFetch } from '../../../../shared/models/v3-adapter.js';
 import { mountModelLimits } from './model-limits.js';
-import { showNotification } from '../../../../chat/core/notification-panel.js';
+import { showNotification } from '../../../../chat/core/chat-action-panel.js';
 
 // Actual v2_ref Models mount: analytics sibling + shared renderer; only the adapter is v3-specific.
 export async function mountSelectionTable(host,{request,agentId,onAssignment}) {

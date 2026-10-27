@@ -344,7 +344,7 @@ pub async fn run_operation<T: Transport>(
     Ok(json!({"status":op.receipt["status"],"output":op.receipt}))
 }
 
-const CREDENTIAL_INSTRUCTION: &str = "For each missing credential, first show the user its label, create_url as a clickable link and the exact permissions, then activate Core Visualizer and call request_credential with only its name and origin so the private panel opens. Wait for check_credential to report it configured before the next one. Also show every setup_links entry as a clickable link. Never ask for token values in chat or tool arguments.";
+const CREDENTIAL_INSTRUCTION: &str = "For each missing credential, first show the user its label, create_url as a clickable link and the exact permissions, then activate Core Visualizer and call request_credential with its name, origin, label and create_url so its private card opens in this chat. Wait for check_credential to report it configured before the next one. Also show every setup_links entry as a clickable link. Never ask for token values in chat or tool arguments.";
 /// A sent chat attachment in this conversation becomes exact file bytes for source_remote_commit.
 async fn resolve_attachments(app: &App, sid: &str, args: &Value) -> Result<Value> {
     let mut args = args.clone();

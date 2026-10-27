@@ -83,6 +83,12 @@ impl Store {
         let record = json!({"name":name,"revision":revision,"origin":state["credential_origin"],"value":value});
         let output = json!({"saved":true,"name":name,"revision":revision,"secret_returned":false});
         self.write_credential_record(&mut tx, &key, &record).await?;
+        // The form is spent: clear it so its card disappears on every device.
+        let ui_key = format!("module_state:core_ui:{sid}");
+        let mut spent = ui.clone();
+        spent["state"] = json!({});
+        spent["revision"] = json!(ui["revision"].as_u64().unwrap_or(0) + 1);
+        self.write_credential_record(&mut tx, &ui_key, &spent).await?;
         self.write_credential_record(
             &mut tx,
             &receipt_key,
@@ -90,7 +96,7 @@ impl Store {
         )
         .await?;
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[key, receipt_key]);
+        self.cache.lock().unwrap().invalidate(&[key, receipt_key, ui_key]);
         Ok(output)
     }
     async fn write_credential_record(
@@ -131,6 +137,10 @@ mod tests {
             .unwrap();
         assert_eq!(output["revision"], 1);
         assert!(output.get("value").is_none());
+        // The spent form is cleared so its card disappears everywhere; the replayed receipt still answers retries.
+        let ui = app.store.module_state("core_ui:source").await.unwrap();
+        assert_eq!(ui["state"], json!({}));
+        assert_eq!(ui["revision"], 2);
         assert_eq!(
             app.store
                 .core_save_credential("source", "example", &request, 0, &value)

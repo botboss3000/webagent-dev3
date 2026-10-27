@@ -191,7 +191,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/embed/challenges/{id}",get(embed::challenge_info))
         .route("/embed/authorize",post(embed::authorize))
         .route("/embed/credentials/{id}",axum::routing::delete(embed::revoke))
-        .route("/core/vault/{sid}/{name}",post(tools::core_vault::save).layer(DefaultBodyLimit::max(16384)))
+        .route("/core/vault/{sid}/{name}",post(tools::core_vault::save).layer(DefaultBodyLimit::max(16384)).delete(tools::core_vault::dismiss))
         .route("/core/visuals/{id}/view",get(tools::core_visualizer::view))
         .route("/core/webhooks/{id}/setup",get(tools::core_webhooks::setup))
         .route("/usage/models/analytics", get(model_usage::analytics).delete(model_usage::clear))

@@ -158,7 +158,7 @@ pub fn vault_name(site: &Site, provider: &str) -> String {
         provider
     )
 }
-/// name and origin go to request_credential; the rest is shown to the user as setup guidance.
+/// name, origin, label and create_url go to request_credential; permissions are shown to the user as setup guidance.
 pub fn vault_requests(site: &Site) -> Value {
     json!([{"name":vault_name(site,"github"),"origin":"https://api.github.com",
             "label":"GitHub fine-grained personal access token","create_url":"https://github.com/settings/personal-access-tokens/new",

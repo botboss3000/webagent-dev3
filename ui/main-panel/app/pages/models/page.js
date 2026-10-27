@@ -2,7 +2,7 @@
 import { mountModelTable } from '../../../../shared/models/model-table.js';
 import { initModelAnalytics } from '../../../../shared/models/model-analytics.js';
 import { usageFetch, usageQuery } from '../../../../shared/models/v3-adapter.js';
-import { showNotification } from '../../../../chat/core/notification-panel.js';
+import { showNotification } from '../../../../chat/core/chat-action-panel.js';
 const MISSING='NEED BACKEND CONTRACT';
 const unavailable=async()=>new Response(JSON.stringify({error:MISSING}),{status:501,headers:{'Content-Type':'application/json'}});
 

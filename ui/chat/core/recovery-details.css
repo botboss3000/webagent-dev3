@@ -1,7 +1,7 @@
 /* Compact recovery disclosure follows the existing composer notice surface. */
-#notification-panel .recovery-details summary{cursor:pointer;color:var(--fg-1);font-weight:600}
-#notification-panel .recovery-details summary:focus-visible,#notification-panel .recovery-details button:focus-visible,#notification-panel .recovery-details textarea:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
-#notification-panel .recovery-details p{margin:6px 0}
-#notification-panel .recovery-details pre{text-align:left;padding:8px;border:var(--border-width) solid var(--border);border-radius:10px;background:var(--bg-1)}
-#notification-panel .recovery-reference{font-size:11px;color:var(--fg-3)}
-#notification-panel .recovery-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:4px}
+#chat-action-panel .recovery-details summary{cursor:pointer;color:var(--fg-1);font-weight:600}
+#chat-action-panel .recovery-details summary:focus-visible,#chat-action-panel .recovery-details button:focus-visible,#chat-action-panel .recovery-details textarea:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
+#chat-action-panel .recovery-details p{margin:6px 0}
+#chat-action-panel .recovery-details pre{text-align:left;padding:8px;border:var(--border-width) solid var(--border);border-radius:10px;background:var(--bg-1)}
+#chat-action-panel .recovery-reference{font-size:11px;color:var(--fg-3)}
+#chat-action-panel .recovery-actions{display:flex;flex-wrap:wrap;justify-content:center;gap:4px}

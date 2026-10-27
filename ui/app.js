@@ -17,7 +17,7 @@ import { authorizeEmbedPopup } from './embed/authorize.js';
 import { mountChatResize } from './shared/chat-resize.js';
 import { initChatConfig } from './chat/controls/chat-config.js';
 import { mountChatPanel } from './chat/core/panel.js';
-import { openSignInPanel } from './chat/core/credential-panel.js';
+import { openSignInPanel } from './chat/core/sign-in-panel.js';
 import { showLeftOverlay } from './chat/controls/login-hook.js';
 
 // v2 dom-utils imports v1 auth and uploads; v3 uses text nodes and its own transport.

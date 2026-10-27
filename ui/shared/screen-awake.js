@@ -217,7 +217,7 @@ export function mountScreenAwake(root, {getProfile = () => null} = {}) {
   }
   document.addEventListener('v3:chat-config-applied', profileChanged);
   // Notice observation excludes streaming content, run repaint and initial/restored transcript history.
-  const regions = [document.getElementById('notice'), root.querySelector('#notification-panel'), root.querySelector('#chat-above-pill')].filter(Boolean);
+  const regions = [document.getElementById('notice'), root.querySelector('#chat-action-panel'), root.querySelector('#chat-above-pill')].filter(Boolean);
   // The above-pill host also owns an elapsed-work clock: only its explicit notice children count.
   const noticeText = region => region.id === 'chat-above-pill'
     ? [...region.querySelectorAll('.v3-repository-notice:not([hidden])')].map(node => node.textContent).join('\n')

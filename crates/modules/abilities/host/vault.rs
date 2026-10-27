@@ -14,7 +14,7 @@ pub fn is_read(name: &str) -> bool {
 pub fn schemas() -> Vec<Value> {
     [
  ("check_credential","Check presence, revision and service origin for one caller-private credential. Returns metadata only; does not validate a remote provider or reveal the secret.",json!({"name":{"type":"string","maxLength":64}}),vec!["name"]),
- ("request_credential","Request a private human credential form in the active conversation. Supply a plain key name and HTTPS service origin. The user enters the value directly; models and mini apps receive only metadata. Does not grant network access or silently use this credential.",json!({"name":{"type":"string","maxLength":64},"origin":{"type":"string","maxLength":500}}),vec!["name","origin"]),
+ ("request_credential","Request a private human credential form in the active conversation. Supply a plain key name and HTTPS service origin, plus a human label and the HTTPS page where the user creates the value when known. The form stays in this conversation until the user saves or dismisses it. The user enters the value directly; models and mini apps receive only metadata. Does not grant network access or silently use this credential.",json!({"name":{"type":"string","maxLength":64},"origin":{"type":"string","maxLength":500},"label":{"type":"string","maxLength":80},"create_url":{"type":"string","maxLength":500}}),vec!["name","origin"]),
  ("list_vault_keys","List caller-private credential names, origins and revisions without values.",json!({}),vec![])
  ].into_iter().map(|(name,description,properties,required)|json!({"type":"function","name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
 }
@@ -23,7 +23,24 @@ pub fn schemas() -> Vec<Value> {
 struct Args {
     name: Option<String>,
     origin: Option<String>,
+    label: Option<String>,
+    create_url: Option<String>,
 }
+/// Optional display link for the credential card: HTTPS, no embedded credentials.
+pub fn create_url(raw: &str) -> Result<String> {
+    let url = reqwest::Url::parse(raw)?;
+    if raw.len() > 500
+        || url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(anyhow!("Use an HTTPS create_url without embedded credentials"));
+    }
+    Ok(url.to_string())
+}
+/// A form stays with its conversation until saved, dismissed or replaced; this only bounds abandoned ones.
+const REQUEST_LIFETIME: u64 = 7 * 24 * 3600;
 pub fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
@@ -101,12 +118,17 @@ pub async fn execute(
             .as_deref()
             .ok_or_else(|| anyhow!("HTTPS service origin required"))?,
     )?;
+    let label = q.label.as_deref().map(str::trim).unwrap_or_default();
+    if label.chars().count() > 80 || label.chars().any(char::is_control) {
+        return Err(anyhow!("Use a short plain credential label"));
+    }
+    let link = q.create_url.as_deref().map(create_url).transpose()?;
     let _guard = app.gate.lock().await;
     super::core_authority::check(app, sid, rid, generation, pending, tool, args, &cancel).await?;
     let mut saved = app.store.module_state(&format!("core_ui:{sid}")).await?;
     let request_id = digest(&json!([sid, rid, pending]));
     if saved["state"]["request_id"] != request_id {
-        saved["state"] = json!({"request_id":request_id,"destination":"credential","actor_id":shared_chat::actor(app),"agent_id":run["agent_id"],"session_id":sid,"created_at":now(),"expires_at":now()+600,"credential_name":name,"credential_origin":origin,"expected_revision":prior["revision"].as_u64().unwrap_or(0),"run_id":rid});
+        saved["state"] = json!({"request_id":request_id,"destination":"credential","actor_id":shared_chat::actor(app),"agent_id":run["agent_id"],"session_id":sid,"created_at":now(),"expires_at":now()+REQUEST_LIFETIME,"credential_name":name,"credential_origin":origin,"credential_label":label,"credential_url":link,"expected_revision":prior["revision"].as_u64().unwrap_or(0),"run_id":rid});
         app.store
             .module_cas(
                 &format!("core_ui:{sid}"),
@@ -201,9 +223,61 @@ pub async fn save(
         })?;
     Ok(Json(output))
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Dismiss {
+    request_id: String,
+}
+/// Dismissing clears the open form for every device; a saved credential is never touched.
+pub async fn dismiss(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path((sid, name)): Path<(String, String)>,
+    Json(body): Json<Dismiss>,
+) -> Api {
+    let actor = identity["_user_id"]
+        .as_str()
+        .ok_or_else(|| bad("Caller required"))?;
+    if !valid_name(&name) || body.request_id.len() != 64 {
+        return Err(bad("Invalid credential form"));
+    }
+    Uuid::parse_str(&sid).map_err(|_| bad("Invalid conversation"))?;
+    let store = app.store.for_user(actor).await?;
+    let key = format!("core_ui:{sid}");
+    let _guard = app.gate.lock().await;
+    let mut saved = store.module_state(&key).await?;
+    let state = &saved["state"];
+    if state["destination"] != "credential"
+        || state["request_id"] != body.request_id.as_str()
+        || state["credential_name"] != name.as_str()
+        || state["actor_id"] != actor
+    {
+        return Err(conflict("Credential request already closed"));
+    }
+    saved["state"] = json!({});
+    store
+        .module_cas(&key, saved["revision"].as_u64().unwrap_or(0), &saved)
+        .await
+        .map_err(|_| conflict("Credential request changed; reload the conversation"))?;
+    Ok(Json(json!({"dismissed":true})))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn create_links_are_https_without_credentials() {
+        assert_eq!(
+            create_url("https://github.com/settings/personal-access-tokens/new").unwrap(),
+            "https://github.com/settings/personal-access-tokens/new"
+        );
+        for value in [
+            "javascript:alert(1)",
+            "http://example.test/new",
+            concat!("https://", "user", ":", "pass", "@example.test/new"),
+        ] {
+            assert!(create_url(value).is_err());
+        }
+    }
     #[test]
     fn service_origins_do_not_smuggle_paths_credentials_or_javascript() {
         assert_eq!(

@@ -9,30 +9,30 @@
 /* Run controls stay above, and clickable beside either composer layout. */
 #chat-panel #chat-input-area #chat-above-pill{flex-shrink:0;max-height:35dvh;opacity:1;margin:0 auto 6px;overflow:auto;pointer-events:auto;z-index:8}
 /* Keep progress and repository notices visible even without run-control cards. */
-#chat-panel #chat-input-area #chat-above-pill:not(.visible):not(:has(.chat-notification:not([hidden]))){display:none}
-#notification-panel{padding:0 4px}
+#chat-panel #chat-input-area #chat-above-pill:not(.visible):not(:has(.chat-action:not([hidden]))){display:none}
+#chat-action-panel{padding:0 4px}
 /* Credential and sign-in panels: the page reset removes dialog centering and theme text colour. */
 dialog[data-core-credential]{margin:auto;max-width:min(420px,calc(100vw - 32px));color:var(--fg-1)}dialog[data-core-credential]::backdrop{background:rgba(0,0,0,.5)}
 /* Mode and tool approvals use one compact composer notification surface. */
-.chat-notification{box-sizing:border-box;width:fit-content;max-width:min(100%,var(--chat-pill-current-width,var(--chat-pill-width,500px)));margin:6px auto;padding:8px 12px;border:var(--border-width) solid color-mix(in oklab,var(--fg-1) 22%,transparent);border-radius:22px;background:var(--chat-pill-bg,color-mix(in oklab,var(--bg-elev) 82%,transparent));color:var(--fg-2);backdrop-filter:blur(12px) saturate(140%);-webkit-backdrop-filter:blur(12px) saturate(140%);font-size:13px;line-height:1.45;text-align:center;overflow-wrap:anywhere}
-body.light-mode .chat-notification{background:var(--chat-pill-bg,color-mix(in oklab,var(--bg-elev) 85%,transparent))}
-.chat-notification-heading{display:flex;align-items:center;justify-content:center;gap:6px;min-width:0}
-.chat-notification-heading strong{font-weight:600;color:var(--fg-1)}
-.chat-notification-detail-toggle{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;margin:0;padding:3px 0;border:0;background:transparent;color:var(--fg-1);font:inherit;font-weight:600;overflow-wrap:anywhere;text-align:left;cursor:pointer}
-.chat-notification-detail-toggle::after{content:'';width:6px;height:6px;flex-shrink:0;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);margin:0 3px 3px}
-.chat-notification-detail-toggle[aria-expanded=true]::after{transform:rotate(225deg);margin-top:5px}
-.chat-notification p{margin:5px 0}
-.chat-notification-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;margin-top:5px}
-.chat-notification-action{margin:0;min-height:28px;padding:3px 10px;border:var(--border-width) solid color-mix(in oklab,currentColor 22%,transparent);border-radius:999px;background:color-mix(in oklab,var(--fg-1) 5%,transparent);color:var(--fg-2);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
-.chat-notification-approve{color:var(--brand);background:color-mix(in oklab,var(--brand) 10%,transparent)}
-.chat-notification-deny{color:var(--danger);background:color-mix(in oklab,var(--danger) 8%,transparent)}
-.chat-notification-action:hover{background:color-mix(in oklab,currentColor 15%,transparent)}
-.chat-notification-action:disabled{opacity:.5;cursor:wait}
-.chat-notification-detail-toggle:focus-visible,.chat-notification-action:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
-.chat-notification pre{box-sizing:border-box;max-width:100%;max-height:120px;margin:8px 0;padding:8px 10px;border:var(--border-width) solid var(--border);border-radius:12px;background:var(--bg-1);color:var(--fg-1);font-size:12px;line-height:1.45;white-space:pre-wrap;overflow:auto;text-align:left}
-.chat-notification pre[hidden]{display:none}
+.chat-action{box-sizing:border-box;width:fit-content;max-width:min(100%,var(--chat-pill-current-width,var(--chat-pill-width,500px)));margin:6px auto;padding:8px 12px;border:var(--border-width) solid color-mix(in oklab,var(--fg-1) 22%,transparent);border-radius:22px;background:var(--chat-pill-bg,color-mix(in oklab,var(--bg-elev) 82%,transparent));color:var(--fg-2);backdrop-filter:blur(12px) saturate(140%);-webkit-backdrop-filter:blur(12px) saturate(140%);font-size:13px;line-height:1.45;text-align:center;overflow-wrap:anywhere}
+body.light-mode .chat-action{background:var(--chat-pill-bg,color-mix(in oklab,var(--bg-elev) 85%,transparent))}
+.chat-action-heading{display:flex;align-items:center;justify-content:center;gap:6px;min-width:0}
+.chat-action-heading strong{font-weight:600;color:var(--fg-1)}
+.chat-action-detail-toggle{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;margin:0;padding:3px 0;border:0;background:transparent;color:var(--fg-1);font:inherit;font-weight:600;overflow-wrap:anywhere;text-align:left;cursor:pointer}
+.chat-action-detail-toggle::after{content:'';width:6px;height:6px;flex-shrink:0;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);margin:0 3px 3px}
+.chat-action-detail-toggle[aria-expanded=true]::after{transform:rotate(225deg);margin-top:5px}
+.chat-action p{margin:5px 0}
+.chat-action-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;margin-top:5px}
+.chat-action-action{margin:0;min-height:28px;padding:3px 10px;border:var(--border-width) solid color-mix(in oklab,currentColor 22%,transparent);border-radius:999px;background:color-mix(in oklab,var(--fg-1) 5%,transparent);color:var(--fg-2);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.chat-action-approve{color:var(--brand);background:color-mix(in oklab,var(--brand) 10%,transparent)}
+.chat-action-deny{color:var(--danger);background:color-mix(in oklab,var(--danger) 8%,transparent)}
+.chat-action-action:hover{background:color-mix(in oklab,currentColor 15%,transparent)}
+.chat-action-action:disabled{opacity:.5;cursor:wait}
+.chat-action-detail-toggle:focus-visible,.chat-action-action:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
+.chat-action pre{box-sizing:border-box;max-width:100%;max-height:120px;margin:8px 0;padding:8px 10px;border:var(--border-width) solid var(--border);border-radius:12px;background:var(--bg-1);color:var(--fg-1);font-size:12px;line-height:1.45;white-space:pre-wrap;overflow:auto;text-align:left}
+.chat-action pre[hidden]{display:none}
 #app-notifications{position:fixed;left:50%;bottom:16px;z-index:1000;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;width:max-content;max-width:calc(100vw - 32px)}
-#app-notifications .chat-notification{box-shadow:0 8px 24px color-mix(in oklab,black 25%,transparent)}
+#app-notifications .chat-action{box-shadow:0 8px 24px color-mix(in oklab,black 25%,transparent)}
 .v3-message{display:flex;flex-direction:column;align-items:flex-start;margin:16px 0}
 .v3-message.user{align-items:flex-end}
 .v3-message .message-content{white-space:pre-wrap;overflow-wrap:anywhere;max-width:95%;border-radius:18px;padding:12px 15px;background:var(--agent-bubble-bg,var(--bg-elev));border:var(--border-width) solid var(--border-soft)}
@@ -201,8 +201,12 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 :is(#chat-header,#chat-footer-row) .chat-header-zone > * {
   margin:0!important;
 }
-.chat-notification textarea{box-sizing:border-box;max-width:100%;margin:8px 0;padding:8px 10px;min-height:60px;border:var(--border-width) solid var(--border);border-radius:12px;background:var(--bg-1);color:var(--fg-1);font:inherit;resize:vertical}
-.chat-notification textarea:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
+.chat-action textarea{box-sizing:border-box;max-width:100%;margin:8px 0;padding:8px 10px;min-height:60px;border:var(--border-width) solid var(--border);border-radius:12px;background:var(--bg-1);color:var(--fg-1);font:inherit;resize:vertical}
+.chat-action textarea:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
+.chat-action-credential{display:flex;flex-direction:column;align-items:stretch;margin:0}
+.chat-action-credential input{box-sizing:border-box;width:100%;margin:4px 0;padding:8px 10px;border:var(--border-width) solid var(--border);border-radius:12px;background:var(--bg-1);color:var(--fg-1);font:inherit}
+.chat-action-credential input:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
+.chat-action-credential a{color:var(--brand);overflow-wrap:anywhere}
 /* Desktop Firefox draws the shared scrollbar as an overlay (/v3-ui/shared/scrollbars.js),
    so scrollbar-gutter reserves nothing; keep bubbles the same 6px off the edge as Chromium. */
 @supports not selector(::-webkit-scrollbar){@media (hover:hover) and (pointer:fine){#chat-messages-inner{padding-right:var(--wa-scrollbar-size,6px)!important}}}

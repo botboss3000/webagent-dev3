@@ -2,53 +2,53 @@
 // One composer surface for confirmations issued by chat controls and the runtime.
 // Mount composer confirmation slots; decisions remain caller-owned guarded callbacks.
 // All chat notices use these card and action primitives, including notices owned by other controllers.
-export function createChatNotificationAction({label,kind='neutral',run,title,disabled=false},{documentObject=globalThis.document,guard=fn=>fn}={}) {
+export function createChatActionButton({label,kind='neutral',run,title,disabled=false},{documentObject=globalThis.document,guard=fn=>fn}={}) {
   const button=documentObject.createElement('button');button.type='button';
-  button.className='chat-notification-action chat-notification-'+kind;button.textContent=label;
+  button.className='chat-action-action chat-action-'+kind;button.textContent=label;
   button.disabled=disabled;if(title)button.title=title;button.onclick=guard(run);return button;
 }
 // Render inert text and caller-owned detail content; callbacks retain their original authority checks.
-export function createChatNotification({title,message,details,body,actions=[],documentObject=globalThis.document,guard=fn=>fn}) {
-  const node=documentObject.createElement('section');node.className='chat-notification';
+export function createChatAction({title,message,details,body,actions=[],documentObject=globalThis.document,guard=fn=>fn}) {
+  const node=documentObject.createElement('section');node.className='chat-action';
   node.setAttribute('role','group');node.setAttribute('aria-label',title);
-  const heading=documentObject.createElement('div');heading.className='chat-notification-heading';
+  const heading=documentObject.createElement('div');heading.className='chat-action-heading';
   const label=documentObject.createElement('strong');label.textContent=title;heading.append(label);
   if(details)heading.append(details.toggle);node.append(heading);
-  if(message!=null){const text=documentObject.createElement('p');text.className='chat-notification-message';text.textContent=message;node.append(text);}
+  if(message!=null){const text=documentObject.createElement('p');text.className='chat-action-message';text.textContent=message;node.append(text);}
   if(details)node.append(details.body);if(body)node.append(body);
-  const buttons=documentObject.createElement('div');buttons.className='chat-notification-actions';
-  for(const item of actions)buttons.append(createChatNotificationAction(item,{documentObject,guard}));
+  const buttons=documentObject.createElement('div');buttons.className='chat-action-actions';
+  for(const item of actions)buttons.append(createChatActionButton(item,{documentObject,guard}));
   node.append(buttons);return node;
 }
 // Shared notices for any page: shown above the chat composer while it is on screen,
 // otherwise in a floating stack. A key replaces its earlier notice; actions close
 // the notice when they succeed and show their error otherwise.
 export function showNotification({key,title,message='',actions=[],timeout=10000,documentObject=globalThis.document}) {
-  const panel=documentObject.getElementById('notification-panel');
+  const panel=documentObject.getElementById('chat-action-panel');
   let host=panel?.closest('#chat-input-area')?.getClientRects().length?panel:documentObject.getElementById('app-notifications');
   if(!host){host=documentObject.createElement('div');host.id='app-notifications';host.setAttribute('aria-live','polite');documentObject.body.append(host);}
   if(key)for(const old of documentObject.querySelectorAll('[data-notification-key]'))if(old.dataset.notificationKey===key)old.remove();
   let timer=null,node=null;
   const close=()=>{clearTimeout(timer);node?.remove();};
   const wrap=item=>({...item,run:async()=>{
-    try{await item.run();close();}catch(error){node.querySelector('.chat-notification-message').textContent=error?.message||'Action failed';}
+    try{await item.run();close();}catch(error){node.querySelector('.chat-action-message').textContent=error?.message||'Action failed';}
   }});
-  node=createChatNotification({title,message,documentObject,actions:[...actions.map(wrap),{label:'Dismiss',kind:'neutral',run:close}]});
+  node=createChatAction({title,message,documentObject,actions:[...actions.map(wrap),{label:'Dismiss',kind:'neutral',run:close}]});
   node.setAttribute('role','status');if(key)node.dataset.notificationKey=key;
   host.append(node);
   if(timeout)timer=setTimeout(close,timeout);
   return {close};
 }
-export function mountNotificationPanel({root,guard,request,note}) {
-  const host=root.querySelector('#notification-panel');
+export function mountChatActionPanel({root,guard,request,note}) {
+  const host=root.querySelector('#chat-action-panel');
   const modeSlot=document.createElement('div');
   const toolSlot=document.createElement('div');
   host.append(modeSlot,toolSlot);
   let finishMode=null;const routeChoices=new Map();
 
   // Bind the common renderers to this panel's interaction guard.
-  const action=(label,kind,run)=>createChatNotificationAction({label,kind,run},{guard});
-  const card=options=>createChatNotification({...options,guard});
+  const action=(label,kind,run)=>createChatActionButton({label,kind,run},{guard});
+  const card=options=>createChatAction({...options,guard});
   // Remembered routes use the same card and action renderer as pending approvals.
   const routesSlot=document.createElement('div');host.append(routesSlot);
   let routeSession='',routeGeneration=0,routeRead=0,routeExpanded=false,routeCount=0,pendingApprovals=false;const revokeKeys=new Map();
@@ -80,7 +80,7 @@ export function mountNotificationPanel({root,guard,request,note}) {
     updateRoutesVisibility();
   }
   const routeList=document.createElement('div');routeList.id='messaging-permissions-details';routeList.hidden=true;
-  const routeToggle=document.createElement('button');routeToggle.type='button';routeToggle.className='chat-notification-detail-toggle';routeToggle.textContent='Show permissions';routeToggle.setAttribute('aria-controls',routeList.id);routeToggle.setAttribute('aria-expanded','false');
+  const routeToggle=document.createElement('button');routeToggle.type='button';routeToggle.className='chat-action-detail-toggle';routeToggle.textContent='Show permissions';routeToggle.setAttribute('aria-controls',routeList.id);routeToggle.setAttribute('aria-expanded','false');
   routeToggle.onclick=guard(async()=>{
     routeExpanded=!routeExpanded;routeList.hidden=!routeExpanded;routeToggle.setAttribute('aria-expanded',String(routeExpanded));routeToggle.textContent=routeExpanded?'Hide permissions':'Show permissions';
     if(routeExpanded)await loadRoutes();
@@ -100,6 +100,42 @@ export function mountNotificationPanel({root,guard,request,note}) {
     node.setAttribute('role','alert');sendSlot.replaceChildren(node);
   }
   function clearSendError(){sendSlot.replaceChildren();}
+  // A private credential form owned by this conversation. It is rebuilt from session state, so it follows
+  // the session across devices and session switches; the value goes only to the nonce-bound vault endpoint.
+  const credentialSlot=document.createElement('div');host.append(credentialSlot);let credentialKey='',credentialSaved=false;
+  function clearCredential(){credentialSlot.replaceChildren();credentialKey='';credentialSaved=false;}
+  function showCredential(detail,session){
+    if(!detail){if(!credentialSaved)clearCredential();return;}
+    const key=session+':'+detail.requestId;if(key===credentialKey)return; // Keep a value being typed across polls.
+    credentialKey=key;credentialSaved=false;
+    const endpoint='/core/vault/'+encodeURIComponent(session)+'/'+encodeURIComponent(detail.name);
+    const title=detail.label||'Private credential';
+    const body=document.createElement('form');body.className='chat-action-credential';
+    const where=document.createElement('p');where.className='chat-action-message';
+    if(detail.createUrl){
+      const link=document.createElement('a');link.href=detail.createUrl;link.target='_blank';link.rel='noopener noreferrer';
+      const url=new URL(detail.createUrl);link.textContent=url.host+(url.pathname==='/'?'':url.pathname);
+      where.append(document.createTextNode('Create it at '),link,document.createTextNode(', then paste it here.'));
+    }else where.textContent='Paste the value for '+new URL(detail.origin).host+'.';
+    const input=document.createElement('input');input.type='password';input.autocomplete='off';input.required=true;input.maxLength=8192;input.dataset.secret='true';input.setAttribute('aria-label',title);
+    const status=document.createElement('p');status.className='chat-action-message';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+    status.textContent='Only you see this value; the agent receives status only.';
+    body.append(where,input,status);
+    const save=async()=>{
+      if(!input.value)return input.focus();
+      status.textContent='Saving…';
+      try{await request(endpoint,'POST',{request_id:detail.requestId,expected_revision:detail.revision,value:input.value});}
+      catch(error){input.value='';status.textContent=error.message;return;}
+      input.value='';credentialSaved=true;
+      credentialSlot.replaceChildren(card({title:title+' saved',message:'Saved privately. Tell the agent to continue.',actions:[{label:'Dismiss',kind:'neutral',run:clearCredential}]}));
+    };
+    body.onsubmit=guard(async event=>{event.preventDefault();await save();});
+    credentialSlot.replaceChildren(card({title,body,actions:[
+      {label:'Save',kind:'approve',run:save},
+      // Dismiss clears the request server-side, so the card disappears on every device.
+      {label:'Dismiss',kind:'neutral',run:async()=>{await request(endpoint,'DELETE',{request_id:detail.requestId});clearCredential();}}
+    ]}));
+  }
   // Run status, observer approval and uncertain-outcome controls share the approval card UI.
   function showRun({run,active,canControl=false,expanded,renderRecovery,cancel,recover}) {
     if(run.status==='completed'||(!run.uncertain&&['queued','running','waiting_gate','waiting_external','failed','paused','stopped'].includes(run.status)))return;
@@ -146,7 +182,7 @@ export function mountNotificationPanel({root,guard,request,note}) {
         if(event.key==='Escape'){event.preventDefault();settle(false);}
       });
       modeSlot.replaceChildren(node);
-      node.querySelector('.chat-notification-deny').focus({preventScroll:true});
+      node.querySelector('.chat-action-deny').focus({preventScroll:true});
     });
   }
   // Show a pending approval, persist expansion in the caller's Set, and delegate decisions.
@@ -159,7 +195,7 @@ export function mountNotificationPanel({root,guard,request,note}) {
     const rememberLabel=document.createElement('label');rememberLabel.append(remembered,document.createTextNode(' Remember this route for queue and steer with these recipient permissions'));
     const toggle=document.createElement('button');
     toggle.type='button';
-    toggle.className='chat-notification-detail-toggle';
+    toggle.className='chat-action-detail-toggle';
     toggle.textContent=approval.new_intent_confirmation ? 'Additional action: '+approval.name : approval.name;
     toggle.title='Show tool call details';
     toggle.setAttribute('aria-controls',details.id);
@@ -185,6 +221,6 @@ export function mountNotificationPanel({root,guard,request,note}) {
   // Remove tool-approval cards without affecting a mode confirmation.
   function clearTools(){toolSlot.replaceChildren();pendingApprovals=false;updateRoutesVisibility();}
   // Cancel pending confirmation and remove both slots from the supplied composer host.
-  function destroy(){messagingRoutes.destroy();routeChoices.clear();cancelMode();clearRuns();clearSendError();host.replaceChildren();}
-  return {confirmMode,cancelMode,showTool,clearTools,showRun,clearRuns,showSendError,clearSendError,messagingRoutes,destroy};
+  function destroy(){messagingRoutes.destroy();routeChoices.clear();cancelMode();clearRuns();clearSendError();clearCredential();host.replaceChildren();}
+  return {confirmMode,cancelMode,showTool,clearTools,showRun,clearRuns,showSendError,clearSendError,showCredential,clearCredential,messagingRoutes,destroy};
 }

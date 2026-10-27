@@ -1,25 +1,25 @@
 // @code-index {"version":1,"feature":"chat-administrator-notices","aliases":["repository status reminder","retained build notice"],"purpose":"Locates administrator repository and retained-build notices in the chat composer","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider notice presentation preferences; access authority remains enforced by policy."]}}
-import {createChatNotification} from './notification-panel.js';
+import {createChatAction} from './chat-action-panel.js';
 // The poller owns freshness and access; all visible cards come from chat notifications.
 export function repositoryNoticeRenderer(documentObject=globalThis.document) {
   let region=null;
   return text=>{
-    const parent=documentObject?.getElementById('notification-panel');if(!parent)return;
+    const parent=documentObject?.getElementById('chat-action-panel');if(!parent)return;
     if(!region||region.parentNode!==parent){
-      region=createChatNotification({title:'Repository status',message:'',documentObject});region.className+=' v3-repository-notice';
+      region=createChatAction({title:'Repository status',message:'',documentObject});region.className+=' v3-repository-notice';
       region.setAttribute('role','status');region.setAttribute('aria-live','polite');parent.prepend(region);
     }
-    region.querySelector('.chat-notification-message').textContent=text;region.hidden=!text;
+    region.querySelector('.chat-action-message').textContent=text;region.hidden=!text;
   };
 }
 export function buildNoticeRenderer(documentObject=globalThis.document) {
   let region=null;
   return(items,review)=>{
-    const parent=documentObject?.getElementById('notification-panel');if(!parent)return;
+    const parent=documentObject?.getElementById('chat-action-panel');if(!parent)return;
     if(!region||region.parentNode!==parent){region=documentObject.createElement('div');region.className='v3-build-leftovers v3-repository-notice';region.setAttribute('aria-live','polite');parent.prepend(region);}
     region.replaceChildren();region.hidden=!items.length;
     for(const item of items){
-      const node=createChatNotification({title:'Retained work',message:item.notification+(Number.isSafeInteger(item.retained_bytes)?' Retained space: '+(item.retained_bytes/1024**2).toFixed(1)+' MiB.':''),documentObject,actions:[{
+      const node=createChatAction({title:'Retained work',message:item.notification+(Number.isSafeInteger(item.retained_bytes)?' Retained space: '+(item.retained_bytes/1024**2).toFixed(1)+' MiB.':''),documentObject,actions:[{
         label:'Mark reviewed',kind:'neutral',title:'Clear this reminder after investigation. Retained work remains intact.',
         run:async()=>{const button=node.querySelector('button');button.disabled=true;try{await review(item.id);}catch{button.textContent='Review unavailable; refresh';}finally{button.disabled=false;}}
       }]});region.append(node);

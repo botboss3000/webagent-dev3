@@ -1,4 +1,4 @@
-import {createChatNotification} from './notification-panel.js';
+import {createChatAction} from './chat-action-panel.js';
 // @code-index {"version":1,"feature":"chat-followup-queue","aliases":["queued message delivery","message followup queue","delivery queue controls"],"purpose":"Projects durable queued-message state beside transcript rows and commits revision-fenced user choices. No chat JSON key is consumed; consider queue status presentation or placement preferences while keeping access and revision checks fixed.","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider configurable queue status labels or placement preferences; access and revision checks remain enforced."]}}
 // Durable delivery state is display-only until a revision-checked user action commits.
 /**
@@ -11,7 +11,7 @@ import {createChatNotification} from './notification-panel.js';
 export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId,forgetKey,onSnapshot,canWrite=()=>true}) {
   let generation=0,revision=-1,entries=[],held=false,bannerKey='';
   const busy=new Set();
-  const banner=createChatNotification({title:'Queue held',guard});banner.className+=' followup-queue-banner';banner.hidden=true;host.append(banner);
+  const banner=createChatAction({title:'Queue held',guard});banner.className+=' followup-queue-banner';banner.hidden=true;host.append(banner);
   const terminal=new Set(['delivered','cancelled','rejected']);
   // Translate durable queue states into short status text for transcript controls.
   const label=entry=>({pending:entry.choice==='interrupt'?'Interrupting…':entry.choice==='steer'?'Steering — applies next turn':'Queued — sends after this run',reviewing:'Reviewing…',held:'Held — waiting to resume',interrupting:'Interrupting…',delivered:'Delivered',cancelled:'Cancelled',rejected:'Not sent — rejected'})[entry.status]||entry.status;
@@ -62,7 +62,7 @@ export function mountFollowupQueue({root,host,client,getSession,guard,note,keyId
     const bannerFocused=banner.contains(document.activeElement);bannerKey=nextBannerKey;
     banner.replaceChildren();banner.hidden=!held;
     if(held){
-      const view=createChatNotification({title:'Queue held',message:state.reason||undefined,guard,actions:[{label:'Resume queue',kind:'approve',disabled:!canWrite(),run:async()=>{
+      const view=createChatAction({title:'Queue held',message:state.reason||undefined,guard,actions:[{label:'Resume queue',kind:'approve',disabled:!canWrite(),run:async()=>{
         if(!canWrite())throw Error('Queue resume is not available to this user');
         const sid=getSession(),epoch=generation,key='resume-queue:'+sid+':'+revision;b.disabled=true;
         try{await client.resumeQueue(sid,{client_request_id:keyId(key),expected_revision:revision});forgetKey(key);await refresh(sid,epoch);}

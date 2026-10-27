@@ -1,6 +1,5 @@
-import { createAppViewDispatcher, appViewUrl } from './app-control.js';
+import { createAppViewDispatcher, appViewUrl, credentialRequest } from './app-control.js';
 import { openRegistrationDialog } from './registration.js';
-import { openCredentialPanel, closeCredentialPanel } from './credential-panel.js';
 import { mountVisualFrame, syncVisualThemes } from './visual-frame.js';
 import {createMainNotes} from '../elements/main-notes/index.js';
 // @code-index {"version":1,"feature":"chat-panel","aliases":["chat panel","conversation panel","session transcript"],"purpose":"Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides. Touch feedback: ui/vibrate.json -> enabled, duration_ms; gestures stay client-owned.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common/composer/keyboard_focus"],"profile_overrides":true},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
@@ -15,7 +14,7 @@ import {mountTranscriptAnchor} from './transcript-anchor.js';
 import {mountChatZoom} from './chat-zoom.js';
 import {mountComposerMedia,describesUploads} from '../controls/composer-media.js';
 import {mountSessionControls} from '../controls/session-controls.js';
-import {mountNotificationPanel,createChatNotification} from './notification-panel.js';
+import {mountChatActionPanel,createChatAction} from './chat-action-panel.js';
 import {mountUsageStats} from '../controls/usage-stats.js';
 import {createMessageRow as createMessage,updateAdmission} from './message-view.js';
 import {closeGutterOverlays,updateGutterTimes} from './bubble-gutters.js';
@@ -63,11 +62,11 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   async function loadAgentPrivacy(){if(session)return;void setChatConfigAgent(getAgentId());privacyNotice(null);try{const data=await request('/agents/'+encodeURIComponent(getAgentId())+'/access-summary');if(!session)privacyNotice(data.conversation_privacy,data.tools_notice);}catch(error){if(!session){privacyNotice(null);const notice=$('chat-privacy-notice');if(notice)notice.textContent='Conversation privacy unavailable. Retry before sending.';}}}
 /** Fetches, validates, and mounts the required V3 chat partial into the supplied root. */
 async function mountChat(){
-  const response=await fetch('/v3-ui/chat/chat.html?v=chat-partial-20261007-notifications',{credentials:'same-origin'});
+  const response=await fetch('/v3-ui/chat/chat.html?v=chat-partial-20261027-actions',{credentials:'same-origin'});
   if(!response.ok)throw Error('Chat shell unavailable');
   const template=document.createElement('template');
   template.innerHTML=await response.text();
-  for(const id of ['chat-header','chat-messages','chat-messages-inner','sessions','new','notification-panel','composer','chat-input','chat-send','chat-stop-btn']){
+  for(const id of ['chat-header','chat-messages','chat-messages-inner','sessions','new','chat-action-panel','composer','chat-input','chat-send','chat-stop-btn']){
     if(!template.content.querySelector('#'+id))throw Error('Chat shell is incomplete: '+id);
   }
   root.replaceChildren(template.content);
@@ -76,8 +75,8 @@ await mountChat();
 const mainNotes=enableMainNotes?createMainNotes({request}):null;if(mainNotes){mainNotes.element.dataset.headerExtension='main_notes';$('chat-header').append(mainNotes.element);}
 // Display activity uses authoritative selected-session run states and live publications.
 const screenAwake=mountScreenAwake(root,{getProfile:currentChatProfile});
-const notifications=mountNotificationPanel({root,guard,request,note});
-const {messagingRoutes}=notifications;
+const chatActions=mountChatActionPanel({root,guard,request,note});
+const {messagingRoutes}=chatActions;
 const anchor=mountTranscriptAnchor({scroller:$('chat-messages'),inner:$('chat-messages-inner'),header:$('chat-header'),getProfile:currentChatProfile});
 // Pinch / Ctrl+wheel zoom scales only the transcript content; destroy removes its listeners and chip.
 const disposeZoom=mountChatZoom({root,scroller:$('chat-messages'),inner:$('chat-messages-inner'),header:$('chat-header')});
@@ -87,10 +86,10 @@ const stats=mountUsageStats({root,client,note,issues});
 // Refreshes relative gutter times once per second while visible; destroy clears this timer.
 const gutterClock=setInterval(()=>{if(document.visibilityState==='visible')updateGutterTimes(root);},1000);
 // Session-control capability updates enable or disable the media adapter.
-const controls=mountSessionControls({root,client,guard,note,issues,ensureSession,notifications,canWrite:()=>sharedAccess?.can_control!==false,/* Forwards advertised attachment availability and limits, and whether the selected model reads images itself, to media controls. */onState:data=>{media?.setAvailable(sharedAccess?.can_send!==false&&data?.composer?.attachments===true,data?.composer?.attachment_limits);media?.setDescribeImages(describesUploads(data));}});
+const controls=mountSessionControls({root,client,guard,note,issues,ensureSession,notifications:chatActions,canWrite:()=>sharedAccess?.can_control!==false,/* Forwards advertised attachment availability and limits, and whether the selected model reads images itself, to media controls. */onState:data=>{media?.setAvailable(sharedAccess?.can_send!==false&&data?.composer?.attachments===true,data?.composer?.attachment_limits);media?.setDescribeImages(describesUploads(data));}});
 let submitting=false,sessionGeneration=0,creatingSession=null,media=null,historyBusy=false,historyLastSeq=0,historyRevision=0,historyDeferredRevision=0,historyReady=false,closeUndoDialog=null,canManageQueue=false;
 const historyRequests=new Map();
-const followups=mountFollowupQueue({root,host:$('notification-panel'),client,getSession:()=>session,canWrite:()=>canManageQueue&&sharedAccess?.can_control!==false,guard,note,keyId,forgetKey,onSnapshot:syncSnapshot});
+const followups=mountFollowupQueue({root,host:$('chat-action-panel'),client,getSession:()=>session,canWrite:()=>canManageQueue&&sharedAccess?.can_control!==false,guard,note,keyId,forgetKey,onSnapshot:syncSnapshot});
 /** Background history reopening is independent from explicit undo/fork action feedback. */
 async function reopenHistory(id){
   const pending=open(id,'replace'),generation=sessionGeneration;
@@ -104,8 +103,10 @@ function historyChanged(summary){
 /** Merge a matching-session poll snapshot only when it shares the displayed history revision. */
 function syncSnapshot(data){
   if(data.session?.id&&data.session.id!==session)return false;
+  // A credential form is session state: every snapshot of this session shows, keeps or clears its card.
+  if('app_view' in data)chatActions.showCredential(credentialRequest(data.app_view,getIdentity()),session);
   if(data.app_view)dispatchAppView(data.app_view,getIdentity(),detail=>{
-    if(detail.destination==='credential'){openCredentialPanel({request,session,name:detail.name,origin:detail.origin,requestId:detail.requestId,revision:detail.revision});return;}
+    if(detail.destination==='credential')return;
     if(detail.destination==='registration'){openRegistrationDialog({request});return;}
     if(detail.destination==='chat'){
       const toggle=document.getElementById('chat-toggle-btn');if(toggle?.getAttribute('aria-expanded')==='false')toggle.click();return;
@@ -156,7 +157,7 @@ let sessionItems=[];
 // Dropdown refresh reads sessions; its search reset delegates to the session-list controller.
 const dropdown=mountSessionDropdown($('session-dropdown'),{/* Reloads session options. */refresh:()=>sessions(),select:open,guard,/* Clears search through the list controller. */resetSearch:()=>sessionList.reset()});
 // Session-list refresh shares the session loader; recycle completion resets transcript and session-scoped state.
-const sessionList=createSessionList($('session-dropdown'),{guard,screenSettings:()=>screenAwake.settings(),/* Shares the panel session loader. */refresh:()=>sessions(),select:open,client,/* Clears the selected transcript and its session-scoped controls after recycle. */recycled:()=>{screenAwake.select('');followups.reset();anchor.reset();progress.reset();activity.disconnect();resetReads();session='';issues?.select('');stats.disconnect();++sessionGeneration;controls.open('');sharing.disconnect();media.open('');client.disconnect();$('chat-messages-inner').replaceChildren();notifications.clearRuns();const url=new URL(location.href);url.searchParams.delete('session_id');history.replaceState({},'',url);}});
+const sessionList=createSessionList($('session-dropdown'),{guard,screenSettings:()=>screenAwake.settings(),/* Shares the panel session loader. */refresh:()=>sessions(),select:open,client,/* Clears the selected transcript and its session-scoped controls after recycle. */recycled:()=>{screenAwake.select('');followups.reset();anchor.reset();progress.reset();activity.disconnect();resetReads();session='';issues?.select('');stats.disconnect();++sessionGeneration;controls.open('');sharing.disconnect();media.open('');client.disconnect();$('chat-messages-inner').replaceChildren();chatActions.clearRuns();const url=new URL(location.href);url.searchParams.delete('session_id');history.replaceState({},'',url);}});
 // Exposes dropdown configuration through the session-list controller.
 $('session-dropdown').configure=cfg=>sessionList.configure(cfg);
 const chatPanel=root;
@@ -270,7 +271,7 @@ async function sessions(){const turn=++sessionsGeneration;let data;try{data=awai
  * Resets the display lease for the selected session; only newly delivered messages restore brightness.
  * Client snapshot failures propagate; controls report independent issues, or note when no tracker is injected.
  */
-async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{closeCredentialPanel();mainNotes?.setAgent(null);messagingRoutes.disconnect();canManageQueue=false;sharedAccess={can_send:false,can_control:false};followups.reset();historyReady=false;anchor.reset();progress.open(id);notifications.clearRuns();notifications.clearSendError();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;issues?.select(id);screenAwake.select(id);stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);sharing.open(id).catch(error=>{if(id===session&&!issues)note('Shared controls unavailable: '+error.message);});controls.open(id).catch(error=>{if(id===session&&!issues)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{privacyNotice(data.conversation_privacy);if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}messagingRoutes.open(id,canManageQueue);void messagingRoutes.refresh().catch(error=>note(error.message));historyReady=true;historyLastSeq=data.last_seq||0;historyRevision=data.session.history_revision||0;readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';if(id!==session)return;mainNotes?.setAgent(sessionAgentId);void setChatConfigAgent(sessionAgentId);$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);onEvent('session',{session_id:id});document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);followups.update(data);runs(data.runs||[],true);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;if(!recovered)screenAwake.attention('message');try{media.published(item);issues?.resolve('media_display',id);}catch(error){if(issues)issues.fail('media_display',error,id);else note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);issues?.resolve('transcript_position',id);}catch(error){if(issues)issues.fail('transcript_position',error,id);else note('Transcript positioning unavailable: '+error.message);}return true;},summary=>{historyChanged(summary);void sessions().catch(error=>{if(!issues)note(error.message);});},syncSnapshot);if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
+async function open(id,routeMode='push',focusKind='existing_session',focusWatch=watchFocus()){try{chatActions.clearCredential();mainNotes?.setAgent(null);messagingRoutes.disconnect();canManageQueue=false;sharedAccess={can_send:false,can_control:false};followups.reset();historyReady=false;anchor.reset();progress.open(id);chatActions.clearRuns();chatActions.clearSendError();closeGutterOverlays();gutterRuns.clear();++sessionGeneration;session=id;issues?.select(id);screenAwake.select(id);stats.open(id);media.open(id);activity.disconnect();closeChatElementFullView();resetReads();session=id;const url=new URL(location.href);url.searchParams.set('session_id',id);if(url.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',url);sharing.open(id).catch(error=>{if(id===session&&!issues)note('Shared controls unavailable: '+error.message);});controls.open(id).catch(error=>{if(id===session&&!issues)note(error.message);});const focusGeneration=sessionGeneration;await client.open(id,data=>{privacyNotice(data.conversation_privacy);if(data.access){sharedAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}messagingRoutes.open(id,canManageQueue);void messagingRoutes.refresh().catch(error=>note(error.message));historyReady=true;historyLastSeq=data.last_seq||0;historyRevision=data.session.history_revision||0;readThrough=data.session.read_through_seq||0;const sessionAgentId=data.session.agent_id||'shared_default';if(id!==session)return;mainNotes?.setAgent(sessionAgentId);void setChatConfigAgent(sessionAgentId);$('chat-input-row').title='Conversation agent: '+sessionAgentId;$('sessions').value=id;sessionList.update(sessionItems,id);onEvent('session',{session_id:id});document.dispatchEvent(new Event('v3:session-open'));$('chat-messages-inner').replaceChildren();for(const item of data.messages)message(item);components(data.components||[]);followups.update(data);runs(data.runs||[],true);anchor.focus();},(item,{recovered=false}={})=>{if(message(item)===false)return false;if(!recovered)screenAwake.attention('message');try{media.published(item);issues?.resolve('media_display',id);}catch(error){if(issues)issues.fail('media_display',error,id);else note('Media display unavailable: '+error.message);}if(item.role==='assistant')void refreshGutterRuns();void stats.refresh(true).catch(error=>note(error.message));try{if(recovered)anchor.changed();else anchor.published(item);issues?.resolve('transcript_position',id);}catch(error){if(issues)issues.fail('transcript_position',error,id);else note('Transcript positioning unavailable: '+error.message);}return true;},summary=>{historyChanged(summary);void sessions().catch(error=>{if(!issues)note(error.message);});},syncSnapshot);if(session===id&&focusGeneration===sessionGeneration&&focusWatch.unchanged()&&shouldFocusComposer(focusKind))$('chat-input').focus({preventScroll:true});}finally{focusWatch.stop();}}
 // Requests run cancellation and refreshes shell state even when the request fails.
 async function cancel(id){if(sharedAccess?.can_control===false)throw Error('This conversation is read only');progress.note('Stopping…');try{await client.cancel(id,{client_request_id:keyId('cancel:'+id)});}finally{await refresh();}}
 // Adds/removes a transcript notice only for certain failed runs; uncertain outcomes remain in recovery UI.
@@ -283,17 +284,17 @@ function failedRunMessages(items){
     let row=[...target.querySelectorAll('[data-failed-run-id]')].find(node=>node.dataset.failedRunId===run.id);
     if(!row){
       row=document.createElement('article');row.className='v3-message system';row.dataset.failedRunId=run.id;
-      row.append(createChatNotification({title:'Run failed',message:''}));
+      row.append(createChatAction({title:'Run failed',message:''}));
       const turns=[...target.children].filter(node=>node.dataset.turnId===run.id);
       const after=turns.at(-1);
       target.insertBefore(row,after?.nextSibling||null);
     }
     row.firstChild.querySelector('strong').textContent='Run failed'+(run.error?' — '+run.error:'');
-    row.firstChild.querySelector('.chat-notification-message').textContent='To continue, write a new message in the chat.';
+    row.firstChild.querySelector('.chat-action-message').textContent='To continue, write a new message in the chat.';
   }
 }
 /** Fans run snapshots to transport, display lease, controls, progress and activity, then paints composer and run actions. Approval, recovery, and cancel handlers call their matching client endpoints. */
-function runs(items,authoritative=false){if(!authoritative&&sharing.state&&activityRuns.length&&!items.some(run=>run.session_id===session))items=activityRuns;onEvent('runs',{session_id:session,runs:items.filter(r=>r.session_id===session||!r.session_id).map(r=>({id:r.id,status:r.status,uncertain:!!r.uncertain,approval_id:r.pending?.id||null}))});screenAwake.runs(items.filter(run=>run.session_id===session||!run.session_id));client.updateRuns(items);anchor.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));progress.update(items);void stats.refresh();controls.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));activityRuns=items.filter(run=>run.session_id===session||!run.session_id);rememberRuns(activityRuns);if(session)paintActivity();notifications.clearRuns();const relevant=items.filter(run=>run.session_id===session||!run.session_id);const pendingReview=!!$('chat-messages-inner').querySelector('[data-admission-status="pending_review"],[data-admission-status="reviewing"]');const active=relevant.find(run=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(run.status));$('chat-input-row').dataset.runStatus=active?.status||relevant[0]?.status||'Ready';$('chat-stop-btn').hidden=!active||$('chat-stop-btn').dataset.configEnabled==='false';$('chat-stop-btn').dataset.run=active?.id||'';$('chat-stop-btn').style.display=$('chat-stop-btn').hidden?'none':'';$('chat-send').disabled=historyBusy||sharedAccess?.can_send===false||!!getState().shutoff||submitting||!!media?.uploading;
+function runs(items,authoritative=false){if(!authoritative&&sharing.state&&activityRuns.length&&!items.some(run=>run.session_id===session))items=activityRuns;onEvent('runs',{session_id:session,runs:items.filter(r=>r.session_id===session||!r.session_id).map(r=>({id:r.id,status:r.status,uncertain:!!r.uncertain,approval_id:r.pending?.id||null}))});screenAwake.runs(items.filter(run=>run.session_id===session||!run.session_id));client.updateRuns(items);anchor.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));progress.update(items);void stats.refresh();controls.updateRuns(items.filter(run=>run.session_id===session||!run.session_id));activityRuns=items.filter(run=>run.session_id===session||!run.session_id);rememberRuns(activityRuns);if(session)paintActivity();chatActions.clearRuns();const relevant=items.filter(run=>run.session_id===session||!run.session_id);const pendingReview=!!$('chat-messages-inner').querySelector('[data-admission-status="pending_review"],[data-admission-status="reviewing"]');const active=relevant.find(run=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(run.status));$('chat-input-row').dataset.runStatus=active?.status||relevant[0]?.status||'Ready';$('chat-stop-btn').hidden=!active||$('chat-stop-btn').dataset.configEnabled==='false';$('chat-stop-btn').dataset.run=active?.id||'';$('chat-stop-btn').style.display=$('chat-stop-btn').hidden?'none':'';$('chat-send').disabled=historyBusy||sharedAccess?.can_send===false||!!getState().shutoff||submitting||!!media?.uploading;
 $('chat-input').readOnly=sharedAccess?.can_send===false;
 $('chat-stop-btn').disabled=sharedAccess?.can_control===false;
 failedRunMessages(relevant);
@@ -306,13 +307,13 @@ $('chat-continue-btn').disabled=sharedAccess?.can_send===false||sharing.state?.p
 for(const run of relevant){
   if(run.pending&&run.status==='waiting_approval'&&run.pending.id&&run.pending.can_decide!==false&&!sharedAccess?.observer){
     const p=run.pending;
-    notifications.showTool({approval:p,run,active,expanded:expandedApprovals,decide:async(decision,extra={})=>{
+    chatActions.showTool({approval:p,run,active,expanded:expandedApprovals,decide:async(decision,extra={})=>{
       await client.decide(p.id,{decision,...extra,client_request_id:keyId('approval:'+p.id+':'+decision+':'+JSON.stringify(extra))});
       if(p.messaging_binding)void messagingRoutes.refresh().catch(error=>note(error.message));await refresh();
     },cancel:()=>cancel(run.id)});
     continue;
   }
-  notifications.showRun({run,active,canControl:sharedAccess?.can_control!==false,expanded:expandedRecovery,renderRecovery:createRecoveryDetails,
+  chatActions.showRun({run,active,canControl:sharedAccess?.can_control!==false,expanded:expandedRecovery,renderRecovery:createRecoveryDetails,
     cancel:()=>cancel(run.id),
     recover:async(decision,output)=>{await client.recover(run.id,{decision,output,client_request_id:keyId('recovery:'+run.id+':'+decision+':'+output)});await refresh();}
   });
@@ -379,13 +380,13 @@ async function submit(text,clearInput=false){
       const data=await client.snapshot(sid);
       if(sid===session)syncSnapshot(data);
     }
-    forgetKey(requestKey);media.committed(sid,ids);notifications.clearSendError();
+    forgetKey(requestKey);media.committed(sid,ids);chatActions.clearSendError();
     if(clearInput&&sid===session&&$('chat-input').value===draft)$('chat-input').value='';
     applyChatConfig();await refresh();
     onEvent('sent',{session_id:sid});return {session_id:sid};
   }catch(error){
     // Fallback after automatic retries: the draft stays in the composer and Retry resubmits it.
-    notifications.showSendError({message:error.message||'Message was not sent.',retry:()=>submit(text,clearInput)});
+    chatActions.showSendError({message:error.message||'Message was not sent.',retry:()=>submit(text,clearInput)});
     throw error;
   }finally{submitting=false;await refresh();}
 }
@@ -400,11 +401,11 @@ $('chat-input').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey&&!even
 $('chat-stop-btn').onclick=guard(()=>cancel($('chat-stop-btn').dataset.run));
 
   /** Clears session visuals and disconnects every session-scoped transport/control. */
-  function disconnect(){issues?.select('');messagingRoutes.disconnect();screenAwake.select('');followups.reset();session='';activityRuns=[];elementContext='';anchor.reset();progress.reset();notifications.clearRuns();notifications.clearSendError();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();sharing.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
+  function disconnect(){issues?.select('');messagingRoutes.disconnect();screenAwake.select('');followups.reset();session='';activityRuns=[];elementContext='';anchor.reset();progress.reset();chatActions.clearRuns();chatActions.clearSendError();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();sharing.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
   /** Disconnects and disposes panel-owned timers, observers, listeners, and mounted child controls. */
-  function destroy(){closeCredentialPanel();visualThemeObserver.disconnect();
+  function destroy(){visualThemeObserver.disconnect();
     mainNotes?.destroy();disposeFeedback();screenAwake.destroy();++sessionGeneration;closeUndoDialog?.();
-    disconnect();followups.destroy();notifications.destroy();anchor.destroy();disposeZoom();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
+    disconnect();followups.destroy();chatActions.destroy();anchor.destroy();disposeZoom();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
     $('chat-input').onkeydown=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;
   }

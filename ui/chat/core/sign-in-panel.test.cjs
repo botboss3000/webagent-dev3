@@ -14,7 +14,7 @@ class E {
 }
 const document={body:new E('body'),createElement:tag=>new E(tag),querySelector:()=>null};
 async function load(){const context=vm.createContext({document,location:{host:'dev.webagent.live'}});
- const mod=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'credential-panel.js'),'utf8'),{context});await mod.link(()=>{});await mod.evaluate();return mod.namespace;}
+ const mod=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'sign-in-panel.js'),'utf8'),{context});await mod.link(()=>{});await mod.evaluate();return mod.namespace;}
 test('sign-in panel collects no secrets and closes before starting the popup flow',async()=>{
  const {openSignInPanel}=await load();const calls=[];document.body.children=[];
  openSignInPanel({agent:'Helper',message:'Use the popup.',identity:'',signIn:()=>calls.push(document.body.children.length),guest:null});

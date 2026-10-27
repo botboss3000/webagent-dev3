@@ -3,7 +3,7 @@ import {vibrationConfigReady,getVibrationConfig} from '../shared/vibrate.js';
 import {mountChatPanel} from '../chat/core/panel.js';
 import {initChatConfig,setChatSurfaceActions} from '../chat/controls/chat-config.js';
 import {watchAuthorization} from './auth-handoff.js';
-import {openSignInPanel} from '../chat/core/credential-panel.js';
+import {openSignInPanel} from '../chat/core/sign-in-panel.js';
 import {createFetchStream} from '../chat/core/fetch-stream.js';
 const params=new URL(location.href).searchParams,hostOrigin=params.get('origin'),agentId=decodeURIComponent(location.pathname.split('/').pop());
 const root=document.getElementById('chat-panel');root.dataset.embedVisible='false';window.__CHAT_PORTAL__=true;

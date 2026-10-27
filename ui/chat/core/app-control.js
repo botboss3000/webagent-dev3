@@ -8,7 +8,10 @@ export function appViewRequest(snapshot, identity, dispatch, now = Date.now()) {
   if(request.destination==='credential'){
     if(typeof request.credential_name!=='string'||!/^[-A-Za-z0-9_]{1,64}$/.test(request.credential_name)||typeof request.credential_origin!=='string'||!/^https:\/\//.test(request.credential_origin)||typeof request.request_id!=='string'||!/^[a-f0-9]{64}$/.test(request.request_id)||!Number.isSafeInteger(request.expected_revision)||request.expected_revision<0)return false;
   }
-  dispatch({destination:request.destination,target_session_id:request.target_session_id,agent_id:request.agent_id,name:request.credential_name,origin:request.credential_origin,requestId:request.request_id,revision:request.expected_revision});
+  // Optional display fields: an invalid label or non-HTTPS link is dropped, never rendered.
+  const label=typeof request.credential_label==='string'&&request.credential_label.length<=80?request.credential_label:'';
+  let createUrl='';try{const url=new URL(request.credential_url);if(url.protocol==='https:'&&!url.username&&!url.password)createUrl=url.href;}catch{}
+  dispatch({destination:request.destination,target_session_id:request.target_session_id,agent_id:request.agent_id,name:request.credential_name,origin:request.credential_origin,requestId:request.request_id,revision:request.expected_revision,label,createUrl});
   return true;
 }
 
@@ -26,6 +29,13 @@ export function appViewUrl(destination,agent,current,target) {
 }
 
 // Polls and reconnects must not reopen a dismissed form or erase a credential being typed.
+// A pending credential form is session state rather than a one-shot navigation, so it bypasses the revision dispatcher.
+export function credentialRequest(snapshot,identity,now=Date.now()){
+  let detail=null;
+  if(snapshot?.request?.destination==='credential')appViewRequest(snapshot,identity,value=>{detail=value;},now);
+  return detail;
+}
+
 export function createAppViewDispatcher(){
   const revisions=new Map();
   return (snapshot,identity,dispatch,now=Date.now())=>{
