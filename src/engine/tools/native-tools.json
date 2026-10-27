@@ -1558,7 +1558,7 @@
   {
     "type": "function",
     "name": "source_remote_commit",
-    "description": "Commit exact UTF-8 file edits on a webagent/ draft branch through GitHub APIs; never publishes production.",
+    "description": "Commit exact file edits on a webagent/ draft branch through GitHub APIs; never publishes production. Each change has path plus one of content (UTF-8 text, or null to delete), attachment_id (a file the user sent in this conversation, e.g. images and fonts) or content_base64.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1609,11 +1609,19 @@
                   "null"
                 ],
                 "maxLength": 262144
+              },
+              "attachment_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "content_base64": {
+                "type": "string",
+                "maxLength": 349528
               }
             },
             "required": [
-              "path",
-              "content"
+              "path"
             ],
             "additionalProperties": false
           }
@@ -1634,7 +1642,7 @@
   {
     "type": "function",
     "name": "source_site_create",
-    "description": "Configure a caller-owned site connection with public metadata, create a private GitHub repository and static Cloudflare Worker, or connect an existing static site. Configure returns private vault request names; tokens are never tool arguments.",
+    "description": "Configure a caller-owned site connection (only github_owner, github_repo and worker_name are required; Cloudflare account and build token are discovered from the saved token), then create a private GitHub repository and static Cloudflare Worker with an optional custom domain, or connect an existing static site. Configure returns credential requests with creation links; tokens are never tool arguments.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1702,17 +1710,17 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 1024
+            },
+            "custom_domain": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253
             }
           },
           "required": [
             "github_owner",
             "github_repo",
-            "production_branch",
-            "cloudflare_account_id",
-            "worker_name",
-            "build_token_uuid",
-            "root_directory",
-            "build_command"
+            "worker_name"
           ],
           "additionalProperties": false
         }
