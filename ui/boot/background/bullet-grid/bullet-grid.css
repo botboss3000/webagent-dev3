@@ -1,28 +1,18 @@
 /* ============================================================
    Bullet grid — colour + layout tokens (read by bullet-grid.js)
    ------------------------------------------------------------
-   Derived from the app palette in design-system.css (so a brand-colour
-   swap flows through) but defined here so the background stays
+   Fixed neutral colours, defined here so the background stays
    self-contained. bullet-grid.js carries matching fallbacks.
 
-   The grid only draws on the black boot curtain, so it keeps the dark
-   palette in every theme: the app's theme can apply mid-boot without
-   recolouring the scene. The cursor highlight tracks the dark accent and
-   updates LIVE when the admin edits it in the Appearance panel. These
-   tokens are declared on `body` (NOT :root): appearance.js writes its live
-   overrides onto body selectors, and a `var(--brand-rgb)` reference only
-   re-resolves to a live edit when it is declared on the same element the
-   override lands on (a :root declaration would freeze to the base palette).
+   The grid only draws on the black boot curtain, so it uses the same
+   white palette in every theme: the app's theme and accent can apply
+   mid-boot without recolouring the scene.
    ============================================================ */
 
-/* Neutral white dots, accent highlight near the cursor */
+/* White dots and white highlight near the cursor, fixed in every theme so the
+   app's theme or accent loading mid-boot cannot recolour the scene. */
 body {
   --bgrid-dot-rgb:    255, 255, 255;             /* resting dot colour (drawn at 20% opacity) */
-  --bgrid-active-rgb: var(--brand-rgb, 125, 207, 255);  /* dot colour at the cursor (accent) */
+  --bgrid-active-rgb: 255, 255, 255;             /* dot colour at the cursor */
   --bgrid-spacing:    34;                        /* grid cell size (px) */
-}
-
-/* The light accent would not suit the black curtain; keep the dark default. */
-body.light-mode {
-  --bgrid-active-rgb: 125, 207, 255;
 }

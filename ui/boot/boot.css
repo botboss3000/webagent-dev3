@@ -5,7 +5,8 @@ body.is-booting > :not(#boot-curtain):not(#cursor-glow):not(script) {visibility:
 /* Fade the grid out over black first: its blue-grey dots read white on black but blue over a light app. */
 #boot-curtain.is-lifting .boot-grid {opacity:0;transition:opacity .2s ease-out}
 #boot-curtain.is-lifting, #boot-curtain.is-lifting ~ #cursor-glow {opacity:0;transition:opacity .5s ease-in-out .2s}
-body.light-mode #cursor-glow.boot-is-on {--glow-color:rgba(125, 207, 255, 0.06)}
+/* White in every theme, like the grid highlight: the app accent must not tint the boot glow. */
+body #cursor-glow.boot-is-on, body.light-mode #cursor-glow.boot-is-on {--glow-color:rgba(255, 255, 255, 0.06)}
 .boot-grid {position:absolute;inset:0;pointer-events:none}
 @media(prefers-reduced-motion:reduce){.boot-grid,#cursor-glow{display:none}}
 

@@ -44,7 +44,7 @@
   var settling = false;
   var POINTER_IDLE_MS = 250;
   var realPointerAt = -Infinity, bootPointerAt = -Infinity;
-  var dotRgb = '255,255,255', activeRgb = '125,207,255';
+  var dotRgb = '255,255,255', activeRgb = '255,255,255';
   var wasLight = null;
 
   function isLight() { return document.body && document.body.classList.contains('light-mode'); }
@@ -53,7 +53,7 @@
     var cs = window.getComputedStyle(document.body);
     function v(n, f) { var x = (cs.getPropertyValue(n) || '').trim(); return x || f; }
     var fbDot = '255,255,255';  // the grid only draws on the black curtain
-    var fbAct = isLight() ? '255,140,66' : '125,207,255';
+    var fbAct = '255,255,255';
     dotRgb = v('--bgrid-dot-rgb', fbDot);
     activeRgb = v('--bgrid-active-rgb', fbAct);
     var sp = parseFloat(v('--bgrid-spacing', '34'));
@@ -203,9 +203,7 @@
     dots = [];
   }
 
-  // Re-read the palette live when the Appearance panel edits the theme colours
-  // (engine calls this on 'wa-appearance-changed'). --bgrid-active-rgb tracks the
-  // accent (var(--brand-rgb)), so the cursor dot recolours instantly.
+  // Re-read the --bgrid-* tokens when the engine reports an appearance change.
   function refresh() { if (running) readPalette(); }
 
   window.WA_BG.register(RID, { start: start, stop: stop, refresh: refresh });
