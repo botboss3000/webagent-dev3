@@ -10,7 +10,6 @@
     "list_spawns",
     "stop_spawn",
     "schedule_spawn_check",
-    "list_abilities",
     "promote_spawn",
     "delegate_to_agent",
     "list_delegatable_agents",

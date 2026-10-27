@@ -6,6 +6,7 @@
     "search_tools",
     "list_tools",
     "load_tool",
+    "list_abilities",
     "load_ability",
     "list_skills",
     "load_skill",
