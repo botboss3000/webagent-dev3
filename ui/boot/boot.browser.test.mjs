@@ -36,7 +36,12 @@ try{
   // The app is released at once; the curtain fades over it (reduced motion removes it immediately).
   assert.equal(await page.getByRole('heading',{name:'App shell'}).isVisible(),true);
   if(reducedMotion==='reduce')assert.equal(await page.locator('#boot-curtain').count(),0);
-  else assert.equal(await page.locator('#boot-curtain.is-lifting').count(),1);
+  else{
+   assert.equal(await page.locator('#boot-curtain.is-lifting').count(),1);
+   // The grid fades out before the black curtain, and its transitionend must not remove the curtain early.
+   await page.evaluate(()=>new Promise(resolve=>document.querySelector('.boot-grid').addEventListener('transitionend',resolve,{once:true})));
+   assert.equal(await page.evaluate(()=>getComputedStyle(document.getElementById('boot-curtain')).opacity>0.5),true);
+  }
   await page.locator('#boot-curtain').waitFor({state:'detached',timeout:2000});
   assert.equal(await page.evaluate(()=>window.readyEvents),0);
   await page.evaluate(()=>{window.__boot.appReady();window.__boot.appReady();});

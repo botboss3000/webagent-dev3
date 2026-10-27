@@ -27,9 +27,11 @@ window.WA_BG?.whenReady('bullet-grid', function (renderer) {
         window.dispatchEvent(new CustomEvent('wa-boot-pointerend'));
       }
       if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) { finish(); return; }
-      curtain.addEventListener('transitionend', finish, { once: true });
-      // transitionend never fires in a hidden tab; cap the wait just past the 0.5s fade.
-      setTimeout(finish, 700);
+      var lifting = curtain;
+      // The grid's own earlier fade bubbles here too; finish only on the curtain's.
+      lifting.addEventListener('transitionend', function (e) { if (e.target === lifting) finish(); });
+      // transitionend never fires in a hidden tab; cap the wait just past the 0.2s grid fade + 0.5s fade.
+      setTimeout(finish, 900);
       curtain.classList.add('is-lifting');
     }
     function announceAppReady() {
