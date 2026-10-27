@@ -142,11 +142,15 @@ pub async fn execute(
     if name == "source_site_status" && args["site_id"].is_null() {
         return Ok(json!({"status":"success","output":list(&store,&agent).await?}));
     }
-    let id = field(args, "site_id", 80)?;
     if name == "source_site_create" && args["operation"] == "configure" {
-        let output = configure(&store, &agent, args).await?;
-        return Ok(json!({"status":"success","output":output}));
+        // Configure has no external effect, so invalid input is a readable result, not an uncertain failure.
+        return Ok(match configure(&store, &agent, args).await {
+            Ok(output) => json!({"status":"success","output":output}),
+            Err(error) => json!({"status":"failed","output":{"error":error.to_string(),"example":{"site_id":"my-site","operation":"configure","request_id":"my-site-configure-1","connection_revision":0,"configuration":{"github_owner":"octocat","github_repo":"my-site","worker_name":"my-site","custom_domain":"my-site.example.com"}}}}),
+        });
     }
+    let id = field(args, "site_id", 80)?;
+    let args = &resolve_attachments(app, sid, args).await?;
     anyhow::ensure!(
         args["configuration"].is_null(),
         "Configuration is only accepted by the configure operation"
@@ -198,7 +202,7 @@ pub async fn execute(
     }
     if secret.github.is_empty() || secret.cloudflare.is_empty() {
         return Ok(
-            json!({"status":"failed","output":{"error":"credentials_required","credential_requests":vault_requests(&site),"instruction":"Activate Core Visualizer and call request_credential with each missing name and origin. User enters values in the private credential panel; retry after check_credential reports configured. Never ask for values in chat."}}),
+            json!({"status":"failed","output":{"error":"credentials_required","credential_requests":vault_requests(&site),"setup_links":setup_links(),"instruction":CREDENTIAL_INSTRUCTION}}),
         );
     }
     let http = Http::new(secret.clone(), cancel)?;
@@ -340,6 +344,29 @@ pub async fn run_operation<T: Transport>(
     Ok(json!({"status":op.receipt["status"],"output":op.receipt}))
 }
 
+const CREDENTIAL_INSTRUCTION: &str = "For each missing credential, first show the user its label, create_url as a clickable link and the exact permissions, then activate Core Visualizer and call request_credential with only its name and origin so the private panel opens. Wait for check_credential to report it configured before the next one. Also show every setup_links entry as a clickable link. Never ask for token values in chat or tool arguments.";
+/// A sent chat attachment in this conversation becomes exact file bytes for source_remote_commit.
+async fn resolve_attachments(app: &App, sid: &str, args: &Value) -> Result<Value> {
+    let mut args = args.clone();
+    for change in args["changes"].as_array_mut().into_iter().flatten() {
+        let Some(id) = change["attachment_id"].as_str().map(str::to_owned) else { continue };
+        anyhow::ensure!(
+            change.get("content").is_none() && change.get("content_base64").is_none(),
+            "Use one of content, content_base64 or attachment_id per file"
+        );
+        let record = app
+            .store
+            .get(&webagent_files::attachment_key(&id))
+            .await?
+            .filter(|record| webagent_files::uploads::sent_view(record, sid).is_some())
+            .ok_or_else(|| anyhow!("Attachment {id} is not a file sent in this conversation"))?;
+        let bytes = webagent_files::uploads::content_bytes(&record)?;
+        let object = change.as_object_mut().ok_or_else(|| anyhow!("Invalid change"))?;
+        object.remove("attachment_id");
+        object.insert("content_base64".into(), json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)));
+    }
+    Ok(args)
+}
 /// Model-callable setup accepts public site metadata; only the human vault form accepts secrets.
 pub async fn configure(store: &Store, agent: &str, args: &Value) -> Result<Value> {
     let id = field(args, "site_id", 80)?;
@@ -353,7 +380,9 @@ pub async fn configure(store: &Store, agent: &str, args: &Value) -> Result<Value
             "Owner revoked this connection; only human settings may re-enable it"
         );
     }
-    let configuration: Configuration = serde_json::from_value(args["configuration"].clone())?;
+    let configuration: Configuration = serde_json::from_value(args["configuration"].clone())
+        .map_err(|error| anyhow!("configuration needs github_owner, github_repo and worker_name; Cloudflare IDs are optional and discovered from the saved token ({error})"))?;
+    configuration.validate()?;
     let expected_revision = args["connection_revision"]
         .as_u64()
         .ok_or_else(|| anyhow!("Connection revision required"))?;
@@ -368,6 +397,6 @@ pub async fn configure(store: &Store, agent: &str, args: &Value) -> Result<Value
         },
     )
     .await?;
-    output["next_step"]=json!("For each missing provider call Core Visualizer request_credential with the returned name and origin, then create or connect the site. Never send token values in chat or tool arguments.");
+    output["next_step"]=json!(format!("{CREDENTIAL_INSTRUCTION} When both are configured, call source_site_create with operation=create (or connect) and the returned connection_revision."));
     Ok(output)
 }

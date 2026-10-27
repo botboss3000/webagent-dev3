@@ -8,17 +8,31 @@ pub const BUILD_COMMAND:&str="npm install --prefix /tmp/webagent-wrangler --igno
 pub const PREVIEW_COMMAND:&str="node /tmp/webagent-wrangler/node_modules/wrangler/bin/wrangler.js preview --config wrangler.jsonc --ignore-base-config --name wa-$WORKERS_CI_COMMIT_SHA --json";
 pub const DEPLOY_COMMAND:&str="node /tmp/webagent-wrangler/node_modules/wrangler/bin/wrangler.js deploy --config wrangler.jsonc --tag $WORKERS_CI_COMMIT_SHA";
 pub const PREFIX: &str = "core_source_control:";
+pub const GITHUB_APP_INSTALL: &str = "https://github.com/apps/cloudflare-workers-and-pages/installations/new";
+fn main_branch() -> String { "main".into() }
+fn build_command() -> String { BUILD_COMMAND.into() }
+fn repository_root() -> String { "/".into() }
+/// Only the GitHub repository and Worker name are required. An empty Cloudflare account or
+/// build token is discovered with the saved Cloudflare token when the site is created.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Configuration {
     pub github_owner: String,
     pub github_repo: String,
+    #[serde(default = "main_branch")]
     pub production_branch: String,
+    #[serde(default)]
     pub cloudflare_account_id: String,
     pub worker_name: String,
+    #[serde(default)]
     pub build_token_uuid: String,
+    #[serde(default = "build_command")]
     pub build_command: String,
+    #[serde(default = "repository_root")]
     pub root_directory: String,
+    /// Optional hostname in a Cloudflare zone of the same account, e.g. site.example.com.
+    #[serde(default)]
+    pub custom_domain: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Site {
@@ -88,7 +102,7 @@ impl Configuration {
         );
         anyhow::ensure!(branch(&self.production_branch), "Invalid production branch");
         anyhow::ensure!(
-            self.cloudflare_account_id.len() == 32
+            self.cloudflare_account_id.is_empty() || self.cloudflare_account_id.len() == 32
                 && self
                     .cloudflare_account_id
                     .bytes()
@@ -105,8 +119,12 @@ impl Configuration {
             "Invalid Worker name"
         );
         anyhow::ensure!(
-            uuid::Uuid::parse_str(&self.build_token_uuid).is_ok(),
-            "Cloudflare build-token UUID required"
+            self.build_token_uuid.is_empty() || uuid::Uuid::parse_str(&self.build_token_uuid).is_ok(),
+            "Invalid Cloudflare build-token UUID"
+        );
+        anyhow::ensure!(
+            self.custom_domain.is_empty() || hostname(&self.custom_domain),
+            "Invalid custom domain; use a lowercase hostname such as site.example.com"
         );
         anyhow::ensure!(
             self.build_command == BUILD_COMMAND,
@@ -119,24 +137,40 @@ impl Configuration {
         Ok(())
     }
 }
+pub fn hostname(s: &str) -> bool {
+    s.len() <= 253
+        && s.split('.').count() >= 2
+        && s.split('.').all(|label| {
+            (1..=63).contains(&label.len())
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
+}
 pub fn site_key(agent: &str, id: &str) -> String {
     format!("{PREFIX}site:{agent}:{id}")
 }
+/// Names depend only on the connection, so credentials can be saved before any Cloudflare ID is known.
 pub fn vault_name(site: &Site, provider: &str) -> String {
-    let target = if provider == "github" {
-        &site.configuration.github_owner
-    } else {
-        &site.configuration.cloudflare_account_id
-    };
     format!(
         "source_{}_{}",
-        &digest(&json!([site.agent_id, site.id, target]))[..32],
+        &digest(&json!([site.agent_id, site.id, provider]))[..32],
         provider
     )
 }
+/// name and origin go to request_credential; the rest is shown to the user as setup guidance.
 pub fn vault_requests(site: &Site) -> Value {
-    json!([{"name":vault_name(site,"github"),"origin":"https://api.github.com"},
-        {"name":vault_name(site,"cloudflare"),"origin":"https://api.cloudflare.com"}])
+    json!([{"name":vault_name(site,"github"),"origin":"https://api.github.com",
+            "label":"GitHub fine-grained personal access token","create_url":"https://github.com/settings/personal-access-tokens/new",
+            "permissions":"Resource owner: your account (or the organization). Repository access: All repositories. Repository permissions: Administration — Read and write; Contents — Read and write."},
+        {"name":vault_name(site,"cloudflare"),"origin":"https://api.cloudflare.com",
+            "label":"Cloudflare user API token","create_url":"https://dash.cloudflare.com/profile/api-tokens",
+            "permissions":"Create Token → Custom token (a user token from My Profile; account-owned tokens are rejected by Workers Builds). Account permissions: Workers Scripts — Edit; Workers Builds Configuration — Edit; Account Settings — Read. Account resources: the account that should host the site."}])
+}
+/// One-time human steps that no token can perform.
+pub fn setup_links() -> Value {
+    json!([{"label":"Install Cloudflare's GitHub app on the repository owner (all repositories, or add the new repository after it is created)","url":GITHUB_APP_INSTALL},
+        {"label":"Cloudflare dashboard (Workers & Pages) — custom domains must be in a zone on this account","url":"https://dash.cloudflare.com/?to=/:account/workers-and-pages"}])
 }
 async fn vault_record(store: &Store, site: &Site, provider: &str) -> Result<Value> {
     anyhow::ensure!(
@@ -225,7 +259,7 @@ pub fn token(s: &str) -> bool {
 pub fn projection(site: &Site, credentials: &Credentials) -> Value {
     json!({"id":site.id,"agent_id":site.agent_id,"owner_id":site.owner_id,"revision":site.revision,"revoked":site.revoked,
         "configuration":site.configuration,"runtime":site.runtime,
-        "github_configured":!credentials.github.is_empty(),"cloudflare_configured":!credentials.cloudflare.is_empty(),"credential_requests":vault_requests(site),"github_credential_revision":credentials.github_revision,"cloudflare_credential_revision":credentials.cloudflare_revision})
+        "github_configured":!credentials.github.is_empty(),"cloudflare_configured":!credentials.cloudflare.is_empty(),"credential_requests":vault_requests(site),"setup_links":setup_links(),"github_credential_revision":credentials.github_revision,"cloudflare_credential_revision":credentials.cloudflare_revision})
 }
 pub async fn list(store: &Store, agent: &str) -> Result<Value> {
     anyhow::ensure!(identifier(agent), "Invalid agent");

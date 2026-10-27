@@ -59,6 +59,7 @@ fn config() -> Configuration {
         build_token_uuid: BUILD.into(),
         build_command: BUILD_COMMAND.into(),
         root_directory: "/".into(),
+        custom_domain: String::new(),
     }
 }
 async fn fixture() -> (tempfile::TempDir, App, Site) {
@@ -1152,4 +1153,105 @@ async fn agent_configuration_cannot_reenable_a_human_revoked_connection() {
             .unwrap()["revoked"],
         true
     );
+}
+
+#[tokio::test]
+async fn minimal_configuration_needs_no_cloudflare_ids_and_returns_creation_links() {
+    let (_root, app, _site) = fixture().await;
+    let args = json!({"site_id":"minimal","connection_revision":0,"request_id":"setup-minimal","configuration":{"github_owner":"fixture-owner","github_repo":"fixture-min","worker_name":"fixture-min","custom_domain":"fixture-min.example.com"}});
+    let output = configure(&app.store, "shared_default", &args).await.unwrap();
+    assert_eq!(output["configuration"]["production_branch"], "main");
+    assert_eq!(output["configuration"]["cloudflare_account_id"], "");
+    assert_eq!(output["configuration"]["build_command"], BUILD_COMMAND);
+    assert_eq!(output["credential_requests"][0]["create_url"], "https://github.com/settings/personal-access-tokens/new");
+    assert_eq!(output["credential_requests"][1]["create_url"], "https://dash.cloudflare.com/profile/api-tokens");
+    assert_eq!(output["setup_links"][0]["url"], GITHUB_APP_INSTALL);
+    let missing = json!({"site_id":"broken","connection_revision":0,"request_id":"setup-broken"});
+    let error = configure(&app.store, "shared_default", &missing).await.unwrap_err().to_string();
+    assert!(error.contains("github_owner, github_repo and worker_name"), "{error}");
+    let mut bad = args.clone();
+    bad["site_id"] = json!("bad-domain");
+    bad["configuration"]["custom_domain"] = json!("Bad_Domain");
+    assert!(configure(&app.store, "shared_default", &bad).await.is_err());
+}
+async fn discovery_operation<'a>(app: &'a App, site: &Site, mock: &'a Mock) -> Operation<'a, Mock> {
+    Operation {
+        store: &app.store,
+        site: site.clone(),
+        transport: mock,
+        credential_digest: digest(&serde_json::to_value(credentials(&app.store, site).await.unwrap()).unwrap()),
+        receipt: json!({"steps":[]}),
+        key: "fixture-discovery-receipt".into(),
+    }
+}
+#[tokio::test]
+async fn cloudflare_ids_are_discovered_and_custom_domain_attached_once() {
+    let (_root, app, mut site) = fixture().await;
+    site.configuration.cloudflare_account_id.clear();
+    site.configuration.build_token_uuid.clear();
+    site.configuration.custom_domain = "fixture.example.com".into();
+    let account = "b".repeat(32);
+    let mock = Mock::new(vec![
+        ("GET", "/client/v4/accounts", 200, json!({"success":true,"result":[{"id":account,"name":"Fixture"}]})),
+        ("GET", "/builds/tokens", 200, json!({"success":true,"result":[{"build_token_name":"fixture","build_token_uuid":BUILD}]})),
+        ("PUT", "/workers/domains", 200, json!({"success":true,"result":{"hostname":"fixture.example.com"}})),
+    ]);
+    let mut op = discovery_operation(&app, &site, &mock).await;
+    op.resolve_cloudflare().await.unwrap();
+    assert_eq!(op.account_id(), account);
+    assert_eq!(op.build_token(), BUILD);
+    op.attach_domain().await.unwrap();
+    op.attach_domain().await.unwrap();
+    mock.done();
+    let calls = mock.requests.lock().unwrap();
+    let domain = calls.last().unwrap();
+    assert_eq!(domain.path, format!("/client/v4/accounts/{account}/workers/domains"));
+    assert_eq!(domain.body, json!({"hostname":"fixture.example.com","service":"fixture-site"}));
+}
+#[tokio::test]
+async fn several_cloudflare_accounts_require_an_explicit_choice() {
+    let (_root, app, mut site) = fixture().await;
+    site.configuration.cloudflare_account_id.clear();
+    let mock = Mock::new(vec![(
+        "GET",
+        "/client/v4/accounts",
+        200,
+        json!({"result":[{"id":"c".repeat(32),"name":"One"},{"id":"d".repeat(32),"name":"Two"}]}),
+    )]);
+    let mut op = discovery_operation(&app, &site, &mock).await;
+    let error = op.resolve_cloudflare().await.unwrap_err().to_string();
+    assert!(error.contains("2 accounts") && error.contains("One = ") && error.contains("cloudflare_account_id"), "{error}");
+    assert!(op.account_id().is_empty());
+}
+#[tokio::test]
+async fn binary_files_commit_as_base64_blobs_and_invalid_base64_never_reaches_github() {
+    let (_root, app, site) = fixture().await;
+    let encoded = base64::engine::general_purpose::STANDARD.encode([0u8, 1, 2, 255]);
+    let transport = Mock::new(vec![
+        ("GET", "/git/ref/heads/webagent/images", 200, json!({"object":{"sha":HEAD}})),
+        ("GET", "/git/commits/1111111111111111111111111111111111111111", 200, json!({"tree":{"sha":TREE}})),
+        ("POST", "/git/blobs", 201, json!({"sha":TREE})),
+        ("POST", "/git/trees", 201, json!({"sha":TREE})),
+        ("POST", "/git/commits", 201, json!({"sha":NEXT})),
+        ("PATCH", "/git/refs/heads/webagent/images", 200, json!({"object":{"sha":NEXT}})),
+    ]);
+    let mut request = args("commit-binary");
+    request["branch"] = json!("webagent/images");
+    request["expected_head"] = json!(HEAD);
+    request["message"] = json!("Add photo");
+    request["changes"] = json!([{"path":"public/photo.png","content_base64":encoded}]);
+    let result = run_operation(&app.store, site.clone(), &transport, "source_remote_commit", &request).await.unwrap();
+    assert_eq!(result["status"], "success", "{result}");
+    transport.done();
+    let blob = transport.requests.lock().unwrap().iter().find(|r| r.path.ends_with("/git/blobs")).unwrap().clone();
+    assert_eq!(blob.body, json!({"content":encoded,"encoding":"base64"}));
+    let empty = Mock::new(vec![]);
+    let mut invalid = args("commit-invalid-binary");
+    invalid["branch"] = json!("webagent/images");
+    invalid["expected_head"] = json!(HEAD);
+    invalid["message"] = json!("Broken");
+    invalid["changes"] = json!([{"path":"public/x.png","content_base64":"not base64!"}]);
+    let result = run_operation(&app.store, load(&app.store, "shared_default", "fixture").await.unwrap(), &empty, "source_remote_commit", &invalid).await.unwrap();
+    assert_eq!(result["status"], "failed", "{result}");
+    assert!(empty.requests.lock().unwrap().is_empty());
 }

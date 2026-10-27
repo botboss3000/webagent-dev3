@@ -18,11 +18,17 @@ impl<T: Transport> Operation<'_, T> {
             self.site.configuration.github_owner, self.site.configuration.github_repo
         )
     }
+    /// Configured values win; otherwise the IDs discovered during provisioning are used.
+    pub fn account_id(&self) -> String {
+        let cfg = &self.site.configuration.cloudflare_account_id;
+        if cfg.is_empty() { self.site.runtime["cloudflare_account_id"].as_str().unwrap_or("").into() } else { cfg.clone() }
+    }
+    pub fn build_token(&self) -> String {
+        let cfg = &self.site.configuration.build_token_uuid;
+        if cfg.is_empty() { self.site.runtime["build_token_uuid"].as_str().unwrap_or("").into() } else { cfg.clone() }
+    }
     pub fn account(&self) -> String {
-        format!(
-            "/client/v4/accounts/{}",
-            self.site.configuration.cloudflare_account_id
-        )
+        format!("/client/v4/accounts/{}", self.account_id())
     }
     pub fn worker(&self) -> String {
         format!(
@@ -200,9 +206,20 @@ impl<T: Transport> Operation<'_, T> {
             anyhow::ensure!(
                 change
                     .as_object()
-                    .is_some_and(|o| o.keys().all(|k| matches!(k.as_str(), "path" | "content"))),
+                    .is_some_and(|o| o.keys().all(|k| matches!(k.as_str(), "path" | "content" | "content_base64"))),
                 "Unsupported change fields"
             );
+            if let Some(encoded) = change.get("content_base64") {
+                // Binary files (images, fonts) arrive as base64, usually resolved from a sent chat attachment.
+                anyhow::ensure!(change.get("content").is_none(), "Use content or content_base64, not both");
+                let len = base64::engine::general_purpose::STANDARD
+                    .decode(encoded.as_str().ok_or_else(|| anyhow!("content_base64 must be a string"))?)
+                    .map_err(|_| anyhow!("Invalid base64 content for {file}"))?
+                    .len();
+                bytes += len;
+                anyhow::ensure!(len <= 10 * 1024 * 1024 && bytes <= 30 * 1024 * 1024, "Binary change exceeds bound (10 MiB per file, 30 MiB per commit)");
+                continue;
+            }
             anyhow::ensure!(
                 change["content"].is_null() || change["content"].is_string(),
                 "Content must be UTF-8 text or null for deletion"
@@ -210,7 +227,7 @@ impl<T: Transport> Operation<'_, T> {
             let len = change["content"].as_str().map_or(0, str::len);
             bytes += len;
             anyhow::ensure!(
-                len <= 262144 && bytes <= 1024 * 1024,
+                len <= 262144 && bytes <= 30 * 1024 * 1024,
                 "Source change exceeds bound"
             );
         }
@@ -241,7 +258,15 @@ impl<T: Transport> Operation<'_, T> {
             .to_owned();
         let mut tree = Vec::new();
         for change in changes {
-            let blob = if let Some(content) = change["content"].as_str() {
+            let blob = if let Some(encoded) = change["content_base64"].as_str() {
+                self.call(ProviderRequest::gh(
+                    "POST",
+                    format!("{}/git/blobs", self.repo()),
+                    json!({"content":encoded,"encoding":"base64"}),
+                ))
+                .await?["sha"]
+                    .clone()
+            } else if let Some(content) = change["content"].as_str() {
                 self.call(ProviderRequest::gh(
                     "POST",
                     format!("{}/git/blobs", self.repo()),

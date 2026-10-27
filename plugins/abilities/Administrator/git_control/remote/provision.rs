@@ -84,7 +84,59 @@ impl<T: Transport> Operation<'_, T> {
         );
         Ok(())
     }
+    /// Fill an unconfigured account or build token from what the saved Cloudflare token can see.
+    /// Ambiguity stops with a clear choice for the user instead of guessing.
+    pub async fn resolve_cloudflare(&mut self) -> Result<()> {
+        if self.account_id().is_empty() {
+            let accounts = self
+                .call(ProviderRequest::cf("GET", "/client/v4/accounts".into(), Value::Null))
+                .await?;
+            let rows = accounts.as_array().ok_or_else(|| anyhow!("Cloudflare account list unavailable"))?;
+            let id = match rows.as_slice() {
+                [one] => one["id"].as_str().unwrap_or("").to_owned(),
+                [] => anyhow::bail!("The Cloudflare token cannot see any account; give it Account Settings — Read for the hosting account"),
+                many => anyhow::bail!(
+                    "The Cloudflare token can access {} accounts ({}); set cloudflare_account_id with configure to choose one",
+                    many.len(),
+                    many.iter().map(|a| format!("{} = {}", a["name"].as_str().unwrap_or("?"), a["id"].as_str().unwrap_or("?"))).collect::<Vec<_>>().join(", ")
+                ),
+            };
+            anyhow::ensure!(id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()), "Cloudflare returned an invalid account ID");
+            self.remember("cloudflare_account_id", json!(id)).await?;
+        }
+        if self.build_token().is_empty() {
+            let tokens = self
+                .call(ProviderRequest::cf("GET", format!("{}/builds/tokens", self.account()), Value::Null))
+                .await?;
+            let token = tokens
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|t| t["build_token_uuid"].as_str())
+                .find(|t| uuid::Uuid::parse_str(t).is_ok())
+                .ok_or_else(|| anyhow!("This Cloudflare account has no Workers Builds token yet. In the Cloudflare dashboard open Workers & Pages, select any Worker → Settings → Builds → API token and create one (or connect any repository once), then retry: https://dash.cloudflare.com/?to=/:account/workers-and-pages"))?
+                .to_owned();
+            self.remember("build_token_uuid", json!(token)).await?;
+        }
+        Ok(())
+    }
+    /// Route the optional custom hostname to the Worker; its zone must belong to the same account.
+    pub async fn attach_domain(&mut self) -> Result<()> {
+        let cfg = self.site.configuration.clone();
+        if cfg.custom_domain.is_empty() || self.site.runtime["custom_domain"] == cfg.custom_domain.as_str() {
+            return Ok(());
+        }
+        self.call(ProviderRequest::cf(
+            "PUT",
+            format!("{}/workers/domains", self.account()),
+            json!({"hostname":cfg.custom_domain,"service":cfg.worker_name}),
+        ))
+        .await
+        .map_err(|error| anyhow!("{error}. The domain's zone must be on this Cloudflare account and the token needs Workers Scripts — Edit"))?;
+        self.remember("custom_domain", json!(cfg.custom_domain)).await
+    }
     pub async fn provision(&mut self, connect: bool) -> Result<Value> {
+        self.resolve_cloudflare().await?;
         let cfg = self.site.configuration.clone();
         let repo = self
             .send(ProviderRequest::gh("GET", self.repo(), Value::Null))
@@ -180,6 +232,7 @@ impl<T: Transport> Operation<'_, T> {
             }
             self.validate_static(&head).await?;
             self.verify_triggers().await?;
+            self.attach_domain().await?;
         } else {
             anyhow::ensure!(repo.status==404&&worker.status==404,"Site creation requires unused repository and Worker names; connect existing resources instead");
             let user = self
@@ -239,10 +292,11 @@ impl<T: Transport> Operation<'_, T> {
             self.remember("worker_tag", json!(tag)).await?;
             self.install_triggers(&tag, &repository).await?;
             self.verify_triggers().await?;
+            self.attach_domain().await?;
         }
         self.remember("provisioned", json!(true)).await?;
         Ok(
-            json!({"status":"configured","site_id":self.site.id,"runtime":self.site.runtime,"live_provider_acceptance":"not_certified"}),
+            json!({"status":"configured","site_id":self.site.id,"runtime":self.site.runtime,"custom_domain_url":(!cfg.custom_domain.is_empty()).then(|| format!("https://{}", cfg.custom_domain)),"live_provider_acceptance":"not_certified"}),
         )
     }
     async fn install_triggers(&mut self, tag: &str, repository: &Value) -> Result<()> {
@@ -260,7 +314,7 @@ impl<T: Transport> Operation<'_, T> {
             ("preview_trigger", PREVIEW_COMMAND),
             ("production_trigger", DEPLOY_COMMAND),
         ] {
-            let trigger=self.call(ProviderRequest::cf("POST",format!("{}/builds/triggers",self.account()),json!({"external_script_id":tag,"repo_connection_uuid":connection,"build_token_uuid":cfg.build_token_uuid,"trigger_name":format!("WebAgent {key}"),"build_command":cfg.build_command,"deploy_command":command,"root_directory":cfg.root_directory,"branch_includes":["*"],"branch_excludes":["*"],"path_includes":["*"],"path_excludes":[]}))).await?;
+            let trigger=self.call(ProviderRequest::cf("POST",format!("{}/builds/triggers",self.account()),json!({"external_script_id":tag,"repo_connection_uuid":connection,"build_token_uuid":self.build_token(),"trigger_name":format!("WebAgent {key}"),"build_command":cfg.build_command,"deploy_command":command,"root_directory":cfg.root_directory,"branch_includes":["*"],"branch_excludes":["*"],"path_includes":["*"],"path_excludes":[]}))).await?;
             let id = trigger["trigger_uuid"]
                 .as_str()
                 .filter(|s| uuid::Uuid::parse_str(s).is_ok())
