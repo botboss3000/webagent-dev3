@@ -1,5 +1,5 @@
 //! Conversation lifecycle, participation, sharing, history, controls, follow-ups, Main Chat and session naming.
-//! Configuration stays in existing `config/chat.json` and `config/prompts.json`; no new JSON files or daemons are introduced.
+//! Configuration stays in existing `config/chat.json` and `crates/modules/configuration/prompts`; no new JSON files or daemons are introduced.
 //! Root-bound adapters (Store/App, HTTP routes) live in `host/` and are compiled by the root binary.
 pub mod agent_config;
 pub mod configuration;

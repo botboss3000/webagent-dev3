@@ -4,7 +4,7 @@ The widget mounts the actual V3 chat panel. `ui/chat/core/panel.js` owns chat be
 
 ## Configure
 
-Presentation reads `/state/config/chat.json`: merge `chat_common` with `chat_widget`. Existing widget formatting stays supported. Add these optional fields under `chat_widget` (shown defaults):
+Presentation reads the live `ui/chat/chat.json`: merge `chat_common` with `chat_widget`. Existing widget formatting stays supported. Add these optional fields under `chat_widget` (shown defaults):
 
 ```json
 {

@@ -1,6 +1,6 @@
 'use strict';
 // V2 chat-ui/session-load landing: live rects, exact tail shortfall, local settle.
-// @code-index {"version":1,"feature":"chat-transcript-anchor","aliases":["chat transcript anchor","scroll anchoring","user turn positioning"],"purpose":"Keeps new user turns visible while respecting reader scroll intent Config: data/config/chat.json -> chat_common.user_turn_anchor. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/user_turn_anchor"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-transcript-anchor","aliases":["chat transcript anchor","scroll anchoring","user turn positioning"],"purpose":"Keeps new user turns visible while respecting reader scroll intent Config: ui/chat/chat.json -> chat_common.user_turn_anchor. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/user_turn_anchor"],"profile_overrides":true}],"opportunities":[]}}
 /** Coordinates user-turn landing, tail following, and directional settle snaps for a transcript. Call destroy when its panel is unmounted. */
 export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
   const abort=new AbortController();

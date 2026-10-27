@@ -128,4 +128,5 @@ mod tests {
     }
 }
 
+pub mod live;
 pub mod prompts;

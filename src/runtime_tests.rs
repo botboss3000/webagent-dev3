@@ -44,7 +44,6 @@ pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
     std::fs::write(control_dir.join("shutoff"), b"0").unwrap();
     let store = Store::open(root.path()).await.unwrap();
     std::fs::create_dir_all(root.path().join("config")).unwrap();
-    std::fs::copy(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config/prompts.json"), root.path().join("config/prompts.json")).unwrap();
     store.put("policy", &policy_default()).await.unwrap();
     store
         .put("settings", &json!({"model":"fixture"}))
@@ -6477,17 +6476,13 @@ async fn live_context_default_stack_journey() {
     let skill=abilities.join("Core/base/skills/live_refresh.skill.md");
     std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
     std::fs::write(&skill,live_context_fixture_skill("LIVE_SKILL_FIRST")).unwrap();
-    std::fs::create_dir_all(source.join("config")).unwrap();
-    let prompt=source.join("config/prompts.json");
-    let mut source_prompts:Value=serde_json::from_slice(&std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/prompts.json")).unwrap()).unwrap();
-    source_prompts["base_instructions"]=json!("LIVE_MAIN_FIRST");
-    source_prompts["closing_reporting"]=json!("LIVE_CLOSING");
-    source_prompts["jev_guidance"]=json!("LIVE_JEV_SOURCE_FIRST");
-    crate::api::live_configuration::validate_source_prompts(&source_prompts).unwrap();
-    std::fs::write(&prompt,source_prompts.to_string()).unwrap();
-    // A saved sibling override must survive adoption of a changed source main prompt.
-    std::fs::create_dir_all(root.path().join("config")).unwrap();
-    std::fs::write(root.path().join("config/prompts.json"),json!({"jev_guidance":"LIVE_JEV_SAVED","tool_result_deduplication":serde_json::from_slice::<Value>(&std::fs::read(root.path().join("config/prompts.json")).unwrap()).unwrap()["tool_result_deduplication"]}).to_string()).unwrap();
+    // The catalog source carries its own prompt files; edits to them are adopted live.
+    let prompt=source.join(webagent_configuration::prompts::PROMPTS);
+    copy_live_context_fixture(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(webagent_configuration::prompts::PROMPTS),&prompt);
+    for (name,text) in [("base_instructions","LIVE_MAIN_FIRST"),("closing_reporting","LIVE_CLOSING"),("jev_guidance","LIVE_JEV_SOURCE_FIRST")] {
+        std::fs::write(prompt.join(format!("{name}.md")),text).unwrap();
+    }
+    crate::api::live_configuration::validate_source_prompts(&serde_json::from_slice(&crate::live_assets::prompt_defaults_at(Some(&source)).unwrap()).unwrap()).unwrap();
     app.abilities=Arc::new(abilities::Catalog::load(&abilities).unwrap());
     let slot=Box::pin(app.store.upsert_prompt_slot("live_refresh","LIVE_SLOT_FIRST",None,None,None,0)).await.unwrap();
     let slot_revision=slot["revision"].as_i64().unwrap();
@@ -6504,10 +6499,8 @@ async fn live_context_default_stack_journey() {
                 1=>json!([{"type":"function_call","call_id":"select-live-skill","name":"load_skill",
                     "arguments":"{\"ability_id\":\"base\",\"kind\":\"selectable\",\"skill_id\":\"live_refresh\"}"}]),
                 2=>{
-                    let mut prompts:Value=serde_json::from_slice(&std::fs::read(&prompt).unwrap()).unwrap();
-                    prompts["base_instructions"]=json!("LIVE_MAIN_CURRENT");prompts["jev_guidance"]=json!("LIVE_JEV_SOURCE_CURRENT");
-                    crate::api::live_configuration::validate_source_prompts(&prompts).unwrap();
-                    std::fs::write(&prompt,prompts.to_string()).unwrap();
+                    std::fs::write(prompt.join("base_instructions.md"),"LIVE_MAIN_CURRENT").unwrap();
+                    std::fs::write(prompt.join("jev_guidance.md"),"LIVE_JEV_SOURCE_CURRENT").unwrap();
                     std::fs::write(&skill,live_context_fixture_skill("LIVE_SKILL_CURRENT")).unwrap();
                     Box::pin(store.upsert_prompt_slot("live_refresh","LIVE_SLOT_CURRENT",None,None,None,slot_revision)).await.unwrap();
                     json!([{"type":"function_call","call_id":"refresh-native-round","name":"get_time","arguments":"{}"}])
@@ -6551,8 +6544,7 @@ async fn live_context_default_stack_journey() {
         assert_eq!(control["parameters"]["properties"]["selector"]["anyOf"][1]["required"],
             json!(["type","tool_name"]));
         let instructions=request["instructions"].as_str().unwrap();
-        assert!(instructions.contains("LIVE_CLOSING")&&instructions.contains("LIVE_JEV_SAVED"));
-        assert!(!instructions.contains("LIVE_JEV_SOURCE_"));
+        assert!(instructions.contains("LIVE_CLOSING")&&instructions.contains("LIVE_JEV_SOURCE_"));
     }
     assert!(!requests[0]["input"].to_string().contains("LIVE_SKILL_FIRST"));
     assert!(requests[1]["input"].to_string().contains("LIVE_SKILL_FIRST"));

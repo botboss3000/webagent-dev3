@@ -1,4 +1,4 @@
-//! Session auto-naming configuration (`config/prompts.json#/session_naming`), title normalization and state transitions.
+//! Session auto-naming configuration (live `prompts/session_naming.json` and `session_naming/prompt.md`), title normalization and state transitions.
 use anyhow::{anyhow, Result};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -108,58 +108,6 @@ impl Config {
     }
 }
 
-pub fn initialize_at(root: &Path, source: Option<&Path>, fallback_directory: &Path) -> Result<()> {
-    let directory = root.join("config");
-    std::fs::create_dir_all(&directory)?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(directory.join(".prompts.lock"))?;
-    lock.lock_exclusive()?;
-    let path = directory.join("prompts.json");
-    let original = match std::fs::read(&path) {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
-    };
-    let mut prompts: Value = match original.as_deref() {
-        Some(bytes) => serde_json::from_slice(bytes)?,
-        None => serde_json::from_slice(&webagent_configuration::prompts::prompt_defaults_at(
-            source,
-            fallback_directory,
-        )?)?,
-    };
-    let object = prompts
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("Invalid prompts file"))?;
-    if object.contains_key("session_naming") && original.is_some() {
-        return Ok(());
-    }
-    object.insert(
-        "session_naming".into(),
-        serde_json::to_value(Config::defaults_at(source, fallback_directory)?)?,
-    );
-    let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
-    if let Ok(metadata) = std::fs::metadata(&path) {
-        temporary
-            .as_file()
-            .set_permissions(metadata.permissions())?;
-    }
-    serde_json::to_writer_pretty(&mut temporary, &prompts)?;
-    temporary.write_all(b"\n")?;
-    temporary.as_file().sync_all()?;
-    if Some(std::fs::read(&path).unwrap_or_default()) != original && original.is_some() {
-        return Err(anyhow!("Prompts changed; retry initialization"));
-    }
-    if original.is_none() && path.exists() {
-        return Err(anyhow!("Prompts changed; retry initialization"));
-    }
-    temporary.persist(&path).map_err(|error| error.error)?;
-    std::fs::File::open(directory)?.sync_all()?;
-    Ok(())
-}
 
 pub fn validate_settings_at(
     value: &Value,

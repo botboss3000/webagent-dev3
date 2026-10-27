@@ -25,8 +25,6 @@ impl Fixture {
 impl RecordEffects for Fixture {
  fn unseal(&self,b:&[u8])->Result<Value>{Ok(serde_json::from_slice(b)?)}
  fn encode_user_record(&self,v:&Value)->Result<Vec<u8>>{Ok(serde_json::to_vec(v)?)}
- fn resolved_prompts(&self,root:&Path)->Result<Value>{Ok(serde_json::from_slice(&std::fs::read(root.join("config/prompts.json"))?)?)}
- fn prompt_defaults(&self)->Result<Vec<u8>>{Ok(b"{}".to_vec())}
  fn public_usage(&self,v:&Value)->Value{v.clone()}
  fn record_usage(&self,_:&mut Value,_:&Value){}
  fn invalidate_documents(&self,_:&[String]){}
@@ -56,12 +54,6 @@ impl RecordEffects for Fixture {
  assert_eq!(f.read_document("manager_review:r").await.unwrap().unwrap()["status"],"review_error");assert!(f.read_document("manager_pending:s").await.unwrap().is_none());
  let events:i64=sqlx::query_scalar("SELECT count(*) FROM events").fetch_one(&f.pool).await.unwrap();assert_eq!(events,1);
  assert!(!f.repo().finish_manager_review(&observed,"review_error",None).await.unwrap());
-}
-#[test]fn cooperating_settings_writes_preserve_siblings_modes_and_lazy_defaults(){
- use std::os::unix::fs::PermissionsExt;
- let root=tempfile::tempdir().unwrap();std::fs::create_dir(root.path().join("config")).unwrap();let path=root.path().join("config/prompts.json");std::fs::write(&path,b"{\"extension\":true}").unwrap();std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o640)).unwrap();
- std::thread::scope(|scope|for id in ["one","two"]{let root=&root;scope.spawn(move||crate::settings::save_prompt(root.path(),id,id,||anyhow::bail!("Defaults must stay lazy")).unwrap());});
- let v:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();assert_eq!(v["extension"],true);for id in ["one","two"]{assert_eq!(v["manager_incoming_message"][id],id);}assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode()&0o777,0o640);
 }
 
 // Append to Manager's existing cfg(test) tests.rs; existing repository tests remain unchanged.
@@ -162,11 +154,6 @@ mod independent_runtime_io {
     impl RecordEffects for Storage {
         fn unseal(&self, bytes: &[u8]) -> Result<Value> { RecordCodec::unseal(self, bytes) }
         fn encode_user_record(&self, value: &Value) -> Result<Vec<u8>> { self.seal(value) }
-        fn resolved_prompts(&self, root: &Path) -> Result<Value> {
-            if root != self.root { bail!("Fixture prompt scope mismatch"); }
-            Ok(serde_json::from_slice(&std::fs::read(root.join("config/prompts.json"))?)?)
-        }
-        fn prompt_defaults(&self) -> Result<Vec<u8>> { bail!("Existing fixture prompts must keep defaults lazy") }
         fn public_usage(&self, value: &Value) -> Value { value.clone() }
         fn record_usage(&self, _: &mut Value, _: &Value) { assert_eq!(self.agent_scope, AGENT); self.usage.fetch_add(1, Ordering::SeqCst); }
         fn invalidate_documents(&self, _: &[String]) {}
@@ -338,7 +325,6 @@ mod independent_runtime_io {
                 .execute(&storage.agent).await.unwrap();
             storage.put_user("control", &json!({"shutoff":false})).await.unwrap();
             storage.put_user(&format!("session:{SESSION}"), &json!({"id":SESSION,"status":"active","owner_id":OWNER,"writer":REQUESTER,"agent_id":AGENT})).await.unwrap();
-            std::fs::write(root.path().join("config/prompts.json"), serde_json::to_vec(&json!({"manager_incoming_message":{(AGENT):CRITERIA},"fixture_extension":true})).unwrap()).unwrap();
             let shared = BTreeSet::from([AGENT.to_owned()]); let mut catalog = Catalog::default();
             catalog.connections.insert("fixture-connection".into(), Connection { id:"fixture-connection".into(), owner_id:REQUESTER.into(), transport:Transport::OpenaiSubscription,
                 credential_ref:"provider_credential:fixture".into(), allowed_agents:shared.clone(), revision:1, revoked:false });
@@ -400,7 +386,6 @@ mod independent_runtime_io {
             metadata["manager_incoming_message_revision"] = json!(revision);
             metadata["manager_incoming_message"]["criteria"] = json!(criteria);
             sqlx::query("UPDATE agents SET metadata=? WHERE id=?").bind(self.storage.seal(&metadata).unwrap()).bind(AGENT).execute(&self.storage.agent).await.unwrap();
-            crate::settings::save_prompt(&self.storage.root, AGENT, criteria, || bail!("Defaults must stay lazy")).unwrap();
         }
         async fn admissions(&self) -> i64 { sqlx::query_scalar("SELECT count(*) FROM owner_admissions").fetch_one(&self.storage.user).await.unwrap() }
         fn check_authority_trace(&self) {

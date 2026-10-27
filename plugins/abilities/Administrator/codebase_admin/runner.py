@@ -24,10 +24,10 @@ from pathlib import Path
 
 LIMIT=1024*1024
 FRAME_LIMIT=8*LIMIT
-CONTEXT_CONFIG_PATH=Path("/state/config/context-compaction.json")
+CONTEXT_CONFIG_PATH=Path("/live-checkout/crates/modules/context/context-compaction.json")
 LIVE_CHECKOUT=Path("/live-checkout")
 def search_limits():
-    """The validated data-root config is read on every search, without a restart."""
+    """The live compaction file (live-files.json) is read on every search, without a restart."""
     try:
         config = json.loads(CONTEXT_CONFIG_PATH.read_text())
     except FileNotFoundError:

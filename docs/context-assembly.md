@@ -16,13 +16,12 @@ Dispatch fingerprints and a synchronous source fence recheck source/authority
 after credential retrieval and before the network call. Repeated changes are
 bounded and pause for review rather than dispatching stale context.
 
-src/live_assets.rs::resolved_prompts_at merges published config/prompts.json
-defaults with saved data-root config/prompts.json overrides, using saved default
-provenance. Provider::instructions_for_snapshot composes base_instructions,
+src/live_assets.rs::resolved_prompts_at assembles the live Markdown prompt files under
+crates/modules/configuration/prompts (`name.md` text, `name.json` settings, folders
+nest). Provider::instructions_for_snapshot composes base_instructions,
 closing_reporting and jev_guidance. Agent prompt slots are host-owned encrypted
 records, read again by prepare_capability. The legacy last-good provider helper
-is not the strict dispatch freshness authority. Publishing defaults does not
-overwrite explicit saved overrides.
+is not the strict dispatch freshness authority. There are no saved overrides.
 
 src/storage/context_assets.rs keeps encrypted conversation selections scoped by
 agent and requester in the canonical conversation owner's user plane. Services
@@ -185,14 +184,13 @@ and stale-write rejection remain host checks. Agent tool_result_deduplication
 policy and tool_result_deduplication_tools overrides have separate persisted
 namespaces. The ability API projects the tool map as tool_result_deduplication.
 
-Config: data/config/prompts.json -> /tool_result_deduplication/placeholder.
-Source config/prompts.json ships the required value. dedup_template reads the
-actual live data-root JSON at each model-call boundary; it does not consult
+Config: crates/modules/configuration/prompts/tool_result_deduplication/placeholder.md
+ships the required value. dedup_template reads the live file at each
+model-call boundary; it does not consult
 embedded defaults or alternate text. Supported variables are {current_call_id},
 {reference_call_id} and {tool}. Empty text, malformed braces, unsupported variables
-and templates over 8192 bytes are rejected. The regular nonsymlink JSON file is
-bounded to 4 MiB. Revision-fenced live prompts writes validate before saving and
-need no Rust compilation. Enabled suppression with missing/invalid configuration
+and templates over 8192 bytes are rejected. Prompt files are bounded to 64 KiB each, edited
+in place and need no Rust compilation. Enabled suppression with missing/invalid configuration
 pauses before model dispatch. New placeholders capture current validated text;
 compaction can use captured assignment configuration when policy is later off.
 That captured configuration is not a hardcoded/alternate-template fallback.

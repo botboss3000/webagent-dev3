@@ -1,0 +1,8 @@
+{
+  "model_role": "system",
+  "attempts_per_job": 3,
+  "retry_delay_ms": 400,
+  "request_timeout_seconds": 45,
+  "recovery_retry_delay_seconds": 60,
+  "max_job_attempts": 3
+}

@@ -48,10 +48,8 @@ or bypass reviews already submitted under an enabled gate.
 
 ## Record authority
 
-The live config/prompts.json stores per-agent criteria in manager_incoming_message.<agent-id>.
-Existing metadata criteria migrate on the next read; saving removes the metadata copy.
-Agent metadata owns only manager_incoming_message enablement beneath the Identity
-revision. An internal gate revision advances when its settings change; pending
+Agent metadata owns manager_incoming_message (enablement and criteria) beneath the
+Identity revision. An internal gate revision advances when its settings change; pending
 reviews pin it, so toggling off and back on cannot resurrect an older verdict. User docs own manager_review:<review-id> (submission, pinned settings,
 model plans, proposed run, state, generation, deadline and verdict) and
 manager_pending:<session-id> (temporary queue pointer). Existing message retry

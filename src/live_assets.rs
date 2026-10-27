@@ -6,16 +6,23 @@ use std::sync::OnceLock;
 /// Supported execution identities and runtime argument/authority checks remain fixed Rust code.
 pub(crate) fn native_schema_snapshot_at(source:Option<&std::path::Path>)->Result<Vec<Value>> {
  use std::io::Read;
- let selected=default_source(source)?;
- let path=match selected {
-  Some(root)=>root.join("config/administration/native-tools.json"),
-  None=>if cfg!(test) {PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/administration/native-tools.json")}
-   else {PathBuf::from("/usr/local/share/webagent/defaults/native-tools.json")},
+ // A pinned candidate supplies its own file; otherwise the live file (`live-files.json`).
+ let bytes=match source {
+  Some(root)=>{
+   let path=root.join(NATIVE_TOOLS);
+   let meta=std::fs::symlink_metadata(&path)?;
+   if !meta.is_file()||meta.file_type().is_symlink()||meta.len()>512*1024 {anyhow::bail!("Invalid native schema file");}
+   let mut bytes=Vec::new();std::fs::File::open(path)?.take(512*1024+1).read_to_end(&mut bytes)?;
+   if bytes.len()>512*1024 {anyhow::bail!("Native schemas exceed limit");}
+   bytes
+  },
+  None=>webagent_configuration::live::read(NATIVE_TOOLS,512*1024,|bytes|native_schemas(bytes).map(|_|()))?,
  };
- let meta=std::fs::symlink_metadata(&path)?;
- if !meta.is_file()||meta.file_type().is_symlink()||meta.len()>512*1024 {anyhow::bail!("Invalid native schema file");}
- let mut bytes=Vec::new();std::fs::File::open(path)?.take(512*1024+1).read_to_end(&mut bytes)?;
- if bytes.len()>512*1024 {anyhow::bail!("Native schemas exceed limit");}
+ native_schemas(&bytes)
+}
+/// Checkout path of the Administrator native tool schemas, beside their handlers.
+pub(crate) const NATIVE_TOOLS:&str="src/engine/tools/native-tools.json";
+fn native_schemas(bytes:&[u8])->Result<Vec<Value>> {
  let schemas:Vec<Value>=serde_json::from_slice(&bytes).map_err(|_|anyhow!("Invalid native schemas"))?;
  let mut ids=std::collections::BTreeSet::new();
  if schemas.len()!=42+crate::source_control::TOOLS.len() {anyhow::bail!("Invalid native schema set");}
@@ -42,7 +49,10 @@ pub(crate) fn native_schema_snapshot_at(source:Option<&std::path::Path>)->Result
 /// Preserve unconfigured local fixture/install fallback; immutable publication snapshots require their own complete file.
 pub(crate) fn native_schemas_for_catalog(root:&std::path::Path,publication:bool)->Result<Vec<Value>> {
  let selected=root.ends_with("plugins/abilities").then(||root.parent().and_then(std::path::Path::parent)).flatten();
- let selected=selected.filter(|source|publication||std::env::var_os("V3_UI_ROOT").is_some()||source.join("config/administration/native-tools.json").exists());
+ // Installations (a configured publication) read the live file; validation and fixture
+ // catalogs without one use their own source's file.
+ let _=publication;
+ let selected=selected.filter(|source|std::env::var_os("V3_UI_ROOT").is_none()&&source.join(NATIVE_TOOLS).exists());
  native_schema_snapshot_at(selected)
 }
 
@@ -73,154 +83,18 @@ pub(crate) fn record_adoption(root:&std::path::Path,role:&str,catalog:&abilities
 /// Read authoritative published defaults, or immutable packaged defaults when publication is not configured.
 pub(crate) fn prompt_defaults() -> Result<Vec<u8>> {prompt_defaults_at(None)}
 pub(crate) fn prompt_defaults_at(source:Option<&std::path::Path>)->Result<Vec<u8>> {webagent_configuration::prompts::prompt_defaults_at(source,&fallback_directory())}
-pub(crate) fn retention_defaults()->Result<Vec<u8>> {webagent_configuration::prompts::retention_defaults_at(None,&fallback_directory())}
-
-/// Publish first-start files and provenance from one pinned snapshot, without replacing saved configuration.
-pub(crate) fn initialize_defaults(root:&std::path::Path)->Result<()> {initialize_defaults_at(root,None)}
-fn initialize_defaults_at(root:&std::path::Path,source:Option<&std::path::Path>)->Result<()> {
- webagent_configuration::prompts::initialize_defaults_at(root,source,&fallback_directory(),|prompts,retention| {
-  crate::api::live_configuration::validate_source_prompts(prompts)?;
-  crate::tool_output::Policy::parse(retention)?;
-  Ok(())
- })
-}
-/// Resolve the current installation defaults and saved prompt overrides.
+/// The live prompts, assembled from their Markdown files.
 pub(crate) fn resolved_prompts(root:&std::path::Path)->Result<Value> {
     resolved_prompts_at(root,None)
 }
-/// Resolve prompts for a pinned model-call source revision. Reads config/prompts.json and saved leaf provenance.
+/// The prompts of a pinned candidate `source`, or the live files.
 pub(crate) fn resolved_prompts_at(root:&std::path::Path,source:Option<&std::path::Path>)->Result<Value> {
  webagent_configuration::prompts::resolved_prompts_at(root,source,&fallback_directory())
-}
-/// Keep saved values that differ from migration defaults; let unchanged leaves inherit published updates.
-fn merge_prompt_overrides(defaults:&mut Value,live:&Value,baseline:&Value) {
-    if let Some(saved)=live.as_object() {
-        for (key,value)in saved{
-            let before=baseline.get(key).unwrap_or(&Value::Null);
-            if value.is_object()&&before.is_object(){
-                if !defaults[key].is_object(){defaults[key]=json!({});}
-                merge_prompt_overrides(&mut defaults[key],value,before);
-            }else if before.as_str()!=Some(digest(value).as_str()){defaults[key]=value.clone();}
-        }
-    }else{*defaults=live.clone();}
-}
-#[cfg(test)]mod prompt_tests{
- use super::*;
- #[test]fn saved_setting_does_not_hide_an_updated_sibling_prompt(){
-  let mut published=json!({"session_naming":{"prompt":"new","attempts_per_job":3}});
-  let saved=json!({"session_naming":{"prompt":"old","attempts_per_job":5}});
-  let baseline=json!({"session_naming":{"prompt":digest(&json!("old")),"attempts_per_job":digest(&json!(3))}});
-  merge_prompt_overrides(&mut published,&saved,&baseline);
-  assert_eq!(published,json!({"session_naming":{"prompt":"new","attempts_per_job":5}}));
- }
 }
 /// Cache only validated immutable revisions; selected source errors remain errors.
 pub(crate) fn catalog(fallback:&Arc<abilities::Catalog>) -> Result<Arc<abilities::Catalog>> {
     static CACHE:OnceLock<webagent_abilities::CatalogCache<abilities::NativeHost>>=OnceLock::new();
     CACHE.get_or_init(webagent_abilities::CatalogCache::default).current(fallback)
-}
-
-#[cfg(test)]mod external_default_tests {
- use super::*;
- fn source()->tempfile::TempDir {
-  let root=tempfile::tempdir().unwrap();std::fs::create_dir(root.path().join("config")).unwrap();
-  for name in ["prompts.json","tool-output-retention.json"] {
-   std::fs::copy(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config").join(name),root.path().join("config").join(name)).unwrap();
-  }root
- }
- #[test]fn configured_source_is_authoritative_and_bounded() {
-  use std::os::unix::fs::symlink;
-  let source=source();let path=source.path().join("config/prompts.json");
-  std::fs::write(&path,b"{}").unwrap();
-  let value:Value=serde_json::from_slice(&prompt_defaults_at(Some(source.path())).unwrap()).unwrap();
-  assert!(value.get("base_instructions").is_none());
-  assert!(crate::api::live_configuration::validate_prompts(&value).is_err());
-  std::fs::write(&path,b"[]").unwrap();assert!(prompt_defaults_at(Some(source.path())).is_err());
-  std::fs::write(&path,b"PRIVATE_PROMPT_MARKER").unwrap();
-  let error=prompt_defaults_at(Some(source.path())).unwrap_err().to_string();assert!(!error.contains("PRIVATE_PROMPT_MARKER"));
-  std::fs::write(&path,vec![b' ';4*1024*1024+1]).unwrap();assert!(prompt_defaults_at(Some(source.path())).is_err());
-  std::fs::remove_file(&path).unwrap();assert!(prompt_defaults_at(Some(source.path())).is_err());
-  symlink(source.path().join("config/tool-output-retention.json"),&path).unwrap();assert!(prompt_defaults_at(Some(source.path())).is_err());
-  assert!(published_root_at(source.path()).is_err());
-  assert!(published_root_at(&source.path().join("missing/current/v3/ui")).is_err());
- }
- #[test]fn concurrent_seed_and_saved_override_adoption_preserve_provenance() {
-  let source=source();let state=tempfile::tempdir().unwrap();
-  std::thread::scope(|scope| {for _ in 0..2 {scope.spawn(||initialize_defaults_at(state.path(),Some(source.path())).unwrap());}});
-  let saved_path=state.path().join("config/prompts.json");let baseline=state.path().join("config/.prompt-defaults-baseline.json");
-  let first_baseline=std::fs::read(&baseline).unwrap();
-  let mut saved:Value=serde_json::from_slice(&std::fs::read(&saved_path).unwrap()).unwrap();saved["jev_guidance"]=json!("saved sibling");
-  std::fs::write(&saved_path,serde_json::to_vec(&saved).unwrap()).unwrap();let saved_bytes=std::fs::read(&saved_path).unwrap();
-  let path=source.path().join("config/prompts.json");let mut next:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-  next["base_instructions"]=json!("new inherited source");std::fs::write(path,serde_json::to_vec(&next).unwrap()).unwrap();
-  initialize_defaults_at(state.path(),Some(source.path())).unwrap();
-  assert_eq!(std::fs::read(&saved_path).unwrap(),saved_bytes);assert_eq!(std::fs::read(baseline).unwrap(),first_baseline);
-  let effective=crate::provider::Provider::instructions_for_snapshot("",state.path(),Some(source.path())).unwrap();
-  assert!(effective.contains("new inherited source"));assert!(effective.contains("saved sibling"));
- }
- #[test]fn invalid_source_never_creates_partial_runtime_defaults() {
-  let source=source();let state=tempfile::tempdir().unwrap();
-  std::fs::write(source.path().join("config/tool-output-retention.json"),br#"{"lifetime_calls":0}"#).unwrap();
-  assert!(initialize_defaults_at(state.path(),Some(source.path())).is_err());assert!(!state.path().join("config/prompts.json").exists());
- }
- #[test]fn source_without_optional_naming_stays_without_naming_after_seed_and_resolution() {
-  let source=source();let state=tempfile::tempdir().unwrap();let path=source.path().join("config/prompts.json");
-  let mut prompts:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-  prompts.as_object_mut().unwrap().remove("session_naming");
-  crate::api::live_configuration::validate_source_prompts(&prompts).unwrap();
-  std::fs::write(&path,serde_json::to_vec(&prompts).unwrap()).unwrap();
-  initialize_defaults_at(state.path(),Some(source.path())).unwrap();
-  let resolved=resolved_prompts_at(state.path(),Some(source.path())).unwrap();
-  assert!(resolved.get("session_naming").is_none());
-  assert!(crate::session_naming::validate_source_settings(&resolved["session_naming"]).is_err());
- }
- #[test]fn partial_source_naming_cannot_validate_using_another_default_snapshot() {
-  let current=source();let state=tempfile::tempdir().unwrap();
-  let path=current.path().join("config/prompts.json");
-  let mut complete:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-  complete["session_naming"]["attempts_per_job"]=json!(7);
-  std::fs::write(&path,serde_json::to_vec(&complete).unwrap()).unwrap();
-  initialize_defaults_at(state.path(),Some(current.path())).unwrap();
-  let mut candidate=complete.clone();candidate["session_naming"]=json!({"prompt":"candidate-only title"});
-  assert!(crate::api::live_configuration::validate_source_prompts(&candidate).is_err());
-  let candidate_source=source();
-  std::fs::write(candidate_source.path().join("config/prompts.json"),serde_json::to_vec(&candidate).unwrap()).unwrap();
-  let fresh_state=tempfile::tempdir().unwrap();
-  assert!(initialize_defaults_at(fresh_state.path(),Some(candidate_source.path())).is_err());
-  assert!(!fresh_state.path().join("config/prompts.json").exists());
-  // A saved partial section still inherits the explicitly selected complete source.
-  std::fs::write(state.path().join("config/prompts.json"),br#"{"session_naming":{"prompt":"saved title"}}"#).unwrap();
-  let resolved=resolved_prompts_at(state.path(),Some(current.path())).unwrap();
-  assert_eq!(resolved["session_naming"]["prompt"],"saved title");
-  assert_eq!(resolved["session_naming"]["attempts_per_job"],7);
-  crate::session_naming::validate_source_settings(&resolved["session_naming"]).unwrap();
-  assert_eq!(complete["session_naming"]["attempts_per_job"],7);
- }
- #[test]fn existing_malformed_saved_bytes_and_baseline_are_never_replaced() {
-  let source=source();let state=tempfile::tempdir().unwrap();let dir=state.path().join("config");std::fs::create_dir(&dir).unwrap();
-  let saved=dir.join("prompts.json");let baseline=dir.join(".prompt-defaults-baseline.json");
-  std::fs::write(&saved,b"PRIVATE_INVALID_SAVED_JSON").unwrap();std::fs::write(&baseline,b"preserved prior baseline").unwrap();
-  initialize_defaults_at(state.path(),Some(source.path())).unwrap();
-  assert_eq!(std::fs::read(&saved).unwrap(),b"PRIVATE_INVALID_SAVED_JSON");
-  assert_eq!(std::fs::read(&baseline).unwrap(),b"preserved prior baseline");
-  assert!(resolved_prompts_at(state.path(),Some(source.path())).is_err());
- }
- #[test]fn missing_baseline_does_not_guess_away_saved_leaf_overrides() {
-  let source=source();let state=tempfile::tempdir().unwrap();let dir=state.path().join("config");std::fs::create_dir(&dir).unwrap();
-  let saved=br#"{"base_instructions":"saved base","jev_guidance":"saved sibling","extension":{"keep":true}}"#;
-  std::fs::write(dir.join("prompts.json"),saved).unwrap();
-  initialize_defaults_at(state.path(),Some(source.path())).unwrap();
-  let baseline=dir.join(".prompt-defaults-baseline.json");let bytes=std::fs::read(&baseline).unwrap();
-  let provenance:Value=serde_json::from_slice(&bytes).unwrap();assert_eq!(provenance["defaults"],json!({}));
-  let path=source.path().join("config/prompts.json");let mut changed:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-  changed["base_instructions"]=json!("changed source base");changed["jev_guidance"]=json!("changed source sibling");
-  std::fs::write(&path,serde_json::to_vec(&changed).unwrap()).unwrap();
-  initialize_defaults_at(state.path(),Some(source.path())).unwrap();
-  let resolved=resolved_prompts_at(state.path(),Some(source.path())).unwrap();
-  assert_eq!(resolved["base_instructions"],"saved base");assert_eq!(resolved["jev_guidance"],"saved sibling");assert_eq!(resolved["extension"]["keep"],true);
-  assert_eq!(std::fs::read(dir.join("prompts.json")).unwrap(),saved);assert_eq!(std::fs::read(baseline).unwrap(),bytes);
- }
-
 }
 
 /// The root test crate supplies its own source fixture directory explicitly.
@@ -234,14 +108,14 @@ pub(crate) mod native_schema_file_tests {
  use super::*;
  pub(crate) fn source_fixture(with_abilities_directory:bool)->tempfile::TempDir {
   let root=tempfile::tempdir().unwrap();
-  std::fs::create_dir_all(root.path().join("config/administration")).unwrap();
+  std::fs::create_dir_all(root.path().join(NATIVE_TOOLS).parent().unwrap()).unwrap();
   if with_abilities_directory {std::fs::create_dir_all(root.path().join("plugins/abilities")).unwrap();}
   // Checked-in public source bytes only; no copied resolver, catalog or handler authority.
-  std::fs::copy(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/administration/native-tools.json"),root.path().join("config/administration/native-tools.json")).unwrap();
+  std::fs::copy(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(NATIVE_TOOLS),root.path().join(NATIVE_TOOLS)).unwrap();
   root
  }
  pub(crate) fn change_parameter(root:&std::path::Path) {
-  let path=root.join("config/administration/native-tools.json");
+  let path=root.join(NATIVE_TOOLS);
   let mut schemas:Vec<Value>=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
   let schema=schemas.iter_mut().find(|s|s["name"]=="code_index_scan").unwrap();
   assert_ne!(schema["parameters"]["properties"]["limit"]["maximum"],123);
@@ -264,7 +138,7 @@ pub(crate) mod native_schema_file_tests {
  }
  #[test]
  fn unsupported_handler_and_invalid_authoritative_files_fail_closed() {
-  let root=source_fixture(true);let path=root.path().join("config/administration/native-tools.json");
+  let root=source_fixture(true);let path=root.path().join("src/engine/tools/native-tools.json");
   let original=std::fs::read(&path).unwrap();let schemas:Vec<Value>=serde_json::from_slice(&original).unwrap();
   let mut unknown=schemas.clone();unknown[0]["name"]=json!("unsupported_native_handler");
   let mut duplicate=schemas.clone();duplicate[1]["name"]=duplicate[0]["name"].clone();
@@ -282,7 +156,7 @@ pub(crate) mod native_schema_file_tests {
  }
  #[test]
  fn actual_native_catalog_retains_owner_action_and_nullable_normalization() {
-  let root=source_fixture(true);let raw:Vec<Value>=serde_json::from_slice(&std::fs::read(root.path().join("config/administration/native-tools.json")).unwrap()).unwrap();
+  let root=source_fixture(true);let raw:Vec<Value>=serde_json::from_slice(&std::fs::read(root.path().join("src/engine/tools/native-tools.json")).unwrap()).unwrap();
   let raw_build=raw.iter().find(|s|s["name"]=="build_work").unwrap();
   assert_eq!(raw_build["parameters"]["properties"]["sync_decision"]["type"],"string");
   let catalog=crate::abilities::Catalog::load_current(&root.path().join("plugins/abilities")).unwrap();let schemas=catalog.all_schemas();

@@ -269,12 +269,11 @@ mod api_tests {
         configure_api(Extension(other.clone()),Json(updated)).await.unwrap();
         assert_eq!(guidance(&other,"agent-two","working").await.unwrap().as_deref(),Some("Updated sentinel"));
         assert!(app.store.main_chat_state().await.unwrap()["skill_overrides"]["contribute"].is_null());
-        std::fs::create_dir_all(app.store.root.join("config")).unwrap();
-        std::fs::write(app.store.root.join("config/prompts.json"),br#"{ "main_chat_skills": {} }"#).unwrap();
+        // Without an override, the Main Chat session receives the live review skill file.
         let main=other.store.main_chat_state().await.unwrap()["session_id"].as_str().unwrap().to_owned();
-        assert!(guidance(&other,"agent-two",&main).await.unwrap().is_none());
+        let review=std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(webagent_configuration::prompts::PROMPTS).join("main_chat_skills/review.md")).unwrap();
+        assert_eq!(guidance(&other,"agent-two",&main).await.unwrap().as_deref(),Some(review.strip_suffix('\n').unwrap_or(&review)));
         assert!(tool(&other,&main,"none","main_notes_read",&json!({})).await.is_ok());
-        std::fs::write(app.store.root.join("config/prompts.json"),br#"{ "main_chat_skills": { "review":"Live JSON sentinel" } }"#).unwrap();
-        assert_eq!(guidance(&other,"agent-two",&main).await.unwrap().as_deref(),Some("Live JSON sentinel"));
     }
 }

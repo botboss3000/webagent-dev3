@@ -23,7 +23,7 @@ from pathlib import Path
 
 CONTROL = Path("/run/v3/control")
 LIMIT = 1024 * 1024
-CONTEXT_CONFIG_PATH = Path("/state/config/context-compaction.json")
+CONTEXT_CONFIG_PATH = Path("/live-checkout/crates/modules/context/context-compaction.json")
 ROOT = Path(os.environ.get("V3_WORKSPACE_ROOT", "/workspaces"))
 SOCKET = os.environ.get("V3_TOOL_SOCKET", "/run/v3/worker/tools.sock")
 TEMPLATE = Path(os.environ.get("V3_CODE_TEMPLATE", "/opt/v3/source-template"))
@@ -31,7 +31,7 @@ LIVE_CHECKOUT = Path("/live-checkout")
 
 
 def search_limits():
-    """The validated data-root config is read on every search, without a restart."""
+    """The live compaction file (live-files.json) is read on every search, without a restart."""
     try:
         config = json.loads(CONTEXT_CONFIG_PATH.read_text())
     except FileNotFoundError:

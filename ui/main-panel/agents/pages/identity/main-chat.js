@@ -1,6 +1,6 @@
 import {requestTouchVibration} from '../../../../shared/vibrate.js';
 
-/** Agent-specific coordination settings and prompt overrides. Config: config/prompts.json -> main_chat_skills.contribute/review supplies placeholders only; the host resolves effective instructions. */
+/** Agent-specific coordination settings and prompt overrides. Config: crates/modules/configuration/prompts -> main_chat_skills.contribute/review supplies placeholders only; the host resolves effective instructions. */
 export async function renderMainChat(host, request, {agentId,canManage=false}={}) {
   if(!agentId)throw Error('Agent identity is required');
   const path='/models/agents/'+encodeURIComponent(agentId)+'/main-chat';

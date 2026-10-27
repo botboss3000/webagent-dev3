@@ -2682,8 +2682,6 @@ impl webagent_manager::storage::RecordEffects for Store {
  fn unseal_agent(&self,agent:&str,bytes:&[u8])->Result<Value> {Store::unseal_agent_for(self,agent,bytes)}
  fn unseal(&self,value:&[u8])->Result<Value> {Store::unseal(self,value)}
  fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {Store::encode_user_record(self,value)}
- fn resolved_prompts(&self,root:&Path)->Result<Value> {crate::live_assets::resolved_prompts(root)}
- fn prompt_defaults(&self)->Result<Vec<u8>> {crate::live_assets::prompt_defaults()}
  fn public_usage(&self,value:&Value)->Value {crate::usage::public(value)}
  fn record_usage(&self,record:&mut Value,response:&Value) {crate::usage::record(record,response)}
  fn invalidate_documents(&self,keys:&[String]) {self.cache.lock().unwrap().invalidate(keys)}

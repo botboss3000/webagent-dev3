@@ -5,7 +5,6 @@ use crate::App;
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
 const MAX_CONFIG_BYTES: u64 = 512 * 1024;
@@ -37,15 +36,13 @@ fn pointers(reference:&Value)->Vec<String> {
 
 fn runtime_state(path:&str,published:bool,administrator:bool)->&'static str {
     if !published {"snapshot_only"}
-    else if path=="data/config/context-compaction.json" && !administrator {"not_permitted"}
+    else if path=="crates/modules/context/context-compaction.json" && !administrator {"not_permitted"}
     else {"read"}
 }
 
 async fn read_json(path:&std::path::Path)->Result<(Value,String)> {
-    let file=tokio::fs::File::open(path).await?;
-    let mut bytes=Vec::new();
-    file.take(MAX_CONFIG_BYTES+1).read_to_end(&mut bytes).await?;
-    if bytes.len() as u64>MAX_CONFIG_BYTES {bail!("Configuration exceeds read bound");}
+    // A checkout-relative path is the current live file; an absolute one is a fixture.
+    let bytes=webagent_configuration::live::read_path(path,MAX_CONFIG_BYTES,|_|Ok(()))?;
     let value=serde_json::from_slice(&bytes)?;
     Ok((value,format!("{:x}",Sha256::digest(&bytes))))
 }
@@ -75,9 +72,9 @@ pub(crate) async fn attach(app:&App,args:&Value,result:&mut Value,cancel:&Cancel
     let mut snippets=source["configuration_snippets"].as_array().cloned().unwrap_or_default();
     for reference in refs.iter().take(4) {
         let Some(path)=reference["path"].as_str() else{continue;};
-        if !matches!(path,"data/config/chat.json"|"data/config/context-compaction.json") {
-            // The worker can resolve indexed source JSON; runtime aliases remain
-            // restricted to these two explicitly authorized native readers.
+        if !matches!(path,"ui/chat/chat.json"|"crates/modules/context/context-compaction.json") {
+            // The worker resolves other indexed source JSON; these two live files are read
+            // by native readers that apply the caller's administrator scope.
             if !snippets.iter().any(|entry|entry["path"]==path) {
                 snippets.push(json!({"path":path,"status":"unavailable","reason":"not_indexed_or_supported_runtime_alias"}));
             }
@@ -130,8 +127,8 @@ mod tests {
         tokio::fs::write(&app.chat_ui_config_path,br#"{"chat_common":{"message_bubbles":{"user":{"bg_dark":"blue"}}},"chat_desktop":{"message_bubbles":{"user":{"bg_dark":"red"}}}}"#).await.unwrap();
         tokio::fs::write(&app.compaction_config_path,br#"{"trigger_tokens":4096}"#).await.unwrap();
         let original=json!({"status":"success","results":[{"text":"paint()","stale":false,"configuration":{"status":"configured","references":[
-            {"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles/user/bg_dark"],"profile_overrides":true},
-            {"path":"data/config/context-compaction.json","pointers":["/trigger_tokens"]},
+            {"path":"ui/chat/chat.json","pointers":["/chat_common/message_bubbles/user/bg_dark"],"profile_overrides":true},
+            {"path":"crates/modules/context/context-compaction.json","pointers":["/trigger_tokens"]},
             {"path":root.path().join("forbidden.json").to_string_lossy(),"pointers":["/secret"]}
         ]}}]});
         let args=json!({"action":"snippet","root":"published","max_chars":512});
@@ -171,10 +168,10 @@ mod tests {
 
     #[test]
     fn runtime_access_respects_snapshot_and_administrator_scope() {
-        assert_eq!(runtime_state("data/config/chat.json",true,false),"read");
-        assert_eq!(runtime_state("data/config/context-compaction.json",true,false),"not_permitted");
-        assert_eq!(runtime_state("data/config/context-compaction.json",true,true),"read");
-        assert_eq!(runtime_state("data/config/chat.json",false,true),"snapshot_only");
+        assert_eq!(runtime_state("ui/chat/chat.json",true,false),"read");
+        assert_eq!(runtime_state("crates/modules/context/context-compaction.json",true,false),"not_permitted");
+        assert_eq!(runtime_state("crates/modules/context/context-compaction.json",true,true),"read");
+        assert_eq!(runtime_state("ui/chat/chat.json",false,true),"snapshot_only");
     }
     #[tokio::test]
     async fn current_json_hash_changes_and_oversized_or_invalid_files_fail() {

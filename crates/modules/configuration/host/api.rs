@@ -3,21 +3,27 @@ use super::*;
 use anyhow::Context;
 use webagent_configuration::{digest, read};
 const IDS:[&str;9]=["app_settings","chat","prompts","context_compaction","loop_runtime","tool_output_retention","access_policy","message_visibility","closing_status"];
-/// Map a known configuration owner to its existing runtime path; never accept a caller filesystem path.
+/// Live files (checkout-relative, listed in `live-files.json`) for configuration edited in place.
+pub(crate) fn live(id:&str)->Option<&'static str>{
+    Some(match id{
+        "chat"=>"ui/chat/chat.json",
+        "context_compaction"=>"crates/modules/context/context-compaction.json",
+        "tool_output_retention"=>crate::tool_output::LIVE_POLICY,
+        "message_visibility"=>"crates/modules/engine/gates/message_visibility_v1.json",
+        "closing_status"=>"crates/modules/engine/gates/closing_status_v1.json",
+        _=>return None,
+    })
+}
+/// Map a known data-root configuration owner to its runtime path; never accept a caller filesystem path.
 fn path(app:&App,id:&str)->Result<PathBuf>{
     Ok(match id{
-        "context_compaction"=>app.compaction_config_path.clone(),
         "loop_runtime"=>app.runtime_path.clone(),
-        "chat"=>app.chat_ui_config_path.clone(),
         "app_settings"=>app.store.root.join("config/app-settings.json"),
-        "prompts"=>app.store.root.join("config/prompts.json"),
-        "tool_output_retention"=>app.store.root.join("config/tool-output-retention.json"),
         "access_policy"=>app.store.root.join("config/access-policy.json"),
-        "message_visibility"=>app.store.root.join("config/gates/message_visibility_v1.json"),
-        "closing_status"=>app.store.root.join("config/gates/closing_status_v1.json"),
         _=>anyhow::bail!("Unknown configuration")
     })
 }
+const LIVE_LIMIT:u64=4*1024*1024;
 /// Reuse each owner's domain validator before an administrator save.
 pub(crate) fn validate(id:&str,value:&Value)->Result<()> {
     if !value.is_object(){anyhow::bail!("Configuration must be an object");}
@@ -72,17 +78,32 @@ pub(crate) async fn list(State(_app):State<App>)->Api{
 }
 /// Return the saved configuration with a canonical digest for stale-write protection.
 pub(crate) async fn get_config(State(app):State<App>,Path(id):Path<String>)->Api{
-    let value=read(&path(&app,&id).map_err(|_|bad("Unknown configuration"))?)?;
+    let value=match live(&id){
+        Some(relative)=>webagent_configuration::live::json(relative,LIVE_LIMIT,|value|validate(&id,value))?,
+        None if id=="prompts"=>crate::live_assets::resolved_prompts(&app.store.root)?,
+        None=>read(&path(&app,&id).map_err(|_|bad("Unknown configuration"))?)?,
+    };
     Ok(Json(json!({"id":id,"config":value,"digest":digest(&value)})))
 }
-/// Validate and atomically replace configuration under the owning lock only when its digest still matches.
+/// Validate and atomically replace configuration only when its digest still matches.
+/// Live files are replaced through the broker, which also fences on the bytes read here.
 pub(crate) async fn put_config(State(app):State<App>,Path(id):Path<String>,Json(body):Json<Value>)->Api{
-    let path=path(&app,&id).map_err(|_|bad("Unknown configuration"))?;
+    if id=="prompts"{return Err(bad("Prompts are live Markdown files under crates/modules/configuration/prompts; edit them in place"));}
     let expected=required(&body,"expected_digest",64)?;
-    let value=&body["config"];validate(&id,value).map_err(|_|bad("Invalid configuration"))?;
+    let value=&body["config"];
+    if live(&id).is_none(){path(&app,&id).map_err(|_|bad("Unknown configuration"))?;}
+    validate(&id,value).map_err(|_|bad("Invalid configuration"))?;
     let _guard=app.gate.lock().await;
+    if let Some(relative)=live(&id){
+        let current=crate::live_files::current(relative,LIVE_LIMIT)?;
+        let old:Value=serde_json::from_slice(&current).map_err(anyhow::Error::from)?;
+        if digest(&old)!=expected{return Err(conflict("Configuration changed; reload before saving"));}
+        crate::live_files::save(&app,relative,&crate::live_files::pretty(value)?,&current).await
+            .map_err(|_|conflict("Configuration changed; reload before saving"))?;
+        return Ok(Json(json!({"id":id,"digest":digest(value),"restart_required":false})));
+    }
+    let path=path(&app,&id)?;
     let lock_path=match id.as_str(){
-        "prompts"=>app.store.root.join("config/.prompts.lock"),
         "access_policy"=>app.store.root.join("config/access-policy.lock"),
         _=>path.with_extension("json.publication.lock"),
     };

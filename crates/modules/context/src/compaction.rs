@@ -32,6 +32,9 @@ pub async fn agent_thresholds(store: &impl crate::ports::AgentMetadata, agent_id
     Ok(Some(serde_json::from_value(metadata["compaction_thresholds"].clone())?))
 }
 
+/// Live compaction policy, relative to the checkout.
+pub const LIVE_COMPACTION: &str = "crates/modules/context/context-compaction.json";
+
 /// Runtime configuration adapter: storage and filesystem authority stay in the core.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(transparent)]
@@ -47,55 +50,31 @@ impl<'de> serde::Deserialize<'de> for Config {
 impl std::ops::Deref for Config {type Target=webagent_context_contracts::context_compaction::Config;fn deref(&self)->&Self::Target{&self.0}}
 impl std::ops::DerefMut for Config {fn deref_mut(&mut self)->&mut Self::Target{&mut self.0}}
 impl Config {
-    // COMPACTION CONFIG: deploy.sh points both processes at the mounted config directory.
-    // This path supplies first-start migration only; runtime reads the data-root file.
-    /// Resolve the operator migration source; initialized data-root policy remains authoritative.
+    /// The live policy file (`live-files.json`), relative to the checkout.
     pub fn configured_path() -> std::path::PathBuf {
-        std::env::var_os("V3_CONTEXT_COMPACTION_CONFIG_PATH")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..").join("config/context-compaction.json"))
+        std::path::PathBuf::from(LIVE_COMPACTION)
     }
-    /// Load the deployment fixture/operator source using the same strict validation as runtime policy.
+    /// Load the live policy with the same strict validation used for every read.
     pub fn configured() -> Result<Self> {
         Self::read(&Self::configured_path())
     }
-    /// Data-root JSON is authoritative. Import the validated legacy/operator file
-    /// only on first startup; never replace an existing (even invalid) data file.
-    /// Atomic no-clobber publication prevents partial reads during concurrent startup.
-    pub fn initialize(root: &std::path::Path) -> Result<std::path::PathBuf> {
-        use std::io::Write;
-        let path = root.join("config/context-compaction.json");
-        if path.exists() { Self::read(&path)?; return Ok(path); }
-        let source = Self::configured_path();
-        let config = Self::read(&source)?;
-        std::fs::create_dir_all(path.parent().unwrap())?;
-        // Publish a fully fsynced inode with no-clobber semantics. Concurrent
-        // startup either publishes this file or validates the winner, never partial JSON.
-        let temp = path.parent().unwrap().join(format!(".compaction-migrate.{}.tmp", uuid::Uuid::new_v4()));
-        let result = (|| -> Result<()> {
-            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
-            file.write_all(&serde_json::to_vec_pretty(&config)?)?; file.sync_all()?;
-            match std::fs::hard_link(&temp, &path) {
-                Ok(()) => { std::fs::File::open(path.parent().unwrap())?.sync_all()?; }
-                Err(e) if e.kind()==std::io::ErrorKind::AlreadyExists => { Self::read(&path)?; }
-                Err(e) => return Err(e.into()),
-            }
-            Ok(())
-        })();
-        let _ = std::fs::remove_file(&temp);
-        result?;
-        Ok(path)
-    }
     /// Decode policy through the core adapter so host-owned summary instructions cannot be overridden.
+    /// A relative path is the live file; an absolute path is read as is (fixtures).
     pub fn read(path: &std::path::Path) -> Result<Self> {
-        let config: Self = serde_json::from_slice(&std::fs::read(path)?)?;
-        config.validate()?;
-        Ok(config)
+        let parse = |bytes: &[u8]| -> Result<Self> {
+            let config: Self = serde_json::from_slice(bytes)?;
+            config.validate()?;
+            Ok(config)
+        };
+        let bytes = webagent_configuration::live::read_path(path, 64 * 1024, |bytes| parse(bytes).map(|_| ()))?;
+        parse(&bytes)
     }
     /// Same temp/fsync/rename discipline as loop-runtime.json.
+    /// Fixture and explicit-file writes; the live file is saved through the broker.
     pub fn persist(&self, path: &std::path::Path) -> Result<()> {
         use std::io::Write;
         self.validate()?;
+        if path.is_relative() { anyhow::bail!("Live compaction policy is saved through the broker"); }
         let parent = path.parent().ok_or_else(|| anyhow!("Config parent missing"))?;
         std::fs::create_dir_all(parent)?;
         let temp = parent.join(format!(".context-compaction.{}.tmp", uuid::Uuid::new_v4()));
@@ -414,20 +393,6 @@ mod tests {
         assert_eq!(&result[1..], &input[p.drop_until..]);
     }
 
-    #[test]
-    fn data_authority_wins_and_invalid_existing_is_preserved() {
-        let root = tempfile::tempdir().unwrap();
-        let path = Config::initialize(root.path()).unwrap();
-        assert_eq!(path, root.path().join("config/context-compaction.json"));
-        let mut config = Config::read(&path).unwrap();
-        config.summary_reserve_bytes = 20000;
-        config.persist(&path).unwrap();
-        Config::initialize(root.path()).unwrap();
-        assert_eq!(Config::read(&path).unwrap().summary_reserve_bytes, 20000);
-        std::fs::write(&path, "{").unwrap();
-        assert!(Config::initialize(root.path()).is_err());
-        assert_eq!(std::fs::read_to_string(path).unwrap(), "{");
-    }
     #[test]
     fn cached_planner_matches_reference_with_unicode_and_append() {
         let mut config = rolling_config();

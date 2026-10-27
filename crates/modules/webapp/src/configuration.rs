@@ -99,7 +99,8 @@ pub enum Error {
 /// Preserve the UI API's bounded status and public error messages.
 pub async fn ui_config(chat_path: &Path, state: &Path) -> Result<Value, Error> {
     use axum::http::StatusCode;
-    let bytes = tokio::fs::read(chat_path).await.map_err(|_| {
+    let valid = |bytes: &[u8]| serde_json::from_slice::<Value>(bytes).map(|_| ()).map_err(Into::into);
+    let bytes = webagent_configuration::live::read_path(chat_path, 4 * 1024 * 1024, valid).map_err(|_| {
         Error::Http(
             StatusCode::SERVICE_UNAVAILABLE,
             "Chat UI configuration unavailable",

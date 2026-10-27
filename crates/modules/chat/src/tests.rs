@@ -177,34 +177,20 @@ mod configuration {
     }
 
     #[test]
-    fn main_chat_guidance_prefers_saved_json_and_never_uses_compiled_text() {
-        let root = tempfile::tempdir().unwrap();
-        let defaults = tempfile::tempdir().unwrap();
-        std::fs::write(
-            defaults.path().join("prompts.json"),
-            br#"{"main_chat_skills":{"review":"Packaged review"}}"#,
-        )
-        .unwrap();
-        let read = || main_chat_prompts_at(root.path(), None, defaults.path());
+    fn main_chat_guidance_comes_from_the_prompt_files_of_the_source() {
+        let source = tempfile::tempdir().unwrap();
+        let skills = source.path().join(webagent_configuration::prompts::PROMPTS).join("main_chat_skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::fs::write(skills.join("review.md"), "Packaged review\n").unwrap();
+        let read = || main_chat_prompts_at(std::path::Path::new("/unused"), Some(source.path()), source.path());
         assert_eq!(read().unwrap()["review"], "Packaged review");
-        std::fs::create_dir(root.path().join("config")).unwrap();
-        std::fs::write(
-            root.path().join("config/prompts.json"),
-            br#"{"main_chat_skills":{"review":"Saved"}}"#,
-        )
-        .unwrap();
-        assert_eq!(read().unwrap()["review"], "Saved");
-        std::fs::write(
-            root.path().join("config/prompts.json"),
-            br#"{"other":true}"#,
-        )
-        .unwrap();
-        assert_eq!(read().unwrap()["review"], "Packaged review");
-        std::fs::write(root.path().join("config/prompts.json"), b"broken").unwrap();
-        assert!(read().is_err());
-        std::fs::remove_file(defaults.path().join("prompts.json")).unwrap();
-        std::fs::remove_file(root.path().join("config/prompts.json")).unwrap();
-        assert!(read().is_err());
+        std::fs::write(skills.join("review.md"), "Edited live\n").unwrap();
+        assert_eq!(read().unwrap()["review"], "Edited live");
+        std::fs::remove_dir_all(&skills).unwrap();
+        assert!(read().unwrap().is_null());
+        // The shipped files carry both skills.
+        let shipped = main_chat_prompts_at(std::path::Path::new("/unused"), None, std::path::Path::new("/unused")).unwrap();
+        assert!(shipped["review"].is_string() && shipped["contribute"].is_string());
     }
 }
 
@@ -212,13 +198,17 @@ mod naming {
     use crate::naming::*;
     use serde_json::json;
 
+    /// A candidate source with only the session-naming prompt files.
     fn defaults_dir() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
+        let prompts = dir.path().join(webagent_configuration::prompts::PROMPTS);
+        std::fs::create_dir_all(prompts.join("session_naming")).unwrap();
+        std::fs::write(prompts.join("base_instructions.md"), "base\n").unwrap();
+        std::fs::write(prompts.join("session_naming/prompt.md"), "Name it\n").unwrap();
         std::fs::write(
-            dir.path().join("prompts.json"),
-            serde_json::to_vec(&json!({"base_instructions":"base","session_naming":{"prompt":"Name it",
-                "model_role":"system","attempts_per_job":2,"retry_delay_ms":10,"request_timeout_seconds":30,
-                "recovery_retry_delay_seconds":60,"max_job_attempts":3}}))
+            prompts.join("session_naming.json"),
+            serde_json::to_vec(&json!({"model_role":"system","attempts_per_job":2,"retry_delay_ms":10,"request_timeout_seconds":30,
+                "recovery_retry_delay_seconds":60,"max_job_attempts":3}))
             .unwrap(),
         )
         .unwrap();
@@ -226,53 +216,37 @@ mod naming {
     }
 
     #[test]
-    fn startup_seeding_is_no_clobber_and_edits_reload_without_compilation() {
+    fn edits_to_the_prompt_files_reload_without_compilation() {
         let defaults = defaults_dir();
-        let root = tempfile::tempdir().unwrap();
-        initialize_at(root.path(), None, defaults.path()).unwrap();
-        let path = root.path().join("config/prompts.json");
-        let seeded = std::fs::read(&path).unwrap();
-        initialize_at(root.path(), None, defaults.path()).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), seeded);
-        assert_eq!(
-            Config::load_at(root.path(), None, defaults.path())
-                .unwrap()
-                .prompt,
-            "Name it"
-        );
-        let mut file: serde_json::Value = serde_json::from_slice(&seeded).unwrap();
-        file["session_naming"]["prompt"] = json!("Edited live");
-        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
-        assert_eq!(
-            Config::load_at(root.path(), None, defaults.path())
-                .unwrap()
-                .prompt,
-            "Edited live"
-        );
-        std::fs::write(&path, b"malformed").unwrap();
-        assert!(Config::load_at(root.path(), None, defaults.path()).is_err());
-        assert!(initialize_at(root.path(), None, defaults.path()).is_err());
-        assert_eq!(std::fs::read(&path).unwrap(), b"malformed");
+        let source = Some(defaults.path());
+        let state = tempfile::tempdir().unwrap();
+        assert_eq!(Config::load_at(state.path(), source, defaults.path()).unwrap().prompt, "Name it");
+        let path = defaults.path().join(webagent_configuration::prompts::PROMPTS).join("session_naming/prompt.md");
+        std::fs::write(&path, "Edited live\n").unwrap();
+        assert_eq!(Config::load_at(state.path(), source, defaults.path()).unwrap().prompt, "Edited live");
+        std::fs::write(defaults.path().join(webagent_configuration::prompts::PROMPTS).join("session_naming.json"), b"malformed").unwrap();
+        // A broken edit keeps serving the last good settings.
+        assert_eq!(Config::load_at(state.path(), source, defaults.path()).unwrap().prompt, "Edited live");
     }
 
     #[test]
     fn partial_saved_sections_inherit_but_source_sections_must_be_complete() {
         let defaults = defaults_dir();
         let partial =
-            Config::parse_at(&json!({"max_job_attempts":5}), None, defaults.path()).unwrap();
+            Config::parse_at(&json!({"max_job_attempts":5}), Some(defaults.path()), defaults.path()).unwrap();
         assert_eq!(
             (partial.max_job_attempts, partial.prompt.as_str()),
             (5, "Name it")
         );
         assert_eq!(
-            Config::parse_at(&json!("Prompt only"), None, defaults.path())
+            Config::parse_at(&json!("Prompt only"), Some(defaults.path()), defaults.path())
                 .unwrap()
                 .prompt,
             "Prompt only"
         );
         assert!(validate_source_settings(&json!({"prompt":"Missing fields"})).is_err());
         let complete =
-            serde_json::to_value(Config::defaults_at(None, defaults.path()).unwrap()).unwrap();
+            serde_json::to_value(Config::defaults_at(Some(defaults.path()), defaults.path()).unwrap()).unwrap();
         validate_source_settings(&complete).unwrap();
         for (key, value) in [
             ("prompt", json!("")),
@@ -285,7 +259,7 @@ mod naming {
             let mut invalid = complete.clone();
             invalid[key] = value;
             assert!(
-                Config::parse_at(&invalid, None, defaults.path()).is_err(),
+                Config::parse_at(&invalid, Some(defaults.path()), defaults.path()).is_err(),
                 "{key}"
             );
         }

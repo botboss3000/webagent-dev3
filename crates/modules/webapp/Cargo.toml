@@ -12,6 +12,7 @@ sqlx={version="0.8",default-features=false,features=["runtime-tokio","sqlite"]}
 tokio={version="1",features=["fs"]}
 tower={version="0.5",features=["util"]}
 tower-http={version="0.6",features=["fs"]}
+webagent-configuration={path="../configuration"}
 
 [dev-dependencies]
 tempfile="3"

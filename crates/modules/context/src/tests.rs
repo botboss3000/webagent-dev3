@@ -57,10 +57,10 @@ async fn real_scoped_ledger_cas_and_caller_transaction_rollback()->Result<()> {
 }
 #[test]
 fn live_policy_parser_preserves_invalid_bytes_and_exact_cap()->Result<()> {
- let dir=tempfile::tempdir()?;std::fs::create_dir(dir.path().join("config"))?;
- let path=dir.path().join("config/tool-output-retention.json");
+ let dir=tempfile::tempdir()?;let path=dir.path().join("invalid-only").join(crate::retention::LIVE_POLICY);
+ std::fs::create_dir_all(path.parent().unwrap())?;
  let invalid=br#"{"enabled":false,"enabled":true}"#;
- std::fs::write(&path,invalid)?;assert!(crate::retention::Policy::read(dir.path()).is_err());assert_eq!(std::fs::read(&path)?,invalid);
+ std::fs::write(&path,invalid)?;assert!(crate::retention::Policy::read_in(&[dir.path().join("invalid-only")]).is_err());assert_eq!(std::fs::read(&path)?,invalid);
  let mut exact=br#"{"enabled":false}"#.to_vec();exact.resize(64*1024,b' ');
  assert!(crate::retention::Policy::parse(&exact).is_ok());exact.push(b' ');assert!(crate::retention::Policy::parse(&exact).is_err());Ok(())
 }

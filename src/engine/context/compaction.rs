@@ -307,20 +307,6 @@ mod tests {
     }
 
     #[test]
-    fn data_authority_wins_and_invalid_existing_is_preserved() {
-        let root = tempfile::tempdir().unwrap();
-        let path = Config::initialize(root.path()).unwrap();
-        assert_eq!(path, root.path().join("config/context-compaction.json"));
-        let mut config = Config::read(&path).unwrap();
-        config.summary_reserve_bytes = 20000;
-        config.persist(&path).unwrap();
-        Config::initialize(root.path()).unwrap();
-        assert_eq!(Config::read(&path).unwrap().summary_reserve_bytes, 20000);
-        std::fs::write(&path, "{").unwrap();
-        assert!(Config::initialize(root.path()).is_err());
-        assert_eq!(std::fs::read_to_string(path).unwrap(), "{");
-    }
-    #[test]
     fn cached_planner_matches_reference_with_unicode_and_append() {
         let mut config = rolling_config();
         config.tail_tokens = 100;

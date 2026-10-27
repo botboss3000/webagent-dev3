@@ -8,6 +8,8 @@ use crate::workflow::{Checkpoint, Policy};
 
 pub const MESSAGE_VISIBILITY: &str = "message_visibility_v1";
 pub const CLOSING_STATUS: &str = "closing_status_v1";
+/// Checkout folder of the integral gate configuration files.
+pub const GATE_FOLDER: &str = "crates/modules/engine/gates";
 pub const PUBLICATION_SIZE: &str = "publication_size_guard_v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -34,17 +36,11 @@ pub struct Selection {
 fn source(id: &str) -> Result<String> {
     match id {
         MESSAGE_VISIBILITY | CLOSING_STATUS => {
-            // The host's v3/data/config/gates file is mounted at /state/config/gates.
-            // Tests read that same checkout file; no packaged fallback can silently
-            // override an operator edit or hide a missing integral configuration.
-            let root = if cfg!(any(test,feature="test-support")) {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..").join("data")
-            } else {
-                std::path::PathBuf::from(std::env::var("V3_STATE_ROOT")
-                    .unwrap_or_else(|_| "/state".into()))
-            };
-            let path = root.join("config/gates").join(format!("{id}.json"));
-            Ok(std::fs::read_to_string(path)?)
+            // Live files beside this crate (`live-files.json`); an integral gate has no
+            // packaged default, so a missing file fails closed.
+            let bytes = webagent_configuration::live::read(&format!("{GATE_FOLDER}/{id}.json"), 64 * 1024,
+                |bytes| std::str::from_utf8(bytes).map(|_| ()).map_err(Into::into))?;
+            Ok(String::from_utf8(bytes)?)
         }
         PUBLICATION_SIZE => publication_source(webagent_configuration::prompts::default_source(None)?.as_deref()),
         _ => bail!("Unknown gate module"),

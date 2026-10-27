@@ -62,8 +62,8 @@ pub(crate) use chat::*;
 pub(crate) use chat_controls::*;
 pub(crate) use voice::*;
 pub(crate) use uploads::{attachment_get,upload,upload_delete,upload_content,upload_describe};
-// CONTEXT-CONFIG AUTHORITY: one validated data-root JSON serves seeded defaults
-// and live updates. Model boundaries reread it; existing runs keep their history.
+// CONTEXT-CONFIG AUTHORITY: one validated live file (`live-files.json`); saves go
+// through the broker. Model boundaries reread it; existing runs keep their history.
 async fn context_config_get(State(app): State<App>) -> Api {
     let config=crate::context_compaction::Config::read(&app.compaction_config_path)?;
     let value=serde_json::to_value(config).map_err(anyhow::Error::from)?;
@@ -81,7 +81,15 @@ async fn context_config_put(State(app): State<App>, Json(body): Json<Value>) -> 
     if crate::digest(&serde_json::to_value(current).map_err(anyhow::Error::from)?)!=expected {
         return Err(conflict("Context configuration changed; reload before saving"));
     }
-    config.persist(&app.compaction_config_path)?;
+    if app.compaction_config_path.is_relative() {
+        let relative=app.compaction_config_path.to_str().ok_or_else(||anyhow!("Invalid live path"))?;
+        let bytes=crate::live_files::current(relative,64*1024)?;
+        let body=crate::live_files::pretty(&serde_json::to_value(&config).map_err(anyhow::Error::from)?)?;
+        crate::live_files::save(&app,relative,&body,&bytes).await
+            .map_err(|_|conflict("Context configuration changed; reload before saving"))?;
+    } else {
+        config.persist(&app.compaction_config_path)?;
+    }
     let value=serde_json::to_value(config).map_err(anyhow::Error::from)?;
     Ok(Json(json!({"config":value,"digest":crate::digest(&value)})))
 }

@@ -98,13 +98,9 @@ with retry receipts. It is not an atomic batch. Unsupported management actions
 are disabled, not sent to v2. This remains a partial port: hidden sessions,
 custom pinned ordering, rich status/family grouping, and the remaining header
 controls are not yet equivalent to v2.
-V3 startup wiring selects its independent `v3/data/config/chat.json` through
-an authenticated `GET /api/v3/auth/ui-config` route. `deploy.sh start` seeds the
-file once from the running v2 app’s `data/config/chat_ui.json`, only when the
-v3 file is absent; later starts preserve v3 edits. The existing `/state` mount
-supplies `/state/config/chat.json` rather than a separate shared v2-file mount.
-These source changes require container recreation to take effect. Live
-configuration separation is not verified yet. Its
+V3 serves the live file `ui/chat/chat.json` (listed in `live-files.json`, read
+from the checkout on every request) through an authenticated
+`GET /api/v3/auth/ui-config` route. Edits take effect without a release. Its
 `chat_common` values merge with `chat_desktop` or `chat_mobile`; arrays replace
 the common value. V3 currently applies supported header rows (agent name,
 conversation selector, previous/next, new, minimize), active/idle composer rows
@@ -718,16 +714,14 @@ have no UI yet.
 ## Context compaction
 
 `src/context/compaction.rs` owns rolling checkpoint policy and validation.
-`<V3_STATE_ROOT>/config/context-compaction.json` is the single operational authority.
-On first startup only, a validated legacy/operator file (`V3_CONTEXT_COMPACTION_CONFIG_PATH`,
-or the package `config/context-compaction.json`) is copied into the data root. Existing data
-always wins and invalid JSON fails explicitly. The legacy file remains a migration template;
-editing it after migration does not change runtime behavior. Both API and loop use `/state`.
+The live file `crates/modules/context/context-compaction.json` (listed in
+`live-files.json`) is the single operational authority; both API and loop read it
+from the checkout. An invalid edit keeps the last good version.
 Model/provider/fallback fields are not accepted.
 Settings are read at each model-call boundary and held immutable through the summary call.
-Administrators can read and update this same data-root file through
+Administrators can read and update this same live file through
 `GET/PUT /api/v3/admin/context-compaction`; writes validate the full schema,
-require the returned digest, and publish atomically. The chat context panel
+require the returned digest, and are saved by the broker's `live_file_write`. The chat context panel
 edits the principal budgets. The Python worker rereads the file for every search. Agent Identity may override the history trigger and verbatim tail; app defaults retain every other safety limit. The resolved settings remain immutable through each summary call.
 
 Defaults are a 40,000 estimated-token history trigger, 10,000-token verbatim tail,
@@ -938,7 +932,7 @@ a build stale even if compilation passed.
 
 ### Attachment limits in chat.json
 
-Configure v3/data/config/chat.json (or V3_CHAT_UI_CONFIG_PATH) under
+Configure the live file ui/chat/chat.json under
 chat_limits.attachments:
 
     { "max_file_size_mb": 25, "max_per_message": 10 }

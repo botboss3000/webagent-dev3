@@ -35,7 +35,7 @@ Warnings contain only the fixed operation and sqlite_busy/sqlite_database/storag
 classification, never SQL text or session content; the content-free backend-error
 counter advances. The finalization rule is an invariant, not a configurable bypass.
 Named/default modes and initial participation remain agent-owned settings.
-Config: data/config/chat.json -> /chat_common/execution_mode/default_mode and
+Config: ui/chat/chat.json -> /chat_common/execution_mode/default_mode and
 /chat_common/execution_mode/confirm_auto_mode affect initial mode/confirmation;
 they never authorize ownership changes. Recovery resets no Identity or connection.
 Persistence and authority remain host-owned; no supporting pure planner changed,

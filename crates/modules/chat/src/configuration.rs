@@ -41,12 +41,16 @@ pub fn parse_chat_preferences(document: &Value) -> Result<ChatModePreferences> {
 /// Read the installation chat.json on every use; per-agent overlays merge over this base.
 /// A missing file means defaults; an unreadable or invalid one fails closed rather than
 /// falling back to a compiled default.
+/// Chat's live file (`live-files.json`), relative to the checkout.
+pub const LIVE_CHAT: &str = "ui/chat/chat.json";
+
 pub async fn read_chat_document(path: &Path) -> Result<Value> {
-    match tokio::fs::read(path).await {
+    let valid = |bytes: &[u8]| serde_json::from_slice::<Value>(bytes).map(|_| ()).map_err(Into::into);
+    match webagent_configuration::live::read_path(path, 4 * 1024 * 1024, valid) {
         Ok(bytes) => {
             serde_json::from_slice(&bytes).map_err(|_| anyhow!("Chat configuration invalid"))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(error) if webagent_configuration::live::missing(&error) => {
             Ok(Value::Object(Default::default()))
         }
         Err(_) => Err(anyhow!("Chat configuration unavailable")),
@@ -108,35 +112,13 @@ pub fn validate_chat_config(value: &Value) -> Result<()> {
     Ok(())
 }
 
-/// Main Chat guidance has no compiled or last-good fallback. An installation
-/// JSON file, when present, is authoritative even when it omits these skills.
+/// Main Chat guidance from the live prompt files (`prompts/main_chat_skills/*.md`),
+/// or from a pinned candidate `source`.
 pub fn main_chat_prompts_at(
     root: &Path,
     source: Option<&Path>,
     fallback_directory: &Path,
 ) -> Result<Value> {
-    let saved = root.join("config/prompts.json");
-    let source = webagent_configuration::prompts::default_source(source)?;
-    fn section(path: &Path) -> Result<Option<Value>> {
-        let meta = std::fs::symlink_metadata(path)?;
-        if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 4 * 1024 * 1024 {
-            bail!("Invalid Main Chat prompts");
-        }
-        let value: Value = serde_json::from_slice(&std::fs::read(path)?)?;
-        Ok(value.get("main_chat_skills").cloned())
-    }
-    if saved.exists() {
-        if let Some(value) = section(&saved)? {
-            return Ok(value);
-        }
-    }
-    let defaults: Value =
-        serde_json::from_slice(&webagent_configuration::prompts::prompt_defaults_at(
-            source.as_deref(),
-            fallback_directory,
-        )?)?;
-    Ok(defaults
-        .get("main_chat_skills")
-        .cloned()
-        .unwrap_or(Value::Null))
+    let prompts = webagent_configuration::prompts::resolved_prompts_at(root, source, fallback_directory)?;
+    Ok(prompts.get("main_chat_skills").cloned().unwrap_or(Value::Null))
 }

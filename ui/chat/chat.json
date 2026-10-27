@@ -1,0 +1,1686 @@
+{
+  "_instructions": "version: Configuration schema version. Documentation describes the configuration schema, including retained v2 options. A setting does not establish that its feature is implemented or authorized in v3. Omitted device-profile values inherit chat_common; arrays replace rather than merge. Documentation strings are explanatory, not settings.",
+  "agents_page_widget": {
+    "_instructions": "enabled: Enable this feature or control; false disables it where supported. title: Displayed title text. icon: Lucide icon name. label: Displayed label text. aria_label: Accessible name announced by assistive technology. tooltip: Hover tooltip text. input_placeholder: Hint shown in an empty input. search_label: Label used in search mode. search_placeholder: Hint shown in the empty search input. search_tooltip: Tooltip for search mode. search_icon: Lucide icon for search mode. search_clear_label: Accessible/display label for clearing the search. search_clear_tooltip: Tooltip for the clear-search action. search_clear_icon: Lucide icon for the clear-search action. search_collapse_label: Label for collapsing an empty search launcher. search_collapse_tooltip: Tooltip for collapsing the search launcher. default_side: Default launcher side: left or right. edge_offset: Launcher distance from the side edge, in pixels. bottom_offset: Distance from the bottom edge, in pixels.",
+    "aria_label": "Ask WebAgent or search agents and abilities",
+    "bottom_offset": 16,
+    "default_side": "right",
+    "description": "Shared Agents-page Ask or Search launcher. It expands in place, forwards live text to whichever Agents sub-view search control is on screen (the Agents/Abilities search, or the embedded Sessions view's footer search — title + content with per-session hit counts), and sends questions through the normal WebAgent widget with current page context. On the Sessions sub-view the pill is search-only (no chat): it advertises a 'Search for a session' label and its trailing control becomes a red clear/collapse button (search_clear_* and search_collapse_* below) — it empties the field, or collapses the pill when the field is already empty, because the filter already runs as the user types.",
+    "edge_offset": 16,
+    "enabled": true,
+    "icon": "bot",
+    "input_placeholder": "Ask or search",
+    "label": "Ask or Search",
+    "search_clear_icon": "x",
+    "search_clear_label": "Clear search",
+    "search_clear_tooltip": "Clear search",
+    "search_collapse_label": "Collapse search",
+    "search_collapse_tooltip": "Collapse search",
+    "search_icon": "search",
+    "search_label": "Search for a session",
+    "search_placeholder": "Search for a session",
+    "search_tooltip": "Searches as you type",
+    "title": "WebAgent",
+    "tooltip": "Ask WebAgent or search agents and abilities"
+  },
+  "chat_common": {
+    "_instructions": "content_max_width: Maximum transcript content width as a CSS length or percentage. show_tool_calls: Show tool-call activity entries where supported. show_activity_groups: Group activity entries where supported. show_activity_preview: Show compact activity previews where supported. classify_main_messages: Classify main-message presentation where supported. fold_main_messages: Fold main-message presentation where supported. mirror_activity_in_transcript: Also display activity in the transcript where supported. mark_read_on_visit: Acknowledge rendered/visited conversation messages as read where supported.",
+    "active_footer": {
+      "_instructions": "margin_bottom: Footer distance from the bottom as a CSS length.",
+      "above_pill": {
+        "_instructions": "enabled: Enable this feature or control; false disables it where supported. rows: Ordered layout rows. Header/footer rows use left, center, and right zones; an override replaces the complete row array.",
+        "controls": {
+          "activity": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. presentation: Activity presentation style identifier; progress-note requests borderless progress text.",
+            "description": "Borderless progress text centered above the composer pill. Tool details expand separately; cancellation uses the composer Stop button.",
+            "enabled": true,
+            "presentation": "progress-note"
+          },
+          "local_changes": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. width: Width as a CSS length/expression. max_lines: Maximum displayed text lines before truncation where supported.",
+            "enabled": true,
+            "max_lines": 3,
+            "width": "600px"
+          }
+        },
+        "description": "Rows above the chat pill. Five-row plan: row 0 = activity; rows 1-4 are reserved slots (empty rows render nothing â€” drop controls into a row to activate it).",
+        "enabled": true,
+        "rows": [
+          {
+            "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [
+              "activity"
+            ],
+            "left": [],
+            "right": []
+          },
+          {
+            "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [
+              "local_changes"
+            ],
+            "left": [],
+            "right": []
+          },
+          {
+            "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [],
+            "left": [],
+            "right": []
+          },
+          {
+            "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [],
+            "left": [],
+            "right": []
+          },
+          {
+            "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [],
+            "left": [],
+            "right": []
+          }
+        ]
+      },
+      "below_pill": {
+        "_instructions": "enabled: Enable this feature or control; false disables it where supported. rows: Ordered layout rows. Header/footer rows use left, center, and right zones; an override replaces the complete row array.",
+        "controls": {
+          "abilities": {
+            "_instructions": "container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "28px"
+          },
+          "agent_active": {
+            "enabled": true,
+            "square": false
+          },
+          "browser_notifications": {
+            "_instructions": "container_size: Control container size as a CSS length; auto allows natural sizing. element_size: Icon/element size as a CSS length.",
+            "container_size": "28px",
+            "element_size": "16px"
+          },
+          "changes": {
+            "_instructions": "container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "28px"
+          },
+          "mode": {
+            "_instructions": "container_size: Control container size as a CSS length; auto allows natural sizing. square: Use a square control container when true; false permits a wider control.",
+            "container_size": "28px",
+            "square": false
+          },
+          "model_changer": {
+            "_instructions": "container_size: Control container size as a CSS length; auto allows natural sizing. square: Use a square control container when true; false permits a wider control.",
+            "container_size": "28px",
+            "square": false
+          },
+          "request_help": {
+            "enabled": true,
+            "square": false
+          },
+          "share": {
+            "enabled": true,
+            "square": false
+          },
+          "target": {
+            "_instructions": "container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "28px"
+          }
+        },
+        "enabled": true,
+        "rows": [
+          {
+            "_instructions": "right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [],
+            "left": [],
+            "right": [
+              "changes",
+              "mode",
+              "model_changer",
+              "abilities",
+              "browser_notifications"
+            ]
+          }
+        ]
+      },
+      "chat_pill": {
+        "_instructions": "pill_width: Composer pill width as a CSS length/expression. pill_radius: Composer pill corner radius as a CSS length. rows: Ordered layout rows. Header/footer rows use left, center, and right zones; an override replaces the complete row array.",
+        "controls": {
+          "attach": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. locked: Keep the control visible but use its locked-state behavior instead of performing its action where supported. locked_message: Explanation shown when a locked control is activated. locked_cta: Call-to-action text for a locked control. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing. attach_label: Label for the attach-files action. take_picture_label: Label for taking a picture. camera_label: Label for enabling camera capture. mic_label: Label for enabling microphone capture. accepted_formats: Allowed MIME types/wildcards or file extensions advertised by the attachment control. show_accepted_formats: Show the accepted-format hint in the attachment picker.",
+            "accepted_formats": [
+              "image/*",
+              "audio/*",
+              "video/*",
+              ".pdf",
+              ".txt",
+              ".md",
+              ".json",
+              ".csv"
+            ],
+            "attach_label": "Attach files",
+            "camera_label": "Enable camera",
+            "container_size": "42px",
+            "element_size": "36px",
+            "enabled": true,
+            "locked": false,
+            "locked_cta": "Register",
+            "locked_message": "Register to attach files and unlock the full app.",
+            "mic_label": "Enable mic",
+            "show_accepted_formats": true,
+            "take_picture_label": "Take picture"
+          },
+          "continue": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "42px",
+            "element_size": "36px",
+            "enabled": true
+          },
+          "mic": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "42px",
+            "element_size": "36px",
+            "enabled": true
+          },
+          "mic_send": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "42px",
+            "element_size": "36px",
+            "enabled": true
+          },
+          "send": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "42px",
+            "element_size": "36px",
+            "enabled": true
+          },
+          "stats": {
+            "_instructions": "visible: For stats, an ordered list of displayed stat identifiers or objects; for message headings, a visibility switch.",
+            "description": "Usage stats shown in the pill. visible = ordered list of stat types: ctx (current context only, e.g. 77.2k), ctx-max (full 'ctx 77.2k / 200k' current/max readout), cost (price, e.g. $0.12). Each entry is a plain string or { type, decimals } — decimals overrides the default (ctx: 1 below 1M, 2 above; cost: 2, rounded up so the first charge reads $0.01). A stat hides itself while its value is zero.",
+            "visible": [
+              {
+                "_instructions": "type: Stat identifier in a stats list (for example ctx or cost), or launcher action type in a corner button.",
+                "type": "ctx"
+              },
+              {
+                "_instructions": "type: Stat identifier in a stats list (for example ctx or cost), or launcher action type in a corner button.",
+                "type": "cost"
+              }
+            ]
+          },
+          "stop": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "42px",
+            "element_size": "36px",
+            "enabled": true
+          },
+          "textarea": {
+            "_instructions": "min_height: Minimum height as a CSS length. font_size: Text size as a CSS length. max_height: Maximum height as a CSS length/expression. padding: Internal spacing as CSS padding shorthand. line_height: Text line height; a number is a font-size multiplier and a CSS length specifies an explicit height.",
+            "font_size": "16px",
+            "line_height": "22px",
+            "max_height": "180px",
+            "min_height": "88px",
+            "padding": "20px 20px 0px 20px"
+          }
+        },
+        "description": "Shared two-row composer. Row 1: full-width textarea. Row 2: left=attach, center=carousel(stats), right=stop/continue/send.",
+        "pill_radius": "41px",
+        "pill_width": "500px",
+        "rows": [
+          {
+            "center": {
+              "_instructions": "controls: Ordered control identifiers placed in this composer zone.",
+              "controls": [
+                "textarea"
+              ]
+            }
+          },
+          {
+            "center": {
+              "_instructions": "carousel: Ordered controls placed in the composer zone carousel. align: Vertical control alignment within the composer zone, such as center or bottom. padding: Internal spacing as CSS padding shorthand.",
+              "align": "bottom",
+              "carousel": [
+                "stats"
+              ],
+              "padding": "0 0 28px 0"
+            },
+            "left": {
+              "_instructions": "controls: Ordered control identifiers placed in this composer zone. align: Vertical control alignment within the composer zone, such as center or bottom. padding: Internal spacing as CSS padding shorthand.",
+              "align": "bottom",
+              "controls": [
+                "attach"
+              ],
+              "padding": "4px 2px 20px 20px"
+            },
+            "right": {
+              "_instructions": "controls: Ordered control identifiers placed in this composer zone. align: Vertical control alignment within the composer zone, such as center or bottom. padding: Internal spacing as CSS padding shorthand.",
+              "align": "bottom",
+              "controls": [
+                "stop",
+                "continue",
+                "mic_send"
+              ],
+              "padding": "4px 20px 20px 0"
+            }
+          }
+        ]
+      },
+      "description": "Full-featured footer shown when the textarea is focused or has content.",
+      "margin_bottom": "0px"
+    },
+    "chat_header": {
+      "_instructions": "enabled: Enable this feature or control; false disables it where supported. max_width: Maximum width as a CSS length/expression. rows: Ordered layout rows. Header/footer rows use left, center, and right zones; an override replaces the complete row array.",
+      "controls": {
+        "main_notes": {
+          "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+          "description": "Main Notes panel below the header rows (Main Chat only). false hides it live without discarding unsaved edits.",
+          "enabled": true
+        },
+        "session_dropdown": {
+          "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+          "description": "Session selector layout. Internal settings are owned by ui/chat/controls/session-dropdown/session-dropdown.json.",
+          "enabled": true
+        }
+      },
+      "description": "Header layout and controls. Row arrays replace entirely on surface override. Each row has left/center/right zones; 'right' is pushed via margin-left:auto.",
+      "enabled": true,
+      "max_width": "750px",
+      "row_sizes": {
+        "description": "Independent header row sizing, shared by desktop and mobile. primary sizes session controls. primary.border_radius accepts a CSS length (e.g. 14px) or pill for half the control height. Per-control overrides win; changes apply live.",
+        "primary": {
+          "_instructions": "container_size: Control container size as a CSS length; auto allows natural sizing. element_size: Icon/element size as a CSS length. font_size: Text size as a CSS length. border_radius: Control corner radius as a CSS length; pill uses half the control height where supported.",
+          "border_radius": "pill",
+          "container_size": "40px",
+          "element_size": "28px",
+          "font_size": "18px"
+        }
+      },
+      "rows": []
+    },
+    "classify_main_messages": true,
+    "component_panel": {
+      "_instructions": "enabled: Enable this feature or control; false disables it where supported. auto_open_on_present: Automatically open the component panel on presentation where supported; false leaves opening to the reader.",
+      "auto_open_on_present": false,
+      "description": "Agent component panel — the single surface for present_chat_component renderings. FULL VIEW is its only open state (CHAT-COMPONENT-FULL-VIEW): a full-height overlay pinned below the chat header tabs and ABOVE the composer (the composer stays visible and usable), as wide as the transcript's content width (chat_common.content_max_width). There is no drawer and no expand control; the header tabs open it and the (—) header button closes it. Components load silently behind the chat pill by default; users open them from their header tabs. Set auto_open_on_present true only for a surface that deliberately needs live presentation. Radius defaults to 12px (structural CSS in app1.css); override with \"radius\" (any CSS length).",
+      "enabled": true
+    },
+    "composer": {
+      "_instructions": "placeholder: Composer placeholder override; null falls back to messages.pill_placeholder. enter_behavior: auto sends on desktop and inserts a newline on touch devices; send or newline forces that behavior. Shift+Enter inserts a newline; Ctrl/Cmd+Enter sends in newline mode.",
+      "description": "Shared input behavior; textarea geometry remains under active_footer/idle_footer.chat_pill.controls.textarea. placeholder null uses messages.pill_placeholder. enter_behavior: auto (desktop send, touch newline), send, or newline; Shift+Enter always inserts a newline; Ctrl/Cmd+Enter sends in newline mode.",
+      "enter_behavior": "auto",
+      "keyboard_focus": {
+        "_instructions": "new_session: Focus the composer after opening a new conversation if keyboard focus has not moved. existing_session: Focus the composer after opening an existing conversation if keyboard focus has not moved.",
+        "description": "Focus the composer after a session opens only if keyboard focus has not moved since opening began. Surface profiles can override either value.",
+        "existing_session": false,
+        "new_session": true
+      },
+      "keyboard_motion": {
+        "duration_ms": 140,
+        "enabled": false
+      },
+      "placeholder": "Send a message"
+    },
+    "content_max_width": "1000px",
+    "context_composition": {
+      "_instructions": "enabled: Enable this feature or control; false disables it where supported. detailed_segments: Request detailed context-composition segments where supported.",
+      "detailed_segments": true,
+      "enabled": true
+    },
+    "description": "Shared configuration for every chat surface. Surface profiles inherit this object at runtime, including its messages.",
+    "execution_mode": {
+      "_instructions": "default_mode: Default execution mode for new conversations: ask, plan, or auto. confirm_auto_mode: Require confirmation when switching to Auto where supported; runtime permission checks still apply.",
+      "confirm_auto_mode": false,
+      "default_mode": "auto",
+      "description": "Default mode for new V3 chats and whether switching to Auto requires confirmation."
+    },
+    "fade": {
+      "_instructions": "top: Top fade distance in pixels. bottom: Bottom fade distance in pixels.",
+      "bottom": 160,
+      "description": "Vertical fade mask on the message scroller. The top edge fades transcript content below the header; bottom remains a pixel-height fade to protect the composer edge.",
+      "top": 24
+    },
+    "fold_main_messages": false,
+    "glimmer": {
+      "agent": {
+        "_instructions": "enabled: Enable this feature or control; false disables it where supported. intensity: Glimmer visual strength where supported. radius_px: Glimmer radius in pixels where supported. transition_ms: Presentation transition duration in milliseconds.",
+        "enabled": true,
+        "intensity": 0.12,
+        "radius_px": 240,
+        "transition_ms": 250
+      },
+      "user": {
+        "_instructions": "enabled: Enable this feature or control; false disables it where supported. intensity: Glimmer visual strength where supported. radius_px: Glimmer radius in pixels where supported. transition_ms: Presentation transition duration in milliseconds.",
+        "enabled": true,
+        "intensity": 0.12,
+        "radius_px": 240,
+        "transition_ms": 250
+      }
+    },
+    "gutter_presentation": {
+      "_instructions": "reveal: Gutter reveal behavior: click, engagement, or always; keyboard focus also reveals controls. transition_ms: Presentation transition duration in milliseconds. icon_size_px: Gutter icon size in pixels. font_size_px: Text size in pixels for this surface. rest_opacity: Gutter opacity while inactive, from 0 (transparent) to 1 (opaque). engaged_opacity: Gutter opacity while engaged, from 0 to 1. control_gap_px: Spacing between gutter controls in pixels.",
+      "control_gap_px": 4,
+      "description": "reveal: click, engagement, or always. Keyboard focus always reveals controls.",
+      "engaged_opacity": 1,
+      "font_size_px": 11,
+      "icon_size_px": 14,
+      "rest_opacity": 0.65,
+      "reveal": "click",
+      "transition_ms": 150
+    },
+    "idle_footer": {
+      "_instructions": "margin_bottom: Footer distance from the bottom as a CSS length.",
+      "above_pill": {
+        "_instructions": "enabled: Enable this feature or control; false disables it where supported. rows: Ordered layout rows. Header/footer rows use left, center, and right zones; an override replaces the complete row array.",
+        "controls": {
+          "activity": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. presentation: Activity presentation style identifier; progress-note requests borderless progress text.",
+            "description": "Borderless progress text centered above the composer pill. Tool details expand separately; cancellation uses the composer Stop button.",
+            "enabled": true,
+            "presentation": "progress-note"
+          },
+          "local_changes": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. width: Width as a CSS length/expression. max_lines: Maximum displayed text lines before truncation where supported.",
+            "enabled": true,
+            "max_lines": 3,
+            "width": "600px"
+          }
+        },
+        "description": "Rows above the chat pill. Five-row plan: row 0 = activity; rows 1-4 are reserved slots (empty rows render nothing â€” drop controls into a row to activate it).",
+        "enabled": true,
+        "rows": [
+          {
+            "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [
+              "activity"
+            ],
+            "left": [],
+            "right": []
+          },
+          {
+            "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [
+              "local_changes"
+            ],
+            "left": [],
+            "right": []
+          },
+          {
+            "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [],
+            "left": [],
+            "right": []
+          },
+          {
+            "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [],
+            "left": [],
+            "right": []
+          },
+          {
+            "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [],
+            "left": [],
+            "right": []
+          }
+        ]
+      },
+      "below_pill": {
+        "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+        "controls": {
+          "agent_active": {
+            "enabled": true,
+            "square": false
+          },
+          "request_help": {
+            "enabled": true,
+            "square": false
+          },
+          "share": {
+            "enabled": true,
+            "square": false
+          }
+        },
+        "enabled": false,
+        "rows": []
+      },
+      "chat_pill": {
+        "_instructions": "pill_width: Composer pill width as a CSS length/expression. pill_radius: Composer pill corner radius as a CSS length. rows: Ordered layout rows. Header/footer rows use left, center, and right zones; an override replaces the complete row array.",
+        "controls": {
+          "attach": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. locked: Keep the control visible but use its locked-state behavior instead of performing its action where supported. locked_message: Explanation shown when a locked control is activated. locked_cta: Call-to-action text for a locked control. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing. attach_label: Label for the attach-files action. take_picture_label: Label for taking a picture. camera_label: Label for enabling camera capture. mic_label: Label for enabling microphone capture. accepted_formats: Allowed MIME types/wildcards or file extensions advertised by the attachment control. show_accepted_formats: Show the accepted-format hint in the attachment picker.",
+            "accepted_formats": [
+              "image/*",
+              "audio/*",
+              "video/*",
+              ".pdf",
+              ".txt",
+              ".md",
+              ".json",
+              ".csv"
+            ],
+            "attach_label": "Attach files",
+            "camera_label": "Enable camera",
+            "container_size": "42px",
+            "element_size": "36px",
+            "enabled": true,
+            "locked": false,
+            "locked_cta": "Register",
+            "locked_message": "Register to attach files and unlock the full app.",
+            "mic_label": "Enable mic",
+            "show_accepted_formats": true,
+            "take_picture_label": "Take picture"
+          },
+          "continue": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "42px",
+            "element_size": "36px",
+            "enabled": true
+          },
+          "mic": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "42px",
+            "element_size": "36px",
+            "enabled": true
+          },
+          "mic_send": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "42px",
+            "element_size": "36px",
+            "enabled": true
+          },
+          "send": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "42px",
+            "element_size": "36px",
+            "enabled": true
+          },
+          "stop": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. element_size: Icon/element size as a CSS length. container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "42px",
+            "element_size": "36px",
+            "enabled": true
+          },
+          "textarea": {
+            "_instructions": "min_height: Minimum height as a CSS length. font_size: Text size as a CSS length. max_height: Maximum height as a CSS length/expression. padding: Internal spacing as CSS padding shorthand. line_height: Text line height; a number is a font-size multiplier and a CSS length specifies an explicit height.",
+            "font_size": "16px",
+            "line_height": "22px",
+            "max_height": "62px",
+            "min_height": "62px",
+            "padding": "20px 8px 20px 8px"
+          }
+        },
+        "pill_radius": "41px",
+        "pill_width": "500px",
+        "rows": [
+          {
+            "center": {
+              "_instructions": "controls: Ordered control identifiers placed in this composer zone. align: Vertical control alignment within the composer zone, such as center or bottom. padding: Internal spacing as CSS padding shorthand.",
+              "align": "center",
+              "controls": [
+                "textarea"
+              ],
+              "padding": "0"
+            },
+            "left": {
+              "_instructions": "controls: Ordered control identifiers placed in this composer zone. align: Vertical control alignment within the composer zone, such as center or bottom. padding: Internal spacing as CSS padding shorthand.",
+              "align": "center",
+              "controls": [
+                "attach"
+              ],
+              "padding": "20px 0 20px 20px"
+            },
+            "right": {
+              "_instructions": "controls: Ordered control identifiers placed in this composer zone. align: Vertical control alignment within the composer zone, such as center or bottom. padding: Internal spacing as CSS padding shorthand.",
+              "align": "center",
+              "controls": [
+                "stop",
+                "continue",
+                "mic_send"
+              ],
+              "padding": "20px 20px 20px 0"
+            }
+          }
+        ]
+      },
+      "description": "Simplified footer shown when the textarea is empty and unfocused. Single row (left/center/right), same width as active footer, no stats, chips, or below.",
+      "margin_bottom": "24px"
+    },
+    "live_reload": {
+      "enabled": true,
+      "interval_ms": 2000,
+      "_instructions": "Enabled native open chats reread this file automatically. interval_ms is bounded to 1000–60000ms; provided guest/embed settings keep their existing owner. Disable requires reload to enable again."
+    },
+    "mark_read_on_visit": false,
+    "message_bubbles": {
+      "_instructions": "font_size_px: Text size in pixels for this surface. padding_y_px: Bubble internal top/bottom padding in pixels. padding_x_px: Bubble internal left/right padding in pixels. agent_padding_left_px: Agent-bubble text inset from its left edge, in pixels.",
+      "agent": {
+        "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing values use built-in defaults; radius_px is an optional per-role all-corners fallback. background_opacity: 0 to 1, background only; null/omitted preserves color alpha. backdrop_blur_px: nonnegative pixels; null/omitted disables blur. Independent role/surface values update live.",
+        "backdrop_blur_px": null,
+        "background_opacity": null,
+        "bg_dark": "transparent",
+        "bg_light": "transparent",
+        "border": null,
+        "box_shadow": null,
+        "line_height": 1.5,
+        "padding_bottom_px": 4,
+        "padding_left_px": 4,
+        "padding_right_px": 14,
+        "padding_top_px": 8,
+        "radius_bottom_left_px": null,
+        "radius_bottom_right_px": null,
+        "radius_px": "auto",
+        "radius_top_left_px": null,
+        "radius_top_right_px": null
+      },
+      "description": "Bubble text size and internal padding in pixels. Surface and agent profiles may override individual values; agent left padding controls its text inset independently of user bubbles.",
+      "font_size_px": 17,
+      "user": {
+        "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing values use built-in defaults; radius_px is an optional per-role all-corners fallback. background_opacity: 0 to 1, background only; null/omitted preserves color alpha. backdrop_blur_px: nonnegative pixels; null/omitted disables blur. Independent role/surface values update live.",
+        "backdrop_blur_px": 8,
+        "background_opacity": 0.5,
+        "bg_dark": "#2563eb",
+        "bg_light": "#93c5fd",
+        "border": "var(--border-width) solid var(--user-bubble-border, color-mix(in oklab, currentColor 12%, transparent))",
+        "box_shadow": "0 2px 8px -4px rgba(0,0,0,0.3)",
+        "line_height": 1.5,
+        "padding_bottom_px": 8,
+        "padding_left_px": 14,
+        "padding_right_px": 14,
+        "padding_top_px": 8,
+        "radius_bottom_left_px": null,
+        "radius_bottom_right_px": null,
+        "radius_px": "auto",
+        "radius_top_left_px": null,
+        "radius_top_right_px": null
+      }
+    },
+    "message_gutters": {
+      "_instructions": "enabled: Show message gutters when true; false hides them permanently and ignores hideable. hideable: When true and enabled, start each gutter hidden and toggle it by clicking its bubble or pressing Enter/Space on the focused bubble. When false, enabled gutters stay visible. Refresh after editing.",
+      "agent": {
+        "_instructions": "enabled: Enable this feature or control; false disables it where supported. order: Ordered control identifiers; a surface override replaces the entire array.",
+        "controls": {
+          "collapse": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "copy": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "delete": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "fork": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. locked: Keep the control visible but use its locked-state behavior instead of performing its action where supported. locked_message: Explanation shown when a locked control is activated.",
+            "enabled": true,
+            "locked": false,
+            "locked_message": "Sign in to fork a conversation."
+          },
+          "full_view": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "more": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "read_aloud": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "schema": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "time": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          }
+        },
+        "enabled": true,
+        "order": [
+          "time",
+          "full_view",
+          "collapse",
+          "read_aloud",
+          "copy",
+          "fork",
+          "delete",
+          "more"
+        ]
+      },
+      "description": "Configurable footer gutters beneath user and agent messages. Order arrays replace entirely on surface or agent override. A locked control stays visible but displays its locked_message instead of executing. Tier gates are reapplied after agent overrides.",
+      "enabled": true,
+      "hideable": true,
+      "more_menu": {
+        "_instructions": "enabled: Enable this feature or control; false disables it where supported. order: Ordered control identifiers; a surface override replaces the entire array.",
+        "controls": {
+          "context": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "cost": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "message_id": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "model": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "refresh": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "row_details": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "schema": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          }
+        },
+        "enabled": true,
+        "order": [
+          "context",
+          "cost",
+          "model",
+          "message_id",
+          "row_details",
+          "schema",
+          "refresh"
+        ]
+      },
+      "user": {
+        "_instructions": "enabled: Enable this feature or control; false disables it where supported. order: Ordered control identifiers; a surface override replaces the entire array.",
+        "controls": {
+          "copy": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "delete": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "full_view": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "more": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "time": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
+            "enabled": true
+          },
+          "undo": {
+            "_instructions": "enabled: Enable this feature or control; false disables it where supported. locked: Keep the control visible but use its locked-state behavior instead of performing its action where supported. locked_message: Explanation shown when a locked control is activated.",
+            "enabled": true,
+            "locked": false,
+            "locked_message": "Sign in to undo messages."
+          }
+        },
+        "enabled": true,
+        "order": [
+          "time",
+          "full_view",
+          "copy",
+          "undo",
+          "delete",
+          "more"
+        ]
+      }
+    },
+    "message_headings": {
+      "agent": {
+        "_instructions": "visible: For stats, an ordered list of displayed stat identifiers or objects; for message headings, a visibility switch. label: Displayed label text. avatar_text: Text inside the message avatar where supported; an empty string supplies no initials.",
+        "avatar_text": "",
+        "label": "Agent",
+        "visible": false
+      },
+      "description": "Sender labels; optional avatar_text is a short initials badge.",
+      "user": {
+        "_instructions": "visible: For stats, an ordered list of displayed stat identifiers or objects; for message headings, a visibility switch. label: Displayed label text. avatar_text: Text inside the message avatar where supported; an empty string supplies no initials.",
+        "avatar_text": "",
+        "label": "You",
+        "visible": false
+      }
+    },
+    "message_spacing": {
+      "_instructions": "message_gap_px: Spacing between message rows in pixels. turn_gap_px: Additional spacing between conversation turns in pixels. activity_offset_px: Vertical activity-line adjustment relative to the preceding bubble, in pixels; negative values move it upward. content_to_gutter_px: Spacing between message content and its action gutter in pixels. gutter_bottom_px: Spacing below a message action gutter in pixels.",
+      "activity_offset_px": -8,
+      "content_to_gutter_px": 4,
+      "description": "Message gap and separate turn gap in px; activity_offset_px adjusts the activity line relative to the preceding bubble.",
+      "gutter_bottom_px": 6,
+      "message_gap_px": 12,
+      "turn_gap_px": 0
+    },
+    "message_visibility": {
+      "_instructions": "defaults.main: Default visibility of main chat messages. defaults.progress: Default visibility of progress messages. defaults.tool: Default visibility of tool messages. defaults.summary: Default visibility of summary messages. defaults.system: Default visibility of system messages.",
+      "defaults": {
+        "main": true,
+        "progress": true,
+        "summary": true,
+        "system": true,
+        "tool": true
+      },
+      "description": "Independent show/hide per message lane type. These defaults apply when the user has no per-device override; the header filter popover (elements/visibility) writes overrides to localStorage and re-renders the transcript."
+    },
+    "messages": {
+      "_instructions": "welcome_bubble: Text for the initial welcome bubble where supported. new_session_bubble: Text for a new-conversation bubble where supported. switched_agent_bubble: Text shown after changing the selected agent where supported. pill_placeholder: Default text hint in the empty composer. session_deleted_notice: Notice text after a conversation is deleted/recycled where supported. title: Displayed title text. subtitle: Chat subtitle text where supported. greeting: Greeting text where supported.",
+      "description": "Default user-facing copy. A surface's messages object may replace any individual string.",
+      "greeting": "Hi! How can I help you today?",
+      "new_session_bubble": "New session. Start typing below.",
+      "pill_placeholder": "Chat",
+      "session_deleted_notice": "Session not found â€” it was deleted.",
+      "subtitle": "",
+      "switched_agent_bubble": "Switched agent. New session started.",
+      "title": "Chat with us",
+      "welcome_bubble": "Welcome to WebAgent"
+    },
+    "mirror_activity_in_transcript": false,
+    "pill_fade": {
+      "_instructions": "top: Top fade distance in pixels. bottom: Bottom fade distance in pixels. bottom_offset: Distance from the bottom edge, in pixels.",
+      "bottom": 5,
+      "bottom_offset": 0,
+      "description": "Vertical fade mask on the pill textarea when content overflows. top/bottom are pixel heights for each fade band. bottom_offset shifts the bottom band closer to the edge (same thickness).",
+      "top": 8
+    },
+    "screen_display": {
+      "active": "dim",
+      "after_activity_ms": 120000,
+      "after_input_ms": 120000,
+      "allow_device_overrides": false,
+      "dim_after_ms": 30000,
+      "dim_opacity": 0.8,
+      "enabled": true,
+      "inactive": "off",
+      "mobile_only": true
+    },
+    "show_activity_groups": true,
+    "show_activity_preview": false,
+    "show_tool_calls": true,
+    "transcript_overscroll": {
+      "_instructions": "max_stretch_px: Maximum transcript overscroll stretch and action-trigger distance, in pixels, where supported.",
+      "description": "Vertical transcript pull distance in pixels. The maximum stretch and both top/bottom action triggers always use this same value. Surface profiles may override max_stretch_px.",
+      "max_stretch_px": 10
+    },
+    "transcript_padding": {
+      "_instructions": "top_px: Additional top transcript padding in pixels. bottom_px: Additional bottom transcript padding in pixels.",
+      "bottom_px": 50,
+      "description": "Additional transcript edge padding in pixels, preserving existing header and composer clearance.",
+      "top_px": 25
+    },
+    "transcript_tail_clearance": {
+      "_instructions": "min_px: Minimum tail clearance in pixels. gap_px: Additional gap above the composer in pixels, combined with measured composer clearance.",
+      "description": "Tail anchor clearance after the last transcript row: max(min_px, live composer clearance + gap_px), plus transcript_padding.bottom_px. Tracks composer resizing so the latest message clears the pill. Surface profiles can override either value.",
+      "gap_px": 74,
+      "min_px": 100
+    },
+    "user_message_truncation": {
+      "_instructions": "enabled: Enable this feature or control; false disables it where supported. max_lines: Maximum displayed text lines before truncation where supported. expand_label: Text on the expand-truncated-message control. collapse_label: Text on the collapse-expanded-message control.",
+      "collapse_label": "Show less",
+      "description": "Limits long user messages in the transcript while preserving their complete DOM content. Set enabled false to disable, or override max_lines and labels per surface or agent.",
+      "enabled": true,
+      "expand_label": "See more",
+      "max_lines": 3
+    },
+    "user_turn_anchor": {
+      "_instructions": "Edit up/down snap_distance_px (capture margin) and snap_rearm_distance_px (outer zone) independently. The shared landing zone uses the up outer distance below the landing and the down outer distance above it. Snap and layout movement do not rearm it. Pixel distances and millisecond durations. Refresh after editing. enabled: Enable user-turn landing and nearby snaps; false disables both. landing_gap_px: Minimum user-bubble landing offset below the transcript top, in pixels; header clearance can increase it. snap_enabled: Enable soft snapping; disabling it leaves open/send landing enabled unless enabled is also false. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_settle_ms: Delay after reader scrolling stops before looking for a nearby eligible anchor, in milliseconds. header_clearance_px: Extra clearance below the measured header when calculating the landing position, in pixels. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown. snap_tolerance_px: Distance in pixels considered already landed; consumes the snap without issuing another scroll. snap_complete_fallback_ms: Maximum wait in milliseconds for snap completion when scrollend does not arrive. scroll_intent_ms: How long after a reader gesture scroll events are treated as reader intent, in milliseconds. focus_hold_ms: How long inactive-run automatic user-turn focus is retained after arming, in milliseconds; active runs refresh this deadline. tail_follow_distance_px: Distance from the transcript tail in pixels at which reader scrolling enables tail following.",
+      "description": "Independent up/down anchor tuning with a shared landing zone. After any landing, all bubble snaps pause until reader scrolling leaves the configured rearm distance from that landing position. This prevents nearby bubbles from alternating snaps. Individual directional cooldowns still apply. Device profiles override Common.",
+      "down": {
+        "_instructions": "snap_enabled: Allow snaps approaching the landing from above (scrolling downward). The shared landing-zone lock still applies. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown.",
+        "snap_distance_px": 100,
+        "snap_enabled": true,
+        "snap_rearm_distance_px": 500
+      },
+      "enabled": true,
+      "focus_hold_ms": 6000,
+      "header_clearance_px": 8,
+      "landing_gap_px": 62,
+      "scroll_intent_ms": 2000,
+      "snap_complete_fallback_ms": 1000,
+      "snap_distance_px": 100,
+      "snap_enabled": true,
+      "snap_rearm_distance_px": 500,
+      "snap_settle_ms": 120,
+      "snap_tolerance_px": 2,
+      "tail_follow_distance_px": 12,
+      "up": {
+        "_instructions": "snap_enabled: Allow snaps approaching the landing from below (scrolling upward). The shared landing-zone lock still applies. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown.",
+        "snap_distance_px": 100,
+        "snap_enabled": true,
+        "snap_rearm_distance_px": 500
+      }
+    }
+  },
+  "chat_desktop": {
+    "active_footer": {
+      "below_pill": {
+        "controls": {
+          "agent_active": {
+            "enabled": true,
+            "square": false
+          },
+          "request_help": {
+            "enabled": true,
+            "square": false
+          },
+          "share": {
+            "enabled": true,
+            "square": false
+          }
+        },
+        "rows": [
+          {
+            "_instructions": "right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [],
+            "left": [],
+            "right": [
+              "changes",
+              "mode",
+              "model_changer",
+              "abilities",
+              "browser_notifications"
+            ]
+          }
+        ]
+      }
+    },
+    "chat_header": {
+      "_instructions": "rows: Ordered layout rows. Header/footer rows use left, center, and right zones; an override replaces the complete row array.",
+      "controls": {
+        "agent_name": {
+          "_instructions": "min_width: Minimum width as a CSS length/expression. max_width: Maximum width as a CSS length/expression.",
+          "max_width": "200px",
+          "min_width": "80px"
+        },
+        "minimize": {},
+        "new_session": {},
+        "session_dropdown": {
+          "_instructions": "min_width: Minimum width as a CSS length/expression. square: Use a square control container when true; false permits a wider control.",
+          "min_width": "150px",
+          "square": false
+        },
+        "session_next": {},
+        "session_prev": {}
+      },
+      "enabled": true,
+      "rows": [
+        {
+          "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+          "center": [
+            "agent_name"
+          ],
+          "left": [],
+          "right": [
+            "minimize"
+          ]
+        },
+        {
+          "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+          "center": [
+            "session_dropdown"
+          ],
+          "left": [
+            "session_prev",
+            "session_next"
+          ],
+          "right": [
+            "new_session"
+          ]
+        }
+      ]
+    },
+    "composer": {
+      "keyboard_focus": {
+        "description": "Set new_session or existing_session here to override chat_common."
+      }
+    },
+    "debug": {
+      "_instructions": "enabled: Enable this feature or control; false disables it where supported. borders: Show development diagnostic borders where supported.",
+      "borders": false,
+      "description": "Development-only diagnostics. Set enabled to true to expose debug-only run errors and raw diagnostics to this chat surface.",
+      "enabled": false
+    },
+    "description": "Desktop side-panel overrides. Leave values absent to use chat_common.",
+    "fade": {
+      "_instructions": "top: Top fade distance in pixels. bottom: Bottom fade distance in pixels.",
+      "bottom": 200,
+      "top": 24
+    },
+    "idle_footer": {
+      "below_pill": {
+        "controls": {
+          "agent_active": {
+            "enabled": true,
+            "square": false
+          },
+          "request_help": {
+            "enabled": true,
+            "square": false
+          },
+          "share": {
+            "enabled": true,
+            "square": false
+          }
+        },
+        "rows": []
+      }
+    },
+    "messages": {},
+    "pill_fade": {
+      "_instructions": "top: Top fade distance in pixels. bottom: Bottom fade distance in pixels.",
+      "bottom": 5,
+      "top": 0
+    },
+    "transcript_overscroll": {
+      "_instructions": "max_stretch_px: Maximum transcript overscroll stretch and action-trigger distance, in pixels, where supported.",
+      "max_stretch_px": 10
+    },
+    "transcript_tail_clearance": {
+      "_instructions": "gap_px: Additional gap above the composer in pixels, combined with measured composer clearance.",
+      "gap_px": 124
+    },
+    "user_turn_anchor": {
+      "_instructions": "Edit up/down snap_distance_px (capture margin) and snap_rearm_distance_px (outer zone) independently. The shared landing zone uses the up outer distance below the landing and the down outer distance above it. Snap and layout movement do not rearm it. Pixel distances and millisecond durations. Refresh after editing. landing_gap_px: Minimum user-bubble landing offset below the transcript top, in pixels; header clearance can increase it. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown.",
+      "description": "Independent up/down anchor tuning with a shared landing zone. After any landing, all bubble snaps pause until reader scrolling leaves the configured rearm distance from that landing position. This prevents nearby bubbles from alternating snaps. Individual directional cooldowns still apply. Device profiles override Common.",
+      "down": {
+        "_instructions": "snap_enabled: Allow snaps approaching the landing from above (scrolling downward). The shared landing-zone lock still applies. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown.",
+        "snap_distance_px": 100,
+        "snap_enabled": true,
+        "snap_rearm_distance_px": 500
+      },
+      "landing_gap_px": 62,
+      "snap_distance_px": 100,
+      "snap_rearm_distance_px": 500,
+      "up": {
+        "_instructions": "snap_enabled: Allow snaps approaching the landing from below (scrolling upward). The shared landing-zone lock still applies. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown.",
+        "snap_distance_px": 100,
+        "snap_enabled": true,
+        "snap_rearm_distance_px": 500
+      }
+    }
+  },
+  "chat_display": {
+    "default": "panel"
+  },
+  "chat_limits": {
+    "attachments": {
+      "_instructions": "max_file_size_mb: Maximum size of one attachment in MiB; a positive integer limits uploads, null or an omitted key removes this application limit. max_per_message: Maximum attachments per message; a positive integer limits the count, null or an omitted key removes this application limit.",
+      "max_file_size_mb": 25,
+      "max_per_message": 10
+    }
+  },
+  "chat_mobile": {
+    "_instructions": "content_max_width: Maximum transcript content width as a CSS length or percentage.",
+    "active_footer": {
+      "below_pill": {
+        "controls": {
+          "agent_active": {
+            "enabled": true,
+            "square": false
+          },
+          "request_help": {
+            "enabled": true,
+            "square": false
+          },
+          "share": {
+            "enabled": true,
+            "square": false
+          }
+        },
+        "rows": [
+          {
+            "_instructions": "right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [],
+            "left": [],
+            "right": [
+              "changes",
+              "mode",
+              "model_changer",
+              "abilities",
+              "browser_notifications"
+            ]
+          }
+        ]
+      }
+    },
+    "chat_header": {
+      "_instructions": "max_width: Maximum width as a CSS length/expression. rows: Ordered layout rows. Header/footer rows use left, center, and right zones; an override replaces the complete row array.",
+      "controls": {
+        "changes": {},
+        "new_session": {},
+        "session_dropdown": {
+          "_instructions": "min_width: Minimum width as a CSS length/expression. square: Use a square control container when true; false permits a wider control.",
+          "min_width": "0",
+          "square": false
+        }
+      },
+      "enabled": true,
+      "max_width": "100%",
+      "rows": [
+        {
+          "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+          "center": [
+            "session_dropdown"
+          ],
+          "left": [],
+          "right": [
+            "new_session"
+          ]
+        }
+      ]
+    },
+    "composer": {
+      "keyboard_focus": {
+        "description": "Set new_session or existing_session here to override chat_common."
+      },
+      "keyboard_motion": {
+        "enabled": true
+      }
+    },
+    "content_max_width": "100%",
+    "description": "Mobile side-panel overrides. Leave values absent to use chat_common.",
+    "fade": {
+      "_instructions": "top: Top fade distance in pixels. bottom: Bottom fade distance in pixels.",
+      "bottom": 120,
+      "top": 24
+    },
+    "idle_footer": {
+      "below_pill": {
+        "controls": {
+          "agent_active": {
+            "enabled": true,
+            "square": false
+          },
+          "request_help": {
+            "enabled": true,
+            "square": false
+          },
+          "share": {
+            "enabled": true,
+            "square": false
+          }
+        },
+        "rows": []
+      }
+    },
+    "messages": {},
+    "pill_fade": {
+      "_instructions": "top: Top fade distance in pixels. bottom: Bottom fade distance in pixels. bottom_offset: Distance from the bottom edge, in pixels.",
+      "bottom": 5,
+      "bottom_offset": 0,
+      "top": 8
+    },
+    "transcript_overscroll": {
+      "_instructions": "max_stretch_px: Maximum transcript overscroll stretch and action-trigger distance, in pixels, where supported.",
+      "max_stretch_px": 10
+    },
+    "user_turn_anchor": {
+      "_instructions": "Edit up/down snap_distance_px (capture margin) and snap_rearm_distance_px (outer zone) independently. The shared landing zone uses the up outer distance below the landing and the down outer distance above it. Snap and layout movement do not rearm it. Pixel distances and millisecond durations. Refresh after editing. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown.",
+      "description": "Independent up/down anchor tuning with a shared landing zone. After any landing, all bubble snaps pause until reader scrolling leaves the configured rearm distance from that landing position. This prevents nearby bubbles from alternating snaps. Individual directional cooldowns still apply. Device profiles override Common.",
+      "down": {
+        "_instructions": "snap_enabled: Allow snaps approaching the landing from above (scrolling downward). The shared landing-zone lock still applies. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown.",
+        "snap_distance_px": 100,
+        "snap_enabled": true,
+        "snap_rearm_distance_px": 500
+      },
+      "snap_distance_px": 100,
+      "snap_rearm_distance_px": 500,
+      "up": {
+        "_instructions": "snap_enabled: Allow snaps approaching the landing from below (scrolling upward). The shared landing-zone lock still applies. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown.",
+        "snap_distance_px": 100,
+        "snap_enabled": true,
+        "snap_rearm_distance_px": 500
+      }
+    }
+  },
+  "chat_widget": {
+    "active_footer": {
+      "below_pill": {
+        "controls": {
+          "agent_active": {
+            "enabled": true,
+            "square": false
+          },
+          "request_help": {
+            "enabled": true,
+            "square": false
+          },
+          "share": {
+            "enabled": true,
+            "square": false
+          }
+        },
+        "rows": [
+          {
+            "_instructions": "right: Right row zone: ordered control identifiers, or a composer zone object.",
+            "center": [],
+            "left": [],
+            "right": [
+              "changes",
+              "mode",
+              "model_changer",
+              "abilities",
+              "browser_notifications"
+            ]
+          }
+        ]
+      }
+    },
+    "chat_header": {
+      "_instructions": "rows: Ordered layout rows. Header/footer rows use left, center, and right zones; an override replaces the complete row array.",
+      "controls": {},
+      "enabled": true,
+      "rows": [
+        {
+          "center": [
+            "session_dropdown"
+          ],
+          "left": [],
+          "right": [
+            "new_session"
+          ]
+        }
+      ]
+    },
+    "composer": {
+      "keyboard_focus": {
+        "description": "Set new_session or existing_session here to override chat_common."
+      }
+    },
+    "description": "Floating and embeddable widget overrides. This profile shares chat_common unless an override is listed here.",
+    "fade": {
+      "_instructions": "top: Top fade distance in pixels. bottom: Bottom fade distance in pixels.",
+      "bottom": 80,
+      "top": 0
+    },
+    "idle_footer": {
+      "below_pill": {
+        "controls": {
+          "agent_active": {
+            "enabled": true,
+            "square": false
+          },
+          "request_help": {
+            "enabled": true,
+            "square": false
+          },
+          "share": {
+            "enabled": true,
+            "square": false
+          }
+        },
+        "rows": []
+      }
+    },
+    "launcher": {
+      "_instructions": "position: Launcher side: left or right. accent: Launcher accent color as a CSS color. icon: Lucide icon name.",
+      "accent": "#4f46e5",
+      "corner_buttons": {
+        "_instructions": "enabled: Enable this feature or control; false disables it where supported. hover_delay_ms: Delay before hover corner controls appear, in milliseconds.",
+        "bottom_left": {
+          "_instructions": "enabled: Enable this feature or control; false disables it where supported. type: Stat identifier in a stats list (for example ctx or cost), or launcher action type in a corner button. icon: Lucide icon name. tooltip: Hover tooltip text.",
+          "enabled": true,
+          "icon": "crosshair",
+          "tooltip": "Toggle element pickup â€” agent sees what the dot points at",
+          "type": "element_pickup"
+        },
+        "bottom_right": {
+          "_instructions": "enabled: Enable this feature or control; false disables it where supported. type: Stat identifier in a stats list (for example ctx or cost), or launcher action type in a corner button. icon: Lucide icon name. tooltip: Hover tooltip text.",
+          "enabled": true,
+          "icon": "maximize-2",
+          "tooltip": "Open all minimized",
+          "type": "open_all"
+        },
+        "description": "Hover-activated corner buttons on the launcher. Each button can be individually enabled/disabled and retooled.",
+        "enabled": true,
+        "hover_delay_ms": 200,
+        "top_left": {
+          "_instructions": "enabled: Enable this feature or control; false disables it where supported. type: Stat identifier in a stats list (for example ctx or cost), or launcher action type in a corner button. icon: Lucide icon name. tooltip: Hover tooltip text.",
+          "enabled": true,
+          "icon": "list",
+          "tooltip": "Show sessions",
+          "type": "sessions"
+        },
+        "top_right": {
+          "_instructions": "enabled: Enable this feature or control; false disables it where supported. type: Stat identifier in a stats list (for example ctx or cost), or launcher action type in a corner button. icon: Lucide icon name. tooltip: Hover tooltip text.",
+          "enabled": true,
+          "icon": "plus",
+          "tooltip": "New session",
+          "type": "new_session"
+        }
+      },
+      "description": "Appearance and placement of the website embed launcher.",
+      "icon": "bot",
+      "mode": "button",
+      "position": "right",
+      "shape": "circle"
+    },
+    "messages": {
+      "_instructions": "pill_placeholder: Default text hint in the empty composer.",
+      "description": "Widget-specific copy overrides, including the anonymous composer prompt.",
+      "pill_placeholder": "Type your message"
+    },
+    "pill_fade": {
+      "_instructions": "top: Top fade distance in pixels. bottom: Bottom fade distance in pixels. bottom_offset: Distance from the bottom edge, in pixels.",
+      "bottom": 5,
+      "bottom_offset": 0,
+      "top": 6
+    },
+    "transcript_overscroll": {
+      "_instructions": "max_stretch_px: Maximum transcript overscroll stretch and action-trigger distance, in pixels, where supported.",
+      "max_stretch_px": 10
+    },
+    "user_turn_anchor": {
+      "_instructions": "Edit up/down snap_distance_px (capture margin) and snap_rearm_distance_px (outer zone) independently. The shared landing zone uses the up outer distance below the landing and the down outer distance above it. Snap and layout movement do not rearm it. Pixel distances and millisecond durations. Refresh after editing. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown.",
+      "description": "Independent up/down anchor tuning with a shared landing zone. After any landing, all bubble snaps pause until reader scrolling leaves the configured rearm distance from that landing position. This prevents nearby bubbles from alternating snaps. Individual directional cooldowns still apply. Device profiles override Common.",
+      "down": {
+        "_instructions": "snap_enabled: Allow snaps approaching the landing from above (scrolling downward). The shared landing-zone lock still applies. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown.",
+        "snap_distance_px": 100,
+        "snap_enabled": true,
+        "snap_rearm_distance_px": 500
+      },
+      "snap_distance_px": 100,
+      "snap_rearm_distance_px": 500,
+      "up": {
+        "_instructions": "snap_enabled: Allow snaps approaching the landing from below (scrolling upward). The shared landing-zone lock still applies. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown.",
+        "snap_distance_px": 100,
+        "snap_enabled": true,
+        "snap_rearm_distance_px": 500
+      }
+    },
+    "window": {
+      "height": 620,
+      "min_height": 320,
+      "min_width": 300,
+      "resizable": true,
+      "width": 440
+    }
+  },
+  "controls_library": {
+    "controls": {
+      "abilities": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Toggle abilities on/off for the current chat",
+        "display_name": "Abilities",
+        "icon": "blocks",
+        "targets": [
+          "header",
+          "footer",
+          "below_pill"
+        ]
+      },
+      "activity": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Tool-call activity chip with expandable panel",
+        "display_name": "Activity Indicator",
+        "icon": "activity",
+        "targets": [
+          "above_pill"
+        ]
+      },
+      "agent_name": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Current agent name with agent-switcher dropdown",
+        "display_name": "Agent Name",
+        "icon": "bot",
+        "targets": [
+          "header",
+          "footer"
+        ]
+      },
+      "attach": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Attach files to the current message. accepted_formats (array of MIME wildcards / extensions, e.g. [\"image/*\", \".pdf\", \".md\"]) sets the allowed list; show_accepted_formats (bool) toggles the popover hint.",
+        "display_name": "Attach Files",
+        "icon": "plus",
+        "targets": [
+          "pill"
+        ]
+      },
+      "changes": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Toggle the file changes panel for the current session",
+        "display_name": "Session Changes",
+        "icon": "files",
+        "targets": [
+          "header",
+          "footer",
+          "below_pill"
+        ]
+      },
+      "close": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Close the chat panel (widget/embed use)",
+        "display_name": "Close Button",
+        "icon": "x",
+        "targets": [
+          "header"
+        ]
+      },
+      "continue": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Send 'continue' to resume the agent",
+        "display_name": "Continue Button",
+        "icon": "play",
+        "targets": [
+          "pill",
+          "above_pill"
+        ]
+      },
+      "delete_session": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Delete the current session",
+        "display_name": "Delete Session",
+        "icon": "trash-2",
+        "targets": [
+          "header",
+          "footer"
+        ]
+      },
+      "local_changes": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "The working-tree panel above the pill (the new design): changed file paths with added/removed line counts, plus a commit button (top right) that commits exactly those files with a note. Hidden until the 'changes' chip below the pill toggles it open; the chip's count badge signals there is something to see",
+        "display_name": "Local Changes",
+        "icon": "files",
+        "targets": [
+          "above_pill"
+        ]
+      },
+      "mic": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Always-visible voice input button",
+        "display_name": "Microphone Button",
+        "icon": "mic",
+        "targets": [
+          "pill"
+        ]
+      },
+      "mic_send": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Switching control: microphone while empty, send when the input has text",
+        "display_name": "Microphone / Send Button",
+        "icon": "mic",
+        "targets": [
+          "pill"
+        ]
+      },
+      "minimize": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Minimize the chat widget",
+        "display_name": "Minimize Button",
+        "icon": "minus",
+        "targets": [
+          "header"
+        ]
+      },
+      "mode": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Toggle execution mode: Ask â†’ Plan â†’ Auto",
+        "display_name": "Execution Mode",
+        "icon": "toggle-left",
+        "targets": [
+          "header",
+          "footer",
+          "below_pill"
+        ]
+      },
+      "model_changer": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Cycle through available models with chevron buttons",
+        "display_name": "Model Changer",
+        "icon": "cpu",
+        "targets": [
+          "below_pill"
+        ]
+      },
+      "new_session": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Create a new chat session",
+        "display_name": "New Session",
+        "icon": "plus",
+        "targets": [
+          "header",
+          "footer"
+        ]
+      },
+      "refresh": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Refresh the chat transcript",
+        "display_name": "Refresh Transcript",
+        "icon": "refresh-cw",
+        "targets": [
+          "header",
+          "footer"
+        ]
+      },
+      "send": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Send the current message",
+        "display_name": "Send Button",
+        "icon": "send",
+        "targets": [
+          "pill"
+        ]
+      },
+      "session_dropdown": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Session selector with chevron, label, and dropdown menu",
+        "display_name": "Session Dropdown",
+        "icon": "list",
+        "targets": [
+          "header",
+          "footer"
+        ]
+      },
+      "session_next": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Navigate to the next pinned session",
+        "display_name": "Next Session",
+        "icon": "arrow-big-right",
+        "targets": [
+          "header",
+          "footer"
+        ]
+      },
+      "session_prev": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Navigate to the previous pinned session",
+        "display_name": "Previous Session",
+        "icon": "arrow-big-left",
+        "targets": [
+          "header",
+          "footer"
+        ]
+      },
+      "stats": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Configurable usage stat chips (tokens, context, cost) — see controls.stats.visible",
+        "display_name": "Usage Stats",
+        "icon": "chart-no-axes-column",
+        "targets": [
+          "pill"
+        ]
+      },
+      "stop": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Stop the current generation",
+        "display_name": "Stop Button",
+        "icon": "square",
+        "targets": [
+          "pill",
+          "above_pill"
+        ]
+      },
+      "storage_mode": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Toggle between browser-backed (IndexedDB) and server-backed storage",
+        "display_name": "Storage Mode",
+        "icon": "database",
+        "targets": [
+          "below_pill"
+        ]
+      },
+      "target": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Choose which device runs the next message",
+        "display_name": "Target Device",
+        "icon": "monitor",
+        "targets": [
+          "header",
+          "footer",
+          "below_pill"
+        ]
+      },
+      "textarea": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Multi-line message input that fills its pill zone",
+        "display_name": "Message Input",
+        "icon": "text-cursor-input",
+        "targets": [
+          "pill"
+        ]
+      },
+      "voice": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Legacy alias for mic; retained for version 2 configurations",
+        "display_name": "Voice Input (Legacy)",
+        "icon": "mic",
+        "targets": [
+          "pill"
+        ]
+      }
+    },
+    "description": "Reference catalog of every available chat control. NOT consumed by UI code â€” exists solely so users can see what controls exist and what each is for."
+  },
+  "description": "Chat presentation defaults. chat_common is the shared base; each chat_* surface overrides only the values it needs.",
+  "settings_page_widget": {
+    "_instructions": "enabled: Enable this feature or control; false disables it where supported. title: Displayed title text. icon: Lucide icon name. label: Displayed label text. aria_label: Accessible name announced by assistive technology. tooltip: Hover tooltip text. input_placeholder: Hint shown in an empty input. default_side: Default launcher side: left or right. edge_offset: Launcher distance from the side edge, in pixels. bottom_offset: Distance from the bottom edge, in pixels.",
+    "aria_label": "Ask WebAgent or search app settings",
+    "bottom_offset": 16,
+    "default_side": "right",
+    "description": "Shared Settings-page Ask or Search launcher. Replaces the old in-page composer pill: it expands in place, forwards live text to the Settings search engine, and sends questions through the normal WebAgent widget with the current settings page/section as context.",
+    "edge_offset": 16,
+    "enabled": true,
+    "icon": "bot",
+    "input_placeholder": "Search settings or ask how to configure something",
+    "label": "Ask or Search",
+    "title": "WebAgent",
+    "tooltip": "Ask WebAgent or search app settings"
+  },
+  "tier_gates": {
+    "admin": {},
+    "controls": {
+      "agent_id": {
+        "_instructions": "admin_only: Restrict this control to administrators where supported; visibility configuration does not replace server authorization.",
+        "admin_only": true
+      },
+      "engine_thread_id": {
+        "_instructions": "admin_only: Restrict this control to administrators where supported; visibility configuration does not replace server authorization.",
+        "admin_only": true
+      },
+      "local_changes": {
+        "_instructions": "ability_groups: Required ability-group capabilities in the inherited tier-gate schema; runtime authorization remains authoritative.",
+        "ability_groups": [
+          "developer_write"
+        ]
+      },
+      "message_id": {
+        "_instructions": "admin_only: Restrict this control to administrators where supported; visibility configuration does not replace server authorization.",
+        "admin_only": true
+      },
+      "model_changer": {
+        "_instructions": "features: Required named feature capabilities in the inherited tier-gate schema; not a grant of v3 authorization.",
+        "features": [
+          "model_picker"
+        ]
+      },
+      "session_id": {
+        "_instructions": "admin_only: Restrict this control to administrators where supported; visibility configuration does not replace server authorization.",
+        "admin_only": true
+      },
+      "storage_mode": {
+        "_instructions": "features: Required named feature capabilities in the inherited tier-gate schema; not a grant of v3 authorization.",
+        "features": [
+          "user_byod"
+        ]
+      },
+      "sub_agent_tabs": {
+        "_instructions": "ability_groups: Required ability-group capabilities in the inherited tier-gate schema; runtime authorization remains authoritative.",
+        "ability_groups": [
+          "agent_orchestration"
+        ]
+      }
+    },
+    "description": "Server-authoritative capability gates for the complete chat UI document. The server removes this block, resolves subject/tier overlays, and forces denied controls off after per-agent overrides. Requirements use named capabilities rather than tier rank so custom tiers work correctly.",
+    "requires": {
+      "_instructions": "features: Required named feature capabilities in the inherited tier-gate schema; not a grant of v3 authorization.",
+      "features": [
+        "chat"
+      ]
+    },
+    "subjects": {},
+    "tiers": {
+      "anonymous": {
+        "chat_common": {
+          "active_footer": {
+            "chat_pill": {
+              "controls": {
+                "attach": {
+                  "_instructions": "locked: Keep the control visible but use its locked-state behavior instead of performing its action where supported. locked_message: Explanation shown when a locked control is activated. locked_cta: Call-to-action text for a locked control.",
+                  "locked": true,
+                  "locked_cta": "Register",
+                  "locked_message": "Register to attach files and unlock the full app."
+                }
+              }
+            }
+          },
+          "chat_header": {
+            "controls": {}
+          },
+          "idle_footer": {
+            "chat_pill": {
+              "controls": {
+                "attach": {
+                  "_instructions": "locked: Keep the control visible but use its locked-state behavior instead of performing its action where supported. locked_message: Explanation shown when a locked control is activated. locked_cta: Call-to-action text for a locked control.",
+                  "locked": true,
+                  "locked_cta": "Register",
+                  "locked_message": "Register to attach files and unlock the full app."
+                }
+              }
+            }
+          },
+          "message_gutters": {
+            "agent": {
+              "controls": {
+                "fork": {
+                  "_instructions": "locked: Keep the control visible but use its locked-state behavior instead of performing its action where supported. locked_feature: Feature name shown in the locked-control explanation.",
+                  "locked": true,
+                  "locked_feature": "Fork"
+                }
+              }
+            },
+            "user": {
+              "controls": {
+                "undo": {
+                  "_instructions": "locked: Keep the control visible but use its locked-state behavior instead of performing its action where supported. locked_feature: Feature name shown in the locked-control explanation.",
+                  "locked": true,
+                  "locked_feature": "Undo"
+                }
+              }
+            }
+          }
+        }
+      },
+      "free": {},
+      "pro": {}
+    }
+  },
+  "version": 3
+}

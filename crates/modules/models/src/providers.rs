@@ -1,10 +1,10 @@
 //! Provider and model catalogs: one `providers/<provider>.json` file per provider,
-//! beside this crate. They are data, never compiled in: every lookup reads the
-//! current published release, so the next request or model call sees an edit.
+//! beside this crate. They are live files (listed in `live-files.json`), never
+//! compiled in: every lookup reads the checkout, so the next request or model call
+//! sees an edit.
 use crate::provider::ProviderId;
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// The full reasoning-effort scale, lowest first. Files may use any subset.
 pub const EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -100,40 +100,30 @@ fn scale(levels: &[String], default: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// The published release when configured; this crate's own folder for tests and local runs.
-fn directory() -> PathBuf {
-    match webagent_configuration::prompts::default_source(None) {
-        Ok(Some(root)) => root.join("crates/modules/models/providers"),
-        _ => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("providers"),
-    }
-}
+const FOLDER: &str = "crates/modules/models/providers";
 
-fn read(path: &std::path::Path, id: &str) -> Result<Provider> {
-    use std::io::Read;
-    let info = std::fs::symlink_metadata(path)?;
-    if !info.is_file() || info.len() > FILE_LIMIT { bail!("Invalid provider file {id}"); }
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)?.take(FILE_LIMIT + 1).read_to_end(&mut bytes)?;
-    let provider: Provider = serde_json::from_slice(&bytes).map_err(|error| anyhow!("Invalid provider file {id}: {error}"))?;
-    provider.validate(id)?;
-    Ok(provider)
+fn read(name: &str, id: &str) -> Result<Provider> {
+    let bytes = webagent_configuration::live::read(&format!("{FOLDER}/{name}"), FILE_LIMIT, |bytes| {
+        let provider: Provider = serde_json::from_slice(bytes)?;
+        provider.validate(id)
+    }).map_err(|error| anyhow!("Invalid provider file {id}: {error:#}"))?;
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
 /// One provider's file, or `None` when the provider has none.
 pub fn load(provider: ProviderId) -> Result<Option<Provider>> {
     let id = serde_json::to_value(provider)?.as_str().unwrap_or_default().to_owned();
-    let path = directory().join(format!("{id}.json"));
-    if !path.exists() { return Ok(None); }
-    read(&path, &id).map(Some)
+    let name = format!("{id}.json");
+    if !webagent_configuration::live::list(FOLDER)?.contains(&name) { return Ok(None); }
+    read(&name, &id).map(Some)
 }
 
 /// Every provider file, validated providers first, then by name.
 pub fn load_all() -> Result<Vec<Provider>> {
     let mut providers = Vec::new();
-    for item in std::fs::read_dir(directory())? {
-        let path = item?.path();
-        let Some(id) = path.file_name().and_then(|name| name.to_str()).and_then(|name| name.strip_suffix(".json")) else { continue };
-        providers.push(read(&path, id)?);
+    for name in webagent_configuration::live::list(FOLDER)? {
+        let Some(id) = name.strip_suffix(".json") else { continue };
+        providers.push(read(&name, id)?);
     }
     providers.sort_by(|a, b| b.validated.cmp(&a.validated).then_with(|| a.name.cmp(&b.name)));
     Ok(providers)

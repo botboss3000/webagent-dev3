@@ -11,28 +11,12 @@ pub async fn dedup_config_fingerprint(app:&crate::App,agent:&str,sid:&str)->Resu
 #[cfg(test)] mod dedup_tests {
     use super::*;
     const TEMPLATE:&str="Call {current_call_id} equals {reference_call_id} from {tool}.";
-    #[test] fn duplicate_prompt_has_no_fallback_and_reloads_the_actual_live_file() {
-        let root=tempfile::tempdir().unwrap();assert!(dedup_template(root.path()).is_err());
-        fs::create_dir(root.path().join("config")).unwrap();let path=root.path().join("config/prompts.json");
-        fs::write(&path,"{}").unwrap();assert!(dedup_template(root.path()).is_err());
-        fs::write(&path,json!({"tool_result_deduplication":{"placeholder":TEMPLATE}}).to_string()).unwrap();
-        assert_eq!(dedup_template(root.path()).unwrap(),TEMPLATE);
-        let changed="Changed {current_call_id} equals {reference_call_id}";
-        fs::write(&path,json!({"tool_result_deduplication":{"placeholder":changed}}).to_string()).unwrap();
-        assert_eq!(dedup_template(root.path()).unwrap(),changed);
-        for value in [json!(null),json!(false),json!(""),json!("{unknown}")] {
-            fs::write(&path,json!({"tool_result_deduplication":{"placeholder":value}}).to_string()).unwrap();
-            assert!(dedup_template(root.path()).is_err());
-        }
-    }
-    #[tokio::test] async fn lifetime_policy_is_disabled_without_discarding_saved_configuration() {
+    #[tokio::test] async fn lifetime_policy_is_disabled_by_the_shipped_live_file() {
         let (_root,app)=crate::runtime_tests::fixture().await;
-        let path=app.store.root.join("config/tool-output-retention.json");
-        let saved=json!({"enabled":true,"scope":"selected","tools":["file_read"],"lifetime_calls":17});
-        fs::write(&path,saved.to_string()).unwrap();
         let policy=effective(&app.store,"shared_default").await.unwrap();
-        assert!(!policy.enabled);assert_eq!(policy.lifetime_calls,17);
-        assert_eq!(serde_json::from_slice::<Value>(&fs::read(path).unwrap()).unwrap(),saved);
+        assert!(!policy.enabled);
+        // The duplicate-result placeholder is a required live prompt file.
+        assert!(!dedup_template(&app.store.root).unwrap().is_empty());
     }
     #[test] fn allowlist_is_explicit_and_does_not_grant_permission() {
         assert!(dedup_included(&json!({}),"file_read"));

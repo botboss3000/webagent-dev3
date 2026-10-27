@@ -40,23 +40,6 @@ mod tests {
     body:"file guidance sentinel".into(),selected:true,natural:false}],
    "temporary menu sentinel".into(),&"a".repeat(64),&CancellationToken::new()).await.unwrap()
  }
- /// Saved main prompt changes are resolved on each preparation, including the synchronous dispatch fence.
- #[cfg(feature="linked-context")]
- #[tokio::test]
- async fn preparation_rereads_current_main_prompt() {
-  let (root,app,run)=bridge_fixture().await;
-  std::fs::create_dir_all(root.path().join("config")).unwrap();
-  let path=root.path().join("config/prompts.json");
-  std::fs::write(&path,serde_json::to_vec(&json!({"base_instructions":"first prompt sentinel"})).unwrap()).unwrap();
-  let first_fence=source_fence(&app).unwrap();
-  let first=Box::pin(bridge_capability(&app,&run)).await;
-  assert!(first.main.contains("first prompt sentinel"));
-  std::fs::write(&path,serde_json::to_vec(&json!({"base_instructions":"second prompt sentinel"})).unwrap()).unwrap();
-  let second=Box::pin(bridge_capability(&app,&run)).await;
-  assert!(second.main.contains("second prompt sentinel"));
-  assert!(!second.main.contains("first prompt sentinel"));
-  assert_ne!(first_fence,source_fence(&app).unwrap());
- }
  /// Main Chat skills refresh with the base prompt, without modifying transcript documents.
  #[cfg(feature="linked-context")]
  #[tokio::test]

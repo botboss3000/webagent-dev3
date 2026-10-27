@@ -1,5 +1,18 @@
 {
   "_instructions": "Files edited in place in this checkout, by hand or by the app, and read live. The broker excludes them from release drift, never lets a task change them, and commits their edits automatically. Paths are relative to this folder; '*' is allowed only in the last segment; only .json and .md files.",
   "version": 1,
-  "files": []
+  "files": [
+    "crates/modules/configuration/prompts/*.md",
+    "crates/modules/configuration/prompts/*.json",
+    "crates/modules/configuration/prompts/main_chat_skills/*.md",
+    "crates/modules/configuration/prompts/session_naming/*.md",
+    "crates/modules/configuration/prompts/tool_output_retention/*.md",
+    "crates/modules/configuration/prompts/tool_result_deduplication/*.md",
+    "crates/modules/context/context-compaction.json",
+    "crates/modules/context/tool-output-retention.json",
+    "crates/modules/engine/gates/*.json",
+    "crates/modules/models/providers/*.json",
+    "src/engine/tools/native-tools.json",
+    "ui/chat/chat.json"
+  ]
 }

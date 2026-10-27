@@ -26,9 +26,6 @@ pub fn published_root()->Option<PathBuf> {
 pub fn prompt_defaults_at(source:Option<&Path>)->Result<Vec<u8>> {
  webagent_configuration::prompts::prompt_defaults_at(source,&fallback_directory())
 }
-pub fn retention_defaults()->Result<Vec<u8>> {
- webagent_configuration::prompts::retention_defaults_at(None,&fallback_directory())
-}
 pub fn resolved_prompts_at(root:&Path,source:Option<&Path>)->Result<Value> {
  webagent_configuration::prompts::resolved_prompts_at(root,source,&fallback_directory())
 }

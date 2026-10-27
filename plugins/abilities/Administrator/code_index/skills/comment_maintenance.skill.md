@@ -22,7 +22,7 @@ Use this skill to maintain human-readable function documentation and searchable 
 
 For every configurable feature, trace the JSON loader and the functions that consume its values. Put Config: <source-root-relative JSON path> -> <consumed keys> in the searchable marker purpose and central map purpose or location purpose, so index search results tell the working agent which settings affect the feature. Include profile inheritance/overrides, environment path overrides and caller-supplied settings where relevant; distinguish a setting that enables an action from one that changes the action itself. Recheck and update the references after every related edit. Do not infer a configuration dependency from names alone.
 
-For V3 chat profiles, data/config/chat.json (runtime /state/config/chat.json, or V3_CHAT_UI_CONFIG_PATH) supplies chat_common merged with chat_desktop, chat_mobile or chat_widget. Arrays and scalars replace common values. Examples include message_bubbles, message_gutters and user_message_truncation. Keep runtime configuration references descriptive: data remains excluded from Code Index, and metadata never authorizes a runtime read or changes its values.
+For V3 chat profiles, ui/chat/chat.json (live, read from the checkout) supplies chat_common merged with chat_desktop, chat_mobile or chat_widget. Arrays and scalars replace common values. Examples include message_bubbles, message_gutters and user_message_truncation. Keep runtime configuration references descriptive: data remains excluded from Code Index, and metadata never authorizes a runtime read or changes its values.
 
 ## What to document
 
@@ -67,7 +67,7 @@ During every documentation or source-edit pass, assess each affected feature:
 Most presentation and preference behavior should be considered for configuration. Never turn policy or security invariants into UI bypass settings.
 
 Use an optional configuration object in a marker, map feature, or map location:
-    {"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles/user/bg_dark"],"profile_overrides":true}],"opportunities":[]}
+    {"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/message_bubbles/user/bg_dark"],"profile_overrides":true}],"opportunities":[]}
 
 profile_overrides expands matching chat_common pointers to desktop, mobile, and widget overlays. These are raw configured values, not a claim about the active surface's effective merged value. A location assessment overrides its feature assessment. Refresh assessments and references after every relevant edit. Never copy current runtime values into breadcrumbs or the index database.
 

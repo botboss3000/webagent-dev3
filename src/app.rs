@@ -545,10 +545,12 @@ async fn run_process() -> Result<()> {
         let catalog=abilities::Catalog::load_snapshot(&path.join("plugins/abilities"))?;
         let _=crate::live_assets::native_schema_snapshot_at(Some(&path))?;
         let engine=crate::engine_components::load(&path,"candidate")?;
-        let prompts:Value=serde_json::from_slice(&std::fs::read(path.join("config/prompts.json"))?)?;
+        let prompts:Value=serde_json::from_slice(&crate::live_assets::prompt_defaults_at(Some(&path))?)?;
         crate::api::live_configuration::validate_source_prompts(&prompts)?;
-        for (file,id)in [("app-settings.json","app_settings"),("chat.json","chat"),("context-compaction.json","context_compaction"),("tool-output-retention.json","tool_output_retention"),("access-policy.json","access_policy")] {
-            let bytes=std::fs::read(path.join("config").join(file))?;
+        for id in ["app_settings","chat","context_compaction","tool_output_retention","access_policy","message_visibility","closing_status"] {
+            let file=crate::api::live_configuration::live(id).map(str::to_owned)
+                .unwrap_or_else(||format!("config/{}.json",id.replace('_',"-")));
+            let bytes=std::fs::read(path.join(file))?;
             if id=="tool_output_retention" {
                 crate::tool_output::Policy::parse(&bytes)
                     .map_err(|_|anyhow!("Candidate retention validation failed"))?;
@@ -561,8 +563,9 @@ async fn run_process() -> Result<()> {
         let effective=provider::Provider::instructions_for_snapshot("",&state_root,Some(&path))
             .map_err(|_|anyhow!("Effective prompt validation failed"))?;
         // This reader uses mounted state/current fallback, independently of the candidate source above.
-        let mounted_retention=crate::tool_output::Policy::read(&state_root)
-            .map_err(|_|anyhow!("Mounted retention validation failed"))?;
+        // Validation containers have no checkout: validate the candidate's own live file.
+        let mounted_retention=crate::tool_output::Policy::read_in(&[path.clone()])
+            .map_err(|_|anyhow!("Candidate retention validation failed"))?;
         println!("{}",json!({"catalog_version":catalog.version(),"abilities":catalog.ids().len(),"engine_components":engine.entries.len(),
             "effective_prompt_digest":digest(&json!(effective)),
             "mounted_retention_digest":digest(&json!(mounted_retention))}));
@@ -591,19 +594,15 @@ async fn run_process() -> Result<()> {
             .map_err(|_|anyhow!("Another v3 loop owns this state"))?;
         Some(lock)
     } else {None};
-    live_assets::initialize_defaults(&root)?;
-    if crate::session_naming::config::initialize(&root).is_err() {
-        tracing::warn!("Naming prompt initialization unavailable; preserving existing prompts");
-    }
     let store = Store::open(&root).await?;
     diagnostics::init(&root, &store, &role).await;
     optimization::init(&root, &role).await;
     mcp::bridge::init(&root, &role).await;
     store.migrate_agent_storage(&root).await?;
     let (runtime, runtime_path) = loop_runtime::Config::initialize(&root, &store).await?;
-    // One data-root authority, reread at call boundaries. Legacy JSON is only
-    // a first-start migration source; existing invalid data is never overwritten.
-    let compaction_config_path = context_compaction::Config::initialize(&root)?;
+    // The live policy file, reread at call boundaries; fail start-up only if it is invalid.
+    let compaction_config_path = context_compaction::Config::configured_path();
+    context_compaction::Config::configured()?;
     crate::engine_components::initialize(&root)?;
     store.configure_cache(runtime.cache.document_budget_bytes, runtime.cache.context_budget_bytes);
     // The temporary development bootstrap credential had no generation. Retire it
@@ -666,10 +665,8 @@ async fn run_process() -> Result<()> {
                 .unwrap_or_else(|_| "/run/v3/promote/promote.sock".into()),
         ),
         secure: std::env::var("V3_SECURE_COOKIE").unwrap_or_else(|_| "true".into()) != "false",
-        chat_ui_config_path: PathBuf::from(
-            std::env::var("V3_CHAT_UI_CONFIG_PATH")
-                .unwrap_or_else(|_| "/state/config/chat.json".into()),
-        ),
+        // Checkout-relative: read live (`live-files.json`) on every use.
+        chat_ui_config_path: PathBuf::from(webagent_chat::configuration::LIVE_CHAT),
     };
     if role=="loop" {
         let progress=agent_loop::watchdog::Progress::new();

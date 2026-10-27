@@ -124,8 +124,7 @@ still applies before dispatch.
 
 The independent V3 incoming-message gate stores submissions as visible user chat
 before admission to the working agent. Agent metadata owns
-manager_incoming_message enablement beneath the Identity revision; criteria live
-in config/prompts.json under manager_incoming_message.<agent-id>. User-owned
+manager_incoming_message enablement and criteria beneath the Identity revision. User-owned
 manager_review: documents retain submissions, pinned criteria/model plans and
 generation-fenced verdicts; manager_pending: documents are temporary per-session
 queue pointers. Acceptance alone atomically adds the user interaction and agent
@@ -280,7 +279,8 @@ The installed package owns diagnostics.json and logs.db (including SQLite WAL si
 
 ## Session naming configuration
 
-The mutable data-root config/prompts.json owns session_naming: prompt,
+The live prompt files own session naming: `prompts/session_naming/prompt.md` and
+`prompts/session_naming.json` (under crates/modules/configuration) hold prompt,
 model_role (system, standard or premium), attempts_per_job (1–10),
 retry_delay_ms (0–60000), request_timeout_seconds (1–300),
 recovery_retry_delay_seconds (1–86400), and max_job_attempts (1–20).

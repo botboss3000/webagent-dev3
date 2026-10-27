@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-screen-awake","aliases":["mobile wake lock","idle dimming"],"purpose":"Display policy from data/config/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/screen_display"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-screen-awake","aliases":["mobile wake lock","idle dimming"],"purpose":"Display policy from ui/chat/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/screen_display"],"profile_overrides":true}],"opportunities":[]}}
 const ACTIVE = new Set(['queued', 'running', 'waiting_gate', 'waiting_external']);
 const WAITING = new Set(['waiting_approval', 'recovery']);
 const PREFERENCES = ['enabled', 'after_activity_ms', 'after_input_ms', 'active', 'inactive', 'dim_after_ms', 'dim_opacity'];
@@ -142,7 +142,7 @@ export function createScreenAwake({config, doc = document, nav = navigator, win 
   function destroy() { disposed = true; ++epoch; refresh(); for (const remove of listeners) remove(); }
   return {select, runs, attention, configure, destroy};
 }
-// @code-index {"version":1,"feature":"chat-screen-preferences","aliases":["device display settings"],"purpose":"Display policy from data/config/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.","span_lines":65,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/screen_display"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-screen-preferences","aliases":["device display settings"],"purpose":"Display policy from ui/chat/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.","span_lines":65,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/screen_display"],"profile_overrides":true}],"opportunities":[]}}
 /** Build accessible device-only controls; parent popup owns dismissal and the shared chat feedback owner handles summary taps. */
 function preferenceControls({getPolicy, save, supported}) {
   const details = document.createElement('details'); details.className = 'screen-awake-settings';
@@ -188,7 +188,7 @@ function preferenceControls({getPolicy, save, supported}) {
   }
   details.append(feedback); return details;
 }
-// @code-index {"version":1,"feature":"chat-screen-awake-mount","aliases":["notification display wake"],"purpose":"Display policy from data/config/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.","span_lines":65,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/screen_display"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-screen-awake-mount","aliases":["notification display wake"],"purpose":"Display policy from ui/chat/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.","span_lines":65,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/screen_display"],"profile_overrides":true}],"opportunities":[]}}
 /** Calls from panel select/runs/live message callbacks; only changed notice text restores brightness. */
 export function mountScreenAwake(root, {getProfile = () => null} = {}) {
   let defaults = profileScreenPolicy(getProfile());

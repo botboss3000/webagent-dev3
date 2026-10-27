@@ -1,12 +1,12 @@
 // V2 schema adapter with V3-specific incremental layout and focus-preserving reconciliation.
-// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat pill layout"],"purpose":"Normalizes chat pill settings and renders configured composer controls Config: data/config/chat.json -> chat_common, chat_desktop, chat_mobile, chat_widget, chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat pill layout"],"purpose":"Normalizes chat pill settings and renders configured composer controls Config: ui/chat/chat.json -> chat_common, chat_desktop, chat_mobile, chat_widget, chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
 'use strict';
 
 // Canonical chat-pill schema and renderer.
 //
 // ⚠️ JSON DRIVES SIZING — all button sizes (element_size/container_size),
 // textarea properties (font_size, min_height, max_height, padding), and
-// zone padding are authored in data/config/chat.json. This file applies
+// zone padding are authored in ui/chat/chat.json. This file applies
 // them as inline styles. Change the JSON, not the CSS or JS defaults.
 //
 // The public schema is always two rows with left/center/right zones. Older
@@ -584,7 +584,7 @@ export function applyChatPillLayout(els, rawPill = {}) {
       els.input.style.setProperty('--chat-pill-font-size', textareaCfg.font_size);
     }
     // padding is applied as inline-style so it overrides the CSS default
-    // (8px 8px 2px 0). Authored in data/config/chat.json.
+    // (8px 8px 2px 0). Authored in ui/chat/chat.json.
     if (textareaCfg.padding) els.input.style.padding = textareaCfg.padding;
   }
   applyStatsConfig(els.stats, pill.controls.stats);

@@ -61,7 +61,7 @@ revisioned host state, not a new source JSON switch. policy_defaults fills absen
 rules without replacing explicit denials. These existing policy defaults are not
 an authority bypass or a migration requirement for future work.
 
-Config: data/config/chat.json -> /chat_limits/attachments/max_per_message
+Config: ui/chat/chat.json -> /chat_limits/attachments/max_per_message
 bounds combined queue attachments; combined context is capped at 65536 bytes.
 An oversized batch is held for the owner to reduce rather than silently split.
 Native messages add no attachments, but can share a batch with human submissions.

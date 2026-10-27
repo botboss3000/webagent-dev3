@@ -74,7 +74,7 @@ The marker must be a real comment, never text inside a string. Its target begins
 
 The central plugins/abilities/Administrator/code_index/code-index-features.json map lives with this ability and uses version 1 with a features array. Each feature has id, aliases, canonical purpose and locations. A location has a confined relative path, exact start_line/end_line and optional location purpose and sha256. When sha256 is present it pins the target; otherwise a successful scan binds the currently indexed target digest atomically. Map edits, target changes and marker removal are revalidated on scan. Search groups a feature's linked files before ordinary lexical candidates and keeps distinct target files visible. Source results remain untrusted.
 
-Configurable features must name the owning JSON file and consumed settings in their marker purpose and map purpose/location purpose, for example: Config: data/config/chat.json -> chat_common.message_bubbles, with chat_desktop/chat_mobile/chat_widget overrides. These descriptions are returned in feature search results. Trace the actual loader, consumer and merge rules; identify trigger-only or indirect settings explicitly. Preserve those references after edits. Runtime config paths are references, not index targets: data directories remain excluded, and reading values still requires an authorized tool. The V3 chat loader defaults to /state/config/chat.json (checkout data/config/chat.json) and honors V3_CHAT_UI_CONFIG_PATH. Map location paths remain relative to the source root, not the map folder.
+Configurable features must name the owning JSON file and consumed settings in their marker purpose and map purpose/location purpose, for example: Config: ui/chat/chat.json -> chat_common.message_bubbles, with chat_desktop/chat_mobile/chat_widget overrides. These descriptions are returned in feature search results. Trace the actual loader, consumer and merge rules; identify trigger-only or indirect settings explicitly. Preserve those references after edits. Runtime config paths are references, not index targets: data directories remain excluded, and reading values still requires an authorized tool. The V3 chat loader defaults to /state/config/chat.json (checkout ui/chat/chat.json) and honors V3_CHAT_UI_CONFIG_PATH. Map location paths remain relative to the source root, not the map folder.
 
 Format examples
 
@@ -111,7 +111,7 @@ During every documentation or source-edit pass, assess each affected feature:
 Most presentation and preference behavior should be considered for configuration. Never turn policy or security invariants into UI bypass settings.
 
 Use an optional configuration object in a marker, map feature, or map location:
-    {"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/message_bubbles/user/bg_dark"],"profile_overrides":true}],"opportunities":[]}
+    {"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/message_bubbles/user/bg_dark"],"profile_overrides":true}],"opportunities":[]}
 
 profile_overrides expands matching chat_common pointers to desktop, mobile, and widget overlays. These are raw configured values, not a claim about the active surface's effective merged value. A location assessment overrides its feature assessment. Refresh assessments and references after every relevant edit. Never copy current runtime values into breadcrumbs or the index database.
 

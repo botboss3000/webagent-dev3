@@ -206,16 +206,9 @@ fn candidate_question_from_config(template_text: &str, live_bytes: Option<&[u8]>
 }
 
 fn retrieval_prompt_settings() -> Result<(String, String)> {
-    let root = std::path::PathBuf::from(
-        std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()),
-    );
-    let path = root.join("config/prompts.json");
-    let bytes = match std::fs::read(path) {
-        Ok(_) => Some(serde_json::to_vec(&crate::live_assets::resolved_prompts(&root)?)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error).context("Could not read live prompt configuration"),
-    };
+    // The live prompt files are both the configuration and the default.
     let defaults=crate::live_assets::prompt_defaults()?;
+    let bytes=Some(defaults.clone());
     let embedded=std::str::from_utf8(&defaults)?;
     Ok((
         prompt_from_config(embedded, bytes.as_deref())?,

@@ -44,7 +44,7 @@ async fn prepare_plan(app: &App, session: &Value) -> Result<Value> {
     pinned["auto_naming"]["system_plan"] = json!(plan);
     Ok(pinned)
 }
-// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Naming caller prepares provider projection before admission. Config: config/prompts.json -> session_naming (snapshotted per job); engine controls/descriptor fence dispatch.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled","/revision"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/interface_version","/implementation_version","/limits"]},{"path":"config/prompts.json","pointers":["/session_naming/prompt","/session_naming/model_role","/session_naming/attempts_per_job","/session_naming/retry_delay_ms","/session_naming/request_timeout_seconds","/session_naming/recovery_retry_delay_seconds","/session_naming/max_job_attempts"]}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Naming caller prepares provider projection before admission. Config: crates/modules/configuration/prompts -> session_naming (snapshotted per job); engine controls/descriptor fence dispatch.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled","/revision"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/interface_version","/implementation_version","/limits"]},{"path":"crates/modules/configuration/prompts","pointers":["/session_naming/prompt","/session_naming/model_role","/session_naming/attempts_per_job","/session_naming/retry_delay_ms","/session_naming/request_timeout_seconds","/session_naming/recovery_retry_delay_seconds","/session_naming/max_job_attempts"]}],"opportunities":[]}}
 /// Generate a private title from the job's pinned settings and safe failover plan.
 /// Calls CallDraft::prepare before dispatch admission; rechecks naming/model/component authority before the first network poll.
 async fn generate(app: &App, original: &Value) -> Result<String> {
@@ -316,11 +316,23 @@ mod acceptance_tests {
         assert_eq!(app.store.chat_snapshot(&sid).await.unwrap(), before);
         server.abort();
     }
-    /// Write a private fixture's naming configuration while preserving the required base prompt field.
+    /// Make the fixture's naming settings invalid (a JSON object that fails validation); returns its path.
+    fn write_invalid(root: &std::path::Path) -> std::path::PathBuf {
+        let prompts = root.join(webagent_configuration::prompts::PROMPTS);
+        std::fs::create_dir_all(prompts.join("session_naming")).unwrap();
+        std::fs::write(prompts.join("session_naming/prompt.md"), "private-invalid-marker").unwrap();
+        let path = prompts.join("session_naming.json");
+        std::fs::write(&path, br#"{"max_job_attempts":0}"#).unwrap();
+        path
+    }
+    /// Write a private fixture's naming prompt files (the state root doubles as the test's prompt source).
     fn write_settings(root: &std::path::Path, settings: &config::Config) {
-        std::fs::create_dir_all(root.join("config")).unwrap();
-        std::fs::write(root.join("config/prompts.json"), serde_json::to_vec(
-            &json!({"session_naming":settings, "base_instructions":"keep"})).unwrap()).unwrap();
+        let prompts = root.join(webagent_configuration::prompts::PROMPTS);
+        std::fs::create_dir_all(prompts.join("session_naming")).unwrap();
+        let mut value = serde_json::to_value(settings).unwrap();
+        let prompt = value.as_object_mut().unwrap().remove("prompt").unwrap();
+        std::fs::write(prompts.join("session_naming/prompt.md"), prompt.as_str().unwrap()).unwrap();
+        std::fs::write(prompts.join("session_naming.json"), serde_json::to_vec(&value).unwrap()).unwrap();
     }
     /// Verify queued settings stay pinned through capped retries while a later job observes new configuration.
     #[tokio::test]
@@ -490,8 +502,7 @@ mod acceptance_tests {
         let locked = create(&app, Some(json!("My locked title"))).await;
         let mut locked_run = accept(&app, &locked, "Keep this title too").await;
         let before_locked = saved(&app, &locked).await["auto_naming"].clone();
-        let invalid = br#"{"base_instructions":"keep","session_naming":{"prompt":"private-invalid-marker","max_job_attempts":0}}"#;
-        std::fs::write(root.path().join("config/prompts.json"), invalid).unwrap();
+        let invalid = write_invalid(root.path());
 
         for (id, terminal) in [(&sid, &mut run), (&locked, &mut locked_run)] {
             finish(&app, terminal).await;
@@ -517,7 +528,7 @@ mod acceptance_tests {
         assert!(app.store.naming_claim(&sid, true).await.unwrap().is_none());
         assert_eq!(saved(&app, &locked).await["title"], "My locked title");
         assert_eq!(saved(&app, &locked).await["auto_naming"], before_locked);
-        assert_eq!(std::fs::read(root.path().join("config/prompts.json")).unwrap(), invalid);
+        assert_eq!(std::fs::read(&invalid).unwrap(), br#"{"max_job_attempts":0}"#);
     }
 
     /// Legacy configuration loading observes participation/lease fences before retiring unavailable work.
@@ -537,7 +548,7 @@ mod acceptance_tests {
             let generation = session["auto_naming"]["participation_generation"].as_u64().unwrap();
             session["participation"]["generation"] = json!(generation + 1);
             app.store.put(&format!("session:{sid}"), &session).await.unwrap();
-            std::fs::write(root.path().join("config/prompts.json"), b"{private-invalid-marker").unwrap();
+            write_invalid(root.path());
             assert!(app.store.naming_claim(&sid, recovery).await.unwrap().is_none());
             assert_eq!(saved(&app, &sid).await, session);
             assert!(app.store.get(&format!("session_naming:{sid}")).await.unwrap().is_some());

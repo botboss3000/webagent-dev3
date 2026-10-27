@@ -118,7 +118,7 @@ async fn identity_get(
                 tail_tokens: defaults.tail_tokens,
             });
     let compaction_valid = effective.apply(&defaults).is_ok();
-    let tool_output_defaults = crate::tool_output::Policy::read(&store.root)?;
+    let tool_output_defaults = crate::tool_output::Policy::live()?;
     let tool_output_override = crate::tool_output::agent_override(&store, &id).await?;
     let tool_output_overridden = tool_output_override.is_some();
     let tool_output_policy = match tool_output_override {
@@ -295,7 +295,8 @@ async fn identity_put(
                 .await
                 .map_err(|_| crate::bad("System model is unavailable"))?;
         }
-        let next = json!({"enabled":settings.enabled});
+        // Criteria are per agent and stay in its encrypted record.
+        let next = json!({"enabled":settings.enabled,"criteria":settings.criteria});
         // Prompt edits also withdraw any review pinned to the earlier Identity revision.
         if manager_prompt.is_some() {
             metadata["manager_incoming_message_revision"] = json!(metadata
@@ -321,9 +322,6 @@ async fn identity_put(
         )
         .await
         .map_err(|_| crate::conflict("Identity changed; reload before saving"))?;
-    if let Some(prompt) = manager_prompt {
-        crate::manager::config::save_prompt(&store.root, &id, &prompt)?;
-    }
     transaction.commit().await.map_err(anyhow::Error::from)?;
     identity_get(State(app.clone()), Extension(identity), Path(id)).await
 }
@@ -936,7 +934,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let defaults = crate::tool_output::Policy::read(&app.store.root).unwrap();
+        let defaults = crate::tool_output::Policy::live().unwrap();
         assert_eq!(before["tool_output_overridden"], false);
         assert_eq!(before["tool_output_defaults"], json!(defaults));
         assert_eq!(before["tool_output_policy"], json!(defaults));
@@ -1408,13 +1406,9 @@ mod manager_identity_tests {
         .unwrap()
         .0;
         assert_eq!(saved, reloaded);
-        let prompt_path = app.store.root.join("config/prompts.json");
-        let prompt_file: Value =
-            serde_json::from_slice(&std::fs::read(&prompt_path).unwrap()).unwrap();
-        assert_eq!(
-            prompt_file["manager_incoming_message"]["shared_default"],
-            "Clothing questions only"
-        );
+        // Criteria are stored in the agent's own record, not a shared prompt file.
+        assert!(!app.store.root.join("config/prompts.json").exists());
+        assert_eq!(reloaded["manager_incoming_message"]["criteria"], "Clothing questions only");
         assert_eq!(
             identity_put(
                 State(app.clone()),
@@ -1459,7 +1453,7 @@ mod manager_identity_tests {
 mod manager_disabled_prompt_tests {
     use super::*;
     #[tokio::test]
-    async fn save_prompt_while_off_without_system_model_and_reload_from_file() {
+    async fn save_criteria_while_off_without_system_model_and_reload_from_the_agent_record() {
         let (_root, app) = crate::runtime_tests::fixture().await;
         let identity = json!({"_user_id":"admin"});
         let mut catalog = app.store.model_catalog().await.unwrap();
@@ -1496,11 +1490,6 @@ mod manager_disabled_prompt_tests {
             saved["manager_incoming_message"],
             json!({"enabled":false,"criteria":"Clothing store questions"})
         );
-        let path = app.store.root.join("config/prompts.json");
-        let mut prompts: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        prompts["manager_incoming_message"]["shared_default"] =
-            json!("Updated directly in prompts.json");
-        std::fs::write(&path, serde_json::to_vec(&prompts).unwrap()).unwrap();
         let reload = identity_get(
             State(app.clone()),
             Extension(identity),
@@ -1509,10 +1498,7 @@ mod manager_disabled_prompt_tests {
         .await
         .unwrap()
         .0;
-        assert_eq!(
-            reload["manager_incoming_message"]["criteria"],
-            "Updated directly in prompts.json"
-        );
+        assert_eq!(reload["manager_incoming_message"]["criteria"], "Clothing store questions");
         assert_eq!(reload["manager_incoming_message"]["enabled"], false);
         let store = app.store.for_agent("shared_default").await.unwrap();
         let raw: Vec<u8> =
@@ -1520,8 +1506,7 @@ mod manager_disabled_prompt_tests {
                 .fetch_one(&store.agent_pool)
                 .await
                 .unwrap();
-        assert!(store.unseal(&raw).unwrap()["manager_incoming_message"]
-            .get("criteria")
-            .is_none());
+        assert_eq!(store.unseal(&raw).unwrap()["manager_incoming_message"]["criteria"],
+            "Clothing store questions");
     }
 }

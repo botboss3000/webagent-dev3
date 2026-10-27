@@ -24,6 +24,8 @@ const MAX_PLACEHOLDER_CHARS: usize = 2048;
 const MAX_LIFETIME_CALLS: u64 = 1_000;
 const MAX_OUTPUT_CHARS: usize = 262_144;
 const MAX_POLICY_BYTES: usize = 64 * 1024;
+/// Live policy file, relative to the checkout.
+pub const LIVE_POLICY: &str = "crates/modules/context/tool-output-retention.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,17 +73,13 @@ impl Policy {
         policy.validate()?;
         Ok(policy)
     }
-    /// Read the live root policy, falling back to external installation defaults.
-    pub fn read(root: &Path) -> Result<Self> {
-        let path = root.join("config/tool-output-retention.json");
-        let bytes = match fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Self::parse(&crate::defaults::retention_defaults()?);
-            }
-            Err(error) => return Err(error.into()),
-        };
-        Self::parse(&bytes)
+    /// Read the live policy file (`live-files.json`) on every use.
+    pub fn live() -> Result<Self> {
+        Self::read_in(&webagent_configuration::live::roots())
+    }
+    /// Read the policy from the first of `roots` that has it; tests pass their own root.
+    pub fn read_in(roots: &[std::path::PathBuf]) -> Result<Self> {
+        Self::parse(&webagent_configuration::live::read_from(roots, LIVE_POLICY, MAX_POLICY_BYTES as u64, |bytes| Self::parse(bytes).map(|_| ()))?)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -154,7 +152,7 @@ pub async fn agent_override(store: &impl crate::ports::AgentMetadata, agent_id: 
 
 /// Resolve a fresh policy at each model-call boundary.
 pub async fn effective(store: &impl crate::ports::AgentMetadata, agent_id: &str) -> Result<Policy> {
-    let mut policy = Policy::read(store.root())?;
+    let mut policy = Policy::live()?;
     if let Some(override_value) = agent_override(store, agent_id).await? {
         policy = serde_json::from_value(override_value)?;
     }
@@ -198,8 +196,6 @@ impl Prompts {
         let template: Value = serde_json::from_slice(&crate::defaults::prompt_defaults_at(source)?)
             .context("Embedded prompt configuration is malformed")?;
         let (guidance_default, placeholder_default) = embedded_prompt_defaults(&template)?;
-        let path = root.join("config/prompts.json");
-        let _=path;
         let live=crate::defaults::resolved_prompts_at(root,source)?;
         let section = live.get("tool_output_retention");
         if section.is_some_and(|value| !value.is_object()) {
@@ -957,14 +953,11 @@ pub async fn dedup_policy<S:crate::ports::AgentMetadata>(store: &S, agent: &str)
     }
 }
 
-/// Read only the actual live JSON file. No embedded defaults or alternate text are consulted.
+/// Read the live placeholder file (`prompts/tool_result_deduplication/placeholder.md`); it has no default.
 pub fn dedup_template(root: &Path) -> Result<String> {
-    let path=root.join("config/prompts.json");
-    let info=fs::symlink_metadata(&path).context("prompts.json is required for duplicate-result suppression")?;
-    if !info.is_file() || info.file_type().is_symlink() || info.len()>4*1024*1024 {bail!("Invalid prompts.json file");}
-    let prompts:Value=serde_json::from_slice(&fs::read(path)?)?;
+    let prompts=crate::defaults::resolved_prompts(root)?;
     let text=prompts["tool_result_deduplication"]["placeholder"].as_str()
-        .context("prompts.json: tool_result_deduplication.placeholder is required")?;
+        .context("prompts: tool_result_deduplication/placeholder.md is required")?;
     webagent_context_contracts::tool_results::validate_template(text)?;
     Ok(text.to_owned())
 }
@@ -1475,12 +1468,13 @@ mod tests {
     #[test]
     fn raw_policy_parser_and_live_reader_share_field_bounds_and_byte_limits() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("config/tool-output-retention.json");
-        fs::create_dir(path.parent().unwrap()).unwrap();
+        let path = root.path().join(LIVE_POLICY);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let roots = [root.path().to_owned()];
         let valid = br#"{"enabled":false}"#;
         assert_eq!(Policy::parse(valid).unwrap(), Policy::default());
         fs::write(&path, valid).unwrap();
-        assert_eq!(Policy::read(root.path()).unwrap(), Policy::parse(valid).unwrap());
+        assert_eq!(Policy::read_in(&roots).unwrap(), Policy::parse(valid).unwrap());
         let mut at_limit = vec![b' '; MAX_POLICY_BYTES - 2];
         at_limit.extend_from_slice(b"{}");
         assert!(Policy::parse(&at_limit).is_ok());
@@ -1496,7 +1490,8 @@ mod tests {
         ] {
             assert!(Policy::parse(&bytes).is_err());
             fs::write(&path, &bytes).unwrap();
-            assert!(Policy::read(root.path()).is_err());
+            // The live reader serves the last good bytes once a file has validated.
+            assert_eq!(Policy::read_in(&roots).unwrap(), Policy::parse(valid).unwrap());
         }
     }
 
@@ -1512,21 +1507,21 @@ mod tests {
         ]);
         synchronize(&mut r, &p);
         assert_eq!(r[STATE_KEY]["entries"].as_array().unwrap().len(), 1);
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(Policy::read(dir.path()).unwrap(), Policy::default());
+        // The shipped live policy keeps retention disabled.
+        assert_eq!(Policy::live().unwrap(), Policy::default());
     }
 
     #[tokio::test]
     async fn policy_reads_live_file_and_agent_override_is_complete() {
         let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("config/tool-output-retention.json");
+        let config = dir.path().join("x").join(LIVE_POLICY);
         std::fs::create_dir_all(config.parent().unwrap()).unwrap();
         std::fs::write(
             &config,
             json!({"enabled":true,"scope":"selected","tools":["file_read"]}).to_string(),
         )
         .unwrap();
-        let loaded = Policy::read(dir.path()).unwrap();
+        let loaded = Policy::read_in(&[dir.path().join("x")]).unwrap();
         assert!(loaded.eligible("file_read"));
         assert!(!loaded.eligible("file_edit"));
     }
@@ -1545,10 +1540,11 @@ mod tests {
         );
         assert!(embedded_prompt_defaults(&json!({})).is_err());
         assert!(embedded_prompt_defaults(&json!({"tool_output_retention":{"guidance":false}})).is_err());
-        let path = dir.path().join("config/prompts.json");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, r#"{"tool_output_retention":{"guidance":false}}"#).unwrap();
-        assert!(Prompts::read(dir.path()).is_err());
+        // A candidate source whose guidance file is blank is rejected.
+        let folder = dir.path().join(webagent_configuration::prompts::PROMPTS).join("tool_output_retention");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("guidance.md"), "  \n").unwrap();
+        assert!(Prompts::read_at(dir.path(), Some(dir.path())).is_err());
     }
 }
 

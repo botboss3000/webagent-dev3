@@ -1,10 +1,10 @@
-// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"Applies the V3 chat surface profile from data/config/chat.json (runtime /state/config/chat.json, or V3_CHAT_UI_CONFIG_PATH), including live_reload, chat_common, desktop/mobile/widget overlays, and chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"Applies the V3 chat surface profile from ui/chat/chat.json (live, read from the checkout), including live_reload, chat_common, desktop/mobile/widget overlays, and chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
 import {loadSessionDropdownConfig, sessionDropdownConfig, setSessionDropdownOverlay} from './session-dropdown/config.js';
 import { watchChatConfig } from './chat-config-live.js';
 import { applyBubblePaint } from '../core/bubble-paint.js';
 import { applyChatPillLayout, disposeChatPillLayout } from './chat-pill-config.js';
 import { initFooterHandle } from './footer-handle.js';
-// V3 reads the v3/data/config/chat.json schema. Unknown controls are
+// V3 reads the ui/chat/chat.json schema. Unknown controls are
 // skipped until their v3 features exist; the controls below are live in v3.
 let chatRoot = null;
 // The optional chatRoot keeps widget queries scoped; document lookup supports the panel.

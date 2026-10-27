@@ -34,6 +34,7 @@ mod background_followup;
 #[path = "../crates/modules/chat/host/session_messaging.rs"] mod session_messaging;
 mod abilities;
 mod live_assets;
+mod live_files;
 #[path = "engine/components.rs"] mod engine_components;
 #[path = "engine/sandbox.rs"] mod engine_sandbox;
 mod ability_plugins;
