@@ -18,6 +18,73 @@ class CandidateModeTests(unittest.TestCase):
         self.assertEqual(changed,["v3/README.md"])
         self.assertEqual(release.entries(merged,validate)["v3/docs/a.md"],base["v3/docs/a.md"])
 
+class LiveFileTests(unittest.TestCase):
+    def setUp(self):
+        self.release=fixtures.host.release;self.validate=fixtures.host.context_digest
+    def manifest(self,*files):
+        return json.dumps({"version":1,"files":list(files)})
+    def blob(self,files):
+        return fixtures.context(extra=files)
+    def test_manifest_accepts_config_files_and_rejects_code_or_broker_paths(self):
+        release=self.release
+        parse=lambda *files:release.live_patterns({release.LIVE_MANIFEST:(0o644,self.manifest(*files).encode())})
+        self.assertEqual(parse("ui/chat/chat.json","crates/modules/models/providers/*.json"),
+                         ("v3/crates/modules/models/providers/*.json","v3/ui/chat/chat.json"))
+        self.assertEqual(release.live_patterns({}),())
+        for bad in ("src/main.rs","build-service/scheduler-defaults.json","tests/a.json","data/config/chat.json",
+                    "crates/*/x.json","ui/../src/a.json","live-files.json",".git/config.json","ui/a b.json"):
+            with self.assertRaises(ValueError,msg=bad):parse(bad)
+        with self.assertRaises(ValueError):parse(*[f"ui/{n}.json"for n in range(257)])
+        patterns=parse("crates/modules/models/providers/*.json")
+        self.assertTrue(release.is_live("v3/crates/modules/models/providers/deepseek.json",patterns))
+        self.assertFalse(release.is_live("v3/crates/modules/models/providers/old/deepseek.json",patterns))
+        self.assertFalse(release.is_live("v3/crates/modules/models/src/lib.rs",patterns))
+    def test_tasks_cannot_change_live_files_but_can_list_new_ones(self):
+        release=self.release
+        live=self.blob({release.LIVE_MANIFEST:self.manifest("ui/chat.json"),"v3/ui/chat.json":"{}","v3/README.md":"a"})
+        edited=self.blob({release.LIVE_MANIFEST:self.manifest("ui/chat.json"),"v3/ui/chat.json":'{"x":1}',"v3/README.md":"b"})
+        with self.assertRaisesRegex(ValueError,"edited in place"):release.candidate(live,edited,live,self.validate)
+        _,changed=release.candidate(live,edited,live,self.validate,skip_live=True)
+        self.assertEqual(changed,["v3/README.md"])
+        # Creating a file and listing it in the same task is an ordinary source change.
+        listed=self.blob({release.LIVE_MANIFEST:self.manifest("ui/chat.json","ui/new.json"),"v3/ui/chat.json":"{}","v3/ui/new.json":"{}","v3/README.md":"a"})
+        _,changed=release.candidate(live,listed,live,self.validate)
+        self.assertEqual(changed,[release.LIVE_MANIFEST,"v3/ui/new.json"])
+        broken=self.blob({release.LIVE_MANIFEST:self.manifest("src/main.rs"),"v3/ui/chat.json":"{}","v3/README.md":"a"})
+        with self.assertRaisesRegex(ValueError,"live-files.json"):release.candidate(live,broken,live,self.validate)
+    def test_live_edits_are_not_checkout_drift(self):
+        release=self.release
+        live=self.blob({release.LIVE_MANIFEST:self.manifest("ui/chat.json"),"v3/ui/chat.json":"{}","v3/README.md":"a"})
+        checkout=self.blob({release.LIVE_MANIFEST:self.manifest("ui/chat.json"),"v3/ui/chat.json":'{"x":1}',"v3/README.md":"a"})
+        report=release.checkout_drift(live,checkout,live,[],self.validate)
+        self.assertEqual((report["status"],report["total"]),("synchronized",0))
+        other=self.blob({release.LIVE_MANIFEST:self.manifest("ui/chat.json"),"v3/ui/chat.json":'{"x":1}',"v3/README.md":"b"})
+        report=release.checkout_drift(live,other,live,[],self.validate)
+        self.assertEqual([row["path"]for row in report["files"]],["README.md"])
+        self.assertEqual(report["digest"],release.checkout_drift(live,self.blob({release.LIVE_MANIFEST:self.manifest("ui/chat.json"),
+            "v3/ui/chat.json":'{"x":2}',"v3/README.md":"b"}),live,[],self.validate)["digest"])
+    def test_committer_commits_only_settled_live_paths_and_keeps_staged_work(self):
+        import subprocess,threading
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder)
+            git=lambda *args:subprocess.run(["git","-C",folder,"-c","user.name=t","-c","user.email=t@example.test",*args],check=True,capture_output=True,text=True).stdout
+            git("init","-q");(root/"ui").mkdir();(root/"ui/chat.json").write_text("{}");(root/"README.md").write_text("a")
+            git("add","-A");git("commit","-q","-m","base")
+            def command(argv,timeout=None,private_raw=False,**_):
+                return subprocess.run([argv[0],"-c","user.name=t","-c","user.email=t@example.test",*argv[1:]],check=True,capture_output=True,text=True).stdout
+            runner=types.SimpleNamespace(command=command,git_lock=threading.Lock())
+            patterns=("v3/ui/*.json",)
+            (root/"README.md").write_text("staged");git("add","README.md")
+            (root/"ui/chat.json").write_text('{"x":1}');(root/"ui/new.json").write_text("{}")
+            with patch.dict(fixtures.host.CONFIG,{"checkout_root":folder}):
+                commit_live=fixtures.host.Runner.commit_live
+                self.assertIsNone(commit_live(runner,patterns,now=time.time()))
+                head=commit_live(runner,patterns,now=time.time()+60)
+                self.assertIsNone(commit_live(runner,patterns,now=time.time()+60))
+            self.assertEqual(git("rev-parse","HEAD").strip(),head)
+            self.assertEqual(git("show","--name-only","--format=%s","HEAD").split(),["Live","config","edit:","ui/chat.json,","ui/new.json","ui/chat.json","ui/new.json"])
+            self.assertEqual(git("diff","--cached","--name-only").split(),["README.md"])
+            self.assertEqual(git("show","HEAD:ui/chat.json"),'{"x":1}')
 class ConfigurationTests(unittest.TestCase):
  def account(self,name):return types.SimpleNamespace(pw_name=name,pw_uid=2301 if name=="builder" else 2402,pw_gid=2301,pw_dir="/srv/build-home")
  def test_arbitrary_account_paths_and_two_instances(self):

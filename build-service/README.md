@@ -259,6 +259,18 @@ leaves an empty target and the job compiles cold (`dependency_snapshot` in the
 receipt records hit, prepared, skipped or unavailable). The three most recent
 keys are kept; the cache is rebuildable and safe to delete while no job runs.
 
+## Live files
+
+`live-files.json` at the checkout root lists config files (`.json`/`.md`; `*` only in
+the last path segment; never broker, test, data or code paths) that are edited in
+place in the checkout, by hand or by the app, and read live. The published release's
+list applies. Live edits are never checkout drift, so they never pause a release. A
+task cannot change a listed file (remove it from the list first); creating a file and
+listing it in the same task is an ordinary change. A rebuild keeps the released bytes
+of listed files. The broker's 60-second maintenance loop commits settled edits (no
+change for 10 seconds) to listed files as one `Live config edit: ...` commit with
+`git commit --only`, so other writers' staged work is never included.
+
 ## Rebuild current checkout and stable releases
 
 `v3_build_rebuild_checkout {mode, request_id}` (app build socket as the signed-in

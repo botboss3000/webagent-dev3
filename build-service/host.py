@@ -78,7 +78,7 @@ BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
 CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
     "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/plugins/abilities", "v3/plugins/gates", "v3/worker.py",
-    "v3/sandbox.py", "v3/ability_plugin_worker.py", "v3/launch.py", "v3/promote.py", "v3/ui-baseline.json", "v3/tests",
+    "v3/sandbox.py", "v3/ability_plugin_worker.py", "v3/launch.py", "v3/promote.py", "v3/ui-baseline.json", "v3/live-files.json", "v3/tests",
     "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service",
     "v3/data/config/gates/message_visibility_v1.json",
     "v3/data/config/gates/closing_status_v1.json",
@@ -836,7 +836,7 @@ def inspect_source_patch_corrected(root, patch):
     paths = []
     allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                      ".gitignore", "README.md", "deploy.sh", "launch.py",
-                     "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json"}
+                     "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json", "live-files.json"}
     allowed_dirs = {"crates", "src", "plugins", "tests", "ui", "docs", "config", "build-service"}
     for record in records:
         fields = record.split(b"\t", 2)
@@ -970,6 +970,7 @@ class Runner:
         self.snapshot_socket = snapshot_socket or str(Path(CONFIG["runtime_root"])/"snapshot.sock")
         self.cancel = threading.Event()
         self.job_context = threading.local()
+        self.git_lock = threading.Lock()
 
     def compiler_runtime(self,job=None,prepare=False):
         """Use only the reviewed, prepared Mold image; never fall back to GNU ld."""
@@ -2142,17 +2143,48 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         tags = re.findall(rb"<\s*(/?)([A-Za-z!][A-Za-z0-9-]*)", block[:script])
         return all(slash == b"" and name.lower() in (b"meta", b"link") for slash, name in tags) and block.count(b"<script") == 1
 
-    def commit_release(self, paths, message):
-        """Commit exactly a completed rebuild's released checkout paths; never another writer's staged work."""
+    def commit_live(self, patterns, settle=10, now=None):
+        """Commit settled in-place live-file edits as one commit; never stage or commit other paths."""
+        if not patterns:
+            return None
         root = CONFIG["checkout_root"]
         git = ["git", "-C", root]
-        if self.command([*git, "diff", "--cached", "--name-only"], timeout=30).strip():
-            raise ValueError("Checkout has staged changes from another writer; rebuild commit skipped")
-        if paths:
-            self.command([*git, "add", "--", *paths], timeout=60)
-            if self.command([*git, "diff", "--cached", "--name-only", "--", *paths], timeout=30).strip():
-                self.command([*git, "commit", "-q", "-m", message, "--", *paths], timeout=120)
-        return self.command([*git, "rev-parse", "HEAD"], timeout=30).strip()
+        specs = [":(glob)" + pattern.removeprefix("v3/") for pattern in patterns]
+        with self.git_lock:
+            raw = self.command([*git, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", *specs],
+                               timeout=30, private_raw=True)
+            rows = [(record[:2], record[3:]) for record in raw.split("\0") if len(record) > 3]
+            rows = [(state, path) for state, path in rows if release.is_live("v3/" + path, patterns)]
+            if not rows:
+                return None
+            now = time.time() if now is None else now
+            for _, path in rows:
+                target = Path(root) / path
+                # Wait for an editor or the app to finish; never follow a planted link.
+                if target.is_symlink() or (target.exists() and now - target.stat().st_mtime < settle):
+                    return None
+            paths = sorted(path for _, path in rows)
+            untracked = [path for state, path in rows if state == "??"]
+            if untracked:
+                self.command([*git, "add", "--intent-to-add", "--", *untracked], timeout=60)
+            shown = ", ".join(paths[:3]) + (f" (+{len(paths) - 3} more)" if len(paths) > 3 else "")
+            # --only commits these paths from the working tree and leaves any other staged work untouched.
+            self.command([*git, "commit", "-q", "--only", "-m", "Live config edit: " + shown, "--", *paths], timeout=120)
+            return self.command([*git, "rev-parse", "HEAD"], timeout=30).strip()
+
+    def commit_release(self, paths, message):
+        """Commit exactly a completed rebuild's released checkout paths; never another writer's staged work."""
+        # Serialized with the live-file committer so neither sees the other's index state.
+        with getattr(self, "git_lock", contextlib.nullcontext()):
+            root = CONFIG["checkout_root"]
+            git = ["git", "-C", root]
+            if self.command([*git, "diff", "--cached", "--name-only"], timeout=30).strip():
+                raise ValueError("Checkout has staged changes from another writer; rebuild commit skipped")
+            if paths:
+                self.command([*git, "add", "--", *paths], timeout=60)
+                if self.command([*git, "diff", "--cached", "--name-only", "--", *paths], timeout=30).strip():
+                    self.command([*git, "commit", "-q", "-m", message, "--", *paths], timeout=120)
+            return self.command([*git, "rev-parse", "HEAD"], timeout=30).strip()
 
     def verify_ui(self, changed=()):
         # Static routes are public and must serve the exact selected bytes; the
@@ -3097,6 +3129,18 @@ class Broker:
             return {"status": "completed", "removed": removed}
 
     @timed("leftovers")
+    def commit_live_files(self):
+        """Commit in-place edits to the files the published release's live-files.json names."""
+        path = ASSET_ROOT / "current" / release.LIVE_MANIFEST
+        try:
+            with path.open("rb") as stream:
+                body = stream.read(64 * 1024 + 1)
+        except FileNotFoundError:
+            return None
+        if len(body) > 64 * 1024:
+            raise ValueError("live-files.json exceeds limit")
+        return self.runner.commit_live(release.live_patterns({release.LIVE_MANIFEST: (0o644, body)}))
+
     def reconcile_leftovers(self):
         # Disk accounting occurs outside the broker lock with a bounded budget.
         # Delayed counts are accepted only for the same still-unreviewed notice.
@@ -3767,10 +3811,18 @@ class Broker:
         if any(job.get("rebuild") and job["status"] in ("queued", "running") for job in self.jobs.values()):
             raise ValueError("A checkout rebuild is already queued or running")
         checkout, live = self.runner.snapshot(), self._current_release_blob()
-        _, drift = release.candidate(live, checkout, live, context_digest, allow_empty=True)
+        _, drift = release.candidate(live, checkout, live, context_digest, allow_empty=True, skip_live=True)
         if args["mode"] == "dev" and not drift:
             return {"task_id": task_id, "mode": "dev", "status": "no_changes", "changed_paths": []}
-        files = {name: value for name, value in release.entries(checkout, context_digest).items() if not release.inspection_path(name)}
+        released = release.entries(live, context_digest)
+        patterns = release.live_patterns(released)
+        def checkout_files(blob):
+            # Live files keep their released bytes; their checkout edits are committed in place.
+            files = {name: value for name, value in release.entries(blob, context_digest).items()
+                     if not release.inspection_path(name) and not release.is_live(name, patterns)}
+            files.update({name: value for name, value in released.items() if release.is_live(name, patterns)})
+            return files
+        files = checkout_files(checkout)
         if args["mode"] == "stable":
             try:
                 features = tomllib.loads(files["v3/Cargo.toml"][1].decode()).get("features", {})
@@ -3803,8 +3855,7 @@ class Broker:
         if finished.get("status") == "needs_decision" and report.get("digest"):
             # The checkout drift is exactly what this task releases. Proceed only while the
             # checkout still equals the tree just built and nothing conflicts at promotion.
-            fresh = {name: value for name, value in release.entries(self.runner.snapshot(), context_digest).items()
-                     if not release.inspection_path(name)}
+            fresh = checkout_files(self.runner.snapshot())
             if fresh == files and not report.get("promotion_conflicts"):
                 finished = call({"action": "finish", "task_id": task_id, "expected_inputs_sha256": expected,
                                  "sync_decision": "proceed", "expected_sync_digest": report["digest"]})
@@ -4424,7 +4475,7 @@ class Broker:
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/tests/test_context_component_builds.py","v3/tests/test_engine_components.py","v3/tests/test_build_lifecycle_entry.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
-                 "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md"}
+                 "v3/docs/boot-supervisor.md","v3/docs/engine-modularization.md",release.LIVE_MANIFEST}
         return review_modules,allowed
 
     def host_source_only(self,changed,blob,trusted):
@@ -5449,7 +5500,7 @@ class Broker:
                 allowed_dirs = {"crates", "src", "plugins", "tests", "ui", "docs", "config", "build-service"}
                 allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                                  ".gitignore", "README.md", "deploy.sh", "launch.py",
-                                 "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json"}
+                                 "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json", "live-files.json"}
                 if (name_path and (not re.fullmatch(r"[A-Za-z0-9_./-]+", name_path)
                         or any(part in ("", ".", "..") for part in parts)
                         or (parts[0] not in allowed_dirs and name_path not in {"services","services/system-monitoring"}
@@ -6557,6 +6608,12 @@ def main():
                 except Exception:
                     # Fixed diagnostic only: Docker inspection contains private configuration.
                     print("Check-cache pruning deferred", flush=True)
+                try:
+                    commit = await asyncio.to_thread(broker.commit_live_files)
+                    if commit:
+                        print("Live file edits committed as " + commit[:12], flush=True)
+                except Exception:
+                    print("Live file commit deferred", flush=True)
                 try:
                     await asyncio.to_thread(write_performance, broker.work_dir / "performance.json")
                 except Exception:

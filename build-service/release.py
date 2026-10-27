@@ -1,4 +1,5 @@
 """Frozen task contexts and versioned development release mounts."""
+import fnmatch
 import io
 import importlib.util
 import hashlib
@@ -18,6 +19,40 @@ MAX_INSPECTION_FILE = 256 * 1024 * 1024
 def inspection_path(name):
     return any(name == prefix or name.startswith(prefix + "/")
                for prefix in INSPECTION_CONTEXT)
+
+
+# Live files are edited in place in the checkout (by hand or by the app) and
+# committed by the broker; releases never carry or overwrite their edits.
+LIVE_MANIFEST = "v3/live-files.json"
+LIVE_DENIED = ("build-service/", "tests/", "data/", "build-jobs/", "workspaces/", "runtime/", "target/", ".")
+
+
+def live_patterns(files):
+    """Validated `v3/` patterns from a snapshot's live-files.json; `*` only in the last segment."""
+    item = files.get(LIVE_MANIFEST)
+    if item is None:
+        return ()
+    try:
+        value = json.loads(item[1])
+    except ValueError:
+        raise ValueError("invalid live-files.json") from None
+    names = value.get("files") if isinstance(value, dict) and value.get("version") == 1 and set(value) <= {"version", "files", "_instructions"} else None
+    if not isinstance(names, list) or len(names) > 256:
+        raise ValueError("invalid live-files.json")
+    for name in names:
+        parts = name.split("/") if isinstance(name, str) else []
+        if (not parts or len(name) > 200 or any(part in ("", ".", "..") for part in parts)
+                or "*" in "/".join(parts[:-1]) or not name.endswith((".json", ".md"))
+                or name.startswith(LIVE_DENIED) or name == "live-files.json"
+                or any(not (c.isalnum() or c in "._-*/") for c in name)):
+            raise ValueError("invalid live-files.json entry")
+    return tuple(sorted({"v3/" + name for name in names}))
+
+
+def is_live(name, patterns):
+    folder, _, leaf = name.rpartition("/")
+    return any(folder == pattern.rpartition("/")[0] and fnmatch.fnmatchcase(leaf, pattern.rpartition("/")[2])
+               for pattern in patterns)
 
 
 def entries(blob, validate):
@@ -117,7 +152,7 @@ def source_differs(before, after):
     return before[1] != after[1] or (before[0] ^ after[0]) & 0o100 != 0
 
 
-def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False):
+def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False, skip_live=False):
     (base,base_inspection),(task,task_inspection),(live,_) = (candidate_entries(value,validate)for value in (base_blob,task_blob,live_blob))
     # Same attested identity without holding private inspection bodies in memory.
     if base_inspection!=task_inspection:raise ValueError("read-only inspection snapshot changed")
@@ -126,6 +161,13 @@ def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False):
             not name.startswith("v3/") or name.startswith("v3/data/")
             for name in changed):
         raise ValueError("isolated task has no bounded V3 source changes")
+    if LIVE_MANIFEST in changed:
+        live_patterns(task)
+    patterns = live_patterns(live)
+    held = [name for name in changed if is_live(name, patterns)]
+    if held and not skip_live:
+        raise ValueError("live file is edited in place, not through tasks (remove it from live-files.json first to change it in a task): " + held[0].removeprefix("v3/"))
+    changed = [name for name in changed if name not in held]
     merged = dict(live)
     for name in changed:
         if live.get(name) not in (base.get(name), task.get(name)):
@@ -445,14 +487,18 @@ def activate_assets(root, job_id):
 
 def checkout_drift(live_blob, checkout_blob, candidate_blob, changed, validate, offset=0):
     """Content-free report over allowlisted V3 source, never runtime data."""
-    def source(blob):
+    live_entries = entries(live_blob, validate)
+    patterns = live_patterns(live_entries)
+    def source(files):
         # Git source identity tracks owner executable status, not ACL masks
         # or checkout read/write permissions. ACL masks can expose group execute
-        # in st_mode even when no file entry grants execute.
+        # in st_mode even when no file entry grants execute. Live files are
+        # edited in place by design, so they are never drift.
         return {name: (mode & 0o100, body)
-                for name, (mode, body) in entries(blob, validate).items()
-                if name.startswith("v3/") and not name.startswith("v3/data/")}
-    live, checkout, candidate = map(source, (live_blob, checkout_blob, candidate_blob))
+                for name, (mode, body) in files.items()
+                if name.startswith("v3/") and not name.startswith("v3/data/") and not is_live(name, patterns)}
+    live, checkout, candidate = (source(live_entries), source(entries(checkout_blob, validate)),
+                                 source(entries(candidate_blob, validate)))
     def fingerprint(values):
         return [(name, mode, hashlib.sha256(body).hexdigest())
                 for name, (mode, body) in sorted(values.items())]

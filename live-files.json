@@ -1,0 +1,5 @@
+{
+  "_instructions": "Files edited in place in this checkout, by hand or by the app, and read live. The broker excludes them from release drift, never lets a task change them, and commits their edits automatically. Paths are relative to this folder; '*' is allowed only in the last segment; only .json and .md files.",
+  "version": 1,
+  "files": []
+}
