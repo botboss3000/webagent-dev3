@@ -85,6 +85,47 @@ class LiveFileTests(unittest.TestCase):
             self.assertEqual(git("show","--name-only","--format=%s","HEAD").split(),["Live","config","edit:","ui/chat.json,","ui/new.json","ui/chat.json","ui/new.json"])
             self.assertEqual(git("diff","--cached","--name-only").split(),["README.md"])
             self.assertEqual(git("show","HEAD:ui/chat.json"),'{"x":1}')
+class LiveFileAccessTests(unittest.TestCase):
+    def setUp(self):
+        self.release=fixtures.host.release
+    def test_loop_mounts_whole_checkout_read_only_and_stays_a_loop(self):
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder)/"release";(root/"v3/plugins/abilities").mkdir(parents=True)
+            loop={"Mounts":[{"Type":"bind","Source":"/checkout/plugins","Target":"/live-checkout/plugins","ReadOnly":True},
+                            {"Type":"bind","Source":"/old","Target":"/opt/v3/plugins/abilities","ReadOnly":True}]}
+            mounted=self.release.release_mounts(loop,root)["Mounts"]
+            checkout=next(m for m in mounted if m["Target"]=="/live-checkout")
+            self.assertEqual((checkout["Source"],checkout["ReadOnly"]),("/checkout",True))
+            # A read-only checkout does not make the loop look like the API on the next release.
+            self.assertEqual(self.release.release_mounts({"Mounts":mounted},root)["Mounts"],mounted)
+    def test_expose_and_write_live_files(self):
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder);folder_path=root/"crates/x";folder_path.mkdir(parents=True);folder_path.chmod(0o700)
+            live=folder_path/"a.json";live.write_text("{}");live.chmod(0o600);(folder_path/"b.rs").write_text("")
+            (folder_path/"b.rs").chmod(0o600)
+            self.release.expose_live(root,("v3/crates/x/*.json",))
+            self.assertEqual(live.stat().st_mode&0o777,0o644);self.assertEqual(folder_path.stat().st_mode&0o777,0o705)
+            self.assertEqual((folder_path/"b.rs").stat().st_mode&0o777,0o600)
+            import hashlib
+            current=hashlib.sha256(b"{}").hexdigest()
+            with self.assertRaisesRegex(ValueError,"changed"):self.release.write_live(root,"crates/x/a.json",b'{"a":1}',None)
+            digest=self.release.write_live(root,"crates/x/a.json",b'{"a":1}',current)
+            self.assertEqual((live.read_text(),digest),('{"a":1}',hashlib.sha256(b'{"a":1}').hexdigest()))
+            with self.assertRaisesRegex(ValueError,"changed"):self.release.write_live(root,"crates/x/a.json",b"{}",current)
+            self.release.write_live(root,"crates/x/new.json",b"{}",None)
+            (root/"link").symlink_to(folder_path)
+            with self.assertRaisesRegex(ValueError,"link"):self.release.write_live(root,"link/a.json",b"{}",digest)
+            self.assertEqual(sorted(p.name for p in folder_path.iterdir()),["a.json","b.rs","new.json"])
+    def test_broker_writes_only_listed_valid_files(self):
+        broker=types.SimpleNamespace(live_patterns=lambda:("v3/ui/chat.json",),runner=types.SimpleNamespace(git_lock=__import__("threading").Lock()))
+        write=lambda args:fixtures.host.Broker.live_file_write(broker,args)
+        with tempfile.TemporaryDirectory()as folder,patch.dict(fixtures.host.CONFIG,{"checkout_root":folder}):
+            (Path(folder)/"ui").mkdir();(Path(folder)/"ui/chat.json").write_text("{}")
+            import hashlib
+            with self.assertRaisesRegex(ValueError,"not a live file"):write({"path":"ui/app.js","content":"x","expected_sha256":None})
+            with self.assertRaisesRegex(ValueError,"invalid"):write({"path":"ui/chat.json","content":"{","expected_sha256":hashlib.sha256(b"{}").hexdigest()})
+            result=write({"path":"ui/chat.json","content":'{"a":1}',"expected_sha256":hashlib.sha256(b"{}").hexdigest()})
+            self.assertEqual(result["sha256"],hashlib.sha256(b'{"a":1}').hexdigest())
 class ConfigurationTests(unittest.TestCase):
  def account(self,name):return types.SimpleNamespace(pw_name=name,pw_uid=2301 if name=="builder" else 2402,pw_gid=2301,pw_dir="/srv/build-home")
  def test_arbitrary_account_paths_and_two_instances(self):

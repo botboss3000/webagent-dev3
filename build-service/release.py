@@ -55,6 +55,66 @@ def is_live(name, patterns):
                for pattern in patterns)
 
 
+def _live_target(root, relative):
+    """Resolve a live file under the checkout without following any link."""
+    path = Path(root)
+    for part in relative.split("/"):
+        if part in ("", ".", ".."):
+            raise ValueError("invalid live file path")
+        path = path / part
+        if path.is_symlink():
+            raise ValueError("live file path link forbidden")
+    return path
+
+
+def expose_live(root, patterns):
+    """Make listed files and their folders readable by the app's distinct UID (the owner keeps writing)."""
+    root = Path(root)
+    for pattern in patterns:
+        folder, _, leaf = pattern.removeprefix("v3/").rpartition("/")
+        try:
+            directory = _live_target(root, folder) if folder else root
+        except ValueError:
+            continue
+        if not directory.is_dir():
+            continue
+        for path in directory.iterdir():
+            if path.is_symlink() or not path.is_file() or not fnmatch.fnmatchcase(path.name, leaf):
+                continue
+            mode = path.stat().st_mode & 0o777
+            if mode & 0o044 != 0o044:
+                path.chmod(mode | 0o044)
+            for parent in path.parents:
+                if parent == root.parent:
+                    break
+                mode = parent.stat().st_mode & 0o777
+                if mode & 0o005 != 0o005:
+                    parent.chmod(mode | 0o005)
+
+
+def write_live(root, relative, body, expected):
+    """Atomically replace a live file when its current bytes still match `expected` (None: absent)."""
+    path = _live_target(root, relative)
+    try:
+        current = hashlib.sha256(path.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        current = None
+    if current != expected:
+        raise ValueError("live file changed; reload before saving")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name("." + path.name + ".live-" + uuid.uuid4().hex)
+    try:
+        with temporary.open("xb") as output:
+            output.write(body)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.chmod(0o644)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return hashlib.sha256(body).hexdigest()
+
+
 def entries(blob, validate):
     validate(blob)
     result = {}
@@ -208,7 +268,8 @@ def release_mounts(previous, root, asset_root=None):
     host = dict(previous)
     mounts = []
     seen = set()
-    api = any(item.get("Target") == "/live-checkout"
+    # Only the API mounts the checkout writable; the loop's read-only checkout is for live files.
+    api = any(item.get("Target") == "/live-checkout" and not item.get("ReadOnly")
               for item in host.get("Mounts") or [])
     legacy_assets = {"/opt/v3/ui", "/opt/v3/shared-ui/shared/css",
                      "/opt/v3/shared-ui/main-panel/agents",
@@ -220,6 +281,9 @@ def release_mounts(previous, root, asset_root=None):
         target = mount.get("Target")
         if api and asset_root is not None and target in legacy_assets:
             continue
+        if target == "/live-checkout/plugins":
+            # The loop reads live files anywhere in the checkout and never writes it.
+            mount.update(Source=str(Path(mount["Source"]).parent), Target="/live-checkout", ReadOnly=True)
         if asset_root is not None and target == "/opt/v3/assets":
             mount["Source"] = str(asset_root)
             mount["ReadOnly"] = True

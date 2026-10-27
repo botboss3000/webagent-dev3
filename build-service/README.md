@@ -269,7 +269,12 @@ task cannot change a listed file (remove it from the list first); creating a fil
 listing it in the same task is an ordinary change. A rebuild keeps the released bytes
 of listed files. The broker's 60-second maintenance loop commits settled edits (no
 change for 10 seconds) to listed files as one `Live config edit: ...` commit with
-`git commit --only`, so other writers' staged work is never included.
+`git commit --only`, so other writers' staged work is never included. The same loop
+makes listed files and their folders readable by the app's UID. Both app containers
+mount the checkout at `/live-checkout` (the loop read-only). The app saves a live file
+through the broker action `live_file_write {path, content, expected_sha256}`: only a
+listed file, only while its bytes still match the digest the caller loaded (`null` for
+a new file), JSON must parse, written atomically; the app never writes the source tree.
 
 ## Rebuild current checkout and stable releases
 

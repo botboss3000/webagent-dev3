@@ -3129,17 +3129,43 @@ class Broker:
             return {"status": "completed", "removed": removed}
 
     @timed("leftovers")
-    def commit_live_files(self):
-        """Commit in-place edits to the files the published release's live-files.json names."""
+    def live_patterns(self):
+        """Patterns from the published release's live-files.json; empty before the first one."""
         path = ASSET_ROOT / "current" / release.LIVE_MANIFEST
         try:
             with path.open("rb") as stream:
                 body = stream.read(64 * 1024 + 1)
         except FileNotFoundError:
-            return None
+            return ()
         if len(body) > 64 * 1024:
             raise ValueError("live-files.json exceeds limit")
-        return self.runner.commit_live(release.live_patterns({release.LIVE_MANIFEST: (0o644, body)}))
+        return release.live_patterns({release.LIVE_MANIFEST: (0o644, body)})
+
+    def commit_live_files(self):
+        """Keep live files readable by the app, then commit their in-place edits."""
+        patterns = self.live_patterns()
+        release.expose_live(Path(CONFIG["checkout_root"]), patterns)
+        return self.runner.commit_live(patterns)
+
+    def live_file_write(self, args):
+        """Replace one listed live file for the app, only if it still has the caller's digest."""
+        if set(args) - {"path", "content", "expected_sha256"} or not isinstance(args.get("path"), str) \
+                or not isinstance(args.get("content"), str) or len(args["content"].encode()) > 4 * 1024 * 1024:
+            raise ValueError("bounded live file path and content required")
+        expected = args.get("expected_sha256")
+        if expected is not None and not (isinstance(expected, str) and re.fullmatch(r"[0-9a-f]{64}", expected)):
+            raise ValueError("invalid expected digest")
+        name = "v3/" + args["path"]
+        if not release.is_live(name, self.live_patterns()):
+            raise ValueError("not a live file")
+        body = args["content"].encode()
+        if name.endswith(".json"):
+            try:
+                json.loads(body)
+            except ValueError:
+                raise ValueError("live JSON file is invalid") from None
+        with self.runner.git_lock:
+            return {"sha256": release.write_live(Path(CONFIG["checkout_root"]), args["path"], body, expected)}
 
     def reconcile_leftovers(self):
         # Disk accounting occurs outside the broker lock with a bounded budget.
@@ -5188,6 +5214,8 @@ class Broker:
             with self.lock:self.scheduler.touch_task(args,trusted,workspace)
         if name in ("workspace_seed","source_review","source_patch","v3_workspace_status","v3_workspace_action") or (name=="v3_cargo_task" and "task_id" not in args):
             return self.workspace_request(name,args,trusted,workspace)
+        if name=="live_file_write":
+            return self.live_file_write(args)
         if name=="code_index_maintenance":
             with self.lock:
                 if args.get("action")not in {"list","get"}and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; maintenance disabled")
