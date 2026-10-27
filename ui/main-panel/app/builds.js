@@ -16,7 +16,8 @@ export function provenance(summary) {
 }
 const owner = (origin, session) => origin === 'claude-code'
   ? 'Claude session ' + (session ? '“' + session + '”' : '(name not recorded)')
-  : origin === 'codex' ? 'Codex chat' : origin || '—';
+  // The broker reports every local operator (Codex or Claude) as "codex".
+  : origin === 'codex' ? 'Local operator' : origin || '—';
 const phaseLabel = value => String(value || 'waiting').replaceAll('_', ' ');
 const when = value => Number.isFinite(value) ? new Date(value * 1000).toLocaleString() : '—';
 const duration = (start, end) => Number.isFinite(start)
