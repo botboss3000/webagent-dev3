@@ -245,6 +245,12 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(executor.Executor.test_stack_env("test"),["-e","RUST_MIN_STACK=33554432"])
         for phase in ("compile_test","compile_linked","compile_release","linked_smoke","live_smoke","dependency","engine_metadata"):
             self.assertEqual(executor.Executor.test_stack_env(phase),[])
+    def test_only_the_live_release_compile_yields_cpu_to_the_overlapping_suite(self):
+        self.assertEqual(executor.Executor.cpu_weight_args("compile_release"),["--cpu-shares","2"])
+        for phase in ("test","compile_test","compile_linked","linked_smoke","live_smoke","dependency"):
+            self.assertEqual(executor.Executor.cpu_weight_args(phase),[])
+        source=(ROOT/"build-service/executor.py").read_text()
+        self.assertIn('*self.test_stack_env(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]',source)
     def test_suite_gate_runs_parallel_and_single_tests_stay_serial(self):
         self.assertEqual(executor.TEST_THREADS,8)
         source=(ROOT/"build-service/executor.py").read_text()

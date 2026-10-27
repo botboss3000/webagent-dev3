@@ -138,6 +138,12 @@ class Executor:
         """Give Rust test-harness phases stack headroom; other phases keep the default."""
         return ["-e","RUST_MIN_STACK="+str(TEST_STACK_BYTES)]if phase=="test"else[]
     @staticmethod
+    def cpu_weight_args(phase):
+        """The live release compile runs beside the full suite inside the build slice's CPU
+        quota; give it the lowest weight so timing-sensitive tests get CPU first and the
+        compile uses only what they leave idle. Same work, so no added CPU-seconds."""
+        return ["--cpu-shares","2"]if phase=="compile_release"else[]
+    @staticmethod
     def suite_totals(output):
         """Sum one cargo test run's result counts; an empty run proves nothing executed."""
         totals=[0,0,0]
@@ -200,7 +206,7 @@ class Executor:
             "--network","bridge"if network else"none","--mount","type=bind,src="+str(source)+",dst=/build"+(""if phase=="test"else",readonly"),
             "--mount","type=bind,src="+str(output)+",dst=/output","-w","/build",
             "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=3","-e","CARGO_INCREMENTAL=0","--env","RUSTFLAGS="+RUSTFLAGS,
-            "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",*self.test_stack_env(phase),image,"sleep","infinity"]
+            "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",*self.test_stack_env(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]
         if cap is not None:create[create.index(image):create.index(image)]=["--memory",str(cap),"--memory-swap",str(cap)]
         try:
             self.runner.command(create,timeout=30,private_raw=True)
