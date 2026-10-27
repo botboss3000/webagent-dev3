@@ -23,6 +23,7 @@ import { showLeftOverlay } from './chat/controls/login-hook.js';
 // v2 dom-utils imports v1 auth and uploads; v3 uses text nodes and its own transport.
 import { renderIdentity } from './main-panel/agents/pages/identity/page.js';
 import {renderMembers} from './main-panel/agents/pages/members/page.js';
+import {renderCreateAgent} from './main-panel/agents/pages/create/page.js';
 import { renderAbilities } from './main-panel/agents/pages/abilities/page.js';
 import { loadAgentPages } from './main-panel/agents/pages/catalog.js';
 import { renderAgentDirectory } from './main-panel/agents/pages/config/page.js';
@@ -35,9 +36,11 @@ let agentSelectionQueue=Promise.resolve();
 let sessionsPage=null,sessionsGeneration=0;
 // Accept the original bookmark scope, then normalize it to the Sessions route.
 let sessionsScope=['sessions','all'].includes(new URL(location.href).searchParams.get('agentScope'));
+let createScope=new URL(location.href).searchParams.get('agentScope')==='create';
 let agentPages=[];
 let configPage;
 let sessionsDescriptor;
+let createDescriptor;
 const $=id=>document.getElementById(id);
 let agentId=new URL(location.href).searchParams.get('agent')||'shared_default';
 let agentRoster=[];
@@ -69,6 +72,7 @@ async function mountAgents(){
   const pages=await loadAgentPages();
   configPage=pages.find(page=>page.type==='directory');
   sessionsDescriptor=pages.find(page=>page.type==='sessions');
+  createDescriptor=pages.find(page=>page.type==='create');
   agentPages=pages.filter(page=>page.type==='agent_configuration');
   const tabs=detail.querySelector('.agent-card-tabs');
   for(const page of [configPage,...agentPages]){
@@ -99,6 +103,13 @@ async function mountAgents(){
   common.querySelector('#sessions-page-tab').textContent=sessionsDescriptor.title;
   common.querySelector('#sessions-page-tab').setAttribute('aria-controls',sessionsDescriptor.panelId);
   grid.append(common);
+  // Creation is caller-scoped like Sessions: it never edits the selected agent.
+  const create=document.createElement('div');create.id='create-region';create.className='open';create.hidden=true;
+  create.innerHTML='<div class="agent-row expanded"><div class="agent-card active agent-card-tabs-only"><div class="agent-card-tabs-wrap"><div class="agent-card-tabs" role="tablist" aria-label="New agent pages"><button id="create-page-tab" type="button" role="tab" class="active" aria-selected="true"></button></div></div></div><div class="agent-detail-panel"><div class="agent-detail-content"><section class="agent-detail-body" role="tabpanel" aria-labelledby="create-page-tab"></section></div></div></div>';
+  create.querySelector('#create-page-tab').textContent=createDescriptor.title;
+  create.querySelector('#create-page-tab').setAttribute('aria-controls',createDescriptor.panelId);
+  create.querySelector('section').id=createDescriptor.panelId;
+  grid.append(create);
   const css=document.createElement('link');css.rel='stylesheet';css.href='/v3-ui/main-panel/agents/pages/sessions/sessions.css';document.head.append(css);
   $('agents-grid').replaceWith(grid);
   const route=new URL(location.href);
@@ -119,14 +130,21 @@ function renderAgentCards(){
   common.querySelector('.agent-card-name').textContent=sessionsDescriptor.title;
   common.firstElementChild.classList.toggle('activated',sessionsScope);common.firstElementChild.setAttribute('aria-pressed',String(sessionsScope));
   common.firstElementChild.onclick=guard(()=>showSessions());squares.append(common);
+  if(accountMe?.role!=='guest'){
+    const create=document.createElement('div');create.className='agent-row';
+    create.innerHTML='<button type="button" class="agent-card agent-square"><div class="agent-card-top"><div class="agent-card-icon-wrap color-purple"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></div><div class="agent-card-meta"><div class="agent-card-name-row"><span class="agent-card-name"></span></div></div></div></button>';
+    const button=create.firstElementChild;button.setAttribute('aria-label',createDescriptor.title);button.querySelector('.agent-card-name').textContent=createDescriptor.title;
+    button.classList.toggle('activated',createScope);button.setAttribute('aria-pressed',String(createScope));
+    button.onclick=guard(()=>showCreateAgent());squares.append(create);
+  }
   for(const agent of agentRoster){
     const row=document.createElement('div');row.className='agent-row';row.dataset.agentId=agent.id;
     row.innerHTML='<div class="agent-card agent-square activated"><div class="agent-card-top"><div class="agent-card-icon-wrap color-purple"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="12" cy="12" r="3"/></svg></div><div class="agent-card-meta"><div class="agent-card-name-row"><span class="agent-card-name">WebAgent</span><span class="agent-status-dot"></span></div></div></div></div>';
     const card=row.firstElementChild;
-    card.classList.toggle('activated',!sessionsScope&&agent.id===agentId);
+    card.classList.toggle('activated',!sessionsScope&&!createScope&&agent.id===agentId);
     card.setAttribute('role','button');card.tabIndex=0;
     card.setAttribute('aria-label','Configure '+(agent.name||agent.id));
-    card.setAttribute('aria-pressed',String(!sessionsScope&&agent.id===agentId));
+    card.setAttribute('aria-pressed',String(!sessionsScope&&!createScope&&agent.id===agentId));
     card.querySelector('.agent-card-name').textContent=agent.name||agent.id;
     card.querySelector('.agent-status-dot')?.remove();
     if(agent.description)card.title=agent.description;
@@ -260,7 +278,7 @@ await loadMainPages();
 function disposeSessionsPage(){++sessionsGeneration;sessionsPage?.destroy();sessionsPage=null;$('tab-agents').classList.remove('sessions-view');}
 async function showSessions(routeMode='push'){
   if(activeMainPage!=='agents')return;
-  sessionsScope=true;$('tab-agents').classList.add('sessions-view');$('agents-detail-region').hidden=true;$('sessions-region').hidden=false;renderAgentCards();
+  sessionsScope=true;createScope=false;$('tab-agents').classList.add('sessions-view');$('agents-detail-region').hidden=true;$('create-region').hidden=true;$('sessions-region').hidden=false;renderAgentCards();
   const route=new URL(location.href);route.searchParams.set('tab','agents');route.searchParams.set('agentScope','sessions');route.searchParams.set('agentView','sessions');
   if(route.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',route);
   if(sessionsPage||activeMainPage!=='agents')return;
@@ -270,10 +288,26 @@ async function showSessions(routeMode='push'){
     changed:()=>{window.dispatchEvent(new Event('v3:sessions-changed'));void chat.sessions().catch(()=>{});}});
   if(generation===sessionsGeneration)sessionsPage=mounted;else mounted?.destroy();
 }
+// The form survives scope switches; a created agent opens on the page it needs next.
+async function showCreateAgent(routeMode='push'){
+  if(activeMainPage!=='agents')return;
+  if(accountMe?.role==='guest'){createScope=false;await showAgentView('config',routeMode);return;}
+  disposeSessionsPage();sessionsScope=false;createScope=true;
+  $('agents-detail-region').hidden=true;$('sessions-region').hidden=true;$('create-region').hidden=false;renderAgentCards();
+  const route=new URL(location.href);route.searchParams.set('tab','agents');route.searchParams.set('agentScope','create');route.searchParams.set('agentView','create');
+  if(route.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',route);
+  const host=$(createDescriptor.panelId);
+  if(!host.firstChild)renderCreateAgent(host,api,{onCreated:async created=>{
+    await loadAgentRoster();
+    const next=new URL(location.href);next.searchParams.set('agentView',created.assignment_required?'model':'identity');history.replaceState({},'',next);
+    await selectAgent(created.id);
+  }});
+}
 // Agent pages resolve tenant authority independently; members see effective read-only abilities.
 async function showAgentView(view,routeMode='push'){
   if(sessionsScope){await showSessions(routeMode);return;}
-  disposeSessionsPage();$('sessions-region').hidden=true;
+  if(createScope){await showCreateAgent(routeMode);return;}
+  disposeSessionsPage();$('sessions-region').hidden=true;$('create-region').hidden=true;
   const pages=[configPage,...agentPages];
   const canManage=agentRoster.find(agent=>agent.id===agentId)?.can_manage===true;
   const selected=!canManage&&!['model','abilities'].includes(view)?'abilities':pages.some(page=>page.id===view)?view:'config';
@@ -294,17 +328,17 @@ async function showAgentView(view,routeMode='push'){
   if(selected==='members')await renderMembers($('members-page'),api,{agentId});
 }
 async function selectAgent(id){
-  if(!sessionsScope&&id===agentId){$('agents-detail-region').scrollIntoView({block:'start',behavior:'smooth'});return;}
-  sessionsScope=false;
+  if(!sessionsScope&&!createScope&&id===agentId){$('agents-detail-region').scrollIntoView({block:'start',behavior:'smooth'});return;}
+  sessionsScope=false;createScope=false;
   disposeSessionsPage();
-  $('sessions-region').hidden=true;
+  $('sessions-region').hidden=true;$('create-region').hidden=true;
   $('agents-detail-region').hidden=false;
   agentId=id;
   const route=new URL(location.href);
   route.searchParams.set('tab','agents');
   route.searchParams.set('agent',id);
   route.searchParams.delete('agentScope');
-  if(route.searchParams.get('agentView')==='sessions')route.searchParams.set('agentView','config');
+  if(['sessions','create'].includes(route.searchParams.get('agentView')))route.searchParams.set('agentView','config');
   history.pushState({},'',route);
   renderAgentCards();
   for(const page of [configPage,...agentPages])$(page.panelId).hidden=true;
@@ -405,7 +439,7 @@ async function boot(){
     try{const redeemed=await api('/chat-invitations/redeem','POST',{token:inviteToken,client_request_id:keyId('invite:'+inviteToken)});const route=new URL(location.href);route.searchParams.delete('chat_invite');route.searchParams.set('session_id',redeemed.session_id);history.replaceState({},'',route);ids.delete('invite:'+inviteToken);}
     catch(error){note('Invitation could not be redeemed: '+error.message);}
   }
-  if(!agentRoster.length){$('agents-detail-region').hidden=true;await chat.sessions();const requested=new URL(location.href).searchParams.get('session_id');if(requested){try{await chat.open(requested,'replace');}catch(error){note('Conversation unavailable: '+error.message);}}if(sessionsScope)await showSessions('replace');window.__boot?.appReady();return;}
+  if(!agentRoster.length){$('agents-detail-region').hidden=true;await chat.sessions();const requested=new URL(location.href).searchParams.get('session_id');if(requested){try{await chat.open(requested,'replace');}catch(error){note('Conversation unavailable: '+error.message);}}if(sessionsScope)await showSessions('replace');else if(accountMe?.role!=='guest')await showCreateAgent('replace');window.__boot?.appReady();return;}
   $('agents-detail-region').hidden=false;
   await refresh();
   await mountAgentModels();

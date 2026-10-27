@@ -58,6 +58,15 @@
       "panelId": "sessions-section",
       "icon": "messages-square",
       "type": "sessions"
+    },
+    {
+      "id": "create",
+      "title": "New agent",
+      "description": "Create an agent you own, then configure it.",
+      "order": 40,
+      "panelId": "create-agent-page",
+      "icon": "plus",
+      "type": "create"
     }
   ]
 }

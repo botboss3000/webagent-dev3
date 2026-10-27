@@ -17,3 +17,8 @@
 .agent-manager-switch[aria-checked="true"]::after { transform: translateX(18px); background: var(--bg-1); }
 .agent-manager-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .agent-manager-switch::after { transition: none; } }
+
+/* Create agent: full hints; the submit sits apart from the last field. */
+#create-agent-page .ac-model-cfg-row > .ac-ability-label { flex-basis: 100%; }
+#create-agent-page .ac-ability-desc { display: block; -webkit-line-clamp: unset; white-space: normal; }
+#create-agent-page form > .ac-btn { margin-top: 14px; }

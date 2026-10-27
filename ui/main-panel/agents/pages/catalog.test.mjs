@@ -10,6 +10,7 @@ test('typed catalog separates configuration from common pages',async()=>{
  assert.deepEqual(pages.filter(p=>p.type==='agent_configuration').map(p=>p.id),['identity','model','abilities','members']);
  assert.equal(pages.find(p=>p.type==='directory').id,'config');
  assert.equal(pages.find(p=>p.type==='sessions').id,'sessions');
+ assert.equal(pages.find(p=>p.type==='create').panelId,'create-agent-page');
 });
 test('invalid catalog types, versions, duplicates and scope fail closed',async()=>{
  for(const change of [
@@ -17,6 +18,7 @@ test('invalid catalog types, versions, duplicates and scope fail closed',async()
  c=>c.pages[1].type='unknown',
  c=>c.pages.push({...c.pages[1]}),
  c=>c.pages=c.pages.filter(p=>p.id!=='sessions'),
+ c=>c.pages=c.pages.filter(p=>p.id!=='create'),
  c=>c.pages[0].type='agent_configuration',
  c=>c.pages[1].panelId=''
  ]){const c=structuredClone(catalog);change(c);await assert.rejects(load(c), /catalog|scope/);}
