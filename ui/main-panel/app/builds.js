@@ -1,6 +1,22 @@
 'use strict';
 import {schedulerPanel} from '../builds/scheduler.js';
 
+// Operator tasks carry their provenance at the end of the summary:
+// "[origin=claude-code; session=<session name>; session_id=<id>]". Only the session name is shown.
+// Task IDs and session names come from task summaries; they are rendered as text only.
+export function provenance(summary) {
+  const text = String(summary || '');
+  const match = /\s*\[([^\]]*\borigin=[^\]]*)\]\s*$/.exec(text);
+  const fields = Object.fromEntries((match?.[1] || '').split(';')
+    .map(part => part.split('=')).filter(part => part.length > 1)
+    .map(([key, ...value]) => [key.trim(), value.join('=').trim()]));
+  // Session names are not stored on the server; fall back to the short session ID.
+  const session = fields.session || (fields.session_id ? fields.session_id.slice(0, 8) : '');
+  return {text: match ? text.slice(0, match.index) : text, origin: fields.origin || '', session};
+}
+const owner = (origin, session) => origin === 'claude-code'
+  ? 'Claude session ' + (session ? '“' + session + '”' : '(name not recorded)')
+  : origin === 'codex' ? 'Codex chat' : origin || '—';
 const phaseLabel = value => String(value || 'waiting').replaceAll('_', ' ');
 const when = value => Number.isFinite(value) ? new Date(value * 1000).toLocaleString() : '—';
 const duration = (start, end) => Number.isFinite(start)
@@ -276,7 +292,8 @@ export function mountBuilds(panel, onStatus = () => {}) {
       const top = document.createElement('div');
       top.className = 'build-card-top';
       const title = document.createElement('h3');
-      title.textContent = job.summary || job.task_id || job.job_id;
+      const origin = provenance(job.summary);
+      title.textContent = job.task_id || job.job_id;
       const flag = document.createElement('span');
       flag.className = 'build-flag';
       const marker = document.createElement('span');
@@ -287,6 +304,10 @@ export function mountBuilds(panel, onStatus = () => {}) {
       flag.append(marker, label);
       top.append(title, flag);
       card.append(top);
+      const about = document.createElement('p');
+      about.className = 'build-card-about';
+      about.textContent = [owner(origin.origin || job.origin, origin.session), origin.text].filter(Boolean).join(' · ');
+      card.append(about);
       const cancellation = job.cancellation || {};
       if (cancellation.available || (cancellation.requested && !stoppedStatuses.has(job.status) && job.status !== 'completed')) {
         const cancel = document.createElement('button');
@@ -381,7 +402,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
       fact(facts, 'Elapsed', duration(job.created_at, job.finished_at));
       fact(facts, 'Job ID', job.job_id);
       fact(facts, 'Task ID', job.task_id || '—');
-      fact(facts, 'Source', job.origin || '—');
+      fact(facts, 'Owner', owner(origin.origin || job.origin, origin.session));
       fact(facts, 'Input digest', job.inputs_sha256 || '—');
       for (const role of ['api', 'loop']) {
         const container = snapshot.containers?.[role] || {};

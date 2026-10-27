@@ -2,6 +2,21 @@
 
 const mib = bytes => Number.isFinite(bytes) ? (bytes / 1024 ** 2).toFixed(1) + ' MiB' : '—';
 const label = value => String(value || 'waiting').replaceAll('_', ' ');
+// Collapsed by default; render() replaces only the list so the open state survives polling.
+function collapsible(className, heading) {
+  const details = document.createElement('details');
+  details.className = className + ' build-retained';
+  const summary = document.createElement('summary');
+  summary.className = 'build-retained-summary';
+  const title = document.createElement('h3'); title.textContent = heading;
+  const count = document.createElement('span'); count.className = 'build-retained-count';
+  const chevron = document.createElement('span'); chevron.className = 'build-retained-chevron';
+  chevron.setAttribute('aria-hidden', 'true'); chevron.textContent = '▸';
+  summary.append(title, count, chevron);
+  const list = document.createElement('div'); list.className = 'build-retained-list';
+  details.append(summary, list);
+  return {details, count, list};
+}
 
 /** Keep logical tasks visible independently of dismissible build receipt cards. */
 // @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Builds task/resource controls; indirect Config: build-service/scheduler-defaults.json -> mode and resource thresholds via protected broker snapshot. Touch feedback is page-owned: ui/vibrate.json -> enabled, duration_ms.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent"]},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
@@ -12,21 +27,9 @@ export function schedulerPanel() {
   const summary = document.createElement('p');
   const message = document.createElement('p');
   message.setAttribute('role', 'status');
-  // Collapsed by default; render() replaces only the list so the open state survives polling.
-  const tasks = document.createElement('details');
-  tasks.className = 'build-scheduler-tasks build-retained';
-  const taskSummary = document.createElement('summary');
-  taskSummary.className = 'build-retained-summary';
-  const taskHeading = document.createElement('h3'); taskHeading.textContent = 'Unfinished source tasks';
-  const taskCount = document.createElement('span'); taskCount.className = 'build-retained-count';
-  const taskChevron = document.createElement('span'); taskChevron.className = 'build-retained-chevron';
-  taskChevron.setAttribute('aria-hidden', 'true'); taskChevron.textContent = '▸';
-  taskSummary.append(taskHeading, taskCount, taskChevron);
-  const taskList = document.createElement('div'); taskList.className = 'build-retained-list';
-  tasks.append(taskSummary, taskList);
-  const phases = document.createElement('div');
-  phases.className = 'build-scheduler-phases';
-  root.append(summary, message, tasks, phases);
+  const {details: tasks, count: taskCount, list: taskList} = collapsible('build-scheduler-tasks', 'Unfinished source tasks');
+  const {details: phaseSection, count: phaseCount, list: phases} = collapsible('build-scheduler-phases', 'Measured build phases');
+  root.append(summary, message, tasks, phaseSection);
   let snapshot = {}, stopped = false, busy = false, offset = 0, updateRevision = 0;
   const requests = new Map();
 
@@ -148,7 +151,7 @@ export function schedulerPanel() {
     taskList.append(pages);
     for (const legacy of ownership.legacy || []) paragraph(taskList, legacy.task_id + ' · Existing task needs ownership classification');
     phases.replaceChildren();
-    const phaseHeading = document.createElement('h3'); phaseHeading.textContent = 'Measured build phases'; phases.append(phaseHeading);
+    phaseCount.textContent = String(Object.keys(resources.phases || {}).length);
     for (const phase of Object.values(resources.phases || {})) {
       const card = document.createElement('article'); card.className = 'build-card';
       const title = document.createElement('h4'); title.textContent = label(phase.phase) + ' · ' + label(phase.state); card.append(title);
