@@ -44,7 +44,7 @@
   var settling = false;
   var POINTER_IDLE_MS = 250;
   var realPointerAt = -Infinity, bootPointerAt = -Infinity;
-  var dotRgb = '150,165,215', activeRgb = '125,207,255';
+  var dotRgb = '255,255,255', activeRgb = '125,207,255';
   var wasLight = null;
 
   function isLight() { return document.body && document.body.classList.contains('light-mode'); }
@@ -52,7 +52,7 @@
   function readPalette() {
     var cs = window.getComputedStyle(document.body);
     function v(n, f) { var x = (cs.getPropertyValue(n) || '').trim(); return x || f; }
-    var fbDot = isLight() ? '150,110,80' : '150,165,215';
+    var fbDot = '255,255,255';  // the grid only draws on the black curtain
     var fbAct = isLight() ? '255,140,66' : '125,207,255';
     dotRgb = v('--bgrid-dot-rgb', fbDot);
     activeRgb = v('--bgrid-active-rgb', fbAct);
@@ -143,7 +143,7 @@
         var a = 0.5 + influence * 0.5;
         ctx.fillStyle = 'rgba(' + activeRgb + ',' + a + ')';
       } else {
-        ctx.fillStyle = 'rgba(' + dotRgb + ',0.32)';
+        ctx.fillStyle = 'rgba(' + dotRgb + ',0.2)';
       }
       ctx.beginPath();
       ctx.arc(d.x, d.y, rr, 0, Math.PI * 2);

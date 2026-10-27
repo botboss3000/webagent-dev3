@@ -15,9 +15,9 @@
    override lands on (a :root declaration would freeze to the base palette).
    ============================================================ */
 
-/* Cool dots, accent highlight near the cursor */
+/* Neutral white dots, accent highlight near the cursor */
 body {
-  --bgrid-dot-rgb:    150, 165, 215;             /* resting dot colour */
+  --bgrid-dot-rgb:    255, 255, 255;             /* resting dot colour (drawn at 20% opacity) */
   --bgrid-active-rgb: var(--brand-rgb, 125, 207, 255);  /* dot colour at the cursor (accent) */
   --bgrid-spacing:    34;                        /* grid cell size (px) */
 }
