@@ -204,3 +204,8 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 /* Desktop Firefox draws the shared scrollbar as an overlay (/v3-ui/shared/scrollbars.js),
    so scrollbar-gutter reserves nothing; keep bubbles the same 6px off the edge as Chromium. */
 @supports not selector(::-webkit-scrollbar){@media (hover:hover) and (pointer:fine){#chat-messages-inner{padding-right:var(--wa-scrollbar-size,6px)!important}}}
+/* Reply choices from offer_choices: a click sends the label as the user's message. */
+.v3-reply-choices{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.v3-reply-choices button{font:inherit;color:var(--fg-1);background:var(--bg-elev);border:1px solid var(--border);border-radius:999px;padding:6px 12px;min-height:34px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.v3-reply-choices button:hover:not(:disabled){border-color:color-mix(in oklab,var(--fg-1) 35%,transparent)}
+.v3-reply-choices button:disabled{opacity:.55;cursor:default}

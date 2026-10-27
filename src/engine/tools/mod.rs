@@ -3,6 +3,10 @@ pub(crate) use webagent_engine::tools::outcome;
 // Single and parallel turns share the same Rust dispatch for native and worker tools.
 #[path = "../../../plugins/abilities/Web/web_access/adapter.rs"]
 pub(crate) mod web_access;
+#[path = "../../../plugins/abilities/Business/front_desk/adapter.rs"]
+pub(crate) mod business_front_desk;
+#[path = "../../../plugins/abilities/Memory/managed_knowledge_files/adapter.rs"]
+pub(crate) mod knowledge_files;
 #[path = "../../../plugins/abilities/Core/decision/adapter.rs"]
 pub(crate) mod core_decision;
 #[path = "../../../plugins/abilities/Core/decision/directory_adapter.rs"]
@@ -81,7 +85,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 pub fn is_read(name: &str) -> bool {
-    crate::source_control::is_read(name) || name=="process_image" || core_vault::is_read(name) || core_visualizer::is_read(name) || core_webhooks::is_read(name) || core_orchestration::is_read(name) || core_ui_admin::is_read(name) || core_agent_management::is_read(name) || name=="list_models" || core_user_files::is_read(name) || name=="main_notes_read" || crate::modules::is_read(name) || matches!(name,"mcp_list_connections"|"mcp_search_servers"|"mcp_inspect_server"|"mcp_list_tools") || matches!(
+    crate::source_control::is_read(name) || name=="process_image" || core_vault::is_read(name) || core_visualizer::is_read(name) || core_webhooks::is_read(name) || business_front_desk::is_read(name) || knowledge_files::is_read(name) || core_orchestration::is_read(name) || core_ui_admin::is_read(name) || core_agent_management::is_read(name) || name=="list_models" || core_user_files::is_read(name) || name=="main_notes_read" || crate::modules::is_read(name) || matches!(name,"mcp_list_connections"|"mcp_search_servers"|"mcp_inspect_server"|"mcp_list_tools") || matches!(
         name,
         "task_status" | "task_wait" | "task_cancel"
             | "search_tools" | "list_tools" | "load_tool"
@@ -178,6 +182,8 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         }
         schemas.extend(crate::background_tasks::schemas());
         schemas.extend(web_access::schemas());
+        schemas.extend(business_front_desk::schemas());
+        schemas.extend(knowledge_files::schemas());
         schemas.extend(core_decision::schemas());
         schemas.extend(core_directory_decision::schemas());
         schemas.extend(core_utilities::schemas());

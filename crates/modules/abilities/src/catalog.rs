@@ -2264,13 +2264,13 @@ pub mod tests {
         let catalog = H::native_fixture();
         let ordinary = catalog.abilities.iter()
             .filter(|entry| !matches!(entry.id.as_str(),"optimization"|"mcp")).collect::<Vec<_>>();
-        assert_eq!(ordinary.len(), 77);
+        assert_eq!(ordinary.len(), 78);
         assert_eq!(catalog.abilities.iter().filter(|entry|entry.id=="mcp").count(),1);
         assert!(!catalog.known("mcp"));
         assert_eq!(catalog.abilities.iter().filter(|entry| entry.id == "optimization").count(), usize::from(H::optimization_declaration().unwrap().is_some()));
         assert!(!catalog.known("optimization"));
-        assert_eq!(catalog.abilities.iter().filter(|entry| Catalog::<H>::executable(entry)).count(), 17);
-        assert_eq!(ordinary.iter().filter(|entry| entry.readiness == Readiness::Ready).count(), 18);
+        assert_eq!(catalog.abilities.iter().filter(|entry| Catalog::<H>::executable(entry)).count(), 19);
+        assert_eq!(ordinary.iter().filter(|entry| entry.readiness == Readiness::Ready).count(), 20);
         assert_eq!(catalog.abilities.iter().filter(|entry| entry.readiness == Readiness::Partial).count(), 0);
         for ability in catalog.abilities.iter().filter(|a|a.group=="Core"&&!matches!(a.id.as_str(),"p2p"|"automation")) {
             for name in &ability.tools {assert!(Catalog::<H>::supported(name)||is_discovery(name),"Unwired Core tool: {}::{name}",ability.id);}
@@ -2280,7 +2280,7 @@ pub mod tests {
         assert!(!Catalog::<H>::executable(automation));
         assert!(catalog.abilities.iter().any(|entry| entry.id == "decision" && entry.tools == ["decide_with_jev", "score_directory_with_jev"]));
         let base = catalog.abilities.iter().find(|entry| entry.id == "base").unwrap();
-        assert_eq!(base.tools.len(),41);
+        assert_eq!(base.tools.len(),42);
         let p2p=catalog.abilities.iter().find(|a|a.id=="p2p").unwrap();assert_eq!(p2p.readiness,Readiness::Pending);assert!(!Catalog::<H>::executable(p2p));for tool in &p2p.tools{assert!(!Catalog::<H>::supported(tool));}
         for name in &base.tools {assert!(Catalog::<H>::supported(name)||is_discovery(name),"Unwired Base tool: {name}");}
         assert!(!catalog.abilities.iter().any(|ability| matches!(ability.id.as_str(), "v3_build"|"v3_workspace")));

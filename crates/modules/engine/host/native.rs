@@ -29,6 +29,12 @@ impl NativeDispatch<Store,loop_runtime::NativeSchemas,abilities::Catalog,shared_
         tools::core_vault::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
     } else if tools::core_visualizer::owns(&name) {
         tools::core_visualizer::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
+    } else if tools::business_front_desk::owns(&name) {
+        // Boxed so this branch does not grow the shared dispatch future's stack frame.
+        Box::pin(tools::business_front_desk::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel)).await
+    } else if tools::knowledge_files::owns(&name) {
+        // Boxed so this branch does not grow the shared dispatch future's stack frame.
+        Box::pin(tools::knowledge_files::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel)).await
     } else if tools::core_webhooks::owns(&name) {
         tools::core_webhooks::execute(&app,&sid,&run_id,&generation,&pending_id,&name,&args,cancel).await
     } else if tools::core_base_extras::owns(&name) {

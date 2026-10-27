@@ -208,15 +208,18 @@ const reviewTimer=setInterval(async()=>{
 /** Inserts or updates a public message row, observes it for read tracking, and repaints activity. */
 function message(item){historyLastSeq=Math.max(historyLastSeq,item.seq||0);const target=$('chat-messages-inner');const existing=[...target.children].find(row=>row.dataset.publicId===item.id);if(existing){updateAdmission(existing,item.admission);return;}const row=createMessage(item,{resolveAsset,/* Supplies the latest cached run for gutter actions. */getRun:()=>gutterRuns.get(item.run_id),client,/* Resolves the currently selected session for message actions. */getSession:()=>session,note,historyAction,/* Opens usage/context details for the selected run. */showContext:run=>stats.show(run)});if(!row)return false;const before=[...target.children].find(node=>Number(node.dataset.seq)>item.seq);target.insertBefore(row,before||null);readObserver.observe(row);paintActivity();return true;}
 // Base presentation is display-only. Never turn model-supplied choice or
-// approval descriptions into an action or an authorization control.
-/** Renders bounded display-only components; these cards never submit model-described actions. */
+// approval descriptions into an action or an authorization control. The one
+// exception is a user_reply choice: a click only sends its label as the user's
+// own message through normal admission, exactly as if typed.
+/** Renders bounded display-only components and user_reply choice buttons. */
 function components(items){
   if(!Array.isArray(items))return;
   const current=new Set(items.map(row=>row?.component?.id));
   for(const node of [...$('chat-messages-inner').children])if(node.dataset.componentId&&!current.has(node.dataset.componentId))node.remove();
   for(const row of items.slice(0,64)){
     const spec=row?.component;
-    if(!spec||spec.authority!=='display_only'||!['status','todo_list','choice','approval','form','visual'].includes(spec.type))continue;
+    const reply=spec?.authority==='user_reply'&&spec.type==='choice';
+    if(!spec||(spec.authority!=='display_only'&&!reply)||!['status','todo_list','choice','approval','form','visual'].includes(spec.type))continue;
     const id=spec.id;if(typeof id!=='string'||!/^[-A-Za-z0-9_]{1,64}$/.test(id))continue;
     const existing=[...$('chat-messages-inner').children].find(node=>node.dataset.componentId===id);
     if(existing?.dataset.componentRevision===String(row.revision))continue;
@@ -225,6 +228,17 @@ function components(items){
     const heading=document.createElement('strong');heading.textContent=spec.title||'Session display';
     body.append(heading);
     const data=spec.data||{};
+    if(reply){
+      if(typeof data.prompt==='string'&&data.prompt){heading.textContent=data.prompt;}
+      const row=document.createElement('div');row.className='v3-reply-choices';
+      for(const option of Array.isArray(data.options)?data.options.slice(0,8):[]){
+        if(typeof option?.label!=='string'||!option.label)continue;
+        const button=document.createElement('button');button.type='button';button.textContent=option.label;
+        button.onclick=async()=>{for(const node of row.children)node.disabled=true;try{await submit(option.label);}catch(error){note(error.message);for(const node of row.children)node.disabled=false;}};
+        row.append(button);
+      }
+      body.append(row);card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);continue;
+    }
     if(spec.type==='visual'){const frame=mountVisualFrame(spec);if(!frame)continue;body.append(frame);card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);continue;}
     const lines=spec.type==='status'?data.sections?.map(item=>[item.label,item.value].filter(Boolean).join(': ')):
       spec.type==='todo_list'?data.items?.map(item=>(item.done?'☑ ':'☐ ')+item.label):

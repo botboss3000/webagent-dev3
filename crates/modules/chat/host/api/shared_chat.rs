@@ -211,9 +211,13 @@ async fn discover(Extension(app): Extension<App>, Path(agent): Path<String>) -> 
         let store = app.store.for_user(owner).await?;
         if let Some(session) = store.get(&format!("session:{sid}")).await? {
             if session["status"] != "active" || session["conversation_privacy"]!="operator_reviewable" {continue;}
-            sessions.push(json!({"id":sid,"title":session["title"],"agent_id":agent,"can_observe":true,"can_join":true}));
+            // Pending help requests surface first so staff can use this list as a handoff inbox.
+            let help=store.get(&format!("shared_help:{sid}")).await?.filter(|h|h["status"]=="pending");
+            sessions.push(json!({"id":sid,"title":session["title"],"agent_id":agent,"can_observe":true,"can_join":true,
+                "help_pending":help.is_some(),"help_requested_at":help.map(|h|h["requested_at"].clone())}));
         }
     }
+    sessions.sort_by_key(|s|(s["help_pending"]!=true,std::cmp::Reverse(s["help_requested_at"].as_u64().unwrap_or(0))));
     Ok(Json(json!({"sessions":sessions})))
 }
 async fn help(

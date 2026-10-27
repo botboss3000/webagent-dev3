@@ -153,6 +153,9 @@ pub fn default_policy<A:crate::tools::execution::ActionCatalog,X:NativePolicy>()
         policy["rules"][name]=json!(if A::is_read(name){"allow"}else{"require_approval"});
     }
     for name in ["message_other_session","start_session"] {policy["rules"][name]=json!("allow");}
+    // Visitor front-desk actions only store a lead, notify staff or show reply buttons;
+    // staff-side writes keep the require_approval default above.
+    for name in ["lead_capture","request_human","offer_choices"] {if policy["rules"].get(name).is_some() {policy["rules"][name]=json!("allow");}}
     #[cfg(any(test,feature="test-support"))] { policy["rules"]["test_owner_purchase"]=json!("require_approval"); }
     policy
 }

@@ -35,6 +35,8 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
    .chain(tools::core_visualizer::schemas())
    .chain(tools::core_vault::schemas())
    .chain(tools::core_visual_capture::schemas())
+   .chain(tools::business_front_desk::schemas())
+   .chain(tools::knowledge_files::schemas())
    .chain(modules::schemas()).chain(mcp::all_schemas()).collect()
  }
 }

@@ -1,0 +1,10 @@
+{
+  "name": "Business",
+  "icon": "store",
+  "color": "#e0af68",
+  "desc": "Run a business's website front desk — business facts, visitor leads, human handoff and reply choices.",
+  "entitlement_group": "business",
+  "risk_class": "write",
+  "action_class": "mixed",
+  "order": 1
+}
