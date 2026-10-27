@@ -49,6 +49,8 @@ mod app_settings;
 pub(crate) mod live_configuration;
 #[path = "../../crates/modules/system/host/api.rs"]
 mod system;
+#[path = "../../crates/modules/usage/host/api.rs"]
+mod model_usage;
 mod loop_settings;
 mod engine_components;
 pub(crate) mod notifications;
@@ -124,6 +126,8 @@ pub(super) fn router(app: App) -> Router {
         .nest("/admin/access", phase3_api::router().merge(crate::agents_api::admin_router()))
         .nest("/admin/services", service_admin::router())
         .nest("/admin/models/rosters", model_catalog::router())
+        .route("/admin/usage/models/analytics", get(model_usage::admin_analytics))
+        .route("/admin/usage/models/totals", get(model_usage::admin_totals))
         .route("/admin/access/registration", get(registration::access_mode).put(registration::set_mode))
         .route("/workflow/policy", get(workflow_policy_get).put(workflow_policy_set))
         .route("/agents/{id}/model", get(agent_model).put(agent_model_set))
@@ -189,6 +193,8 @@ pub(super) fn router(app: App) -> Router {
         .route("/core/vault/{sid}/{name}",post(tools::core_vault::save).layer(DefaultBodyLimit::max(16384)))
         .route("/core/visuals/{id}/view",get(tools::core_visualizer::view))
         .route("/core/webhooks/{id}/setup",get(tools::core_webhooks::setup))
+        .route("/usage/models/analytics", get(model_usage::analytics))
+        .route("/usage/models/totals", get(model_usage::totals))
         .route("/auth/me", get(me))
         .route("/auth/ui-config", get(chat_ui_config))
         .route("/auth/profile", put(update_profile))

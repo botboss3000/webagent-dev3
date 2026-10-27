@@ -1,7 +1,7 @@
  'use strict';
 import { mountModelTable } from '../../../../shared/models/model-table.js';
 import { initModelAnalytics } from '../../../../shared/models/model-analytics.js';
-import { createModelAdapter } from '../../../../shared/models/v3-adapter.js';
+import { createModelAdapter, usageFetch } from '../../../../shared/models/v3-adapter.js';
 import { mountModelLimits } from './model-limits.js';
 
 // Actual v2_ref Models mount: analytics sibling + shared renderer; only the adapter is v3-specific.
@@ -13,7 +13,7 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   const group=document.createElement('div');group.className='v3-reference-models';
   const analyticsHost=document.createElement('div');analyticsHost.className='agent-model-analytics-host';
   const tableHost=document.createElement('div');tableHost.style.marginTop='8px';group.append(analyticsHost,tableHost);host.append(css,pendingCss,group);
-  const analytics=initModelAnalytics(analyticsHost,{fetchFn:bridge.blockedFetch,apiPath:p=>p,scope:'user',agentId,description:'Compare the daily usage of every model used with this agent.'});
+  const analytics=initModelAnalytics(analyticsHost,{fetchFn:usageFetch('/usage/models'),apiPath:p=>p,scope:'user',agentId,description:'Compare the daily usage of every model used with this agent.'});
   let limits;
   const table=mountModelTable(tableHost,{adapter:bridge.adapter,agentLocalRoster:true,userCatalog:true,inlineCatalogAdd:true,subscriptionScope:'agent',directivePresentation:'inline',directivesEditable:false,manualModelEntry:true,
     onLimitEdit:(id,field)=>limits?.edit(id,field),modelBudget:id=>limits?.budget(id),
@@ -28,7 +28,7 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   function markPending(el){if(el)el.classList.add('v3-pending-feature');}
   function pending(){
     if(stopped)return;
-    for(const el of group.querySelectorAll('.ac-saved-usage-th,.ac-saved-usage,.ac-model-meta-aliases,.ac-directives-section-title,.ac-directive-hint'))markPending(el);
+    for(const el of group.querySelectorAll('.ac-model-meta-aliases,.ac-directives-section-title,.ac-directive-hint'))markPending(el);
     for(const el of group.querySelectorAll('.ac-model-alias-add')){el.disabled=true;markPending(el);}
     for(const el of group.querySelectorAll('.ac-model-meta-editable')){
       if(el.closest('.ac-model-meta-nameline'))continue;
@@ -39,7 +39,6 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
       const unported=row.querySelector('.ac-ability-name')?.textContent==='Connection';
       for(const btn of row.querySelectorAll('button'))if(['Load','Save'].includes(btn.textContent)){btn.hidden=unported;btn.style.display=unported?'none':'';}
     }
-    markPending(analyticsHost);
     for(const row of group.querySelectorAll('.ac-directive-row'))markPending(row.querySelector('.ac-ability-name')||row);
     if(!bridge.state()?.can_manage){for(const el of tableHost.querySelectorAll('.ac-model-meta-editable,.ac-saved-drag-handle')){el.style.pointerEvents='none';el.tabIndex=-1;el.setAttribute('aria-disabled','true');}}
     if(!bridge.state()?.can_manage){for(const el of tableHost.querySelectorAll('input,select,textarea,button'))el.disabled=true;}

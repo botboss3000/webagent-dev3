@@ -1,6 +1,7 @@
 'use strict';
 import { mountModelTable } from '../../../../shared/models/model-table.js';
 import { initModelAnalytics } from '../../../../shared/models/model-analytics.js';
+import { usageFetch, usageQuery } from '../../../../shared/models/v3-adapter.js';
 const MISSING='NEED BACKEND CONTRACT';
 const unavailable=async()=>new Response(JSON.stringify({error:MISSING}),{status:501,headers:{'Content-Type':'application/json'}});
 
@@ -76,7 +77,7 @@ export async function mountAppModels(host) {
       staged=structuredClone(next);dirty=true;update();return{providers:next};
     },
     fetchModels:async({provider,api_key})=>request('/models/discovery','POST',{provider,api_key}),
-    fetchModelInfo:async()=>({}),fetchModelUsage:async()=>null,
+    fetchModelInfo:async()=>({}),fetchModelUsage:async args=>request('/admin/usage/models/totals?'+usageQuery(args)).catch(()=>null),
     loadDirectives:async()=>({custom:{}}),
     saveDirectives:async()=>{throw Error(MISSING+': role directives');},
     saveDefaultEntryId:async()=>{throw Error('Defaults belong to user accounts, not app publication');},
@@ -84,7 +85,7 @@ export async function mountAppModels(host) {
     listCredentials:async()=>{throw Error(MISSING+': named credential library');}
   };
   function markPending() {
-    for(const element of host.querySelectorAll('.ac-saved-usage-th,.ac-model-meta-defaultline,.ac-model-meta-aliases,.ac-saved-credentials .ac-ability-name')) {
+    for(const element of host.querySelectorAll('.ac-model-meta-defaultline,.ac-model-meta-aliases,.ac-saved-credentials .ac-ability-name')) {
       if(element.querySelector('.v3-contract-pending'))continue;const label=document.createElement('span');label.className='v3-contract-pending';label.textContent=MISSING;element.append(label);
     }
     for(const control of host.querySelectorAll('.ac-model-meta-defaultline input,.ac-model-alias-add'))control.disabled=true;
@@ -93,7 +94,7 @@ export async function mountAppModels(host) {
   for(const control of extras.querySelectorAll('input,select,button')) {
     control.disabled=true;const label=document.createElement('span');label.className='v3-contract-pending';label.textContent=MISSING;control.after(label);
   }
-  analytics=initModelAnalytics(q('#ac-model-analytics'),{fetchFn:unavailable,apiPath:p=>p,scope:'global',description:'Application model usage. '+MISSING});
+  analytics=initModelAnalytics(q('#ac-model-analytics'),{fetchFn:usageFetch('/admin/usage/models'),apiPath:p=>p,scope:'global',description:'Application model usage across all users.'});
   async function load() {
     const generation=++scopeGeneration;table?.destroy();table=null;dirty=false;
     status.textContent='Loading…';result.hidden=true;

@@ -17,6 +17,17 @@ export function catalogCapabilityFlags(capabilities=[],transport) {
   };
 }
 
+// The reference chart and table request v2 usage paths; serve them from v3 usage routes.
+export function usageFetch(base) {
+  const routes={'/admin/settings/model-usage-analytics':'/analytics','/admin/settings/model-usage':'/totals'};
+  return async(path,options={})=>{
+    const url=new URL(path,location.origin),route=routes[url.pathname];
+    if(!route||(options.method||'GET')!=='GET')return response({detail:MISSING},501);
+    return fetch('/api/v3'+base+route+url.search,{credentials:'same-origin',cache:'no-store'});
+  };
+}
+export const usageQuery=({model,entry_id,include_unassigned},extra={})=>new URLSearchParams({model:model||'',entry_id:entry_id||'',include_unassigned:include_unassigned?'1':'',...extra});
+
 export function createModelAdapter(request, agentId, onAssignment) {
   let data, catalog, account, destroyed=false;
   // Provider names, models and effort scales come from the server's provider files
@@ -156,7 +167,7 @@ export function createModelAdapter(request, agentId, onAssignment) {
         ...catalogCapabilityFlags(c.capabilities,c.transport),origin:c.origin}))};
     },
     fetchModelInfo:async(model,provider)=>['gpt-6-luna','gpt-6.1-sol','gpt-6-astra'].includes(model)?provider==='openai_subscription'?{context:272000}:{context:1050000,max_output:128000}:{},
-    fetchModelUsage:async()=>null,
+    fetchModelUsage:async args=>request('/usage/models/totals?'+usageQuery(args,{agent_id:agentId})).catch(()=>null),
     loadModelLimits:async()=>{
       await read();
       const cfg=catalog.agent_models?.[agentId];

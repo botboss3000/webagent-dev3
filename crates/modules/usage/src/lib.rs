@@ -79,6 +79,58 @@ pub async fn stage_session_total<'a,'c:'a,R:SessionRecords>(records:&'a R,tx:&'a
     Ok(new_usage)
 }
 
+/// One run's public usage, attributed to its last update and its session's agent.
+pub struct Sample{pub at:i64,pub session:String,pub agent:String,pub entry:String,pub model:String,pub usage:Value}
+
+// Civil UTC date from Unix seconds (Howard Hinnant's days-to-civil).
+fn stamp(at:i64,minutes:bool)->String{
+    let (days,secs)=(at.div_euclid(86400),at.rem_euclid(86400));
+    let z=days+719468;let era=z.div_euclid(146097);let doe=z-era*146097;
+    let yoe=(doe-doe/1460+doe/36524-doe/146096)/365;let doy=doe-(365*yoe+yoe/4-yoe/100);
+    let mp=(5*doy+2)/153;let d=doy-(153*mp+2)/5+1;let m=if mp<10{mp+3}else{mp-9};let y=yoe+era*400+i64::from(m<=2);
+    if minutes{format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}",secs/3600,secs%3600/60)}else{format!("{y:04}-{m:02}-{d:02}")}
+}
+fn tokens(usage:&Value)->u64{usage["input_tokens"].as_u64().unwrap_or(0).saturating_add(usage["output_tokens"].as_u64().unwrap_or(0))}
+fn cost(usage:&Value)->f64{usage["known_cost_usd"].as_f64().filter(|v|v.is_finite()&&*v>=0.).unwrap_or(0.)}
+
+/// Bucketed usage series for the model analytics chart. `minute` covers the last
+/// hour, `hour` the last two days, `day` every day from the first sample to now.
+pub fn analytics(samples:&[Sample],interval:&str,group_by:&str,labels:&std::collections::HashMap<String,String>,now:i64)->Option<Value>{
+    let (width,fixed)=match interval{"minute"=>(60,Some(60)),"hour"=>(3600,Some(48)),"day"=>(86400,None),_=>return None};
+    if !matches!(group_by,"models"|"sessions"|"agents"|"agent_models"){return None;}
+    let last=now.div_euclid(width);
+    let first=match fixed{Some(n)=>last-n+1,None=>samples.iter().map(|s|s.at.div_euclid(width)).min().unwrap_or(last).min(last).max(last-3660)};
+    let mut days:Vec<Value>=(first..=last).map(|b|json!({"date":stamp(b*width,fixed.is_some()),"models":{}})).collect();
+    let (mut totals,mut meta,mut series_labels)=(std::collections::HashMap::<String,u64>::new(),serde_json::Map::new(),serde_json::Map::new());
+    for s in samples{
+        let bucket=s.at.div_euclid(width);
+        if bucket<first||bucket>last{continue;}
+        let model=if s.model.is_empty(){"unknown"}else{&s.model};
+        let key=match group_by{"models"=>model.to_owned(),"sessions"=>s.session.clone(),"agents"=>s.agent.clone(),_=>format!("{}/{model}",s.agent)};
+        if group_by=="agent_models"{meta.insert(key.clone(),json!({"agent_id":s.agent,"agent_label":labels.get(&s.agent).unwrap_or(&s.agent)}));series_labels.insert(key.clone(),json!(model));}
+        else if let Some(label)=labels.get(&key){series_labels.insert(key.clone(),json!(label));}
+        let cell=&mut days[(bucket-first) as usize]["models"][&key];
+        cell["usage_tokens"]=json!(cell["usage_tokens"].as_u64().unwrap_or(0).saturating_add(tokens(&s.usage)));
+        cell["cost_usd"]=json!(cell["cost_usd"].as_f64().unwrap_or(0.)+cost(&s.usage));
+        *totals.entry(key).or_default()+=tokens(&s.usage);
+    }
+    let mut models:Vec<(String,u64)>=totals.into_iter().collect();
+    models.sort_by(|a,b|b.1.cmp(&a.1).then_with(||a.0.cmp(&b.0)));
+    Some(json!({"days":days,"models":models.into_iter().map(|m|m.0).collect::<Vec<_>>(),"group_by":group_by,"interval":interval,"series_labels":series_labels,"series_meta":meta}))
+}
+
+/// Lifetime totals for one model-table row. A row is matched by entry id; rows
+/// recorded without one count only when `include_unassigned` and the model matches.
+pub fn model_totals(samples:&[Sample],entry:&str,model:&str,include_unassigned:bool)->Value{
+    let (mut input,mut output,mut usd)=(0u64,0u64,0f64);
+    for s in samples.iter().filter(|s|if entry.is_empty(){s.model==model}else{s.entry==entry||(include_unassigned&&s.entry.is_empty()&&s.model==model)}){
+        input=input.saturating_add(s.usage["input_tokens"].as_u64().unwrap_or(0));
+        output=output.saturating_add(s.usage["output_tokens"].as_u64().unwrap_or(0));
+        usd+=cost(&s.usage);
+    }
+    json!({"total_input_tokens":input,"total_output_tokens":output,"total_cost_usd":usd})
+}
+
 #[cfg(test)]
 mod tests{
     use super::*;
@@ -95,6 +147,30 @@ mod tests{
         assert_eq!(out["unreported_calls"],1);assert_eq!(out["unknown_cost_calls"],2);
         assert!(!out.to_string().contains("secret"));
         assert!(reported(&json!({"usage":{"input_tokens":-1,"output_tokens":4}})).is_none());
+    }
+    fn sample(at:i64,agent:&str,entry:&str,model:&str,input:u64,output:u64,usd:f64)->Sample{
+        Sample{at,session:"s1".into(),agent:agent.into(),entry:entry.into(),model:model.into(),usage:json!({"input_tokens":input,"output_tokens":output,"known_cost_usd":usd})}
+    }
+    #[test]fn analytics_buckets_and_totals_match_samples(){
+        let day=86400;let now=20_000*day+3600;
+        let samples=[sample(now-2*day,"a","e1","m1",10,5,0.5),sample(now,"a","e1","m1",3,1,0.),sample(now,"b","","m2",7,0,0.25),sample(now-40*day,"a","e1","m1",1,1,0.)];
+        let labels=std::collections::HashMap::from([("b".to_string(),"Agent B".to_string())]);
+        let out=analytics(&samples,"day","models",&labels,now).unwrap();
+        let days=out["days"].as_array().unwrap();
+        assert_eq!(days.len(),41);assert_eq!(days[40]["date"],stamp(now,false));
+        assert_eq!(days[40]["models"]["m1"]["usage_tokens"],4);assert_eq!(days[38]["models"]["m1"]["cost_usd"],0.5);
+        assert_eq!(out["models"],json!(["m1","m2"]));
+        let agents=analytics(&samples,"day","agents",&labels,now).unwrap();
+        assert_eq!(agents["series_labels"]["b"],"Agent B");
+        let nested=analytics(&samples,"day","agent_models",&labels,now).unwrap();
+        assert_eq!(nested["series_meta"]["b/m2"]["agent_label"],"Agent B");assert_eq!(nested["series_labels"]["b/m2"],"m2");
+        let hours=analytics(&samples,"hour","sessions",&labels,now).unwrap();
+        assert_eq!(hours["days"].as_array().unwrap().len(),48);assert_eq!(hours["models"],json!(["s1"]));
+        assert!(analytics(&samples,"week","models",&labels,now).is_none());
+        assert_eq!(stamp(0,true),"1970-01-01T00:00");assert_eq!(stamp(951_782_400,false),"2000-02-29");
+        assert_eq!(model_totals(&samples,"e1","m1",false),json!({"total_input_tokens":14,"total_output_tokens":7,"total_cost_usd":0.5}));
+        assert_eq!(model_totals(&samples,"e2","m2",true)["total_input_tokens"],7);
+        assert_eq!(model_totals(&samples,"e2","m2",false)["total_input_tokens"],0);
     }
     struct Docs{invalidated:AtomicUsize}
     async fn doc(tx:&mut Transaction<'_,Sqlite>,key:&str)->Result<Option<Value>>{
