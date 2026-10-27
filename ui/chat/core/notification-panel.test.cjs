@@ -76,3 +76,13 @@ test('paused and stopped runs stay quiet while observer and recovery notices ret
  for(const status of ['completed','running','queued','failed'])assert.equal(ui.showRun({run:{id:status,status}}),undefined);
  ui.clearRuns();assert.equal(host.children[3].children.length,0);ui.destroy();assert.equal(host.children.length,0);
 });
+test('send failure card survives run refreshes; Retry and Dismiss clear it',async()=>{
+ const host=new E(),{api,root}=await moduleAt('notification-panel.js',host);let retried=0;
+ const ui=api.mountNotificationPanel({root,guard:fn=>fn,request:async()=>({routes:[]}),note:()=>{}});
+ ui.showSendError({message:'Model unavailable',retry:async()=>{retried++;}});
+ assert.match(flat(host),/Message not sent/);assert.match(flat(host),/Model unavailable/);
+ ui.clearRuns();assert.match(flat(host),/Message not sent/);
+ const buttons=node=>[...(node.tag==='button'?[node]:[]),...node.children.flatMap(buttons)];
+ await buttons(host).find(b=>b.textContent==='Retry').onclick();assert.equal(retried,1);assert.doesNotMatch(flat(host),/Message not sent/);
+ ui.showSendError({message:'again',retry:async()=>{}});buttons(host).find(b=>b.textContent==='Dismiss').onclick();assert.doesNotMatch(flat(host),/Message not sent/);
+});

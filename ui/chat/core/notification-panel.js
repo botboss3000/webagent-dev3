@@ -74,6 +74,13 @@ export function mountNotificationPanel({root,guard,request,note}) {
     destroy(){this.disconnect();revokeKeys.clear();routeToggle.onclick=null;routesSlot.remove();}
   };
   const runSlot=document.createElement('div');host.append(runSlot);
+  // A send that exhausted its automatic retries; kept apart from run cards, which refresh constantly.
+  const sendSlot=document.createElement('div');host.append(sendSlot);
+  function showSendError({message,retry}){
+    const node=card({title:'Message not sent',message,actions:[{label:'Retry',kind:'approve',run:async()=>{clearSendError();await retry();}},{label:'Dismiss',kind:'neutral',run:clearSendError}]});
+    node.setAttribute('role','alert');sendSlot.replaceChildren(node);
+  }
+  function clearSendError(){sendSlot.replaceChildren();}
   // Run status, observer approval and uncertain-outcome controls share the approval card UI.
   function showRun({run,active,canControl=false,expanded,renderRecovery,cancel,recover}) {
     if(run.status==='completed'||(!run.uncertain&&['queued','running','waiting_gate','waiting_external','failed','paused','stopped'].includes(run.status)))return;
@@ -159,6 +166,6 @@ export function mountNotificationPanel({root,guard,request,note}) {
   // Remove tool-approval cards without affecting a mode confirmation.
   function clearTools(){toolSlot.replaceChildren();pendingApprovals=false;updateRoutesVisibility();}
   // Cancel pending confirmation and remove both slots from the supplied composer host.
-  function destroy(){messagingRoutes.destroy();routeChoices.clear();cancelMode();clearRuns();host.replaceChildren();}
-  return {confirmMode,cancelMode,showTool,clearTools,showRun,clearRuns,messagingRoutes,destroy};
+  function destroy(){messagingRoutes.destroy();routeChoices.clear();cancelMode();clearRuns();clearSendError();host.replaceChildren();}
+  return {confirmMode,cancelMode,showTool,clearTools,showRun,clearRuns,showSendError,clearSendError,messagingRoutes,destroy};
 }
