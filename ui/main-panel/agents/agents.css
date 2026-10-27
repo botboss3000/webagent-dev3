@@ -22,3 +22,14 @@
 #create-agent-page .ac-model-cfg-row > .ac-ability-label { flex-basis: 100%; }
 #create-agent-page .ac-ability-desc { display: block; -webkit-line-clamp: unset; white-space: normal; }
 #create-agent-page form > .ac-btn { margin-top: 14px; }
+
+/* Recycling bin (V2 parity): the bin replaces the squares and hides every detail region. */
+#agents-grid.agents-bin-view > [id$="-region"] { display: none !important; }
+#agents-toolbar-actions > [hidden] { display: none !important; }
+#agents-delete-btn { color: var(--danger); border-color: rgba(var(--danger-rgb), 0.3); }
+#agents-delete-btn:hover { background: rgba(var(--danger-rgb), 0.14); }
+#agents-delete-btn.warning { color: var(--warning); border-color: rgba(var(--warning-rgb), 0.5); }
+#agents-delete-btn::after { content: 'Delete'; }
+#agents-delete-btn[data-state="warning"]::after { content: 'Delete?'; }
+#agents-delete-btn[data-state="deleting"]::after { content: none; }
+.agent-select-box { -webkit-tap-highlight-color: transparent; padding: 0; }

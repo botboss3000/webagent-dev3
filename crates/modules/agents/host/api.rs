@@ -1,7 +1,12 @@
 //! Agent API composition: neighbors validate their settings; Agents owns identity/revisions/SQL.
 use crate::access::Principal;
 use crate::{Api, ApiError, App, State};
-use axum::{extract::Path, http::StatusCode, routing::get, Extension, Json, Router};
+use axum::{
+    extract::{Path, Query},
+    http::StatusCode,
+    routing::{get, post},
+    Extension, Json, Router,
+};
 use serde_json::{json, Value};
 #[path = "bridge.rs"]
 mod super_bridge;
@@ -72,8 +77,18 @@ pub(crate) async fn modes_config(
     let view = store.for_agent(agent).await?;
     webagent_agents::modes::config(&agent_metadata(&view, agent).await?)
 }
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct RosterQuery {
+    /// The recycling bin: deleted agents the caller manages, instead of the usable roster.
+    deleted: bool,
+}
 // AGENT-DISCOVERY: list only agents the caller can use or explicitly administer.
-async fn agents(State(app): State<App>, Extension(identity): Extension<Value>) -> Api {
+async fn agents(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Query(query): Query<RosterQuery>,
+) -> Api {
     use sqlx::Row;
     let caller = principal(&app, &identity).await?;
     let mut values = Vec::new();
@@ -85,6 +100,11 @@ async fn agents(State(app): State<App>, Extension(identity): Extension<Value>) -
         let mut value = webagent_agents::repository::Repository::new(&view.agent_pool, &id, &view)?
             .summary()
             .await?;
+        if (value["status"] == "deleted") != query.deleted
+            || (query.deleted && rights["can_manage"] != true)
+        {
+            continue;
+        }
         value["can_manage"] = rights["can_manage"].clone();
         values.push(value);
     }
@@ -435,9 +455,62 @@ pub(crate) async fn create_agent(
         })
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BinChange {
+    expected_revision: u64,
+}
+async fn set_deleted(app: &App, identity: &Value, id: &str, expected: u64, deleted: bool) -> Api {
+    let bridge = super_bridge::Bridge { app, identity };
+    let service = webagent_agents::service::Service {
+        storage: &app.store,
+        access: &bridge,
+        effects: &bridge,
+        gate: app.gate.as_ref(),
+    };
+    service
+        .set_deleted(id, expected, deleted)
+        .await
+        .map(Json)
+        .map_err(|error| {
+            let message = error.to_string();
+            match message.as_str() {
+                "Agent revision changed" => crate::conflict("Agent changed; reload and try again"),
+                "Only active agents can be deleted" | "Agent is not in the recycling bin" => {
+                    crate::conflict(&message)
+                }
+                "The default agent cannot be deleted" | "Invalid agent status" => {
+                    crate::bad(&message)
+                }
+                "Agent not found" => ApiError(StatusCode::NOT_FOUND, message),
+                _ if message.ends_with("administration unavailable") => denied(),
+                _ => error.into(),
+            }
+        })
+}
+// AGENT-BIN: managers move agents to the recycling bin and back; chat admits only active agents.
+async fn delete_agent(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path(id): Path<String>,
+    Json(body): Json<BinChange>,
+) -> Api {
+    set_deleted(&app, &identity, &id, body.expected_revision, true).await
+}
+async fn restore_agent(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path(id): Path<String>,
+    Json(body): Json<BinChange>,
+) -> Api {
+    set_deleted(&app, &identity, &id, body.expected_revision, false).await
+}
+
 pub fn router() -> Router<App> {
     Router::new()
         .route("/agents", get(agents).post(create_agent))
+        .route("/agents/{id}", axum::routing::delete(delete_agent))
+        .route("/agents/{id}/restore", post(restore_agent))
         .route("/agents/{id}/identity", get(identity_get).put(identity_put))
 }
 
@@ -524,6 +597,120 @@ mod tests {
             .0,
             StatusCode::FORBIDDEN
         );
+    }
+    #[tokio::test]
+    async fn recycling_bin_api_hides_blocks_and_restores_owned_agents() {
+        let (_root, app) = fixture().await;
+        let owner = json!({"_user_id":tenant_user(&app, "bin-owner").await});
+        let Json(created) = create_agent(
+            State(app.clone()),
+            Extension(owner.clone()),
+            Json(NewAgent {
+                client_request_id: "bin-agent".into(),
+                name: "Bin agent".into(),
+                description: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let id = created["id"].as_str().unwrap().to_owned();
+        let roster = |deleted: bool| {
+            let (app, owner) = (app.clone(), owner.clone());
+            async move {
+                let Json(value) =
+                    agents(State(app), Extension(owner), Query(RosterQuery { deleted }))
+                        .await
+                        .unwrap();
+                value["agents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|agent| agent["id"].as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert!(roster(false).await.contains(&id));
+        assert!(!roster(true).await.contains(&id));
+        let view = app.store.for_agent(&id).await.unwrap();
+        let revision = status_value(&view, &id).await.unwrap()["revision"]
+            .as_u64()
+            .unwrap();
+        let outsider = json!({"_user_id":tenant_user(&app, "bin-outsider").await});
+        assert_eq!(
+            delete_agent(
+                State(app.clone()),
+                Extension(outsider),
+                Path(id.clone()),
+                Json(BinChange {
+                    expected_revision: revision
+                }),
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            delete_agent(
+                State(app.clone()),
+                Extension(owner.clone()),
+                Path("shared_default".into()),
+                Json(BinChange {
+                    expected_revision: 1
+                }),
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        let Json(deleted) = delete_agent(
+            State(app.clone()),
+            Extension(owner.clone()),
+            Path(id.clone()),
+            Json(BinChange {
+                expected_revision: revision,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(deleted["status"], "deleted");
+        assert!(!roster(false).await.contains(&id));
+        assert_eq!(roster(true).await, vec![id.clone()]);
+        let owner_id = owner["_user_id"].as_str().unwrap();
+        assert!(!app
+            .store
+            .live_access(owner_id, &id)
+            .await
+            .unwrap()
+            .admitted());
+        assert_eq!(
+            restore_agent(
+                State(app.clone()),
+                Extension(owner.clone()),
+                Path(id.clone()),
+                Json(BinChange {
+                    expected_revision: revision
+                }),
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::CONFLICT
+        );
+        let Json(restored) = restore_agent(
+            State(app.clone()),
+            Extension(owner.clone()),
+            Path(id.clone()),
+            Json(BinChange {
+                expected_revision: revision + 1,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(restored["status"], "active");
+        assert!(roster(false).await.contains(&id));
+        assert!(roster(true).await.is_empty());
     }
     #[tokio::test]
     async fn visibility_preferences_preserve_fixed_protocol_and_revision_fence() {

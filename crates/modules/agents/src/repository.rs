@@ -119,6 +119,28 @@ impl<'a, C: RecordCodec> Repository<'a, C> {
         }
         Ok(json!({"agent_id":self.agent,"status":status,"revision":expected+1}))
     }
+    /// Owner recycling bin: active <-> deleted only, so a restore never lifts an administrator's disable.
+    pub async fn set_deleted(&self, expected: u64, deleted: bool) -> Result<Value> {
+        let (from, to) = if deleted {
+            ("active", "deleted")
+        } else {
+            ("deleted", "active")
+        };
+        let changed = sqlx::query("UPDATE agents SET status=?,revision=revision+1,updated_at=strftime('%s','now') WHERE id=? AND revision=? AND status=?")
+            .bind(to).bind(self.agent).bind(expected as i64).bind(from).execute(self.pool).await?;
+        if changed.rows_affected() != 1 {
+            let current = self.status().await?;
+            if current["revision"].as_u64() != Some(expected) {
+                bail!("Agent revision changed");
+            }
+            bail!(if deleted {
+                "Only active agents can be deleted"
+            } else {
+                "Agent is not in the recycling bin"
+            });
+        }
+        Ok(json!({"agent_id":self.agent,"status":to,"revision":expected+1}))
+    }
 }
 
 /// Create/reconcile an unregistered row using Storage's existing creation pool.

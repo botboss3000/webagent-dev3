@@ -15,7 +15,7 @@ const shell=slice('function renderAgentCards(){','async function loadAgentRoster
  +(source.includes('async function mountAgentModels(){')?slice('async function mountAgentModels(){','// A rejected sign-in'):'');
 const setup=`
 const $=id=>document.getElementById(id);
-let agentId='one',sessionsScope=true,createScope=false,sessionsPage=null,sessionsGeneration=0,selectionTable=null,agentSelectionQueue=Promise.resolve();
+let agentBin=null,agentId='one',sessionsScope=true,createScope=false,sessionsPage=null,sessionsGeneration=0,selectionTable=null,agentSelectionQueue=Promise.resolve();
 const agentRoster=[{id:'one',name:'One',can_manage:true},{id:'two',name:'Two',can_manage:true}];
 const configPage={id:'config',panelId:'config-page'},sessionsDescriptor={id:'sessions',title:'Sessions',panelId:'sessions-section'},createDescriptor={id:'create',title:'New agent',panelId:'create-agent-page'};
 const agentPages=['model','identity','abilities','members'].map(id=>({id,panelId:id+'-page'})),agentTabOrder=['config','model','identity','abilities','members'];

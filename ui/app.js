@@ -24,6 +24,7 @@ import { showLeftOverlay } from './chat/controls/login-hook.js';
 import { renderIdentity } from './main-panel/agents/pages/identity/page.js';
 import {renderMembers} from './main-panel/agents/pages/members/page.js';
 import {renderCreateAgent} from './main-panel/agents/pages/create/page.js';
+import {createAgentBin} from './main-panel/agents/agent-bin.js';
 import { renderAbilities } from './main-panel/agents/pages/abilities/page.js';
 import { loadAgentPages } from './main-panel/agents/pages/catalog.js';
 import { renderAgentDirectory } from './main-panel/agents/pages/config/page.js';
@@ -44,6 +45,7 @@ let createDescriptor;
 const $=id=>document.getElementById(id);
 let agentId=new URL(location.href).searchParams.get('agent')||'shared_default';
 let agentRoster=[];
+let agentBin=null;
 let explicitAssignment=false;
 const initialTab=new URL(location.href).searchParams.get('tab');
 let agentModel='';
@@ -112,6 +114,7 @@ async function mountAgents(){
   grid.append(create);
   const css=document.createElement('link');css.rel='stylesheet';css.href='/v3-ui/main-panel/agents/pages/sessions/sessions.css';document.head.append(css);
   $('agents-grid').replaceWith(grid);
+  agentBin=createAgentBin({grid,request:api,roster:()=>agentRoster,rerender:()=>renderAgentCards(),notify:note,onChanged:agentsBinned,canUseBin:()=>accountMe?.role!=='guest'});
   const route=new URL(location.href);
   if(activeMainPage==='agents'){
     route.searchParams.set('tab','agents');
@@ -124,6 +127,7 @@ async function mountAgents(){
 function renderAgentCards(){
   const squares=document.querySelector('#agents-grid .agents-squares');
   squares.replaceChildren();
+  if(agentBin?.open){agentBin.render(squares);return;}
   const common=document.createElement('div');common.className='agent-row';
   common.innerHTML='<button type="button" class="agent-card agent-square" aria-label="Sessions"><div class="agent-card-top"><div class="agent-card-icon-wrap color-purple">'+ '<i data-lucide="messages-square"></i>'+'</div><div class="agent-card-meta"><div class="agent-card-name-row"><span class="agent-card-name">Sessions</span></div></div></div></button>';
   common.firstElementChild.setAttribute('aria-label',sessionsDescriptor.title);
@@ -155,10 +159,22 @@ function renderAgentCards(){
     });
     card.onclick=select;
     card.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();select();}};
+    agentBin?.decorate(row,agent);
     squares.append(row);
   }
   if(!agentRoster.length){const empty=document.createElement('p');empty.textContent='No agents are available to this account.';squares.append(empty);}
   document.querySelector('#agents-detail-region .agent-row').dataset.agentId=agentId;
+  agentBin?.sync();
+}
+// A deleted selection moves to a remaining agent first, so the reload reads as deliberate.
+async function agentsBinned(ids,verb){
+  if(verb==='deleted'&&ids.includes(agentId)){
+    const rest=agentRoster.filter(agent=>!ids.includes(agent.id));
+    const next=(rest.find(agent=>agent.id==='shared_default')||rest[0])?.id;
+    if(next&&!sessionsScope&&!createScope)await selectAgent(next);
+    else if(next){agentId=next;const route=new URL(location.href);route.searchParams.set('agent',next);history.replaceState({},'',route);}
+  }
+  await loadAgentRoster();
 }
 async function loadAgentRoster(){
   const data=await api('/models/agents');

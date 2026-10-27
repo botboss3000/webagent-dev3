@@ -523,3 +523,71 @@ fn stable_identity_matches_existing_request_digest_contract() {
         "receipt:model-agent:owner:new-agent"
     );
 }
+async fn bin_status(f: &Fixture, id: &str) -> Value {
+    Repository::new(&f.pools[id], id, f)
+        .unwrap()
+        .status()
+        .await
+        .unwrap()
+}
+#[tokio::test]
+async fn recycling_bin_hides_quiesces_restores_and_never_lifts_a_disable() {
+    let f = Fixture::new().await;
+    let id = f.service().create(&request(), 2).await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let revision = bin_status(&f, &id).await["revision"].as_u64().unwrap();
+    assert!(f
+        .service()
+        .set_deleted("shared_default", 1, true)
+        .await
+        .is_err());
+    assert!(f
+        .service()
+        .set_deleted(&id, revision + 1, true)
+        .await
+        .is_err());
+    let deleted = f.service().set_deleted(&id, revision, true).await.unwrap();
+    assert_eq!(deleted["status"], "deleted");
+    assert_eq!(f.quiesced.load(Ordering::SeqCst), 1);
+    let listed = f.service().list().await.unwrap();
+    assert!(listed["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|a| a["id"] != id.as_str()));
+    let error = f
+        .service()
+        .set_deleted(&id, revision + 1, true)
+        .await
+        .unwrap_err();
+    assert_eq!(error.to_string(), "Only active agents can be deleted");
+    let restored = f
+        .service()
+        .set_deleted(&id, revision + 1, false)
+        .await
+        .unwrap();
+    assert_eq!(restored["status"], "active");
+    assert_eq!(
+        f.quiesced.load(Ordering::SeqCst),
+        1,
+        "a restore has no work to stop"
+    );
+    assert_eq!(f.events.lock().unwrap().len(), 2);
+    f.service()
+        .set_status(&id, revision + 2, "disabled")
+        .await
+        .unwrap();
+    assert!(f
+        .service()
+        .set_deleted(&id, revision + 3, true)
+        .await
+        .is_err());
+    assert!(f
+        .service()
+        .set_deleted(&id, revision + 3, false)
+        .await
+        .is_err());
+    assert_eq!(bin_status(&f, &id).await["status"], "disabled");
+}

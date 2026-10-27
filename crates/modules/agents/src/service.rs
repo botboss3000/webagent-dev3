@@ -106,6 +106,9 @@ impl<S: Storage, A: Access, E: Effects> Service<'_, S, A, E> {
             };
             let pool = self.storage.agent_pool(&id).await?;
             let mut identity = Repository::new(&pool, &id, self.storage)?.summary().await?;
+            if identity["status"] == "deleted" {
+                continue;
+            }
             identity["can_manage"] = rights["can_manage"].clone();
             agents.push(identity);
         }
@@ -182,6 +185,26 @@ impl<S: Storage, A: Access, E: Effects> Service<'_, S, A, E> {
             .await?;
         self.effects.status_event(&value).await?;
         self.effects.quiesce(agent).await?;
+        Ok(value)
+    }
+    /// Managers move their agents to and from the recycling bin; the default agent stays.
+    pub async fn set_deleted(&self, agent: &str, expected: u64, deleted: bool) -> Result<Value> {
+        if agent == "shared_default" {
+            bail!("The default agent cannot be deleted");
+        }
+        if expected >= i64::MAX as u64 {
+            bail!("Invalid agent status");
+        }
+        let _guard = self.gate.lock().await;
+        self.authorize(agent, true).await?;
+        let pool = self.storage.agent_pool(agent).await?;
+        let value = Repository::new(&pool, agent, self.storage)?
+            .set_deleted(expected, deleted)
+            .await?;
+        self.effects.status_event(&value).await?;
+        if deleted {
+            self.effects.quiesce(agent).await?;
+        }
         Ok(value)
     }
 }
