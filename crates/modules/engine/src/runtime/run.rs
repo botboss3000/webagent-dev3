@@ -1587,6 +1587,16 @@ async fn execute_run_inner(app:Self,id:String,generation:String,cancel:Cancellat
                 .or_else(||if index==0 {run["chat_effort"].as_str()} else {None})
                 .or_else(||candidate["default_effort"].as_str());
             let core_effort=webagent_models::providers::supported(selection.provider,&selection.model,requested);
+            // Image-capable candidates see sent images directly; others keep the durable text.
+            let mut projected_input=projected_input;
+            if candidate["image_in"]==true {
+                let mut records=std::collections::HashMap::new();
+                for id in super::images::wanted(&projected_input).into_iter().take(super::images::MAX_IMAGES*4) {
+                    if let Some(record)=app.store.get(&format!("attachment:{id}")).await? {records.insert(id,record);}
+                }
+                let chosen=super::images::select(&sid,&projected_input,&records);
+                super::images::apply(&mut projected_input,&chosen);
+            }
             let prepared_provider=match crate::provider::CallDraft::new(&selection,projected_input,schemas,&sid,&instructions)
                 .with_reasoning_effort(core_effort.as_deref())
                 .prepare(crate::ports::AgentMetadata::root(app.store.records()),&cancel).await {

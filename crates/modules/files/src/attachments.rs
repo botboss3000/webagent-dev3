@@ -36,7 +36,7 @@ impl Prepared {
             .as_str()
             .is_some_and(|m| m.starts_with("image/"))
         {
-            "Image description is not available; do not infer image contents from its filename."
+            "Image description is not available; do not infer image contents from its filename. If the image matters, tell the user to choose an image-capable model for this chat."
         } else {
             "This attachment provides file metadata; content extraction is not available for this media type."
         };

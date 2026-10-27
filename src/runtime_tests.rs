@@ -1525,6 +1525,59 @@ async fn reasoning_only_completion_continues_to_one_final_publication() {
 }
 
 #[tokio::test]
+async fn image_capable_candidates_receive_sent_images_and_others_keep_text() {
+    use axum::routing::post;
+    let (_root, mut app) = fixture().await;
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = requests.clone();
+    let mock = Router::new().route("/responses", post(
+        |AxumState(requests): AxumState<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
+            requests.lock().await.push(body);
+            let output = json!([{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Seen."}]}]);
+            let event = json!({"type":"response.completed","response":{"status":"completed","output":output}});
+            ([("content-type","text/event-stream")], format!("data: {event}\n\n"))
+        }
+    )).with_state(captured);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap(); });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    for (sees, generation) in [(true, "image-in"), (false, "text-only")] {
+        let sid = conversation(&app).await;
+        let aid = uuid();
+        crate::api::upload(State(app.clone()), Path(sid.clone()), Json(json!({"client_upload_id":aid,
+            "name":"dot.png","media_type":"image/png","data":"iVBORw0KGgo="}))).await.unwrap();
+        let (_, Json(sent)) = send(State(app.clone()), Path(sid.clone()), Json(json!({"client_message_id":uuid(),
+            "text":"What is this?","attachment_ids":[aid]}))).await.unwrap();
+        let id = sent["run_id"].as_str().unwrap().to_owned();
+        // Hydrate as the scheduler would, and mark the candidate as the plan would for an image_in entry.
+        let mut run = app.run(&id).await.unwrap();
+        run["input"] = json!(app.store.context(&sid).await.unwrap());
+        run["context_hydration_pending"] = json!(false);
+        run["selection_plan"]["candidates"][0]["image_in"] = json!(sees);
+        app.store.put(&key("run", &id), &run).await.unwrap();
+        running(&app, &id, generation).await;
+        execute_run(app.clone(), id.clone(), generation.into(), CancellationToken::new()).await.unwrap();
+        assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
+        // Session naming shares the mock provider; the chat call is the one carrying this message.
+        let user = requests.lock().await.drain(..).flat_map(|request| request["input"].as_array().cloned().unwrap_or_default())
+            .find(|item| item["role"] == "user" && item.to_string().contains("What is this?")).unwrap();
+        let image = json!({"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgo="});
+        if sees {
+            assert_eq!(user["content"].as_array().unwrap().iter().filter(|part| **part == image).count(), 1);
+        } else {
+            assert!(user.to_string().contains("Image description is not available"));
+            assert!(!user.to_string().contains("input_image"));
+        }
+        // Durable context keeps text either way; the image is call-scoped.
+        let context = app.store.context(&sid).await.unwrap();
+        assert!(!json!(context).to_string().contains("input_image"));
+        assert!(!app.run(&id).await.unwrap()["input"].to_string().contains("input_image"));
+    }
+    server.abort();
+}
+
+#[tokio::test]
 async fn agent_loop_gates_tool_and_denial_continues_without_worker() {
     use axum::routing::post;
     let (_root, mut app) = fixture().await;
@@ -4977,7 +5030,9 @@ async fn parallel_batch_overlaps_reads_denies_write_by_policy_and_preserves_resu
     let policy=current_workflow_policy(&app).await.unwrap();
     let access=app.store.live_access(app.store.current_user_id(),"shared_default").await.unwrap();
     let guard=app.gate.lock().await;
-    tokio::time::timeout(Duration::from_secs(5),
+    // Hang guard only: the assertions check dispatch order, so a generous bound
+    // absorbs build-server load without hiding a stalled batch.
+    tokio::time::timeout(Duration::from_secs(30),
         parallel_batch::execute_parallel_batch(&app,&id,"batch-generation",
             &CancellationToken::new(),&policy,&access,
             app.run(&id).await.unwrap(),guard)).await.unwrap().unwrap();
@@ -5257,7 +5312,9 @@ async fn parallel_batch_overflow_queues_reads_despite_legacy_reject() {
     let policy=current_workflow_policy(&app).await.unwrap();
     let access=app.store.live_access(app.store.current_user_id(),"shared_default").await.unwrap();
     let guard=app.gate.lock().await;
-    tokio::time::timeout(Duration::from_secs(5),
+    // Hang guard only: the assertions check dispatch order, so a generous bound
+    // absorbs build-server load without hiding a stalled batch.
+    tokio::time::timeout(Duration::from_secs(30),
         parallel_batch::execute_parallel_batch(&app,&id,"overflow",&CancellationToken::new(),
             &policy,&access,app.run(&id).await.unwrap(),guard)).await.unwrap().unwrap();
     worker.await.unwrap();
@@ -5324,7 +5381,9 @@ async fn parallel_batch_read_completes_before_independent_write_approval() {
     let policy=current_workflow_policy(&app).await.unwrap();
     let access=app.store.live_access(app.store.current_user_id(),"shared_default").await.unwrap();
     let guard=app.gate.lock().await;
-    tokio::time::timeout(Duration::from_secs(5),
+    // Hang guard only: the assertions check dispatch order, so a generous bound
+    // absorbs build-server load without hiding a stalled batch.
+    tokio::time::timeout(Duration::from_secs(30),
         parallel_batch::execute_parallel_batch(&app,&id,"independent",&CancellationToken::new(),
             &policy,&access,app.run(&id).await.unwrap(),guard)).await.unwrap().unwrap();
     worker.await.unwrap();

@@ -178,7 +178,8 @@ impl Catalog {
             }
             candidates.push(Candidate { limits:roster.limits.get(id).cloned(), default_effort:roster.efforts.get(id).cloned(), platform:self.platform_sources.get(id).cloned(), entry_id: id.clone(), entry_revision: entry.revision,
                 connection_id: connection.id.clone(), connection_revision: connection.revision,
-                credential_ref: connection.credential_ref.clone(), transport: connection.transport.clone(), upstream_model: entry.upstream_model.clone() });
+                credential_ref: connection.credential_ref.clone(), transport: connection.transport.clone(), upstream_model: entry.upstream_model.clone(),
+                image_in: entry.capabilities.contains("image_in") });
         }
         Ok(SelectionPlan { version: 2, agent_id: roster.agent_id.clone(), owner_id: roster.owner_id.clone(),
             assignment_revision: roster.revision, group_revision: None, candidates, role, custom_entry_id,
@@ -422,6 +423,9 @@ pub struct Candidate {
     pub credential_ref: String,
     pub transport: Transport,
     pub upstream_model: String,
+    /// The entry accepts image input, so sent images may go to it directly.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub image_in: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -500,6 +504,7 @@ impl SelectionPlan {
                 connection_id: connection.id.clone(), connection_revision: connection.revision,
                 credential_ref: connection.credential_ref.clone(), transport: connection.transport.clone(),
                 upstream_model: entry.upstream_model.clone(),
+                image_in: entry.capabilities.contains("image_in"),
             });
         }
         Ok(Self { version: 1, agent_id: assignment.agent_id.clone(), owner_id: assignment.owner_id.clone(),
@@ -690,8 +695,12 @@ mod tests {
                 RoleAssignment { entry_id: "a".into(), backup_entry_ids: vec![] });
             assert!(catalog.resolve_role("agent-a", role).is_err());
         }
+        assert!(!catalog.resolve("agent-a").unwrap().candidates[0].image_in);
+        assert!(serde_json::to_value(&catalog.resolve("agent-a").unwrap().candidates[0]).unwrap().get("image_in").is_none());
         catalog.entries.get_mut("a").unwrap().capabilities.extend(["image_in".into(), "image_out".into(), "voice".into()]);
         for role in [ModelRole::ImageIn, ModelRole::ImageOut, ModelRole::Voice] { assert!(catalog.resolve_role("agent-a", role).is_ok()); }
+        // The plan pins whether each candidate reads images, so the loop can send them directly.
+        assert!(catalog.resolve("agent-a").unwrap().candidates[0].image_in);
         catalog.entries.get_mut("a").unwrap().allowed_agents.clear();
         assert!(catalog.resolve_role("agent-a", ModelRole::Voice).is_err());
         catalog.entries.get_mut("a").unwrap().allowed_agents.insert("agent-a".into());

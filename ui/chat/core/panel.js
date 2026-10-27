@@ -13,7 +13,7 @@ import { createChatClient } from './client.js';
 import {mountFollowupQueue} from './followup-queue.js';
 import {mountTranscriptAnchor} from './transcript-anchor.js';
 import {mountChatZoom} from './chat-zoom.js';
-import {mountComposerMedia} from '../controls/composer-media.js';
+import {mountComposerMedia,describesUploads} from '../controls/composer-media.js';
 import {mountSessionControls} from '../controls/session-controls.js';
 import {mountNotificationPanel,createChatNotification} from './notification-panel.js';
 import {mountUsageStats} from '../controls/usage-stats.js';
@@ -87,7 +87,7 @@ const stats=mountUsageStats({root,client,note,issues});
 // Refreshes relative gutter times once per second while visible; destroy clears this timer.
 const gutterClock=setInterval(()=>{if(document.visibilityState==='visible')updateGutterTimes(root);},1000);
 // Session-control capability updates enable or disable the media adapter.
-const controls=mountSessionControls({root,client,guard,note,issues,ensureSession,notifications,canWrite:()=>sharedAccess?.can_control!==false,/* Forwards advertised attachment availability and limits to media controls. */onState:data=>{media?.setAvailable(sharedAccess?.can_send!==false&&data?.composer?.attachments===true,data?.composer?.attachment_limits);}});
+const controls=mountSessionControls({root,client,guard,note,issues,ensureSession,notifications,canWrite:()=>sharedAccess?.can_control!==false,/* Forwards advertised attachment availability and limits, and whether the selected model reads images itself, to media controls. */onState:data=>{media?.setAvailable(sharedAccess?.can_send!==false&&data?.composer?.attachments===true,data?.composer?.attachment_limits);media?.setDescribeImages(describesUploads(data));}});
 let submitting=false,sessionGeneration=0,creatingSession=null,media=null,historyBusy=false,historyLastSeq=0,historyRevision=0,historyDeferredRevision=0,historyReady=false,closeUndoDialog=null,canManageQueue=false;
 const historyRequests=new Map();
 const followups=mountFollowupQueue({root,host:$('notification-panel'),client,getSession:()=>session,canWrite:()=>canManageQueue&&sharedAccess?.can_control!==false,guard,note,keyId,forgetKey,onSnapshot:syncSnapshot});

@@ -14,7 +14,11 @@ export function textForSpeech(value,maxChars=1800){
  return text.length<=maxChars?text:text.slice(0,maxChars).replace(/\s+\S*$/,'')+'. The rest is available on screen.';
 }
 /** Purpose: Mount per-session attachment staging and voice controls. Files are staged as selected; snapshot refuses submission while any upload is pending, failed, or incomplete. Reset and destroy invalidate session-bound async work and release local media resources. panel.js mounts this module, opens/disconnects/destroys it, and brackets sends with snapshot/committed while reading count/uploading. */
+/** Whether uploads need a description: false only when the selected model reads images itself. */
+export function describesUploads(controls){return !controls?.models?.find(m=>m.entry_id===(controls.model?.entry_id??null))?.image_in;}
 export function mountComposerMedia({root,client,ensureSession,note,changed,refresh,guard,getState}){
+ // An image-capable selected model receives images directly, so no description is requested.
+ let describeImages=true;
   // Purpose: Resolve control IDs within the supplied chat root.
  const $=id=>root.querySelector('#'+id),pill=$('chat-input-row'),preview=$('chat-preview-bar'),mic=$('chat-voice-btn');
  const abort=new AbortController(),staged=new Map();
@@ -56,7 +60,7 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
   // Upload one staged file and optionally request its preview description; preserve retryable error state and report failures only in the owning session.
  async function upload(item){
   if(item.pending||item.removed)return;item.pending=true;item.error='';paint();
-  try{const data=encodeBytes(new Uint8Array(await item.file.arrayBuffer()));const info=await client.upload(item.sid,{client_upload_id:item.id,name:item.file.name,media_type:inferMedia(item.file),data});item.uploaded=true;if(item.removed){await client.removeUpload(item.sid,item.id);return;}if(info.preview){try{await client.describeUpload(item.sid,item.id);}catch(e){item.issue=e.message;if(!disposed&&item.sid===session&&!item.removed)note(item.file.name+': '+e.message);}}}
+  try{const data=encodeBytes(new Uint8Array(await item.file.arrayBuffer()));const info=await client.upload(item.sid,{client_upload_id:item.id,name:item.file.name,media_type:inferMedia(item.file),data});item.uploaded=true;if(item.removed){await client.removeUpload(item.sid,item.id);return;}if(info.preview&&describeImages){try{await client.describeUpload(item.sid,item.id);}catch(e){item.issue=e.message;if(!disposed&&item.sid===session&&!item.removed)note(item.file.name+': '+e.message);}}}
   catch(e){item.error=e.message;if(!disposed&&item.sid===session&&!item.removed)note(item.file.name+': '+e.message);}finally{item.pending=false;if(!disposed)paint();}
  }
   // Validate and stage selected, pasted, or dropped files for the current ensured session, applying server-provided count and size limits.
@@ -111,6 +115,6 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
  function committed(sid,ids){const files=staged.get(sid)||[];for(const i of files.filter(i=>ids.includes(i.id))){i.removed=true;if(i.url)URL.revokeObjectURL(i.url);}staged.set(sid,files.filter(i=>!ids.includes(i.id)));paint();}
   // Tear down capture, speech, listeners, controls, and object URLs; request removal of uploaded attachments best-effort without waiting for server cleanup.
  function destroy(){disposed=true;capture.cancel();stopSpeech();abort.abort();attach.onclick=null;chooser.onchange=null;mic.onclick=null;caption.remove();voiceControls.remove();for(const files of staged.values())for(const i of files){i.removed=true;if(i.url)URL.revokeObjectURL(i.url);if(i.uploaded)client.removeUpload(i.sid,i.id).catch(()=>{});}}
-  // Public API: open resets the session view; published/snapshot/committed bracket submission; setAvailable applies runtime limits; disconnect and destroy release voice resources; count/uploading expose current-session composer state.
- return {open,published,snapshot,committed,destroy,setAvailable(value,limits){attachmentLimits={max_file_size_mb:null,max_per_message:null,...limits};if(available!==value){available=value;paint();}},disconnect:()=>{capture.cancel();stopSpeech();},get count(){return(staged.get(session)||[]).length;},get uploading(){return(staged.get(session)||[]).some(i=>i.pending||i.error);}};
+  // Public API: open resets the session view; published/snapshot/committed bracket submission; setAvailable applies runtime limits; setDescribeImages(false) skips upload descriptions while the selected model reads images itself; disconnect and destroy release voice resources; count/uploading expose current-session composer state.
+ return {open,published,snapshot,committed,destroy,setDescribeImages(value){describeImages=value!==false;},setAvailable(value,limits){attachmentLimits={max_file_size_mb:null,max_per_message:null,...limits};if(available!==value){available=value;paint();}},disconnect:()=>{capture.cancel();stopSpeech();},get count(){return(staged.get(session)||[]).length;},get uploading(){return(staged.get(session)||[]).some(i=>i.pending||i.error);}};
 }
