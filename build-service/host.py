@@ -1399,7 +1399,13 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         return blob
 
     def promote_checkout(self, before, after, changed):
-        return release.promote_checkout(self.source, before, after, changed, context_digest, standalone=True)
+        count = release.promote_checkout(self.source, before, after, changed, context_digest, standalone=True)
+        try:
+            # New live files must be readable by the app at once, not at the next maintenance pass.
+            release.expose_live(self.source, release.live_patterns(release.entries(after, context_digest)))
+        except (OSError, ValueError):
+            pass
+        return count
 
     def promote_live_ui(self, before, after, changed):
         # The app deliberately serves the checkout in live-editing mode.
@@ -2143,8 +2149,11 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         tags = re.findall(rb"<\s*(/?)([A-Za-z!][A-Za-z0-9-]*)", block[:script])
         return all(slash == b"" and name.lower() in (b"meta", b"link") for slash, name in tags) and block.count(b"<script") == 1
 
-    def commit_live(self, patterns, settle=10, now=None):
-        """Commit settled in-place live-file edits as one commit; never stage or commit other paths."""
+    def commit_live(self, patterns, settle=10, now=None, released=None):
+        """Commit settled in-place live-file edits as one commit; never stage or commit other paths.
+
+        `released(path)` returns the published release's bytes (None when absent); a file that
+        still matches its release was promoted by that release, and the release commit owns it."""
         if not patterns:
             return None
         root = CONFIG["checkout_root"]
@@ -2155,6 +2164,11 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                                timeout=30, private_raw=True)
             rows = [(record[:2], record[3:]) for record in raw.split("\0") if len(record) > 3]
             rows = [(state, path) for state, path in rows if release.is_live("v3/" + path, patterns)]
+            if released is not None:
+                def current(path):
+                    target = Path(root) / path
+                    return target.read_bytes() if target.is_file() and not target.is_symlink() else None
+                rows = [(state, path) for state, path in rows if current(path) != released(path)]
             if not rows:
                 return None
             now = time.time() if now is None else now
@@ -3145,7 +3159,11 @@ class Broker:
         """Keep live files readable by the app, then commit their in-place edits."""
         patterns = self.live_patterns()
         release.expose_live(Path(CONFIG["checkout_root"]), patterns)
-        return self.runner.commit_live(patterns)
+        published = ASSET_ROOT / "current" / "v3"
+        def released(path):
+            target = published / path
+            return target.read_bytes() if target.is_file() and not target.is_symlink() else None
+        return self.runner.commit_live(patterns, released=released)
 
     def live_file_write(self, args):
         """Replace one listed live file for the app, only if it still has the caller's digest."""

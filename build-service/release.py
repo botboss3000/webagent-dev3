@@ -276,10 +276,15 @@ def release_mounts(previous, root, asset_root=None):
                      "/opt/v3/shared-ui/vendor/fonts",
                      "/opt/v3/shared-ui/vendor/lucide",
                      "/opt/v3/shared-ui/favicon.svg"}
+    # A loop created after the first conversion already has the whole checkout.
+    whole_checkout = any(item.get("Target") == "/live-checkout" for item in host.get("Mounts") or [])
     for mount in host.get("Mounts") or []:
         mount = dict(mount)
         target = mount.get("Target")
         if api and asset_root is not None and target in legacy_assets:
+            continue
+        if target == "/live-checkout/plugins" and whole_checkout:
+            # Docker rejects a duplicate /live-checkout target; the nested read-only mount is redundant.
             continue
         if target == "/live-checkout/plugins":
             # The loop reads live files anywhere in the checkout and never writes it.

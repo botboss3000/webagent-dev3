@@ -883,7 +883,7 @@ class BuildTests(unittest.TestCase):
         self.assertEqual("another writer", path.read_text())
 
     def test_source_apply_schemas_have_disjoint_arguments(self):
-        path = Path(__file__).resolve().parents[1] / "config/administration/native-tools.json"
+        path = Path(__file__).resolve().parents[1] / "src/engine/tools/native-tools.json"
         schemas = {item["name"]: item["parameters"] for item in json.loads(path.read_text())}
         prepared = schemas["v3_source_apply_prepared"]
         raw = schemas["v3_source_apply"]

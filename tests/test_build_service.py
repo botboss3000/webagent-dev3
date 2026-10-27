@@ -85,6 +85,13 @@ class LiveFileTests(unittest.TestCase):
             self.assertEqual(git("show","--name-only","--format=%s","HEAD").split(),["Live","config","edit:","ui/chat.json,","ui/new.json","ui/chat.json","ui/new.json"])
             self.assertEqual(git("diff","--cached","--name-only").split(),["README.md"])
             self.assertEqual(git("show","HEAD:ui/chat.json"),'{"x":1}')
+            # A file still equal to its published release was promoted; the release commit owns it.
+            (root/"ui/released.json").write_text("{}");(root/"ui/edited.json").write_text("{}")
+            released=lambda path:{"ui/released.json":b"{}","ui/edited.json":b"[]"}.get(path)
+            with patch.dict(fixtures.host.CONFIG,{"checkout_root":folder}):
+                fixtures.host.Runner.commit_live(runner,patterns,now=time.time()+60,released=released)
+            self.assertEqual(git("show","--name-only","--format=","HEAD").split(),["ui/edited.json"])
+            self.assertIn("ui/released.json",git("status","--porcelain"))
 class LiveFileAccessTests(unittest.TestCase):
     def setUp(self):
         self.release=fixtures.host.release
@@ -98,6 +105,10 @@ class LiveFileAccessTests(unittest.TestCase):
             self.assertEqual((checkout["Source"],checkout["ReadOnly"]),("/checkout",True))
             # A read-only checkout does not make the loop look like the API on the next release.
             self.assertEqual(self.release.release_mounts({"Mounts":mounted},root)["Mounts"],mounted)
+            # A loop holding both mounts (as deployed) must never produce a duplicate target.
+            both=[*mounted,{"Type":"bind","Source":"/checkout/plugins","Target":"/live-checkout/plugins","ReadOnly":True}]
+            targets=[m["Target"]for m in self.release.release_mounts({"Mounts":both},root)["Mounts"]]
+            self.assertEqual(len(targets),len(set(targets)));self.assertIn("/live-checkout",targets)
     def test_expose_and_write_live_files(self):
         with tempfile.TemporaryDirectory()as folder:
             root=Path(folder);folder_path=root/"crates/x";folder_path.mkdir(parents=True);folder_path.chmod(0o700)
