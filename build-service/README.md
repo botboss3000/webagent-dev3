@@ -387,6 +387,29 @@ writes/builds must reacquire their derived claims and pass normal merge checks.
 Exact-request retry repairs the registry after interrupted persistence. This is
 not task completion, an administrator takeover, or authorization to deploy.
 
+## Failed releases, reopen and abandon
+
+A task whose latest release failed, was cancelled or went stale before any
+deployment effect keeps its claims for `scheduler.failure_grace_seconds`
+(default 1800, range 300–7200) so its owner can fix it on the same task. Send
+`buildctl schedule` action `reopen` with task_id, request_id and the current
+expected_revision/expected_epoch: the task becomes open again with its tree,
+baseline and held claims, and the failed job is listed under `failed_jobs`.
+Apply the correction and finish as usual; unchanged Rust inputs reuse the
+verified compiler artifacts. When the window ends without a reopen, or the
+heartbeat lapses and the task orphans, housekeeping drops every claim and queued
+request (the task returns to `waiting`; a later reopen reacquires on apply).
+A closed task never keeps queued requests, so it cannot block other writers.
+
+`abandon` accepts an open task or such a failed closed task and, in the same
+call, drops every claim and queued request (ownership `abandoned`). It reports
+`released_scopes` and `cleared_requests`. A task with a live job is refused or,
+for an open task's running check, cleaned up by housekeeping once that job ends.
+
+Blockers in conflict errors, `reservations` rows and `takeover_preview` carry
+`session`: the owning session's name from `session=<name>` in the task summary
+provenance (for example `[origin=claude; session=Broker updates]`), or null.
+
 ## Concurrent preparation and settled-component indexing
 
 These features are opt-in protected installation policy. Source defaults keep

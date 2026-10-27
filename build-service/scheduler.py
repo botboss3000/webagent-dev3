@@ -18,13 +18,14 @@ class Conflict(ValueError):
 # @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Source reservations and completion. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds; protected installation overrides at broker restart.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image"]}],"opportunities":[]}}
 class Scheduler:
     """Derive authority and scope from the broker; caller assertions never certify a release."""
-    actions={"create","resources","pause","resume","priority","reconcile","increase_memory","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover","reconcile_acquisition","clear_pending_requests","reconcile_continuation"}
+    actions={"create","resources","pause","resume","priority","reconcile","increase_memory","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover","reconcile_acquisition","clear_pending_requests","reconcile_continuation","reopen"}
     def __init__(self,broker,config):
         """Load reviewed coordination policy and open its private durable ownership store."""
         self.broker=broker;self.config=config
         policy=config.get("scheduler",{})
         self.mode=policy.get("mode","observe")
         self.orphan_after=policy.get("orphan_after_seconds",300)
+        self.failure_grace=policy.get("failure_grace_seconds",1800)
         self.store=ownership.Ownership(broker.work_dir/"ownership.sqlite")
     @staticmethod
     def owner(trusted,workspace):
@@ -39,6 +40,36 @@ class Scheduler:
         if "ownership_epoch"not in item:
             item["ownership_epoch"]=value["epoch"];self.broker._save_work()
         return value
+    def task_jobs(self,item):
+        return [j for j in self.broker.jobs.values()if j.get("ownership_id")==item["key"]or(j.get("task_id")==item["task_id"]and j.get("user_id")==item.get("user_id")and j.get("workspace")==item.get("workspace"))]
+    def settled(self,item):
+        """No job of the task can still run, and none left an unreconciled deployment effect."""
+        return all(j.get("status")in {"failed","cancelled","stale","completed"}and not(j.get("effects_started")and j.get("status")!="completed")for j in self.task_jobs(item))
+    def failed_release(self,item):
+        """A closed task whose latest release failed before any deployment effect; it may reopen for a fix."""
+        job=self.broker.jobs.get(item.get("job_id"))or{}
+        return item.get("mode")=="isolated"and item.get("status")=="closed"and job.get("status")in {"failed","cancelled","stale"}and self.settled(item)
+    def settle(self):
+        """Closed tasks never keep queued requests. A failed release keeps its claims for the grace window so
+        its owner can reopen, fix and resubmit; once that ends or the heartbeat lapses, every claim drops.
+        Abandoned tasks keep nothing. Claims of a completed release wait for its commit and release_claims."""
+        rows={r["id"]:r for r in self.store.list()if r["scopes"]or r["requested"]}
+        for item in list(self.broker.work.values()):
+            value=rows.get(item.get("key"))
+            if value is None or item.get("mode")!="isolated"or item["status"]=="open"or not self.settled(item):continue
+            if item.get("acquisition_refresh")or any(l.get("task_key")==item["key"]for l in self.broker.code_index_leases.values()):continue
+            if item["status"]=="abandoned":
+                self.store.retire(item["key"],"Abandoned task keeps no claims or queued requests",abandon=True)
+            elif not value["scopes"]:
+                self.store.retire(item["key"],"Closed task keeps no queued requests")
+            elif self.failed_release(item):
+                job=self.broker.jobs[item["job_id"]]
+                if value["state"]=="orphaned"or self.store.clock()-job.get("finished_at",job.get("created_at",0))>self.failure_grace:
+                    self.store.retire(item["key"],"Failed release "+job["job_id"][:8]+" was not reopened within the grace window")
+    def session(self,key):
+        """The owning session's name from the task summary provenance (session=<name>), if it gave one."""
+        match=re.search(r"session=([^;\]]{1,80})",(self.broker.work.get(key)or{}).get("summary","")[:200])
+        return match.group(1).strip()if match else None
     def retention_allowed(self,key):
         """Keep registered task source until explicit verified agent completion; old clearances do not release claims."""
         try:value=self.store.get(key)
@@ -213,7 +244,7 @@ class Scheduler:
         revision=value["revision"]if expected is None else expected
         token=request or"reserve-"+hashlib.sha256(ownership.canonical([value["id"],revision,scopes]).encode()).hexdigest()[:48]
         result=self.store.acquire(value["id"],value["owner"],revision,item["ownership_epoch"],scopes,token)
-        if not result["acquired"]:raise Conflict(result)
+        if not result["acquired"]:raise Conflict({**result,"blockers":[{**b,"session":self.session(b["task_id"])}for b in result["blockers"]]})
         self.mark_waiter_refresh(item,value,result["task"])
         return result["task"]
     def guard(self,item,trusted,workspace,paths,request,patch=None):
@@ -258,7 +289,7 @@ class Scheduler:
         result=[]
         for r in rows:
             if r["state"]in {"complete","abandoned"}:continue
-            result.append({k:r[k]for k in ["id","label","state","revision","epoch","generation","heartbeat","created","scopes","requested"]}|{"owned_by_caller":r["owner"]==self.owner(trusted,workspace)})
+            result.append({k:r[k]for k in ["id","label","state","revision","epoch","generation","heartbeat","created","scopes","requested"]}|{"session":self.session(r["id"]),"owned_by_caller":r["owner"]==self.owner(trusted,workspace)})
         if task_id is not None:result=[r for r in result if r["label"]==task_id]
         legacy=[{"task_id":i["task_id"],"state":"legacy_review_required"}for i in self.broker.work.values()if i.get("mode")=="isolated"and i.get("status")!="abandoned"and not any(r["id"]==i["key"]for r in rows)]
         total=len(result);paged=result[offset:offset+limit]
@@ -402,6 +433,7 @@ class Scheduler:
                 self.review_wait(job)
         # Scope holders get a 30-minute floor: local checks and commit close-out make no broker call.
         self.store.orphan(self.orphan_after,max(self.orphan_after,1800))
+        self.settle()
     def touch_task(self,args,trusted,workspace):
         """Treat any authenticated call naming the caller's own task as liveness; never revives orphaned or foreign ownership."""
         if self.mode!="enforce":return
@@ -712,7 +744,7 @@ class Scheduler:
         else:value=self.ensure(item,trusted,workspace)
         owner=self.owner(trusted,workspace)
         if action=="takeover_preview":
-            return {"task":{k:value[k]for k in ["id","label","state","epoch","revision","scopes"]},"jobs":[{"job_id":j["job_id"],"status":j["status"],"effects_started":bool(j.get("effects_started"))}for j in self.broker.jobs.values()if j.get("task_id")==item["task_id"]and j.get("user_id")==item["user_id"]and j.get("workspace")==item["workspace"]]}
+            return {"task":{k:value[k]for k in ["id","label","state","epoch","revision","scopes"]}|{"session":self.session(value["id"])},"jobs":[{"job_id":j["job_id"],"status":j["status"],"effects_started":bool(j.get("effects_started"))}for j in self.broker.jobs.values()if j.get("task_id")==item["task_id"]and j.get("user_id")==item["user_id"]and j.get("workspace")==item["workspace"]]}
         revision=args.get("expected_revision");epoch=args.get("expected_epoch")
         request="action-"+hashlib.sha256(ownership.canonical([owner,value["id"],args.get("request_id")]).encode()).hexdigest()
         if type(revision)is not int or type(epoch)is not int:raise ValueError("Expected ownership revision and epoch required")
@@ -728,6 +760,17 @@ class Scheduler:
             if item.get("acquisition_refresh")or any(l.get("task_key")==item["key"]for l in self.broker.code_index_leases.values()):
                 raise ValueError("Reconcile task transition or maintenance before clearing requests")
             return self.store.clear_pending_requests(value["id"],owner,revision,epoch,args.get("reason"),request)
+        if action=="reopen":
+            if set(args)!={"action","task_id","expected_revision","expected_epoch","request_id"}:raise ValueError("Exact reopen request required")
+            with self.broker.lock:
+                if not self.failed_release(item):raise ValueError("Only a closed task whose latest release failed without deployment effects can reopen")
+                current=self.store.get(value["id"])
+                if current["owner"]!=owner or current["revision"]!=revision or current["epoch"]!=epoch:raise ValueError("Stale ownership revision or epoch")
+                # The tree, baseline and any claims still held stay with the task; the next finish
+                # reuses verified compiler artifacts when the Rust inputs are unchanged.
+                failed=item.pop("job_id");item.setdefault("failed_jobs",[]).append(failed)
+                item.update(status="open",ownership_epoch=current["epoch"]);self.broker._save_work()
+            return {"task_id":item["task_id"],"status":"open","failed_job_id":failed,"state":current["state"],"scopes":current["scopes"],"revision":current["revision"],"epoch":current["epoch"]}
         if action=="reserve":
             paths=args.get("paths")
             if not isinstance(paths,list)or not 1<=len(paths)<=128:raise ValueError("Bounded source paths required")

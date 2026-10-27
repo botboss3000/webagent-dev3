@@ -395,6 +395,21 @@ class Ownership:
             return result
         return self.mutate(request,["clear_pending_requests",task,owner,revision,epoch,reason],operation)
 
+    def retire(self,task,reason,abandon=False):
+        """Broker-verified terminal cleanup: drop every claim and queued request in one transition.
+
+        The host calls this only after confirming the task has no live or effect-bearing
+        job. The epoch advances so tokens from before the cleanup are fenced."""
+        if not isinstance(reason,str)or not 1<=len(reason.encode())<=500:raise ValueError("Bounded retirement reason required")
+        with self.transaction()as db:
+            value=self.get(task,db)
+            if value["state"]not in {"owned","orphaned","waiting"}:return value
+            state="abandoned"if abandon else"waiting"
+            if not value["scopes"]and not value["requested"]and state==value["state"]:return value
+            result=self.update(db,value,state=state,scopes=[],requested=[],epoch=value["epoch"]+1,evidence={},heartbeat=self.clock())
+            db.execute("INSERT INTO events(task,at,event)VALUES(?,?,?)",(task,self.clock(),canonical({"retire":{"scopes":value["scopes"],"requested":value["requested"]},"abandon":abandon,"reason":reason})))
+            return result
+
     # @code-index {"version":1,"feature":"owner-claim-release","aliases":["release reservations","unblock engine"],"purpose":"Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.","span_lines":17,"configuration":{"status":"not_applicable","rationale":"Ownership fencing and authenticated scope release are fixed authority invariants."}}
     def release_scopes(self,task,owner,revision,epoch,scopes,reason,request):
         """Release explicit owner claims, fence old epochs and retain the unpublished draft."""

@@ -1704,6 +1704,89 @@ class ClearPendingRequestsTests(unittest.TestCase):
         self.assertEqual(reopened.get(item["key"]),result);self.assertEqual(result["state"],"orphaned")
         self.assertEqual(self.call("build_work",request),result)
 
+class FailedReleaseLifecycleTests(unittest.TestCase):
+    """A failed release keeps its claims for a bounded fix window; terminal tasks never block others."""
+    from test_scheduler_broker import SchedulerBrokerTests as _base
+    setUp=_base.setUp
+    tearDown=_base.tearDown
+    call=_base.call
+    begin=_base.begin
+    action=_base.action
+    write=_base.write
+    def failed(self,label="failed-release",status="failed",**job):
+        item=self.begin(label);self.write(item,"README.md",label+"\n")
+        job_id=str(uuid.uuid4());store=self.broker.scheduler.store
+        self.broker.jobs[job_id]={"job_id":job_id,"ownership_id":item["key"],"task_id":item["task_id"],"status":status,
+            "effects_started":False,"finished_at":store.clock(),**job}
+        item.update(status="closed",job_id=job_id);self.broker._save_work()
+        return item,store.get(item["key"])
+    def test_reopen_keeps_tree_and_claims_and_replays(self):
+        item,before=self.failed();tree=Path(item["workspace_path"]).parent
+        source=self.broker.scheduler_task_snapshot(tree);failed=item["job_id"]
+        result,request=self.action(item["task_id"],"reopen")
+        self.assertEqual((result["status"],result["failed_job_id"],result["scopes"]),("open",failed,before["scopes"]))
+        self.assertEqual((item["status"],item["failed_jobs"]),("open",[failed]));self.assertNotIn("job_id",item)
+        self.assertEqual(self.broker.scheduler_task_snapshot(tree),source)
+        self.assertEqual(self.call("build_work",request),result)
+        with self.assertRaisesRegex(ValueError,"reopen"):self.action(item["task_id"],"reopen")
+        self.write(item,"README.md","fixed\n")
+        self.assertEqual(self.broker.scheduler.store.get(item["key"])["scopes"],before["scopes"])
+    def test_reopen_refuses_effects_live_and_completed_jobs(self):
+        item,before=self.failed();job=self.broker.jobs[item["job_id"]]
+        for change in ({"effects_started":True},{"status":"running"},{"status":"uncertain"},{"status":"completed"}):
+            job.update({"status":"failed","effects_started":False,**change})
+            with self.assertRaisesRegex(ValueError,"reopen"):self.action(item["task_id"],"reopen")
+        self.assertEqual(item["status"],"closed")
+    def test_grace_window_then_heartbeat_loss_release_every_claim(self):
+        item,before=self.failed();scheduler=self.broker.scheduler;store=scheduler.store
+        scheduler.settle();self.assertEqual(store.get(item["key"])["scopes"],before["scopes"])
+        with patch.object(store,"clock",return_value=store.clock()+scheduler.failure_grace+1):scheduler.settle()
+        after=store.get(item["key"])
+        self.assertEqual((after["state"],after["scopes"],after["requested"],after["epoch"]),("waiting",[],[],before["epoch"]+1))
+        other,held=self.failed("orphaned-release")
+        with store.transaction()as db:store.update(db,store.get(other["key"],db),state="orphaned")
+        scheduler.settle();self.assertEqual(store.get(other["key"])["scopes"],[])
+        # A reopened task reacquires its claims on the next apply.
+        self.action(item["task_id"],"reopen");self.write(item,"README.md","fixed\n")
+        self.assertEqual(store.get(item["key"])["state"],"owned")
+    def test_completed_release_keeps_claims_until_commit_release(self):
+        item,before=self.failed(status="completed")
+        with patch.object(self.broker.scheduler.store,"clock",return_value=time.time()+86400):self.broker.scheduler.settle()
+        self.assertEqual(self.broker.scheduler.store.get(item["key"])["scopes"],before["scopes"])
+    def test_closed_and_abandoned_tasks_drop_queued_requests_at_once(self):
+        holder=self.begin("queue-holder");self.write(holder,"README.md","holder\n")
+        item=self.begin("queued-closed");store=self.broker.scheduler.store
+        v=store.get(item["key"]);self.assertFalse(store.acquire(item["key"],v["owner"],v["revision"],v["epoch"],["path:README.md"],"queue-wait")["acquired"])
+        item.update(status="closed",job_id="cancelled-queue-job")
+        self.broker.jobs["cancelled-queue-job"]={"job_id":"cancelled-queue-job","ownership_id":item["key"],"status":"cancelled"}
+        self.broker.scheduler.settle();self.assertEqual(store.get(item["key"])["requested"],[])
+        abandoned=self.begin("queued-abandoned");v=store.get(abandoned["key"])
+        store.acquire(abandoned["key"],v["owner"],v["revision"],v["epoch"],["path:README.md"],"queue-wait-2")
+        abandoned["status"]="abandoned";self.broker.scheduler.settle()
+        self.assertEqual((store.get(abandoned["key"])["state"],store.get(abandoned["key"])["requested"]),("abandoned",[]))
+        self.assertTrue(store.get(holder["key"])["scopes"])
+    def test_abandon_releases_claims_and_requests_in_one_call(self):
+        item,before=self.failed()
+        result=self.call("build_work",{"action":"abandon","task_id":item["task_id"]})
+        self.assertEqual((result["status"],result["released_scopes"],result["cleared_requests"]),("abandoned",len(before["scopes"]),0))
+        after=self.broker.scheduler.store.get(item["key"])
+        self.assertEqual((after["state"],after["scopes"]),("abandoned",[]))
+        opened=self.begin("abandon-open");self.write(opened,"docs/open.md","x\n")
+        self.assertEqual(self.call("build_work",{"action":"abandon","task_id":"abandon-open"})["cleared_requests"],0)
+        self.assertEqual(self.broker.scheduler.store.get(opened["key"])["scopes"],[])
+        live,_=self.failed("abandon-live",status="running")
+        with self.assertRaisesRegex(ValueError,"abandoned"):self.call("build_work",{"action":"abandon","task_id":"abandon-live"})
+    def test_blockers_and_reservations_name_the_owning_session(self):
+        self.call("build_work",{"action":"begin","task_id":"named-holder","summary":"Fix [origin=claude; session=Landing page and SEO]"})
+        holder=next(i for i in self.broker.work.values()if i["task_id"]=="named-holder");self.write(holder,"README.md","held\n")
+        other=self.begin("blocked-writer")
+        with self.assertRaises(ValueError)as caught:self.write(other,"README.md","blocked\n")
+        blockers=json.loads(str(caught.exception))["blockers"]
+        self.assertEqual([(b["label"],b["session"])for b in blockers],[("named-holder","Landing page and SEO")])
+        rows=self.call("build_work",{"action":"reservations"})["tasks"]
+        self.assertEqual({r["label"]:r["session"]for r in rows}["named-holder"],"Landing page and SEO")
+        self.assertIsNone({r["label"]:r["session"]for r in rows}["blocked-writer"])
+
 class ContinuationReconciliationTests(unittest.TestCase):
     """Legacy switched orphan continuations settle without release effects."""
     from test_scheduler_broker import SchedulerBrokerTests as _base

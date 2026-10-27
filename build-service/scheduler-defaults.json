@@ -1,6 +1,7 @@
 {
   "mode": "observe",
   "orphan_after_seconds": 300,
+  "failure_grace_seconds": 1800,
   "reserve_bytes": 805306368,
   "reserve_percent": 10,
   "max_phases": 4,

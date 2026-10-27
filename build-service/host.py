@@ -5929,11 +5929,20 @@ class Broker:
                             "workspace_path": item.get("workspace_path"),
                             "workspace_inputs_sha256": item.get("base_inputs_sha256")}
                 if action == "abandon":
-                    if set(args) != {"action", "task_id"} or not item or item["status"] != "open":
-                        raise ValueError("only an open task in this session may be abandoned")
+                    if set(args) != {"action", "task_id"} or not item or not (item["status"] == "open" or self.scheduler.failed_release(item)):
+                        raise ValueError("only an open task, or a closed task whose release failed without effects, may be abandoned")
                     item.update(status="abandoned", finished_at=time.time())
                     self._save_work()
-                    return {"task_id": task_id, "status": "abandoned", "open_count": len(self._open_work())}
+                    # Claims and queued requests go in the same call; a live check job defers this to housekeeping.
+                    released = {"scopes": [], "requested": []}
+                    if item.get("mode") == "isolated" and self.scheduler.mode == "enforce" and self.scheduler.settled(item):
+                        try: before = self.scheduler.store.get(item["key"])
+                        except ValueError: before = None
+                        if before is not None:
+                            self.scheduler.store.retire(item["key"], "Task abandoned by its owner", abandon=True)
+                            released = {"scopes": before["scopes"], "requested": before["requested"]}
+                    return {"task_id": task_id, "status": "abandoned", "open_count": len(self._open_work()),
+                            "released_scopes": len(released["scopes"]), "cleared_requests": len(released["requested"])}
                 if set(args) - {"action", "task_id", "expected_inputs_sha256", "sync_decision", "expected_sync_digest", "compiler_memory_cap", "package_memory_cap", "expected_paths", "expected_operation"} or not {"action", "task_id", "expected_inputs_sha256"} <= set(args):
                     raise ValueError("finish requires task_id and expected_inputs_sha256")
                 expected = args["expected_inputs_sha256"]
