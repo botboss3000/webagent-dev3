@@ -79,3 +79,6 @@ body.v3-build-active:has(#tab-builds.active) #mobile-back-main-btn::after{conten
 #tab-builds .build-scheduler button:hover{background:var(--accent-soft);border-color:var(--border)}
 #tab-builds .build-scheduler button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 #tab-builds .build-scheduler button:disabled{opacity:.55;cursor:default}
+#tab-builds .build-scheduler-tasks.build-retained{margin:0}
+#tab-builds .build-loading-spinner{display:inline-block;width:13px;height:13px;margin-right:8px;vertical-align:-2px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:build-header-spin .75s linear infinite}
+@media(prefers-reduced-motion:reduce){#tab-builds .build-loading-spinner{animation:none}}

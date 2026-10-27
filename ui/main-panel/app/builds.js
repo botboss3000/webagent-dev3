@@ -78,7 +78,10 @@ export function mountBuilds(panel, onStatus = () => {}) {
   const status = document.createElement('p');
   status.className = 'build-summary';
   status.setAttribute('role', 'status');
-  status.hidden = true;
+  const spinner = document.createElement('span');
+  spinner.className = 'build-loading-spinner';
+  spinner.setAttribute('aria-hidden', 'true');
+  status.append(spinner, 'Loading builds…');
   const list = document.createElement('div');
   list.className = 'build-list';
   list.setAttribute('aria-label', 'Development builds');
@@ -99,6 +102,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
   leftoverList.className = "build-retained-list";
   leftoverSummary.append(leftoverTitle, leftoverCount, leftoverChevron);
   leftovers.append(leftoverSummary, leftoverList);
+  leftovers.hidden = true;
   const reviewed = new Set();
   const reviewErrors = new Map();
   const synchronization = document.createElement('div');
@@ -107,7 +111,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
   toolbar.className = 'build-toolbar';
   toolbar.append(update, filters, controls);
   const scheduler = schedulerPanel();
-  panel.append(toolbar, synchronization, scheduler.root, leftovers, status, list);
+  panel.append(toolbar, status, synchronization, scheduler.root, leftovers, list);
 
   const fact = (facts, label, value) => {
     const item = document.createElement('div');

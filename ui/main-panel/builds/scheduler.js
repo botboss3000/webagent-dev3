@@ -12,8 +12,18 @@ export function schedulerPanel() {
   const summary = document.createElement('p');
   const message = document.createElement('p');
   message.setAttribute('role', 'status');
-  const tasks = document.createElement('div');
-  tasks.className = 'build-scheduler-tasks';
+  // Collapsed by default; render() replaces only the list so the open state survives polling.
+  const tasks = document.createElement('details');
+  tasks.className = 'build-scheduler-tasks build-retained';
+  const taskSummary = document.createElement('summary');
+  taskSummary.className = 'build-retained-summary';
+  const taskHeading = document.createElement('h3'); taskHeading.textContent = 'Unfinished source tasks';
+  const taskCount = document.createElement('span'); taskCount.className = 'build-retained-count';
+  const taskChevron = document.createElement('span'); taskChevron.className = 'build-retained-chevron';
+  taskChevron.setAttribute('aria-hidden', 'true'); taskChevron.textContent = '▸';
+  taskSummary.append(taskHeading, taskCount, taskChevron);
+  const taskList = document.createElement('div'); taskList.className = 'build-retained-list';
+  tasks.append(taskSummary, taskList);
   const phases = document.createElement('div');
   phases.className = 'build-scheduler-phases';
   root.append(summary, message, tasks, phases);
@@ -87,9 +97,9 @@ export function schedulerPanel() {
       ' · Available RAM: ' + mib(host.available) + ' · Host reserve: ' + mib(resources.reserve) +
       ' · Memory pressure: ' + (host.pressure?.memory ?? '—') + '%' +
       ' · CPU pressure: ' + (host.pressure?.cpu ?? '—') + '%';
-    tasks.replaceChildren();
-    const heading = document.createElement('h3'); heading.textContent = 'Unfinished source tasks'; tasks.append(heading);
-    paragraph(tasks, 'A successful build keeps its reservation until the owning agent verifies acceptance and explicitly completes the task.');
+    taskCount.textContent = String(ownership.total || 0);
+    taskList.replaceChildren();
+    paragraph(taskList, 'A successful build keeps its reservation until the owning agent verifies acceptance and explicitly completes the task.');
     for (const task of ownership.tasks || []) {
       const card = document.createElement('article'); card.className = 'build-card';
       const title = document.createElement('h4'); title.textContent = task.label + ' · ' + label(task.state); card.append(title);
@@ -129,14 +139,14 @@ export function schedulerPanel() {
         await send(taskArgs({...task, revision: preview.task.revision, epoch: preview.task.epoch}, 'takeover',
           {target_task_id: target, reason}));
       }, !['owned', 'validating', 'orphaned'].includes(task.state));
-      card.append(controls); tasks.append(card);
+      card.append(controls); taskList.append(card);
     }
     const pages = document.createElement('div'); pages.className = 'build-scheduler-controls';
     button(pages, 'Previous source tasks', async () => { offset = Math.max(0, offset - 20); }, !offset);
     button(pages, 'Next source tasks', async () => { offset = ownership.next_offset; }, ownership.next_offset == null);
     paragraph(pages, 'Showing ' + (ownership.offset || 0) + '–' + ((ownership.offset || 0) + (ownership.tasks || []).length) + ' of ' + (ownership.total || 0) + ' unfinished tasks');
-    tasks.append(pages);
-    for (const legacy of ownership.legacy || []) paragraph(tasks, legacy.task_id + ' · Existing task needs ownership classification');
+    taskList.append(pages);
+    for (const legacy of ownership.legacy || []) paragraph(taskList, legacy.task_id + ' · Existing task needs ownership classification');
     phases.replaceChildren();
     const phaseHeading = document.createElement('h3'); phaseHeading.textContent = 'Measured build phases'; phases.append(phaseHeading);
     for (const phase of Object.values(resources.phases || {})) {
