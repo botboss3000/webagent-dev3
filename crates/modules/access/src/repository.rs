@@ -232,13 +232,14 @@ impl<C: RecordCodec> Repository<'_, C> {
                 bail!("Unsupported access migration marker");
             }
         }
+        // Fresh-install seeds are explicit; only Operator receives codebase_admin.
         let operator = Tier { id:"operator".into(), revision:1, model_policy:None,
-            ability_permissions:access::legacy_ability_grants(),
+            ability_permissions:[("codebase_admin".into(),access::Permission::Auto),("web_access".into(),access::Permission::Auto)].into(),
             allowed_models:vec!["*".into()],
             tools:[("*".into(), access::Permission::Auto)].into(),
             max_sessions:10_000, max_active_runs:200 };
         let basic = Tier { id:"basic".into(), revision:1, model_policy:None,
-            ability_permissions:access::legacy_ability_grants(),
+            ability_permissions:[("web_access".into(),access::Permission::Auto)].into(),
             allowed_models:Vec::new(), tools:Default::default(),
             max_sessions:10, max_active_runs:2 };
         for tier in [&operator, &basic] {

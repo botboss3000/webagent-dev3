@@ -39,6 +39,10 @@ mod tests {
         let root=tempfile::tempdir().unwrap();
         let store=Store::open(root.path()).await.unwrap();
         store.create_admin_account("admin","hash","generation").await.unwrap();
+        // Unsaved capability levels grant nothing, even to the original administrator.
+        let unset=store.live_access("admin","shared_default").await.unwrap();
+        for id in ["codebase_admin","web_access","new_plugin"] {assert_eq!(unset.ability_permission(id),Permission::Deny);}
+        crate::runtime_tests::grant_fixture_levels(&store,"shared_default").await;
         let access=store.live_access("admin","shared_default").await.unwrap();
         assert_eq!(access.ability_permission("codebase_admin"),Permission::Auto);
         assert_eq!(access.ability_permission("web_access"),Permission::Auto);
@@ -61,6 +65,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         store.create_admin_account("admin","hash","generation").await.unwrap();
+        crate::runtime_tests::grant_fixture_levels(&store,"shared_default").await;
         let admin = store.live_access("admin","shared_default").await.unwrap();
         // CONTEXT-FINGERPRINT-REGRESSION: grants invalidate even without revision changes.
         let original:Vec<u8>=sqlx::query_scalar("SELECT metadata FROM agents WHERE id='shared_default'")

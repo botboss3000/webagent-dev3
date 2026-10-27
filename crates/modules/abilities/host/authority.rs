@@ -125,7 +125,7 @@ mod tests {
             .ability_permissions
             .insert("app_control".into(), access::Permission::Auto);
         app.store
-            .save_capability_level("shared_default", level, 0)
+            .save_capability_level("shared_default", level, app.store.capability_levels("shared_default").await.unwrap().revision)
             .await
             .unwrap();
         let grants = app

@@ -101,7 +101,8 @@ async fn summary(State(app):State<App>,Extension(identity):Extension<Value>,Path
     let user=identity["_user_id"].as_str().unwrap_or("");
     if !app.store.live_access(user,&id).await.is_ok_and(|a|a.admitted()) {return Err(ApiError(StatusCode::NOT_FOUND,"Agent unavailable".into()));}
     let store=app.store.for_agent(&id).await?;
-    Ok(Json(json!({"conversation_privacy":store.access_repository().member_access(&id).await?.conversation_privacy})))
+    Ok(Json(json!({"conversation_privacy":store.access_repository().member_access(&id).await?.conversation_privacy,
+        "tools_notice":app.store.capability_levels(&id).await?.tools_notice()})))
 }
 pub fn router()->Router<App> {
     Router::new().route("/agents/{id}/members",get(read).put(update))

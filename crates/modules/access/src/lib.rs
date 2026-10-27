@@ -56,15 +56,11 @@ pub struct Tier {
     #[serde(default)]
     pub model_policy: Option<ModelPolicy>,
     pub tools: BTreeMap<String, Permission>,
-    // Missing legacy grants preserve only the two already executable adapters.
-    // Newly registered ability IDs remain denied until explicitly appointed.
-    #[serde(default = "legacy_ability_grants")]
+    // Fail closed: a tier without ability_permissions grants no abilities.
+    #[serde(default)]
     pub ability_permissions: BTreeMap<String, Permission>,
     pub max_sessions: u32,
     pub max_active_runs: u32,
-}
-pub fn legacy_ability_grants() -> BTreeMap<String, Permission> {
-    [("codebase_admin".into(),Permission::Auto),("web_access".into(),Permission::Auto)].into()
 }
 impl Tier {
     pub fn validate(&self) -> Result<()> {
@@ -277,7 +273,7 @@ mod tests {
     #[test]
     fn byo_downgrade_blocks_use_and_growth_but_allows_reduction() {
         let mut tier=Tier{id:"basic".into(),revision:1,model_policy:None,
-            allowed_models:vec!["*".into()],tools:BTreeMap::new(),ability_permissions:legacy_ability_grants(),
+            allowed_models:vec!["*".into()],tools:BTreeMap::new(),ability_permissions:[("web_access".into(),Permission::Auto)].into(),
             max_sessions:10,max_active_runs:2};
         assert!(tier.allows_byo_model("deepseek-chat"));
         assert!(tier.allows_byo_growth(0,1));
@@ -299,7 +295,7 @@ mod tests {
     #[test]
     fn tier_is_explicit_and_bounded() {
         let mut tier = Tier {id:"basic".into(),revision:1,model_policy:None,
-            allowed_models:vec!["gpt-6-luna".into()],tools:BTreeMap::new(),ability_permissions:legacy_ability_grants(),
+            allowed_models:vec!["gpt-6-luna".into()],tools:BTreeMap::new(),ability_permissions:[("web_access".into(),Permission::Auto)].into(),
             max_sessions:10,max_active_runs:2};
         tier.validate().unwrap();
         assert!(!tier.allows_model("other"));
@@ -308,6 +304,13 @@ mod tests {
         assert_eq!(tier.tool_permission("file_write"), Permission::Ask);
         tier.max_active_runs=201;
         assert!(tier.validate().is_err());
+    }
+    #[test]
+    fn tier_without_ability_permissions_grants_no_abilities() {
+        let tier:Tier=serde_json::from_value(json!({"id":"basic","revision":1,"allowed_models":["*"],
+            "tools":{"*":"auto"},"max_sessions":10,"max_active_runs":2})).unwrap();
+        assert!(tier.ability_permissions.is_empty());
+        for id in ["codebase_admin","web_access","*"] {assert_eq!(tier.ability_permission(id),Permission::Deny);}
     }
 }
 

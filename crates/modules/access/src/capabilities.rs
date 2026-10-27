@@ -85,15 +85,20 @@ fn meet_exposure(target:&mut BTreeMap<String,Exposure>,upper:&BTreeMap<String,Ex
 }
 impl Default for CapabilityLevels {
     fn default()->Self {
-        // Default levels preserve prior ready-tool access beneath existing tier,
-        // agent, installation and caller rules. Their names confer no authority.
+        // Unsaved levels (revision 0) fail closed: they grant no abilities, so the
+        // agent has no tools until an Operator saves explicit levels.
         Self {revision:0,order:vec!["operator".into(),"member".into(),"visitor".into()],levels:[("visitor","Visitor"),("member","Member"),("operator","Operator")]
             .into_iter().map(|(id,name)|(id.into(),CapabilityLevel {id:id.into(),name:name.into(),revision:1,
-                ability_permissions:access::legacy_ability_grants(),tool_permissions:BTreeMap::new(),
+                ability_permissions:BTreeMap::new(),tool_permissions:BTreeMap::new(),
                 ability_exposure:BTreeMap::new(),tool_exposure:BTreeMap::new(),skill_exposure:BTreeMap::new()})).collect()}
     }
 }
+/// Shown in chat and the effective-abilities response for agents without saved levels.
+pub const NO_TOOLS_NOTICE:&str="No tools are available: this agent's capability levels aren't configured.";
 impl CapabilityLevels {
+    /// Levels were never saved for this agent, so they grant nothing.
+    pub fn unset(&self)->bool {self.revision==0}
+    pub fn tools_notice(&self)->Option<&'static str> {self.unset().then_some(NO_TOOLS_NOTICE)}
     pub fn from_metadata(metadata:&Value)->Result<Self> {
         let mut value=match metadata.get("capability_levels") {
             Some(v)=>serde_json::from_value::<Self>(v.clone())?,None=>Self::default(),

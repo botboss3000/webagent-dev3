@@ -114,7 +114,19 @@ pub(crate) async fn fixture() -> (TempDir, App) {
     let roster = catalog.agent_models.get_mut("shared_default").unwrap();
     roster.roles.insert(model_selection::ModelRole::System, roster.roles[&model_selection::ModelRole::Standard].clone());
     app.store.save_model_catalog(&catalog, catalog.revision).await.unwrap();
+    grant_fixture_levels(&app.store, "shared_default").await;
     (root, app)
+}
+/// Unsaved capability levels grant nothing, so fixtures save the two executable
+/// adapters explicitly at every level, as an Operator would.
+pub(crate) async fn grant_fixture_levels(store: &Store, agent: &str) {
+    let mut levels = store.capability_levels(agent).await.unwrap();
+    for id in ["operator", "member", "visitor"] {
+        let mut level = levels.levels[id].clone();
+        level.ability_permissions = [("codebase_admin".into(), crate::access::Permission::Auto),
+            ("web_access".into(), crate::access::Permission::Auto)].into();
+        levels = store.save_capability_level(agent, level, levels.revision).await.unwrap();
+    }
 }
 
 // Runtime assertions change the authoritative roster entry; legacy settings remain
@@ -4804,7 +4816,7 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
         "/api/v3/admin/access/tiers/basic",
         json!({"expected_revision":1,"tier":{"id":"basic","revision":1,
             "allowed_models":[granted_model],"tools":{"file_read":"auto","file_write":"ask","v3_build_status":"auto"},
-            "max_sessions":10,"max_active_runs":2}}))).await.unwrap();
+            "ability_permissions":{"codebase_admin":"auto"},"max_sessions":10,"max_active_runs":2}}))).await.unwrap();
     assert_eq!(response.status(),StatusCode::OK);
     let access=app.store.live_access(&user_id,"shared_default").await.unwrap();
     assert_eq!(access.tool_decision_for_abilities("file_read",&["codebase_admin".into()],
@@ -5421,12 +5433,21 @@ async fn tenant_ability_http_levels_effective_views_and_stale_updates() {
     let path="/api/v3/agents/agent-a/abilities";
     let (status,view)=call(&app,&token,"a","GET",path,Value::Null).await;
     assert_eq!(status,StatusCode::OK);assert_eq!(view["authority"]["can_manage"],true);
+    // Unsaved levels fail closed: every ready ability reports the distinct cause and notice.
+    assert_eq!(view["notice"],json!(crate::capabilities::NO_TOOLS_NOTICE));
+    let ready:Vec<_>=view["abilities"].as_array().unwrap().iter().filter(|a|a["ready"]==true).collect();
+    assert!(!ready.is_empty() && ready.iter().all(|a|a["effective"]["permission"]=="deny"&&a["effective"]["reason"]=="capability_levels_unset"));
+    let (_,summary)=call(&app,&token,"a","GET","/api/v3/agents/agent-a/access-summary",Value::Null).await;
+    assert_eq!(summary["tools_notice"],view["notice"]);
+    crate::runtime_tests::grant_fixture_levels(&app.store,"agent-a").await;
+    let (_,view)=call(&app,&token,"a","GET",path,Value::Null).await;assert!(view["notice"].is_null());
+    let (_,summary)=call(&app,&token,"a","GET","/api/v3/agents/agent-a/access-summary",Value::Null).await;assert!(summary["tools_notice"].is_null());
     let (_,member_view)=call(&app,&member_token,"m","GET",path,Value::Null).await;
     assert_eq!(member_view["authority"]["can_manage"],false);
     assert_eq!(member_view["permissions"],json!({}));assert_eq!(member_view["tool_modes"],json!({}));
     assert!(!member_view["abilities"].as_array().unwrap().iter().any(|a|a["readiness"]!="ready"));
     let level=json!({"id":"limited","name":"Limited","revision":1,"ability_permissions":{"web_access":"auto"},"tool_permissions":{}});
-    let update=json!({"expected_revision":0,"level":level});
+    let update=json!({"expected_revision":3,"level":level});
     let level_path="/api/v3/agents/agent-a/capability-levels/limited";
     assert_eq!(call(&app,&member_token,"m","PUT",level_path,update.clone()).await.0,StatusCode::FORBIDDEN);
     assert_eq!(call(&app,&token,"wrong","PUT",level_path,update.clone()).await.0,StatusCode::FORBIDDEN);
@@ -6619,7 +6640,7 @@ async fn retained_read_recall_resolves_only_verified_same_session_origin() {
     app.store.save_entitlement_tier(tier, tier_revision).await.unwrap();
     let mut level = app.store.live_access("admin", "shared_default").await.unwrap().capability_level;
     level.ability_permissions.insert("base".into(), access::Permission::Auto);
-    app.store.save_capability_level("shared_default", level, 0).await.unwrap();
+    app.store.save_capability_level("shared_default", level, app.store.capability_levels("shared_default").await.unwrap().revision).await.unwrap();
     activate_codebase(&app, &sid).await;
     session_ability_set(State(app.clone()), Path((sid.clone(), "base".into())),
         Json(SessionAbilityBody {state:"active".into(), expected_revision:1}))
@@ -6972,7 +6993,7 @@ async fn visibility_fixture_base_access(app:&App) {
     app.store.save_entitlement_tier(tier,revision).await.unwrap();
     let mut level=app.store.live_access("admin","shared_default").await.unwrap().capability_level;
     level.ability_permissions.insert("base".into(),access::Permission::Auto);
-    app.store.save_capability_level("shared_default",level,0).await.unwrap();
+    app.store.save_capability_level("shared_default",level,app.store.capability_levels("shared_default").await.unwrap().revision).await.unwrap();
     let mut visibility=app.store.agent_abilities().await.unwrap();
     let revision=visibility["revision"].as_u64().unwrap();
     visibility["visibility"]["base"]=json!("visible");

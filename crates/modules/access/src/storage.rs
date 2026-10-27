@@ -238,6 +238,12 @@ mod integration_tests {
         repo.migrate_access_v1().await.unwrap();
         let after:Vec<u8>=sqlx::query_scalar("SELECT value FROM user_accounts WHERE user_id='admin'").fetch_one(&f.app).await.unwrap();assert_eq!(stable,after);
         let tiers:i64=sqlx::query_scalar("SELECT COUNT(*) FROM entitlement_tiers").fetch_one(&f.app).await.unwrap();assert_eq!(tiers,2);
+        // Fresh-install seeds are explicit: only Operator receives codebase_admin.
+        for (id,codebase) in [("basic",Permission::Deny),("operator",Permission::Auto)] {
+            let blob:Vec<u8>=sqlx::query_scalar("SELECT value FROM entitlement_tiers WHERE tier_id=?").bind(id).fetch_one(&f.app).await.unwrap();
+            let tier:crate::Tier=serde_json::from_value(f.codec.unseal(&blob).unwrap()).unwrap();
+            assert_eq!(tier.ability_permission("codebase_admin"),codebase);assert_eq!(tier.ability_permission("web_access"),Permission::Auto);
+        }
         let markers:i64=sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key='storage:access_v1'").fetch_one(&f.app).await.unwrap();assert_eq!(markers,1);
     }
 

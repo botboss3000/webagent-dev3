@@ -61,7 +61,7 @@ mod tests {
         let before=app.store.live_access("admin","shared_default").await.unwrap();
         let mut level=before.capability_level;
         level.ability_permissions.insert("base".into(),crate::access::Permission::Auto);
-        app.store.save_capability_level("shared_default",level,0).await.unwrap();
+        app.store.save_capability_level("shared_default",level,app.store.capability_levels("shared_default").await.unwrap().revision).await.unwrap();
         let sid=crate::uuid();
         app.store.put(&format!("session:{sid}"),&json!({"id":sid,
             "agent_id":"shared_default","title":"Mode test","created_at":crate::now()})).await.unwrap();

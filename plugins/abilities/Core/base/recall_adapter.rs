@@ -298,7 +298,7 @@ mod tests {
         app.store.save_entitlement_tier(tier, revision).await.unwrap();
         let mut level = app.store.live_access("admin", "shared_default").await.unwrap().capability_level;
         level.ability_permissions.insert("base".into(), crate::access::Permission::Auto);
-        app.store.save_capability_level("shared_default", level, 0).await.unwrap();
+        app.store.save_capability_level("shared_default", level, app.store.capability_levels("shared_default").await.unwrap().revision).await.unwrap();
         let sid = crate::runtime_tests::conversation(&app).await;
         crate::runtime_tests::activate_codebase(&app, &sid).await;
         crate::session_ability_set(crate::State(app.clone()), crate::Path((sid.clone(), "base".into())),

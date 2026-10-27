@@ -56,3 +56,21 @@ fn raising_an_ancestor_keeps_explicit_lower_restrictions() {
     levels.levels.get_mut("operator").unwrap().tool_permissions.insert("*".into(),Permission::Auto);
     assert_eq!(levels.effective("visitor").unwrap().tool_permission("file_write"),Permission::Ask);
 }
+
+#[test]
+fn unsaved_levels_grant_no_abilities_and_never_fall_back_to_codebase_admin() {
+    // No saved levels, and a legacy base map that once granted codebase_admin.
+    for metadata in [json!({}),json!({"ability_permissions":{"codebase_admin":"auto","*":"auto"}})] {
+        let levels=CapabilityLevels::from_metadata(&metadata).unwrap();
+        assert!(levels.unset());
+        assert_eq!(levels.tools_notice(),Some(crate::capabilities::NO_TOOLS_NOTICE));
+        for id in ["operator","member","visitor"] {
+            let level=levels.effective(id).unwrap();
+            for ability in ["codebase_admin","web_access","new_plugin"] {
+                assert_eq!(level.ability_permission(ability),Permission::Deny,"{id} {ability}");
+            }
+        }
+    }
+    let mut saved=CapabilityLevels::default();saved.revision=1;
+    assert!(!saved.unset());assert_eq!(saved.tools_notice(),None);
+}
