@@ -1322,6 +1322,80 @@ class RecoveryDockerBoundaryTests(unittest.TestCase):
    self.assertEqual(runner.create(fixtures.host.TARGETS[0],"sha256:"+"2"*64,previous,"/frozen"),"a"*64)
   labels=json.loads(connection.request.call_args.kwargs["body"])["Labels"]
   self.assertEqual(labels,{"existing":"preserved","webagent.release.job":job,"webagent.release.role":"api","webagent.release.instance":fixtures.host.CONFIG["instance"]})
+ def test_rejected_create_keeps_a_bounded_scrubbed_docker_reason(self):
+  from unittest.mock import Mock
+  runner=fixtures.host.Runner();runner.secrets=["inspected-private-value"]
+  runner.command=Mock(return_value=json.dumps([{"Config":{}}]))
+  private="private-env-value-"+uuid.uuid4().hex
+  previous={"Image":"sha256:"+"1"*64,"Config":{"Env":["SETTING="+private]},"HostConfig":{}}
+  message="Duplicate mount point: /live-checkout; "+private+" inspected-private-value "+"x"*900
+  connection=Mock();response=connection.getresponse.return_value;response.status=400;response.read.return_value=json.dumps({"message":message}).encode()
+  with patch.object(fixtures.host,"DockerHTTP",return_value=connection):
+   with self.assertRaises(RuntimeError)as caught:runner.create(fixtures.host.TARGETS[1],"sha256:"+"2"*64,previous)
+  reason=str(caught.exception)
+  self.assertTrue(reason.startswith("development container create failed (400): Duplicate mount point: /live-checkout"))
+  self.assertNotIn(private,reason);self.assertNotIn("inspected-private-value",reason);self.assertLess(len(reason),400)
+  # Non-JSON bodies are bounded too, and a duplicate target is refused before Docker is asked.
+  response.read.return_value=b"<html>"+private.encode()+b"</html>"
+  with patch.object(fixtures.host,"DockerHTTP",return_value=connection):
+   with self.assertRaises(RuntimeError)as caught:runner.create(fixtures.host.TARGETS[1],"sha256:"+"2"*64,previous)
+  self.assertNotIn(private,str(caught.exception))
+  duplicate={**previous,"HostConfig":{"Mounts":[{"Type":"bind","Source":"/a","Target":"/live-checkout"},{"Type":"bind","Source":"/b","Target":"/live-checkout/"}]}}
+  connection.reset_mock()
+  with patch.object(fixtures.host,"DockerHTTP",return_value=connection):
+   with self.assertRaisesRegex(ValueError,"duplicate /live-checkout"):runner.create(fixtures.host.TARGETS[0],"sha256:"+"2"*64,duplicate)
+  connection.request.assert_not_called()
+
+ def test_consecutive_releases_inherit_stable_mounts_and_settings(self):
+  """Each release inherits the previous container; a later one must not drift (job 204bdea6)."""
+  from unittest.mock import Mock
+  with tempfile.TemporaryDirectory()as folder:
+   root=Path(folder);checkout=root/"checkout";assets=root/"assets";data=root/"data"
+   for path in ("plugins","workspaces","runtime","gate-runtime"):(checkout/path).mkdir(parents=True)
+   data.mkdir();assets.mkdir()
+   def published(job):
+    target=assets/"releases"/job
+    for path in ("v3/config","v3/plugins/abilities"):(target/path).mkdir(parents=True,exist_ok=True)
+    return target
+   bind=lambda source,target,ro=False:{"Type":"bind","Source":str(source),"Target":target,"ReadOnly":ro}
+   first=published(str(uuid.uuid4()))
+   common=[bind(first/"v3/config","/opt/v3/config",True),bind(checkout/"workspaces","/workspaces"),bind(checkout/"runtime","/run/v3"),
+           bind(assets,"/opt/v3/assets",True),bind(data,"/state")]
+   tmpfs={"/run":"rw,nosuid,nodev,size=16m","/tmp":"rw,nosuid,nodev,size=32m"}
+   # The deployed shapes: the API's writable checkout; the loop's read-only checkout plus nested plugins.
+   containers={"api":{"Mounts":[*common,bind(first/"v3","/live-v3",True),bind(checkout,"/live-checkout")],"Tmpfs":tmpfs,"PidsLimit":10},
+               "loop":{"Mounts":[*common,bind(checkout/"gate-runtime","/run/v3/gate"),bind(first/"v3/plugins/abilities","/opt/v3/plugins/abilities",True),
+                                 bind(checkout,"/live-checkout",True),bind(checkout/"plugins","/live-checkout/plugins",True)],"Tmpfs":tmpfs,"Memory":5}}
+   image={"Env":["PATH=/usr/bin"],"Cmd":["v3"],"Labels":{}}
+   previous={role:{"Image":"sha256:"+"1"*64,"Config":{**image,"Env":["PATH=/usr/bin","SETTING=kept"]},"HostConfig":host}
+             for role,host in containers.items()}
+   runner=fixtures.host.Runner();runner.command=Mock(return_value=json.dumps([{"Config":image}]))
+   generations=[]
+   with patch.object(fixtures.host,"SOURCE",checkout),patch.object(fixtures.host,"ASSET_ROOT",assets):
+    for _ in range(3):
+     job=str(uuid.uuid4());runner.job_context.job={"job_id":job}
+     with patch.object(runner,"published_runtime_source",return_value=published(job)):
+      configs={role:runner.container_config(name,"sha256:"+"2"*64,previous[role],"/frozen")for role,name in zip(("api","loop"),fixtures.host.TARGETS)}
+     generations.append((job,configs))
+     previous={role:{"Image":config["Image"],"Config":{k:v for k,v in config.items()if k!="HostConfig"},"HostConfig":config["HostConfig"]}
+               for role,config in configs.items()}
+   def shape(job,config):
+    # Only the release directory may change between generations.
+    mounts=sorted((m["Target"],m["Source"].replace(job,"JOB"),bool(m.get("ReadOnly")))for m in config["HostConfig"]["Mounts"])
+    host={k:v for k,v in config["HostConfig"].items()if k!="Mounts"}
+    labels={k:v for k,v in config["Labels"].items()if k!="webagent.release.job"}
+    return mounts,host,sorted(config["Env"]),labels,config.get("Cmd")
+   for role in ("api","loop"):
+    shapes=[shape(job,configs[role])for job,configs in generations]
+    self.assertEqual(shapes[1],shapes[2],role)
+    targets=[m[0]for m in shapes[2][0]]
+    self.assertEqual(len(targets),len(set(targets)),role)
+    self.assertIn("SETTING=kept",shapes[2][2])
+   job,configs=generations[2]
+   loop={m[0]:m[1:]for m in shape(job,configs["loop"])[0]}
+   self.assertEqual(loop["/live-checkout"],(str(checkout),True));self.assertEqual(loop["/live-checkout/plugins"],(str(checkout/"plugins"),True))
+   api={m[0]:m[1:]for m in shape(job,configs["api"])[0]}
+   self.assertEqual(api["/live-checkout"],(str(checkout),False))
 
 class AutomaticBrokerIdentityTests(unittest.TestCase):
     from test_scheduler_broker import SchedulerBrokerTests as _base

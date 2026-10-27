@@ -433,7 +433,8 @@ class Ownership:
         def operation(db):
             """A completed publication no longer needs source exclusivity."""
             value=self.check(task,owner,revision,epoch,db)
-            if value["state"]not in {"owned","validating"}or evidence.get("generation")!=value["generation"]:raise ValueError("Deployed generation changed")
+            if value["state"]not in {"owned","validating"}:raise ValueError("Task is "+value["state"]+", not owned; renew its heartbeat or recover ownership, then release")
+            if evidence.get("generation")!=value["generation"]:raise ValueError("Deployed generation changed")
             if not set(scopes)<=set(value["scopes"]):raise ValueError("Only held scopes can be released")
             held=sorted(set(value["scopes"])-set(scopes))
             # The caller verified release, commit and health; acceptance/complete would only repeat it.

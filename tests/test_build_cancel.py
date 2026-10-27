@@ -103,7 +103,10 @@ class CancelTests(unittest.TestCase):
         self.assertEqual("uncertain", self.wait(job)["status"])
         self.assertTrue((self.state / job["job_id"] / "rollback-images.tar").exists())
         self.assertEqual(1, len([c for c in self.runner.calls if c[0] == "stop"]))
-        self.assertFalse(any(c[0] in ("rename", "create", "start") for c in self.runner.calls))
+        self.assertFalse(any(c[0] in ("rename", "start") for c in self.runner.calls))
+        # Stopped replacements are created only before the first consumer stop.
+        stop = next(i for i, c in enumerate(self.runner.calls) if c[0] == "stop")
+        self.assertTrue(all(i < stop for i, c in enumerate(self.runner.calls) if c[0] == "create"))
         self.broker.shutdown()
         calls = list(self.runner.calls)
         self.broker = host.Broker(self.state, self.runner)

@@ -255,6 +255,9 @@ def validate_codebase_package(folder):
 RUST_UI_FIXTURES = {"v3/ui/chat/chat_ui.json"}
 ASSET_ROOT = STATE / "ui-assets"
 TARGETS = (CONFIG["api_container"], CONFIG["loop_container"])
+# Replacement phases before any new consumer has passed its health check.
+AUTO_RESTORE_PHASES = {"stopping_loop", "stopping_api", "switching_ui", "renaming_api", "activating_api", "starting_api",
+                       "renaming_loop", "activating_loop", "starting_loop", "checking_api"}
 LOCAL_WORKSPACE = "71440aad-a6ba-4ba8-adc8-1fcf66250be6"
 WORKER_CONTROL = Path(CONFIG["worker_control"])
 MAX_LOG = 1024 * 1024
@@ -945,6 +948,33 @@ def loop_plugin_mounts(previous):
     host["Mounts"].append({"Type": "bind", "Source": str(SOURCE / "plugins"),
                            "Target": target, "ReadOnly": True})
     return host
+
+
+def candidate_name(target, job_id):
+    """Stopped staging name of a replacement created before any consumer changes."""
+    return target + "-candidate-build-" + job_id
+
+
+def validate_container_mounts(host):
+    """Reject a replacement Docker would refuse for duplicate mount points (job 204bdea6)."""
+    targets = [item.get("Target") for item in host.get("Mounts") or []]
+    targets += [item.split(":")[1] for item in host.get("Binds") or [] if len(item.split(":")) >= 2]
+    targets += list(host.get("Tmpfs") or {})
+    normal = [os.path.normpath(target) if isinstance(target, str) and target else target for target in targets]
+    duplicates = sorted({target for target in normal if normal.count(target) > 1}, key=str)
+    if duplicates or None in normal or "" in normal:
+        raise ValueError("replacement container mount targets invalid: duplicate " + ", ".join(map(str, duplicates)))
+
+
+def docker_error(body, secrets=()):
+    """Docker's bounded one-line reason, scrubbed of configuration values."""
+    try:
+        message = json.loads(body).get("message")
+    except (ValueError, AttributeError):
+        message = None
+    if not isinstance(message, str):
+        message = bytes(body[:400]).decode("utf-8", "replace")
+    return scrub(" ".join(message.split()), secrets)[:300] or "no Docker message"
 
 
 @contextlib.contextmanager
@@ -2225,7 +2255,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 connection.close()
 
     def inspect(self, name):
-        if name not in TARGETS and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed)-build-[0-9a-f-]{36}",name) for target in TARGETS):
+        if name not in TARGETS and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed|candidate)-build-[0-9a-f-]{36}",name) for target in TARGETS):
             raise ValueError("container outside development target")
         value = json.loads(self.command(["docker", "inspect", name], timeout=30, private_raw=True))[0]
         self.secrets.extend(item.partition("=")[2] for item in value.get("Config", {}).get("Env", []) if "=" in item)
@@ -2233,7 +2263,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
 
     def inspect_recovery(self,name):
         """Discover only fixed release names; a Docker error never means absent."""
-        if name not in TARGETS and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed)-build-[0-9a-f-]{36}",name)for target in TARGETS):
+        if name not in TARGETS and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed|candidate)-build-[0-9a-f-]{36}",name)for target in TARGETS):
             raise ValueError("Recovery container outside development target")
         identities=self.command(["docker","ps","--all","--no-trunc","--filter","name=^/"+name+"$","--format","{{.ID}}"],timeout=30).splitlines()
         if not identities:return None
@@ -2427,7 +2457,23 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         release.verify_publication(destination,job["job_id"],job["inputs_sha256"])
         return destination
 
-    def create(self, name, image, previous, release_root=None):
+    def create(self, name, image, previous, release_root=None, as_name=None):
+        """Create the replacement for target `name`, optionally under the stopped staging name `as_name`."""
+        config = self.container_config(name, image, previous, release_root)
+        conn = DockerHTTP("localhost", timeout=30)
+        try:
+            conn.request("POST", "/containers/create?name=" + (as_name or name), body=canonical(config), headers={"Content-Type": "application/json"})
+            response = conn.getresponse()
+            body = response.read(1024 * 1024)
+            if response.status != 201:
+                raise RuntimeError("development container create failed (" + str(response.status) + "): "
+                                   + docker_error(body, [*self.secrets, *(item.partition("=")[2] for item in config.get("Env") or [])]))
+            return json.loads(body)["Id"]
+        finally:
+            conn.close()
+
+    def container_config(self, name, image, previous, release_root=None):
+        """Compute and validate one replacement's Docker create body; no Docker effects."""
         # Docker engine JSON preserves the inspected container configuration,
         # including private Env values, without shell escaping or printing it.
         old_defaults = json.loads(self.command(["docker", "image", "inspect", previous["Image"]], timeout=30, private_raw=True))[0]["Config"]
@@ -2459,16 +2505,8 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         config.pop("Hostname", None)
         config.pop("Domainname", None)
         config.pop("MacAddress", None)
-        conn = DockerHTTP("localhost", timeout=30)
-        try:
-            conn.request("POST", "/containers/create?name=" + name, body=canonical(config), headers={"Content-Type": "application/json"})
-            response = conn.getresponse()
-            body = response.read(1024 * 1024)
-            if response.status != 201:
-                raise RuntimeError("development container create failed (" + str(response.status) + ")")
-            return json.loads(body)["Id"]
-        finally:
-            conn.close()
+        validate_container_mounts(host)
+        return config
 
     def remove(self, name):
         self.command(["docker", "rm", name], timeout=30)
@@ -4515,7 +4553,7 @@ class Broker:
     def host_source_scope(self):
         """Broker modules and their docs/tests that the host-only lane may publish."""
         review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
-        allowed={"v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_scheduler_broker.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        allowed={"v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_scheduler_broker.py","v3/tests/test_build_cancel.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/tests/test_context_component_builds.py","v3/tests/test_engine_components.py","v3/tests/test_build_lifecycle_entry.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
@@ -6423,6 +6461,28 @@ class Broker:
                 # Production Runner always implements this gate; legacy test adapters can omit it.
                 if hasattr(self.runner,"preflight_runtime_mounts"):
                     with host_phase(job,"checking_runtime_mounts"):self.runner.preflight_runtime_mounts(job,previous)
+                # Create both replacements stopped beside the running consumers, so a
+                # rejected configuration fails before anything they serve changes.
+                self._phase(job, "creating_candidates")
+                staged = {role: candidate_name(name, job["job_id"]) for role, name in zip(("api", "loop"), TARGETS)}
+                created = []
+                with host_phase(job, "creating_candidates"):
+                    try:
+                        for role, name in zip(("api", "loop"), TARGETS):
+                            identity = self.runner.create(name, job["images"][role], previous[role],
+                                                          job["release_root"] if job.get("isolated") else None, as_name=staged[role])
+                            created.append(role)
+                            if job.get("isolated") and isinstance(identity, str) and re.fullmatch(r"[a-f0-9]{64}", identity):
+                                with self.lock:
+                                    job.setdefault("candidate_containers", {})[role] = identity
+                                    self._save(job)
+                    except Exception:
+                        for role, name in zip(("api", "loop"), TARGETS):
+                            if role in created:
+                                # Quarantine, never delete; the original error is the job's reason.
+                                with contextlib.suppress(Exception):
+                                    self.runner.rename(staged[role], name + "-failed-build-" + job["job_id"])
+                        raise
                 # Record intent before each externally visible mutation. On a
                 # crash the next broker only reconciles, never retries it.
                 self._phase(job, "stopping_loop")
@@ -6449,15 +6509,9 @@ class Broker:
                 for role, name in zip(("api", "loop"), TARGETS):
                     self._phase(job, "renaming_" + role)
                     self.runner.rename(name, job["rollback"][role])
-                    self._phase(job, "creating_" + role)
+                    self._phase(job, "activating_" + role)
                     with host_phase(job,"recreate_"+role):
-                        if job.get("isolated"):
-                            created=self.runner.create(name, job["images"][role], previous[role],
-                                               job["release_root"])
-                            if isinstance(created,str)and re.fullmatch(r"[a-f0-9]{64}",created):
-                                job.setdefault("candidate_containers",{})[role]=created;self._save(job)
-                        else:
-                            self.runner.create(name, job["images"][role], previous[role])
+                        self.runner.rename(staged[role], name)
                         self._phase(job, "starting_" + role)
                         self.runner.start(name)
                 # API readiness depends on the loop heartbeat. Start both
@@ -6494,8 +6548,12 @@ class Broker:
             if job.get("rebuild") and job["status"] == "completed":
                 self._rebuild_closeout(job)
         except Exception as error:
+            # A replacement that failed before any new consumer was healthy restores its
+            # captured predecessor at once; the job stays running until that settles.
+            restore = (job.get("effects_started") and job.get("phase") in AUTO_RESTORE_PHASES and job["operation"] == "build_deploy"
+                       and job.get("publication_policy_version") == 1 and not isinstance(error, PermissionError) and not self.stopping)
             with self.lock:
-                job["status"] = "uncertain" if mutated or job.get("effects_started") else ("cancelled" if isinstance(error, PermissionError) else "failed")
+                job["status"] = "running" if restore else "uncertain" if mutated or job.get("effects_started") else ("cancelled" if isinstance(error, PermissionError) else "failed")
                 job["reason"] = scrub(str(error), self.runner.secrets)
                 job.update({key: (scrub(value, self.runner.secrets) if isinstance(value, str) else [scrub(name, self.runner.secrets) for name in value])
                            for key, value in failure_fields(error).items()})
@@ -6512,6 +6570,8 @@ class Broker:
                     job["rust_tests"] = {"status": "unconfirmed",
                         "summary": "Image build stopped before Rust test success was confirmed"}
                 self._save(job)
+            if restore:
+                self._auto_restore(job)
         finally:
             if hasattr(self.runner, "job_context"):
                 self.runner.job_context.job = None
@@ -6538,6 +6598,26 @@ class Broker:
                 if job["status"] not in ("uncertain", "interrupted"):
                     self._start_next()
             if job["status"]=="completed":self.post_deployment.enqueue(job)
+
+    def _auto_restore(self, job):
+        """Bring the exact captured predecessor back after a failed replacement; record either outcome."""
+        failure = job["reason"]
+        args = self.ui_publication.auto_restore_args(job)
+        # Held throughout, as operator recovery does, so readers see the outcome with its record.
+        with self.lock:
+            try:
+                result = self.ui_publication.auto_restore_backend(job)
+                outcome = {"status": "restored", "restored_release_id": result.get("restored_release_id")}
+                note = "; the captured predecessor containers were restored automatically and the candidates quarantined"
+            except Exception as restore_error:
+                outcome = {"status": "failed", "reason": scrub(str(restore_error), self.runner.secrets)[:300]}
+                note = ("; automatic restoration did not complete (" + outcome["reason"] + "); reconcile with recover "
+                        "restore_captured_backend request_id " + args["request_id"])
+            if job["status"] == "running":
+                job["status"] = "uncertain"
+            job["automatic_rollback"] = {**outcome, "request_id": args["request_id"], "at": time.time()}
+            job["reason"] = failure + note
+            self._save(job)
 
     def request_shutdown(self):
         with self.lock:

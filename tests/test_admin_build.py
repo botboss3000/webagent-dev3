@@ -122,12 +122,13 @@ class FakeRunner:
         self.calls.append(("rename", name, target))
         self.containers[target] = self.containers.pop(name)
 
-    def create(self, name, image, previous, release_root=None):
+    def create(self, name, image, previous, release_root=None, as_name=None):
         self.calls.append(("create", name, image, release_root))
         if self.fail_create:
             raise RuntimeError("TOKEN=NEVER-EXPOSE-THIS create failure")
-        self.containers[name] = copy.deepcopy(previous)
-        self.containers[name]["Image"] = image
+        self.containers[as_name or name] = copy.deepcopy(previous)
+        self.containers[as_name or name]["Image"] = image
+        self.containers[as_name or name]["State"]["Status"] = "created"
         if name == host.TARGETS[0] and release_root is not None:
             self.hot_assets = True
 
@@ -1664,7 +1665,11 @@ class BuildTests(unittest.TestCase):
 
     def test_uncertain_external_effect_is_not_replayed_on_restart(self):
         built = self.wait(self.build())
-        self.runner.fail_create = True
+        original_start = self.runner.start
+        def lost_start(name):
+            original_start(name)
+            raise RuntimeError("lost start response")
+        self.runner.start = lost_start
         deployed = self.wait(self.deploy(built))
         self.assertEqual("uncertain", deployed["status"])
         mutations = len([c for c in self.runner.calls if c[0] in ("stop", "rename", "create", "start")])
@@ -1920,7 +1925,29 @@ class BuildTests(unittest.TestCase):
         result = self.wait(submitted)
         self.assertEqual("uncertain", result["status"])
         self.assertEqual(1, len([c for c in self.runner.calls if c[0] == "stop"]))
-        self.assertFalse(any(c[0] in ("rename", "create", "start") for c in self.runner.calls))
+        self.assertFalse(any(c[0] in ("rename", "start") for c in self.runner.calls))
+        # Replacements are only ever created, stopped, before the first consumer stop.
+        stop = next(i for i, c in enumerate(self.runner.calls) if c[0] == "stop")
+        self.assertTrue(all(i < stop for i, c in enumerate(self.runner.calls) if c[0] == "create"))
+
+    def test_rejected_create_leaves_running_consumers_untouched(self):
+        built = self.wait(self.build())
+        original = self.runner.create
+        def reject_loop(name, *args, **kwargs):
+            if name == host.TARGETS[1]:
+                raise RuntimeError("development container create failed (400): Duplicate mount point: /live-checkout")
+            return original(name, *args, **kwargs)
+        self.runner.create = reject_loop
+        deployed = self.wait(self.deploy(built))
+        self.assertEqual(("failed", "creating_candidates"), (deployed["status"], deployed["phase"]))
+        self.assertIn("Duplicate mount point", deployed["reason"])
+        self.assertFalse(any(c[0] in ("stop", "start", "activate_assets", "promote") for c in self.runner.calls))
+        for name in host.TARGETS:
+            self.assertEqual(("running", "sha256:" + "1" * 64), (self.runner.containers[name]["State"]["Status"], self.runner.containers[name]["Image"]))
+        # The API candidate created first is quarantined under its failed name, never deleted.
+        failed = self.runner.containers[host.TARGETS[0] + "-failed-build-" + deployed["job_id"]]
+        self.assertEqual(("created", "sha256:" + "a" * 64), (failed["State"]["Status"], failed["Image"]))
+        self.assertNotIn(host.candidate_name(host.TARGETS[0], deployed["job_id"]), self.runner.containers)
 
     def test_changed_fingerprint_stops_job_and_expired_lease_cannot_revive(self):
         self.runner.block = threading.Event()

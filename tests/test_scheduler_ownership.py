@@ -26,6 +26,11 @@ class OwnershipTests(unittest.TestCase):
         self.assertFalse(self.acquire(self.current(b),["module:engine"])["acquired"])
         self.store.complete(a["id"],a["owner"],a["revision"],a["epoch"],self.request())
         self.assertTrue(self.acquire(self.current(b),["module:engine"])["acquired"])
+    def test_orphaned_release_names_ownership_not_generation(self):
+        owner=self.acquire(self.begin("orphaned-release"),["module:engine"])["task"];self.time+=301;self.store.orphan()
+        orphan=self.current(owner);self.assertEqual(orphan["state"],"orphaned")
+        with self.assertRaisesRegex(ValueError,"orphaned, not owned; renew its heartbeat"):
+            self.store.release_deployed_scopes(orphan["id"],orphan["owner"],orphan["revision"],orphan["epoch"],["module:engine"],self.evidence(orphan),self.request())
     def completed_holder_and_waiter(self):
         """Leave an older queued request after its actual holder has explicitly completed."""
         holder=self.acquire(self.begin("queue-holder"),["module:engine"])["task"];self.time+=1

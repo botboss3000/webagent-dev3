@@ -106,7 +106,8 @@ class ConcurrentUIEntryTests(unittest.TestCase):
             # Match the API lock: never observe status before its atomic receipt is populated.
             with self.broker.lock:
                 rows=[self.broker.jobs[job]for job in jobs]
-                if all(row["status"]not in {"queued","running"}for row in rows):return rows
+                # A terminal job's thread may still hold the publication lock it releases last.
+                if all(row["status"]not in {"queued","running"}for row in rows)and not set(jobs)&self.broker.active_jobs:return rows
             time.sleep(.01)
         self.fail("Bounded UI publications did not finish")
 
@@ -583,17 +584,29 @@ class ConcurrentUIEntryTests(unittest.TestCase):
         self.assertIn("Source metadata changed",str(errors[0]))
 
 
+def manual_recovery_only(case):
+    """Model a broker that stopped before its automatic restore, leaving recovery to the operator."""
+    automatic=patch.object(fixtures.host.ui_publication_module.UIPublication,"auto_restore_backend",side_effect=RuntimeError("broker stopped before its automatic restore"))
+    automatic.start();case.addCleanup(automatic.stop)
+
+
 class BackendPredecessorRecoveryTests(ConcurrentUIEntryTests):
     """Reconcile original restored backend containers without replaying deployment."""
+    def setUp(self):
+        super().setUp();manual_recovery_only(self)
     def failed_backend(self):
         """Fail after API rename, then model the original containers restored with new PIDs."""
         self.predecessor=self.runner.current_asset_id()
         self.change("backend-recovery-task","src/main.rs","fn main() {}\n","fn main() { let _x=1; }\n")
-        self.runner.fail_create=True
-        job=self.finish("backend-recovery-task");row=self.wait([job])[0]
-        self.assertEqual(row["status"],"uncertain",row.get("reason"));self.assertEqual(row["phase"],"creating_api")
-        self.runner.fail_create=False
         api,loop=fixtures.host.TARGETS
+        rename=self.runner.rename
+        def fail(name,target):
+            if target==api and name.startswith(api+"-candidate-build-"):raise RuntimeError("fixture activation failure")
+            return rename(name,target)
+        self.runner.rename=fail
+        job=self.finish("backend-recovery-task");row=self.wait([job])[0]
+        self.assertEqual(row["status"],"uncertain",row.get("reason"));self.assertEqual(row["phase"],"activating_api")
+        self.runner.rename=rename
         self.runner.containers[api]=self.runner.containers.pop(row["rollback"]["api"])
         for n,name in enumerate((api,loop)):
             self.runner.containers[name]["State"].update(Status="running",Pid=100+n)
@@ -682,6 +695,7 @@ class CapturedBackendRestorationTests(ConcurrentUIEntryTests):
     """Exercise actual restoration effects against independently identified fake containers."""
     def setUp(self):
         super().setUp()
+        if not self._testMethodName.startswith("test_automatic"):manual_recovery_only(self)
         import copy,hashlib
         for name,value in self.runner.containers.items():
             value.update(Id=hashlib.sha256(name.encode()).hexdigest(),Name="/"+name)
@@ -697,11 +711,11 @@ class CapturedBackendRestorationTests(ConcurrentUIEntryTests):
         def move(identity,target):
             rename(resolve(identity),target);self.runner.containers[target]["Name"]="/"+target
         self.runner.rename=move
-        def replacement(name,image,previous,release_root=None):
-            create(name,image,previous,release_root)
+        def replacement(name,image,previous,release_root=None,as_name=None):
+            create(name,image,previous,release_root,as_name)
             role="api"if name==fixtures.host.TARGETS[0]else"loop"
-            jid=next(j["job_id"]for j in self.broker.jobs.values()if j.get("release_root")==str(release_root));value=self.runner.containers[name]
-            value.update(Id=uuid.uuid4().hex+uuid.uuid4().hex,Name="/"+name)
+            jid=next(j["job_id"]for j in self.broker.jobs.values()if j.get("release_root")==str(release_root));value=self.runner.containers[as_name or name]
+            value.update(Id=uuid.uuid4().hex+uuid.uuid4().hex,Name="/"+(as_name or name))
             value["State"]["Status"]="created"
             value["Config"]["Labels"]={"webagent.release.job":jid,"webagent.release.role":role,"webagent.release.instance":fixtures.host.CONFIG["instance"]}
             return value["Id"]
@@ -711,21 +725,21 @@ class CapturedBackendRestorationTests(ConcurrentUIEntryTests):
         self.predecessor=self.runner.current_asset_id()
         self.change("captured-backend-task","src/main.rs","fn main() {}\n","fn main() { let _x=3; }\n")
         api,loop=fixtures.host.TARGETS
-        if point=="api_create":self.runner.fail_create=True
-        elif point=="both_created":self.runner.fail_verify_ui=True
+        if point=="both_created":self.runner.fail_verify_ui=True
         else:
-            method,target={"stop_loop":("stop",loop),"loop_create":("create",loop),"after_api_create":("create",api)}[point]
+            method,target={"stop_loop":("stop",loop),"api_activate":("rename",api+"-candidate-build-"),
+                           "loop_activate":("rename",loop+"-candidate-build-"),"api_start":("start",api)}[point]
             original=getattr(self.runner,method)
             def fail(*args,**kwargs):
-                if args[0]==target:
-                    if point!="loop_create":original(*args,**kwargs)
+                if args[0].startswith(target)and(method!="start"or args[0]==target):
+                    if point!="loop_activate":original(*args,**kwargs)
                     raise RuntimeError("fixture activation checkpoint")
                 return original(*args,**kwargs)
             setattr(self.runner,method,fail)
         job=self.finish("captured-backend-task");row=self.wait([job])[0]
         self.assertEqual(row["status"],"uncertain",row.get("reason"))
-        self.runner.fail_create=False;self.runner.fail_verify_ui=False
-        if point not in {"api_create","both_created"}:setattr(self.runner,method,original)
+        self.runner.fail_verify_ui=False
+        if point!="both_created":setattr(self.runner,method,original)
         return job
 
     def restore(self,job):
@@ -751,6 +765,66 @@ class CapturedBackendRestorationTests(ConcurrentUIEntryTests):
         self.assertFalse(any(c[0]in {"remove","build","create","promote"}for c in self.runner.calls[start:]))
         self.assertNotIn("NEVER-EXPOSE-THIS",json.dumps(result)+json.dumps(self.broker.jobs[job]["publication_recovery"]))
 
+    def test_automatic_restore_before_new_consumers_are_healthy(self):
+        for point in ("stop_loop","api_activate","loop_activate","api_start"):
+            with self.subTest(point=point):
+                case=type(self)("test_automatic_restore_before_new_consumers_are_healthy");case.setUp()
+                try:
+                    api,loop=fixtures.host.TARGETS
+                    method,target={"stop_loop":("stop",loop),"api_activate":("rename",api+"-candidate-build-"),
+                                   "loop_activate":("rename",loop+"-candidate-build-"),"api_start":("start",api)}[point]
+                    original=getattr(case.runner,method)
+                    def fail(*args,original=original,method=method,target=target,**kwargs):
+                        if args[0].startswith(target)and(method!="start"or args[0]==target):raise RuntimeError("fixture activation checkpoint TOKEN=NEVER-EXPOSE-THIS")
+                        return original(*args,**kwargs)
+                    setattr(case.runner,method,fail)
+                    case.predecessor=case.runner.current_asset_id()
+                    case.change("captured-backend-task","src/main.rs","fn main() {}\n","fn main() { let _x=3; }\n")
+                    job=case.finish("captured-backend-task");row=case.wait([job])[0]
+                    setattr(case.runner,method,original)
+                    self.assertEqual((row["status"],row["phase"]),("failed","publication_reconciled"),row.get("reason"))
+                    self.assertEqual(case.broker.jobs[job]["automatic_rollback"]["status"],"restored")
+                    self.assertIn("fixture activation checkpoint",row["reason"]);self.assertIn("restored automatically",row["reason"])
+                    case.verify_originals(job)
+                    # Each created candidate is quarantined under its failed name, never deleted.
+                    for role,name in zip(("api","loop"),fixtures.host.TARGETS):
+                        self.assertNotIn(name+"-candidate-build-"+job,case.runner.containers)
+                        self.assertEqual(case.runner.containers[name+"-failed-build-"+job]["Image"],case.broker.jobs[job]["images"][role])
+                    self.assertNotIn("NEVER-EXPOSE-THIS",json.dumps(case.broker.jobs[job]))
+                    self.assertFalse(any(c[0]=="promote"for c in case.runner.calls))
+                finally:case.tearDown()
+
+    def test_automatic_restore_skips_after_a_healthy_new_consumer(self):
+        loop=fixtures.host.TARGETS[1];healthy=self.runner.healthy
+        self.runner.healthy=lambda name,expected:False if name==loop else healthy(name,expected)
+        self.change("captured-backend-task","src/main.rs","fn main() {}\n","fn main() { let _x=3; }\n")
+        job=self.finish("captured-backend-task");row=self.wait([job])[0]
+        self.runner.healthy=healthy
+        self.assertEqual((row["status"],row["phase"]),("uncertain","checking_loop"),row.get("reason"))
+        self.assertNotIn("automatic_rollback",self.broker.jobs[job])
+
+    def test_automatic_restore_failure_is_recorded_and_operator_resumes_it(self):
+        api=fixtures.host.TARGETS[0];start=self.runner.start;rename=self.runner.rename;calls=[0]
+        def fail_start(identity):
+            if identity==api:raise RuntimeError("fixture start failure")
+            return start(identity)
+        def lost_restore(identity,target):
+            # The restore's first effect fails once; the operator retries the same request.
+            if target.endswith("-failed-build-"+identity[:0])or "-failed-build-" in target:
+                calls[0]+=1
+                if calls[0]==1:raise RuntimeError("lost quarantine response")
+            return rename(identity,target)
+        self.runner.start=fail_start;self.runner.rename=lost_restore
+        self.predecessor=self.runner.current_asset_id()
+        self.change("captured-backend-task","src/main.rs","fn main() {}\n","fn main() { let _x=3; }\n")
+        job=self.finish("captured-backend-task");row=self.wait([job])[0]
+        self.runner.start=start;self.runner.rename=rename
+        automatic=self.broker.jobs[job]["automatic_rollback"]
+        self.assertEqual((row["status"],automatic["status"]),("uncertain","failed"),row.get("reason"))
+        self.assertIn(automatic["request_id"],row["reason"])
+        result=self.recovery("captured-backend-task",job,"restore_captured_backend",automatic["request_id"])
+        self.assertTrue(result["effects_reconciled"]);self.verify_originals(job)
+
     def test_restarting_certified_candidate_is_stopped_before_quarantine(self):
         job=self.failed();api=fixtures.host.TARGETS[0];identity=self.runner.containers[api]["Id"]
         self.runner.containers[api]["State"]["Status"]="restarting"
@@ -770,7 +844,7 @@ class CapturedBackendRestorationTests(ConcurrentUIEntryTests):
         self.assertFalse(any(c[0]in {"stop","rename","start"}for c in self.runner.calls[start:]))
 
     def test_each_activation_boundary_can_restore(self):
-        for point in ("stop_loop","api_create","loop_create","after_api_create"):
+        for point in ("stop_loop","api_activate","loop_activate","api_start"):
             with self.subTest(point=point):
                 case=type(self)("test_restores_and_retains_both_failed_candidates");case.setUp()
                 try:job=case.failed(point);case.restore(job);case.verify_originals(job)
