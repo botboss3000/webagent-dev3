@@ -19,7 +19,17 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
     onLimitEdit:(id,field)=>limits?.edit(id,field),modelBudget:id=>limits?.budget(id),
     fetchFn:bridge.blockedFetch,onRoster:p=>analytics?.setModelLabels(p),onModelFocus:m=>analytics?.setModelFocus(m),onModelChange:()=>{analytics?.reload();limits?.reload();},
     advancedExtra:body=>{
-      const row=document.createElement('div');row.className='ac-row v3-pending-feature';row.innerHTML='<div class="ac-ability-row">Reset Usage Counters</div><div class="ac-ability-body"><select class="ac-input" disabled><option>All (input + output + cost)</option><option>Input Tokens only</option><option>Output Tokens only</option><option>Cost only</option></select><button class="ac-btn" disabled>Reset</button></div>';row.firstElementChild.onclick=()=>row.classList.toggle('expanded');body.append(row);
+      const row=document.createElement('div');row.className='ac-row';row.dataset.ownUsage='';row.innerHTML='<div class="ac-ability-row"><span class="ac-ability-label"><span class="ac-ability-name">Reset Usage Counters</span><span class="ac-ability-desc">Clear your own usage with this agent: the tokens and cost in the table and graph above. Other users\' usage is unchanged.</span></span></div><div class="ac-ability-body"><select class="ac-input"><option value="all">All (input + output + cost)</option><option value="input">Input Tokens only</option><option value="output">Output Tokens only</option><option value="cost">Cost only</option></select> <button type="button" class="ac-btn ac-btn-ghost" style="color:var(--danger)">Reset</button> <span class="ac-ability-desc" role="status"></span></div>';
+      row.firstElementChild.onclick=()=>row.classList.toggle('expanded');
+      const [select,button,status]=row.querySelectorAll('select,button,[role=status]');
+      button.onclick=async()=>{
+        if(!confirm('Reset '+select.selectedOptions[0].textContent+' usage for this agent?'))return;
+        button.disabled=true;status.textContent='Resetting…';
+        try{await request('/usage/models/reset?'+new URLSearchParams({agent_id:agentId,scope:select.value}),'POST');status.textContent='Reset complete';await Promise.all([table.reload(),analytics.reload()]);}
+        catch(e){status.textContent=e.message||'Reset failed';}
+        finally{button.disabled=false;}
+      };
+      body.append(row);
     }});
   const limitsHost=document.createElement("div");group.append(limitsHost);
   limits=await mountModelLimits(limitsHost,bridge.adapter,()=>table.reload());
@@ -41,7 +51,8 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
     }
     for(const row of group.querySelectorAll('.ac-directive-row'))markPending(row.querySelector('.ac-ability-name')||row);
     if(!bridge.state()?.can_manage){for(const el of tableHost.querySelectorAll('.ac-model-meta-editable,.ac-saved-drag-handle')){el.style.pointerEvents='none';el.tabIndex=-1;el.setAttribute('aria-disabled','true');}}
-    if(!bridge.state()?.can_manage){for(const el of tableHost.querySelectorAll('input,select,textarea,button'))el.disabled=true;}
+    // Resetting your own usage needs no roster authority.
+    if(!bridge.state()?.can_manage){for(const el of tableHost.querySelectorAll('input,select,textarea,button'))if(!el.closest('[data-own-usage]'))el.disabled=true;}
   }
   // Rebuilt rows and expanded details keep their pending color after rerender.
   const observer=new MutationObserver(pending);observer.observe(group,{childList:true,subtree:true});pending();

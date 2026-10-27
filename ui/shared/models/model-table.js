@@ -3433,6 +3433,8 @@ export function mountModelTable(host, opts = {}) {
   // together rather than one after the other; the config read, in turn, is a
   // single combined bundle (see the admin adapter) instead of two round-trips.
   async function reload() {
+    // Usage can be cleared or reset between loads.
+    for (const key of Object.keys(usageCache)) delete usageCache[key];
     table.style.display = '';
     // Keep the add-model form visible while its data loads; the user can still
     // collapse it with the + / × toggle.

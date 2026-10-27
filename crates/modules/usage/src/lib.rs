@@ -131,6 +131,22 @@ pub fn model_totals(samples:&[Sample],entry:&str,model:&str,include_unassigned:b
     json!({"total_input_tokens":input,"total_output_tokens":output,"total_cost_usd":usd})
 }
 
+/// Record a reset at `now`: `model` clears that model's history; `all`, `input`,
+/// `output` or `cost` zero those counters for earlier runs. Run records stay intact.
+pub fn mark_reset(resets:&mut Value,kind:&str,model:&str,now:i64)->bool{
+    let fields:&[&str]=match kind{"model" if !model.is_empty()=>{resets["models"][model]=json!(now);return true}"all"=>&["input","output","cost"],"input"=>&["input"],"output"=>&["output"],"cost"=>&["cost"],_=>return false};
+    for field in fields{resets["fields"][*field]=json!(now);}
+    true
+}
+/// Apply recorded resets to one sample; false when its model's history was cleared.
+pub fn apply_resets(sample:&mut Sample,resets:&Value)->bool{
+    if resets["models"][sample.model.as_str()].as_i64().is_some_and(|at|sample.at<=at){return false;}
+    for (field,key,zero) in [("input","input_tokens",json!(0)),("output","output_tokens",json!(0)),("cost","known_cost_usd",json!(0.0))]{
+        if resets["fields"][field].as_i64().is_some_and(|at|sample.at<=at){sample.usage[key]=zero;}
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests{
     use super::*;
@@ -171,6 +187,15 @@ mod tests{
         assert_eq!(model_totals(&samples,"e1","m1",false),json!({"total_input_tokens":14,"total_output_tokens":7,"total_cost_usd":0.5}));
         assert_eq!(model_totals(&samples,"e2","m2",true)["total_input_tokens"],7);
         assert_eq!(model_totals(&samples,"e2","m2",false)["total_input_tokens"],0);
+    }
+    #[test]fn resets_clear_models_and_zero_counters_before_their_time(){
+        let mut resets=Value::Null;
+        assert!(mark_reset(&mut resets,"model","m1",100)&&mark_reset(&mut resets,"output","",200)&&!mark_reset(&mut resets,"model","",1)&&!mark_reset(&mut resets,"week","",1));
+        let mut old=sample(100,"a","e1","m1",5,5,1.);let mut kept=sample(101,"a","e1","m1",5,5,1.);let mut other=sample(150,"a","","m2",3,4,0.5);
+        assert!(!apply_resets(&mut old,&resets));assert!(apply_resets(&mut kept,&resets)&&apply_resets(&mut other,&resets));
+        assert_eq!((kept.usage["input_tokens"].as_u64(),kept.usage["output_tokens"].as_u64(),kept.usage["known_cost_usd"].as_f64()),(Some(5),Some(0),Some(1.)));
+        assert!(mark_reset(&mut resets,"all","",300));let mut late=sample(250,"a","","m2",3,4,0.5);apply_resets(&mut late,&resets);
+        assert_eq!(model_totals(&[late],"","m2",false),json!({"total_input_tokens":0,"total_output_tokens":0,"total_cost_usd":0.0}));
     }
     struct Docs{invalidated:AtomicUsize}
     async fn doc(tx:&mut Transaction<'_,Sqlite>,key:&str)->Result<Option<Value>>{

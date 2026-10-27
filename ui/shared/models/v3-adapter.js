@@ -21,9 +21,11 @@ export function catalogCapabilityFlags(capabilities=[],transport) {
 export function usageFetch(base) {
   const routes={'/admin/settings/model-usage-analytics':'/analytics','/admin/settings/model-usage':'/totals'};
   return async(path,options={})=>{
-    const url=new URL(path,location.origin),route=routes[url.pathname];
-    if(!route||(options.method||'GET')!=='GET')return response({detail:MISSING},501);
-    return fetch('/api/v3'+base+route+url.search,{credentials:'same-origin',cache:'no-store'});
+    const url=new URL(path,location.origin),route=routes[url.pathname],method=options.method||'GET';
+    if(!route)return response({detail:MISSING},501);
+    const headers={};
+    if(method!=='GET')headers['x-csrf-token']=(await (await fetch('/api/v3/auth/me',{credentials:'same-origin',cache:'no-store'})).json()).csrf_token;
+    return fetch('/api/v3'+base+route+url.search,{method,headers,credentials:'same-origin',cache:'no-store'});
   };
 }
 export const usageQuery=({model,entry_id,include_unassigned},extra={})=>new URLSearchParams({model:model||'',entry_id:entry_id||'',include_unassigned:include_unassigned?'1':'',...extra});

@@ -1,5 +1,7 @@
-//! Read-only model usage for the Models pages: the signed-in user's own runs, or
-//! every user's runs for administrators. Only numeric public usage leaves here.
+//! Model usage for the Models pages: the signed-in user's own runs, or every
+//! user's runs for administrators. Only numeric public usage leaves here.
+//! Clearing history and resetting counters record time markers; run records,
+//! session totals and other users' views are never changed.
 use crate::{bad, Api, App, Store};
 use axum::{extract::{Query, State}, Extension, Json};
 use serde::Deserialize;
@@ -14,6 +16,13 @@ pub(crate) struct UsageArgs {
     model: Option<String>,
     entry_id: Option<String>,
     include_unassigned: Option<String>,
+    scope: Option<String>,
+}
+
+// Markers live in the application plane: per user and agent, or global for the
+// administrator view.
+fn reset_key(user: Option<&str>, agent: &str) -> String {
+    user.map_or_else(|| "usage_reset:global".into(), |user| format!("usage_reset:{user}:{agent}"))
 }
 
 /// Runs with recorded usage, labelled with session titles. With `user`, only runs
@@ -61,7 +70,15 @@ fn respond(args: &UsageArgs, samples: &[Sample], labels: &HashMap<String, String
 
 async fn own(app: App, args: UsageArgs, totals: bool) -> Api {
     let (mut samples, mut labels) = (Vec::new(), HashMap::new());
-    collect(&app.store, Some(app.store.current_user_id()), args.agent_id.as_deref(), &mut samples, &mut labels).await?;
+    let user = app.store.current_user_id();
+    collect(&app.store, Some(user), args.agent_id.as_deref(), &mut samples, &mut labels).await?;
+    let mut resets = HashMap::new();
+    for sample in &samples {
+        if !resets.contains_key(&sample.agent) {
+            resets.insert(sample.agent.clone(), app.store.get(&reset_key(Some(user), &sample.agent)).await?.unwrap_or_default());
+        }
+    }
+    samples.retain_mut(|sample| webagent_usage::apply_resets(sample, &resets[&sample.agent]));
     respond(&args, &samples, &labels, totals)
 }
 
@@ -70,10 +87,34 @@ async fn everyone(app: App, args: UsageArgs, totals: bool) -> Api {
     for user in app.store.all_user_ids().await? {
         collect(&app.store.for_user(&user).await?, None, args.agent_id.as_deref(), &mut samples, &mut labels).await?;
     }
+    let resets = app.store.get(&reset_key(None, "")).await?.unwrap_or_default();
+    samples.retain_mut(|sample| webagent_usage::apply_resets(sample, &resets));
     respond(&args, &samples, &labels, totals)
+}
+
+async fn mark(app: &App, user: Option<&str>, agent: &str, kind: &str, model: &str) -> Api {
+    let key = reset_key(user, agent);
+    let mut resets = app.store.get(&key).await?.unwrap_or_default();
+    if !webagent_usage::mark_reset(&mut resets, kind, model, crate::now() as i64) { return Err(bad("Invalid usage reset")); }
+    app.store.put(&key, &resets).await?;
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
+/// The signed-in user's own markers for one agent they can currently access.
+async fn own_mark(app: App, args: UsageArgs, kind: &str) -> Api {
+    let user = app.store.current_user_id();
+    let agent = args.agent_id.as_deref().filter(|a| !a.is_empty()).ok_or_else(|| bad("agent_id is required"))?;
+    if !app.store.live_access(user, agent).await.is_ok_and(|a| a.admitted()) { return Err(crate::ApiError(axum::http::StatusCode::FORBIDDEN, "Agent access unavailable".into())); }
+    mark(&app, Some(user), agent, kind, args.model.as_deref().unwrap_or("")).await
 }
 
 pub(crate) async fn analytics(Extension(app): Extension<App>, Query(args): Query<UsageArgs>) -> Api { own(app, args, false).await }
 pub(crate) async fn totals(Extension(app): Extension<App>, Query(args): Query<UsageArgs>) -> Api { own(app, args, true).await }
 pub(crate) async fn admin_analytics(State(app): State<App>, Query(args): Query<UsageArgs>) -> Api { everyone(app, args, false).await }
 pub(crate) async fn admin_totals(State(app): State<App>, Query(args): Query<UsageArgs>) -> Api { everyone(app, args, true).await }
+pub(crate) async fn clear(Extension(app): Extension<App>, Query(args): Query<UsageArgs>) -> Api { own_mark(app, args, "model").await }
+pub(crate) async fn reset(Extension(app): Extension<App>, Query(args): Query<UsageArgs>) -> Api {
+    let kind = args.scope.clone().unwrap_or_default();
+    own_mark(app, args, &kind).await
+}
+pub(crate) async fn admin_clear(State(app): State<App>, Query(args): Query<UsageArgs>) -> Api { mark(&app, None, "", "model", args.model.as_deref().unwrap_or("")).await }
