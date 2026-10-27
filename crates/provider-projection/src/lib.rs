@@ -82,7 +82,7 @@ mod tests {
             ProviderIdV1::OpenaiApi,ProviderIdV1::Openrouter,ProviderIdV1::Abacus,
             ProviderIdV1::Gemini,ProviderIdV1::Groq,ProviderIdV1::Together,
             ProviderIdV1::Mistral,ProviderIdV1::Fireworks,ProviderIdV1::Xai,
-            ProviderIdV1::Perplexity,ProviderIdV1::Deepinfra,ProviderIdV1::Typesafe] {
+            ProviderIdV1::Perplexity,ProviderIdV1::Deepinfra,ProviderIdV1::Typesafe,ProviderIdV1::ClaudeBridge] {
             let result = project(&RequestV1::Profile{version:1,provider,model:"fixture".into()}).unwrap();
             let ResultV1::Profile { profile, .. } = result else { panic!("Profile expected") };
             match provider {

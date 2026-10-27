@@ -39,6 +39,7 @@ pub(super) struct SubscriptionCredentials<'a> {
 enum PreparedRequest<'a> {
     Subscription(SubscriptionRequest<'a>),
     Compatible { body: Value, endpoint: &'static str },
+    Bridge { body: Value, session: &'a str },
 }
 
 enum ReadyTransport<'a> {
@@ -48,6 +49,7 @@ enum ReadyTransport<'a> {
         endpoint: &'static str,
         api_key: &'a str,
     },
+    Bridge { body: Value, session: &'a str, link: &'a str },
 }
 
 // @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Host projection preparation precedes credential binding and network dispatch. Config: config/engine-components.json -> disabled; provider descriptor -> versions and limits.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/interface_version","/implementation_version","/limits"]}],"opportunities":[]}}
@@ -151,7 +153,7 @@ impl<'a> CallDraft<'a> {
                 false, "Invalid Provider request"))?;
         // Shape errors precede the legacy unsupported-transport error; no service
         // or credential work is attempted for a Decision-only model.
-        if self.selection.provider != ProviderId::OpenaiSubscription
+        if !matches!(self.selection.provider, ProviderId::OpenaiSubscription | ProviderId::ClaudeBridge)
             && self.selection.provider.chat_endpoint().is_none() {
             return Err(anyhow!("Provider does not use API keys"));
         }
@@ -187,6 +189,12 @@ impl<'a> CallDraft<'a> {
                     model:&self.selection.model, input, tools, session:self.session,
                     instructions:self.instructions,
                 })
+            },
+            webagent_provider_contracts::MaterializedV1::ChatCompletions { messages, tools }
+                if self.selection.provider == ProviderId::ClaudeBridge => {
+                let mut body=compatible_body(self.selection,messages,tools);
+                if let Some(effort)=self.reasoning_effort {body["reasoning_effort"]=json!(effort);}
+                PreparedRequest::Bridge { body, session:self.session }
             },
             webagent_provider_contracts::MaterializedV1::ChatCompletions { messages, tools } => {
                 let endpoint = self.selection.provider.chat_endpoint()
@@ -256,6 +264,9 @@ impl<'a> ValidatedCall<'a> {
                 endpoint,
                 api_key: required(tokens, "api_key")?,
             },
+            PreparedRequest::Bridge { body, session } => ReadyTransport::Bridge {
+                body, session, link: required(tokens, "api_key")?,
+            },
         };
         Ok(ReadyCall { transport })
     }
@@ -281,6 +292,12 @@ impl Provider {
             } => {
                 self.send_compatible(body, endpoint, api_key, delta, cancel)
                     .await
+            }
+            ReadyTransport::Bridge { body, session, link } => {
+                let queue = self.bridge.as_ref().ok_or_else(|| typed_failure(
+                    crate::model_selection::FailureKind::ModelUnavailable, false, "Claude Bridge is unavailable here"))?;
+                let reply = queue.exchange(super::BridgeCall { link:link.to_owned(), session:session.to_owned(), body, cancel }).await?;
+                super::deepseek::bridge_result(&reply)
             }
         }
     }
@@ -454,6 +471,44 @@ use crate::transport::Projection;
         assert_eq!(credentials.access_token, "fixture-token");
         assert_eq!(credentials.account_id, None);
         assert_eq!(credentials.residency, Some("eu"));
+    }
+
+    /// A bridge call reaches the host queue as a compatible body and its reply is validated like a stream.
+    #[tokio::test]
+    async fn bridge_calls_round_trip_through_the_host_queue() {
+        struct Fake(std::sync::Mutex<Option<(String, String, Value)>>);
+        impl super::super::BridgeQueue for Fake {
+            fn exchange(&self, call: super::super::BridgeCall) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
+                *self.0.lock().unwrap() = Some((call.link, call.session, call.body));
+                Box::pin(async { Ok(json!({"message":{"role":"assistant","content":"",
+                    "tool_calls":[{"id":"call_1","type":"function","function":{"name":"read","arguments":"{}"}}]}})) })
+            }
+        }
+        let fake = std::sync::Arc::new(Fake(std::sync::Mutex::new(None)));
+        let provider = Provider::new().with_bridge(fake.clone());
+        let selection = ProviderSelection { limits:None, provider:ProviderId::ClaudeBridge, model:"claude-opus-5-5".into() };
+        let tools = vec![json!({"name":"read","description":"inspect","parameters":{"type":"object"}})];
+        let tokens = json!({"api_key":"link"});
+        // Effort levels come from the live provider file, which lands after this code.
+        let effort = crate::providers::efforts(ProviderId::ClaudeBridge, "claude-opus-5-5")
+            .is_ok_and(|e| !e.levels.is_empty()).then_some("high");
+        let ready = CallDraft::new(&selection, vec![json!({"role":"user","content":"hi"})], tools, "chat", "guide")
+            .with_reasoning_effort(effort).validate().unwrap()
+            .bind_credentials(&tokens, &CancellationToken::new()).unwrap();
+        let (sender, _receiver) = mpsc::channel(1);
+        let result = provider.dispatch(ready, sender, CancellationToken::new()).await.unwrap();
+        assert_eq!(result["output"][0]["type"], "function_call");
+        assert_eq!(result["output"][0]["name"], "read");
+        let (link, session, body) = fake.0.lock().unwrap().take().unwrap();
+        assert_eq!((link.as_str(), session.as_str()), ("link", "chat"));
+        assert_eq!(body["model"], "claude-opus-5-5");
+        assert_eq!(body.get("reasoning_effort").and_then(Value::as_str), effort);
+        assert_eq!(body["tools"][0]["function"]["name"], "read");
+        // Without a host queue the call fails as unavailable rather than reaching the network.
+        let ready = CallDraft::new(&selection, vec![json!({"role":"user","content":"hi"})], vec![], "chat", "guide")
+            .validate().unwrap().bind_credentials(&tokens, &CancellationToken::new()).unwrap();
+        let (sender, _receiver) = mpsc::channel(1);
+        assert!(Provider::new().dispatch(ready, sender, CancellationToken::new()).await.is_err());
     }
 
     /// Verify exact compatible text/schema framing while retaining reasoning only for DeepSeek.

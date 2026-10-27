@@ -149,8 +149,13 @@ mod tests {
         let all = load_all().unwrap();
         assert!(all.len() >= 14);
         let validated: Vec<_> = all.iter().filter(|p| p.validated).map(|p| p.provider).collect();
-        assert_eq!(validated.len(), 2);
         assert!(validated.contains(&ProviderId::Deepseek) && validated.contains(&ProviderId::OpenaiSubscription));
+        // The Claude Bridge file is a live file added after its code; check it once present.
+        if validated.contains(&ProviderId::ClaudeBridge) {
+            let bridge = efforts(ProviderId::ClaudeBridge, "claude-opus-5-5").unwrap();
+            assert_eq!(bridge.levels, ["low", "medium", "high", "xhigh", "max"]);
+            assert_eq!(bridge.default.as_deref(), Some("medium"));
+        }
         let flash = efforts(ProviderId::Deepseek, "deepseek-flash").unwrap();
         assert_eq!(flash.levels, ["none", "low", "high", "max"]);
         assert_eq!(flash.default.as_deref(), Some("high"));

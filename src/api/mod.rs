@@ -212,6 +212,8 @@ pub(super) fn router(app: App) -> Router {
         .route("/api/v3/embed/redeem",post(embed::redeem))
         .route("/api/v3/core/webhook-receive/{id}",post(tools::core_webhooks::receive).layer(DefaultBodyLimit::max(16384)))
         .route("/api/v3/auth/login",post(login))
+        .route("/api/v3/claude-bridge/next",post(crate::claude_bridge::next))
+        .route("/api/v3/claude-bridge/reply",post(crate::claude_bridge::reply))
         .route("/api/v3/auth/register",post(registration::register))
         .route("/api/v3/auth/guest-login",post(registration::guest_login))
         .route("/api/v3/auth/access-mode",get(registration::access_mode))

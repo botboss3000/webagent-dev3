@@ -42,6 +42,8 @@ impl Roster {
             for (id,e) in entries {
                 if id!=&e.id || !webagent_access::valid_id(id) || e.display_name.trim().is_empty()
                     || e.display_name.len()>200 || !valid_model(&e.upstream_model)
+                    // A bridge link answers only its owner's chats, so it cannot be published to others.
+                    || e.transport==Transport::ClaudeBridge
                     || e.capabilities.iter().any(|c|!matches!(c.as_str(),"text"|"decision"|"image_in"|"image_out"|"voice"|"video")) {
                     bail!("Invalid platform model metadata");
                 }

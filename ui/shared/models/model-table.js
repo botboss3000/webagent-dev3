@@ -549,7 +549,17 @@ export function mountModelTable(host, opts = {}) {
   const credentialSelect = document.createElement('select');
   credentialSelect.className = 'ac-input ac-input-sm'; credentialSelect.setAttribute('aria-label', 'Saved credentials');
   credentialSelect.hidden = true;
-  keyCtrl.append(keyInput, keyCheck);
+  // Claude Bridge has no provider-issued key: the link token is generated here and given to the bridge client.
+  const generateLinkBtn = document.createElement('button');
+  generateLinkBtn.type = 'button'; generateLinkBtn.className = 'ac-btn ac-btn-ghost ac-btn-sm';
+  generateLinkBtn.textContent = 'Generate link'; generateLinkBtn.title = 'Create a new link token for a Claude Bridge client';
+  generateLinkBtn.hidden = true;
+  generateLinkBtn.addEventListener('click', () => {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    keyInput.value = 'cbl_' + Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    keyInput.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  keyCtrl.append(keyInput, generateLinkBtn, keyCheck);
   keyRow.appendChild(keyCtrl);
   table.appendChild(keyRow);
 
@@ -3305,7 +3315,9 @@ export function mountModelTable(host, opts = {}) {
     syncProviderField();
     const saved = S.providerConfigs[S.currentProvider];
     urlInput.value = (saved && saved.base_url) || S.presets[S.currentProvider]?.base_url || '';
-    keyInput.value = ''; keyInput.placeholder = 'sk-...';
+    const bridge = S.currentProvider === 'claude_bridge';
+    keyInput.value = ''; keyInput.placeholder = bridge ? 'Generate a link token' : 'sk-...';
+    generateLinkBtn.hidden = !bridge;
     validatedCredential = ''; clearTimeout(credentialValidationTimer);
     credentialSelect.hidden = true; credentialSelect.replaceChildren(); credentialLabelInput.value = '';
     S.selectedModel = inlineCatalogAdd ? '' : ((saved && saved.model) || '');

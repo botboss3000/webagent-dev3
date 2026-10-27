@@ -12,7 +12,7 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 #[serde(rename_all = "snake_case")]
 pub enum ProviderIdV1 {
     OpenaiSubscription, Deepseek, OpenaiApi, Openrouter, Abacus, Gemini, Groq,
-    Together, Mistral, Fireworks, Xai, Perplexity, Deepinfra, Typesafe,
+    Together, Mistral, Fireworks, Xai, Perplexity, Deepinfra, Typesafe, ClaudeBridge,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

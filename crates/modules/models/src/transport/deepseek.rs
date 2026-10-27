@@ -71,6 +71,18 @@ impl Completion {
         Ok(json!({"status":"completed","output":output,"usage":self.usage}))
     }
 }
+/// Validate one whole Claude Bridge reply exactly as a finished compatible stream.
+pub(super) fn bridge_result(reply: &Value) -> Result<Value> {
+    let message = &reply["message"];
+    let calls: Vec<Value> = message["tool_calls"].as_array().map(|calls| calls.iter().enumerate()
+        .map(|(index, call)| { let mut call = call.clone(); call["index"] = json!(index); call }).collect())
+        .unwrap_or_default();
+    let finish = if calls.is_empty() { "stop" } else { "tool_calls" };
+    let mut completion = Completion::default();
+    completion.push(&json!({"choices":[{"delta":{"content":message["content"],"tool_calls":calls},"finish_reason":finish}],"usage":reply["usage"]}))
+        .map_err(|e| typed_failure(FailureKind::Protocol, true, e.to_string()))?;
+    completion.result().map_err(|e| typed_failure(FailureKind::Protocol, true, e.to_string()))
+}
 impl Provider {
     /// Fixed installation endpoints, bounded bytes/time, and no secrets in query strings.
     pub async fn discover_models(&self, provider:ProviderId, tokens:&Value, cancel:CancellationToken)->Result<Value> {
@@ -79,6 +91,17 @@ impl Provider {
             if cancel.is_cancelled() { return Err(typed_failure(FailureKind::Cancelled,false,"Provider discovery cancelled")); }
             required(tokens,"api_key")?;
             return Ok(json!({"models":[{"id":"jev-latest","name":"Jev","display_name":"Jev","text_capable":false,"decision_capable":true,"image_capable":false,"image_out_capable":false,"voice_capable":false,"video_capable":false}],"provider_acceptance_verified":false}));
+        }
+        // The bridge has no listing endpoint: its models are the provider file's.
+        if provider == ProviderId::ClaudeBridge {
+            required(tokens,"api_key")?;
+            let file = crate::providers::load(provider)?.ok_or_else(|| anyhow!("Claude Bridge provider file missing"))?;
+            let models: Vec<Value> = file.models.iter().map(|m| {
+                let name = m.name.clone().unwrap_or_else(|| m.id.clone());
+                json!({"id":m.id,"name":name,"display_name":name,"text_capable":true,"decision_capable":false,
+                    "image_capable":m.input.iter().any(|i| i == "image"),"image_out_capable":false,"voice_capable":false,"video_capable":false})
+            }).collect();
+            return Ok(json!({"models":models,"provider_acceptance_verified":false}));
         }
         let base=provider.chat_endpoint().ok_or_else(||anyhow!("Subscription discovery is unavailable"))?;
         let fixed=base.strip_suffix("chat/completions").ok_or_else(||anyhow!("Discovery unavailable"))?.to_owned()+"models";

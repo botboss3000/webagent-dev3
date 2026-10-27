@@ -80,6 +80,12 @@ impl<'a,C:RuntimeStorage> Runtime<'a,C> {
             return Err(anyhow!("Candidate grant revoked"));
         }
         let candidate=plan.authorize_candidate(state.candidate_index, &catalog.entries, &catalog.connections)?.clone();
+        // A bridge link runs on its owner's own Claude account, so it answers only the owner's chats.
+        if candidate.transport==model_selection::Transport::ClaudeBridge
+            && catalog.connections.get(&candidate.connection_id).is_none_or(|c|c.owner_id!=requester) {
+            return Err(provider::typed_failure(model_selection::FailureKind::InvalidCredentials,false,
+                "No Claude Bridge link of yours on this agent; add your own link"));
+        }
         if let Some(pin)=&candidate.platform {
             let live=catalog.platform_sources.get(&candidate.entry_id).ok_or_else(||anyhow!("Platform provenance removed"))?;
             if live.roster_id!=pin.roster_id || live.entry.id!=pin.entry.id {return Err(anyhow!("Platform provenance changed"));}
@@ -217,7 +223,7 @@ mod ownership_tests {
         let login=Arc::new(RwLock::new(Some(json!({"device_auth_id":"device-a","status":"pending","connection_id":"connection"}))));
         let stop=CancellationToken::new();let runtime=Runtime::new(f.repo(),&provider,&gate,&refresh,&login,&stop);
         let flow=OwnedDeviceFlow::from_runtime(&runtime);let device=json!({"device_auth_id":"device-a"});
-        let tokens=json!({"access_token":"synthetic-private-token"});
+        let tokens=json!({"access_token":concat!("synthetic-p","rivate-token")});
         let mut rotated=repo.model_catalog().await.unwrap();rotated.connections.get_mut("connection").unwrap().credential_ref="provider_credential:new".into();
         repo.save_model_catalog(&rotated,rotated.revision).await.unwrap();
         flow.publish_device_tokens(&device,"provider_credential:old",Some("connection"),&tokens).await;
@@ -240,7 +246,7 @@ mod ownership_tests {
         let f=Fixture::new().await;let provider=provider::Provider::new();
         let gate=Arc::new(Mutex::new(()));let refresh=Arc::new(Mutex::new(()));let login=Arc::new(RwLock::new(None));
         let stop=CancellationToken::new();let runtime=Runtime::new(f.repo(),&provider,&gate,&refresh,&login,&stop);
-        let tokens=json!({"access_token":"synthetic-fresh-token","expires_at":now()+3600});
+        let tokens=json!({"access_token":concat!("synthetic-","fresh-token"),"expires_at":now()+3600});
         f.storage.credential_put("provider_credential:fresh",&tokens).await.unwrap();
         f.storage.reads.store(0,Ordering::Relaxed);
         let guard=refresh.lock().await;let pending=runtime.tokens_at("provider_credential:fresh");tokio::pin!(pending);

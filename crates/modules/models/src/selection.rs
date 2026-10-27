@@ -289,10 +289,10 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_,C> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Transport { OpenaiSubscription, Typesafe, Deepseek, OpenaiApi, Openrouter, Abacus, Gemini, Groq, Together, Mistral, Fireworks, Xai, Perplexity, Deepinfra }
+pub enum Transport { OpenaiSubscription, Typesafe, Deepseek, OpenaiApi, Openrouter, Abacus, Gemini, Groq, Together, Mistral, Fireworks, Xai, Perplexity, Deepinfra, ClaudeBridge }
 
 impl Transport {
-    pub fn uses_api_key(&self) -> bool { matches!(self, Self::Typesafe) || self.provider_id().chat_endpoint().is_some() }
+    pub fn uses_api_key(&self) -> bool { matches!(self, Self::Typesafe | Self::ClaudeBridge) || self.provider_id().chat_endpoint().is_some() }
     pub fn provider_id(&self) -> crate::provider::ProviderId {
         match self { Self::OpenaiSubscription => crate::provider::ProviderId::OpenaiSubscription,
             Self::Typesafe => crate::provider::ProviderId::Typesafe,
@@ -308,6 +308,7 @@ impl Transport {
             Self::Xai => crate::provider::ProviderId::Xai,
             Self::Perplexity => crate::provider::ProviderId::Perplexity,
             Self::Deepinfra => crate::provider::ProviderId::Deepinfra,
+            Self::ClaudeBridge => crate::provider::ProviderId::ClaudeBridge,
         }
     }
 }

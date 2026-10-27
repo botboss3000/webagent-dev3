@@ -49,6 +49,7 @@ pub fn projection_id(provider: ProviderId) -> webagent_provider_contracts::Provi
         ProviderId::Perplexity => P::Perplexity,
         ProviderId::Deepinfra => P::Deepinfra,
         ProviderId::Typesafe => P::Typesafe,
+        ProviderId::ClaudeBridge => P::ClaudeBridge,
     }
 }
 /// Sanitized transport error; no provider payload, token or user input escapes.
@@ -136,9 +137,27 @@ fn failure_kind(value: &Value) -> crate::model_selection::FailureKind {
         _ => Protocol,
     }
 }
+/// One Claude Bridge call: the chat-completions body for the client holding `link`.
+pub struct BridgeCall {
+    pub link: String,
+    pub session: String,
+    pub body: Value,
+    pub cancel: CancellationToken,
+}
+/// Storage identity of a bridge link token; the token itself is a bearer secret.
+pub fn bridge_link_id(token: &str) -> String {
+    webagent_configuration::digest(token)
+}
+/// Host-owned queue that hands a call to a linked client and returns its reply:
+/// `{"message": <chat-completions assistant message>, "usage": <optional usage>}`.
+pub trait BridgeQueue: Send + Sync {
+    fn exchange(&self, call: BridgeCall) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>>;
+}
+
 #[derive(Clone)]
 pub struct Provider {
     client: reqwest::Client,
+    bridge: Option<std::sync::Arc<dyn BridgeQueue>>,
     #[cfg(any(test,feature="test-support"))]
     responses_endpoint: Option<String>,
 }
@@ -449,9 +468,16 @@ impl Provider {
                 .user_agent("webagent-v3/0.1")
                 .build()
                 .expect("HTTP client initialization"),
+            bridge: None,
             #[cfg(any(test,feature="test-support"))]
             responses_endpoint: None,
         }
+    }
+
+    /// Attach the host's Claude Bridge queue; without one, bridge calls fail as unavailable.
+    pub fn with_bridge(mut self, queue: std::sync::Arc<dyn BridgeQueue>) -> Self {
+        self.bridge = Some(queue);
+        self
     }
 
     /// Override the Responses/compatible endpoint only in test builds so local fixtures can observe exact wire behavior.

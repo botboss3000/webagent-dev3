@@ -341,6 +341,10 @@ pub async fn connection_key<C:RuntimeStorage>(app:&Runtime<'_,C>,identity:Value,
     let reference = format!("provider_credential:{}", uuid::Uuid::new_v4().to_string());
     // Store the secret only in the encrypted credential plane. No key in catalog/events.
     app.store.put(&reference, &json!({"api_key":body.api_key})).await?;
+    // The bridge client endpoints admit only tokens saved on a bridge connection.
+    if connection.transport == crate::model_selection::Transport::ClaudeBridge {
+        app.store.put(&format!("claude_bridge_link:{}", crate::transport::bridge_link_id(&body.api_key)), &json!({"owner_id":caller.user_id})).await?;
+    }
     connection.credential_ref = reference;
     app.store.save_model_catalog(&catalog, catalog.revision).await?;
     Ok(Json(json!({"saved":true})))
@@ -358,7 +362,7 @@ pub async fn discover<C:RuntimeStorage>(app:&Runtime<'_,C>,identity:Value,input:
         let provider=input.provider.ok_or_else(||super::bad("Provider required"))?;
         let key=input.api_key.ok_or_else(||super::bad("API key required"))?;
         if !key.bytes().all(|b|b.is_ascii_graphic())||!(8..=512).contains(&key.len())
-            ||(provider.chat_endpoint().is_none()&&provider!=crate::provider::ProviderId::Typesafe){return Err(super::bad("Invalid discovery credential or provider"));}
+            ||(provider.chat_endpoint().is_none()&&!matches!(provider,crate::provider::ProviderId::Typesafe|crate::provider::ProviderId::ClaudeBridge)){return Err(super::bad("Invalid discovery credential or provider"));}
         (provider,json!({"api_key":key}))
     };
     Ok(Json(app.provider.discover_models(provider,&tokens,tokio_util::sync::CancellationToken::new()).await

@@ -72,6 +72,7 @@ mod workflow;
 #[path = "gates/protocol.rs"] mod gate_protocol;
 mod promotion;
 #[path = "../crates/modules/models/host/provider/mod.rs"] mod provider;
+#[path = "../crates/modules/models/host/claude_bridge.rs"] mod claude_bridge;
 #[path = "../crates/modules/models/host/selection.rs"] mod model_selection;
 #[path = "../crates/modules/models/host/platform_catalog.rs"] mod platform_catalog;
 #[path = "../crates/modules/models/host/account_catalog.rs"] mod account_catalog;

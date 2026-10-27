@@ -19,6 +19,8 @@ pub enum ProviderId {
     Perplexity,
     Deepinfra,
     Typesafe,
+    /// A linked client (for example a local Claude Code) answers each call; no network endpoint.
+    ClaudeBridge,
 }
 
 
@@ -26,7 +28,7 @@ impl ProviderId {
     /// Installation-owned endpoints only. Client catalog payloads cannot override these.
     pub fn chat_endpoint(self) -> Option<&'static str> {
         match self {
-            Self::OpenaiSubscription | Self::Typesafe => None,
+            Self::OpenaiSubscription | Self::Typesafe | Self::ClaudeBridge => None,
             Self::Deepseek => Some("https://api.deepseek.com/chat/completions"),
             Self::OpenaiApi => Some("https://api.openai.com/v1/chat/completions"),
             Self::Openrouter => Some("https://openrouter.ai/api/v1/chat/completions"),

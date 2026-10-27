@@ -17,6 +17,7 @@ impl Provider {
     #[cfg(any(test,feature="test-support"))]
     pub fn for_test(endpoint:String)->Self {Self(webagent_models::transport::Provider::for_test(endpoint))}
     pub fn transport(&self)->&webagent_models::transport::Provider {&self.0}
+    pub fn with_bridge(self,queue:std::sync::Arc<dyn webagent_models::transport::BridgeQueue>)->Self {Self(self.0.with_bridge(queue))}
     pub fn instructions_for_turn(pinned:&str)->String {crate::context::instructions::instructions_for_turn(pinned)}
     pub fn instructions_for_snapshot(pinned:&str,root:&std::path::Path,source:Option<&std::path::Path>)->Result<String> {crate::context::instructions::instructions_for_snapshot(pinned,root,source)}
     pub fn configured_base_instructions()->String {crate::context::instructions::configured_base_instructions()}

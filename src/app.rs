@@ -633,6 +633,7 @@ async fn run_process() -> Result<()> {
         .unwrap_or_else(|_| "/opt/v3/plugins/abilities".to_owned());
     let catalog = abilities::Catalog::load(&PathBuf::from(abilities_root))?;
     store.ensure_agent_connections(&catalog.ids()).await?;
+    let bridge = Arc::new(claude_bridge::Queue(store.clone()));
     let app = App {
         runtime: Arc::new(RwLock::new(runtime)), runtime_path, compaction_config_path,
         browser_login_bridge: browser_login::Bridge::configure(
@@ -645,7 +646,7 @@ async fn run_process() -> Result<()> {
         chat_access: None,
         abilities: Arc::new(catalog),
         gate: Arc::new(Mutex::new(())),
-        provider: provider::Provider::new(),
+        provider: provider::Provider::new().with_bridge(bridge),
         refresh: Arc::new(Mutex::new(())),
         login: Arc::new(RwLock::new(None)),
         active: Arc::new(Mutex::new(HashMap::new())),
