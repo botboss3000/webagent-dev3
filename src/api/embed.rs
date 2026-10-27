@@ -552,7 +552,9 @@ async fn scope_request(
         .strip_prefix("/api/v3")
         .unwrap_or(request.uri().path())
         .to_owned();
-    if !scope_path(&path)
+    // The panel reads the bound agent's privacy mode before a widget's first message.
+    let summary = path == format!("/agents/{agent}/access-summary");
+    if !(scope_path(&path) || summary)
         || path.contains("/promotions")
         || path.ends_with("/source-review")
         || path.ends_with("/state-inspect")
@@ -1053,5 +1055,9 @@ mod shared_scope_tests{
   let retained=axum::body::to_bytes(request.into_body(),1024).await.unwrap();assert_eq!(serde_json::from_slice::<Value>(&retained).unwrap()["token"],invite["token"]);
   let mut request=Request::builder().method("POST").uri("/api/v3/chat-invitations/redeem").body(axum::body::Body::from(json!({"token":invite["token"],"client_request_id":"widget-redeem"}).to_string())).unwrap();
   assert!(scope_request(&caller,&json!({"agent_id":"another-agent"}),&mut request).await.is_err());
+  for (path,ok) in [("/api/v3/agents/shared_default/access-summary",true),("/api/v3/agents/another-agent/access-summary",false),("/api/v3/agents/shared_default/members",false)]{
+   let mut request=Request::builder().uri(path).body(axum::body::Body::empty()).unwrap();
+   assert_eq!(scope_request(&caller,&doc,&mut request).await.is_ok(),ok,"{path}");
+  }
  }
 }
