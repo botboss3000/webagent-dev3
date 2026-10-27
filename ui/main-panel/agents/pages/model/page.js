@@ -3,6 +3,7 @@ import { mountModelTable } from '../../../../shared/models/model-table.js';
 import { initModelAnalytics } from '../../../../shared/models/model-analytics.js';
 import { createModelAdapter, usageFetch } from '../../../../shared/models/v3-adapter.js';
 import { mountModelLimits } from './model-limits.js';
+import { showNotification } from '../../../../chat/core/notification-panel.js';
 
 // Actual v2_ref Models mount: analytics sibling + shared renderer; only the adapter is v3-specific.
 export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
@@ -13,7 +14,11 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   const group=document.createElement('div');group.className='v3-reference-models';
   const analyticsHost=document.createElement('div');analyticsHost.className='agent-model-analytics-host';
   const tableHost=document.createElement('div');tableHost.style.marginTop='8px';group.append(analyticsHost,tableHost);host.append(css,pendingCss,group);
-  const analytics=initModelAnalytics(analyticsHost,{fetchFn:usageFetch('/usage/models'),apiPath:p=>p,scope:'user',agentId,description:'Compare the daily usage of every model used with this agent.'});
+  // Clearing and resetting usage only records markers, so the latest one can be undone.
+  const usageCleared=title=>{table.reload();showNotification({key:'usage-reset',title,message:'Earlier usage is hidden from the graph and the model table.',actions:[{label:'Undo',kind:'approve',run:async()=>{
+    await request('/usage/models/undo?'+new URLSearchParams({agent_id:agentId}),'POST');await Promise.all([table.reload(),analytics.reload()]);
+  }}]});};
+  const analytics=initModelAnalytics(analyticsHost,{fetchFn:usageFetch('/usage/models'),apiPath:p=>p,scope:'user',agentId,description:'Compare the daily usage of every model used with this agent.',onHistoryCleared:model=>usageCleared('Usage history cleared for '+model)});
   let limits;
   const table=mountModelTable(tableHost,{adapter:bridge.adapter,agentLocalRoster:true,userCatalog:true,inlineCatalogAdd:true,subscriptionScope:'agent',directivePresentation:'inline',directivesEditable:false,manualModelEntry:true,
     onLimitEdit:(id,field)=>limits?.edit(id,field),modelBudget:id=>limits?.budget(id),
@@ -25,7 +30,7 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
       button.onclick=async()=>{
         if(!confirm('Reset '+select.selectedOptions[0].textContent+' usage for this agent?'))return;
         button.disabled=true;status.textContent='Resetting…';
-        try{await request('/usage/models/reset?'+new URLSearchParams({agent_id:agentId,scope:select.value}),'POST');status.textContent='Reset complete';await Promise.all([table.reload(),analytics.reload()]);}
+        try{await request('/usage/models/reset?'+new URLSearchParams({agent_id:agentId,scope:select.value}),'POST');status.textContent='';await analytics.reload();usageCleared('Usage counters reset: '+select.selectedOptions[0].textContent);}
         catch(e){status.textContent=e.message||'Reset failed';}
         finally{button.disabled=false;}
       };

@@ -45,7 +45,7 @@ function esc(value) {
 
 let analyticsInstanceCount = 0;
 
-export function initModelAnalytics(host, { fetchFn, apiPath, scope = 'global', agentId = '', description = '', nestedAgentStacks = false }) {
+export function initModelAnalytics(host, { fetchFn, apiPath, scope = 'global', agentId = '', description = '', nestedAgentStacks = false, onHistoryCleared = null }) {
   if (!host || host.dataset.modelAnalyticsMounted === '1') return null;
   host.dataset.modelAnalyticsMounted = '1';
   const instanceId = ++analyticsInstanceCount;
@@ -886,6 +886,7 @@ export function initModelAnalytics(host, { fetchFn, apiPath, scope = 'global', a
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data?.error) throw new Error(data?.error || `HTTP ${response.status}`);
     await reload();
+    onHistoryCleared?.(model);
   }
 
   // A native popover light-dismisses on pointerdown, so by the time a click lands

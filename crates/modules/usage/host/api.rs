@@ -1,7 +1,8 @@
 //! Model usage for the Models pages: the signed-in user's own runs, or every
 //! user's runs for administrators. Only numeric public usage leaves here.
-//! Clearing history and resetting counters record time markers; run records,
-//! session totals and other users' views are never changed.
+//! Clearing history and resetting counters record time markers, and the latest
+//! one can be undone; run records, session totals and other users' views are
+//! never changed.
 use crate::{bad, Api, App, Store};
 use axum::{extract::{Query, State}, Extension, Json};
 use serde::Deserialize;
@@ -95,7 +96,8 @@ async fn everyone(app: App, args: UsageArgs, totals: bool) -> Api {
 async fn mark(app: &App, user: Option<&str>, agent: &str, kind: &str, model: &str) -> Api {
     let key = reset_key(user, agent);
     let mut resets = app.store.get(&key).await?.unwrap_or_default();
-    if !webagent_usage::mark_reset(&mut resets, kind, model, crate::now() as i64) { return Err(bad("Invalid usage reset")); }
+    let changed = if kind == "undo" { webagent_usage::undo_reset(&mut resets) } else { webagent_usage::mark_reset(&mut resets, kind, model, crate::now() as i64) };
+    if !changed { return Err(bad(if kind == "undo" { "Nothing to undo" } else { "Invalid usage reset" })); }
     app.store.put(&key, &resets).await?;
     Ok(Json(serde_json::json!({"ok": true})))
 }
@@ -117,4 +119,6 @@ pub(crate) async fn reset(Extension(app): Extension<App>, Query(args): Query<Usa
     let kind = args.scope.clone().unwrap_or_default();
     own_mark(app, args, &kind).await
 }
+pub(crate) async fn undo(Extension(app): Extension<App>, Query(args): Query<UsageArgs>) -> Api { own_mark(app, args, "undo").await }
 pub(crate) async fn admin_clear(State(app): State<App>, Query(args): Query<UsageArgs>) -> Api { mark(&app, None, "", "model", args.model.as_deref().unwrap_or("")).await }
+pub(crate) async fn admin_undo(State(app): State<App>) -> Api { mark(&app, None, "", "undo", "").await }

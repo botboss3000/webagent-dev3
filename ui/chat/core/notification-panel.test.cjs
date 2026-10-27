@@ -86,3 +86,19 @@ test('send failure card survives run refreshes; Retry and Dismiss clear it',asyn
  await buttons(host).find(b=>b.textContent==='Retry').onclick();assert.equal(retried,1);assert.doesNotMatch(flat(host),/Message not sent/);
  ui.showSendError({message:'again',retry:async()=>{}});buttons(host).find(b=>b.textContent==='Dismiss').onclick();assert.doesNotMatch(flat(host),/Message not sent/);
 });
+test('shared notices float without a visible composer, replace by key and close after a successful action',async()=>{
+ const body=new E('body'),byId={};
+ const all=()=>{const out=[],walk=n=>{for(const c of n.children){out.push(c);walk(c);}};walk(body);return out;};
+ const document={body,createElement:t=>new E(t),getElementById:id=>byId[id]||all().find(n=>n.id===id)||null,
+  querySelectorAll:s=>all().filter(n=>s==='[data-notification-key]'&&n.dataset.notificationKey)};
+ const context=vm.createContext({document,setTimeout,clearTimeout});
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'notification-panel.js'),'utf8').replaceAll('export function','function'),context);
+ let undone=0,fail=true;
+ context.showNotification({key:'usage',title:'First',timeout:0});
+ context.showNotification({key:'usage',title:'Cleared',message:'Hidden',timeout:0,actions:[{label:'Undo',run:async()=>{if(fail)throw Error('Nothing to undo');undone++;}}]});
+ const stack=body.children[0];assert.equal(stack.id,'app-notifications');assert.equal(stack.children.length,1);
+ const card=stack.children[0],[undo,dismiss]=card.querySelector('.chat-notification-actions').children;
+ await undo.onclick();assert.equal(card.querySelector('.chat-notification-message').textContent,'Nothing to undo');assert.equal(stack.children.length,1);
+ fail=false;await undo.onclick();assert.equal(undone,1);assert.equal(stack.children.length,0);
+ context.showNotification({title:'Other',timeout:0});dismiss.onclick();stack.children[0].querySelector('.chat-notification-actions').children[0].onclick();assert.equal(stack.children.length,0);
+});

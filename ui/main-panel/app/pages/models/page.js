@@ -2,6 +2,7 @@
 import { mountModelTable } from '../../../../shared/models/model-table.js';
 import { initModelAnalytics } from '../../../../shared/models/model-analytics.js';
 import { usageFetch, usageQuery } from '../../../../shared/models/v3-adapter.js';
+import { showNotification } from '../../../../chat/core/notification-panel.js';
 const MISSING='NEED BACKEND CONTRACT';
 const unavailable=async()=>new Response(JSON.stringify({error:MISSING}),{status:501,headers:{'Content-Type':'application/json'}});
 
@@ -94,7 +95,10 @@ export async function mountAppModels(host) {
   for(const control of extras.querySelectorAll('input,select,button')) {
     control.disabled=true;const label=document.createElement('span');label.className='v3-contract-pending';label.textContent=MISSING;control.after(label);
   }
-  analytics=initModelAnalytics(q('#ac-model-analytics'),{fetchFn:usageFetch('/admin/usage/models'),apiPath:p=>p,scope:'global',description:'Application model usage across all users.'});
+  analytics=initModelAnalytics(q('#ac-model-analytics'),{fetchFn:usageFetch('/admin/usage/models'),apiPath:p=>p,scope:'global',description:'Application model usage across all users.',
+    onHistoryCleared:model=>{table?.reload();showNotification({key:'usage-reset',title:'Usage history cleared for '+model,message:'Earlier usage is hidden from the all-users graph and totals.',actions:[{label:'Undo',kind:'approve',run:async()=>{
+      await request('/admin/usage/models/undo','POST');await Promise.all([table?.reload(),analytics.reload()]);
+    }}]});}});
   async function load() {
     const generation=++scopeGeneration;table?.destroy();table=null;dirty=false;
     status.textContent='Loading…';result.hidden=true;

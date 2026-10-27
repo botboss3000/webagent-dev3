@@ -20,6 +20,25 @@ export function createChatNotification({title,message,details,body,actions=[],do
   for(const item of actions)buttons.append(createChatNotificationAction(item,{documentObject,guard}));
   node.append(buttons);return node;
 }
+// Shared notices for any page: shown above the chat composer while it is on screen,
+// otherwise in a floating stack. A key replaces its earlier notice; actions close
+// the notice when they succeed and show their error otherwise.
+export function showNotification({key,title,message='',actions=[],timeout=10000,documentObject=globalThis.document}) {
+  const panel=documentObject.getElementById('notification-panel');
+  let host=panel?.closest('#chat-input-area')?.getClientRects().length?panel:documentObject.getElementById('app-notifications');
+  if(!host){host=documentObject.createElement('div');host.id='app-notifications';host.setAttribute('aria-live','polite');documentObject.body.append(host);}
+  if(key)for(const old of documentObject.querySelectorAll('[data-notification-key]'))if(old.dataset.notificationKey===key)old.remove();
+  let timer=null,node=null;
+  const close=()=>{clearTimeout(timer);node?.remove();};
+  const wrap=item=>({...item,run:async()=>{
+    try{await item.run();close();}catch(error){node.querySelector('.chat-notification-message').textContent=error?.message||'Action failed';}
+  }});
+  node=createChatNotification({title,message,documentObject,actions:[...actions.map(wrap),{label:'Dismiss',kind:'neutral',run:close}]});
+  node.setAttribute('role','status');if(key)node.dataset.notificationKey=key;
+  host.append(node);
+  if(timeout)timer=setTimeout(close,timeout);
+  return {close};
+}
 export function mountNotificationPanel({root,guard,request,note}) {
   const host=root.querySelector('#notification-panel');
   const modeSlot=document.createElement('div');

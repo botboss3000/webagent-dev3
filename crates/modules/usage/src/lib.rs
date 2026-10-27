@@ -133,9 +133,19 @@ pub fn model_totals(samples:&[Sample],entry:&str,model:&str,include_unassigned:b
 
 /// Record a reset at `now`: `model` clears that model's history; `all`, `input`,
 /// `output` or `cost` zero those counters for earlier runs. Run records stay intact.
+/// The markers before the latest reset are kept so it can be undone once.
 pub fn mark_reset(resets:&mut Value,kind:&str,model:&str,now:i64)->bool{
-    let fields:&[&str]=match kind{"model" if !model.is_empty()=>{resets["models"][model]=json!(now);return true}"all"=>&["input","output","cost"],"input"=>&["input"],"output"=>&["output"],"cost"=>&["cost"],_=>return false};
+    let fields:&[&str]=match kind{"model" if !model.is_empty()=>&[],"all"=>&["input","output","cost"],"input"=>&["input"],"output"=>&["output"],"cost"=>&["cost"],_=>return false};
+    let previous=json!({"models":resets["models"].clone(),"fields":resets["fields"].clone()});
+    if kind=="model"{resets["models"][model]=json!(now);}
     for field in fields{resets["fields"][*field]=json!(now);}
+    resets["undo"]=previous;
+    true
+}
+/// Restore the markers from before the latest reset; false when there is nothing to undo.
+pub fn undo_reset(resets:&mut Value)->bool{
+    let Some(previous)=resets.as_object_mut().and_then(|r|r.remove("undo")).filter(Value::is_object) else{return false};
+    resets["models"]=previous["models"].clone();resets["fields"]=previous["fields"].clone();
     true
 }
 /// Apply recorded resets to one sample; false when its model's history was cleared.
@@ -196,6 +206,12 @@ mod tests{
         assert_eq!((kept.usage["input_tokens"].as_u64(),kept.usage["output_tokens"].as_u64(),kept.usage["known_cost_usd"].as_f64()),(Some(5),Some(0),Some(1.)));
         assert!(mark_reset(&mut resets,"all","",300));let mut late=sample(250,"a","","m2",3,4,0.5);apply_resets(&mut late,&resets);
         assert_eq!(model_totals(&[late],"","m2",false),json!({"total_input_tokens":0,"total_output_tokens":0,"total_cost_usd":0.0}));
+        // Undo restores the markers from before the latest reset, once.
+        assert!(undo_reset(&mut resets));assert_eq!(resets["fields"]["input"],Value::Null);assert_eq!(resets["fields"]["output"],200);
+        let mut late=sample(250,"a","","m2",3,4,0.5);apply_resets(&mut late,&resets);assert_eq!(late.usage["input_tokens"],3);
+        assert!(!undo_reset(&mut resets));
+        let mut cleared=Value::Null;assert!(mark_reset(&mut cleared,"model","m1",100)&&undo_reset(&mut cleared));
+        assert!(apply_resets(&mut sample(50,"a","e1","m1",1,1,0.),&cleared));
     }
     struct Docs{invalidated:AtomicUsize}
     async fn doc(tx:&mut Transaction<'_,Sqlite>,key:&str)->Result<Option<Value>>{
