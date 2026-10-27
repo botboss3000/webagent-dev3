@@ -40,7 +40,7 @@ try{
   await press();
   await page.getByText('Created Research assistant.').waitFor();
   const calls=await page.evaluate(()=>calls);
-  assert.deepEqual(calls.map(call=>[call.path,call.method,call.body.name,call.body.description]),[['/agents','POST','Research assistant',null],['/agents','POST','Research assistant',null]]);
+  assert.deepEqual(calls.map(call=>[call.path,call.method,call.body.name,call.body.description]),[['/models/agents','POST','Research assistant',null],['/models/agents','POST','Research assistant',null]]);
   assert.equal(calls[0].body.client_request_id,calls[1].body.client_request_id,'an unchanged retry reuses its request ID');
   assert.deepEqual(await page.evaluate(()=>created),[{id:'agent-x',name:'Research assistant',assignment_required:true}]);
   assert.equal(await page.getByLabel(/^Name/).inputValue(),'','the form resets after creation');

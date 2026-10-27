@@ -20,7 +20,7 @@ export function renderCreateAgent(host,request,{onCreated}) {
     const current=JSON.stringify([body.name,body.description]);if(draft&&draft!==current)body.client_request_id=id=requestId();draft=current;
     submit.disabled=true;status.textContent='Creating…';
     try{
-      const created=await request('/agents','POST',body);
+      const created=await request('/models/agents','POST',body);
       id=requestId();draft='';form.reset();status.textContent='Created '+created.name+'.';
       await onCreated(created);
     }catch(error){status.textContent='Agent not created: '+error.message;}
