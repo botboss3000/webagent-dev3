@@ -33,8 +33,9 @@ const ids=new Map(),keyId=key=>{if(!ids.has(key))ids.set(key,crypto.randomUUID()
 async function publicRequest(path,body){const response=await fetch('/api/v3'+path,{method:body===undefined?'GET':'POST',credentials:'omit',headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});const value=await response.json().catch(()=>({}));if(!response.ok)throw Error(value.error||value.message||'Embedded chat unavailable');return value;}
 // Purpose: Send bearer-authenticated embed API requests only while the current credential is unexpired; a 401 clears credentials, assets, polling, and chat state.
 
-// A write such as the first send admits a guest when allowed; reads never create guest accounts.
-async function request(path,method='GET',body){if(method!=='GET'&&!authBusy)await ensureAuthenticated();if(!credential||Date.now()/1000>=expires)throw Error('Type /login to sign in, or send a message to chat as a guest');
+// Once the visitor types or submits, any request (the first send reads the agent's privacy mode) admits a guest when allowed; page views alone never create guest accounts.
+let engaged=false;for(const type of ['input','submit'])document.addEventListener(type,()=>{engaged=true},{capture:true,once:true});
+async function request(path,method='GET',body){if((engaged||method!=='GET')&&!authBusy)await ensureAuthenticated();if(!credential||Date.now()/1000>=expires)throw Error('Type /login to sign in, or send a message to chat as a guest');
  const response=await fetch('/api/v3'+path,{method,credentials:'omit',headers:{'Content-Type':'application/json',Authorization:'Bearer '+credential},...(body===undefined?{}:{body:JSON.stringify(body)})});const value=await response.json().catch(()=>({}));
  if(!response.ok){if(response.status===401){credential=null;clearAssets();clearInterval(poll);chat?.disconnect();emit('authentication',{connected:false});}const error=Error(value.error||value.message||'Request failed ('+response.status+')');error.status=response.status;throw error}return value;}
 // Purpose: Refresh caller status and project active runs into the chat panel while authenticated.
