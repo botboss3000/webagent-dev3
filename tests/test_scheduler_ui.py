@@ -60,6 +60,9 @@ class SchedulerUITests(unittest.TestCase):
             return driver.find_element(By.XPATH,"//button[normalize-space(.)='"+text+"']")
         try:
             driver.get("http://127.0.0.1:"+str(server.server_port)+"/fixture")
+            tasks=wait.until(lambda d:d.find_element(By.CSS_SELECTOR,"details.build-scheduler-tasks"))
+            self.assertIsNone(tasks.get_attribute("open"))
+            tasks.find_element(By.TAG_NAME,"summary").click()
             wait.until(lambda d:"holding-code-owner"in d.find_element(By.CSS_SELECTOR,".build-scheduler-tasks").text)
             text_button("Clear").click()
             wait.until(lambda d:not d.find_elements(By.CSS_SELECTOR,".build-list .build-card"))

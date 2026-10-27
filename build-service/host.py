@@ -262,6 +262,8 @@ LOCAL_WORKSPACE = "71440aad-a6ba-4ba8-adc8-1fcf66250be6"
 WORKER_CONTROL = Path(CONFIG["worker_control"])
 MAX_LOG = 1024 * 1024
 PUBLIC_LOG = 16 * 1024
+# _view scrubs each job's full stored log; projecting all receipts made every poll take ~14 s.
+DASHBOARD_JOBS = 50
 MAX_CONTEXT = 128 * 1024 * 1024
 MIN_DEPLOY_FREE = 8 * 1024 * 1024 * 1024
 MIN_SEQUENCE_FREE = 5 * 1024 * 1024 * 1024
@@ -5391,7 +5393,9 @@ class Broker:
                 jobs = []
                 # Adopted releases remain addressable by ID but are no longer pending in the queue.
                 recent = (job for job in self.jobs.values() if not job.get("operator_adopted_at"))
-                for job in sorted(recent, key=lambda row: row["created_at"], reverse=True):
+                ordered = sorted(recent, key=lambda row: row["created_at"], reverse=True)
+                for job in [job for index, job in enumerate(ordered)
+                            if index < DASHBOARD_JOBS or job["status"] in ("queued", "running", "needs_decision")]:
                     view = self._view(job, administrator=True)
                     # Keep compiler/cache artifacts on the per-job detail endpoint.
                     view = {key: value for key, value in view.items() if key in {"job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "isolated", "synchronization", "cancellation", "queue_preflight", "reason", "log", "log_bytes", "log_truncated"}}

@@ -530,6 +530,9 @@ class BuildTests(unittest.TestCase):
                            workspace=dashboard["session_id"])
         self.assertEqual("passed", legacy["jobs"][0]["rust_tests"]["status"])
         self.assertIn("detailed test output was not retained", legacy["jobs"][0]["rust_tests"]["summary"])
+        with patch.object(host, "DASHBOARD_JOBS", 0):
+            bounded = self.call("v3_build_dashboard", trusted=dashboard, workspace=dashboard["session_id"])
+        self.assertEqual([], bounded["jobs"])
         self.assertIn("building_api", [item["phase"] for item in view["jobs"][0]["phase_history"]])
         self.assertEqual("healthy", view["containers"]["api"]["health"])
         self.assertNotIn("NEVER-EXPOSE-THIS", json.dumps(view))
