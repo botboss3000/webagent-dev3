@@ -33,15 +33,16 @@ const ids=new Map(),keyId=key=>{if(!ids.has(key))ids.set(key,crypto.randomUUID()
 async function publicRequest(path,body){const response=await fetch('/api/v3'+path,{method:body===undefined?'GET':'POST',credentials:'omit',headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});const value=await response.json().catch(()=>({}));if(!response.ok)throw Error(value.error||value.message||'Embedded chat unavailable');return value;}
 // Purpose: Send bearer-authenticated embed API requests only while the current credential is unexpired; a 401 clears credentials, assets, polling, and chat state.
 
-async function request(path,method='GET',body){if(!credential||Date.now()/1000>=expires)throw Error('Sign in or continue as guest');
+// A write such as the first send admits a guest when allowed; reads never create guest accounts.
+async function request(path,method='GET',body){if(method!=='GET'&&!authBusy)await ensureAuthenticated();if(!credential||Date.now()/1000>=expires)throw Error('Type /login to sign in, or send a message to chat as a guest');
  const response=await fetch('/api/v3'+path,{method,credentials:'omit',headers:{'Content-Type':'application/json',Authorization:'Bearer '+credential},...(body===undefined?{}:{body:JSON.stringify(body)})});const value=await response.json().catch(()=>({}));
- if(!response.ok){if(response.status===401){credential=null;clearAssets();clearInterval(poll);chat?.disconnect();document.getElementById('embed-identity').textContent='Reconnect to chat';emit('authentication',{connected:false});}const error=Error(value.error||value.message||'Request failed ('+response.status+')');error.status=response.status;throw error}return value;}
+ if(!response.ok){if(response.status===401){credential=null;clearAssets();clearInterval(poll);chat?.disconnect();emit('authentication',{connected:false});}const error=Error(value.error||value.message||'Request failed ('+response.status+')');error.status=response.status;throw error}return value;}
 // Purpose: Refresh caller status and project active runs into the chat panel while authenticated.
 
 async function refresh(){if(!credential)return;state=await request('/user/status');chat?.runs(state.runs||[]);}
 // Purpose: Replace the current credential, select the requested or first accessible session, refresh state, and start visible-session polling.
 
-async function connected(value){clearAssets();credential=value.token;expires=value.expires_at;identity={...value.user,is_admin:false};document.getElementById('embed-identity').textContent=identity.is_guest?'Guest':identity.user;document.getElementById('embed-guest').hidden=true;
+async function connected(value){clearAssets();credential=value.token;expires=value.expires_at;identity={...value.user,is_admin:false};
  const items=await chat.sessions(),wanted=params.get('session_id'),selected=items.find(s=>s.id===wanted)||items[0];if(selected)await chat.open(selected.id,'replace');
  await refresh();clearInterval(poll);poll=setInterval(()=>refresh().catch(error=>note(error.message)),3000);note('');emit('authentication',{connected:true,is_guest:!!identity.is_guest});}
 // Purpose: Acquire public guest access only once per pending connection and clear the busy flag on completion.
@@ -51,15 +52,16 @@ async function guest(){if(authBusy)throw Error('Connection is pending');authBusy
 
 async function ensureAuthenticated(){if(credential&&Date.now()/1000<expires)return;if(!(access.guest_access&&descriptor.config?.guest_access))throw Error('Sign in to send your message');await guest();}
 const descriptor=await publicRequest('/embed/'+encodeURIComponent(agentId)+'/descriptor?origin='+encodeURIComponent(hostOrigin));
-document.getElementById('embed-agent-name').textContent=descriptor.agent.name||'WebAgent';
 setChatSurfaceActions({title:descriptor.agent.name||'WebAgent',minimize:()=>emit('minimize'),close:()=>emit('close')});
 chat=await mountChatPanel({root,resolveAsset,enableMainNotes:false,request,guard,note,keyId,forgetKey:key=>ids.delete(key),refresh,getState:()=>state,getAgentId:()=>agentId,getIdentity:()=>identity,onLogin:()=>login(),onEvent:emit,createStream:url=>createFetchStream(url,{headers:()=>({Authorization:'Bearer '+credential})})});
 await initChatConfig({config:descriptor.chat_ui,root});
 // Apply the normal send rules before sign-in; the shell's Send starts disabled and only status refresh re-enables it, so /login could not be clicked.
 chat.runs([]);
-const access=await publicRequest('/auth/access-mode').catch(()=>({guest_access:false}));document.getElementById('embed-guest').hidden=!(access.guest_access&&descriptor.config?.guest_access);
-let theme;try{theme=localStorage.getItem('v3-theme')}catch{}document.body.classList.toggle('light-mode',theme==='light');
-document.getElementById('embed-guest').onclick=guard(guest);
+const access=await publicRequest('/auth/access-mode').catch(()=>({guest_access:false}));
+// chat_widget.window.theme (light/dark) overrides the visitor's stored theme; window.background recolours the panel from its base token.
+const windowStyle={...descriptor.chat_ui?.chat_common?.window,...descriptor.chat_ui?.chat_widget?.window};
+let theme=['light','dark'].includes(windowStyle.theme)?windowStyle.theme:null;if(!theme)try{theme=localStorage.getItem('v3-theme')}catch{}document.body.classList.toggle('light-mode',theme==='light');
+const background=typeof windowStyle.background==='string'?windowStyle.background.trim():'';if(background&&CSS.supports('color',background))document.body.style.setProperty('--bg-0',background);
 // @code-index {"version":1,"feature":"chat-embed-auth","aliases":["embedded chat authorization","PKCE popup handoff","embed sign in"],"purpose":"Locates popup consent, PKCE challenge creation, one-use redemption, and popup-origin/source validation for embedded chat authorization.","span_lines":40,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Origin binding, channel checks, one-use authorization and command validation are security invariants; they must not become UI bypass settings."}}
 const signIn=guard(async()=>{
  if(authBusy)throw Error('Connection is pending');
@@ -72,14 +74,13 @@ const signIn=guard(async()=>{
  // Purpose: Abort popup listeners and clear pending challenge/busy state after success or terminal failure.
 
  const finish=()=>{abort.abort();authBusy=false;popupChallenge='';};
- authWatch=watchAuthorization({redeem:()=>publicRequest('/embed/redeem',{challenge_id:challenge.challenge_id,code_verifier:verifier}),connected:async value=>{finish();await connected(value)},ended:error=>{finish();note('Sign-in ended. Click Sign in to try again. '+(error.message||''))},isClosed:()=>popup.closed,isExpired:()=>Date.now()/1000>=challenge.expires_at});
+ authWatch=watchAuthorization({redeem:()=>publicRequest('/embed/redeem',{challenge_id:challenge.challenge_id,code_verifier:verifier}),connected:async value=>{finish();await connected(value)},ended:error=>{finish();note('Sign-in ended. Type /login to try again. '+(error.message||''))},isClosed:()=>popup.closed,isExpired:()=>Date.now()/1000>=challenge.expires_at});
  // Purpose: Accept only the same-origin authorization signal from the expected popup and challenge.
 
  const complete=event=>{if(event.origin!==location.origin||event.source!==popup||event.data?.namespace!=='webagent.widget.auth'||event.data.challenge_id!==challenge.challenge_id||event.data.authorized!==true)return;void authWatch.complete();};
  window.addEventListener('message',complete,{signal:abort.signal});
  }catch(error){authBusy=false;popup.close();throw error}
 });
-document.getElementById('embed-connect').onclick=signIn;
 // Purpose: Show the sign-in panel for "/login"; its Sign in button starts the same first-party popup flow.
 function login(){const connected=credential&&Date.now()/1000<expires;openSignInPanel({agent:descriptor.agent.name||'WebAgent',message:'Sign in on '+location.host+' in a secure popup to use your account access on '+hostOrigin+'. Your password is never entered on this website.',identity:connected?(identity.is_guest?'Guest':identity.user):'',signIn,guest:!connected&&access.guest_access&&descriptor.config?.guest_access?guard(guest):null});}
 // Parent commands are serialized; the bounded receipt journal replays identical IDs and rejects changed input.

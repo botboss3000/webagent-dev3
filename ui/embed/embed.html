@@ -23,5 +23,5 @@
 <link rel="stylesheet" href="/v3-ui/embed/embed.css">
 <!-- Native authentication actions share the central touch feedback configuration. -->
 <script type="module" src="/v3-ui/shared/remaining-control-feedback.js"></script>
-</head><body><!-- Embed shell: embed-app.js owns auth/notice controls; the shared chat panel mounts into chat-panel. -->
-<div class="wa-embed-root"><div class="wa-embed-auth"><span id="embed-agent-name">WebAgent</span><button id="embed-connect" type="button">Sign in</button><button id="embed-guest" type="button">Continue as guest</button><span id="embed-identity"></span></div><div id="notice" role="status" aria-live="polite"></div><div id="chat-panel" class="chat-surface"></div></div></body></html>
+</head><body><!-- Embed shell: embed-app.js owns the notice line; the shared chat panel mounts into chat-panel. Sign-in is the /login panel. -->
+<div class="wa-embed-root"><div id="notice" role="status" aria-live="polite"></div><div id="chat-panel" class="chat-surface"></div></div></body></html>

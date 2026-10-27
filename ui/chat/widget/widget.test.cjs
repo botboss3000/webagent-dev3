@@ -4,6 +4,13 @@ async function moduleAt(file,globals={}){const context=vm.createContext({...glob
 test('restored and resized widget stays within viewport',async()=>{const {clampGeometry}=await moduleAt('window.js');const r=clampGeometry({x:-900,y:9000,width:9999,height:9999},{},{width:1024,height:768});assert.equal(r.x,8);assert.equal(r.y,8);assert.equal(r.width,1008);assert.equal(r.height,752);});
 test('narrow widget uses available width; profile enforces minimums',async()=>{const {clampGeometry}=await moduleAt('window.js');const narrow=clampGeometry({width:440},{},{width:360,height:640});assert.equal(narrow.width,344);assert.equal(narrow.x,8);const r=clampGeometry({width:10,height:10},{window:{min_width:350,min_height:400}},{width:1000,height:800});assert.equal(r.width,350);assert.equal(r.height,400);});
 test('widget overrides inherit common formatting and replace row arrays',async()=>{const {mergeProfile}=await moduleAt('window.js');const merged=mergeProfile({messages:{font:17,color:'red'},rows:['base']},{messages:{color:'blue'},rows:['widget']});assert.equal(merged.messages.font,17);assert.equal(merged.messages.color,'blue');assert.deepEqual(Array.from(merged.rows),['widget']);});
+test('window radius and background style the shell; invalid values keep stylesheet defaults',async()=>{
+ const {applyWindowStyle}=await moduleAt('window.js',{CSS:{supports:(property,value)=>property==='color'&&/^#[0-9a-f]{6}$/i.test(value)}});
+ const props=new Map(),shell={style:{borderRadius:'',setProperty:(k,v)=>props.set(k,v),removeProperty:k=>props.delete(k)}};
+ applyWindowStyle(shell,{window:{radius:28,background:'#F4F3F0'}});assert.equal(shell.style.borderRadius,'28px');assert.equal(props.get('--bg-1'),'#F4F3F0');assert.equal(props.get('--bg-elev'),'#F4F3F0');
+ applyWindowStyle(shell,{window:{radius:999,background:'url(x)'}});assert.equal(shell.style.borderRadius,'64px');assert.equal(props.size,0);
+ applyWindowStyle(shell,{window:{}});assert.equal(shell.style.borderRadius,'');
+});
 test('authenticated SSE handles split Unicode, named events and closes',async()=>{
  let controller,options;const stream=new ReadableStream({start(c){controller=c}});const {createFetchStream}=await moduleAt('../core/fetch-stream.js',{TextDecoder,AbortController,queueMicrotask,setTimeout,clearTimeout,fetch:()=>{throw Error('Unexpected default fetch')}});
  const events=[];const source=createFetchStream('/events',{headers:()=>({Authorization:'Bearer test-only'}),fetchFn:async(url,o)=>{options=o;return {ok:true,body:stream}}});source.onmessage=e=>events.push(e.data);source.addEventListener('session_updated',e=>events.push('meta:'+e.data));await tick();
@@ -21,7 +28,7 @@ test('head loader waits for the body and respects an already mounted widget',()=
 
 test('embedded window keeps its iframe mounted once across open, minimize and close',async()=>{
  let attachments=0,panel;class Node{
- constructor(){this.children=[];this.parentNode=null;this.style={};this.dataset={};}
+ constructor(){this.children=[];this.parentNode=null;this.style={setProperty(){},removeProperty(){}};this.dataset={};}
  append(...nodes){for(const n of nodes){if(n===panel)attachments++;n.remove();this.children.push(n);n.parentNode=this;}}
  before(n){if(this.parentNode)this.parentNode.insertBefore(n,this);}
  insertBefore(n,next){n.remove();const i=this.children.indexOf(next);this.children.splice(i<0?this.children.length:i,0,n);n.parentNode=this;}

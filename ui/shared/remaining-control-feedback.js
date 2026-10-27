@@ -8,5 +8,5 @@ import { discoverPageControlFeedback } from './page-control-feedback.js';
 // without the authenticated app shell. Shared discovery handles BFCache teardown.
 discoverPageControlFeedback([
   '#main-panel > .tab-content:not(#tab-app):not(#tab-agents)',
-  '#app-restricted-overlay', '.setup-box', '.wa-embed-auth', '.wa-embed-connect',
+  '#app-restricted-overlay', '.setup-box', '.wa-embed-connect',
 ].join(', '));

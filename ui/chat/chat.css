@@ -144,9 +144,7 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
   .chat-element-full-view-backdrop,
   [data-chat-control-surface="undo"],
   #chat-toggle-btn,
-  #chat-float-btn,
-  #embed-connect,
-  #embed-guest
+  #chat-float-btn
 ) {
   -webkit-tap-highlight-color:transparent;
 }
@@ -163,7 +161,7 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
   .chat-element-full-view-backdrop,
   [data-chat-control-surface="undo"]
 ) :where(button,[role="button"],[role="menuitem"],summary),
-:where(#chat-toggle-btn,#chat-float-btn,#embed-connect,#embed-guest) {
+:where(#chat-toggle-btn,#chat-float-btn) {
   -webkit-tap-highlight-color:transparent;
 }
 

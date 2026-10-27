@@ -9,6 +9,13 @@ export function clampGeometry(value,profile={},viewport={width:innerWidth,height
  const height=Math.min(maxH,Math.max(Math.min(maxH,finite(cfg.min_height,320)),finite(value.height,finite(cfg.height,620))));
  return {width,height,x:narrow?margin:Math.max(margin,Math.min(viewport.width-width-margin,finite(value.x,viewport.width-width-20))),y:Math.max(margin,Math.min(viewport.height-height-margin,finite(value.y,viewport.height-height-20)))};
 }
+/** Applies window.radius (px) and window.background (CSS colour) to the shell; invalid or unset values keep the stylesheet defaults. */
+export function applyWindowStyle(shell,profile={}){
+ const cfg=profile.window||{},radius=Number(cfg.radius),background=typeof cfg.background==='string'?cfg.background.trim():'';
+ shell.style.borderRadius=cfg.radius!==undefined&&cfg.radius!==''&&Number.isFinite(radius)?Math.max(0,Math.min(64,radius))+'px':'';
+ const colour=background&&globalThis.CSS?.supports?.('color',background)?background:'';
+ for(const token of ['--bg-1','--bg-elev'])colour?shell.style.setProperty(token,colour):shell.style.removeProperty(token);
+}
 /** Wraps the chat panel in a movable, resizable window with open/minimize/close/dock states. Geometry is restored and saved under storageKey, viewport changes reclamp it, and destroy removes listeners and shell nodes. The optional synchronous feedback callback is registered on the shell; destroy releases that registration. */
 export function createFloatingChat({panel,profile={},storageKey='webagent.widget.geometry',onMinimize=()=>{},onClose=()=>{},onDock=()=>{},embedded=false,container=document.body,feedback}){
  const anchor=document.createComment('chat dock position');panel.before(anchor);
@@ -34,7 +41,7 @@ export function createFloatingChat({panel,profile={},storageKey='webagent.widget
  minimize(){shell.hidden=true;mode='minimized';onMinimize();savedFocus?.focus?.({preventScroll:true})},
  close(){shell.hidden=true;mode='closed';onClose();savedFocus?.focus?.({preventScroll:true})},
  dock(){anchor.parentNode?.insertBefore(panel,anchor.nextSibling);shell.hidden=true;mode='docked';onDock()},
- setProfile(next){profile=next||{};shell.dataset.resizable=String(profile.window?.resizable!==false);layout()},
+ setProfile(next){profile=next||{};shell.dataset.resizable=String(profile.window?.resizable!==false);applyWindowStyle(shell,profile);layout()},
  isOpen(){return mode==='open'},get state(){return mode},
  destroy(){if(disposed)return;disposeFeedback();api.dock();disposed=true;window.removeEventListener('resize',layout);shell.remove();anchor.remove()}};
  if(!embedded)button('Dock chat','↗',()=>api.dock());button('Minimize chat','−',()=>api.minimize());button('Close chat','×',()=>api.close());
@@ -182,7 +189,7 @@ const PORTAL_SELECTOR = [
   '.chat-element-full-view-backdrop',
   '[data-chat-control-surface="undo"]',
 ].join(',');
-const SHELL_SELECTOR = '#chat-toggle-btn, #chat-float-btn, #embed-connect, #embed-guest';
+const SHELL_SELECTOR = '#chat-toggle-btn, #chat-float-btn';
 const MAX_TRACKED_POINTERS = 4;
 const MAX_PENDING_CLICKS = 4;
 const CLICK_ASSOCIATION_MS = 800;
