@@ -53,6 +53,10 @@ class ComponentBuildTests(unittest.TestCase):
             path.write_text(json.dumps(usage));self.assertEqual(engine.descriptor(path),usage)
             self.assertIn("crates/usage-reports/src/lib.rs",engine.closure(ROOT,"usage-reports"))
             self.assertTrue(engine.package_path("v3/crates/usage-reports/src/lib.rs",{}))
+            discovery=json.loads((ROOT/"plugins/engine/model-discovery/component.json").read_text())
+            path.write_text(json.dumps(discovery));self.assertEqual(engine.descriptor(path),discovery)
+            self.assertIn("crates/model-discovery/src/lib.rs",engine.closure(ROOT,"model-discovery"))
+            self.assertTrue(engine.package_path("v3/crates/model-discovery/src/lib.rs",{}))
 
     # Require exact service dependency closures and reject symlinked source inputs.
     def test_each_service_closure_includes_shared_contracts_and_exact_local_dependencies(self):

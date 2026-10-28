@@ -39,6 +39,7 @@ fn module_registration(operation:&str)->Option<(&'static str,&'static str,Vec<&'
  match operation {
   "module.toy"=>Some(("module-toy","webagent-toy-service",vec!["crates/module-toy","crates/module-service","crates/module-interface","crates/engine-service","Cargo.toml","Cargo.lock"])),
   "usage.reports"=>Some(("usage-reports","webagent-usage-service",vec!["crates/usage-service","crates/usage-reports","crates/modules/usage","crates/module-service","crates/module-interface","crates/engine-service","Cargo.toml","Cargo.lock"])),
+  "models.discovery"=>Some(("model-discovery","webagent-models-service",vec!["crates/models-service","crates/model-discovery","crates/modules/models","crates/modules/access","crates/modules/accounts","crates/modules/configuration","crates/provider-contracts","crates/context-contracts","crates/provider-projection","crates/module-service","crates/module-interface","crates/engine-service","Cargo.toml","Cargo.lock"])),
   _=>None,
  }
 }
@@ -844,7 +845,7 @@ mod tests {
  /// A registered module service enters the catalog only with its own group, package and limits.
  #[test]
  fn module_descriptors_validate_only_as_modules() {
-  for id in ["module-toy","usage-reports"] {
+  for id in ["module-toy","usage-reports","model-discovery"] {
   let path=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../plugins/engine").join(id).join("component.json");
   let value:Value=serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
   serde_json::from_value::<Descriptor>(value.clone()).unwrap().validate().unwrap();

@@ -239,7 +239,7 @@ pub async fn pending_subscription_authorization<C:RuntimeStorage>(app:&Runtime<'
         "verification_url":pending["verification_url"],"user_code":pending["user_code"],
         "expires_at":pending["expires_at"]})))
 }
-pub async fn subscription_models<C:RuntimeStorage>(app:&Runtime<'_,C>,identity:Value,id:String,params:HashMap<String,String>)->Api {
+pub async fn subscription_models<C:RuntimeStorage>(app:&Runtime<'_,C>,identity:Value,id:String,params:HashMap<String,String>,discovery:&impl crate::discovery::ModelDiscovery)->Api {
     let caller=principal(&app,&identity).await?;
     let agent=selected(&params);
     authority(&app,&identity,agent,true).await?;
@@ -250,7 +250,7 @@ pub async fn subscription_models<C:RuntimeStorage>(app:&Runtime<'_,C>,identity:V
         .ok_or_else(denied)?;
     let tokens=app.tokens_at(&connection.credential_ref).await
         .map_err(|_|ApiError(StatusCode::PRECONDITION_REQUIRED,"Connect ChatGPT to list models".into()))?;
-    Ok(Json(app.provider.subscription_models(&tokens).await
+    Ok(Json(app.provider.subscription_models(&tokens,discovery).await
         .map_err(|_|ApiError(StatusCode::BAD_GATEWAY,"Subscription model catalog unavailable".into()))?))
 }
 pub async fn connection_authorize<C:RuntimeStorage>(app:&Runtime<'_,C>,identity:Value,id:String)->Api {
@@ -349,7 +349,7 @@ pub async fn connection_key<C:RuntimeStorage>(app:&Runtime<'_,C>,identity:Value,
     app.store.save_model_catalog(&catalog, catalog.revision).await?;
     Ok(Json(json!({"saved":true})))
 }
-pub async fn discover<C:RuntimeStorage>(app:&Runtime<'_,C>,identity:Value,input:Discovery)->Api {
+pub async fn discover<C:RuntimeStorage>(app:&Runtime<'_,C>,identity:Value,input:Discovery,discovery:&impl crate::discovery::ModelDiscovery)->Api {
     let caller=principal(&app,&identity).await?;
     if !caller.administrator(){byo_credential_permission(&app,&caller).await?;}
     let (provider,tokens)=if let Some(id)=input.connection_id {
@@ -365,7 +365,7 @@ pub async fn discover<C:RuntimeStorage>(app:&Runtime<'_,C>,identity:Value,input:
             ||(provider.chat_endpoint().is_none()&&!matches!(provider,crate::provider::ProviderId::Typesafe|crate::provider::ProviderId::ClaudeBridge)){return Err(super::bad("Invalid discovery credential or provider"));}
         (provider,json!({"api_key":key}))
     };
-    Ok(Json(app.provider.discover_models(provider,&tokens,tokio_util::sync::CancellationToken::new()).await
+    Ok(Json(app.provider.discover_models(provider,&tokens,tokio_util::sync::CancellationToken::new(),discovery).await
         .map_err(|_|ApiError(StatusCode::BAD_GATEWAY,"Provider discovery unavailable; check provider and credential".into()))?))
 }
 

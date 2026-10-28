@@ -13,6 +13,7 @@ pub mod storage;
 pub mod account_catalog;
 pub mod platform_catalog;
 pub mod transport;
+pub mod discovery;
 
 pub mod runtime;
 pub mod api;

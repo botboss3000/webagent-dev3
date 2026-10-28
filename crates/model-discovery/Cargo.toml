@@ -1,0 +1,10 @@
+[package]
+name = "webagent-model-discovery"
+version = "0.1.0"
+edition = "2021"
+description = "Model discovery: provider listings normalized into public capability rows. Linked in stable builds; a module service in dev builds."
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+webagent-models = { path = "../modules/models" }

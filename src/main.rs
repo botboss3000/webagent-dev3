@@ -37,6 +37,9 @@ mod live_assets;
 mod live_files;
 #[path = "engine/components.rs"] mod engine_components;
 mod usage_reports;
+mod model_discovery;
+#[cfg(feature = "live-context")]
+mod module_services;
 #[path = "engine/sandbox.rs"] mod engine_sandbox;
 mod ability_plugins;
 mod optimization;

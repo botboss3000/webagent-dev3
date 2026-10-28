@@ -2549,6 +2549,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-model-discovery"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "webagent-models",
+]
+
+[[package]]
 name = "webagent-models"
 version = "0.1.0"
 dependencies = [
@@ -2569,8 +2578,20 @@ dependencies = [
  "webagent-access",
  "webagent-configuration",
  "webagent-context-contracts",
+ "webagent-module-service",
  "webagent-provider-contracts",
  "webagent-provider-projection",
+]
+
+[[package]]
+name = "webagent-models-service"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tokio",
+ "webagent-model-discovery",
+ "webagent-models",
+ "webagent-module-service",
 ]
 
 [[package]]
@@ -2738,6 +2759,7 @@ dependencies = [
  "webagent-engine",
  "webagent-files",
  "webagent-manager",
+ "webagent-model-discovery",
  "webagent-models",
  "webagent-module-service",
  "webagent-provider-contracts",

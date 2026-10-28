@@ -85,7 +85,8 @@ pub(super) fn bridge_result(reply: &Value) -> Result<Value> {
 }
 impl Provider {
     /// Fixed installation endpoints, bounded bytes/time, and no secrets in query strings.
-    pub async fn discover_models(&self, provider:ProviderId, tokens:&Value, cancel:CancellationToken)->Result<Value> {
+    /// `discovery` normalizes the fetched listing; it receives no credential.
+    pub async fn discover_models(&self, provider:ProviderId, tokens:&Value, cancel:CancellationToken, discovery:&impl crate::discovery::ModelDiscovery)->Result<Value> {
         // Jev is a decision model, not an OpenAI-compatible chat transport.
         if provider == ProviderId::Typesafe {
             if cancel.is_cancelled() { return Err(typed_failure(FailureKind::Cancelled,false,"Provider discovery cancelled")); }
@@ -122,13 +123,9 @@ impl Provider {
             }
             let data:Value=serde_json::from_slice(&bytes).map_err(|_|typed_failure(FailureKind::Protocol,false,"Invalid provider discovery response"))?;
             let rows=data["data"].as_array().ok_or_else(||typed_failure(FailureKind::Protocol,false,"Provider discovery listing unavailable"))?;
-            let mut ids=std::collections::BTreeSet::new();
-            let catalogs=super::capabilities::metadata(&self.client).await;
-            let models:Vec<_>=rows.iter().filter_map(|row| {
-                let id=row["id"].as_str()?;
-                if !crate::platform_catalog::valid_model(id)||!ids.insert(id.to_owned()) { return None; }
-                Some(super::capabilities::normalize(id,row,&super::capabilities::lookup(id,provider,&catalogs)))
-            }).take(256).collect();
+            let (models_dev,openrouter)=super::capabilities::metadata(&self.client).await;
+            let models=discovery.provider_models(provider,rows,&models_dev,&openrouter).await
+                .map_err(|_|typed_failure(FailureKind::Protocol,false,"Provider discovery normalization unavailable"))?;
             Ok(json!({"models":models,"provider_acceptance_verified":false}))
         };
         tokio::select! {
@@ -265,9 +262,16 @@ data: [DONE]
         assert_eq!(result["usage"]["prompt_tokens"],42);assert_eq!(result["usage"]["completion_tokens"],3);
         server.abort();
     }
-    /// Verify discovery deduplicates safe model identifiers, omits private metadata and keeps credentials out of query strings.
+    /// Echo listing rows so transport tests see exactly what the discovery service would receive.
+    struct Rows;
+    impl crate::discovery::ModelDiscovery for Rows {
+        async fn provider_models(&self,_:ProviderId,rows:&[Value],_:&Value,_:&Value)->Result<Vec<Value>> {Ok(rows.to_vec())}
+        async fn subscription_models(&self,catalog:&Value)->Result<Value> {Ok(catalog.clone())}
+    }
+    /// Verify discovery hands the bounded listing rows, not the key, to normalization and keeps credentials out of query strings.
+    /// Deduplication, id validation and field projection are covered in `webagent-model-discovery`.
     #[tokio::test]
-    async fn discovery_returns_only_validated_ids_and_never_sends_keys_in_urls() {
+    async fn discovery_forwards_listing_rows_and_never_sends_keys_in_urls() {
         use axum::{routing::get,Router};
         let app=Router::new().route("/models",get(|headers:axum::http::HeaderMap,uri:axum::http::Uri|async move {
             assert_eq!(headers["authorization"],"Bearer discovery-key");assert!(uri.query().is_none());
@@ -276,12 +280,12 @@ data: [DONE]
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let addr=listener.local_addr().unwrap();
         let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap();});
         let provider=Provider::for_test(format!("http://{addr}/models"));
-        let result=provider.discover_models(ProviderId::Openrouter,&json!({"api_key":"discovery-key"}),CancellationToken::new()).await.unwrap();
-        assert_eq!(result["models"].as_array().unwrap().len(),2);
-        assert_eq!(result["models"][0]["id"],"vendor/model");assert!(!result.to_string().contains("must-not-project"));
+        let result=provider.discover_models(ProviderId::Openrouter,&json!({"api_key":"discovery-key"}),CancellationToken::new(),&Rows).await.unwrap();
+        assert_eq!(result["models"].as_array().unwrap().len(),4);
+        assert_eq!(result["models"][0]["id"],"vendor/model");assert!(!result.to_string().contains("discovery-key"));
         assert_eq!(result["provider_acceptance_verified"],false);
         let cancel=CancellationToken::new();cancel.cancel();
-        assert!(provider.discover_models(ProviderId::Openrouter,&json!({"api_key":"discovery-key"}),cancel).await.is_err());
+        assert!(provider.discover_models(ProviderId::Openrouter,&json!({"api_key":"discovery-key"}),cancel,&Rows).await.is_err());
         server.abort();
     }
     /// Exercise the one-MiB compatible discovery body limit through a real local response.
@@ -292,7 +296,7 @@ data: [DONE]
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let addr=listener.local_addr().unwrap();
         let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap();});
         let provider=Provider::for_test(format!("http://{addr}/models"));
-        let error=provider.discover_models(ProviderId::Openrouter,&json!({"api_key":"discovery-key"}),CancellationToken::new()).await.unwrap_err();
+        let error=provider.discover_models(ProviderId::Openrouter,&json!({"api_key":"discovery-key"}),CancellationToken::new(),&Rows).await.unwrap_err();
         assert!(error.to_string().contains("exceeded limit"));server.abort();
     }
     /// Verify every fixed compatible route uses only its API key and excludes subscription identity and foreign reasoning.

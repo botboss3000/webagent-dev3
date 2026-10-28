@@ -1,0 +1,42 @@
+{
+  "build": {
+    "features": [],
+    "package": "webagent-models-service",
+    "runtime_assets": [],
+    "source_inputs": [
+      "crates/models-service",
+      "crates/model-discovery",
+      "crates/modules/models",
+      "crates/modules/access",
+      "crates/modules/accounts",
+      "crates/modules/configuration",
+      "crates/provider-contracts",
+      "crates/context-contracts",
+      "crates/provider-projection",
+      "crates/module-service",
+      "crates/module-interface",
+      "crates/engine-service",
+      "Cargo.toml",
+      "Cargo.lock"
+    ],
+    "toolchain": "1.99.1"
+  },
+  "executable": "artifact/webagent-models-service",
+  "group": "module",
+  "id": "model-discovery",
+  "implementation_version": "0.1.0",
+  "interface_version": 1,
+  "limits": {
+    "max_concurrency": 1,
+    "max_request_bytes": 16777216,
+    "max_response_bytes": 16777216,
+    "timeout_ms": 30000
+  },
+  "modes": [
+    "live",
+    "linked"
+  ],
+  "operation": "models.discovery",
+  "runtime_requirements": [],
+  "schema_version": 1
+}

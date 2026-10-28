@@ -20,39 +20,11 @@ struct Handle(#[allow(dead_code)] std::sync::Arc<webagent_module_service::Proces
 #[cfg(feature = "live-context")]
 impl Handle {
     async fn open() -> Result<Self> {
-        let process = supervised()?.current().await?;
+        let process = crate::module_services::supervised("usage-reports")?.current().await?;
         let client = webagent_usage::UsageReportsClient(process.peer().clone());
         Ok(Self(process, client))
     }
     fn reports(&self) -> &impl UsageReports { &self.1 }
-}
-
-/// The service for the current catalog revision; a new revision starts a new
-/// generation while admitted calls finish on the old one.
-#[cfg(feature = "live-context")]
-fn supervised() -> Result<std::sync::Arc<webagent_module_service::Supervised>> {
-    use std::sync::{Arc, Mutex};
-    const ID: &str = "usage-reports";
-    static CURRENT: Mutex<Option<(String, Arc<webagent_module_service::Supervised>)>> = Mutex::new(None);
-    let catalog = crate::engine_components::catalog()?;
-    let descriptor = catalog.entries.get(ID).ok_or_else(|| anyhow::anyhow!("Usage reports module unavailable"))?;
-    let root = catalog.root.clone().ok_or_else(|| anyhow::anyhow!("Usage reports module unpublished"))?;
-    let mut current = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((_, service)) = current.as_ref().filter(|(revision, _)| *revision == catalog.revision) {
-        return Ok(service.clone());
-    }
-    let executable = root.join("plugins/engine").join(ID).join(&descriptor.executable);
-    let limits = webagent_module_service::Limits {
-        max_frame_bytes: descriptor.limits.max_request_bytes.max(descriptor.limits.max_response_bytes),
-        call_timeout: std::time::Duration::from_millis(descriptor.limits.timeout_ms),
-    };
-    let service = Arc::new(webagent_module_service::Supervised::new(
-        move || tokio::process::Command::new(&executable),
-        limits,
-        Arc::new(|_| Vec::new()),
-    ));
-    *current = Some((catalog.revision.clone(), service.clone()));
-    Ok(service)
 }
 
 pub(crate) async fn analytics(samples: &[Sample], interval: &str, group_by: &str, labels: &HashMap<String, String>, now: i64) -> Result<Option<Value>> {

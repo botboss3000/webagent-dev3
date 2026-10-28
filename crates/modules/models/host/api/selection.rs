@@ -38,7 +38,7 @@ async fn pending_subscription_authorization(State(app): State<App>, Extension(id
 
 // Subscription discovery is scoped to the selected owned connection.
 async fn subscription_models(State(app): State<App>, Extension(identity): Extension<Value>,
-    Path(id): Path<String>, Query(params): Query<HashMap<String,String>>) -> Api { webagent_models::api::selection::subscription_models(&app.models_runtime(),identity,id,params).await.map_err(Into::into) }
+    Path(id): Path<String>, Query(params): Query<HashMap<String,String>>) -> Api { webagent_models::api::selection::subscription_models(&app.models_runtime(),identity,id,params,&crate::model_discovery::Service).await.map_err(Into::into) }
 
 
 // CREDENTIAL-AUTHORIZATION: only the connection owner starts a private device flow.
@@ -100,7 +100,7 @@ async fn credential_delete(State(app):State<App>,Extension(identity):Extension<V
 // Provider files are public catalog data (names, models, effort scales); no credentials.
 async fn providers() -> Api { Ok(Json(json!({"providers":webagent_models::providers::load_all()?}))) }
 
-async fn discover(State(app):State<App>,Extension(identity):Extension<Value>,Json(input):Json<Discovery>)->Api { webagent_models::api::selection::discover(&app.models_runtime(),identity,input).await.map_err(Into::into) }
+async fn discover(State(app):State<App>,Extension(identity):Extension<Value>,Json(input):Json<Discovery>)->Api { webagent_models::api::selection::discover(&app.models_runtime(),identity,input,&crate::model_discovery::Service).await.map_err(Into::into) }
 
 /// Nest only under the authenticated browser API (including its CSRF middleware).
 pub fn router() -> Router<App> {

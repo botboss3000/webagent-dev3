@@ -264,41 +264,6 @@ async fn checked_json(response: reqwest::Response) -> Result<Value> {
     Ok(value)
 }
 
-/// Project visible subscription models in server order through the shared capability normalizer.
-fn subscription_model_list(value: &Value) -> Result<Value> {
-    let models = value["models"].as_array()
-        .ok_or_else(|| anyhow!("Invalid subscription model catalog"))?;
-    let visible: Vec<Value> = models.iter().filter_map(|model| {
-        if model["visibility"] != "list" { return None; }
-        let id = model["slug"].as_str()?;
-        if id.is_empty() || id.len() > 200 || !id.bytes().all(|b| b.is_ascii_graphic()) {
-            return None;
-        }
-        let name = model["display_name"].as_str().filter(|s| !s.is_empty()).unwrap_or(id);
-        // Subscription chat models retain the v2 Vision fallback when upstream omits modalities.
-        let mut row = model.clone();
-        row["name"] = json!(name);
-        let fallback = json!({"input_modalities":["text","image"],"output_modalities":["text"]});
-        Some(capabilities::normalize(id,&row,&fallback))
-    }).collect();
-    Ok(json!({"models":visible}))
-}
-
-/// Verify hidden rows are omitted while visible order and subscription image-input fallback survive normalization.
-#[cfg(test)]
-#[test]
-fn subscription_catalog_only_lists_visible_models_in_server_order() {
-    let catalog=json!({"models":[{"slug":"new-gpt","display_name":"New GPT","visibility":"list"},
-        {"slug":"hidden-gpt","visibility":"hide"},{"slug":"older-gpt","visibility":"list"}]});
-    let result = subscription_model_list(&catalog).unwrap();
-    assert_eq!(result["models"][0]["id"],"new-gpt");
-    assert_eq!(result["models"][1]["id"],"older-gpt");
-    assert_eq!(result["models"].as_array().unwrap().len(),2);
-    assert_eq!(result["models"][0]["image_capable"],true);
-    assert_eq!(result["models"][0]["image_out_capable"],false);
-    assert!(subscription_model_list(&json!({})).is_err());
-}
-
 // JWT claims are metadata only; authentication is performed by the provider.
 fn claims(token: &str) -> Value {
     let Some(encoded) = token.split('.').nth(1) else {
@@ -582,9 +547,10 @@ impl Provider {
         decorate(merged)
     }
 
-    /// Query the account-scoped Codex catalog used by the subscription transport.
+    /// Query the account-scoped Codex catalog used by the subscription transport;
+    /// `discovery` projects its visible models without seeing the token.
     /// Never return a token or provider error body to the UI.
-    pub async fn subscription_models(&self, tokens: &Value) -> Result<Value> {
+    pub async fn subscription_models(&self, tokens: &Value, discovery: &impl crate::discovery::ModelDiscovery) -> Result<Value> {
         let mut request = self.client.get(SUBSCRIPTION_MODELS)
             .query(&[("client_version", CODEX_MODEL_CLIENT_VERSION)])
             .bearer_auth(required(tokens, "access_token")?)
@@ -608,7 +574,7 @@ impl Provider {
         }
         let value: Value = serde_json::from_slice(&body)
             .map_err(|_| anyhow!("Invalid subscription model catalog"))?;
-        subscription_model_list(&value)
+        discovery.subscription_models(&value).await
     }
 
     /// Send the host-prepared stateless Responses call with subscription-only credentials; bound waits/output retention and honor cancellation throughout streaming.

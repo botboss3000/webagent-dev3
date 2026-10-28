@@ -21,6 +21,7 @@ webagent-access = { path = "../access" }
 webagent-configuration = { path = "../configuration" }
 webagent-provider-contracts = { path = "../../provider-contracts" }
 webagent-context-contracts = { path = "../../context-contracts" }
+webagent-module-service = { path = "../../module-service" }
 
 [features]
 test-support = []
