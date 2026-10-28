@@ -16,7 +16,8 @@
     "prompt_slot_read",
     "prompt_slot_write",
     "shell",
-    "python"
+    "python",
+    "checkout_edit"
   ],
   "build": {
     "inputs": [

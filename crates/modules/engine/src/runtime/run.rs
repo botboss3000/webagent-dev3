@@ -1,12 +1,18 @@
 //! Engine-owned claimed-run execution, context reconstruction and first-poll/tool fences.
 use super::failure::{system_dispatch_run, terminal, validate_system_summary_input};
 use super::policy::policy_decision;
-use super::{config, models::ModelRecords, ports::*, Runtime};
+use super::ports::{
+    AgentPolicy, ChatAuthority, ContextDiagnostics, CredentialBindings, FollowupQueue,
+    InstallationAccess, MainGuidance, ModelDiagnostics, ModuleBindings, NativePolicy, PromptSlots,
+    ProviderUsage, RunObservation, RunPresentation, ScopedStorage, SessionBinding, SkillSources,
+    StartupPolicy,
+};
+use super::{config, models::ModelRecords, Runtime};
 use crate::context::abilities::{self, Catalog};
 use crate::gates::protocol as gate_protocol;
 use crate::gates::{self as gate_registry, controls as gate_controls};
 use crate::output as engine_output;
-use crate::ports::*;
+use crate::ports::{AdmissionEffects, ChatEffects, NotificationEffects, ToolJournal, UsageEffects};
 use crate::tools::{self, execution as tool_execution};
 use crate::{
     context_accounting, context_assembly, context_compaction, context_input, digest, now, provider,
@@ -675,9 +681,14 @@ impl<
                         )
                     )
                 })
+                && !calls.iter().any(|call| {
+                    super::batch::serial_discovery::<B>(call["name"].as_str().unwrap_or(""))
+                })
         }) {
             // NATIVE-GATE-SERIAL: private controls keep provider order and
             // never enter a parallel batch or the Python tool worker.
+            // Discovery changes what later calls may use, so a batch that
+            // contains it runs serially and each call sees the result.
             run["closing"] = Value::Null;
             Self::execute_parallel_batch(
                 &app,
@@ -765,10 +776,13 @@ impl<
             } else {
                 gate_registry::CLOSING_STATUS
             };
+            let closing: gate_controls::AgentClosing =
+                serde_json::from_value(run["closing_settings"].clone()).unwrap_or_default();
             let enabled = gate_registry::selected(&workflow_policy, checkpoint)?
                 .iter()
                 .any(|item| item.id == module_id)
-                && (name != "publish_main_message" || run["promotion_mode"] == "manual");
+                && (name != "publish_main_message" || run["promotion_mode"] == "manual")
+                && (name != "set_closer_status" || closing.active());
             workflow::record(
                 &mut run,
                 &workflow_policy,
@@ -797,7 +811,7 @@ impl<
                 }
             } else {
                 let config = gate_registry::closing_config()?;
-                match gate_controls::closing_status(&args, &config) {
+                match gate_controls::closing_status(&args, &config, &closing) {
                     Ok(status) => {
                         let repeats = closer_repeats(&run, &status);
                         run["closing_repeats"] = json!(repeats);
@@ -805,9 +819,10 @@ impl<
                         json!({"status":"ok","output":if repeats==0 {"Closing status recorded"}
                                 else {"Closing status already recorded; reply to the user now in plain text without tool calls"}})
                     }
-                    Err(_) => {
+                    Err(error) => {
                         run["closing"] = gate_controls::fallback_status(&config);
-                        json!({"status":"denied","output":"Invalid closing status; unverified fallback recorded"})
+                        json!({"status":"denied","output":format!(
+                                "Invalid closing status: {error}. Unverified fallback recorded; call again with a valid status")})
                     }
                 }
             };
@@ -841,7 +856,7 @@ impl<
             }
             return Ok(std::ops::ControlFlow::Continue(()));
         }
-        let (policy, mode_revision, visibility, ability_state) = app
+        let (policy, mode_revision, mut visibility, ability_state) = app
             .ability_controls_for(
                 &sid,
                 run["requester_user_id"]
@@ -987,6 +1002,9 @@ impl<
                     .await?;
                 return Ok(std::ops::ControlFlow::Break(()));
             }
+            // Abilities needing a model role this agent lacks stay out of discovery.
+            app.hide_without_model_role(agent_id, &policy, &mut visibility, &ability_state)
+                .await?;
             let mut result = app.abilities.discover_with(
                 &name,
                 &args,
@@ -1054,7 +1072,15 @@ impl<
             app.actions
                 .not_dispatched(app.store.records(), &run, &run["pending"])
                 .await?;
-            let result = json!({"status":"denied","output":"Tool invocation denied by policy or invalid arguments"});
+            let message = if run["pending"]["decision"] == "deny" {
+                "Tool invocation denied: the user denied this call".to_owned()
+            } else {
+                super::batch::denial_message(
+                    effective.reason,
+                    args.get("invalid_arguments").is_some(),
+                )
+            };
+            let result = json!({"status":"denied","output":message});
             Self::append_tool(&mut run, &result)?;
             app.store
                 .save_run_observed(
@@ -1994,19 +2020,23 @@ impl<
                         .iter()
                         .any(|item| item.id == gate_registry::CLOSING_STATUS)
                 {
-                    let config = gate_registry::closing_config()?;
-                    gate_schemas.push(gate_controls::closing_schema(&config));
-                    // Closing notification guidance accompanies the fixed status protocol.
+                    // Agent Identity selects whether the status runs and which parts it requires.
                     let closing =
                         gate_controls::agent_closing(app.store.records(), &agent_id).await?;
-                    contributions.push(context_input::Contribution {
-                        id: "gate_closing_status".into(),
-                        source: "native_gate_config".into(),
-                        lifetime: context_input::Lifetime::Call,
-                        content: gate_controls::closing_guidance(&config, &closing),
-                        turn: run["turns"].as_u64().unwrap_or(0),
-                        call: call_number,
-                    });
+                    // Publication and the status control reuse these settings for this call.
+                    run["closing_settings"] = serde_json::to_value(&closing)?;
+                    if closing.active() {
+                        let config = gate_registry::closing_config()?;
+                        gate_schemas.push(gate_controls::closing_schema(&config, &closing));
+                        contributions.push(context_input::Contribution {
+                            id: "gate_closing_status".into(),
+                            source: "native_gate_config".into(),
+                            lifetime: context_input::Lifetime::Call,
+                            content: gate_controls::closing_guidance(&config, &closing),
+                            turn: run["turns"].as_u64().unwrap_or(0),
+                            call: call_number,
+                        });
+                    }
                 }
                 // COMPACTION CONFIG: reread the single external JSON at each call boundary.
                 // Agent Identity can override the two history thresholds. Hold the
@@ -3018,12 +3048,16 @@ impl<
                         run["calls"] = json!(calls);
                         run["call_index"] = json!(0);
                         run["phase"] = json!("tools");
-                        let closing_enabled = gate_registry::selected(
-                            &publication_policy,
-                            workflow::Checkpoint::Publication,
-                        )?
-                        .iter()
-                        .any(|item| item.id == gate_registry::CLOSING_STATUS);
+                        let closing: gate_controls::AgentClosing =
+                            serde_json::from_value(run["closing_settings"].clone())
+                                .unwrap_or_default();
+                        let closing_enabled = closing.active()
+                            && gate_registry::selected(
+                                &publication_policy,
+                                workflow::Checkpoint::Publication,
+                            )?
+                            .iter()
+                            .any(|item| item.id == gate_registry::CLOSING_STATUS);
                         // CLOSING-SAME-RESPONSE: the private status tool may accompany
                         // the final prose. Validate it here, then let the existing
                         // terminal transaction publish that prose exactly once.
@@ -3042,19 +3076,28 @@ impl<
                             let arguments = calls[0]["arguments"]
                                 .as_str()
                                 .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-                            let accepted = call_id
-                                .and_then(|_| arguments.as_ref())
-                                .and_then(|args| gate_controls::closing_status(args, &config).ok());
+                            let checked = arguments
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    anyhow!("Closing status arguments must be a JSON object")
+                                })
+                                .and_then(|args| {
+                                    gate_controls::closing_status(args, &config, &closing)
+                                });
+                            let rejection = checked.as_ref().err().map(ToString::to_string);
+                            let accepted = call_id.and(checked.ok());
                             run["closing"] = accepted
                                 .clone()
                                 .unwrap_or_else(|| gate_controls::fallback_status(&config));
                             if let Some(call_id) = call_id {
                                 let result = json!({"status":if accepted.is_some() {"ok"} else {"denied"},
-                                "output":if accepted.is_some() {"Closing status recorded"}
-                                    else {"Closing status invalid; unverified fallback recorded"}});
+                                "output":match rejection {
+                                    None=>"Closing status recorded".to_owned(),
+                                    Some(error)=>format!("Invalid closing status: {error}. Unverified fallback recorded"),
+                                }});
                                 run["input"]
                                     .as_array_mut()
-                                    .expect("run input is an array")
+                                    .expect("run input is a JSON array")
                                     .push(json!({
                                 "type":"function_call_output","call_id":call_id,
                                 "output":result.to_string()}));
@@ -3103,16 +3146,24 @@ impl<
                                 // CLOSING-FALLBACK: missing or malformed model status
                                 // never blocks a valid final reply or starts a repair turn.
                                 let config = gate_registry::closing_config()?;
-                                let valid = run["closing"]["flag"].as_str().is_some_and(|flag| {
-                                    config.flags.iter().any(|item| item == flag)
-                                }) && run["closing"]["notification"]
-                                    .as_str()
-                                    .is_some_and(|note| {
-                                        !note.trim().is_empty()
-                                            && note.chars().count() <= config.notification_max_chars
-                                            && note.split_whitespace().count()
-                                                <= config.notification_max_words
-                                    });
+                                let valid = run["closing"]["fallback"] == false
+                                    && gate_controls::closing_status(
+                                        &run["closing"]
+                                            .as_object()
+                                            .map(|status| {
+                                                status
+                                                    .iter()
+                                                    .filter(|(key, _)| *key != "fallback")
+                                                    .map(|(key, value)| {
+                                                        (key.clone(), value.clone())
+                                                    })
+                                                    .collect::<serde_json::Map<_, _>>()
+                                            })
+                                            .map_or(Value::Null, Value::Object),
+                                        &config,
+                                        &closing,
+                                    )
+                                    .is_ok();
                                 if !valid {
                                     run["closing"] = gate_controls::fallback_status(&config);
                                 }

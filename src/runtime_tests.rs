@@ -3182,6 +3182,224 @@ async fn state_inspection_is_authenticated_policy_controlled_and_session_bounded
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 #[tokio::test]
+/// Verify an ability that requires a model role cannot be loaded until the roster appoints it.
+async fn image_generation_stays_off_without_an_image_out_model() {
+    use axum::routing::post;
+
+    let (_root, mut app) = fixture().await;
+    let mut tier = app
+        .store
+        .entitlement_tier("operator")
+        .await
+        .unwrap()
+        .unwrap();
+    let tier_revision = tier.revision;
+    tier.ability_permissions
+        .insert("image_generation".into(), access::Permission::Auto);
+    app.store
+        .save_entitlement_tier(tier, tier_revision)
+        .await
+        .unwrap();
+    let mut levels = app.store.capability_levels("shared_default").await.unwrap();
+    for id in ["operator", "member", "visitor"] {
+        let mut level = levels.levels[id].clone();
+        level
+            .ability_permissions
+            .insert("image_generation".into(), crate::access::Permission::Auto);
+        levels = app
+            .store
+            .save_capability_level("shared_default", level, levels.revision)
+            .await
+            .unwrap();
+    }
+    let mut policy = policy_default();
+    policy["rules"]["generate_image"] = json!("allow");
+    app.store.put("policy", &policy).await.unwrap();
+    let mock = Router::new().route(
+        "/responses",
+        post(move |Json(body): Json<Value>| async move {
+            let answered = body["input"].as_array().is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item["type"] == "function_call_output")
+            });
+            let output = if answered {
+                json!([{"type":"message","role":"assistant",
+                    "content":[{"type":"output_text","text":"Done."}]}])
+            } else {
+                json!([{"type":"function_call","call_id":"load","name":"load_ability",
+                    "arguments":"{\"ability_id\":\"image_generation\"}"}])
+            };
+            let event = json!({"type":"response.completed",
+                "response":{"status":"completed","output":output}});
+            (
+                [("content-type", "text/event-stream")],
+                format!("data: {event}\n\n"),
+            )
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    let load_result = |app: App, generation: &'static str| async move {
+        let sid = conversation(&app).await;
+        session_mode_set(
+            State(app.clone()),
+            Path(sid.clone()),
+            Json(SessionModeBody {
+                mode: "auto".into(),
+                expected_revision: session_mode(&app, &sid).await.unwrap()["revision"].as_u64(),
+                confirm_write: true,
+            }),
+        )
+        .await
+        .unwrap();
+        let sent = send(
+            State(app.clone()),
+            Path(sid.clone()),
+            Json(json!({"client_message_id":uuid(),"text":"draw a cat"})),
+        )
+        .await
+        .unwrap();
+        let id = sent.1 .0["run_id"].as_str().unwrap().to_owned();
+        running(&app, &id, generation).await;
+        execute_fixture_journey(
+            app.clone(),
+            id.clone(),
+            generation.into(),
+            CancellationToken::new(),
+        )
+        .await;
+        let run = app.run(&id).await.unwrap();
+        let item = run["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["type"] == "function_call_output" && item["call_id"] == "load")
+            .cloned()
+            .unwrap();
+        serde_json::from_str::<Value>(item["output"].as_str().unwrap()).unwrap()
+    };
+    let refused = load_result(app.clone(), "role-missing").await;
+    assert_ne!(refused["status"], "ok", "{refused}");
+
+    let mut catalog = app.store.model_catalog().await.unwrap();
+    let standard = catalog.agent_models["shared_default"].roles
+        [&model_selection::ModelRole::Standard]
+        .entry_id
+        .clone();
+    let mut image = catalog.entries[&standard].clone();
+    image.id = "image-out".into();
+    image.capabilities.insert("image_out".into());
+    image.revision = 1;
+    catalog.entries.insert(image.id.clone(), image);
+    let roster = catalog.agent_models.get_mut("shared_default").unwrap();
+    roster.entry_ids.push("image-out".into());
+    roster.roles.insert(
+        model_selection::ModelRole::ImageOut,
+        model_selection::RoleAssignment {
+            entry_id: "image-out".into(),
+            backup_entry_ids: vec![],
+        },
+    );
+    app.store
+        .save_model_catalog(&catalog, catalog.revision)
+        .await
+        .unwrap();
+    let loaded = load_result(app.clone(), "role-present").await;
+    assert_eq!(loaded["status"], "ok", "{loaded}");
+    server.abort();
+}
+#[tokio::test]
+/// Verify discovery calls batched with other calls run serially: both list calls succeed and a
+/// tool from an ability loaded earlier in the same batch is authorized after the load.
+async fn batched_discovery_calls_run_serially_and_succeed() {
+    use axum::routing::post;
+
+    let (_root, mut app) = fixture().await;
+    let sid = conversation(&app).await;
+    let sent = send(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(json!({"client_message_id":uuid(),"text":"what can you inspect?"})),
+    )
+    .await
+    .unwrap();
+    let id = sent.1 .0["run_id"].as_str().unwrap().to_owned();
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = requests.clone();
+    let mock = Router::new().route(
+        "/responses",
+        post(move |Json(body): Json<Value>| {
+            let captured = captured.clone();
+            async move {
+                let mut captured = captured.lock().await;
+                captured.push(body);
+                let output = match captured.len() {
+                    1 => json!([
+                        {"type":"function_call","call_id":"list-a","name":"list_abilities",
+                            "arguments":"{\"query\":\"state\"}"},
+                        {"type":"function_call","call_id":"list-b","name":"list_abilities",
+                            "arguments":"{\"include_available\":true}"}]),
+                    2 => json!([
+                        {"type":"function_call","call_id":"load","name":"load_ability",
+                            "arguments":"{\"ability_id\":\"codebase_admin\"}"},
+                        {"type":"function_call","call_id":"inspect","name":"state_inspect",
+                            "arguments":"{\"resource\":\"chat\",\"limit\":1}"}]),
+                    3 => json!([{"type":"message","role":"assistant",
+                        "content":[{"type":"output_text","text":"Done."}]}]),
+                    _ => panic!("Unexpected provider turn"),
+                };
+                let event = json!({"type":"response.completed",
+                    "response":{"status":"completed","output":output}});
+                (
+                    [("content-type", "text/event-stream")],
+                    format!("data: {event}\n\n"),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    running(&app, &id, "batched-discovery").await;
+    execute_fixture_journey(
+        app.clone(),
+        id.clone(),
+        "batched-discovery".into(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 3);
+    let result_for = |request: &Value, call_id: &str| -> Value {
+        let item = request["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["type"] == "function_call_output" && item["call_id"] == call_id)
+            .unwrap();
+        serde_json::from_str(item["output"].as_str().unwrap()).unwrap()
+    };
+    for call_id in ["list-a", "list-b"] {
+        let listed = result_for(&requests[1], call_id);
+        assert_eq!(listed["status"], "ok", "{call_id}: {listed}");
+    }
+    let loaded = result_for(&requests[2], "load");
+    assert_eq!(loaded["status"], "ok", "{loaded}");
+    let inspected = result_for(&requests[2], "inspect");
+    assert_eq!(inspected["status"], "success", "{inspected}");
+    server.abort();
+}
+#[tokio::test]
 /// Verify native ability loading adds current guidance only to model-call frames and keeps state inspection scoped to the active session.
 async fn agent_discovers_ability_then_inspects_only_its_current_session() {
     use axum::routing::post;

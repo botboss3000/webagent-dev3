@@ -11,6 +11,7 @@
   "placeholder": false,
   "readiness": "ready",
   "config": {
+    "required_model_role": "image_out",
     "settings": []
   },
   "migration_note": "Native V3 implementation. Current schemas, live policy and configured model/module availability determine callable behavior."

@@ -1,8 +1,14 @@
 //! Image Out requests retain a durable started receipt before a potentially billable request.
-use crate::*;
+use crate::{api, digest, model_selection, shared_chat, App, State};
+use anyhow::{anyhow, Result};
+use axum::extract::Path;
+use axum::Json;
 use base64::Engine as _;
 use serde::Deserialize;
+use serde_json::{json, Value};
 use sha2::Digest as _;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 pub fn owns(name: &str) -> bool {
     name == "generate_image"
 }
@@ -19,10 +25,16 @@ struct Args {
 }
 fn attachment_id(input: &str) -> String {
     let h = digest(&json!(input));
-    Uuid::from_slice(&hex::decode(&h[..32]).unwrap())
-        .unwrap()
+    let bytes = hex::decode(&h[..32]).expect("a digest is lowercase hex");
+    Uuid::from_slice(&bytes)
+        .expect("32 hex characters are 16 bytes")
         .to_string()
 }
+/// A failure before any provider request: report it plainly instead of as an uncertain effect.
+fn not_sent(message: &str) -> Value {
+    json!({"status":"error","output":message})
+}
+
 pub async fn execute(
     app: &App,
     sid: &str,
@@ -45,7 +57,7 @@ pub async fn execute(
     .await?;
     let q: Args = serde_json::from_value(args.clone())?;
     if q.prompt.trim().is_empty() || q.prompt.len() > 16384 {
-        return Err(anyhow!("Image prompt must contain 1..16384 bytes"));
+        return Ok(not_sent("Image prompt must contain 1..16384 bytes"));
     }
     let receipt = format!(
         "receipt:core_image:{sid}:{}",
@@ -67,15 +79,19 @@ pub async fn execute(
             json!({"status":"uncertain","uncertain":true,"output":{"receipt":receipt,"message":"Image request may have been submitted. Reconcile this receipt before another generation."}}),
         );
     }
-    let lane = api::media_lane::lane_run(app, sid, model_selection::ModelRole::ImageOut)
-        .await
-        .map_err(|e| anyhow!(e.1))?;
-    let (selection, tokens) = api::media_lane::lane_selection(app, &lane)
-        .await
-        .map_err(|e| anyhow!(e.1))?;
+    // Nothing has been submitted yet, so these failures are definite errors.
+    let lane = match api::media_lane::lane_run(app, sid, model_selection::ModelRole::ImageOut).await
+    {
+        Ok(lane) => lane,
+        Err(error) => return Ok(not_sent(&error.1.to_string())),
+    };
+    let (selection, tokens) = match api::media_lane::lane_selection(app, &lane).await {
+        Ok(selected) => selected,
+        Err(error) => return Ok(not_sent(&error.1.to_string())),
+    };
     if !webagent_models::transport::image_transport(selection.provider) {
-        return Err(anyhow!(
-            "Assigned Image Out transport does not support image generation"
+        return Ok(not_sent(
+            "Assigned Image Out transport does not support image generation",
         ));
     }
     let gate = app.gate.lock().await;
@@ -206,6 +222,7 @@ async fn publish(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::uuid;
     #[tokio::test]
     async fn stored_image_recovery_publishes_once_and_rejects_preexisting_different_bytes() {
         let (_root, app) = crate::runtime_tests::fixture().await;

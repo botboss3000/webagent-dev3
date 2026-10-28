@@ -76,7 +76,7 @@ work authorized in this caller's session; it cannot take over another owner.
 
 ## Isolated source workflow
 
-Application source changes use one stable isolated task ID. Source writes without task_id create/reuse a broker draft and return its ID; continue reading/editing that task with its latest digest. Relative source paths and /live-checkout source writes enter this workflow. Explicit runtime/workspace paths use their own tools and live policy; source data, generated output and inspection databases cannot be written through task file tools. Never fall back to live source writes when a task conflicts.
+Application source changes use one stable isolated task ID. Source writes without task_id create/reuse a broker draft and return its ID; continue reading/editing that task with its latest digest. Relative source paths and /live-checkout source writes enter this workflow. Explicit runtime/workspace paths use their own tools and live policy; source data, generated output and inspection databases cannot be written through task file tools. Never fall back to live source writes when a task conflicts. The separate checkout_edit tool writes the live checkout directly, without a broker task; use it only when a direct checkout change is wanted, since it is not built or deployed.
 
 With task_id, file_list/read/search/edit/write create a missing task. Paths are source-relative, such as src/example.rs or ui/chat/chat.css. Reuse the returned task_id throughout the change. Read reservations before editing: held modules/paths belong to their logical task until explicit verified completion. A queued unchanged draft refreshes to current published code when acquired; reread before applying changes.
 

@@ -83,12 +83,17 @@ if broker.poll() is not None:
 os.setgroups([])
 os.setgid(1100)
 # Workspace seeds follow the frozen UI release served by the API container.
-worker = subprocess.Popen(["/usr/bin/python3", "-I", "/opt/v3/worker.py"],
+# The worker keeps the checkout owner's identity plus one ambient capability,
+# CAP_DAC_READ_SEARCH, so Codebase Admin reads every file including state.
+# Landlock still confines command writes to the session workspace.
+worker = subprocess.Popen(["/usr/bin/setpriv", "--reuid=1000", "--regid=1100", "--groups=1001",
+                           "--inh-caps=-all,+dac_read_search",
+                           "--ambient-caps=-all,+dac_read_search", "--no-new-privs", "--",
+                           "/usr/bin/python3", "-I", "/opt/v3/worker.py"],
                           env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
                                "V3_TOOL_SOCKET": "/run/v3/worker/tools.sock",
                                "V3_WORKSPACE_ROOT": "/workspaces",
-                               "V3_CODE_TEMPLATE": "/opt/v3/assets/current/v3"},
-                          preexec_fn=lambda: drop(1000, groups=(1001,)))
+                               "V3_CODE_TEMPLATE": "/opt/v3/assets/current/v3"})
 for _ in range(100):
     if Path("/run/v3/worker/tools.sock").exists():
         break

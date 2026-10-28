@@ -26,6 +26,27 @@ class PluginTests(unittest.TestCase):
                     runner.file_operation({},root,{"path":str(alias/"app.rs"),"content":"bypass"},"file_write")
             self.assertEqual((source/"app.rs").read_text(),"original")
 
+    def test_checkout_edit_writes_live_checkout_directly(self):
+        """The one direct checkout writer skips broker routing but keeps runtime paths out."""
+        self.assertEqual(runner.route("checkout_edit",{"path":"src/app.rs","content":"x"})["route"],"file")
+        for path in ("data/admin.db","/etc/passwd","src/../data/x","workspaces/a"):
+            with self.assertRaises(ValueError):runner.route("checkout_edit",{"path":path,"content":"x"})
+        with self.assertRaises(ValueError):runner.route("checkout_edit",{"path":"src/a.rs","content":"x","old_text":"a","new_text":"b"})
+        with tempfile.TemporaryDirectory()as directory:
+            source=Path(directory)/"checkout";source.mkdir();(source/"app.rs").write_text("before")
+            with patch.object(runner,"LIVE_CHECKOUT",source):
+                previous=os.umask(0o077)
+                try:
+                    planned=runner.route("checkout_edit",{"path":"new/deep/file.txt","content":"made"})
+                    self.assertEqual(runner.file_operation({},Path(directory),planned["arguments"],"checkout_edit")["status"],"success")
+                    planned=runner.route("checkout_edit",{"path":"app.rs","old_text":"before","new_text":"after"})
+                    self.assertEqual(runner.file_operation({},Path(directory),planned["arguments"],"checkout_edit")["status"],"success")
+                finally:os.umask(previous)
+            self.assertEqual((source/"new/deep/file.txt").read_text(),"made")
+            self.assertEqual((source/"new/deep/file.txt").stat().st_mode&0o777,0o644)
+            self.assertEqual((source/"new/deep").stat().st_mode&0o777,0o755)
+            self.assertEqual((source/"app.rs").read_text(),"after")
+
     def test_process_file_journey_and_contract(self):
         with tempfile.TemporaryDirectory() as temporary:
             def call(name,args,version=1):

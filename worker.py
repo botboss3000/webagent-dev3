@@ -247,8 +247,7 @@ async def command(argv, base, timeout, lock):
            "HOME": str(base), "TMPDIR": str(base), "CARGO_HOME": str(base / ".cargo"),
            "CARGO_BUILD_JOBS": "1", "CARGO_INCREMENTAL": "0",
            "RUSTFLAGS": "-C debuginfo=0",
-           "V3_ALLOWED_LISTEN_PORTS": ",".join(map(str, network_ports(base))),
-           "V3_COMMAND_SOURCE_ROOT":str(LIVE_CHECKOUT)}
+           "V3_ALLOWED_LISTEN_PORTS": ",".join(map(str, network_ports(base)))}
     process = await asyncio.create_subprocess_exec(
         "/usr/bin/python3", "-I", str(Path(__file__).resolve()), "--runner", json.dumps(argv),
         cwd=base,
@@ -287,7 +286,7 @@ async def command(argv, base, timeout, lock):
 
 
 CODEBASE_TOOLS = ["file_list","file_read","file_search","file_edit","file_write","build_work",
-                 "state_inspect","prompt_slot_read","prompt_slot_write","shell","python"]
+                 "state_inspect","prompt_slot_read","prompt_slot_write","shell","python","checkout_edit"]
 def codebase_package(revision=None):
     active=Path("/opt/v3/assets/current")
     if active.parent.is_dir():
@@ -326,7 +325,7 @@ async def codebase_call(name,args,base,operation="execute",revision=None):
         return result
     try:return await asyncio.wait_for(exchange(),30)
     except (OSError,ValueError,asyncio.TimeoutError):
-        if name in ("file_write","file_edit") and operation=="execute":
+        if name in ("file_write","file_edit","checkout_edit") and operation=="execute":
             return {"status":"uncertain","uncertain":True,"output":"Plugin interrupted; reconcile file contents before retry"}
         raise
     finally:
@@ -510,7 +509,7 @@ async def execute_locked(request, lock):
         planned=await codebase_call(name,args,base,"plan",revision=(request.get("trusted")or{}).get("codebase_revision"))
         if planned["status"]!="success" or planned["output"]["route"]!="command":return planned
         return await command(planned["output"]["argv"],base,min(max(int(request.get("timeout_seconds",120)),1),600),lock)
-    if name in ("file_list","file_read","file_search","file_edit","file_write"):
+    if name in ("file_list","file_read","file_search","file_edit","file_write","checkout_edit"):
         fcntl.flock(lock,fcntl.LOCK_UN)
         return await codebase_call(name,args,base,revision=(request.get("trusted") or {}).get("codebase_revision"))
     # The lock covers dispatch only; controls never wait for tool completion.
@@ -883,15 +882,11 @@ def runner(argv):
         spec=json.loads(argv[4])
         if set(spec)!={"base","name","arguments"}or Path(spec["base"]).resolve()!=Path.cwd():raise ValueError("Invalid trusted index invocation")
         read_paths=(Path(__file__).resolve(),Path(__file__).with_name("sandbox.py").resolve(),Path(__file__).parent/"plugins/abilities/Administrator/code_index",Path(__file__).parent/"build-service")
-    # Source writes require broker ownership. General commands may read source but only write this workspace.
-    source_read=Path(os.environ.get("V3_COMMAND_SOURCE_ROOT",str(LIVE_CHECKOUT)))
-    if source_read.is_dir():
-        # Grant source inputs individually; the checkout also contains state and other writers' private tasks.
-        names=("src","ui","plugins/abilities","plugins/gates","build-service","tests","docs","config",
-            "Cargo.toml","Cargo.lock","build.rs","Dockerfile","README.md","AGENTS.md","deploy.sh","launch.py",
-            "worker.py","ability_plugin_worker.py","sandbox.py","promote.py","ui-baseline.json","gate.Dockerfile","gate_worker.py",
-            "data/config/gates/message_visibility_v1.json","data/config/gates/closing_status_v1.json")
-        read_paths=(*read_paths,*(source_read/name for name in names))
+    # Codebase Admin commands read the whole container, including state, and write only this
+    # workspace. Checkout writes go through checkout_edit or broker tasks, never commands.
+    # Internal seed and index invocations keep their narrow grants.
+    if not read_paths:
+        read_paths=(Path("/"),)
     child = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
                              preexec_fn=lambda: restrict(Path.cwd(), read_paths=read_paths,deny_unix=True))
     try:

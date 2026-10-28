@@ -1309,7 +1309,9 @@ mod tests {
             default_execution_mode: None,
             message_visibility: None,
             closing_message: Some(crate::gate_controls::AgentClosing {
+                require_flag: false,
                 notification_guidance: guidance.into(),
+                ..Default::default()
             }),
             manager_incoming_message: None,
             compaction_thresholds: None,
@@ -1328,6 +1330,8 @@ mod tests {
             saved["closing_message"]["notification_guidance"],
             "Name the next step"
         );
+        assert_eq!(saved["closing_message"]["require_flag"], false);
+        assert_eq!(saved["closing_message"]["enabled"], true);
         let Json(reloaded) = identity_get(
             State(app.clone()),
             Extension(identity.clone()),
@@ -1595,7 +1599,10 @@ mod manager_identity_tests {
         assert_eq!(saved, reloaded);
         // Criteria are stored in the agent's own record, not a shared prompt file.
         assert!(!app.store.root.join("config/prompts.json").exists());
-        assert_eq!(reloaded["manager_incoming_message"]["criteria"], "Clothing questions only");
+        assert_eq!(
+            reloaded["manager_incoming_message"]["criteria"],
+            "Clothing questions only"
+        );
         assert_eq!(
             identity_put(
                 State(app.clone()),
@@ -1685,7 +1692,10 @@ mod manager_disabled_prompt_tests {
         .await
         .unwrap()
         .0;
-        assert_eq!(reload["manager_incoming_message"]["criteria"], "Clothing store questions");
+        assert_eq!(
+            reload["manager_incoming_message"]["criteria"],
+            "Clothing store questions"
+        );
         assert_eq!(reload["manager_incoming_message"]["enabled"], false);
         let store = app.store.for_agent("shared_default").await.unwrap();
         let raw: Vec<u8> =
@@ -1693,7 +1703,9 @@ mod manager_disabled_prompt_tests {
                 .fetch_one(&store.agent_pool)
                 .await
                 .unwrap();
-        assert_eq!(store.unseal(&raw).unwrap()["manager_incoming_message"]["criteria"],
-            "Clothing store questions");
+        assert_eq!(
+            store.unseal(&raw).unwrap()["manager_incoming_message"]["criteria"],
+            "Clothing store questions"
+        );
     }
 }

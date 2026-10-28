@@ -40,13 +40,17 @@ def search_limits():
     return output, line
 
 def file_operation(request, base, args, name):
+    # checkout_edit is the one direct live-checkout writer; policy can deny it alone.
+    checkout = name == "checkout_edit"
+    if checkout:
+        name = "file_write" if "content" in args else "file_edit"
     raw = args.get("path", ".")
     relative = Path(raw)
     # Resolve ordinary container paths, including parent traversal and symlinks.
     # The OS identity and container mounts determine which targets are reachable.
     default_root = LIVE_CHECKOUT if LIVE_CHECKOUT.is_dir() else base
     target = (relative if relative.is_absolute() else default_root / relative).resolve()
-    if name in ("file_write","file_edit")and LIVE_CHECKOUT.is_dir():
+    if name in ("file_write","file_edit")and LIVE_CHECKOUT.is_dir()and not checkout:
         live=LIVE_CHECKOUT.resolve()
         if target==live or target.is_relative_to(live)or any(parent.exists()and parent.samefile(live)for parent in target.parents):
             raise ValueError("Source writes require broker-owned task routing; direct source effects denied")
@@ -60,10 +64,12 @@ def file_operation(request, base, args, name):
         for part in parts[:-1]:
             if name == "file_write":
                 try:
-                    os.mkdir(part, mode=0o770, dir_fd=directory)
+                    os.mkdir(part, mode=0o755 if checkout else 0o770, dir_fd=directory)
                 except FileExistsError:
                     pass
                 else:
+                    if checkout:
+                        os.chmod(part, 0o755, dir_fd=directory)
                     os.fsync(directory)
             nextfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
             os.close(directory)
@@ -141,7 +147,7 @@ def file_operation(request, base, args, name):
                 previous = None
             if previous is not None and not stat.S_ISREG(previous.st_mode):
                 raise ValueError("only regular files are supported")
-            mode = stat.S_IMODE(previous.st_mode) if previous else 0o660
+            mode = stat.S_IMODE(previous.st_mode) if previous else (0o644 if checkout else 0o660)
             temporary = f".v3-write-{uuid.uuid4().hex}"
             tempfd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                              0o600, dir_fd=directory)
@@ -388,13 +394,24 @@ def file_operation(request, base, args, name):
 
 IMPLEMENTATION_VERSION = "1.1.0"
 TOOLS = ["file_list","file_read","file_search","file_edit","file_write","build_work",
-         "state_inspect","prompt_slot_read","prompt_slot_write","shell","python"]
+         "state_inspect","prompt_slot_read","prompt_slot_write","shell","python","checkout_edit"]
+# Runtime state and other writers' material never change through a source edit.
+CHECKOUT_PRIVATE = {"data","workspaces","target",".git","build-jobs","deployment-secrets",
+                    "runtime","rollback","gate-runtime"}
 def route(name,args):
     if name not in TOOLS or not isinstance(args,dict):raise ValueError("Unsupported Codebase Admin contract")
     if name in ("state_inspect","prompt_slot_read","prompt_slot_write"):return {"route":"core","arguments":args}
     if name=="build_work" or args.get("task_id") is not None:
         if name not in ("build_work","file_list","file_read","file_search","file_edit","file_write"):raise ValueError("Task scope unsupported")
         return {"route":"broker","arguments":{k:v for k,v in args.items() if v is not None}}
+    if name=="checkout_edit":
+        raw=args.get("path")
+        if not isinstance(raw,str)or not raw:raise ValueError("path is required")
+        relative=raw.removeprefix(str(LIVE_CHECKOUT)+"/")
+        if relative.startswith("/")or any(p in ("",".","..")for p in relative.split("/"))or relative.split("/")[0]in CHECKOUT_PRIVATE:
+            raise ValueError("Path must be a live-checkout source path outside runtime state")
+        if ("content" in args)==("old_text" in args):raise ValueError("Pass content to write a file, or old_text and new_text to edit one")
+        return {"route":"file","arguments":{k:v for k,v in args.items()if v is not None}|{"path":str(LIVE_CHECKOUT/relative)}}
     if name in ("shell","python"):
         return {"route":"command","argv":["/bin/sh","-c",args["command"]] if name=="shell" else ["/usr/bin/python3","-I","-c",args["code"]]}
     if name in ("file_edit","file_write"):

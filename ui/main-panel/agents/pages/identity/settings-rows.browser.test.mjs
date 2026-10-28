@@ -72,9 +72,15 @@ try{
   await page.getByLabel('Working-message promotion',{exact:true}).selectOption('none');await page.waitForFunction(()=>fixture.agent.message_visibility.mode==='none');assert.equal(await page.getByLabel('Additional promotion guidance',{exact:true}).isVisible(),false);
   await page.getByLabel('Working-message promotion',{exact:true}).selectOption('manual');await page.waitForFunction(()=>fixture.agent.message_visibility.mode==='manual');
   await page.getByLabel('Notification guidance',{exact:true}).fill('Updated closing');await page.locator('[data-identity-section="final-response"]').getByRole('button',{name:'Save',exact:true}).click();await page.waitForFunction(()=>fixture.agent.closing_message.notification_guidance==='Updated closing');
+  const closingRow=page.locator('[data-identity-section="final-response"]');
+  await page.locator('[data-closing-key="require_flag"]').uncheck();await page.waitForFunction(()=>fixture.agent.closing_message.require_flag===false);
+  assert.equal(await page.evaluate(()=>fixture.agent.closing_message.notification_guidance),'Updated closing');
+  await closingRow.locator('.conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===false);
+  assert.equal(await page.locator('[data-closing-key="require_notification"]').isDisabled(),true);assert.equal(await page.getByLabel('Notification guidance',{exact:true}).isDisabled(),true);
+  await closingRow.locator('.conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===true);
   await page.evaluate(()=>remount());for(const title of titles)assert.equal(await page.getByRole('button',{name:'Expand '+title,exact:true}).getAttribute('aria-expanded'),'false');
   await page.getByRole('button',{name:'Expand Chat modes',exact:true}).click();assert.equal(await page.locator('[data-field="default_execution_mode"]').inputValue(),'auto');
-  await page.getByRole('button',{name:'Expand Final response',exact:true}).click();assert.equal(await page.getByLabel('Notification guidance',{exact:true}).inputValue(),'Updated closing');
+  await page.getByRole('button',{name:'Expand Final response',exact:true}).click();assert.equal(await page.getByLabel('Notification guidance',{exact:true}).inputValue(),'Updated closing');assert.equal(await page.locator('[data-closing-key="require_flag"]').isChecked(),false);
   if(touch){const before=await page.evaluate(()=>pulses.length);await page.getByRole('button',{name:'Expand Shared conversations',exact:true}).tap();assert.equal(await page.evaluate(()=>pulses.length),before+1);}
   await page.evaluate(async()=>{fixture.agent.can_manage=false;await remount();});
   assert.equal(await page.locator('[data-identity-section="website-chat-widget"]').count(),0);

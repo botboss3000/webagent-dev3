@@ -41,11 +41,11 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["status"], "success", response)
         result = json.loads(response["output"])
         self.assertEqual(result["uid"], 1000)
-        # launch.py retains the checkout group; application state stays inaccessible.
+        # launch.py retains the checkout group; Codebase Admin commands read state too.
         self.assertEqual(result["groups"], [1001])
         self.assertTrue(result["source_access"])
         self.assertFalse(result["v2_source_access"])
-        self.assertFalse(result["state_access"])
+        self.assertTrue(result["state_access"])
         self.assertFalse(result["control_write"])
         self.assertFalse(result["secret_env"])
         self.assertFalse(result["app_environ_access"])

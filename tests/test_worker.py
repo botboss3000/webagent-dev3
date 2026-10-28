@@ -766,9 +766,13 @@ print("SEEDED" if result["baseline_commit"] else "FAILED")
         with mock.patch.object(worker,"LIVE_CHECKOUT",source):
             result=await self.run_tool("shell",{"command":"cat "+str(outside)})
         self.assertEqual(result["status"],"success",result);self.assertEqual(result["output"],"LIVE_SOURCE")
+        # Codebase Admin commands read any file but write only their workspace.
         private=Path(self.tmp.name)/"unrelated-private";private.write_text("PRIVATE_FIXTURE")
         result=await self.run_tool("shell",{"command":"cat "+str(private)})
+        self.assertEqual(result["output"],"PRIVATE_FIXTURE",result)
+        result=await self.run_tool("shell",{"command":"echo changed > "+str(private)})
         self.assertEqual(result["status"],"failed")
+        self.assertEqual(private.read_text(),"PRIVATE_FIXTURE")
 
     async def test_output_is_bounded(self):
         result = await self.run_tool("python", {"code": "print('x' * 2000000)"})
