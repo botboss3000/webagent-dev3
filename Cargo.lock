@@ -2504,6 +2504,7 @@ name = "webagent-engine-service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "libc",
  "serde",
  "serde_json",
 ]
@@ -2570,6 +2571,37 @@ dependencies = [
  "webagent-context-contracts",
  "webagent-provider-contracts",
  "webagent-provider-projection",
+]
+
+[[package]]
+name = "webagent-module-interface"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "webagent-module-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "webagent-engine-service",
+ "webagent-module-interface",
+]
+
+[[package]]
+name = "webagent-module-toy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tokio",
+ "webagent-module-service",
 ]
 
 [[package]]

@@ -1,0 +1,16 @@
+[package]
+name = "webagent-module-toy"
+version = "0.1.0"
+edition = "2021"
+description = "Smallest module service: proves the transport, the generated adapters and the broker module lane."
+
+[dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["time"] }
+webagent-module-service = { path = "../module-service" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

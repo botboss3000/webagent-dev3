@@ -87,6 +87,20 @@ fn sealed_records_round_trip_and_reject_tampering() {
 }
 
 #[test]
+fn administrator_plaintext_records_with_inexact_floats_authenticate() {
+    let root = tempfile::tempdir().unwrap();
+    let admin = handle(root.path(), "admin");
+    write_settings(
+        root.path(),
+        br#"{"admin_database_encryption":{"enabled":false}}"#,
+    );
+    // 84.5 * 0.18: a tool result whose shortest form the fast float parser rounds.
+    let value = json!({"result": 84.5 * 0.18, "cost": 0.0});
+    let plain = admin.encode_user_record(&value).unwrap();
+    assert_eq!(admin.unseal(&plain).unwrap(), value);
+}
+
+#[test]
 fn administrator_plaintext_policy_follows_app_settings() {
     let root = tempfile::tempdir().unwrap();
     let admin = handle(root.path(), "admin");
