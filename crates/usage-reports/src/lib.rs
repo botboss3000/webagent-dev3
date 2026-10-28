@@ -1,5 +1,6 @@
 //! Usage report computation over samples the host has already authorized. It
 //! reads nothing itself; the host collects runs, resets and labels.
+//! An edit here ships as a module release of the usage-reports service alone.
 use serde_json::{json,Value};
 use std::collections::HashMap;
 use webagent_usage::{Sample,UsageReports};

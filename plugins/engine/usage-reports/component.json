@@ -18,7 +18,7 @@
   "executable": "artifact/webagent-usage-service",
   "group": "module",
   "id": "usage-reports",
-  "implementation_version": "0.1.0",
+  "implementation_version": "0.1.1",
   "interface_version": 1,
   "limits": {
     "max_concurrency": 1,
