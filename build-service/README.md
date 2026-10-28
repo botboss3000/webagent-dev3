@@ -524,6 +524,19 @@ the candidate or replay container replacement. Revocation, task ownership,
 maintenance drains, newer-release fences and the shared lifecycle lease still
 apply. Use the original task ID, job ID and one stable recovery request ID.
 
+When the captured predecessor was restored but cannot become healthy because of
+a fault it shares with the candidate (for example stored data both releases
+reject), `accept_unhealthy_predecessor` settles the job as a reconciled failed
+release with `predecessor_unhealthy`, so the queue can admit the repairing
+release. It may follow that job's unfinished `restore_captured_backend` request.
+It applies every identity, configuration, pointer, checkout and ownership check
+above except consumer health and process generation, and performs no container
+effects. While consumers stay unhealthy, a host-only (`host_service_deploy`)
+release also ends uncertain at its health check; `complete_unhealthy_host_release`
+completes that exact activated release (active pointer, verified publication,
+checkout promotion, consumer identities) without consumer health, marking it
+`consumers_unhealthy`. It replaces no container.
+
 To undo an older successful UI release, begin a fresh empty isolated task and
 request `ui_rollback_preview` with its `task_id` and the original
 `release_job_id`. The host returns a checked-patch draft plus its exact source

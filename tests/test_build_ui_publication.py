@@ -278,6 +278,22 @@ class ConcurrentUIEntryTests(unittest.TestCase):
         active=self.runner.assets/"releases"/before
         self.assertEqual((active/"v3/ui/probe/a.css").read_text(),"body {}\n")
 
+    def test_host_release_over_already_unhealthy_consumers_completes_explicitly(self):
+        self.change("host-unhealthy-fixture","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        self.runner.fail_verify_ui=True
+        job=self.finish("host-unhealthy-fixture");self.wait([job])
+        self.assertEqual(self.broker.jobs[job]["status"],"uncertain")
+        self.runner.fail_verify_ui=False;calls=list(self.runner.calls)
+        with self.assertRaisesRegex(ValueError,"host-only release required"):
+            self.recovery("host-unhealthy-fixture",job,"complete_unhealthy_host_release","host-unhealthy-request")
+        self.broker.jobs[job]["operation"]="host_service_deploy"
+        with patch.object(self.runner,"healthy",return_value=False):
+            result=self.recovery("host-unhealthy-fixture",job,"complete_unhealthy_host_release","host-unhealthy-request-2")
+        self.assertEqual((result["status"],result["consumers_unhealthy"]),("completed",True))
+        self.assertEqual(self.runner.current_asset_id(),job);self.assertFalse(self.broker._has_unresolved_release())
+        self.assertEqual(result,self.recovery("host-unhealthy-fixture",job,"complete_unhealthy_host_release","host-unhealthy-request-2"))
+        self.assertFalse(any(c[0]in {"build","stop","start","create","rename"}for c in self.runner.calls[len(calls):]))
+
     def test_installed_host_failure_restores_predecessor_without_runtime_restart(self):
         before=self.runner.current_asset_id()
         self.change("host-restore-fixture","ui/probe/a.css","body {}\n","body { color: red; }\n")
@@ -824,6 +840,33 @@ class CapturedBackendRestorationTests(ConcurrentUIEntryTests):
         self.assertIn(automatic["request_id"],row["reason"])
         result=self.recovery("captured-backend-task",job,"restore_captured_backend",automatic["request_id"])
         self.assertTrue(result["effects_reconciled"]);self.verify_originals(job)
+
+    def accept_unhealthy(self,job,request="accept-unhealthy-request"):
+        return self.recovery("captured-backend-task",job,"accept_unhealthy_predecessor",request)
+
+    def test_unhealthy_restored_predecessor_is_settled_only_by_explicit_acceptance(self):
+        # A fault both releases share (for example stored data) keeps the predecessor unhealthy;
+        # the queue must still be able to admit the release that repairs it.
+        job=self.failed();loop=fixtures.host.TARGETS[1]
+        with patch.object(self.runner,"healthy",return_value=False):
+            with self.assertRaisesRegex(ValueError,"unhealthy"):self.restore(job)
+            self.assertTrue(self.broker._has_unresolved_release())
+            self.runner.containers[loop]["State"]["Pid"]=4242  # crash loop restarted it
+            start=len(self.runner.calls);result=self.accept_unhealthy(job)
+        self.assertTrue(result["effects_reconciled"]);self.assertTrue(result["predecessor_unhealthy"])
+        self.assertEqual(self.broker.jobs[job]["status"],"failed");self.assertIn("unhealthy",self.broker.jobs[job]["reason"])
+        self.verify_originals(job);self.assertEqual(self.accept_unhealthy(job),result)
+        self.assertFalse(any(c[0]in {"build","stop","start","create","rename","promote","remove"}for c in self.runner.calls[start:]))
+        for role,name in zip(("api","loop"),fixtures.host.TARGETS):
+            self.assertEqual(self.runner.containers[name+"-failed-build-"+job]["Image"],self.broker.jobs[job]["images"][role])
+
+    def test_unhealthy_acceptance_still_requires_the_exact_predecessor(self):
+        job=self.failed();api=fixtures.host.TARGETS[0]
+        with patch.object(self.runner,"healthy",return_value=False):
+            with self.assertRaisesRegex(ValueError,"unhealthy"):self.restore(job)
+            self.runner.containers[api]["Id"]=uuid.uuid4().hex+uuid.uuid4().hex
+            with self.assertRaisesRegex(ValueError,"Original predecessor"):self.accept_unhealthy(job)
+        self.assertEqual(self.broker.jobs[job]["status"],"uncertain");self.assertTrue(self.broker._has_unresolved_release())
 
     def test_restarting_certified_candidate_is_stopped_before_quarantine(self):
         job=self.failed();api=fixtures.host.TARGETS[0];identity=self.runner.containers[api]["Id"]
