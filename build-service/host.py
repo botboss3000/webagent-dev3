@@ -112,7 +112,9 @@ INDEX_METADATA_FILES={INDEX_METADATA_ROOT+"code-index-features.json",INDEX_METAD
 INDEX_METADATA_FILES.update(INDEX_METADATA_ROOT+"tools/"+name+".skill.md"for name in ("code_index_scan","code_index_lookup","code_index_coverage","code_index_trace","code_index_progress","code_index_maintenance"))
 CODEBASE_ROOT="v3/plugins/abilities/Administrator/codebase_admin/"
 CODEBASE_TOOLS=["file_list","file_read","file_search","file_edit","file_write","build_work",
-                "state_inspect","prompt_slot_read","prompt_slot_write","shell","python"]
+                "state_inspect","prompt_slot_read","prompt_slot_write","shell","python","checkout_edit"]
+# The package published before checkout_edit stays valid until its replacement deploys.
+CODEBASE_TOOL_LISTS=(CODEBASE_TOOLS,CODEBASE_TOOLS[:-1])
 def codebase_source_path(path):
     if not path.startswith(CODEBASE_ROOT):return False
     relative=path[len(CODEBASE_ROOT):]
@@ -217,8 +219,8 @@ HOT_OPERATIONS={"ui_deploy","index_deploy","plugin_deploy"}
 # Limit no-compile publication to UI assets and explicit Code Index metadata paths.
 def hot_source_path(path):return path.startswith(UI_SOURCE_PREFIX)or path in INDEX_METADATA_FILES or ability_asset_path(path) or (path.startswith("v3/config/") and path.endswith(".json")) or path=="v3/src/engine/tools/administrator-schemas.json" or path=="v3/tests/test_codebase_plugin.py"
 
-EXPECTED_CODEBASE_MANIFEST={'version': 1, 'id': 'codebase_admin', 'protocol': 1, 'runtime': 'python3', 'entrypoint': 'runner.py', 'interface': 1, 'tools': ['file_list', 'file_read', 'file_search', 'file_edit', 'file_write', 'build_work', 'state_inspect', 'prompt_slot_read', 'prompt_slot_write', 'shell', 'python'], 'build': {'inputs': ['runner.py'], 'dependencies': [], 'toolchain': 'image-python3', 'flags': ['-I', '-B'], 'assets': ['codebase_admin.json', 'codebase_admin.skill.md', 'tools', 'skills']}}
-EXPECTED_CODEBASE_DECLARATION={'display_name': 'Codebase Admin', 'kind': 'ability', 'icon': 'folder-cog', 'color': '#bb9af7', 'description': 'Inspect and edit live development files or isolated source tasks, run checks, and release reviewed builds.', 'skill_summary': 'Use file tools without task_id for explicit live edits and runtime configuration; use one task_id for source changes intended for a build. Task creation is automatic. Finish explicitly to deploy.', 'migration_note': 'Unified file and protected broker workflow; runtime authorization remains authoritative.', 'order': 1, 'placeholder': False, 'tools': ['file_list', 'file_read', 'file_search', 'file_edit', 'file_write', 'build_work', 'state_inspect', 'prompt_slot_read', 'prompt_slot_write', 'shell', 'python'], 'readiness': 'ready', 'config': {'bias': {'key': 'destructive_caution', 'label': 'Caution on destructive actions', 'default': 'balanced', 'levels': {'cautious': 'Before any file delete, overwrite, bulk edit, or non-read-only shell command, STOP and ask the user to confirm in plain language what will change — even if they gave a broad instruction. Prefer the smallest reversible step and never act on your own initiative without an explicit go-ahead. (Restarting the server after a change is exempt — use restart_server.)', 'balanced': "Carry out the user's explicit file/shell commands directly, but ask first whenever YOU decide on your own initiative to delete, overwrite, or run something irreversible, and when an action is ambiguous or far-reaching.", 'trusted': "Act decisively on the user's intent without pausing to re-confirm routine writes, edits, or shell commands; only stop for clearly irreversible or repo-wide destructive actions (mass delete, force-push)."}}}}
+EXPECTED_CODEBASE_MANIFEST={'version': 1, 'id': 'codebase_admin', 'protocol': 1, 'runtime': 'python3', 'entrypoint': 'runner.py', 'interface': 1, 'tools': CODEBASE_TOOLS, 'build': {'inputs': ['runner.py'], 'dependencies': [], 'toolchain': 'image-python3', 'flags': ['-I', '-B'], 'assets': ['codebase_admin.json', 'codebase_admin.skill.md', 'tools', 'skills']}}
+EXPECTED_CODEBASE_DECLARATION={'display_name': 'Codebase Admin', 'kind': 'ability', 'icon': 'folder-cog', 'color': '#bb9af7', 'description': 'Inspect and edit live development files or isolated source tasks, run checks, and release reviewed builds.', 'skill_summary': 'Use file tools without task_id for explicit live edits and runtime configuration; use one task_id for source changes intended for a build. Task creation is automatic. Finish explicitly to deploy.', 'migration_note': 'Unified file and protected broker workflow; runtime authorization remains authoritative.', 'order': 1, 'placeholder': False, 'tools': CODEBASE_TOOLS, 'readiness': 'ready', 'config': {'bias': {'key': 'destructive_caution', 'label': 'Caution on destructive actions', 'default': 'balanced', 'levels': {'cautious': 'Before any file delete, overwrite, bulk edit, or non-read-only shell command, STOP and ask the user to confirm in plain language what will change — even if they gave a broad instruction. Prefer the smallest reversible step and never act on your own initiative without an explicit go-ahead. (Restarting the server after a change is exempt — use restart_server.)', 'balanced': "Carry out the user's explicit file/shell commands directly, but ask first whenever YOU decide on your own initiative to delete, overwrite, or run something irreversible, and when an action is ambiguous or far-reaching.", 'trusted': "Act decisively on the user's intent without pausing to re-confirm routine writes, edits, or shell commands; only stop for clearly irreversible or repo-wide destructive actions (mass delete, force-push)."}}}}
 def validate_codebase_package(folder):
     folder=Path(folder)
     for name in ("plugin.json","runner.py","test_runner.py","codebase_admin.json","codebase_admin.skill.md"):
@@ -227,9 +229,10 @@ def validate_codebase_package(folder):
         if path.is_symlink() or not path.is_file() or (bound is not None and path.stat().st_size>bound):
             raise ValueError("Incomplete or oversized Codebase Admin package")
     manifest=json.loads((folder/"plugin.json").read_bytes())
-    if canonical(manifest)!=canonical(EXPECTED_CODEBASE_MANIFEST):raise ValueError("Incompatible Codebase Admin plugin contract")
+    tools=manifest.get("tools")
+    if tools not in CODEBASE_TOOL_LISTS or canonical(manifest)!=canonical({**EXPECTED_CODEBASE_MANIFEST,"tools":tools}):raise ValueError("Incompatible Codebase Admin plugin contract")
     declaration=json.loads((folder/"codebase_admin.json").read_bytes())
-    if declaration.get("tools")!=CODEBASE_TOOLS or declaration.get("kind")!="ability" or declaration.get("readiness")!="ready":raise ValueError("Incompatible Codebase Admin catalog")
+    if declaration.get("tools")!=tools or declaration.get("kind")!="ability" or declaration.get("readiness")!="ready":raise ValueError("Incompatible Codebase Admin catalog")
     for field,bound in (("display_name",100),("description",1000),("skill_summary",2000),("migration_note",2000)):
         value=declaration.get(field)
         if value is None and field in ("skill_summary","migration_note"):continue
@@ -243,7 +246,7 @@ def validate_codebase_package(folder):
     if declaration.get("config") is not None and not isinstance(declaration["config"],dict):
         raise ValueError("Invalid Codebase Admin configuration")
     mutable={"display_name","description","skill_summary","migration_note","icon","color","config","order"}
-    if canonical({k:v for k,v in declaration.items() if k not in mutable})!=canonical({k:v for k,v in EXPECTED_CODEBASE_DECLARATION.items() if k not in mutable}):
+    if canonical({k:v for k,v in declaration.items() if k not in mutable})!=canonical({k:v for k,v in {**EXPECTED_CODEBASE_DECLARATION,"tools":tools}.items() if k not in mutable}):
         raise ValueError("Codebase Admin interface/settings change needs coordinated installation")
     compile((folder/"runner.py").read_bytes(),str(folder/"runner.py"),"exec")
     for path in folder.rglob("*"):
@@ -2486,7 +2489,10 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         if release_root is not None:
             # Image releases adopt the protected operator budget; retained-image
             # reconfiguration already carries its explicitly selected HostConfig.
-            if name == TARGETS[0]:host["PidsLimit"]=CONFIG["api_pids_limit"]
+            if name == TARGETS[0]:
+                host["PidsLimit"]=CONFIG["api_pids_limit"]
+                # The Codebase Admin worker reads every file through this ambient capability.
+                host["CapAdd"]=sorted(set(host.get("CapAdd")or[])|{"CAP_DAC_READ_SEARCH"})
             host = release.release_mounts(host, self.published_runtime_source(release_root), ASSET_ROOT)
             if name in TARGETS:
                 env = [value for value in config.get("Env", [])

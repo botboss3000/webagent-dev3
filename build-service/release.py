@@ -314,6 +314,23 @@ def release_mounts(previous, root, asset_root=None):
     host["Mounts"] = mounts
     return host
 
+def checkout_mode(mode):
+    """Shared source stays readable to every local identity; only the owner execute bit is source identity."""
+    return 0o755 if mode & 0o100 else 0o644
+
+
+def make_source_parents(root, path):
+    """Create missing parent folders as 0755 regardless of the broker's private umask."""
+    missing = []
+    for parent in path.parents:
+        if parent == root or parent.exists():
+            break
+        missing.append(parent)
+    for parent in reversed(missing):
+        parent.mkdir()
+        parent.chmod(0o755)
+
+
 def promote_checkout(root, before_blob, after_blob, changed, validate, standalone=False):
     """Copy a healthy release's changed files into the shared source checkout."""
     before, after = entries(before_blob, validate), entries(after_blob, validate)
@@ -337,18 +354,20 @@ def promote_checkout(root, before_blob, after_blob, changed, validate, standalon
         else:
             current = None
         current_body = current[1] if current is not None else None
+        target = after.get(name)
+        target = (checkout_mode(target[0]), target[1]) if target is not None else None
         before_body = before[name][1] if name in before else None
         after_body = after[name][1] if name in after else None
         if current_body not in (before_body, after_body):
             raise ValueError("checkout changed during release: " + name)
-        if current != after.get(name):
-            actions.append((path, after.get(name)))
+        if current != target:
+            actions.append((path, target))
     for path, target in actions:
         if target is None:
             path.unlink()
             continue
         mode, body = target
-        path.parent.mkdir(parents=True, exist_ok=True)
+        make_source_parents(root, path)
         temporary = path.with_name(path.name + ".release-" + uuid.uuid4().hex)
         try:
             with temporary.open("xb") as output:
@@ -383,7 +402,8 @@ def checkout_matches(root, after_blob, changed, validate, standalone=False):
             current = (info.st_mode & 0o777, path.read_bytes())
         else:
             current = None
-        if current != after.get(name):
+        target = after.get(name)
+        if current != ((checkout_mode(target[0]), target[1]) if target is not None else None):
             return False
     return True
 

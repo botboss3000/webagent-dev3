@@ -886,6 +886,33 @@ class BuildTests(unittest.TestCase):
                 ["v3/README.md"], host.context_digest, standalone=True)
         self.assertEqual("another writer", path.read_text())
 
+    def test_checkout_promotion_writes_readable_modes_and_folders(self):
+        root = self.state / "modes"
+        root.mkdir()
+        before = context()
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w") as archive:
+            for name, mode in (("v3/new/deep/tool.sh", 0o700), ("v3/new/deep/data.json", 0o600)):
+                info = tarfile.TarInfo(name)
+                info.size, info.mode = 2, mode
+                archive.addfile(info, io.BytesIO(b"{}"))
+        after = stream.getvalue()
+        changed = ["v3/new/deep/tool.sh", "v3/new/deep/data.json"]
+        previous = os.umask(0o077)
+        try:
+            self.assertEqual(2, host.release.promote_checkout(
+                root, before, after, changed, lambda _: None, standalone=True))
+        finally:
+            os.umask(previous)
+        self.assertEqual(0o755, (root / "new/deep/tool.sh").stat().st_mode & 0o777)
+        self.assertEqual(0o644, (root / "new/deep/data.json").stat().st_mode & 0o777)
+        for folder in (root / "new", root / "new/deep"):
+            self.assertEqual(0o755, folder.stat().st_mode & 0o777)
+        self.assertTrue(host.release.checkout_matches(
+            root, after, changed, lambda _: None, standalone=True))
+        self.assertEqual(0, host.release.promote_checkout(
+            root, before, after, changed, lambda _: None, standalone=True))
+
     def test_source_apply_schemas_have_disjoint_arguments(self):
         path = Path(__file__).resolve().parents[1] / "src/engine/tools/native-tools.json"
         schemas = {item["name"]: item["parameters"] for item in json.loads(path.read_text())}

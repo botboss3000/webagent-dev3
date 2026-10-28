@@ -65,7 +65,7 @@ def main():
  mounts=[(state,"/state",False),(root/"config","/opt/v3/config",True),(Path(c["workspace_root"]),"/workspaces",False),(Path(c["runtime_root"]).parent,"/run/v3",False)]
  argv=["docker","run","-d","--name",name,"--restart","unless-stopped","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges:true","--pids-limit",str(c["api_pids_limit"]) if role=="api" else "256","--memory","2g","--cpus","2"]
  if role=="api":
-  argv+=["--cap-add","CHOWN","--cap-add","FOWNER","--cap-add","SETUID","--cap-add","SETGID","--publish",c["bind_address"]+":"+str(c["port"])+":8080"]
+  argv+=["--cap-add","CHOWN","--cap-add","FOWNER","--cap-add","SETUID","--cap-add","SETGID","--cap-add","DAC_READ_SEARCH","--publish",c["bind_address"]+":"+str(c["port"])+":8080"]
   mounts += [(root,"/live-checkout",False),(root,"/live-v3",True),(root/"ui","/opt/v3/ui",True)]
   for rel in ("shared/css","main-panel/agents","vendor/fonts","vendor/lucide","favicon.svg"):mounts.append((root/"build-service/shared-ui/ui"/rel,"/opt/v3/shared-ui/"+rel,True))
  else:

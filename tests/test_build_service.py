@@ -6,6 +6,20 @@ import test_admin_build as fixtures
 def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 config=module("portable_config",Path(__file__).resolve().parents[1]/"build-service/config.py")
+class CodebaseToolListTests(unittest.TestCase):
+    def test_codebase_package_accepts_previous_and_checkout_edit_tool_lists(self):
+        import shutil
+        package=Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/codebase_admin"
+        with tempfile.TemporaryDirectory()as temporary:
+            folder=Path(temporary)/"package";shutil.copytree(package,folder)
+            for tools in fixtures.host.CODEBASE_TOOL_LISTS+(fixtures.host.CODEBASE_TOOLS[:-2],):
+                for name in ("plugin.json","codebase_admin.json"):
+                    path=folder/name;value=json.loads(path.read_text());value["tools"]=list(tools);path.write_text(json.dumps(value))
+                (folder/"tools/checkout_edit.skill.md").write_text("# checkout_edit\n")
+                if tools in fixtures.host.CODEBASE_TOOL_LISTS:fixtures.host.validate_codebase_package(folder)
+                else:
+                    with self.assertRaises(ValueError):fixtures.host.validate_codebase_package(folder)
+
 class CandidateModeTests(unittest.TestCase):
     def test_mode_only_rewrite_is_not_a_change_but_executable_bit_is(self):
         release=fixtures.host.release;validate=fixtures.host.context_digest
@@ -1396,6 +1410,8 @@ class RecoveryDockerBoundaryTests(unittest.TestCase):
    self.assertEqual(loop["/live-checkout"],(str(checkout),True));self.assertEqual(loop["/live-checkout/plugins"],(str(checkout/"plugins"),True))
    api={m[0]:m[1:]for m in shape(job,configs["api"])[0]}
    self.assertEqual(api["/live-checkout"],(str(checkout),False))
+   self.assertEqual(["CAP_DAC_READ_SEARCH"],configs["api"]["HostConfig"]["CapAdd"])
+   self.assertNotIn("CapAdd",configs["loop"]["HostConfig"])
 
 class AutomaticBrokerIdentityTests(unittest.TestCase):
     from test_scheduler_broker import SchedulerBrokerTests as _base
