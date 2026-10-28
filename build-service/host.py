@@ -184,7 +184,8 @@ def engine_component_source_path(path):
         "v3/crates/assets-service/","v3/crates/context-assets/","v3/crates/assets-contracts/",
         "v3/crates/capability-service/","v3/crates/capability-context/","v3/crates/capability-contracts/",
         "v3/crates/provider-service/","v3/crates/provider-projection/","v3/crates/provider-contracts/",
-        "v3/crates/engine-service/"))
+        "v3/crates/engine-service/",
+        "v3/crates/module-toy/","v3/crates/module-service/","v3/crates/module-interface/"))
 
 def generic_package_path(path,blob,entries=None):
     """Classify registered engine and isolated ability inputs; authority and actual core dependencies still fence publication."""

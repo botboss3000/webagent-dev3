@@ -2596,15 +2596,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "webagent-module-toy"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "tokio",
- "webagent-module-service",
-]
-
-[[package]]
 name = "webagent-provider-contracts"
 version = "0.1.0"
 dependencies = [
@@ -2654,6 +2645,15 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "serde_json",
+]
+
+[[package]]
+name = "webagent-toy-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tokio",
+ "webagent-module-service",
 ]
 
 [[package]]

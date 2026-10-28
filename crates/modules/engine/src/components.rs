@@ -34,6 +34,15 @@ fn context_registration(operation:&str)->Option<(&'static str,&'static str,Vec<&
  let _=(service,implementation,contracts);
  Some((id,match operation {"assets.plan"=>"webagent-assets-service","capability.prepare"=>"webagent-capability-service",_=>"webagent-provider-service"},names))
 }
+/// Module services share the engine catalog; each registration fixes its package and build closure.
+fn module_registration(operation:&str)->Option<(&'static str,&'static str,Vec<&'static str>)> {
+ match operation {
+  "module.toy"=>Some(("module-toy","webagent-toy-service",vec!["crates/module-toy","crates/module-service","crates/module-interface","crates/engine-service","Cargo.toml","Cargo.lock"])),
+  _=>None,
+ }
+}
+/// Engine operations and module services resolve through one registration lookup.
+fn registration(operation:&str)->Option<(&'static str,&'static str,Vec<&'static str>)> {context_registration(operation).or_else(||module_registration(operation))}
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {pub max_request_bytes:usize,pub max_response_bytes:usize,pub timeout_ms:u64,pub max_concurrency:usize}
@@ -53,21 +62,21 @@ fn valid_id(id:&str)->bool {!id.is_empty()&&id.len()<=64&&id.bytes().all(|c|c.is
 impl Descriptor {
  /// Only reviewed fixed interfaces and confined build recipes may enter the engine catalog.
  pub fn validate(&self)->Result<()> {
-  if self.schema_version!=1||!valid_id(&self.id)||self.interface_version!=if self.operation=="context.prepare"{2}else if self.operation=="background.plan"{webagent_background_contracts::INTERFACE_VERSION}else{1}||(!matches!(self.operation.as_str(),"context.prepare"|"background.plan"|"boot.plan")&&context_registration(&self.operation).is_none())
-   ||!valid_id(&self.group)||self.implementation_version.is_empty()||self.implementation_version.len()>64
+  if self.schema_version!=1||!valid_id(&self.id)||self.interface_version!=if self.operation=="context.prepare"{2}else if self.operation=="background.plan"{webagent_background_contracts::INTERFACE_VERSION}else{1}||(!matches!(self.operation.as_str(),"context.prepare"|"background.plan"|"boot.plan")&&registration(&self.operation).is_none())
+   ||!valid_id(&self.group)||module_registration(&self.operation).is_some()!=(self.group=="module")||self.implementation_version.is_empty()||self.implementation_version.len()>64
    ||self.modes!=["live","linked"]||self.runtime_requirements.len()>16||self.runtime_requirements.iter().any(|id|!valid_id(id))
    ||self.executable!=format!("artifact/{}",self.build.package)
    ||match self.operation.as_str() {
     "context.prepare"=>self.build.package!="webagent-context-service",
     "background.plan"=>self.id!=BACKGROUND||self.build.package!="webagent-background-service",
-    "boot.plan"=>self.id!="boot-supervisor"||self.build.package!="webagent-boot-service",_=>context_registration(&self.operation).is_none_or(|(id,package,_)|self.id!=id||self.build.package!=package)
+    "boot.plan"=>self.id!="boot-supervisor"||self.build.package!="webagent-boot-service",_=>registration(&self.operation).is_none_or(|(id,package,_)|self.id!=id||self.build.package!=package)
    }
-   ||self.build.toolchain!="1.90.0"||self.build.source_inputs!=if self.operation=="context.prepare" {vec!["crates/context-service","crates/context-assembly","crates/context-contracts","Cargo.toml","Cargo.lock"]}else if self.operation=="boot.plan"{vec!["crates/boot-service","crates/boot-supervisor","crates/boot-contracts","crates/engine-service","Cargo.toml","Cargo.lock"]}else if self.operation=="background.plan"{vec!["crates/background-service","crates/background-dispatch","crates/background-contracts","crates/engine-service","Cargo.toml","Cargo.lock"]}else{context_registration(&self.operation).map(|(_,_,inputs)|inputs).unwrap_or_default()}
+   ||self.build.toolchain!="1.90.0"||self.build.source_inputs!=if self.operation=="context.prepare" {vec!["crates/context-service","crates/context-assembly","crates/context-contracts","Cargo.toml","Cargo.lock"]}else if self.operation=="boot.plan"{vec!["crates/boot-service","crates/boot-supervisor","crates/boot-contracts","crates/engine-service","Cargo.toml","Cargo.lock"]}else if self.operation=="background.plan"{vec!["crates/background-service","crates/background-dispatch","crates/background-contracts","crates/engine-service","Cargo.toml","Cargo.lock"]}else{registration(&self.operation).map(|(_,_,inputs)|inputs).unwrap_or_default()}
    ||!self.build.features.is_empty()||!self.build.runtime_assets.is_empty()
    ||self.limits.max_request_bytes==0||self.limits.max_request_bytes>16*1024*1024
    ||self.limits.max_response_bytes==0||self.limits.max_response_bytes>16*1024*1024
    ||self.limits.timeout_ms==0||self.limits.timeout_ms>30000||self.limits.max_concurrency!=1
-   ||matches!(self.operation.as_str(),"background.plan"|"boot.plan")&&(self.limits.max_request_bytes>65536||self.limits.max_response_bytes>65536||self.limits.timeout_ms>1000)
+   ||(matches!(self.operation.as_str(),"background.plan"|"boot.plan")||module_registration(&self.operation).is_some())&&(self.limits.max_request_bytes>65536||self.limits.max_response_bytes>65536||self.limits.timeout_ms>1000)
    ||self.artifact_sha256.as_ref().is_some_and(|s|s.len()!=64||!s.bytes().all(|c|c.is_ascii_hexdigit())) {
     anyhow::bail!("Engine contract rejected");
   }Ok(())
@@ -832,6 +841,17 @@ mod tests {
   assert_eq!(version,webagent_context_assembly::IMPLEMENTATION_VERSION);assert_ne!(generation,declaration.artifact_sha256.unwrap());
  }
  #[test]
+ /// A registered module service enters the catalog only with its own group, package and limits.
+ #[test]
+ fn module_toy_descriptor_validates_only_as_a_module() {
+  let path=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../plugins/engine/module-toy/component.json");
+  let value:Value=serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+  serde_json::from_value::<Descriptor>(value.clone()).unwrap().validate().unwrap();
+  for (pointer,bad) in [("/group",json!("engine-loop")),("/build/package",json!("webagent-context-service")),("/limits/timeout_ms",json!(30000)),("/id",json!("context-assembly"))] {
+   let mut changed=value.clone();*changed.pointer_mut(pointer).unwrap()=bad;
+   assert!(serde_json::from_value::<Descriptor>(changed).unwrap().validate().is_err(),"{pointer}");
+  }
+ }
  /// Reuse an identical generation while refreshing its validated respawn location.
  fn unchanged_service_refreshes_respawn_path() {
   let declaration=descriptor();let mut catalog=Catalog{revision:"old".into(),root:Some(PathBuf::from("/old")),entries:BTreeMap::new(),withdrawn:Default::default()};

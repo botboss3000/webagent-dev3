@@ -1,8 +1,12 @@
 [package]
-name = "webagent-module-toy"
+name = "webagent-toy-service"
 version = "0.1.0"
 edition = "2021"
 description = "Smallest module service: proves the transport, the generated adapters and the broker module lane."
+
+# The package carries the service binary's name, as the module lane builds it by package.
+[lib]
+name = "webagent_module_toy"
 
 [dependencies]
 anyhow = "1"

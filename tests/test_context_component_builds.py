@@ -37,6 +37,19 @@ class ComponentBuildTests(unittest.TestCase):
             value["interface_version"]=3;path.write_text(json.dumps(value))
             with self.assertRaises(ValueError):engine.descriptor(path)
 
+    # Module services ride the same lane under their own group; nothing else is accepted.
+    def test_module_service_registration_requires_its_group(self):
+        with tempfile.TemporaryDirectory()as temporary:
+            path=Path(temporary)/"component.json"
+            value=json.loads((ROOT/"plugins/engine/module-toy/component.json").read_text())
+            path.write_text(json.dumps(value));self.assertEqual(engine.descriptor(path),value)
+            self.assertEqual(engine.REGISTRY["module-toy"]["binary"],"webagent-toy-service")
+            for field,bad in (("group","engine-loop"),("operation","context.prepare")):
+                path.write_text(json.dumps({**value,field:bad}))
+                with self.assertRaises(ValueError):engine.descriptor(path)
+            self.assertTrue(engine.package_path("v3/crates/module-toy/src/lib.rs",{}))
+            self.assertIn("crates/module-service/src/lib.rs",engine.closure(ROOT,"module-toy"))
+
     # Require exact service dependency closures and reject symlinked source inputs.
     def test_each_service_closure_includes_shared_contracts_and_exact_local_dependencies(self):
         for identity,(_,service,implementation,contract,_)in NEW.items():
