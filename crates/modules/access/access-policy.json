@@ -1,4 +1,18 @@
 {
+  "login_protection": {
+    "account": {
+      "delay_seconds": 5,
+      "failures": 5,
+      "max_delay_seconds": 60,
+      "window_seconds": 300
+    },
+    "address": {
+      "block_seconds": 60,
+      "failures": 5,
+      "max_block_seconds": 3600,
+      "window_seconds": 300
+    }
+  },
   "registration": "open",
   "revision": 43,
   "tier_names": {
