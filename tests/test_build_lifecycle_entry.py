@@ -1,4 +1,5 @@
 """Lifecycle installation resolves protected bootstrap without weakening fixed paths."""
+import types
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -52,3 +53,46 @@ class StaleTreeGuardTests(unittest.TestCase):
         source=(Path(__file__).resolve().parents[1]/"build-service/lifecycle.py").read_text()
         self.assertIn("--allow-stale-tree",source)
         self.assertIn('if stale and not args.allow_stale_tree:',source)
+
+class BootPinTests(unittest.TestCase):
+    """Broker installs repoint the boot host's reviewed-release drop-in instead of leaving it stale."""
+    def layout(self,text=None):
+        temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup);root=Path(temporary.name)
+        install=root/"var/build-service";old=install/"releases"/("a"*64);new=install/"releases"/("b"*64)
+        for folder in (old,new):folder.mkdir(parents=True);(folder/"boot_host.py").write_text("# reviewed boot host\n")
+        units=root/"units";folder=units/"webagent-boot-development.service.d";folder.mkdir(parents=True)
+        if text is not None:(folder/lifecycle.BOOT_PIN).write_text(text.format(old=old))
+        value={"instance":"development","install_root":str(install),"service_dir":str(new)}
+        return root,units,value,folder/lifecycle.BOOT_PIN,new
+    def test_stale_pin_is_backed_up_rewritten_and_only_the_boot_host_restarted(self):
+        root,units,value,path,new=self.layout("[Service]\nExecStart=\nExecStart=/usr/bin/python3 -B {old}/boot_host.py\n")
+        before=path.read_text();calls=[]
+        run=lambda state:lambda argv,check,**_:calls.append(argv) or types.SimpleNamespace(stdout=state+"\n")
+        result=lifecycle.repoint_boot(lifecycle.boot_pin(value,units),root/"pin.previous",run("active"))
+        self.assertEqual(path.read_text(),"[Service]\nExecStart=\nExecStart=/usr/bin/python3 -B "+str(new)+"/boot_host.py\n")
+        self.assertEqual((root/"pin.previous").read_text(),before)
+        unit="webagent-boot-development.service"
+        self.assertEqual(calls,[["systemctl","daemon-reload"],["systemctl","is-active",unit],["systemctl","reset-failed",unit],["systemctl","restart",unit]])
+        self.assertEqual(result["restarted"],unit)
+        calls.clear();self.assertFalse(lifecycle.repoint_boot(lifecycle.boot_pin(value,units),root/"pin.previous",run("active"))["changed"])
+        self.assertEqual(calls,[])
+    def test_operator_stopped_boot_host_is_repointed_but_left_stopped(self):
+        root,units,value,path,new=self.layout("[Service]\nExecStart=\nExecStart=/usr/bin/python3 -B {old}/boot_host.py\n");calls=[]
+        result=lifecycle.repoint_boot(lifecycle.boot_pin(value,units),root/"pin.previous",lambda argv,check,**_:calls.append(argv) or types.SimpleNamespace(stdout="inactive\n"))
+        self.assertIn(str(new)+"/boot_host.py",path.read_text());self.assertIsNone(result["restarted"])
+        self.assertEqual(calls,[["systemctl","daemon-reload"],["systemctl","is-active","webagent-boot-development.service"]])
+    def test_absent_drop_in_is_left_alone(self):
+        _,units,value,path,_=self.layout()
+        self.assertIsNone(lifecycle.boot_pin(value,units));self.assertFalse(path.exists())
+    def test_unfamiliar_or_symlinked_drop_in_fails_closed(self):
+        for text in ("[Service]\nExecStart=/usr/bin/python3 /tmp/boot_host.py\n","ExecStart={old}/boot_host.py\nExecStartPre={old}/boot_host.py\n"):
+            _,units,value,_,_=self.layout(text)
+            with self.assertRaises(ValueError):lifecycle.boot_pin(value,units)
+        root,units,value,path,_=self.layout("ExecStart={old}/boot_host.py\n")
+        real=root/"real.conf";path.rename(real);path.symlink_to(real)
+        with self.assertRaises(PermissionError):lifecycle.boot_pin(value,units)
+    def test_missing_installed_boot_host_never_rewrites_the_pin(self):
+        root,units,value,path,new=self.layout("ExecStart={old}/boot_host.py\n");before=path.read_text()
+        plan=lifecycle.boot_pin(value,units);(new/"boot_host.py").unlink()
+        with self.assertRaises(FileNotFoundError):lifecycle.repoint_boot(plan,root/"pin.previous",lambda argv,check:None)
+        self.assertEqual(path.read_text(),before);self.assertFalse((root/"pin.previous").exists())

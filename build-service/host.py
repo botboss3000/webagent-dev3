@@ -3918,11 +3918,14 @@ class Broker:
         files = checkout_files(checkout)
         if args["mode"] == "stable":
             try:
-                features = tomllib.loads(files["v3/Cargo.toml"][1].decode()).get("features", {})
+                manifest = tomllib.loads(files["v3/Cargo.toml"][1].decode())
             except (KeyError, UnicodeError, tomllib.TOMLDecodeError):
-                features = {}
-            if STABLE_FEATURE not in features:
+                manifest = {}
+            if STABLE_FEATURE not in manifest.get("features", {}):
                 raise ValueError("Stable release requires the app to declare the webagent-v3 '" + STABLE_FEATURE + "' Cargo feature")
+            # The stable live compile selects --profile stable (thin LTO, opt-level 3); refuse before claiming.
+            if manifest.get("profile", {}).get("stable", {}).get("inherits") != "release":
+                raise ValueError("Stable release requires the app to declare [profile.stable] inheriting release")
         begun = call({"action": "begin", "task_id": task_id, "mode": "isolated",
                       "summary": "Rebuild current checkout (" + args["mode"] + ") requested by " + ("an administrator" if admin else "the local operator")})
         tree = Path(begun["workspace_path"]).parent

@@ -212,6 +212,14 @@ confinement; install it only from the successful release's attested artifact,
 alongside its protected hash receipt. Library/service descriptors cannot replace
 that authority or choose its targets. The UI is an unprivileged keyboard-woken
 status/control client outside this checkout. See docs/boot-supervisor.md.
+`lifecycle.py install` also repoints the boot host's systemd drop-in
+`webagent-boot-<instance>.service.d/50-reviewed-broker-release.conf` at the
+installed release's boot_host.py: the previous file is kept as
+`boot-supervisor/50-reviewed-broker-release.conf.previous`, the new one is written
+atomically (symlinks and any drop-in not naming exactly one release boot_host.py
+are refused), then systemd reloads and only the boot host restarts; app containers
+are untouched. An absent drop-in is left alone and the install reply says so
+(`boot_host`).
 
 Host-source publication allows only the already-installed fixed boot authority
 module and its explicit docs/tests, with exact protected byte equality. Actual
@@ -325,6 +333,24 @@ extraction time, so only changed module crates and their dependents rebuild (the
 root crate always does). The job's target is replaced only after the copy matches
 the receipt's inventory; any failure keeps the dependency snapshot. Two snapshots
 per dependency key are kept; the cache is rebuildable and safe to delete.
+
+## Previous-execution target seeding
+
+Before the snapshots, an engine job copies the private target of the newest
+compatible earlier execution (same compiler recipe; source digest, phase evidence
+and symlink checks as before; copy verified by hash; skipped when free disk would
+fall below `disk_min_free_bytes` plus the target's size). Identical Rust inputs may
+seed from a failed or completed execution as before. A Rust (or embedded input)
+change seeds only from a completed execution of the same release mode with
+identical manifests, lock and Cargo configuration (`dependency_binding`) and no
+deleted Rust input, so unit names stay stable and no orphaned dep-info reaches
+attestation; an identical-input candidate is preferred. Every source file
+byte-identical to that execution's source takes its mtime; changed and new files
+are made newer than every seeded object, so Cargo rebuilds only changed crates
+and their dependents (the root is cleaned and always rebuilds). Seeding supplies
+starting objects only: all compiles, tests and smokes run on the captured inputs.
+`cargo_cache_seed` in the job records the source job, decision, Rust inputs
+differing, target size and restored/newer file counts.
 
 ## Engine component reuse keys
 

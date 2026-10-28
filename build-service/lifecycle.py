@@ -10,7 +10,7 @@ def atomic(path,value):
  temporary=path.with_name("."+path.name+".new")
  fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
  try:
-  with os.fdopen(fd,"w") as stream:json.dump(value,stream,sort_keys=True);stream.write("\n");stream.flush();os.fsync(stream.fileno())
+  with os.fdopen(fd,"w") as stream:stream.write(value if isinstance(value,str) else json.dumps(value,sort_keys=True)+"\n");stream.flush();os.fsync(stream.fileno())
   os.chmod(temporary,0o644);os.replace(temporary,path)
  finally:temporary.unlink(missing_ok=True)
 def secure_dirs(path):
@@ -48,6 +48,34 @@ def stale_tree(tree,installed):
   current=path.read_bytes()
   if candidate.read_bytes()!=current and base.get(name)!=current:stale.append(name)
  return stale
+BOOT_PIN="50-reviewed-broker-release.conf"
+def boot_pin(value,unit_root="/etc/systemd/system"):
+ """Plan repointing the boot host's release drop-in at value's release: (unit, drop-in, old, new, boot host), or None when absent.
+
+ Only a drop-in naming exactly one boot_host.py under this installation's releases is rewritten;
+ any other content fails closed rather than overwriting an operator edit."""
+ import re
+ unit="webagent-boot-"+value["instance"]+".service";folder=Path(unit_root)/(unit+".d");path=folder/BOOT_PIN
+ if folder.is_symlink() or path.is_symlink():raise PermissionError("Boot drop-in symlink")
+ if not path.exists():return None
+ if not path.is_file():raise PermissionError("Boot drop-in is not a regular file")
+ old=path.read_text();pattern=re.compile(re.escape(str(Path(value["install_root"])/"releases"))+r"/[0-9a-f]{64}/boot_host\.py(?=\s|$)")
+ if len(pattern.findall(old))!=1:raise ValueError("Boot drop-in does not pin exactly one reviewed boot host")
+ host=Path(value["service_dir"])/"boot_host.py"
+ return unit,path,old,pattern.sub(lambda _:str(host),old),host
+def repoint_boot(plan,backup,run=subprocess.run):
+ """Back up and atomically rewrite the boot pin, reload systemd and restart only the boot host (app containers untouched)."""
+ unit,path,old,new,host=plan
+ if old==new:return {"drop_in":str(path),"changed":False}
+ if host.is_symlink() or not host.is_file():raise FileNotFoundError("Installed boot host unavailable")
+ atomic(backup,old);atomic(path,new)
+ run(["systemctl","daemon-reload"],check=True)
+ # An operator-stopped boot host stays stopped. A running or failed one restarts on the new
+ # release; a stale pin may have left it start-limited, which reset-failed clears.
+ state=run(["systemctl","is-active",unit],check=False,capture_output=True,text=True).stdout.strip()
+ if state=="inactive":return {"drop_in":str(path),"changed":True,"previous":str(backup),"restarted":None}
+ run(["systemctl","reset-failed",unit],check=False);run(["systemctl","restart",unit],check=True)
+ return {"drop_in":str(path),"changed":True,"previous":str(backup),"restarted":unit}
 def install(args):
  if os.geteuid()!=0:raise PermissionError("Installation requires root")
  source=Path(__file__).resolve().parent;checkout=Path(args.checkout_root or source.parent)
@@ -87,6 +115,8 @@ def install(args):
  digest.update((reviewed.parent/"plugins/abilities/Administrator/code_index/adapter.py").read_bytes())
  digest.update((reviewed.parent/"plugins/abilities/Administrator/code_index/maintenance.py").read_bytes())
  release=digest.hexdigest();value["service_dir"]=str(install_root/"releases"/release);cfg.validate(value)
+ boot=boot_pin(value);boot_home=Path(value["install_root"]).parent/"boot-supervisor"
+ if boot:secure_dirs(boot_home)
  config_path=Path(args.config or "/etc/webagent/"+args.instance+"/build-service.json")
  secure_dirs(config_path.parent);secure_dirs(Path(value["service_dir"]).parent)
  ledger_root=Path(value["install_root"]).parent/"code-index-maintenance"
@@ -136,7 +166,8 @@ def install(args):
  unit=Path("/etc/systemd/system")/unit_name
  if unit.is_symlink():raise PermissionError("Unit symlink")
  unit.write_text(text);unit.chmod(0o644);subprocess.run(["systemctl","daemon-reload"],check=True)
- print(json.dumps({"installed":True,"version":release,"config":str(config_path),"unit":unit_name}))
+ boot_host=repoint_boot(boot,boot_home/(BOOT_PIN+".previous")) if boot else {"drop_in":"absent","changed":False,"note":"no "+BOOT_PIN+" drop-in; boot host left unchanged"}
+ print(json.dumps({"installed":True,"version":release,"config":str(config_path),"unit":unit_name,"boot_host":boot_host}))
 def resource_policy(config_path,candidate_path,task_id,dry_run=False):
  """Atomically change only protected CPU/memory policy; reload broker/helper without a restart."""
  if os.geteuid()!=0:raise PermissionError("Memory policy installation requires root")

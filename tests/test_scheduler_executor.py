@@ -138,6 +138,52 @@ class CacheTests(unittest.TestCase):
         self.assertNotIn("cargo_cache_reuse",self.job)
         self.assertFalse((output/"cargo").exists());self.assertFalse((output/"target").exists())
         self.assertEqual(self.job["cargo_cache_rejections"],[{"job_id":previous,"reason":"previous_execution_source_differs_from_candidate"}])
+    def changed_seed(self,changes,status="completed",**receipt):
+        """A completed previous execution and a job whose captured source differs by changes."""
+        import json,os
+        previous,folder=self.previous_cargo_cache()
+        (self.root/(previous+".json")).write_text(json.dumps({"job_id":previous,"status":status,"compiler_recipe":self.worker.compiler_recipe(),**receipt}))
+        old=10**18;newest=old+5*10**9
+        for path in (folder/"source").rglob("*"):
+            if path.is_file():os.utime(path,ns=(old,old))
+        for path in (folder/"output/target").rglob("*"):
+            if path.is_file():os.utime(path,ns=(newest,newest))
+        blob=self.candidate(changes);job=self.root/uuid.uuid4().hex;output=job/"output";output.mkdir(parents=True)
+        fixtures.host.release.extract(job/"source",blob,fixtures.host.context_digest)
+        for path in (job/"source").rglob("*"):
+            if path.is_file():os.utime(path,ns=(1,1))
+        return previous,blob,job,old,newest
+    def test_changed_rust_input_seeds_and_only_changed_files_look_newer(self):
+        """Unchanged files take the previous mtimes; changed and new files postdate every seeded object."""
+        previous,blob,job,old,newest=self.changed_seed({"v3/src/main.rs":"fn main(){println!()}","v3/src/new.rs":"fn new(){}"})
+        self.assertTrue(self.worker.seed_cargo_cache(self.job,blob,job/"output"))
+        seed=self.job["cargo_cache_seed"]
+        self.assertEqual((seed["job_id"],seed["decision"],seed["rust_inputs_differing"],seed["files_newer"]),(previous,"changed_rust_inputs",2,2))
+        self.assertEqual((job/"output/target/debug/deps/dependency.rlib").read_bytes(),b"compatible dependency objects")
+        self.assertEqual((job/"source/v3/config/embedded.json").stat().st_mtime_ns,old)
+        for name in ("src/main.rs","src/new.rs"):self.assertGreater((job/"source/v3"/name).stat().st_mtime_ns,newest)
+        self.assertFalse((job/"output/cargo").exists())
+    def test_changed_embedded_input_seeds_only_from_a_completed_execution(self):
+        previous,blob,job,old,newest=self.changed_seed({"v3/config/embedded.json":"changed"})
+        self.assertTrue(self.worker.seed_cargo_cache(self.job,blob,job/"output"))
+        self.assertEqual((self.job["cargo_cache_seed"]["decision"],self.job["cargo_cache_seed"]["rust_inputs_differing"]),("changed_rust_inputs",0))
+        self.assertGreater((job/"source/v3/config/embedded.json").stat().st_mtime_ns,newest)
+    def test_changed_rust_input_never_seeds_from_unsafe_candidates(self):
+        """Failed or other-mode executions, changed manifests and deleted inputs fall back to snapshots."""
+        for changes,status,receipt in [({"v3/src/main.rs":"fn main(){1;}"},"failed",{}),({"v3/src/main.rs":"fn main(){1;}"},"completed",{"release_mode":"stable"}),
+            ({"v3/src/main.rs":"fn main(){1;}","v3/Cargo.toml":"changed manifest"},"completed",{}),({"v3/src/main.rs":"fn main(){1;}","v3/crates/new/Cargo.toml":"[package]"},"completed",{})]:
+            self.job={"job_id":str(uuid.uuid4())}
+            _,blob,job,_,_=self.changed_seed(changes,status,**receipt)
+            self.assertFalse(self.worker.seed_cargo_cache(self.job,blob,job/"output"))
+            self.assertFalse((job/"output/target").exists())
+        previous,blob,job,_,_=self.changed_seed({})
+        self.extra.pop("v3/src/main.rs");(job/"source/v3/src/main.rs").unlink()
+        self.assertFalse(self.worker.seed_cargo_cache(self.job,self.candidate({}),job/"output"))
+    def test_identical_inputs_restore_mtimes_so_workspace_objects_stay_fresh(self):
+        previous,blob,job,old,_=self.changed_seed({},status="failed")
+        self.assertTrue(self.worker.seed_cargo_cache(self.job,blob,job/"output"))
+        self.assertEqual(self.job["cargo_cache_seed"]["decision"],"identical_rust_inputs");self.assertEqual(self.job["cargo_cache_seed"]["files_newer"],0)
+        self.assertEqual((job/"source/v3/src/main.rs").stat().st_mtime_ns,old)
     def test_runtime_roles_package_only_declared_artifacts_and_stream_to_disk(self):
         """Loop contexts exclude API registry and retained tests; API keeps its required closure."""
         import tarfile

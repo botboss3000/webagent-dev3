@@ -92,6 +92,8 @@ def reuse_inputs(root,inputs):
             profile["package"]={key:value for key,value in profile["package"].items()if key=="*"or key in names}
             if not profile["package"]:del profile["package"]
     if "profile"in effective:
+        # Components never build with the stable-release profile, so it cannot reach them.
+        effective["profile"].pop("stable",None)
         # An empty profile (or profile table) is a no-op for Cargo.
         effective["profile"]={name:value for name,value in effective["profile"].items()if value!={}}
         if not effective["profile"]:del effective["profile"]

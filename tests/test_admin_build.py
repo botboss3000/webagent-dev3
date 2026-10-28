@@ -1819,11 +1819,18 @@ class BuildTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "stable-abilities"):
             self.rebuild("stable", "request-stable-missing")
         self.deployed_baseline();self.drift(**{"v3/Cargo.toml": "[package]\nname = \"webagent-v3\"\n[features]\nstable-abilities = []\n"})
+        with self.assertRaisesRegex(ValueError, "profile.stable"):
+            self.rebuild("stable", "request-stable-profile")
+        self.drift(**{"v3/Cargo.toml": "[package]\nname = \"webagent-v3\"\n[features]\nstable-abilities = []\n[profile.stable]\ninherits = \"release\"\nlto = \"thin\"\n"})
         result = self.rebuild("stable", "request-stable")
         job = self.settle(result["job_id"])
         self.assertEqual((job["release_mode"], job["operation"]), ("stable", "build_deploy"))
         self.assertEqual(host.executor_module.Executor.live_recipe(True)[-1].split("--features ")[-1], "webagent-v3/live-context,webagent-v3/stable-abilities")
         self.assertNotIn("stable-abilities", host.executor_module.Executor.live_recipe()[-1])
+        # Only stable selects the LTO profile; dev keeps its exact release recipe.
+        self.assertIn("cargo build --workspace --profile stable ", host.executor_module.Executor.live_recipe(True)[-1])
+        self.assertNotIn("--profile", host.executor_module.Executor.live_recipe()[-1])
+        self.assertIn("/output/target/stable/webagent-v3 ", host.executor_module.Executor.smoke_recipe("live", profile="stable")[-1])
 
     def test_operator_continues_build_release_stopped_at_ui_check(self):
         self.runner.hot_assets = True

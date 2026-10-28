@@ -120,3 +120,12 @@ path = "src/plugin_packages/outbound_notifications/main.rs"
 # compile by about a sixth; module and dependency crates keep level 3.
 [profile.release.package.webagent-v3]
 opt-level = 2
+
+# Used only by the broker's stable release (`rebuild --mode stable`): thin LTO and
+# full optimisation for the root. Dev releases keep the faster release profile.
+[profile.stable]
+inherits = "release"
+lto = "thin"
+
+[profile.stable.package.webagent-v3]
+opt-level = 3

@@ -384,6 +384,7 @@ checksum = "bb"
         base=self.keyed()
         self.assertNotIn("Cargo.toml",base);self.assertNotIn("Cargo.lock",base)
         for manifest in (self.MANIFEST+"\n[profile.release.package.webagent-v3]\nopt-level = 2\n",
+                         self.MANIFEST+'\n[profile.stable]\ninherits = "release"\nlto = "thin"\n[profile.stable.package.svc]\nopt-level = 1\n',
                          self.MANIFEST.replace('serde = "1"\n[[bin]]','serde = "1"\ntokio = "1"\n[[bin]]'),
                          self.MANIFEST.replace('members = ["crates/svc", "crates/lib"]','members = ["crates/svc", "crates/lib", "crates/new"]')):
             self.assertEqual(self.keyed(manifest),base)

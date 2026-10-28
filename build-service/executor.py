@@ -40,6 +40,9 @@ WORKSPACE_RECIPE="compiled-workspace-v1"
 WORKSPACE_KEEP=2
 FROZEN_MTIME=946684800
 STABLE_FEATURE="stable-abilities"  # root feature a stable release adds to link ability crates
+# Cargo profile and target directory of the deployed live binary: stable releases use the
+# root's [profile.stable] (thin LTO, opt-level 3); dev releases keep the release profile.
+def live_profile(stable=False):return "stable"if stable else"release"
 MOLD_VERSION="1.10.1+dfsg-1"
 MOLD_SHA256="f85b0102cabeaee34b76ab195aacfa9ff9442d670948c88f6f353dd666ea5b64"
 MOLD_COMPILER_DOCKERFILE_SHA256="9efba3943ef7e5d9ee4ca90913cc9710572e927444e1d3e458985f42434cf9dd"
@@ -1019,20 +1022,20 @@ class Executor:
     def compiler_dependencies(target):
         """Read Cargo make-style dependencies, excluding its environment/comment metadata."""
         dependencies=set()
-        for profile in ("debug","release"):
+        for profile in ("debug","release","stable"):
             for path in(target/profile/"deps").glob("*.d"):
                 for line in path.read_text().replace(chr(92)+chr(10)," ").splitlines():
                     if not line.lstrip().startswith("#")and ":"in line:
                         dependencies.update(shlex.split(line.split(":",1)[1]))
         return dependencies
     @staticmethod
-    def smoke_recipe(mode,linked=None):
+    def smoke_recipe(mode,linked=None,profile="release"):
         """Write only fixed mode-proof artifacts; structured JSON never enters public log scrubbing."""
         if mode=="linked"and linked=="/output/target/debug/webagent-v3":return ["sh","-c","set -e\ntest ! -L /output/stable/linked-smoke-result.json\n/output/target/debug/webagent-v3 --context-smoke > /output/stable/linked-smoke-result.json"]
         # The root test binary writes the proof through its ignored hook; a filter that
         # matches nothing writes no file, which the caller detects.
         if mode=="linked"and linked is not None and re.fullmatch(r"/output/artifacts/tests/webagent_v3-[a-f0-9]{16}",linked):return ["sh","-c","set -e\ntest ! -L /output/stable/linked-smoke-result.json\nrm -f /output/stable/linked-smoke-result.json\nWEBAGENT_CONTEXT_SMOKE_OUT=/output/stable/linked-smoke-result.json "+linked+" engine_components::smoke_probe::context_smoke_to_file --exact --ignored --test-threads=1"]
-        if mode=="live":return ["sh","-c","set -e\ntest ! -L /output/stable/live-smoke-result.json\n/output/target/release/webagent-v3 --context-smoke > /output/stable/live-smoke-result.json"]
+        if mode=="live"and profile in {"release","stable"}:return ["sh","-c","set -e\ntest ! -L /output/stable/live-smoke-result.json\n/output/target/"+profile+"/webagent-v3 --context-smoke > /output/stable/live-smoke-result.json"]
         raise ValueError("Fixed context smoke mode required")
     @staticmethod
     def smoke_artifact(path):
@@ -1078,9 +1081,9 @@ class Executor:
         return ["cargo","build","--release","--locked","--offline","--bin","webagent-v3"]
     @staticmethod
     def live_recipe(stable=False):
-        """The deployed release build; a stable release also links ability crates (STABLE_FEATURE)."""
-        features="webagent-v3/live-context"+(",webagent-v3/"+STABLE_FEATURE if stable else "")
-        return ["sh","-c","set -e\ncargo clean --release --package webagent-v3 --locked --offline\ncargo build --workspace --release --locked --offline --no-default-features --features "+features]
+        """The deployed release build; a stable release also links ability crates (STABLE_FEATURE) under the stable profile."""
+        features="webagent-v3/live-context"+(",webagent-v3/"+STABLE_FEATURE if stable else "");profile="--profile stable"if stable else"--release"  # dev keeps its exact recipe (snapshot keys bind it)
+        return ["sh","-c","set -e\ncargo clean "+profile+" --package webagent-v3 --locked --offline\ncargo build --workspace "+profile+" --locked --offline --no-default-features --features "+features]
     def linked_dependencies(self,metadata,target,files):
         """Attest linked implementation inputs separately from the deployed live dependency closure."""
         captured={}
@@ -1099,7 +1102,7 @@ class Executor:
         return json.loads(path.read_bytes())
 
     @staticmethod
-    def core_dependencies(metadata,target):
+    def core_dependencies(metadata,target,profile="release"):
         """Attest only the live root's resolved local dependency closure, excluding service-only crates."""
         packages={p["id"]:p for p in metadata["packages"]};nodes={n["id"]:n for n in metadata["resolve"]["nodes"]}
         roots=[p["id"]for p in metadata["packages"]if p["name"]=="webagent-v3"]
@@ -1113,16 +1116,42 @@ class Executor:
             if package.get("source")is not None:continue
             for item in package["targets"]:
                 if not any(kind in {"bin","lib","rlib","proc-macro"}for kind in item["kind"]):continue
-                for path in(target/"release/deps").glob(item["name"].replace("-","_")+"-*.d"):
+                for path in(target/profile/"deps").glob(item["name"].replace("-","_")+"-*.d"):
                     for line in path.read_text().replace(chr(92)+chr(10)," ").splitlines():
                         if not line.lstrip().startswith("#")and ":"in line:dependencies.update(shlex.split(line.split(":",1)[1]))
         if not any(name in {"src/main.rs","/build/src/main.rs"}for name in dependencies):raise ValueError("Live root dependency attestation missing")
         return dependencies
 
+    @staticmethod
+    def restore_mtimes(source,previous,target):
+        """Give files byte-identical to the previous execution its mtime; make every other file newer than all seeded objects.
+
+        Cargo decides path-crate freshness by comparing dep-info sources with the unit's recorded
+        output time, so an unchanged file must look as old as when the seeded objects were built and
+        a changed or new file must look strictly newer than any of them. Returns (restored, newer)."""
+        newest=max((p.lstat().st_mtime_ns for p in target.rglob("*")if p.is_file()and not p.is_symlink()),default=0)
+        restored=newer=0
+        for path in source.rglob("*"):
+            if path.is_symlink()or not path.is_file():continue
+            old=previous/path.relative_to(source);info=path.stat()
+            if not old.is_symlink()and old.is_file()and old.stat().st_size==info.st_size and old.read_bytes()==path.read_bytes():
+                mtime=old.stat().st_mtime_ns;os.utime(path,ns=(mtime,mtime),follow_symlinks=False);restored+=1
+            else:
+                newer+=1
+                if info.st_mtime_ns<=newest:os.utime(path,ns=(newest+10**9,newest+10**9),follow_symlinks=False)
+        return restored,newer
     def seed_cargo_cache(self,job,blob,output):
-        """Reuse compatible dependency objects, then rebuild the root package and rerun current tests."""
+        """Seed the private target from the newest compatible previous execution; Cargo fingerprints decide what rebuilds.
+
+        Identical Rust inputs keep the old rule (every compiled local input equal). A Rust change seeds only
+        from a completed execution with the same compiler recipe, release mode and locked manifests and no
+        deleted Rust input, so every unit keeps its name and no orphaned dep-info can reach attestation.
+        Unchanged files then take the previous mtimes and changed or new files are newer than every seeded
+        object, so only changed crates and their dependents rebuild. Seeding only supplies starting objects:
+        every compile, test and smoke still runs on the captured inputs. Downloads come from dependencies()."""
         files=self.runner.execution_entries(blob);folder=Path(self.config["state_root"])/"execution"
         if folder.is_symlink():raise ValueError("Compiler cache directory replaced")
+        source=output.parent/"source";rust=self.rust_inputs(files);mode=job.get("release_mode","dev");binding=None;changed=None
         with self.resources.lock:phases=list(self.resources.rows.values())
         for previous in sorted(folder.iterdir(),key=lambda p:p.stat().st_mtime,reverse=True)[:64]:
             if previous.name==job["job_id"]or not re.fullmatch(r"[a-f0-9-]{36}",previous.name):continue
@@ -1137,25 +1166,45 @@ class Executor:
             state=json.loads(receipt.read_text())
             if state["job_id"]!=previous.name or state["status"]not in {"failed","completed"}or state.get("compiler_recipe")!=self.compiler_recipe():continue
             old_blob=self.runner.execution_application_blob(captured.read_bytes())
-            old=self.runner.execution_entries(old_blob)
-            if self.rust_inputs(old)!=self.rust_inputs(files):continue
+            old=self.runner.execution_entries(old_blob);old_rust=self.rust_inputs(old)
+            def eligible():
+                nonlocal binding
+                if changed or state["status"]!="completed"or state.get("release_mode","dev")!=mode or not set(old_rust)<=set(rust):return False
+                if binding is None:binding=self.dependency_binding(source/"v3")
+                return self.dependency_binding(previous/"source/v3")==binding
+            identical=old_rust==rust
+            if not identical and not eligible():continue
             if self.runner.execution_source_digest(previous/"source")!=self.runner.execution_source_digest_blob(old_blob):
                 # A final UI rebase can differ from the original compiler snapshot; never seed mismatching bytes.
                 job.setdefault("cargo_cache_rejections",[]).append({"job_id":previous.name,"reason":"previous_execution_source_differs_from_candidate"})
                 continue
-            target=previous/"output/target";cargo=previous/"output/cargo"
-            if not target.is_dir()or not cargo.is_dir():continue
-            dependencies=self.compiler_dependencies(target)
-            local={self.local_dependency(name)for name in dependencies}-{None}
+            target=previous/"output/target"
+            if not target.is_dir():continue
+            local={self.local_dependency(name)for name in self.compiler_dependencies(target)}-{None}
             if "v3/src/main.rs"not in local:continue
-            if any(name not in old or name not in files or old[name]!=files[name]for name in local):continue
-            before={name:self.artifact_hashes(previous/"output"/name)for name in ("cargo","target")}
-            for name in ("cargo","target"):shutil.copytree(previous/"output"/name,output/name)
-            if before!={name:self.artifact_hashes(previous/"output"/name)for name in ("cargo","target")}:
-                raise ValueError("Previous dependency cache changed during copy")
-            job["cargo_cache_reuse"]=previous.name
-            return True
-        return False
+            if identical and any(name not in old or name not in files or old[name]!=files[name]for name in local):
+                # A changed non-Rust compiled input (embedded JSON) seeds only as a changed-input candidate.
+                if not eligible():continue
+                identical=False
+            if identical:break
+            # Remember the newest changed-input candidate; an older identical one is still preferred.
+            changed=(previous,old_rust)
+        else:
+            if changed is None:return False
+            previous,old_rust=changed;identical=False
+        target=previous/"output/target";size=sum(p.lstat().st_size for p in target.rglob("*")if p.is_file())
+        if shutil.disk_usage(output).free<int(self.config.get("scheduler",{}).get("disk_min_free_bytes",5*1024**3))+size:
+            job.setdefault("cargo_cache_rejections",[]).append({"job_id":previous.name,"reason":"insufficient_disk"});return False
+        before=self.artifact_hashes(target)
+        shutil.copytree(target,output/"target",symlinks=True)
+        if before!=self.artifact_hashes(target)or before!=self.artifact_hashes(output/"target"):
+            raise ValueError("Previous compiler cache changed during copy")
+        restored,newer=self.restore_mtimes(source,previous/"source",output/"target")
+        job["cargo_cache_reuse"]=previous.name
+        job["cargo_cache_seed"]={"job_id":previous.name,"decision":"identical_rust_inputs"if identical else"changed_rust_inputs",
+            "rust_inputs_differing":sum(old_rust.get(name)!=sha for name,sha in rust.items()),"target_files":len(before),
+            "target_bytes":size,"mtimes_restored":restored,"files_newer":newer}
+        return True
     def retain_engine(self,job,blob,dependencies,hashes,log=None):
         """Publish a content-addressed cache receipt only after tests, source and every output are verified."""
         files=self.runner.execution_entries(blob);inputs={}
@@ -1225,7 +1274,7 @@ class Executor:
         raise ValueError('Verified offline plugin dependencies unavailable; controlled provisioning required')
 
     @staticmethod
-    def collect_runtime_artifacts(application,output,artifacts,legacy_automation,context_components=False):
+    def collect_runtime_artifacts(application,output,artifacts,legacy_automation,context_components=False,profile="release"):
         """Copy the fixed core closure and only the reviewed recipe's optional legacy distribution.
 
         The extracted Automation ability is built by the existing standalone plugin builder.
@@ -1234,7 +1283,7 @@ class Executor:
         binaries=[name for name in BINARIES if context_components or name not in NEW_CONTEXT_BINARIES]+(["webagent-automation"]if legacy_automation else[])
         for name in binaries:
             destination=artifacts/name
-            shutil.copyfile(output/"target/release"/name,destination);destination.chmod(0o555)
+            shutil.copyfile(output/"target"/profile/name,destination);destination.chmod(0o555)
         packages=[("outbound_notifications","webagent-outbound-notifications")]
         if legacy_automation:packages.insert(0,("automation","webagent-automation"))
         for package,binary in packages:
@@ -1449,14 +1498,14 @@ class Executor:
         job["suite_counts"]={"passed":counts[0],"failed":counts[1],"ignored":counts[2]}
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Tests left changed application inputs")
         logs+=live_log
-        logs+=self.phase(job,"live_smoke","test",application,output,self.smoke_recipe("live"),"engine:rust1.90:live-smoke",90)
+        logs+=self.phase(job,"live_smoke","test",application,output,self.smoke_recipe("live",profile=live_profile(stable_release)),"engine:rust1.90:live-smoke",90)
         live_proof=self.live_smoke(self.smoke_artifact(stable/"live-smoke-result.json"),proof)
         job["optimized_mode_equivalence"]={"status":"passed","linked":proof,"live":live_proof,"linked_profile":"debug"}
         (stable/"mode-equivalence.json").write_text(json.dumps(job["optimized_mode_equivalence"],sort_keys=True)+"\n")
         getattr(self.runner,"resource_progress",lambda _:None)(job)
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Compilation changed application inputs")
         artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
-        self.collect_runtime_artifacts(application,output,artifacts,legacy_automation,self.context_component_recipe(blob))
+        self.collect_runtime_artifacts(application,output,artifacts,legacy_automation,self.context_component_recipe(blob),live_profile(stable_release))
         shutil.copytree(stable,artifacts/"stable")
         # Preserve the offline optimization registry independently of optional abilities.
         registry=artifacts/"optimization-cargo/registry";registry.parent.mkdir()
@@ -1464,7 +1513,7 @@ class Executor:
         dependencies=self.compiler_dependencies(output/"target")
         self.phase(job,"engine_metadata","dependency",application,output,["sh","-c","cargo metadata --locked --offline --format-version 1 --no-default-features --features webagent-v3/live-context > /output/core-metadata.json"],"engine:rust1.90:metadata")
         metadata=self.metadata_receipt(output/"core-metadata.json")
-        core=self.core_dependencies(metadata,output/"target")
+        core=self.core_dependencies(metadata,output/"target",live_profile(stable_release))
         (artifacts/"core-inputs.txt").write_text("\n".join(sorted(core))+"\n")
         files=self.runner.execution_entries(blob);compiled_inputs={}
         for name in core:
@@ -1478,7 +1527,7 @@ class Executor:
         (artifacts/"stable/smoke.json").write_text(json.dumps(job["linked_stable"],sort_keys=True)+"\n")
         if "v3/src/main.rs"not in {self.local_dependency(name)for name in dependencies}:raise ValueError("Compiler dependency attestation missing")
         logs+=self.phase(job,"engine_metadata","dependency",application,output,
-            ["sh","-c","set -e\nreadelf -p .comment "+linked+" > /output/linked-comment.txt\nreadelf -p .comment /output/target/release/webagent-v3 > /output/live-comment.txt\nmkdir -p /output/compiler\ninstall -m755 /usr/bin/mold /output/compiler/mold\ninstall -m644 /usr/share/doc/mold/copyright /usr/share/doc/mold/LICENSE.gz /output/compiler/"],"engine:rust1.90:mold-proof",60)
+            ["sh","-c","set -e\nreadelf -p .comment "+linked+" > /output/linked-comment.txt\nreadelf -p .comment /output/target/"+live_profile(stable_release)+"/webagent-v3 > /output/live-comment.txt\nmkdir -p /output/compiler\ninstall -m755 /usr/bin/mold /output/compiler/mold\ninstall -m644 /usr/share/doc/mold/copyright /usr/share/doc/mold/LICENSE.gz /output/compiler/"],"engine:rust1.90:mold-proof",60)
         comments={}
         for mode in ("linked","live"):
             body=(output/(mode+"-comment.txt")).read_bytes()
