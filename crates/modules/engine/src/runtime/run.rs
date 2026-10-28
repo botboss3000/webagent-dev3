@@ -139,6 +139,26 @@ pub fn pair_unresolved_calls(input: &mut Vec<Value>) {
 /// looped on the closer for the whole turn budget without ever replying.
 const CLOSER_REPEAT_LIMIT: u64 = 2;
 /// Consecutive repeats of the same closing status; any other tool clears `closing`.
+/// Content-free outline of a history for the operator log: each item's kind, and the
+/// call id of tool calls and results so an unpaired one can be spotted.
+fn history_shape(history: &[Value]) -> String {
+    history
+        .iter()
+        .take(64)
+        .map(|item| {
+            let kind = item["type"]
+                .as_str()
+                .or(item["role"].as_str())
+                .unwrap_or("?");
+            match item["call_id"].as_str() {
+                Some(call) => format!("{kind}({call})"),
+                None => kind.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn closer_repeats(run: &Value, status: &Value) -> u64 {
     if run["closing"] == *status {
         run["closing_repeats"].as_u64().unwrap_or(0) + 1
@@ -2174,6 +2194,11 @@ impl<
                 {
                     Ok(value) => value,
                     Err(error) => {
+                        eprintln!(
+                            "Projection history for run {}: {}",
+                            run["id"].as_str().unwrap_or("unknown"),
+                            history_shape(&placement_history)
+                        );
                         Self::pause_context_preparation(&app, &mut run, "projection", &error)
                             .await?;
                         return Ok(());
