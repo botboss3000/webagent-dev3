@@ -170,9 +170,14 @@ async def command(repo,argv,mutable=False,env_extra=None,local=False,timeout=30,
     # Removed text is not sent in the new tree; its introducing commit is scanned separately.
     line=b"-<removed line>\n"
    output.extend(line)
-   if secret(bytes(output)):
+   # Earlier bytes were already scanned, so only a match ending in this line is
+   # new. Cross-line matches need at most a 4095-byte whitespace run (bounded
+   # below), so rescan from the line boundary before that context, not the
+   # whole 64 KiB buffer per line (quadratic on large outgoing diffs).
+   window=bytes(output[output.rfind(b"\n",0,max(0,len(output)-len(line)-4160))+1:])
+   if secret(window):
     raise Rejected("Outgoing history withheld by credential guard; inspect outgoing commits for credential-shaped content","git_credential_guard",{"line":location} if location is not None else None)
-   if re.search(rb"\s{4096}",output):raise Rejected("Outgoing history whitespace exceeds scan bound")
+   if re.search(rb"\s{4096}",window):raise Rejected("Outgoing history whitespace exceeds scan bound")
    if len(output)>LIMIT:del output[:-LIMIT]
    if new_line is not None and (line.startswith(b"+") and not line.startswith(b"+++") or line.startswith(b" ")):new_line+=1
   while chunk:=await proc.stdout.read(8192):
