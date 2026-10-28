@@ -8,7 +8,6 @@ class BootstrapTests(unittest.TestCase):
  def test_first_start_mounts_source_runtime_and_configured_identity(self):
   with tempfile.TemporaryDirectory() as temporary:
    root=Path(temporary);(root/"config").mkdir()
-   for name in ("chat.json","app-settings.json"):(root/"config"/name).write_text("{}")
    value=deploy.cfg.defaults(root);value.update(api_container="isolated-api",source_uid=2402)
    calls=[]
    def run(argv,**kwargs):
@@ -22,19 +21,19 @@ class BootstrapTests(unittest.TestCase):
    self.assertIn("V3_SOURCE_OWNER_UID=2402",launch)
    self.assertIn("isolated-api",launch)
 
- def test_state_defaults_preserve_existing_values_and_reject_directory_symlink(self):
-  import os,json
+ def test_state_folders_are_created_without_seeding_and_reject_directory_symlink(self):
+  import os
   with tempfile.TemporaryDirectory() as temporary:
    root=Path(temporary);(root/"config").mkdir()
-   for name in ("chat.json","app-settings.json"):(root/"config"/name).write_text('{"default":true}')
    config={"app_uid":os.getuid(),"app_gid":os.getgid()}
    with patch.object(deploy.os,"geteuid",return_value=0):
     deploy.initialize_state(root,config)
     self.assertEqual((root/"data/config").stat().st_mode&0o777,0o770)
-    self.assertEqual((root/"data/config/chat.json").stat().st_mode&0o777,0o660)
-    (root/"data/config/chat.json").write_text('{"preserved":true}')
+    # Configuration is live source; nothing is copied into the state root.
+    self.assertEqual(list((root/"data/config").iterdir()),[])
+    (root/"data/config/app-settings.json").write_text('{"preserved":true}')
     deploy.initialize_state(root,config)
-    self.assertEqual(json.loads((root/"data/config/chat.json").read_text()),{"preserved":True})
+    self.assertEqual((root/"data/config/app-settings.json").read_text(),'{"preserved":true}')
    import shutil
    shutil.rmtree(root/"data/config");(root/"data/config").symlink_to(root/"config",target_is_directory=True)
    with patch.object(deploy.os,"geteuid",return_value=0),self.assertRaises(OSError):deploy.initialize_state(root,config)

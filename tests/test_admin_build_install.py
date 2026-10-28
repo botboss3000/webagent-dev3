@@ -190,6 +190,19 @@ class InstallTests(unittest.TestCase):
         (src / "secret.db").write_bytes(b"SQLite format 3")
         with self.assertRaisesRegex(ValueError, "database"): installer.snapshot_context(("v3/src",))
 
+    def test_snapshot_skips_optional_root_files_until_first_promoted(self):
+        src = self.v3 / "src"
+        src.mkdir()
+        (src / "main.rs").write_text("fn main() {}")
+        context = installer.snapshot_context(("v3/src", "v3/live-files.json", "v3/rustfmt.toml"))
+        with installer.tarfile.open(fileobj=installer.io.BytesIO(context)) as archive:
+            names = [member.name for member in archive]
+        self.assertEqual(names, ["v3/src/main.rs"])
+        (self.v3 / "rustfmt.toml").write_text("max_width = 100\n")
+        context = installer.snapshot_context(("v3/src", "v3/rustfmt.toml"))
+        with installer.tarfile.open(fileobj=installer.io.BytesIO(context)) as archive:
+            self.assertIn("v3/rustfmt.toml", [member.name for member in archive])
+
     def test_inspection_snapshot_backups_committed_wal_and_keeps_exact_scope(self):
         admin = self.v3 / "data/user_data/admin"
         agent = self.v3 / "data/agent_data/shared_default"

@@ -106,7 +106,7 @@ def install(args):
    subprocess.run(["setfacl","-R","-m","u:"+account.pw_name+":rwX",str(path)],check=True)
    for directory in [path,*[p for p in path.rglob("*") if p.is_dir() and not p.is_symlink()]]:
     if directory.is_dir():subprocess.run(["setfacl","-m","d:u:"+account.pw_name+":rwX,d:u:"+value["source_owner"]+":rwX",str(directory)],check=True)
-  for relative in ("Cargo.toml","Cargo.lock","build.rs","Dockerfile",".gitignore","README.md","deploy.sh","launch.py","worker.py","ability_plugin_worker.py","sandbox.py","promote.py","ui-baseline.json","live-files.json","gate.Dockerfile","gate_worker.py"):
+  for relative in ("Cargo.toml","Cargo.lock","build.rs","Dockerfile",".gitignore","README.md","deploy.sh","launch.py","worker.py","ability_plugin_worker.py","sandbox.py","promote.py","ui-baseline.json","live-files.json","rustfmt.toml","gate.Dockerfile","gate_worker.py"):
    file=checkout/relative
    if file.is_symlink():raise PermissionError("Source ACL file is a symlink")
    if file.is_file():subprocess.run(["setfacl","-m","u:"+account.pw_name+":rw",str(file)],check=True)

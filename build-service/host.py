@@ -78,7 +78,7 @@ BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
 CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
     "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/plugins/abilities", "v3/plugins/gates", "v3/worker.py",
-    "v3/sandbox.py", "v3/ability_plugin_worker.py", "v3/launch.py", "v3/promote.py", "v3/ui-baseline.json", "v3/live-files.json", "v3/tests",
+    "v3/sandbox.py", "v3/ability_plugin_worker.py", "v3/launch.py", "v3/promote.py", "v3/ui-baseline.json", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
     "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service",
     "v3/data/config/gates/message_visibility_v1.json",
     "v3/data/config/gates/closing_status_v1.json",
@@ -844,7 +844,7 @@ def inspect_source_patch_corrected(root, patch):
     paths = []
     allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                      ".gitignore", "README.md", "deploy.sh", "launch.py",
-                     "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json", "live-files.json"}
+                     "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
     allowed_dirs = {"crates", "src", "plugins", "tests", "ui", "docs", "config", "build-service"}
     for record in records:
         fields = record.split(b"\t", 2)
@@ -1446,7 +1446,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         # The app deliberately serves the checkout in live-editing mode.
         # Once this release is active/healthy, promote only conflict-free UI
         # before checking served bytes. Final full promotion stays checked.
-        settings = self.source / "data/config/app-settings.json"
+        settings = self.source / "crates/modules/webapp/app-settings.json"
         try:
             enabled = json.loads(settings.read_text())["development"]["live_ui_editing"] is True
         except (OSError, ValueError, KeyError, TypeError):
@@ -5594,7 +5594,7 @@ class Broker:
                 allowed_dirs = {"crates", "src", "plugins", "tests", "ui", "docs", "config", "build-service"}
                 allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                                  ".gitignore", "README.md", "deploy.sh", "launch.py",
-                                 "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json", "live-files.json"}
+                                 "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
                 if (name_path and (not re.fullmatch(r"[A-Za-z0-9_./-]+", name_path)
                         or any(part in ("", ".", "..") for part in parts)
                         or (parts[0] not in allowed_dirs and name_path not in {"services","services/system-monitoring"}

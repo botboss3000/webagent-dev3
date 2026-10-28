@@ -3,6 +3,7 @@ import argparse,importlib.util,os,subprocess,stat
 from pathlib import Path
 spec=importlib.util.spec_from_file_location("deploy_config",Path(__file__).with_name("config.py"));cfg=importlib.util.module_from_spec(spec);spec.loader.exec_module(cfg)
 def initialize_state(root,c):
+ """Create the container-owned state folders; configuration is live source, never seeded."""
  if os.geteuid()!=0:raise PermissionError("First API start requires root to initialize container-owned state")
  # Retained FDs prevent editable checkout paths from redirecting privileged ownership changes.
  installer_spec=importlib.util.spec_from_file_location("bootstrap_paths",Path(__file__).with_name("install.py"))
@@ -18,18 +19,6 @@ def initialize_state(root,c):
   except FileExistsError:pass
   config_fd=os.open("config",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=state_fd)
   os.fchown(config_fd,c["app_uid"],c["app_gid"]);os.fchmod(config_fd,0o770)
-  for name in ("chat.json","app-settings.json"):
-   try:
-    existing=os.stat(name,dir_fd=config_fd,follow_symlinks=False)
-    if not stat.S_ISREG(existing.st_mode):raise PermissionError("Configuration target is not a regular file")
-    continue
-   except FileNotFoundError:pass
-   body=(root/"config"/name).read_bytes()
-   fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o660,dir_fd=config_fd)
-   try:
-    os.fchown(fd,c["app_uid"],c["app_gid"]);os.fchmod(fd,0o660)
-    with os.fdopen(fd,"wb",closefd=False) as stream:stream.write(body);stream.flush();os.fsync(fd)
-   finally:os.close(fd)
   os.fsync(config_fd);os.fsync(state_fd)
  finally:
   if config_fd is not None:os.close(config_fd)
@@ -71,6 +60,6 @@ def main():
  else:
   gate=root/"gate-runtime";gate.mkdir(exist_ok=True);mounts += [(gate,"/run/v3/gate",False),(root/"plugins","/live-checkout/plugins",True)]
  for source,target,ro in mounts:argv+=["--mount","type=bind,src="+str(source)+",dst="+target+(",readonly" if ro else "")]
- for key,value in {"V3_PROCESS_ROLE":role,"V3_ABILITIES_ROOT":"/opt/v3/plugins/abilities","V3_CONTEXT_COMPACTION_CONFIG_PATH":"/opt/v3/config/context-compaction.json","V3_CHAT_UI_CONFIG_PATH":"/state/config/chat.json","V3_PUBLIC_ORIGIN":c["public_origin"],"V3_SOURCE_OWNER_UID":str(c["source_uid"]),"V3_BUILD_SOCKET":"/run/v3/"+Path(c["runtime_root"]).name+"/build.sock"}.items():argv+=["--env",key+"="+value]
+ for key,value in {"V3_PROCESS_ROLE":role,"V3_ABILITIES_ROOT":"/opt/v3/plugins/abilities","V3_PUBLIC_ORIGIN":c["public_origin"],"V3_SOURCE_OWNER_UID":str(c["source_uid"]),"V3_BUILD_SOCKET":"/run/v3/"+Path(c["runtime_root"]).name+"/build.sock"}.items():argv+=["--env",key+"="+value]
  argv+=["--tmpfs","/run:rw,nosuid,nodev,size=16m","--tmpfs","/tmp:rw,nosuid,nodev,size=32m","--stop-timeout","30",name+":local"];run(argv)
 if __name__=="__main__":main()

@@ -436,8 +436,8 @@ def snapshot_context(context):
                     try:
                         info = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
                     except FileNotFoundError:
-                        # The live-file manifest is optional until a checkout first promotes one.
-                        if inspection or name in ("v3/ability_plugin_worker.py", "v3/live-files.json"):
+                        # Root files added after a checkout's creation are optional until first promoted.
+                        if inspection or name in ("v3/ability_plugin_worker.py", "v3/live-files.json", "v3/rustfmt.toml"):
                             continue
                         raise
                     if inspection and not stat.S_ISDIR(info.st_mode):

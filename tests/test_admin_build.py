@@ -491,9 +491,9 @@ class BuildTests(unittest.TestCase):
 
     def test_live_ui_promotes_only_ui_and_keeps_conflict_check(self):
         root=Path(self.temp.name)/"live-checkout"
-        (root/"data/config").mkdir(parents=True)
+        (root/"crates/modules/webapp").mkdir(parents=True)
         (root/"ui").mkdir()
-        (root/"data/config/app-settings.json").write_text('{"development":{"live_ui_editing":true}}')
+        (root/"crates/modules/webapp/app-settings.json").write_text('{"development":{"live_ui_editing":true}}')
         (root/"ui/app.js").write_text("old")
         (root/"README.md").write_text("old")
         before=context(extra={"v3/ui/app.js":"old","v3/README.md":"old"})
