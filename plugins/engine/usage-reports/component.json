@@ -1,0 +1,36 @@
+{
+  "build": {
+    "features": [],
+    "package": "webagent-usage-service",
+    "runtime_assets": [],
+    "source_inputs": [
+      "crates/usage-service",
+      "crates/usage-reports",
+      "crates/modules/usage",
+      "crates/module-service",
+      "crates/module-interface",
+      "crates/engine-service",
+      "Cargo.toml",
+      "Cargo.lock"
+    ],
+    "toolchain": "1.90.0"
+  },
+  "executable": "artifact/webagent-usage-service",
+  "group": "module",
+  "id": "usage-reports",
+  "implementation_version": "0.1.0",
+  "interface_version": 1,
+  "limits": {
+    "max_concurrency": 1,
+    "max_request_bytes": 16777216,
+    "max_response_bytes": 16777216,
+    "timeout_ms": 30000
+  },
+  "modes": [
+    "live",
+    "linked"
+  ],
+  "operation": "usage.reports",
+  "runtime_requirements": [],
+  "schema_version": 1
+}

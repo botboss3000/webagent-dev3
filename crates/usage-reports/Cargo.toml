@@ -1,0 +1,13 @@
+[package]
+name = "webagent-usage-reports"
+version = "0.1.0"
+edition = "2021"
+description = "Usage reports: analytics series, model totals and reset markers. Linked in stable builds; a module service in dev builds."
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+webagent-usage = { path = "../modules/usage" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

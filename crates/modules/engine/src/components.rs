@@ -38,6 +38,7 @@ fn context_registration(operation:&str)->Option<(&'static str,&'static str,Vec<&
 fn module_registration(operation:&str)->Option<(&'static str,&'static str,Vec<&'static str>)> {
  match operation {
   "module.toy"=>Some(("module-toy","webagent-toy-service",vec!["crates/module-toy","crates/module-service","crates/module-interface","crates/engine-service","Cargo.toml","Cargo.lock"])),
+  "usage.reports"=>Some(("usage-reports","webagent-usage-service",vec!["crates/usage-service","crates/usage-reports","crates/modules/usage","crates/module-service","crates/module-interface","crates/engine-service","Cargo.toml","Cargo.lock"])),
   _=>None,
  }
 }
@@ -76,7 +77,7 @@ impl Descriptor {
    ||self.limits.max_request_bytes==0||self.limits.max_request_bytes>16*1024*1024
    ||self.limits.max_response_bytes==0||self.limits.max_response_bytes>16*1024*1024
    ||self.limits.timeout_ms==0||self.limits.timeout_ms>30000||self.limits.max_concurrency!=1
-   ||(matches!(self.operation.as_str(),"background.plan"|"boot.plan")||module_registration(&self.operation).is_some())&&(self.limits.max_request_bytes>65536||self.limits.max_response_bytes>65536||self.limits.timeout_ms>1000)
+   ||matches!(self.operation.as_str(),"background.plan"|"boot.plan"|"module.toy")&&(self.limits.max_request_bytes>65536||self.limits.max_response_bytes>65536||self.limits.timeout_ms>1000)
    ||self.artifact_sha256.as_ref().is_some_and(|s|s.len()!=64||!s.bytes().all(|c|c.is_ascii_hexdigit())) {
     anyhow::bail!("Engine contract rejected");
   }Ok(())
@@ -840,18 +841,20 @@ mod tests {
   let (version,generation)=execution_identity(&declaration);
   assert_eq!(version,webagent_context_assembly::IMPLEMENTATION_VERSION);assert_ne!(generation,declaration.artifact_sha256.unwrap());
  }
- #[test]
  /// A registered module service enters the catalog only with its own group, package and limits.
  #[test]
- fn module_toy_descriptor_validates_only_as_a_module() {
-  let path=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../plugins/engine/module-toy/component.json");
+ fn module_descriptors_validate_only_as_modules() {
+  for id in ["module-toy","usage-reports"] {
+  let path=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../plugins/engine").join(id).join("component.json");
   let value:Value=serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
   serde_json::from_value::<Descriptor>(value.clone()).unwrap().validate().unwrap();
-  for (pointer,bad) in [("/group",json!("engine-loop")),("/build/package",json!("webagent-context-service")),("/limits/timeout_ms",json!(30000)),("/id",json!("context-assembly"))] {
+  for (pointer,bad) in [("/group",json!("engine-loop")),("/build/package",json!("webagent-context-service")),("/limits/timeout_ms",json!(30001)),("/id",json!("context-assembly"))] {
    let mut changed=value.clone();*changed.pointer_mut(pointer).unwrap()=bad;
-   assert!(serde_json::from_value::<Descriptor>(changed).unwrap().validate().is_err(),"{pointer}");
+   assert!(serde_json::from_value::<Descriptor>(changed).unwrap().validate().is_err(),"{id} {pointer}");
+  }
   }
  }
+ #[test]
  /// Reuse an identical generation while refreshing its validated respawn location.
  fn unchanged_service_refreshes_respawn_path() {
   let declaration=descriptor();let mut catalog=Catalog{revision:"old".into(),root:Some(PathBuf::from("/old")),entries:BTreeMap::new(),withdrawn:Default::default()};

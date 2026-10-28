@@ -25,7 +25,9 @@ TEST_STACK_BYTES=32*1024*1024
 # test threads must stay a pinned recipe value so test_proof stays deterministic.
 # Single named tests (focused checks) keep one thread: parallelism is meaningless
 # there. Evidence: identical pass/fail/ignored counts at 1 vs 4 threads.
-TEST_THREADS=8
+# Four, not eight: on the 3-CPU slice beside the live compile, eight threads
+# starved wall-clock leases and timeouts (2026-10-28: 15+ different flaky tests).
+TEST_THREADS=4
 # Compiled-dependency snapshots: stub compiles mirror the engine profiles exactly.
 SNAPSHOT_RECIPE="compiled-dependencies-v2"
 SNAPSHOT_COMPILES="set -e\ncargo test --workspace --locked --offline --no-run\ncargo build --workspace --locked --offline --bins\ncargo build --workspace --release --locked --offline --no-default-features --features webagent-v3/live-context"
@@ -138,6 +140,12 @@ class Executor:
         """Give Rust test-harness phases stack headroom; other phases keep the default."""
         return ["-e","RUST_MIN_STACK="+str(TEST_STACK_BYTES)]if phase=="test"else[]
     @staticmethod
+    def test_tmpfs_args(phase):
+        """Test databases live in tempdirs; keep /tmp in RAM so their per-commit fsyncs do
+        not queue behind the parallel release compile's disk writes. Exec stays allowed:
+        component tests run service binaries copied into a tempdir."""
+        return ["--tmpfs","/tmp:rw,exec,nosuid,nodev,size=2g,mode=1777"]if phase=="test"else[]
+    @staticmethod
     def cpu_weight_args(phase):
         """The live release compile runs beside the full suite inside the build slice's CPU
         quota; give it the lowest weight so timing-sensitive tests get CPU first and the
@@ -206,7 +214,7 @@ class Executor:
             "--network","bridge"if network else"none","--mount","type=bind,src="+str(source)+",dst=/build"+(""if phase=="test"else",readonly"),
             "--mount","type=bind,src="+str(output)+",dst=/output","-w","/build",
             "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=3","-e","CARGO_INCREMENTAL=0","--env","RUSTFLAGS="+RUSTFLAGS,
-            "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",*self.test_stack_env(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]
+            "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",*self.test_stack_env(phase),*self.test_tmpfs_args(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]
         if cap is not None:create[create.index(image):create.index(image)]=["--memory",str(cap),"--memory-swap",str(cap)]
         try:
             self.runner.command(create,timeout=30,private_raw=True)

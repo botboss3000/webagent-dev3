@@ -2661,9 +2661,32 @@ name = "webagent-usage"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "serde",
  "serde_json",
  "sqlx",
  "tokio",
+ "webagent-module-service",
+]
+
+[[package]]
+name = "webagent-usage-reports"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "tokio",
+ "webagent-usage",
+]
+
+[[package]]
+name = "webagent-usage-service"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tokio",
+ "webagent-module-service",
+ "webagent-usage",
+ "webagent-usage-reports",
 ]
 
 [[package]]
@@ -2716,11 +2739,13 @@ dependencies = [
  "webagent-files",
  "webagent-manager",
  "webagent-models",
+ "webagent-module-service",
  "webagent-provider-contracts",
  "webagent-provider-projection",
  "webagent-storage",
  "webagent-system",
  "webagent-usage",
+ "webagent-usage-reports",
  "webagent-webapp",
 ]
 

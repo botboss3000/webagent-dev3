@@ -49,6 +49,10 @@ class ComponentBuildTests(unittest.TestCase):
                 with self.assertRaises(ValueError):engine.descriptor(path)
             self.assertTrue(engine.package_path("v3/crates/module-toy/src/lib.rs",{}))
             self.assertIn("crates/module-service/src/lib.rs",engine.closure(ROOT,"module-toy"))
+            usage=json.loads((ROOT/"plugins/engine/usage-reports/component.json").read_text())
+            path.write_text(json.dumps(usage));self.assertEqual(engine.descriptor(path),usage)
+            self.assertIn("crates/usage-reports/src/lib.rs",engine.closure(ROOT,"usage-reports"))
+            self.assertTrue(engine.package_path("v3/crates/usage-reports/src/lib.rs",{}))
 
     # Require exact service dependency closures and reject symlinked source inputs.
     def test_each_service_closure_includes_shared_contracts_and_exact_local_dependencies(self):

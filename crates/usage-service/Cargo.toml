@@ -1,0 +1,17 @@
+[package]
+name = "webagent-usage-service"
+version = "0.1.0"
+edition = "2021"
+description = "The usage-reports module service process for dev builds."
+
+[dependencies]
+webagent-module-service = { path = "../module-service" }
+webagent-usage = { path = "../modules/usage" }
+webagent-usage-reports = { path = "../usage-reports" }
+
+[dev-dependencies]
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -61,11 +61,11 @@ async fn collect(store: &Store, user: Option<&str>, agent: Option<&str>, samples
     Ok(())
 }
 
-fn respond(args: &UsageArgs, samples: &[Sample], labels: &HashMap<String, String>, totals: bool) -> Api {
+async fn respond(args: &UsageArgs, samples: &[Sample], labels: &HashMap<String, String>, totals: bool) -> Api {
     if totals {
-        return Ok(Json(webagent_usage::model_totals(samples, args.entry_id.as_deref().unwrap_or(""), args.model.as_deref().unwrap_or(""), args.include_unassigned.as_deref() == Some("1"))));
+        return Ok(Json(crate::usage_reports::model_totals(samples, args.entry_id.as_deref().unwrap_or(""), args.model.as_deref().unwrap_or(""), args.include_unassigned.as_deref() == Some("1")).await?));
     }
-    webagent_usage::analytics(samples, args.interval.as_deref().unwrap_or("day"), args.group_by.as_deref().unwrap_or("models"), labels, crate::now() as i64)
+    crate::usage_reports::analytics(samples, args.interval.as_deref().unwrap_or("day"), args.group_by.as_deref().unwrap_or("models"), labels, crate::now() as i64).await?
         .map(Json).ok_or_else(|| bad("Invalid usage interval or grouping"))
 }
 
@@ -79,8 +79,12 @@ async fn own(app: App, args: UsageArgs, totals: bool) -> Api {
             resets.insert(sample.agent.clone(), app.store.get(&reset_key(Some(user), &sample.agent)).await?.unwrap_or_default());
         }
     }
-    samples.retain_mut(|sample| webagent_usage::apply_resets(sample, &resets[&sample.agent]));
-    respond(&args, &samples, &labels, totals)
+    let mut kept = Vec::new();
+    for (agent, resets) in &resets {
+        let group: Vec<Sample> = samples.iter().filter(|s| &s.agent == agent).cloned().collect();
+        kept.extend(crate::usage_reports::apply_resets(&group, resets).await?);
+    }
+    respond(&args, &kept, &labels, totals).await
 }
 
 async fn everyone(app: App, args: UsageArgs, totals: bool) -> Api {
@@ -89,15 +93,16 @@ async fn everyone(app: App, args: UsageArgs, totals: bool) -> Api {
         collect(&app.store.for_user(&user).await?, None, args.agent_id.as_deref(), &mut samples, &mut labels).await?;
     }
     let resets = app.store.get(&reset_key(None, "")).await?.unwrap_or_default();
-    samples.retain_mut(|sample| webagent_usage::apply_resets(sample, &resets));
-    respond(&args, &samples, &labels, totals)
+    let samples = crate::usage_reports::apply_resets(&samples, &resets).await?;
+    respond(&args, &samples, &labels, totals).await
 }
 
 async fn mark(app: &App, user: Option<&str>, agent: &str, kind: &str, model: &str) -> Api {
     let key = reset_key(user, agent);
-    let mut resets = app.store.get(&key).await?.unwrap_or_default();
-    let changed = if kind == "undo" { webagent_usage::undo_reset(&mut resets) } else { webagent_usage::mark_reset(&mut resets, kind, model, crate::now() as i64) };
-    if !changed { return Err(bad(if kind == "undo" { "Nothing to undo" } else { "Invalid usage reset" })); }
+    let resets = app.store.get(&key).await?.unwrap_or_default();
+    let Some(resets) = crate::usage_reports::mark_reset(&resets, kind, model, crate::now() as i64).await? else {
+        return Err(bad(if kind == "undo" { "Nothing to undo" } else { "Invalid usage reset" }));
+    };
     app.store.put(&key, &resets).await?;
     Ok(Json(serde_json::json!({"ok": true})))
 }

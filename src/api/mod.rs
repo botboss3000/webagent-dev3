@@ -49,7 +49,6 @@ mod app_settings;
 pub(crate) mod live_configuration;
 #[path = "../../crates/modules/system/host/api.rs"]
 mod system;
-#[path = "../../crates/modules/usage/host/api.rs"]
 mod model_usage;
 mod loop_settings;
 mod engine_components;

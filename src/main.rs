@@ -36,6 +36,7 @@ mod abilities;
 mod live_assets;
 mod live_files;
 #[path = "engine/components.rs"] mod engine_components;
+mod usage_reports;
 #[path = "engine/sandbox.rs"] mod engine_sandbox;
 mod ability_plugins;
 mod optimization;

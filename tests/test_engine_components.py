@@ -250,9 +250,13 @@ class EngineTests(unittest.TestCase):
         for phase in ("test","compile_test","compile_linked","linked_smoke","live_smoke","dependency"):
             self.assertEqual(executor.Executor.cpu_weight_args(phase),[])
         source=(ROOT/"build-service/executor.py").read_text()
-        self.assertIn('*self.test_stack_env(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]',source)
+        self.assertIn('*self.test_stack_env(phase),*self.test_tmpfs_args(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]',source)
+    def test_only_rust_test_phases_keep_tmp_in_ram_with_exec(self):
+        self.assertEqual(executor.Executor.test_tmpfs_args("test"),["--tmpfs","/tmp:rw,exec,nosuid,nodev,size=2g,mode=1777"])
+        for phase in ("compile_test","compile_linked","compile_release","linked_smoke","live_smoke","dependency"):
+            self.assertEqual(executor.Executor.test_tmpfs_args(phase),[])
     def test_suite_gate_runs_parallel_and_single_tests_stay_serial(self):
-        self.assertEqual(executor.TEST_THREADS,8)
+        self.assertEqual(executor.TEST_THREADS,4)
         source=(ROOT/"build-service/executor.py").read_text()
         engine=source[source.index("    def engine(self,job,blob,extract,digest):"):]
         self.assertIn('"--test-threads="+str(TEST_THREADS)',engine)

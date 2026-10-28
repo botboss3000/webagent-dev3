@@ -116,6 +116,9 @@ impl Store {
         let receipt_key = format!("receipt:session:patch:{sid}:{}", patch.client_request_id);
         let fingerprint = crate::digest(patch);
         let _guard = self.context_gate.write().await;
+        // Every early return rolls back at once: a dropped transaction releases its
+        // write lock only when sqlx's queued ROLLBACK runs, and a following
+        // deferred writer cannot wait for an upgrade.
         let mut tx = self.pool.begin().await?;
         sqlx::query("UPDATE docs SET key=key WHERE key=?")
             .bind(&session_key).execute(&mut *tx).await?;
@@ -123,6 +126,7 @@ impl Store {
             .bind(&receipt_key).fetch_optional(&mut *tx).await? {
             let receipt = self.unseal(&raw)?;
             if receipt["digest"] != fingerprint {
+                tx.rollback().await?;
                 return Ok(SessionPatchOutcome::Conflict("Request identifier reused with different input"));
             }
             tx.commit().await?;
@@ -130,14 +134,17 @@ impl Store {
         }
         let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(&session_key).fetch_optional(&mut *tx).await? else {
+            tx.rollback().await?;
             return Ok(SessionPatchOutcome::NotFound);
         };
         let mut session = self.unseal(&raw)?;
         let metadata: SessionMetadata = serde_json::from_value(session.clone())?;
         if metadata.status != SessionStatus::Active {
+            tx.rollback().await?;
             return Ok(SessionPatchOutcome::Conflict("Session is recycled"));
         }
         if metadata.metadata_revision != patch.expected_revision {
+            tx.rollback().await?;
             return Ok(SessionPatchOutcome::Conflict("Session metadata revision changed"));
         }
         let mut changed = false;
@@ -160,6 +167,7 @@ impl Store {
         }
         if changed {
             let Some(revision) = metadata.metadata_revision.checked_add(1) else {
+                tx.rollback().await?;
                 return Ok(SessionPatchOutcome::Conflict("Session metadata revision exhausted"));
             };
             session["metadata_revision"] = json!(revision);
