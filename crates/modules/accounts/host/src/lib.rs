@@ -27,22 +27,29 @@ impl RecordCodec for AccountsCodec<'_> {
 pub trait AccountsStore {
     /// The Accounts repository over the application authority.
     fn accounts_repository(&self) -> Repository<'_, AccountsCodec<'_>>;
+    /// Every account id, guests included, in id order.
     fn all_user_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send;
+    /// Creates a guest account and returns its record.
     fn create_guest_account(&self) -> impl Future<Output = Result<Value>> + Send;
+    /// Creates an ordinary account from an already hashed password.
     fn create_user_account<'a>(
         &'a self,
         username: &'a str,
         password_hash: &'a str,
     ) -> impl Future<Output = Result<Value>> + Send + 'a;
+    /// Whether the built-in administrator account exists.
     fn has_admin_account(&self) -> impl Future<Output = Result<bool>> + Send;
+    /// The account record for an id, if it exists.
     fn account_by_id<'a>(
         &'a self,
         id: &'a str,
     ) -> impl Future<Output = Result<Option<Value>>> + Send + 'a;
+    /// The account record for a username, if it exists.
     fn account_by_username<'a>(
         &'a self,
         name: &'a str,
     ) -> impl Future<Output = Result<Option<Value>>> + Send + 'a;
+    /// The profile record (display name, default agent, last sign-in) for an account id.
     fn user_profile<'a>(
         &'a self,
         id: &'a str,
