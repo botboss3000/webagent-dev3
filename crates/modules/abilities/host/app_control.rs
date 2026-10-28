@@ -99,8 +99,15 @@ pub async fn enqueue(
 }
 pub async fn projection(app: &App, sid: &str) -> Result<Value> {
     let saved = app.store.module_state(&format!("core_ui:{sid}")).await?;
-    if saved["state"]["actor_id"] != shared_chat::actor(app)
-        || saved["state"]["expires_at"].as_u64().unwrap_or(0) < now()
+    // A saved or dismissed credential form leaves an empty state; its new revision
+    // lets every open device clear the card.
+    if saved["state"].as_object().is_some_and(|state| state.is_empty()) {
+        return Ok(json!({"revision":saved["revision"],"request":null}));
+    }
+    // Navigation requests expire; a credential form stays until saved, dismissed or replaced.
+    let state = &saved["state"];
+    if state["actor_id"] != shared_chat::actor(app)
+        || (state["destination"] != "credential" && state["expires_at"].as_u64().unwrap_or(0) < now())
     {
         return Ok(Value::Null);
     }
@@ -120,5 +127,16 @@ mod tests {
             assert!(destination(view).is_none());
         }
         assert_eq!(destination("files"), Some("app:files"));
+    }
+    #[tokio::test]
+    async fn credential_forms_never_expire_and_closing_one_reaches_every_device() {
+        let (_root, app) = crate::runtime_tests::fixture_uninitialized().await;
+        let actor = shared_chat::actor(&app).to_string();
+        app.store.module_cas("core_ui:s",0,&json!({"state":{"destination":"credential","actor_id":actor,"credential_name":"example"}})).await.unwrap();
+        assert_eq!(projection(&app,"s").await.unwrap()["request"]["credential_name"],"example");
+        app.store.module_cas("core_ui:s",1,&json!({"state":{}})).await.unwrap();
+        assert_eq!(projection(&app,"s").await.unwrap(),json!({"revision":2,"request":null}));
+        app.store.module_cas("core_ui:s",2,&json!({"state":{"destination":"app:files","actor_id":actor,"expires_at":1}})).await.unwrap();
+        assert_eq!(projection(&app,"s").await.unwrap(),Value::Null);
     }
 }

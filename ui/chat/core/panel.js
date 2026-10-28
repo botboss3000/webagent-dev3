@@ -103,8 +103,9 @@ function historyChanged(summary){
 /** Merge a matching-session poll snapshot only when it shares the displayed history revision. */
 function syncSnapshot(data){
   if(data.session?.id&&data.session.id!==session)return false;
-  // A credential form is session state: every snapshot of this session shows, keeps or clears its card.
-  if('app_view' in data)chatActions.showCredential(credentialRequest(data.app_view,getIdentity()),session);
+  // A credential form is session state. The stream nulls an unchanged app_view, so only a
+  // new revision shows, keeps or clears the card (a saved or dismissed form has request null).
+  if(data.app_view)chatActions.showCredential(credentialRequest(data.app_view,getIdentity()),session);
   if(data.app_view)dispatchAppView(data.app_view,getIdentity(),detail=>{
     if(detail.destination==='credential')return;
     if(detail.destination==='registration'){openRegistrationDialog({request});return;}

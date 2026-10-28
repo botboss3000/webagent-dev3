@@ -1,7 +1,9 @@
 // Only authenticated snapshot metadata can request one registered navigation; tool text cannot.
 export function appViewRequest(snapshot, identity, dispatch, now = Date.now()) {
   const request=snapshot?.request;
-  if(!request||request.actor_id!==identity?.user_id||!Number.isFinite(request.expires_at)||request.expires_at*1000<now)return false;
+  if(!request||request.actor_id!==identity?.user_id)return false;
+  // Navigation requests expire; a credential form stays until saved, dismissed or replaced.
+  if(request.destination!=='credential'&&(!Number.isFinite(request.expires_at)||request.expires_at*1000<now))return false;
   if(!['chat','app:files','agents:config','agents:model','agents:abilities','app:settings','automation','builds','registration','credential','handoff'].includes(request.destination))return false;
   if(typeof request.agent_id!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(request.agent_id))return false;
   if(request.destination==='handoff'&&(typeof request.target_session_id!=='string'||!/^[-a-f0-9]{36}$/i.test(request.target_session_id)))return false;

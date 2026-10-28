@@ -49,9 +49,8 @@ impl Store {
             || state["credential_name"] != name
             || state["actor_id"] != self.current_user_id()
             || state["expected_revision"] != expected
-            || state["expires_at"].as_u64().unwrap_or(0) <= crate::now()
         {
-            bail!("Credential request expired or changed");
+            bail!("Credential request changed");
         }
         let old = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(&key)
@@ -124,7 +123,7 @@ mod tests {
             )
             .await
             .unwrap();
-        app.store.module_cas("core_ui:source",0,&json!({"state":{"request_id":request,"destination":"credential","credential_name":"example","credential_origin":"https://example.test","actor_id":"admin","expected_revision":0,"expires_at":crate::now()+60}})).await.unwrap();
+        app.store.module_cas("core_ui:source",0,&json!({"state":{"request_id":request,"destination":"credential","credential_name":"example","credential_origin":"https://example.test","actor_id":"admin","expected_revision":0}})).await.unwrap();
         assert!(app
             .store
             .core_save_credential("source", "other", &request, 0, &value)

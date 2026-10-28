@@ -29,7 +29,7 @@ test('snapshot polling cannot reopen forms or reapply old view requests',()=>{
  assert.equal(calls.length,2);
 });
 test('credential requests are session state: label and HTTPS link pass, unsafe links and other callers do not',()=>{
- const request={actor_id:'alice',agent_id:'agent-a',destination:'credential',expires_at:200,session_id:'s',credential_name:'source_x',credential_origin:'https://api.github.com',request_id:'a'.repeat(64),expected_revision:0,credential_label:'GitHub token',credential_url:'https://github.com/settings/personal-access-tokens/new'};
+ const request={actor_id:'alice',agent_id:'agent-a',destination:'credential',session_id:'s',credential_name:'source_x',credential_origin:'https://api.github.com',request_id:'a'.repeat(64),expected_revision:0,credential_label:'GitHub token',credential_url:'https://github.com/settings/personal-access-tokens/new'};
  const detail=credentialRequest({revision:3,request},{user_id:'alice'},100000);
  assert.equal(detail.label,'GitHub token');assert.equal(detail.createUrl,'https://github.com/settings/personal-access-tokens/new');assert.equal(detail.requestId,'a'.repeat(64));
  assert.equal(credentialRequest({revision:3,request},{user_id:'alice'},100000).requestId,'a'.repeat(64),'repeat snapshots keep rendering it');
@@ -37,4 +37,5 @@ test('credential requests are session state: label and HTTPS link pass, unsafe l
  assert.equal(credentialRequest({revision:3,request},{user_id:'bob'},100000),null);
  assert.equal(credentialRequest({revision:3,request:{...request,destination:'app:files'}},{user_id:'alice'},100000),null);
  assert.equal(credentialRequest(null,{user_id:'alice'}),null);
+ assert.equal(credentialRequest({revision:4,request:null},{user_id:'alice'}),null,'a closed form clears the card');
 });

@@ -207,6 +207,10 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .chat-action-credential input{box-sizing:border-box;width:100%;margin:4px 0;padding:8px 10px;border:var(--border-width) solid var(--border);border-radius:12px;background:var(--bg-1);color:var(--fg-1);font:inherit}
 .chat-action-credential input:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
 .chat-action-credential a{color:var(--brand);overflow-wrap:anywhere}
+.chat-action-credential .chat-action-message:empty{display:none}
+.chat-action-info{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin:0 0 0 2px;padding:0;border:var(--border-width) solid color-mix(in oklab,currentColor 35%,transparent);border-radius:50%;background:transparent;color:var(--fg-2);font:italic 600 11px/1 Georgia,serif;vertical-align:middle;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.chat-action-info:hover{border-color:var(--brand);color:var(--brand)}
+.chat-action-info:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 /* Desktop Firefox draws the shared scrollbar as an overlay (/v3-ui/shared/scrollbars.js),
    so scrollbar-gutter reserves nothing; keep bubbles the same 6px off the edge as Chromium. */
 @supports not selector(::-webkit-scrollbar){@media (hover:hover) and (pointer:fine){#chat-messages-inner{padding-right:var(--wa-scrollbar-size,6px)!important}}}

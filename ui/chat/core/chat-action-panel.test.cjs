@@ -10,6 +10,9 @@ class E {
  setAttribute(k,v){this.attributes[k]=v;}
  addEventListener(name,fn){this.listeners[name]=fn;}
  querySelector(s){return this.children.find(c=>s.startsWith('.')?(c.className||'').split(' ').includes(s.slice(1)):c.tag===s)||this.children.map(c=>c.querySelector(s)).find(Boolean)||null;}
+ showModal(){this.open=true;}
+ close(){this.open=false;}
+ focus(){}
  remove(){this.isConnected=false;if(this.parent)this.parent.children=this.parent.children.filter(c=>c!==this);}
 }
 const flat=n=>[n.textContent,...n.children.map(flat)].join(' ');
@@ -94,12 +97,16 @@ test('credential card follows its session request: link not vault name, draft ke
  ui.showCredential(detail,'sid');const slot=host.children.at(-1);
  assert.ok(flat(slot).includes('GitHub token'));assert.ok(!flat(slot).includes('source_x'));
  const link=all(slot,'a')[0];assert.equal(link.href,detail.createUrl);assert.equal(link.target,'_blank');assert.equal(link.textContent,'github.com/settings/personal-access-tokens/new');
+ const button=label=>all(slot,'button').find(b=>b.textContent===label);
+ assert.ok(!flat(slot).includes('Only you see'));api.document.body=new E('body');button('i').onclick();
+ const dialog=api.document.body.children[0];assert.equal(dialog.tag,'dialog');assert.equal(dialog.open,true);assert.match(flat(dialog),/Only you see this value/);
+ dialog.children.find(b=>b.textContent==='OK').onclick();assert.equal(api.document.body.children.length,0);
  all(slot,'input')[0].value='typed';ui.showCredential({...detail},'sid');assert.equal(all(slot,'input')[0].value,'typed');
- await all(slot,'button')[0].onclick();
+ await button('Save').onclick();
  assert.deepEqual(calls[0].slice(0,2),['/core/vault/sid/source_x','POST']);assert.equal(calls[0][2].value,'typed');assert.equal(calls[0][2].request_id,detail.requestId);
  assert.ok(flat(slot).includes('GitHub token saved'));ui.showCredential(null,'sid');assert.ok(flat(slot).includes('GitHub token saved'));
  ui.clearCredential();assert.equal(slot.children.length,0);
- ui.showCredential({...detail,requestId:'b'.repeat(64)},'sid');await all(slot,'button')[1].onclick();
+ ui.showCredential({...detail,requestId:'b'.repeat(64)},'sid');await button('Dismiss').onclick();
  assert.deepEqual(calls[1].slice(0,2),['/core/vault/sid/source_x','DELETE']);assert.equal(calls[1][2].request_id,'b'.repeat(64));assert.equal(slot.children.length,0);
  ui.showCredential(detail,'sid');ui.showCredential(null,'other');assert.equal(slot.children.length,0);
  ui.destroy();

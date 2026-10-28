@@ -117,9 +117,17 @@ export function mountChatActionPanel({root,guard,request,note}) {
       const url=new URL(detail.createUrl);link.textContent=url.host+(url.pathname==='/'?'':url.pathname);
       where.append(document.createTextNode('Create it at '),link,document.createTextNode(', then paste it here.'));
     }else where.textContent='Paste the value for '+new URL(detail.origin).host+'.';
+    // The privacy note lives behind an info button so the card stays compact.
+    const info=document.createElement('button');info.type='button';info.className='chat-action-info';info.textContent='i';info.setAttribute('aria-label','Who can see this value');
+    info.onclick=()=>{
+      const dialog=document.createElement('dialog');dialog.className='wa-confirm-panel';
+      const text=document.createElement('p');text.textContent='Only you see this value. It is stored privately in your vault, and the agent receives status only, never the value itself.';
+      const ok=document.createElement('button');ok.type='button';ok.textContent='OK';ok.onclick=()=>{dialog.close();dialog.remove();};
+      dialog.append(text,ok);document.body.append(dialog);dialog.showModal();ok.focus();
+    };
+    where.append(document.createTextNode(' '),info);
     const input=document.createElement('input');input.type='password';input.autocomplete='off';input.required=true;input.maxLength=8192;input.dataset.secret='true';input.setAttribute('aria-label',title);
     const status=document.createElement('p');status.className='chat-action-message';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-    status.textContent='Only you see this value; the agent receives status only.';
     body.append(where,input,status);
     const save=async()=>{
       if(!input.value)return input.focus();

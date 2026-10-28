@@ -39,8 +39,6 @@ pub fn create_url(raw: &str) -> Result<String> {
     }
     Ok(url.to_string())
 }
-/// A form stays with its conversation until saved, dismissed or replaced; this only bounds abandoned ones.
-const REQUEST_LIFETIME: u64 = 7 * 24 * 3600;
 pub fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
@@ -128,7 +126,7 @@ pub async fn execute(
     let mut saved = app.store.module_state(&format!("core_ui:{sid}")).await?;
     let request_id = digest(&json!([sid, rid, pending]));
     if saved["state"]["request_id"] != request_id {
-        saved["state"] = json!({"request_id":request_id,"destination":"credential","actor_id":shared_chat::actor(app),"agent_id":run["agent_id"],"session_id":sid,"created_at":now(),"expires_at":now()+REQUEST_LIFETIME,"credential_name":name,"credential_origin":origin,"credential_label":label,"credential_url":link,"expected_revision":prior["revision"].as_u64().unwrap_or(0),"run_id":rid});
+        saved["state"] = json!({"request_id":request_id,"destination":"credential","actor_id":shared_chat::actor(app),"agent_id":run["agent_id"],"session_id":sid,"created_at":now(),"credential_name":name,"credential_origin":origin,"credential_label":label,"credential_url":link,"expected_revision":prior["revision"].as_u64().unwrap_or(0),"run_id":rid});
         app.store
             .module_cas(
                 &format!("core_ui:{sid}"),
@@ -218,7 +216,7 @@ pub async fn save(
         .await
         .map_err(|_| {
             conflict(
-                "Credential request changed, expired or was already used; request a fresh form",
+                "Credential request changed or was already used; request a fresh form",
             )
         })?;
     Ok(Json(output))
