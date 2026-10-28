@@ -366,6 +366,25 @@ starts cold. Reuse and proofs never relied on byte-reproducible binaries: cache
 receipts hash what was built and smokes compare results. The compiler recipe
 token `incremental-dev-v1` invalidated earlier caches once.
 
+## Execution output pruning
+
+After an engine build passes its compile, suite and smokes (right after its cache
+receipt is retained), the broker removes execution output no future build can
+select (`execution_target_prune` in the job lists job IDs and bytes). Protected
+entirely: the current job, the pinned recovery job and any execution whose receipt
+is missing or not completed, failed or cancelled. Otherwise `output/target` stays
+only for the newest completed execution per (current compiler recipe, release
+mode, `dependency_binding`), the one seeding selects. `output/artifacts` and
+`verified.json` stay only when an engine-artifacts receipt `cached_engine` can still
+select references them (current recipe, newest 64 valid receipts), when a protected
+job's packaging-resume or legacy-image proof names them, or for a failed
+pre-activation `build_deploy` newer than the newest completed job (packaging-only
+retry). Unselectable receipts are deleted before their artifacts, and
+`cached_engine` skips (rather than fails on) a receipt whose artifacts are absent.
+`output/cargo`, `previous-cargo-*` and `workspace-target` are never read after a job
+ends and are always removed. Symlinks are refused, the work holds the seeding lock
+(also taken by `cached_engine`), and errors never fail the build.
+
 ## Engine component reuse keys
 
 Each engine component's artifact is keyed by its crate closure plus digests of

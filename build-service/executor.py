@@ -44,6 +44,7 @@ SNAPSHOT_HEADROOM=16*1024**3
 WORKSPACE_RECIPE="compiled-workspace-v1"
 WORKSPACE_KEEP=2
 FROZEN_MTIME=946684800
+PINNED_EXECUTION="4f605f3b-4444-4447-a511-3a9d4b9677df"  # retained for recovery (operator pin)
 STABLE_FEATURE="stable-abilities"  # root feature a stable release adds to link ability crates
 # Cargo profile and target directory of the deployed live binary: stable releases use the
 # root's [profile.stable] (thin LTO, opt-level 3); dev releases keep the release profile.
@@ -1016,6 +1017,8 @@ class Executor:
         """Reuse only artifacts whose pinned recipe, release mode and complete compiled inputs still match the candidate."""
         cache=Path(self.config["state_root"])/"engine-artifacts";cache.mkdir(mode=0o700,exist_ok=True)
         files=self.runner.execution_entries(blob);rust=self.rust_inputs(files)
+        with self.target_lock():return self._cached_engine(cache,files,rust,output,mode)
+    def _cached_engine(self,cache,files,rust,output,mode):
         for path in sorted(cache.glob("*.json"),key=lambda p:p.stat().st_mtime,reverse=True)[:64]:
             if path.is_symlink():raise ValueError("Engine cache receipt symlink")
             value=json.loads(path.read_text())
@@ -1023,6 +1026,8 @@ class Executor:
             if any(name not in files or hashlib.sha256(files[name][1]).hexdigest()!=sha for name,sha in value["compiled_inputs"].items()):continue
             if not re.fullmatch(r"[a-f0-9-]{36}",value["job_id"]):raise ValueError("Engine cache job identity invalid")
             source=Path(self.config["state_root"])/"execution"/value["job_id"]/"output/artifacts"
+            # Removed (not altered) output is simply unavailable; any other difference still fails closed.
+            if not source.exists()and not source.is_symlink():continue
             if self.artifact_hashes(source)!=value["artifacts"]:raise ValueError("Cached compiler output changed")
             # Output retained under an older inventory rule (e.g. before a service joined
             # SERVICE_SOURCES) cannot replay its tests: compile fresh instead of failing.
@@ -1174,7 +1179,88 @@ class Executor:
                 newer+=1
                 if info.st_mtime_ns<=newest:os.utime(path,ns=(newest+10**9,newest+10**9),follow_symlinks=False)
         return restored,newer
+    def target_lock(self):
+        """Serialize seeding copies with target pruning so a copy never reads a target being deleted."""
+        lock=getattr(self.runner,"plugin_build_lock",None)
+        return lock("execution-targets")if lock is not None else contextlib.nullcontext()
     def seed_cargo_cache(self,job,blob,output):
+        """Seed under the execution-target lock (see _seed_cargo_cache)."""
+        with self.target_lock():return self._seed_cargo_cache(job,blob,output)
+    def prune_execution_targets(self,job):
+        """Delete execution output that no future build can select; keep everything else.
+
+        Protected entirely: this job, the pinned recovery job and every execution whose receipt is
+        missing or not terminal (completed/failed/cancelled). Of the rest:
+        - output/target survives only for the newest completed execution per (current compiler recipe,
+          release mode, dependency_binding), the one seed_cargo_cache selects;
+        - output/artifacts and verified.json survive only when referenced by an engine-artifacts receipt
+          cached_engine can still select (current recipe, among the newest 64 valid receipts, artifacts
+          present), by a packaging-resume or legacy-image proof of a protected job, or for a failed
+          pre-activation build_deploy newer than the newest completed job (packaging-only retry);
+        - unselectable receipts are deleted before their artifacts, so cached_engine never sees one dangling;
+        - output/cargo, previous-cargo-* and workspace-target are never read after a job ends.
+        Symlinks are refused, never followed; the seed lock is held; failures are recorded, never fatal."""
+        state=Path(self.config["state_root"]);folder=state/"execution";cache=state/"engine-artifacts";recipe=self.compiler_recipe()
+        record={"removed":[],"bytes":0,"artifacts_removed":[],"receipts_removed":0,"scratch_bytes":0,"refused":[]}
+        job["execution_target_prune"]=record
+        def size(path):return sum(p.lstat().st_size for p in path.rglob("*")if p.is_file()or p.is_symlink())if path.is_dir()else path.lstat().st_size
+        def remove(path):
+            freed=size(path);shutil.rmtree(path)if path.is_dir()else path.unlink();return freed
+        try:
+            if folder.is_symlink()or not folder.is_dir()or cache.is_symlink():raise ValueError("Execution folder unavailable")
+            with self.target_lock():
+                states={}
+                for execution in folder.iterdir():
+                    name=execution.name;receipt=state/(name+".json")
+                    if not re.fullmatch(r"[a-f0-9-]{36}",name):continue
+                    if execution.is_symlink()or receipt.is_symlink()or any((execution/p).is_symlink()for p in ("output","output/target","output/artifacts","verified.json")):
+                        record["refused"].append(name);continue
+                    try:value=json.loads(receipt.read_text())if receipt.is_file()else{}
+                    except ValueError:value={}
+                    states[name]=(execution,value if value.get("job_id")==name else{})
+                protected={name for name,(_,value)in states.items()if value.get("status")not in {"completed","failed","cancelled"}}|{job["job_id"],PINNED_EXECUTION}
+                completed=[execution.lstat().st_mtime for execution,value in states.values()if value.get("status")=="completed"]
+                newest_completed=max(completed,default=float("inf"))
+                keep_artifacts=set(protected)
+                for name,(execution,value)in states.items():
+                    if value.get("status")=="failed"and value.get("operation")=="build_deploy"and not value.get("effects_started")and value.get("compiler_checkpoint")and execution.lstat().st_mtime>newest_completed:keep_artifacts.add(name)
+                for name in list(keep_artifacts):
+                    value=states.get(name,(None,{}))[1]
+                    for proof in (value.get("packaging_resume")or{},value.get("legacy_image_proof")or{}):
+                        if isinstance(proof.get("source_job_id"),str):keep_artifacts.add(proof["source_job_id"])
+                valid=[];stale=[]
+                for path in (sorted(cache.glob("*.json"),key=lambda p:p.lstat().st_mtime,reverse=True)if cache.is_dir()else[]):
+                    if path.is_symlink():record["refused"].append(path.name);continue
+                    try:value=json.loads(path.read_text())
+                    except ValueError:value={}
+                    owner=value.get("job_id")
+                    usable=value.get("recipe")==recipe and isinstance(owner,str)and owner in states and(folder/owner/"output/artifacts").is_dir()
+                    (valid if usable else stale).append((path,owner))
+                stale+=valid[64:]
+                keep_artifacts|={owner for _,owner in valid[:64]}
+                for path,_ in stale:path.unlink();record["receipts_removed"]+=1
+                newest={}
+                for name,(execution,value)in sorted(states.items(),key=lambda item:item[1][0].lstat().st_mtime,reverse=True):
+                    if name in protected:continue
+                    output=execution/"output"
+                    if value.get("status")=="completed"and value.get("compiler_recipe")==recipe and(output/"target").is_dir():
+                        try:key=json.dumps([value.get("release_mode","dev"),self.dependency_binding(execution/"source/v3")],sort_keys=True)
+                        except (OSError,ValueError):key=None
+                        if key is not None and key not in newest:newest[key]=name
+                    if (output/"target").is_dir()and name not in newest.values():
+                        freed=remove(output/"target");record["removed"].append({"job_id":name,"bytes":freed});record["bytes"]+=freed
+                    if name not in keep_artifacts and((output/"artifacts").is_dir()or(execution/"verified.json").is_file()):
+                        freed=sum(remove(path)for path in (output/"artifacts",execution/"verified.json")if path.exists())
+                        record["artifacts_removed"].append({"job_id":name,"bytes":freed});record["bytes"]+=freed
+                    for path in [output/"cargo",output/"workspace-target",*output.glob("previous-cargo-*")]if output.is_dir()else[]:
+                        if path.is_symlink():record["refused"].append(name);continue
+                        if path.exists():freed=remove(path);record["scratch_bytes"]+=freed;record["bytes"]+=freed
+                record["kept_seeds"]=sorted(newest.values());record["kept_artifacts"]=sorted(keep_artifacts&set(states))
+        except (OSError,ValueError)as error:
+            record["error"]=type(error).__name__+": "+str(error)[:300]
+        getattr(self.runner,"resource_progress",lambda _:None)(job)
+        return record
+    def _seed_cargo_cache(self,job,blob,output):
         """Seed the private target from the newest compatible previous execution; Cargo fingerprints decide what rebuilds.
 
         Identical Rust inputs keep the old rule (every compiled local input equal). A Rust change seeds only
@@ -1186,12 +1272,8 @@ class Executor:
         files=self.runner.execution_entries(blob);folder=Path(self.config["state_root"])/"execution"
         if folder.is_symlink():raise ValueError("Compiler cache directory replaced")
         source=output.parent/"source";rust=self.rust_inputs(files);mode=job.get("release_mode","dev");binding=None;changed=None
-        with self.resources.lock:phases=list(self.resources.rows.values())
         for previous in sorted(folder.iterdir(),key=lambda p:p.stat().st_mtime,reverse=True)[:64]:
             if previous.name==job["job_id"]or not re.fullmatch(r"[a-f0-9-]{36}",previous.name):continue
-            success={r["phase"]for r in phases if r["job_id"]==previous.name and r["state"]=="finished"
-                and r["profile"]in {"engine:rust1.90:compile_test","engine:rust1.90:test","engine:rust1.90:release"}}
-            if not {"compile_test","test","compile_release"}<=success:continue
             receipt=Path(self.config["state_root"])/(previous.name+".json")
             captured=Path(self.config["state_root"])/previous.name/"candidate.tar"
             if any(path.is_symlink()for path in (previous,receipt,captured,previous/"source",previous/"output",previous/"output/cargo",previous/"output/target")):
@@ -1199,6 +1281,11 @@ class Executor:
             if not receipt.is_file()or not captured.is_file():continue
             state=json.loads(receipt.read_text())
             if state["job_id"]!=previous.name or state["status"]not in {"failed","completed"}or state.get("compiler_recipe")!=self.compiler_recipe()or state.get("release_mode","dev")!=mode:continue
+            # The job's own receipt proves its compile and suite finished; the in-memory resource
+            # ledger keeps only the last 64 finished phases, which one full build already exceeds.
+            success={p.get("phase")for p in state.get("phase_timings")or[]if p.get("outcome")=="completed"
+                and p.get("recipe")in {"engine:rust1.90:compile_test","engine:rust1.90:test","engine:rust1.90:release"}}
+            if not {"compile_test","test","compile_release"}<=success:continue
             old_blob=self.runner.execution_application_blob(captured.read_bytes())
             old=self.runner.execution_entries(old_blob);old_rust=self.rust_inputs(old)
             def eligible():
@@ -1583,6 +1670,8 @@ class Executor:
             "live_sha256":hashlib.sha256((artifacts/"webagent-v3").read_bytes()).hexdigest(),"mold_sha256":MOLD_SHA256}
         (artifacts/"stable/linker-proof.json").write_text(json.dumps(job["linker_proof"],sort_keys=True)+"\n")
         hashes=self.artifact_hashes(artifacts);self.retain_engine(job,blob,dependencies,hashes,logs)
+        # This build passed; older targets that can no longer seed a build are dead weight (4+ GB each).
+        self.prune_execution_targets(job)
         receipt={"inputs_sha256":inputs,"artifacts":hashes,"log":logs,"test_proof":self.test_proof(blob)}
         temporary=root/"verified.new";temporary.write_text(json.dumps(receipt));os.replace(temporary,root/"verified.json")
         return artifacts,logs

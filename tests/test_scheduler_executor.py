@@ -4,6 +4,9 @@ from pathlib import Path
 import test_admin_build as fixtures
 spec=importlib.util.spec_from_file_location("scheduler_executor",Path(__file__).parents[1]/"build-service/executor.py")
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+# A completed compile and suite, as a job receipt records them.
+FINISHED_ENGINE=[{"phase":phase,"recipe":recipe,"outcome":"completed","seconds":1.0}for phase,recipe in
+    (("compile_test","engine:rust1.90:compile_test"),("test","engine:rust1.90:test"),("compile_release","engine:rust1.90:release"))]
 class CacheTests(unittest.TestCase):
     """Use real archives/files to distinguish runtime assets from compiled dependencies."""
     def setUp(self):
@@ -65,7 +68,7 @@ class CacheTests(unittest.TestCase):
         """Create terminal phase evidence and an exact captured source for a private cache fixture."""
         import threading
         previous=str(uuid.uuid4());state=self.root/(previous+".json")
-        state.write_text(__import__("json").dumps({"job_id":previous,"status":"failed","compiler_recipe":self.worker.compiler_recipe()}))
+        state.write_text(__import__("json").dumps({"job_id":previous,"status":"failed","compiler_recipe":self.worker.compiler_recipe(),"phase_timings":FINISHED_ENGINE}))
         folder=self.root/previous;folder.mkdir();(folder/"candidate.tar").write_bytes(self.blob)
         execution=self.root/"execution"/previous
         fixtures.host.release.extract(execution/"source",self.blob,fixtures.host.context_digest)
@@ -81,6 +84,10 @@ class CacheTests(unittest.TestCase):
             for name,profile in {"compile_test":"engine:rust1.90:compile_test",
                 "test":"engine:rust1.90:test","compile_release":"engine:rust1.90:release"}.items()})
         return previous,execution
+    def test_seed_reads_phase_completion_from_the_receipt_not_the_bounded_ledger(self):
+        """The resource ledger keeps only recent phases; a full build evicts its own compile rows."""
+        self.previous_cargo_cache();self.worker.resources.rows.clear()
+        self.assertTrue(self.worker.seed_cargo_cache(self.job,self.blob,self.output()))
     def test_compatible_dependency_cache_is_copied_without_certifying_artifacts(self):
         """A post-compilation failure may seed dependency objects, while root outputs still require rebuilding."""
         previous,folder=self.previous_cargo_cache();output=self.output()
@@ -118,7 +125,9 @@ class CacheTests(unittest.TestCase):
         """Measured phase completion alone cannot override the compiler input closure."""
         self.previous_cargo_cache()
         self.assertFalse(self.worker.seed_cargo_cache(self.job,self.candidate({"v3/config/embedded.json":"changed"}),self.output()))
-        self.worker.resources.rows["test"]["state"]="failed"
+        previous=next(p.stem for p in self.root.glob("*.json")if p.stem!=self.job["job_id"])
+        incomplete=[{**p,"outcome":"failed"}if p["phase"]=="test"else p for p in FINISHED_ENGINE]
+        (self.root/(previous+".json")).write_text(__import__("json").dumps({"job_id":previous,"status":"failed","compiler_recipe":self.worker.compiler_recipe(),"phase_timings":incomplete}))
         self.assertFalse(self.worker.seed_cargo_cache(self.job,self.blob,self.output()))
     def test_dependency_cache_rejects_source_drift_and_symlinks(self):
         """Caches are private captured inputs; filesystem substitution cannot seed a compiler."""
@@ -142,7 +151,7 @@ class CacheTests(unittest.TestCase):
         """A completed previous execution and a job whose captured source differs by changes."""
         import json,os
         previous,folder=self.previous_cargo_cache()
-        (self.root/(previous+".json")).write_text(json.dumps({"job_id":previous,"status":status,"compiler_recipe":self.worker.compiler_recipe(),**receipt}))
+        (self.root/(previous+".json")).write_text(json.dumps({"job_id":previous,"status":status,"compiler_recipe":self.worker.compiler_recipe(),"phase_timings":FINISHED_ENGINE,**receipt}))
         old=10**18;newest=old+5*10**9
         for path in (folder/"source").rglob("*"):
             if path.is_file():os.utime(path,ns=(old,old))
@@ -220,6 +229,102 @@ class CacheTests(unittest.TestCase):
         previous,blob,job,_,_=self.changed_seed({},status="completed")
         self.job["release_mode"]="stable"
         self.assertFalse(self.worker.seed_cargo_cache(self.job,blob,job/"output"))
+    def execution(self,status,mtime,lock="locked",**receipt):
+        """A fake execution with source, target and artifacts; returns its job id."""
+        import json,os
+        name=str(uuid.uuid4());folder=self.root/"execution"/name
+        (folder/"source/v3").mkdir(parents=True);(folder/"source/v3/Cargo.toml").write_text("fixture");(folder/"source/v3/Cargo.lock").write_text(lock)
+        (folder/"output/target/debug").mkdir(parents=True);(folder/"output/target/debug/object.rlib").write_bytes(b"o"*100)
+        (folder/"output/artifacts").mkdir();(folder/"output/artifacts/webagent-v3").write_bytes(b"verified")
+        (self.root/(name+".json")).write_text(json.dumps({"job_id":name,"status":status,"compiler_recipe":self.worker.compiler_recipe(),**receipt}))
+        os.utime(folder,(mtime,mtime));return name
+    def test_prune_keeps_only_targets_that_can_still_seed(self):
+        """Newest completed per key, non-terminal, pinned and current jobs keep targets."""
+        import os
+        old=self.execution("completed",100);newest=self.execution("completed",200);failed_old=self.execution("failed",150)
+        cancelled=self.execution("cancelled",300);stable=self.execution("completed",120,release_mode="stable")
+        other_lock=self.execution("completed",110,lock="different")
+        stale_recipe=self.execution("completed",400,compiler_recipe="old-recipe")
+        running=self.execution("running",50);interrupted=self.execution("interrupted",60);uncertain=self.execution("uncertain",70)
+        pinned=self.root/"execution"/module.PINNED_EXECUTION;(pinned/"output/target").mkdir(parents=True)
+        (self.root/(module.PINNED_EXECUTION+".json")).write_text(__import__("json").dumps({"job_id":module.PINNED_EXECUTION,"status":"failed"}))
+        current={"job_id":self.execution("completed",10)}
+        record=self.worker.prune_execution_targets(current)
+        removed={item["job_id"]for item in record["removed"]}
+        self.assertEqual(removed,{old,failed_old,cancelled,stale_recipe})
+        self.assertEqual(sum(item["bytes"]for item in record["removed"]),400);self.assertEqual(current["execution_target_prune"],record)
+        self.assertEqual(set(record["kept_seeds"]),{newest,stable,other_lock})
+        for name in [newest,stable,other_lock,running,interrupted,uncertain,current["job_id"],module.PINNED_EXECUTION]:
+            self.assertTrue((self.root/"execution"/name/"output/target").is_dir(),name)
+        for name in removed:
+            folder=self.root/"execution"/name
+            self.assertFalse((folder/"output/target").exists());self.assertTrue((folder/"source/v3/Cargo.lock").is_file())
+        for name in [running,interrupted,uncertain,current["job_id"]]:self.assertTrue((self.root/"execution"/name/"output/artifacts/webagent-v3").is_file())
+        self.assertTrue((self.artifacts/"webagent-v3").is_file())
+    def engine_receipt(self,name,mtime,recipe=None):
+        import json,os
+        path=self.root/"engine-artifacts"/(name+".json")
+        path.write_text(json.dumps({"recipe":recipe or self.worker.compiler_recipe(),"job_id":name,"artifacts":{},"rust_inputs":{},"compiled_inputs":{}}));os.utime(path,(mtime,mtime));return path
+    def test_prune_removes_artifacts_no_selectable_receipt_references(self):
+        """Selectable receipts, protected jobs and packaging-resume sources keep artifacts; stale receipts go first."""
+        import json,os
+        for path in (self.root/"engine-artifacts").glob("*.json"):path.unlink()
+        selected=self.execution("completed",100);old_recipe=self.execution("completed",90);unreferenced=self.execution("failed",80)
+        resumable=self.execution("failed",500,operation="build_deploy",compiler_checkpoint={"recipe":"r"})
+        old_resumable=self.execution("failed",20,operation="build_deploy",compiler_checkpoint={"recipe":"r"})
+        source=self.execution("failed",10);running=self.execution("running",5,packaging_resume={"source_job_id":source})
+        for name in (selected,old_recipe,unreferenced,resumable,old_resumable,source):
+            (self.root/"execution"/name/"verified.json").write_text("{}")
+            (self.root/"execution"/name/"output/cargo/registry").mkdir(parents=True);(self.root/"execution"/name/"output/cargo/registry/x.crate").write_bytes(b"c"*10)
+            (self.root/"execution"/name/"output/previous-cargo-1").mkdir()
+        (self.root/"execution"/running/"output/cargo").mkdir();(self.root/"execution"/running/"output/cargo/keep").write_bytes(b"in use")
+        for name,mtime in ((selected,100),(old_recipe,90),(unreferenced,80),(resumable,500),(old_resumable,20),(source,10),(running,5)):os.utime(self.root/"execution"/name,(mtime,mtime))
+        self.engine_receipt(selected,1000);stale=self.engine_receipt(old_recipe,1001,recipe="old-recipe")
+        dangling=self.engine_receipt(str(uuid.uuid4()),1002)
+        record=self.worker.prune_execution_targets({"job_id":str(uuid.uuid4())})
+        removed={item["job_id"]for item in record["artifacts_removed"]}
+        self.assertEqual(removed,{old_recipe,unreferenced,old_resumable})
+        self.assertEqual(record["receipts_removed"],2);self.assertFalse(stale.exists());self.assertFalse(dangling.exists())
+        self.assertTrue((self.root/"engine-artifacts"/(selected+".json")).is_file())
+        for name in (selected,resumable,source,running):self.assertTrue((self.root/"execution"/name/"output/artifacts/webagent-v3").is_file(),name)
+        for name in removed:
+            self.assertFalse((self.root/"execution"/name/"output/artifacts").exists());self.assertFalse((self.root/"execution"/name/"verified.json").exists())
+        for name in (selected,old_recipe,resumable,source):
+            self.assertFalse((self.root/"execution"/name/"output/cargo").exists());self.assertFalse((self.root/"execution"/name/"output/previous-cargo-1").exists())
+        self.assertTrue((self.root/"execution"/running/"output/cargo/keep").is_file())
+        self.assertEqual(record["scratch_bytes"],60)
+    def test_prune_keeps_only_the_64_receipts_cached_engine_scans(self):
+        for path in (self.root/"engine-artifacts").glob("*.json"):path.unlink()
+        names=[self.execution("completed",100+i)for i in range(66)]
+        for i,name in enumerate(names):self.engine_receipt(name,1000+i)
+        record=self.worker.prune_execution_targets({"job_id":str(uuid.uuid4())})
+        self.assertEqual({item["job_id"]for item in record["artifacts_removed"]},set(names[:2]))
+        self.assertEqual(len(list((self.root/"engine-artifacts").glob("*.json"))),64)
+    def test_cached_engine_skips_a_receipt_whose_artifacts_were_removed(self):
+        import shutil
+        shutil.rmtree(self.artifacts)
+        self.assertIsNone(self.worker.cached_engine(self.blob,self.output()))
+        self.artifacts.mkdir();(self.artifacts/"webagent-v3").write_bytes(b"tampered")
+        with self.assertRaisesRegex(ValueError,"changed"):self.worker.cached_engine(self.blob,self.output())
+    def test_prune_refuses_symlinks_and_never_follows_them(self):
+        import shutil
+        newest=self.execution("completed",200);victim=self.execution("completed",100)
+        outside=self.root/"outside";outside.mkdir();(outside/"keep").write_text("not broker data")
+        target=self.root/"execution"/victim/"output/target";shutil.rmtree(target);target.symlink_to(outside)
+        linked=self.execution("failed",50);folder=self.root/"execution"/linked;moved=self.root/"moved";folder.rename(moved);folder.symlink_to(moved)
+        record=self.worker.prune_execution_targets({"job_id":str(uuid.uuid4())})
+        self.assertEqual(set(record["refused"]),{victim,linked});self.assertEqual(record["removed"],[])
+        self.assertEqual((outside/"keep").read_text(),"not broker data");self.assertTrue((moved/"output/target/debug/object.rlib").is_file())
+    def test_prune_runs_under_the_seed_lock_and_never_fails_the_build(self):
+        import contextlib
+        taken=[]
+        @contextlib.contextmanager
+        def lock(key):taken.append(key);yield
+        self.worker.runner=types.SimpleNamespace(plugin_build_lock=lock,compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64})
+        self.execution("failed",100)
+        with unittest.mock.patch.object(module.shutil,"rmtree",side_effect=OSError("busy")):
+            record=self.worker.prune_execution_targets({"job_id":str(uuid.uuid4())})
+        self.assertEqual(taken,["execution-targets"]);self.assertIn("OSError",record["error"])
     def test_runtime_roles_package_only_declared_artifacts_and_stream_to_disk(self):
         """Loop contexts exclude API registry and retained tests; API keeps its required closure."""
         import tarfile
