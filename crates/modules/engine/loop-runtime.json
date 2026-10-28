@@ -1,0 +1,42 @@
+{
+  "schema_version": 2,
+  "scheduler": {
+    "max_active_runs": 5,
+    "max_unresolved_runs": 200,
+    "poll_interval_ms": 300,
+    "recovery_interval_ms": 10000,
+    "background_rescan_interval_ms": 5000
+  },
+  "context": {
+    "max_context_bytes": 4194304,
+    "model_profiles": {}
+  },
+  "cache": {
+    "document_budget_bytes": 67108864,
+    "context_budget_bytes": 16777216
+  },
+  "tools": {
+    "max_parallel_calls": 4,
+    "parallel_modes": {
+      "file_list": "concurrent",
+      "file_read": "concurrent",
+      "file_search": "concurrent",
+      "prompt_slot_read": "concurrent",
+      "source_review": "concurrent",
+      "state_inspect": "concurrent"
+    }
+  },
+  "workflow": {
+    "max_turns": 50,
+    "max_attempts": 3,
+    "max_publication_bytes": 262144,
+    "modules": {
+      "model_dispatch": [
+        "message_visibility_v1"
+      ],
+      "publication": [
+        "closing_status_v1"
+      ]
+    }
+  }
+}

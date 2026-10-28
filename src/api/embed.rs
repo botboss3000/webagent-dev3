@@ -1,9 +1,15 @@
 //! Embed credentials authorize only the selected agent's caller-owned chat.
 //! Host-page configuration never changes agent, account, or tool authority.
-use super::*;
+use super::{
+    access, admin_agent_view, bad, conflict, digest, json, key, now, registration, required,
+    ui_config_value, uuid, Api, ApiError, App, Deserialize, HashMap, HeaderMap, HeaderValue, Json,
+    Mutex, Path, PathBuf, Query, Request, Response, Sha256, State, StatusCode, Value,
+};
+use axum::response::IntoResponse;
 use axum::Extension;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::Serialize;
+use sha2::Digest;
 #[derive(Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
 struct Config {
@@ -149,8 +155,10 @@ pub(super) async fn page(
     let origin = args.get("origin").map(String::as_str).unwrap_or("");
     allowed(&app, &id, origin).await?;
     let root = std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into());
-    let root = if crate::store::read_app_settings(&app.store.root)
-        .is_ok_and(|s| s["development"]["live_ui_editing"] == true)
+    let root = if webagent_webapp::configuration::app_settings(std::path::Path::new(
+        webagent_webapp::configuration::LIVE_SETTINGS,
+    ))
+    .is_ok_and(|s| s["development"]["live_ui_editing"] == true)
         && std::path::Path::new("/live-checkout/ui/embed/embed.html").is_file()
     {
         "/live-checkout/ui".into()
@@ -168,9 +176,15 @@ pub(super) async fn page(
     );
     Ok(response)
 }
-static EMBED_ATTEMPTS: std::sync::OnceLock<Mutex<HashMap<(PathBuf, String, std::net::IpAddr, &'static str), Vec<u64>>>> =
-    std::sync::OnceLock::new();
-async fn rate(app: &App, agent: &str, client: std::net::IpAddr, lane: &'static str) -> std::result::Result<(), ApiError> {
+static EMBED_ATTEMPTS: std::sync::OnceLock<
+    Mutex<HashMap<(PathBuf, String, std::net::IpAddr, &'static str), Vec<u64>>>,
+> = std::sync::OnceLock::new();
+async fn rate(
+    app: &App,
+    agent: &str,
+    client: std::net::IpAddr,
+    lane: &'static str,
+) -> std::result::Result<(), ApiError> {
     // Independent agent/client/operation windows cannot consume native login admission.
     let key = (app.store.root.clone(), agent.to_owned(), client, lane);
     let mut roots = EMBED_ATTEMPTS
@@ -437,7 +451,17 @@ pub(super) async fn guest(
 }
 async fn source_valid(app: &App, doc: &Value) -> bool {
     match doc["auth_key"].as_str() {
-        Some(key) => app.store.accounts_repository().session_reference_live(key,doc["user_id"].as_str().unwrap_or("admin"),&doc["generation"],now()).await.unwrap_or(false),
+        Some(key) => app
+            .store
+            .accounts_repository()
+            .session_reference_live(
+                key,
+                doc["user_id"].as_str().unwrap_or("admin"),
+                &doc["generation"],
+                now(),
+            )
+            .await
+            .unwrap_or(false),
         None => true,
     }
 }
@@ -517,24 +541,50 @@ fn scope_path(path: &str) -> bool {
     let path = path.strip_prefix("/api/v3").unwrap_or(path);
     matches!(
         path,
-        "/auth/me" | "/auth/ui-config" | "/sessions" | "/sessions/search" | "/sessions/stats" | "/user/status" | "/chat-invitations/redeem"
+        "/auth/me"
+            | "/auth/ui-config"
+            | "/sessions"
+            | "/sessions/search"
+            | "/sessions/stats"
+            | "/user/status"
+            | "/chat-invitations/redeem"
     ) || path.starts_with("/sessions/")
         || path.starts_with("/runs/")
         || path.starts_with("/approvals/")
 }
-async fn bound_run_session(app:&App,actor:&str,agent:&str,id:&str,approval:bool)->std::result::Result<Option<String>,ApiError>{
-    let mut stores=vec![app.store.clone()];
-    for entry in app.store.shared_sessions_for(actor).await?{
-        if entry["agent_id"]!=agent{continue;}
-        if let Some(owner)=entry["owner_id"].as_str(){stores.push(app.store.for_user(owner).await?);}
+async fn bound_run_session(
+    app: &App,
+    actor: &str,
+    agent: &str,
+    id: &str,
+    approval: bool,
+) -> std::result::Result<Option<String>, ApiError> {
+    let mut stores = vec![app.store.clone()];
+    for entry in app.store.shared_sessions_for(actor).await? {
+        if entry["agent_id"] != agent {
+            continue;
+        }
+        if let Some(owner) = entry["owner_id"].as_str() {
+            stores.push(app.store.for_user(owner).await?);
+        }
     }
-    for store in stores{
-        let runs=if approval{store.active_runs().await?}else{store.get(&key("run",id)).await?.into_iter().collect()};
-        for run in runs{
-            if approval&&run["pending"]["id"]!=id{continue;}
-            let Some(sid)=run["session_id"].as_str()else{continue};
-            if let Ok(access)=crate::shared_chat::resolve(app,sid,actor).await{
-                if access.agent_id==agent{return Ok(Some(sid.to_owned()));}
+    for store in stores {
+        let runs = if approval {
+            store.active_runs().await?
+        } else {
+            store.get(&key("run", id)).await?.into_iter().collect()
+        };
+        for run in runs {
+            if approval && run["pending"]["id"] != id {
+                continue;
+            }
+            let Some(sid) = run["session_id"].as_str() else {
+                continue;
+            };
+            if let Ok(access) = crate::shared_chat::resolve(app, sid, actor).await {
+                if access.agent_id == agent {
+                    return Ok(Some(sid.to_owned()));
+                }
             }
         }
     }
@@ -563,27 +613,47 @@ async fn scope_request(
     }
     // A widget's credential remains bound to one agent, even when the canonical
     // conversation lives in another participant's encrypted store.
-    let actor=crate::shared_chat::actor(app);
-    let parts:Vec<_>=path.trim_matches('/').split('/').collect();
-    let session=if parts.first()==Some(&"sessions")&&parts.len()>1&&!matches!(parts[1],"search"|"stats"){
+    let actor = crate::shared_chat::actor(app);
+    let parts: Vec<_> = path.trim_matches('/').split('/').collect();
+    let session = if parts.first() == Some(&"sessions")
+        && parts.len() > 1
+        && !matches!(parts[1], "search" | "stats")
+    {
         Some(parts[1].to_owned())
-    }else if matches!(parts.first(),Some(&"runs")|Some(&"approvals"))&&parts.len()>1{
-        bound_run_session(app,actor,agent,parts[1],parts[0]=="approvals").await?
-    }else{None};
-    if matches!(parts.first(),Some(&"runs")|Some(&"approvals"))&&session.is_none(){return Err(denied());}
-    if let Some(id)=session{
-        let access=crate::shared_chat::resolve(app,&id,actor).await.map_err(|_|denied())?;
-        if access.agent_id!=agent{return Err(denied());}
+    } else if matches!(parts.first(), Some(&"runs") | Some(&"approvals")) && parts.len() > 1 {
+        bound_run_session(app, actor, agent, parts[1], parts[0] == "approvals").await?
+    } else {
+        None
+    };
+    if matches!(parts.first(), Some(&"runs") | Some(&"approvals")) && session.is_none() {
+        return Err(denied());
     }
-    if path=="/chat-invitations/redeem"{
-        let body=std::mem::take(request.body_mut());
-        let bytes=axum::body::to_bytes(body,2*1024*1024).await.map_err(|_|bad("Invalid invitation request"))?;
-        let value:Value=serde_json::from_slice(&bytes).map_err(|_|bad("Invalid invitation request"))?;
-        let token=value["token"].as_str().ok_or_else(denied)?;
-        let sid=app.store.shared_invite_session_for(token,actor).await?.ok_or_else(denied)?;
-        let directory=app.store.shared_directory(&sid).await?.ok_or_else(denied)?;
-        if directory["agent_id"]!=agent{return Err(denied());}
-        *request.body_mut()=axum::body::Body::from(bytes);
+    if let Some(id) = session {
+        let access = crate::shared_chat::resolve(app, &id, actor)
+            .await
+            .map_err(|_| denied())?;
+        if access.agent_id != agent {
+            return Err(denied());
+        }
+    }
+    if path == "/chat-invitations/redeem" {
+        let body = std::mem::take(request.body_mut());
+        let bytes = axum::body::to_bytes(body, 2 * 1024 * 1024)
+            .await
+            .map_err(|_| bad("Invalid invitation request"))?;
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|_| bad("Invalid invitation request"))?;
+        let token = value["token"].as_str().ok_or_else(denied)?;
+        let sid = app
+            .store
+            .shared_invite_session_for(token, actor)
+            .await?
+            .ok_or_else(denied)?;
+        let directory = app.store.shared_directory(&sid).await?.ok_or_else(denied)?;
+        if directory["agent_id"] != agent {
+            return Err(denied());
+        }
+        *request.body_mut() = axum::body::Body::from(bytes);
     }
     if path == "/sessions" && request.method() == axum::http::Method::POST {
         let body = std::mem::take(request.body_mut());
@@ -637,6 +707,7 @@ pub(crate) async fn bearer(app: &App, request: &mut Request) -> std::result::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::router;
     #[test]
     fn exact_origins_only() {
         assert!(origin_valid("https://example.com"));
@@ -712,7 +783,8 @@ mod tests {
         let id = challenge["challenge_id"].as_str().unwrap();
         assert!(redeem(
             State(app.clone()),
-            None, HeaderMap::new(),
+            None,
+            HeaderMap::new(),
             Json(json!({"challenge_id":id,"code_verifier":verifier}))
         )
         .await
@@ -744,7 +816,8 @@ mod tests {
         assert!(redeem(State(app.clone()),None, HeaderMap::new(),Json(json!({"challenge_id":id,"code_verifier":"wrong-verifier-abcdefghijklmnopqrstuvwxyz-0123456789"}))).await.is_err());
         let credential = redeem(
             State(app.clone()),
-            None, HeaderMap::new(),
+            None,
+            HeaderMap::new(),
             Json(json!({"challenge_id":id,"code_verifier":verifier})),
         )
         .await
@@ -752,7 +825,8 @@ mod tests {
         .0;
         assert!(redeem(
             State(app.clone()),
-            None, HeaderMap::new(),
+            None,
+            HeaderMap::new(),
             Json(json!({"challenge_id":id,"code_verifier":verifier}))
         )
         .await
@@ -933,12 +1007,28 @@ mod tests {
     async fn embed_throttle_preserves_password_login_budget() {
         let (_root, app) = crate::runtime_tests::fixture().await;
         for _ in 0..30 {
-            rate(&app, "agent-a", "192.0.2.1".parse().unwrap(), "challenge").await.unwrap();
+            rate(&app, "agent-a", "192.0.2.1".parse().unwrap(), "challenge")
+                .await
+                .unwrap();
         }
-        assert!(rate(&app, "agent-a", "192.0.2.1".parse().unwrap(), "challenge").await.is_err());
-        assert!(rate(&app, "agent-b", "192.0.2.1".parse().unwrap(), "challenge").await.is_ok());
-        assert!(rate(&app, "agent-a", "192.0.2.2".parse().unwrap(), "challenge").await.is_ok());
-        assert!(rate(&app, "agent-a", "192.0.2.1".parse().unwrap(), "guest").await.is_ok());
+        assert!(
+            rate(&app, "agent-a", "192.0.2.1".parse().unwrap(), "challenge")
+                .await
+                .is_err()
+        );
+        assert!(
+            rate(&app, "agent-b", "192.0.2.1".parse().unwrap(), "challenge")
+                .await
+                .is_ok()
+        );
+        assert!(
+            rate(&app, "agent-a", "192.0.2.2".parse().unwrap(), "challenge")
+                .await
+                .is_ok()
+        );
+        assert!(rate(&app, "agent-a", "192.0.2.1".parse().unwrap(), "guest")
+            .await
+            .is_ok());
         assert!(app.login_attempts.is_empty().await);
     }
     #[tokio::test]
@@ -947,11 +1037,25 @@ mod tests {
         config_put(State(app.clone()), Extension(json!({"_user_id":"admin"})), Path("shared_default".into()),
             Json(json!({"expected_revision":0,"config":{"enabled":true,"allowed_origins":["https://example.com"]}}))).await.unwrap();
         for _ in 0..35 {
-            assert!(challenge(State(app.clone()), Path("shared_default".into()), None, HeaderMap::new(),
-                Json(json!({"origin":"https://example.com","code_challenge":"invalid"}))).await.is_err());
+            assert!(challenge(
+                State(app.clone()),
+                Path("shared_default".into()),
+                None,
+                HeaderMap::new(),
+                Json(json!({"origin":"https://example.com","code_challenge":"invalid"}))
+            )
+            .await
+            .is_err());
         }
-        assert!(challenge(State(app), Path("shared_default".into()), None, HeaderMap::new(),
-            Json(json!({"origin":"https://example.com","code_challenge":"a".repeat(43)}))).await.is_ok());
+        assert!(challenge(
+            State(app),
+            Path("shared_default".into()),
+            None,
+            HeaderMap::new(),
+            Json(json!({"origin":"https://example.com","code_challenge":"a".repeat(43)}))
+        )
+        .await
+        .is_ok());
     }
     #[tokio::test]
     async fn guest_and_descriptor_fail_closed() {
@@ -961,7 +1065,8 @@ mod tests {
         assert!(guest(
             State(app.clone()),
             Path("shared_default".into()),
-            None, HeaderMap::new(),
+            None,
+            HeaderMap::new(),
             Json(json!({"origin":"https://example.com"}))
         )
         .await
@@ -970,7 +1075,8 @@ mod tests {
         assert!(guest(
             State(app.clone()),
             Path("shared_default".into()),
-            None, HeaderMap::new(),
+            None,
+            HeaderMap::new(),
             Json(json!({"origin":"https://example.com"}))
         )
         .await
@@ -979,7 +1085,8 @@ mod tests {
         let issued = guest(
             State(app.clone()),
             Path("shared_default".into()),
-            None, HeaderMap::new(),
+            None,
+            HeaderMap::new(),
             Json(json!({"origin":"https://example.com"})),
         )
         .await
@@ -1025,39 +1132,148 @@ mod tests {
 }
 
 #[cfg(test)]
-mod shared_scope_tests{
- use super::*;
- #[tokio::test]
- async fn shared_widget_sessions_runs_approvals_and_invites_keep_exact_agent_scope(){
-  let (_root,app)=crate::runtime_tests::fixture().await;
-  let account=app.store.create_user_account("widget-participant","fixture-long-password-hash").await.unwrap();let actor=account["user_id"].as_str().unwrap().to_owned();
-  app.store.update_account_access(&actor,1,crate::access::AccountStatus::Active,crate::access::Role::User,"basic").await.unwrap();
-  app.store.set_agent_membership(&actor,"shared_default",crate::access::Relationship::Caller,0).await.unwrap();
-  app.store.put("session:widget-shared",&json!({"id":"widget-shared","agent_id":"shared_default"})).await.unwrap();
-  app.store.register_shared_session("admin","widget-shared","shared_default").await.unwrap();
-  app.store.shared_join("widget-shared",&actor).await.unwrap();
-  app.store.put("run:widget-shared-run",&json!({"id":"widget-shared-run","session_id":"widget-shared","agent_id":"shared_default","status":"waiting_approval","pending":{"id":"widget-approval"}})).await.unwrap();
-  let mut caller=app.clone();caller.store=app.store.for_user(&actor).await.unwrap();let doc=json!({"agent_id":"shared_default"});
-  for path in ["/api/v3/sessions/widget-shared","/api/v3/sessions/widget-shared/events","/api/v3/runs/widget-shared-run/cancel","/api/v3/approvals/widget-approval"]{
-   let mut request=Request::builder().uri(path).body(axum::body::Body::empty()).unwrap();
-   assert!(scope_request(&caller,&doc,&mut request).await.is_ok(),"{path}");
-  }
-  let mut request=Request::builder().uri("/api/v3/sessions/widget-shared").body(axum::body::Body::empty()).unwrap();
-  assert!(scope_request(&caller,&json!({"agent_id":"another-agent"}),&mut request).await.is_err());
-  let other=app.store.create_user_account("widget-outsider","fixture-long-password-hash").await.unwrap();let other=other["user_id"].as_str().unwrap();
-  app.store.update_account_access(other,1,crate::access::AccountStatus::Active,crate::access::Role::User,"basic").await.unwrap();
-  let mut outsider=app.clone();outsider.store=app.store.for_user(other).await.unwrap();
-  let mut request=Request::builder().uri("/api/v3/sessions/widget-shared").body(axum::body::Body::empty()).unwrap();
-  assert!(scope_request(&outsider,&doc,&mut request).await.is_err());
-  let invite=app.store.shared_invite_issue("widget-shared","admin","widget-invite",86400).await.unwrap();
-  let mut request=Request::builder().method("POST").uri("/api/v3/chat-invitations/redeem").body(axum::body::Body::from(json!({"token":invite["token"],"client_request_id":"widget-redeem"}).to_string())).unwrap();
-  assert!(scope_request(&caller,&doc,&mut request).await.is_ok());
-  let retained=axum::body::to_bytes(request.into_body(),1024).await.unwrap();assert_eq!(serde_json::from_slice::<Value>(&retained).unwrap()["token"],invite["token"]);
-  let mut request=Request::builder().method("POST").uri("/api/v3/chat-invitations/redeem").body(axum::body::Body::from(json!({"token":invite["token"],"client_request_id":"widget-redeem"}).to_string())).unwrap();
-  assert!(scope_request(&caller,&json!({"agent_id":"another-agent"}),&mut request).await.is_err());
-  for (path,ok) in [("/api/v3/agents/shared_default/access-summary",true),("/api/v3/agents/another-agent/access-summary",false),("/api/v3/agents/shared_default/members",false)]{
-   let mut request=Request::builder().uri(path).body(axum::body::Body::empty()).unwrap();
-   assert_eq!(scope_request(&caller,&doc,&mut request).await.is_ok(),ok,"{path}");
-  }
- }
+mod shared_scope_tests {
+    use super::*;
+    #[tokio::test]
+    async fn shared_widget_sessions_runs_approvals_and_invites_keep_exact_agent_scope() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let account = app
+            .store
+            .create_user_account("widget-participant", "fixture-long-password-hash")
+            .await
+            .unwrap();
+        let actor = account["user_id"].as_str().unwrap().to_owned();
+        app.store
+            .update_account_access(
+                &actor,
+                1,
+                crate::access::AccountStatus::Active,
+                crate::access::Role::User,
+                "basic",
+            )
+            .await
+            .unwrap();
+        app.store
+            .set_agent_membership(
+                &actor,
+                "shared_default",
+                crate::access::Relationship::Caller,
+                0,
+            )
+            .await
+            .unwrap();
+        app.store
+            .put(
+                "session:widget-shared",
+                &json!({"id":"widget-shared","agent_id":"shared_default"}),
+            )
+            .await
+            .unwrap();
+        app.store
+            .register_shared_session("admin", "widget-shared", "shared_default")
+            .await
+            .unwrap();
+        app.store
+            .shared_join("widget-shared", &actor)
+            .await
+            .unwrap();
+        app.store.put("run:widget-shared-run",&json!({"id":"widget-shared-run","session_id":"widget-shared","agent_id":"shared_default","status":"waiting_approval","pending":{"id":"widget-approval"}})).await.unwrap();
+        let mut caller = app.clone();
+        caller.store = app.store.for_user(&actor).await.unwrap();
+        let doc = json!({"agent_id":"shared_default"});
+        for path in [
+            "/api/v3/sessions/widget-shared",
+            "/api/v3/sessions/widget-shared/events",
+            "/api/v3/runs/widget-shared-run/cancel",
+            "/api/v3/approvals/widget-approval",
+        ] {
+            let mut request = Request::builder()
+                .uri(path)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            assert!(
+                scope_request(&caller, &doc, &mut request).await.is_ok(),
+                "{path}"
+            );
+        }
+        let mut request = Request::builder()
+            .uri("/api/v3/sessions/widget-shared")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert!(
+            scope_request(&caller, &json!({"agent_id":"another-agent"}), &mut request)
+                .await
+                .is_err()
+        );
+        let other = app
+            .store
+            .create_user_account("widget-outsider", "fixture-long-password-hash")
+            .await
+            .unwrap();
+        let other = other["user_id"].as_str().unwrap();
+        app.store
+            .update_account_access(
+                other,
+                1,
+                crate::access::AccountStatus::Active,
+                crate::access::Role::User,
+                "basic",
+            )
+            .await
+            .unwrap();
+        let mut outsider = app.clone();
+        outsider.store = app.store.for_user(other).await.unwrap();
+        let mut request = Request::builder()
+            .uri("/api/v3/sessions/widget-shared")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert!(scope_request(&outsider, &doc, &mut request).await.is_err());
+        let invite = app
+            .store
+            .shared_invite_issue("widget-shared", "admin", "widget-invite", 86400)
+            .await
+            .unwrap();
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/v3/chat-invitations/redeem")
+            .body(axum::body::Body::from(
+                json!({"token":invite["token"],"client_request_id":"widget-redeem"}).to_string(),
+            ))
+            .unwrap();
+        assert!(scope_request(&caller, &doc, &mut request).await.is_ok());
+        let retained = axum::body::to_bytes(request.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&retained).unwrap()["token"],
+            invite["token"]
+        );
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/v3/chat-invitations/redeem")
+            .body(axum::body::Body::from(
+                json!({"token":invite["token"],"client_request_id":"widget-redeem"}).to_string(),
+            ))
+            .unwrap();
+        assert!(
+            scope_request(&caller, &json!({"agent_id":"another-agent"}), &mut request)
+                .await
+                .is_err()
+        );
+        for (path, ok) in [
+            ("/api/v3/agents/shared_default/access-summary", true),
+            ("/api/v3/agents/another-agent/access-summary", false),
+            ("/api/v3/agents/shared_default/members", false),
+        ] {
+            let mut request = Request::builder()
+                .uri(path)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            assert_eq!(
+                scope_request(&caller, &doc, &mut request).await.is_ok(),
+                ok,
+                "{path}"
+            );
+        }
+    }
 }

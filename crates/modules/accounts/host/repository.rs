@@ -1,5 +1,5 @@
 //! Root supplies Storage resources and tenant routing; Accounts owns record SQL.
-use crate::*;
+use crate::{access, Result, Store, Value};
 impl webagent_accounts::RecordCodec for Store {
     fn seal(&self, value: &Value) -> Result<Vec<u8>> {
         Store::seal(self, value)
@@ -26,7 +26,9 @@ impl Store {
             .await
     }
     pub(crate) async fn init_access_policy(&self) -> Result<()> {
-        if self.access_policy_path().exists() {
+        // The live policy (a checkout-relative path) always exists; fixtures may lack theirs.
+        let path = self.access_policy_path();
+        if path.is_relative() || path.exists() {
             self.read_access_policy()?;
             return Ok(());
         }

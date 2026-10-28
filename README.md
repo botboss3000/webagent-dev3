@@ -682,7 +682,7 @@ stale, then 200 after the loop resumes. Check health and one persisted reply
 after each replacement. The socket directory is transient and is not
 application data or backup authority.
 
-Gate activation and order live in `/state/config/loop-runtime.json` under
+Gate activation and order live in the live file `crates/modules/engine/loop-runtime.json` under
 `workflow.modules`. The default is empty. For the first two native modules and
 the optional size plugin, use:
 `{"model_dispatch":["message_visibility_v1"],"publication":["closing_status_v1","optional:publication_size_guard_v1"]}`.
@@ -807,7 +807,7 @@ catalog, policy, visibility, loaded abilities and mode. Tool execution still che
 permissions. Activated discoverable skills are rebuilt from the catalog across compaction;
 Off and suppressed states remain authoritative. Catalog refresh still requires restart.
 
-Optional `context.model_profiles` in `config/loop-runtime.json` maps
+Optional `context.model_profiles` in `crates/modules/engine/loop-runtime.json` maps
 `provider/model` to `context_tokens`, `output_reserve_tokens`, and `bytes_per_token`
 (1–8). The logical-envelope ceiling is the smaller of the existing byte ceiling and
 `(context_tokens - output_reserve_tokens) * bytes_per_token`. Unknown models retain
@@ -853,21 +853,16 @@ peak-RAM reduction is claimed from these allocation removals alone.
 
 ## App access-policy configuration
 
-V3 owns `<state-root>/config/access-policy.json` (deployed as
-`v3/data/config/access-policy.json`, mounted at `/state/config/access-policy.json`).
-The repository template is `v3/config/access-policy.json`:
-
-```json
-{"registration": "restricted"}
-```
+V3 owns the live file `crates/modules/access/access-policy.json` (listed in
+`live-files.json`): registration mode, account levels (tiers, order, names) and
+page policy, for example `{"registration": "restricted", ...}`.
 
 `restricted` creates pending accounts requiring administrator approval; `open`
 activates ordinary registered accounts and enables the existing guest admission
 flow. Neither grants administrator privileges or agent/tool entitlements.
-The file is read on policy checks, so edits require no restart after this code
-is deployed. Invalid or unreadable policy fails closed, rather than opening access.
-On first startup without a file, the existing database registration mode is
-migrated; otherwise the default is restricted. The file then becomes authoritative.
+The file is read on policy checks and can be edited in place; administrator saves go
+through the broker's `live_file_write`. An invalid edit keeps the last good policy;
+an unreadable policy fails closed, rather than opening access.
 The existing access-mode API keeps its V2-compatible values (`admin_approval` /
 `public_registered`) and writes this file atomically. Registration edits preserve
 additional JSON fields for future feature/page policies; those fields do not yet
@@ -955,9 +950,10 @@ need no rebuild.
 
 ## Admin database encryption setting
 
-Both processes read `v3/data/config/app-settings.json` (container
-`/state/config/app-settings.json`) at startup. The documented seed template is
-`v3/config/app-settings.json`; `deploy.sh start` copies it only if absent.
+Both processes read the instance file `v3/data/config/app-settings.json` (container
+`/state/config/app-settings.json`). It holds only per-server settings (this toggle
+and trusted authentication proxies) and is never seeded; the UI settings live in
+the live file `crates/modules/webapp/app-settings.json`.
 `admin_database_encryption.enabled=false` saves new or rewritten fixed-account
 `admin` user database records as readable JSON with a tamper-detection tag.
 Other users, application and agent databases, and search cursors stay encrypted.

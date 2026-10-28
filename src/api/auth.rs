@@ -1,9 +1,13 @@
 //! Authentication middleware composes Accounts identity with live Access authorization.
-use super::*;
+use super::{
+    access, json, now, phase3_api, registration, Api, ApiError, App, HashMap, HeaderMap,
+    HeaderValue, Json, Next, Query, Request, Response, State, StatusCode, Value,
+};
 pub(crate) use crate::account_authentication::{
     change_password, list_auth_sessions, login, logout, me, revoke_auth_session, session_policy,
     setup_admin, setup_status, update_profile, update_session_policy,
 };
+use axum::response::IntoResponse;
 pub(crate) use webagent_accounts::message_api_token_hash;
 pub(crate) fn message_api_authorized(expected: Option<&[u8; 32]>, headers: &HeaderMap) -> bool {
     webagent_accounts::message_api_authorized(
@@ -175,7 +179,10 @@ pub(crate) async fn chat_ui_config(
     let mut value = ui_config_value(&app).await?;
     if let Some(agent) = args.get("agent_id") {
         // Agent overlays are served only to callers admitted to use that agent (session-creation authority).
-        if !app.store.live_access(app.store.current_user_id(), agent).await
+        if !app
+            .store
+            .live_access(app.store.current_user_id(), agent)
+            .await
             .is_ok_and(|access| access.admitted())
         {
             return Err(ApiError(StatusCode::NOT_FOUND, "Agent not found".into()));
@@ -185,14 +192,17 @@ pub(crate) async fn chat_ui_config(
     Ok(Json(value))
 }
 pub(crate) async fn ui_config_value(app: &App) -> std::result::Result<Value, ApiError> {
-    webagent_webapp::configuration::ui_config(&app.chat_ui_config_path, &app.store.root)
-        .await
-        .map_err(|error| match error {
-            webagent_webapp::configuration::Error::Http(status, message) => {
-                ApiError(status, message.into())
-            }
-            webagent_webapp::configuration::Error::Settings(error) => error.into(),
-        })
+    webagent_webapp::configuration::ui_config(
+        &app.chat_ui_config_path,
+        std::path::Path::new(webagent_webapp::configuration::LIVE_SETTINGS),
+    )
+    .await
+    .map_err(|error| match error {
+        webagent_webapp::configuration::Error::Http(status, message) => {
+            ApiError(status, message.into())
+        }
+        webagent_webapp::configuration::Error::Settings(error) => error.into(),
+    })
 }
 
 #[cfg(test)]
@@ -205,39 +215,97 @@ mod webapp_adapter_tests {
         app.chat_ui_config_path = root.path().join("adapter-chat-ui.json");
         std::fs::write(&app.chat_ui_config_path, br#"{"chat_common":{}}"#).unwrap();
         // Domain schema/default/privacy assertions live in Webapp; this verifies host wiring.
-        let expected =
-            webagent_webapp::configuration::ui_config(&app.chat_ui_config_path, &app.store.root)
-                .await
-                .unwrap();
+        let expected = webagent_webapp::configuration::ui_config(
+            &app.chat_ui_config_path,
+            std::path::Path::new(webagent_webapp::configuration::LIVE_SETTINGS),
+        )
+        .await
+        .unwrap();
         assert_eq!(
-            chat_ui_config(State(app.clone()), Query(HashMap::new())).await.unwrap().0,
+            chat_ui_config(State(app.clone()), Query(HashMap::new()))
+                .await
+                .unwrap()
+                .0,
             expected
         );
         std::fs::write(&app.chat_ui_config_path, "{}").unwrap();
         assert_eq!(
-            chat_ui_config(State(app.clone()), Query(HashMap::new())).await.err().unwrap().0,
+            chat_ui_config(State(app.clone()), Query(HashMap::new()))
+                .await
+                .err()
+                .unwrap()
+                .0,
             StatusCode::INTERNAL_SERVER_ERROR
         );
         // Agent selection requires use authority; overlays reach only the agent-scoped response.
         std::fs::write(&app.chat_ui_config_path, br#"{"chat_common":{"x":1}}"#).unwrap();
         let agent = |id: &str| Query(HashMap::from([("agent_id".to_owned(), id.to_owned())]));
         let view = app.store.for_agent("shared_default").await.unwrap();
-        webagent_chat::agent_config::save(&view.agent_pool, &view, "shared_default", "chat",
-            webagent_chat::agent_config::Change::Patch(&json!({"chat_common":{"x":2}})), 0, &json!({}), "admin", 1)
-            .await.unwrap();
-        let scoped = chat_ui_config(State(app.clone()), agent("shared_default")).await.unwrap().0;
-        assert_eq!((scoped["chat_ui"]["chat_common"]["x"].clone(), scoped["components"]["session_dropdown"].clone()),
-            (json!(2), json!({})));
-        let plain = chat_ui_config(State(app.clone()), Query(HashMap::new())).await.unwrap().0;
-        assert_eq!((plain["chat_ui"]["chat_common"]["x"].clone(), plain.get("components")), (json!(1), None));
-        assert_eq!(chat_ui_config(State(app.clone()), agent("missing-agent")).await.err().unwrap().0, StatusCode::NOT_FOUND);
+        webagent_chat::agent_config::save(
+            &view.agent_pool,
+            &view,
+            "shared_default",
+            "chat",
+            webagent_chat::agent_config::Change::Patch(&json!({"chat_common":{"x":2}})),
+            0,
+            &json!({}),
+            "admin",
+            1,
+        )
+        .await
+        .unwrap();
+        let scoped = chat_ui_config(State(app.clone()), agent("shared_default"))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(
+            (
+                scoped["chat_ui"]["chat_common"]["x"].clone(),
+                scoped["components"]["session_dropdown"].clone()
+            ),
+            (json!(2), json!({}))
+        );
+        let plain = chat_ui_config(State(app.clone()), Query(HashMap::new()))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(
+            (
+                plain["chat_ui"]["chat_common"]["x"].clone(),
+                plain.get("components")
+            ),
+            (json!(1), None)
+        );
+        assert_eq!(
+            chat_ui_config(State(app.clone()), agent("missing-agent"))
+                .await
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::NOT_FOUND
+        );
         let guest = app.store.create_guest_account().await.unwrap();
         let mut outsider = app.clone();
-        outsider.store = app.store.for_user(guest["user_id"].as_str().unwrap()).await.unwrap();
-        assert_eq!(chat_ui_config(State(outsider), agent("shared_default")).await.err().unwrap().0, StatusCode::NOT_FOUND);
+        outsider.store = app
+            .store
+            .for_user(guest["user_id"].as_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            chat_ui_config(State(outsider), agent("shared_default"))
+                .await
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::NOT_FOUND
+        );
         std::fs::remove_file(&app.chat_ui_config_path).unwrap();
         assert_eq!(
-            chat_ui_config(State(app), Query(HashMap::new())).await.err().unwrap().0,
+            chat_ui_config(State(app), Query(HashMap::new()))
+                .await
+                .err()
+                .unwrap()
+                .0,
             StatusCode::SERVICE_UNAVAILABLE
         );
     }

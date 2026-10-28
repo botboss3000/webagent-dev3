@@ -306,11 +306,11 @@ mod tests {
         let config_path = state.path().join("config/app-settings.json");
         let mut config: Value = serde_json::from_str(r#"{"admin_database_encryption":{"enabled":false},"development":{"live_ui_editing":false}}"#).unwrap();
         fs::write(&config_path, config.to_string()).unwrap();
-        assert!(crate::configuration::live_root(state.path(), ui.path()).is_none());
+        assert!(crate::configuration::live_root(&config_path, ui.path()).is_none());
         config["development"]["live_ui_editing"] = json!(true);
         fs::write(&config_path, config.to_string()).unwrap();
         assert_eq!(
-            crate::configuration::live_root(state.path(), ui.path()).unwrap(),
+            crate::configuration::live_root(&config_path, ui.path()).unwrap(),
             ui.path()
         );
         // Storage policy is preserved; switching does not require a restart.
@@ -334,14 +334,14 @@ mod tests {
         }
         config["development"]["live_ui_editing"] = json!(false);
         fs::write(&config_path, config.to_string()).unwrap();
-        assert!(crate::configuration::live_root(state.path(), ui.path()).is_none());
+        assert!(crate::configuration::live_root(&config_path, ui.path()).is_none());
         // Invalid or missing settings and absent checkout mounts fail closed.
         fs::write(&config_path, "{}").unwrap();
-        assert!(crate::configuration::live_root(state.path(), ui.path()).is_none());
+        assert!(crate::configuration::live_root(&config_path, ui.path()).is_none());
         fs::write(&config_path, "{broken").unwrap();
-        assert!(crate::configuration::live_root(state.path(), ui.path()).is_none());
-        fs::remove_file(config_path).unwrap();
-        assert!(crate::configuration::live_root(state.path(), ui.path()).is_none());
+        assert!(crate::configuration::live_root(&config_path, ui.path()).is_none());
+        fs::remove_file(&config_path).unwrap();
+        assert!(crate::configuration::live_root(&config_path, ui.path()).is_none());
     }
 
     #[tokio::test]

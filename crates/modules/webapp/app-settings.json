@@ -1,0 +1,22 @@
+{
+  "_instructions": "Live UI settings (live-files.json): edit in place; the API rereads this file per request and signed-in pages adopt changes within five seconds, without a release or restart. Instance-only settings (admin database encryption, trusted authentication proxies) stay in the state root's config/app-settings.json.",
+  "development": {
+    "_instructions": "Development only. true serves v3 UI directly from /live-checkout/ui (/home/ar/webagent-dev3/ui on the host). Save and refresh; no restart. false restores broker-selected frozen UI. Disable before broker releases, then re-enable after promotion. Backend code and shared V2 assets remain frozen.",
+    "live_ui_editing": false
+  },
+  "ui": {
+    "chat_panel": {
+      "_instructions": "Initial docked chat width on app boot: unit is px (CSS pixels) or % (available split width, 0-100). Width must be nonnegative; zero hides chat at boot. Missing section defaults to 45%. Positive sizes are clamped to keep both panels usable. Adopted on sign-in/page reload; dragging changes only the current page. Mobile retains its full-panel layout.",
+      "unit": "%",
+      "width": 45
+    },
+    "mobile_mode": {
+      "_instructions": "true renders the mobile chat edge-to-edge: the transcript paints behind the status and navigation bars while the app header, chat header and composer stay inset over it. false keeps the current inset shell. Boolean; missing defaults to false. The API rereads this file per request; signed-in mobile pages adopt changes within five seconds. Desktop layout is unaffected.",
+      "full_height": true
+    },
+    "pull_to_refresh": {
+      "_instructions": "Gesture start band measured in CSS pixels from the viewport top, inclusive. Nonnegative number; missing defaults to 50. The API rereads this file per request. Visible signed-in pages adopt changes within five seconds, or when returning to the page, without reload, compilation or server restart.",
+      "start_zone_px": 50
+    }
+  }
+}

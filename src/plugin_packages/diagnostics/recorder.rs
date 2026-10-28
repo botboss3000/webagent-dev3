@@ -1,15 +1,32 @@
 //! Fixed-admin bounded recording and archive reads; owner handles are borrowed.
-use crate::{SnapshotStore,Error,bridge,config::{self,Config}};
-use webagent_context::{assembly as context_assembly,input as context_input,compaction as context_compaction,accounting as context_accounting};
+use crate::{
+    bridge,
+    config::{self, Config},
+    Error, SnapshotStore,
+};
 use context_assembly::Prepared;
 use context_input::Request;
 use serde::Serialize;
-use serde_json::{json,Value};
-use sqlx::{sqlite::{SqliteConnectOptions,SqlitePoolOptions},SqlitePool};
-use std::{path::Path,sync::{atomic::{AtomicU64,Ordering},Arc,OnceLock,RwLock},time::Duration};
-use tokio::sync::{mpsc,OwnedSemaphorePermit,Semaphore};
-static HEARTBEAT:tokio::sync::Semaphore=tokio::sync::Semaphore::const_new(1);
-const SNAPSHOT_QUEUE_BYTES:usize=64*1024*1024;
+use serde_json::{json, Value};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    SqlitePool,
+};
+use std::{
+    path::Path,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, OnceLock, RwLock,
+    },
+    time::Duration,
+};
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
+use webagent_context::{
+    accounting as context_accounting, assembly as context_assembly,
+    compaction as context_compaction, input as context_input,
+};
+static HEARTBEAT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+const SNAPSHOT_QUEUE_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Clone)]
 pub struct Settings {
     pub config: Config,
@@ -32,7 +49,7 @@ impl Settings {
         }
     }
 }
-pub struct Recorder<S:SnapshotStore> {
+pub struct Recorder<S: SnapshotStore> {
     pool: SqlitePool,
     settings: RwLock<Settings>,
     tx: mpsc::Sender<Value>,
@@ -43,7 +60,7 @@ pub struct Recorder<S:SnapshotStore> {
     skipped: AtomicU64,
     role: String,
 }
-pub struct Snapshot<S:SnapshotStore> {
+pub struct Snapshot<S: SnapshotStore> {
     store: S,
     payload: Value,
     bytes: usize,
@@ -93,11 +110,11 @@ pub fn identifier(value: &Value) -> Value {
         .unwrap_or(Value::Null)
 }
 
-pub fn scope<S:SnapshotStore>(store: &S) -> bool {
+pub fn scope<S: SnapshotStore>(store: &S) -> bool {
     store.current_user_id() == "admin"
 }
 
-pub fn settings<S:SnapshotStore>(recorder:Option<&Recorder<S>>) -> Option<Settings> {
+pub fn settings<S: SnapshotStore>(recorder: Option<&Recorder<S>>) -> Option<Settings> {
     recorder?.settings.read().ok().map(|s| s.clone())
 }
 
@@ -119,7 +136,7 @@ pub fn permits(settings: &Settings, category: &str) -> bool {
         }
 }
 
-pub async fn init<S:SnapshotStore>(cell: &'static OnceLock<Recorder<S>>, root: &Path, role: &str) {
+pub async fn init<S: SnapshotStore>(cell: &'static OnceLock<Recorder<S>>, root: &Path, role: &str) {
     if cell.get().is_some() {
         return;
     }
@@ -159,21 +176,23 @@ pub async fn init<S:SnapshotStore>(cell: &'static OnceLock<Recorder<S>>, root: &
                 continue;
             }
             if persist(&pool, &event).await.is_err() {
-                cell
-                    .get()
-                    .unwrap()
+                cell.get()
+                    .expect("recorder is set before its writers start")
                     .write_errors
                     .fetch_add(1, Ordering::Relaxed);
             }
         }
     });
-    let pool = cell.get().unwrap().pool.clone();
+    let pool = cell
+        .get()
+        .expect("recorder is set before its writers start")
+        .pool
+        .clone();
     tokio::spawn(async move {
         while let Some(snapshot) = sx.recv().await {
             if persist_snapshot(cell.get(), &pool, snapshot).await.is_err() {
-                cell
-                    .get()
-                    .unwrap()
+                cell.get()
+                    .expect("recorder is set before its writers start")
                     .write_errors
                     .fetch_add(1, Ordering::Relaxed);
             }
@@ -222,16 +241,18 @@ pub async fn init<S:SnapshotStore>(cell: &'static OnceLock<Recorder<S>>, root: &
     });
 }
 
-#[cfg(any(test,feature="test-support"))]
+#[cfg(any(test, feature = "test-support"))]
 pub fn seed(path: &Path) -> std::io::Result<()> {
     use std::io::Write;
-    std::fs::create_dir_all(path.parent().unwrap())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
     {
-        Ok(mut file) => file.write_all(include_bytes!("../../../config/diagnostics.json")),
+        Ok(mut file) => file.write_all(include_bytes!("diagnostics.json")),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(e),
     }
@@ -248,7 +269,7 @@ pub fn reader(folder: &Path) -> anyhow::Result<SqlitePool> {
         .connect_lazy_with(options))
 }
 
-#[cfg(any(test,feature="test-support"))]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn open(root: &Path) -> anyhow::Result<SqlitePool> {
     let dir = root.join("diagnostics");
     tokio::fs::create_dir_all(&dir).await?;
@@ -288,7 +309,11 @@ pub async fn persist(_pool: &SqlitePool, event: &Value) -> anyhow::Result<()> {
     bridge::send("event", event.clone(), None).await
 }
 
-pub async fn persist_snapshot<S:SnapshotStore>(recorder: Option<&Recorder<S>>, pool: &SqlitePool, snapshot: Snapshot<S>) -> anyhow::Result<()> {
+pub async fn persist_snapshot<S: SnapshotStore>(
+    recorder: Option<&Recorder<S>>,
+    pool: &SqlitePool,
+    snapshot: Snapshot<S>,
+) -> anyhow::Result<()> {
     let Some(s) = settings(recorder) else {
         return Ok(());
     };
@@ -322,7 +347,7 @@ pub fn snapshot_allowed(s: &Settings, payload: &Value) -> bool {
             .selected(payload["session_id"].as_str().unwrap_or(""), crate::now())
 }
 
-#[cfg(any(test,feature="test-support"))]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn insert_snapshot(
     pool: &SqlitePool,
     payload: &Value,
@@ -337,7 +362,7 @@ pub async fn insert_snapshot(
     Ok(())
 }
 
-#[cfg(any(test,feature="test-support"))]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn prune(pool: &SqlitePool, config: &Config) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM diagnostics WHERE id IN (SELECT id FROM diagnostics WHERE ts<? ORDER BY id LIMIT 1000)")
@@ -352,7 +377,7 @@ pub async fn prune(pool: &SqlitePool, config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn emit<S:SnapshotStore>(recorder: Option<&Recorder<S>>, event: Value) {
+pub fn emit<S: SnapshotStore>(recorder: Option<&Recorder<S>>, event: Value) {
     if let Some(r) = recorder {
         if r.tx.try_send(event).is_err() {
             r.dropped.fetch_add(1, Ordering::Relaxed);
@@ -360,19 +385,29 @@ pub fn emit<S:SnapshotStore>(recorder: Option<&Recorder<S>>, event: Value) {
     }
 }
 
-pub fn provider_enabled<S:SnapshotStore>(recorder: Option<&Recorder<S>>, store: &S) -> bool {
-    scope(store) && bridge::available() && settings(recorder).is_some_and(|s| permits(&s, "provider"))
+pub fn provider_enabled<S: SnapshotStore>(recorder: Option<&Recorder<S>>, store: &S) -> bool {
+    scope(store)
+        && bridge::available()
+        && settings(recorder).is_some_and(|s| permits(&s, "provider"))
 }
 
-pub fn failure<S:SnapshotStore>(recorder: Option<&Recorder<S>>, store: &S, run: &Value, error: &anyhow::Error, action: &str) {
+pub fn failure<S: SnapshotStore>(
+    recorder: Option<&Recorder<S>>,
+    store: &S,
+    run: &Value,
+    error: &anyhow::Error,
+    action: &str,
+) {
     if !scope(store) {
         return;
     }
-    let Some(s) = settings(recorder).filter(|s| bridge::available() && permits(s, "provider")) else {
+    let Some(s) = settings(recorder).filter(|s| bridge::available() && permits(s, "provider"))
+    else {
         return;
     };
     let failure = error.downcast_ref::<webagent_models::provider::ProviderFailure>();
-    emit(recorder,
+    emit(
+        recorder,
         json!({"category":"provider","level":"error","owner":"admin","config_digest":s.digest,"message":"Model request failed",
   "run_id":identifier(&run["id"]),"session_id":identifier(&run["session_id"]),
   "provider":serde_json::from_value::<webagent_models::provider::ProviderId>(run["provider_selection"]["provider"].clone()).ok(),
@@ -382,7 +417,14 @@ pub fn failure<S:SnapshotStore>(recorder: Option<&Recorder<S>>, store: &S, run: 
     );
 }
 
-pub fn committed<S:SnapshotStore>(recorder: Option<&Recorder<S>>, store: &S, run: &Value, kind: &str, recovery: bool, project_failure: impl FnOnce(&Value)->Value) {
+pub fn committed<S: SnapshotStore>(
+    recorder: Option<&Recorder<S>>,
+    store: &S,
+    run: &Value,
+    kind: &str,
+    recovery: bool,
+    project_failure: impl FnOnce(&Value) -> Value,
+) {
     if !scope(store) || !bridge::available() {
         return;
     }
@@ -394,7 +436,13 @@ pub fn committed<S:SnapshotStore>(recorder: Option<&Recorder<S>>, store: &S, run
     }
 }
 
-pub fn transition(s: &Settings, run: &Value, kind: &str, recovery: bool, project_failure: impl FnOnce(&Value)->Value) -> Option<Value> {
+pub fn transition(
+    s: &Settings,
+    run: &Value,
+    kind: &str,
+    recovery: bool,
+    project_failure: impl FnOnce(&Value) -> Value,
+) -> Option<Value> {
     let category = if recovery {
         "recovery"
     } else {
@@ -434,7 +482,8 @@ pub fn transition(s: &Settings, run: &Value, kind: &str, recovery: bool, project
     )
 }
 
-pub fn assembly<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
+pub fn assembly<S: SnapshotStore>(
+    recorder: Option<&Recorder<S>>,
     store: &S,
     run: &Value,
     request: &Request<'_>,
@@ -448,16 +497,27 @@ pub fn assembly<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
             ("failed", code, stage)
         }
     };
-    capture_attempt(recorder, store, run, request, outcome, code, stage, Some(prepared))
+    capture_attempt(
+        recorder,
+        store,
+        run,
+        request,
+        outcome,
+        code,
+        stage,
+        Some(prepared),
+    )
 }
 
-pub fn summary<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
+pub fn summary<S: SnapshotStore>(
+    recorder: Option<&Recorder<S>>,
     store: &S,
     run: &Value,
     request: &Request<'_>,
     result: &anyhow::Result<()>,
 ) -> Option<Value> {
-    capture_attempt(recorder,
+    capture_attempt(
+        recorder,
         store,
         run,
         request,
@@ -472,7 +532,8 @@ pub fn summary<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
     )
 }
 
-pub fn capture_attempt<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
+pub fn capture_attempt<S: SnapshotStore>(
+    recorder: Option<&Recorder<S>>,
     store: &S,
     run: &Value,
     request: &Request<'_>,
@@ -684,7 +745,8 @@ pub fn measure(request: &Request<'_>) -> Value {
    "unmatched_calls_or_results":unmatched,"source_limit_rejections":source_rejections,"tail_byte_rejections":tail_rejections,"tail_character_rejections":tail_character_rejections,"history_triggered":characters.iter().sum::<usize>()>request.compaction.trigger_tokens*request.compaction.characters_per_token}})
 }
 
-pub fn validation<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
+pub fn validation<S: SnapshotStore>(
+    recorder: Option<&Recorder<S>>,
     store: &S,
     run: &Value,
     code: &'static str,
@@ -702,7 +764,7 @@ pub fn validation<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
     Some(event)
 }
 
-pub fn status_value<S:SnapshotStore>(r: &Recorder<S>) -> Value {
+pub fn status_value<S: SnapshotStore>(r: &Recorder<S>) -> Value {
     let s = settings(Some(r)).unwrap_or(Settings {
         config: Config::disabled(),
         digest: None,
@@ -715,14 +777,15 @@ pub fn status_value<S:SnapshotStore>(r: &Recorder<S>) -> Value {
   "dropped":r.dropped.load(Ordering::Relaxed),"write_errors":r.write_errors.load(Ordering::Relaxed),"skipped_snapshots":r.skipped.load(Ordering::Relaxed)})
 }
 
-pub async fn heartbeat<S:SnapshotStore>(r: &Recorder<S>) -> anyhow::Result<()> {
+pub async fn heartbeat<S: SnapshotStore>(r: &Recorder<S>) -> anyhow::Result<()> {
     if !bridge::available() {
         return Ok(());
     }
     bridge::send("heartbeat", status_value(r), None).await
 }
 
-pub async fn read<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
+pub async fn read<S: SnapshotStore>(
+    recorder: Option<&Recorder<S>>,
     filter: Filter,
 ) -> Result<Value, Error> {
     let Some(r) = recorder else {
@@ -759,16 +822,13 @@ pub async fn read<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
     )
 }
 
-pub async fn status<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
-) -> Result<Value, Error> {
+pub async fn status<S: SnapshotStore>(recorder: Option<&Recorder<S>>) -> Result<Value, Error> {
     let Some(r) = recorder else {
         return Ok(json!({"available":false,"enabled":false}));
     };
     let folder = bridge::folder();
     if !folder.join("logs.db").is_file() {
-        return Ok(
-            json!({"available":false,"current_process":status_value(r)}),
-        );
+        return Ok(json!({"available":false,"current_process":status_value(r)}));
     }
     let pool = reader(&folder)?;
     let rows: Vec<(String, i64, String)> =
@@ -792,7 +852,8 @@ pub async fn status<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
     )
 }
 
-pub async fn context<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
+pub async fn context<S: SnapshotStore>(
+    recorder: Option<&Recorder<S>>,
     store: &S,
     sid: &str,
     rid: &str,
@@ -821,7 +882,7 @@ pub async fn context<S:SnapshotStore>(recorder: Option<&Recorder<S>>,
     read_snapshot(&pool, store, sid, rid, attempt).await
 }
 
-pub async fn read_snapshot<S:SnapshotStore>(
+pub async fn read_snapshot<S: SnapshotStore>(
     pool: &SqlitePool,
     store: &S,
     sid: &str,
@@ -850,7 +911,11 @@ pub async fn read_snapshot<S:SnapshotStore>(
     Ok(value)
 }
 
-#[cfg(any(test,feature="test-support"))]
-pub fn test_pool<S:SnapshotStore>(recorder:&Recorder<S>)->&SqlitePool {&recorder.pool}
-#[cfg(any(test,feature="test-support"))]
-pub fn test_write_errors<S:SnapshotStore>(recorder:&Recorder<S>)->u64 {recorder.write_errors.load(Ordering::Relaxed)}
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_pool<S: SnapshotStore>(recorder: &Recorder<S>) -> &SqlitePool {
+    &recorder.pool
+}
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_write_errors<S: SnapshotStore>(recorder: &Recorder<S>) -> u64 {
+    recorder.write_errors.load(Ordering::Relaxed)
+}

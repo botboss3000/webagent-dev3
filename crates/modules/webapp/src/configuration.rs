@@ -71,9 +71,22 @@ pub fn validate_app_settings(settings: &Value) -> Result<()> {
     }
     Ok(())
 }
-/// Match Storage's existing missing-file fallback without taking over encryption policy.
-fn app_settings(root: &Path) -> Result<Value> {
-    match std::fs::read(root.join("config/app-settings.json")) {
+/// The live UI settings file (`live-files.json`), relative to the checkout. Instance-only
+/// settings (database encryption, trusted proxies) stay in the state root's app-settings.json.
+pub const LIVE_SETTINGS: &str = "crates/modules/webapp/app-settings.json";
+
+/// UI settings from `settings`: the live file when relative, that exact file when absolute
+/// (fixtures). A missing file means defaults.
+pub fn app_settings(settings: &Path) -> Result<Value> {
+    let valid = |bytes: &[u8]| -> Result<()> {
+        let value: Value = serde_json::from_slice(bytes)?;
+        validate_app_settings(&value)?;
+        if !value.is_object() {
+            return Err(anyhow!("app-settings.json must be an object"));
+        }
+        Ok(())
+    };
+    match webagent_configuration::live::read_path(settings, 64 * 1024, valid) {
         Ok(bytes) => {
             let value: Value = serde_json::from_slice(&bytes)?;
             if !value.is_object() {
@@ -81,12 +94,13 @@ fn app_settings(root: &Path) -> Result<Value> {
             }
             Ok(value)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
-        Err(e) => Err(e.into()),
+        Err(error) if webagent_configuration::live::missing(&error) => Ok(json!({})),
+        Err(error) => Err(error),
     }
 }
-pub fn live_root(state: &Path, ui: &Path) -> Option<PathBuf> {
-    (app_settings(state).is_ok_and(|s| s["development"]["live_ui_editing"].as_bool() == Some(true))
+pub fn live_root(settings: &Path, ui: &Path) -> Option<PathBuf> {
+    (app_settings(settings)
+        .is_ok_and(|s| s["development"]["live_ui_editing"].as_bool() == Some(true))
         && ui.is_dir()
         && !ui.is_symlink())
     .then(|| ui.to_path_buf())
@@ -97,15 +111,20 @@ pub enum Error {
     Settings(anyhow::Error),
 }
 /// Preserve the UI API's bounded status and public error messages.
-pub async fn ui_config(chat_path: &Path, state: &Path) -> Result<Value, Error> {
+pub async fn ui_config(chat_path: &Path, settings: &Path) -> Result<Value, Error> {
     use axum::http::StatusCode;
-    let valid = |bytes: &[u8]| serde_json::from_slice::<Value>(bytes).map(|_| ()).map_err(Into::into);
-    let bytes = webagent_configuration::live::read_path(chat_path, 4 * 1024 * 1024, valid).map_err(|_| {
-        Error::Http(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Chat UI configuration unavailable",
-        )
-    })?;
+    let valid = |bytes: &[u8]| {
+        serde_json::from_slice::<Value>(bytes)
+            .map(|_| ())
+            .map_err(Into::into)
+    };
+    let bytes = webagent_configuration::live::read_path(chat_path, 4 * 1024 * 1024, valid)
+        .map_err(|_| {
+            Error::Http(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Chat UI configuration unavailable",
+            )
+        })?;
     let chat_ui: Value = serde_json::from_slice(&bytes).map_err(|_| {
         Error::Http(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -118,7 +137,7 @@ pub async fn ui_config(chat_path: &Path, state: &Path) -> Result<Value, Error> {
             "Chat UI configuration invalid",
         ));
     }
-    let settings = app_settings(state).map_err(Error::Settings)?;
+    let settings = app_settings(settings).map_err(Error::Settings)?;
     let start_zone_px = pull_refresh_start_zone(&settings).map_err(Error::Settings)?;
     let panel = chat_panel(&settings).map_err(Error::Settings)?;
     let full_height = mobile_full_height(&settings).map_err(Error::Settings)?;
@@ -177,7 +196,7 @@ mod tests {
             let settings = json!({"ui":{"chat_panel":panel},"private":"never project"});
             validate_app_settings(&settings).unwrap();
             std::fs::write(&path, settings.to_string()).unwrap();
-            let result = ui_config(&chat, root.path()).await.unwrap();
+            let result = ui_config(&chat, &path).await.unwrap();
             assert_eq!(
                 result["app_ui"]["chat_panel"],
                 json!({"width":width,"unit":unit})
@@ -195,7 +214,7 @@ mod tests {
             let settings = json!({"ui":{"chat_panel":panel}});
             assert!(validate_app_settings(&settings).is_err());
             std::fs::write(&path, settings.to_string()).unwrap();
-            assert!(ui_config(&chat, root.path()).await.is_err());
+            assert!(ui_config(&chat, &path).await.is_err());
         }
     }
     #[tokio::test]
@@ -213,7 +232,7 @@ mod tests {
         for zone in [50.0, 0.0, 200.0, 12.5] {
             let value = json!({"ui":{"pull_to_refresh":{"start_zone_px":zone}},"admin_database_encryption":{"enabled":true},"private_marker":"private"});
             std::fs::write(&settings, value.to_string()).unwrap();
-            let result = ui_config(&chat, root.path()).await.unwrap();
+            let result = ui_config(&chat, &settings).await.unwrap();
             assert_eq!(
                 result["app_ui"],
                 json!({"chat_panel":{"width":45.0,"unit":"%"},"pull_to_refresh":{"start_zone_px":zone},"mobile_mode":{"full_height":false}})
@@ -234,7 +253,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            ui_config(&chat, root.path()).await.unwrap()["app_ui"]["mobile_mode"],
+            ui_config(&chat, &settings).await.unwrap()["app_ui"]["mobile_mode"],
             json!({"full_height":true})
         );
         for value in [
@@ -245,25 +264,25 @@ mod tests {
             assert!(validate_app_settings(&value).is_err());
         }
         std::fs::write(&settings, "{").unwrap();
-        assert!(ui_config(&chat, root.path()).await.is_err());
+        assert!(ui_config(&chat, &settings).await.is_err());
         std::fs::write(&settings, "{}").unwrap();
         assert_eq!(
-            ui_config(&chat, root.path()).await.unwrap()["app_ui"]["pull_to_refresh"]
+            ui_config(&chat, &settings).await.unwrap()["app_ui"]["pull_to_refresh"]
                 ["start_zone_px"],
             50.0
         );
         assert_eq!(
-            ui_config(&chat, root.path()).await.unwrap()["app_ui"]["mobile_mode"]["full_height"],
+            ui_config(&chat, &settings).await.unwrap()["app_ui"]["mobile_mode"]["full_height"],
             false
         );
         std::fs::write(&chat, "{}").unwrap();
         assert!(matches!(
-            ui_config(&chat, root.path()).await.unwrap_err(),
+            ui_config(&chat, &settings).await.unwrap_err(),
             Error::Http(axum::http::StatusCode::INTERNAL_SERVER_ERROR, _)
         ));
         std::fs::remove_file(&chat).unwrap();
         assert!(matches!(
-            ui_config(&chat, root.path()).await.unwrap_err(),
+            ui_config(&chat, &settings).await.unwrap_err(),
             Error::Http(axum::http::StatusCode::SERVICE_UNAVAILABLE, _)
         ));
     }

@@ -327,8 +327,8 @@ timer state. Historical pending entries above are superseded by this evidence.
 
 ### Configurable background recovery cadence, 2026-10-15
 
-The host reads scheduler.background_rescan_interval_ms from the data-root
-config/loop-runtime.json. Missing fields retain the 5000 ms bootstrap default;
+The host reads scheduler.background_rescan_interval_ms from the live
+crates/modules/engine/loop-runtime.json. Missing fields retain the 5000 ms bootstrap default;
 explicit values accept every positive u64 whole-millisecond interval without a
 five-second ceiling. Source publication preserves saved runtime configuration.
 Typed loop-settings and generic configuration writes emit wake hints; scheduler

@@ -10,7 +10,7 @@ use std::path::Path;
 use tower::ServiceExt;
 
 pub(super) async fn live_ui(
-    State(app): State<crate::App>,
+    State(_app): State<crate::App>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -20,7 +20,7 @@ pub(super) async fn live_ui(
         || path.starts_with("/v3-ui/")
     {
         if let Some(ui) = webagent_webapp::configuration::live_root(
-            &app.store.root,
+            Path::new(webagent_webapp::configuration::LIVE_SETTINGS),
             Path::new("/live-checkout/ui"),
         ) {
             return webagent_webapp::pages::routes(&ui)
@@ -31,14 +31,16 @@ pub(super) async fn live_ui(
     }
     next.run(request).await
 }
-pub async fn catalog(State(app): State<crate::App>) -> Result<Json<Value>, (StatusCode, String)> {
-    let ui =
-        webagent_webapp::configuration::live_root(&app.store.root, Path::new("/live-checkout/ui"))
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(
-                    std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into()),
-                )
-            });
+pub async fn catalog(State(_app): State<crate::App>) -> Result<Json<Value>, (StatusCode, String)> {
+    let ui = webagent_webapp::configuration::live_root(
+        Path::new(webagent_webapp::configuration::LIVE_SETTINGS),
+        Path::new("/live-checkout/ui"),
+    )
+    .unwrap_or_else(|| {
+        std::path::PathBuf::from(
+            std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into()),
+        )
+    });
     let packages = crate::modules::package_ids()
         .into_iter()
         .filter(|id| crate::modules::available(id))

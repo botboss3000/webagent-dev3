@@ -22,7 +22,7 @@ export const runtimeHelp = {
 };
 export function renderRuntimeReference(host, config) {
  host.replaceChildren();
- const note=document.createElement('p');note.textContent='Current saved values from config/loop-runtime.json. The five settings above are editable here; other values are shown for reference. Only scheduler concurrency treats blank or zero as unlimited.';host.append(note);
+ const note=document.createElement('p');note.textContent='Current saved values from the live file crates/modules/engine/loop-runtime.json. The five settings above are editable here; other values are shown for reference. Only scheduler concurrency treats blank or zero as unlimited.';host.append(note);
  const table=document.createElement('table');const header=document.createElement('tr');
  for(const text of ['Setting / saved value','Function','Where used / when applied']){const th=document.createElement('th');th.scope='col';th.textContent=text;header.append(th);}
  const thead=document.createElement('thead');thead.append(header);table.append(thead);

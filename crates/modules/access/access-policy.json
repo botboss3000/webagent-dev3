@@ -1,0 +1,111 @@
+{
+  "registration": "open",
+  "revision": 43,
+  "tier_names": {
+    "anonymous": "Anonymous",
+    "basic": "Base",
+    "operator": "Admin"
+  },
+  "tier_order": [
+    "operator",
+    "basic",
+    "anonymous"
+  ],
+  "tiers": {
+    "anonymous": {
+      "ability_permissions": {
+        "front_desk": "auto",
+        "managed_knowledge_files": "auto",
+        "web_access": "auto"
+      },
+      "allowed_models": [
+        "deepseek-flash"
+      ],
+      "id": "anonymous",
+      "max_active_runs": 2,
+      "max_sessions": 10,
+      "model_policy": null,
+      "revision": 3,
+      "tools": {
+        "business_profile_get": "auto",
+        "get_weather": "auto",
+        "knowledge_file_get": "auto",
+        "knowledge_file_list": "auto",
+        "knowledge_file_search": "auto",
+        "lead_capture": "auto",
+        "maps_geocode": "auto",
+        "offer_choices": "auto",
+        "request_human": "auto",
+        "web_search": "auto"
+      }
+    },
+    "basic": {
+      "ability_permissions": {
+        "front_desk": "auto",
+        "managed_knowledge_files": "auto",
+        "web_access": "auto"
+      },
+      "allowed_models": [
+        "deepseek-flash"
+      ],
+      "id": "basic",
+      "max_active_runs": 2,
+      "max_sessions": 10,
+      "model_policy": null,
+      "revision": 3,
+      "tools": {
+        "business_profile_get": "auto",
+        "get_weather": "auto",
+        "knowledge_file_get": "auto",
+        "knowledge_file_list": "auto",
+        "knowledge_file_search": "auto",
+        "lead_capture": "auto",
+        "maps_geocode": "auto",
+        "offer_choices": "auto",
+        "request_human": "auto",
+        "web_search": "auto"
+      }
+    },
+    "operator": {
+      "ability_permissions": {
+        "agent_management": "auto",
+        "agent_orchestration": "auto",
+        "app_control": "auto",
+        "automation": "auto",
+        "base": "auto",
+        "code_index": "auto",
+        "codebase_admin": "auto",
+        "create_tools": "auto",
+        "decision": "auto",
+        "diagnostics": "auto",
+        "front_desk": "auto",
+        "git_control": "auto",
+        "image_generation": "auto",
+        "image_vision": "auto",
+        "managed_knowledge_files": "auto",
+        "mcp": "auto",
+        "model_switcher": "auto",
+        "optimization": "auto",
+        "remote_tunnel": "auto",
+        "terminal_control": "auto",
+        "ui_admin": "auto",
+        "user_files": "auto",
+        "v3_build": "auto",
+        "v3_workspace": "auto",
+        "visualizer": "auto",
+        "web_access": "auto"
+      },
+      "allowed_models": [
+        "*"
+      ],
+      "id": "operator",
+      "max_active_runs": 200,
+      "max_sessions": 10000,
+      "model_policy": null,
+      "revision": 11,
+      "tools": {
+        "*": "auto"
+      }
+    }
+  }
+}
