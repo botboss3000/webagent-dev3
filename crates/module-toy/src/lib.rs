@@ -1,4 +1,5 @@
 //! A toy module: one interface it serves and one host port it calls back.
+//! Released through the module lane: an edit here rebuilds only this service.
 use anyhow::{bail, Result};
 use std::time::Duration;
 use webagent_module_service::module_interface;

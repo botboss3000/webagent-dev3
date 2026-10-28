@@ -16,7 +16,7 @@
   "executable": "artifact/webagent-toy-service",
   "group": "module",
   "id": "module-toy",
-  "implementation_version": "0.1.0",
+  "implementation_version": "0.1.1",
   "interface_version": 1,
   "limits": {
     "max_concurrency": 1,
