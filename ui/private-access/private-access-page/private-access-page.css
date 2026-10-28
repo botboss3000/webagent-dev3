@@ -198,6 +198,8 @@ body.app-restricted #session-new-header-btn { display: none !important; }
 .private-access-sign-in #register-toggle {background:transparent;color:var(--accent);font-size:12px;}
 #login-title {color:var(--fg-2);font-weight:600;font-size:13px;}
 #registration-status {color:var(--fg-3);font-size:12px;margin:0;}
+/* Sits directly below Sign in; takes no gap while it has nothing to say. */
+#registration-status:empty {display:none;}
 /* app.js toggles error state without collapsing the sign-in host. */
 #registration-status.is-error, .private-access-sign-in .password-error {color:var(--danger);font-size:12px;margin:0;}
 .private-access-sign-in .password-error[hidden] {display:none;}

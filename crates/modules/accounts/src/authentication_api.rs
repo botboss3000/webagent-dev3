@@ -48,7 +48,7 @@ pub async fn login<C: RecordCodec, H: Host>(
     {
         return Err(Error::Public(
             StatusCode::TOO_MANY_REQUESTS,
-            "Try signing in again in one minute".into(),
+            "Too many sign-in attempts. Try again in 1 minute.".into(),
         ));
     }
     let protection = crate::LoginProtection::from_policy(&host.registration_policy()?)?;
@@ -75,7 +75,7 @@ fn blocked(retry_after: u64) -> Response {
     let mut response = (
         StatusCode::TOO_MANY_REQUESTS,
         Json(json!({
-            "error": format!("Too many failed sign-ins; try again in {retry_after} seconds"),
+            "error": format!("Too many failed sign-ins. Try again in {}.", wait_text(retry_after)),
             "retry_after": retry_after,
         })),
     )
@@ -84,6 +84,15 @@ fn blocked(retry_after: u64) -> Response {
         .headers_mut()
         .insert("retry-after", HeaderValue::from(retry_after));
     response
+}
+/// A wait as people say it: whole minutes once it reaches a minute, rounded up.
+fn wait_text(seconds: u64) -> String {
+    match seconds {
+        0..=1 => "1 second".to_owned(),
+        2..=59 => format!("{seconds} seconds"),
+        60 => "1 minute".to_owned(),
+        _ => format!("{} minutes", seconds.div_ceil(60)),
+    }
 }
 // Registration has already passed its independent admission window.
 pub(crate) async fn login_admitted<C: RecordCodec, H: Host>(
@@ -216,4 +225,21 @@ pub async fn logout<C: RecordCodec>(
         HeaderValue::from_static("v3_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"),
     );
     Ok(response)
+}
+
+#[cfg(test)]
+mod wait_text_tests {
+    #[test]
+    fn waits_read_as_people_say_them() {
+        for (seconds, text) in [
+            (1, "1 second"),
+            (45, "45 seconds"),
+            (60, "1 minute"),
+            (61, "2 minutes"),
+            (120, "2 minutes"),
+            (3600, "60 minutes"),
+        ] {
+            assert_eq!(super::wait_text(seconds), text);
+        }
+    }
 }
