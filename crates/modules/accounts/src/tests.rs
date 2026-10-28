@@ -57,7 +57,7 @@ impl Fixture {
         f.repo().initialize().await.unwrap();
         f
     }
-    fn repo(&self) -> Repository<'_, Codec> {
+    fn repo(&self) -> Repository<'_, &Codec> {
         Repository::new(&self.pool, &self.codec)
     }
     async fn active(&self, name: &str) -> String {
@@ -664,7 +664,7 @@ fn fixture_user_access() -> InitialAccess<'static> {
         profile_is_admin: false,
     }
 }
-impl Repository<'_, Codec> {
+impl Repository<'_, &Codec> {
     async fn fixture_user(&self, username: &str, hash: &str) -> Result<Value> {
         self.create_user_account(username, hash, fixture_user_access())
             .await
@@ -699,7 +699,7 @@ impl Repository<'_, Codec> {
     }
 }
 
-impl Repository<'_, Codec> {
+impl Repository<'_, &Codec> {
     async fn fixture_session(
         &self,
         user: &str,
@@ -1014,7 +1014,7 @@ fn controller_token(headers: &axum::http::HeaderMap) -> String {
         .into()
 }
 async fn controller_identity(
-    repo: &Repository<'_, Codec>,
+    repo: &Repository<'_, &Codec>,
     token: &str,
     now: u64,
     mode: RegistrationMode,

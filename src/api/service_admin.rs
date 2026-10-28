@@ -1,5 +1,7 @@
 //! Startup-only installation service administration. Browser middleware owns CSRF.
 //! Agent administrators cannot manage these records and updates do not stop current work.
+#[cfg(test)]
+use webagent_accounts_host::AccountsStore;
 use crate::State;
 use crate::{App,Api,ApiError,services};
 use axum::{Extension,Json,Router,routing::get,http::StatusCode};

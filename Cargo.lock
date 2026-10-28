@@ -2219,6 +2219,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-accounts-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "webagent-access",
+ "webagent-accounts",
+ "webagent-host-core",
+]
+
+[[package]]
 name = "webagent-agents"
 version = "0.1.0"
 dependencies = [
@@ -2526,6 +2540,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-host-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "webagent-accounts",
+ "webagent-chat",
+ "webagent-configuration",
+ "webagent-models",
+ "webagent-storage",
+]
+
+[[package]]
 name = "webagent-manager"
 version = "0.1.0"
 dependencies = [
@@ -2742,6 +2775,7 @@ dependencies = [
  "webagent-abilities",
  "webagent-access",
  "webagent-accounts",
+ "webagent-accounts-host",
  "webagent-agents",
  "webagent-assets-contracts",
  "webagent-background-contracts",
@@ -2758,6 +2792,7 @@ dependencies = [
  "webagent-diagnostics",
  "webagent-engine",
  "webagent-files",
+ "webagent-host-core",
  "webagent-manager",
  "webagent-model-discovery",
  "webagent-models",

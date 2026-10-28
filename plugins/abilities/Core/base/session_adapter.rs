@@ -1,5 +1,7 @@
 //! Native reads are confined to the caller-owned session supplied by Rust.
 //! No tool argument can select a different user, session, database or private interaction.
+#[cfg(test)]
+use webagent_accounts_host::AccountsStore;
 use crate::State;
 use crate::{App, attachment_get};
 use anyhow::{bail, Context, Result};

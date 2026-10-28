@@ -184,6 +184,42 @@ class CacheTests(unittest.TestCase):
         self.assertTrue(self.worker.seed_cargo_cache(self.job,blob,job/"output"))
         self.assertEqual(self.job["cargo_cache_seed"]["decision"],"identical_rust_inputs");self.assertEqual(self.job["cargo_cache_seed"]["files_newer"],0)
         self.assertEqual((job/"source/v3/src/main.rs").stat().st_mtime_ns,old)
+    def test_incremental_is_limited_to_dev_engine_phases(self):
+        """Every phase sharing a dev job's target agrees; shared, component, plugin and stable builds stay reproducible."""
+        dev={"cargo_incremental":True};stable={"cargo_incremental":False}
+        for profile in ("engine:rust1.90:compile_test","engine:rust1.90:test","engine:rust1.90:release","engine:rust1.90:focused-v2:x"):
+            self.assertEqual((module.Executor.incremental(dev,profile),module.Executor.incremental(stable,profile)),("1","0"))
+        for profile in ("compiled-dependencies:rust1.90:stub-v1","plugin:rust1.90:engine-x","cargo-dependencies:rust1.90:fetch-v1"):
+            self.assertEqual(module.Executor.incremental(dev,profile),"0")
+        self.assertEqual(module.Executor.incremental({},"engine:rust1.90:check"),"0")
+        self.assertIn("incremental-dev-v1",self.worker.compiler_recipe())
+    def test_dev_release_keeps_root_incremental_state_and_stable_still_cleans(self):
+        live=module.Executor.live_recipe
+        self.assertEqual(live(),live(False,False));self.assertIn("cargo clean --release --package webagent-v3",live()[-1])
+        self.assertNotIn("cargo clean",live(False,True)[-1]);self.assertIn("--release",live(False,True)[-1])
+        self.assertIn("cargo clean --profile stable --package webagent-v3",live(True,True)[-1])
+    def test_seed_copies_incremental_state_or_drops_it_when_disk_is_short(self):
+        import collections
+        previous,blob,job,_,_=self.changed_seed({"v3/src/main.rs":"fn main(){2;}"})
+        state=self.root/"execution"/previous/"output/target/debug/incremental/webagent_v3-1/s-1";state.mkdir(parents=True);(state/"query-cache.bin").write_bytes(b"x"*4096)
+        nested=self.root/"execution"/previous/"output/target/debug/deps/incremental";nested.mkdir();(nested/"keep").write_bytes(b"not rustc state")
+        self.assertTrue(self.worker.seed_cargo_cache(self.job,blob,job/"output"))
+        self.assertTrue((job/"output/target/debug/incremental/webagent_v3-1/s-1/query-cache.bin").is_file())
+        self.assertEqual((self.job["cargo_cache_seed"]["incremental"],self.job["cargo_cache_seed"]["incremental_bytes"]),("copied",4096))
+        usage=collections.namedtuple("usage","total used free")
+        for seeded in (False,True):
+            self.job={"job_id":str(uuid.uuid4())};output=self.root/uuid.uuid4().hex/"output";output.mkdir(parents=True)
+            fixtures.host.release.extract(output.parent/"source",blob,fixtures.host.context_digest)
+            size=sum(p.stat().st_size for p in (self.root/"execution"/previous/"output/target").rglob("*")if p.is_file())
+            with unittest.mock.patch.object(module.shutil,"disk_usage",return_value=usage(0,0,5*1024**3+size-4096+(0 if seeded else -1))):
+                self.assertEqual(self.worker.seed_cargo_cache(self.job,blob,output),seeded)
+            if seeded:
+                self.assertEqual(self.job["cargo_cache_seed"]["incremental"],"dropped_insufficient_disk")
+                self.assertFalse((output/"target/debug/incremental").exists());self.assertTrue((output/"target/debug/deps/incremental/keep").is_file())
+    def test_identical_inputs_never_seed_across_release_modes(self):
+        previous,blob,job,_,_=self.changed_seed({},status="completed")
+        self.job["release_mode"]="stable"
+        self.assertFalse(self.worker.seed_cargo_cache(self.job,blob,job/"output"))
     def test_runtime_roles_package_only_declared_artifacts_and_stream_to_disk(self):
         """Loop contexts exclude API registry and retained tests; API keeps its required closure."""
         import tarfile
@@ -290,6 +326,15 @@ class RealFeatureProfileTests(unittest.TestCase):
             self.assertIn("optional_implementation",live.stdout);self.assertIn("E0433",live.stdout)
 
 
+class ReplayArgvTests(unittest.TestCase):
+    def test_retained_proc_macro_tests_find_the_toolchain_libstd(self):
+        # Replaying a retained binary outside cargo needs the sysroot on the loader path, as cargo sets it.
+        import subprocess
+        argv=module.Executor.replay_argv("/bin/sh","-c",'printf %s "$LD_LIBRARY_PATH"')
+        self.assertEqual(argv[3:],["/bin/sh","-c",'printf %s "$LD_LIBRARY_PATH"'])
+        fake=argv[:2]+[argv[2].replace("$(rustc --print target-libdir)","/sysroot/lib/rustlib/x86_64-unknown-linux-gnu/lib")]+argv[3:]
+        self.assertEqual(subprocess.run(fake,capture_output=True,text=True,env={"PATH":"/usr/bin:/bin"}).stdout,"/sysroot/lib/rustlib/x86_64-unknown-linux-gnu/lib")
+
 class NativeBuilderPhaseTests(unittest.TestCase):
     """The real builder must provision verified bytes and test before publishing a binary."""
     def exercise(self, *, fail_tests=False, alter_registry=False, fail_proof=False):
@@ -315,7 +360,7 @@ class NativeBuilderPhaseTests(unittest.TestCase):
             if phase=='plugin_compile':
                 binary=cache/'target/release/fixture_runner';binary.parent.mkdir(parents=True);binary.write_bytes(b'tested executable')
                 if alter_registry:(cache/'cargo/registry/crate').write_bytes(b'altered crate')
-        runner.executor=types.SimpleNamespace(compiler_recipe=lambda:"fixture-mold-image",dependencies=lambda job,source,cache,**kw:provision(cache),phase=phase,artifact_hashes=module.Executor.artifact_hashes)
+        runner.executor=types.SimpleNamespace(compiler_recipe=lambda:"fixture-mold-image",plugin_compiler_recipe=lambda:"fixture-mold-image",dependencies=lambda job,source,cache,**kw:provision(cache),phase=phase,artifact_hashes=module.Executor.artifact_hashes)
         with patch.object(fixtures.host,'ASSET_ROOT',assets),patch.object(fixtures.host,'STATE',state):
             if fail_tests or alter_registry or fail_proof:
                 with self.assertRaisesRegex(ValueError,'native test failed' if fail_tests else 'lacks Mold'if fail_proof else 'changed verified dependency'):

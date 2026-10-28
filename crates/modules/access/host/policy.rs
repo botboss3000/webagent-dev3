@@ -1,4 +1,6 @@
 //! Root composition: Access owns the decisions, SQL and revisions.
+#[cfg(test)]
+use webagent_accounts_host::AccountsStore;
 use crate::store::Store;
 use crate::access::{self,Permission,Relationship};
 #[cfg(test)] use crate::access::{AccountStatus,Principal,Tier,ToolDecision,ToolFactors};

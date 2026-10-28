@@ -1,5 +1,7 @@
 //! Per-agent chat configuration overlays: agent-plane storage, effective documents for
 //! enforcement and UI serving, and the agent-manager API. Chat owns the merge rules.
+#[cfg(test)]
+use webagent_accounts_host::AccountsStore;
 use crate::{
     admin_agent_view, bad, conflict, json, now, Api, ApiError, App, Deserialize, Json, Path,
     PathBuf, Result, State, StatusCode, Store, Value,

@@ -352,6 +352,20 @@ starting objects only: all compiles, tests and smokes run on the captured inputs
 `cargo_cache_seed` in the job records the source job, decision, Rust inputs
 differing, target size and restored/newer file counts.
 
+Dev engine jobs compile incrementally (`cargo_incremental` in the job): every
+`engine:rust1.90:*` phase of the job runs `CARGO_INCREMENTAL=1`, because Cargo
+rebuilds every workspace crate when a shared target switches from 0 to 1, and the
+dev live compile and seeded jobs keep the root's incremental state instead of
+`cargo clean -p webagent-v3`. Stable releases, checks, dependency/workspace
+snapshots, engine components and plugins stay `CARGO_INCREMENTAL=0` (registry
+crates are never incremental, so the shared snapshot stays valid). Seeding never
+crosses release modes; it copies `target/<profile>/incremental` when free disk
+covers `disk_min_free_bytes` plus the whole target, drops only that state when
+just the rest fits (`incremental: dropped_insufficient_disk`), and otherwise
+starts cold. Reuse and proofs never relied on byte-reproducible binaries: cache
+receipts hash what was built and smokes compare results. The compiler recipe
+token `incremental-dev-v1` invalidated earlier caches once.
+
 ## Engine component reuse keys
 
 Each engine component's artifact is keyed by its crate closure plus digests of

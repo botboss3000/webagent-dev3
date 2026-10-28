@@ -1,3 +1,4 @@
+use webagent_accounts_host::AccountsStore;
 use super::*;
 fn enabled(sid: &str) -> Settings {
     let mut config = Config::disabled();

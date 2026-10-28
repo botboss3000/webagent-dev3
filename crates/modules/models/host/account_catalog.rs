@@ -1,4 +1,6 @@
 //! Root composition delegates Models domain and persistence to its independently compiled package.
+#[cfg(test)]
+use webagent_accounts_host::AccountsStore;
 pub use webagent_models::account_catalog::*;
 use crate::store::Store;
 use anyhow::Result;

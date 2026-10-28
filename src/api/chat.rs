@@ -1,4 +1,5 @@
 //! HTTP handlers for chat operations.
+use webagent_accounts_host::AccountsStore;
 use super::{
     access, anyhow, append_tool, assembled_agent_instructions, attachments, bad, conflict, digest,
     effective_policy, json, key, loop_runtime, marker, memory, model_selection, now,

@@ -31,12 +31,23 @@ pub trait RecordCodec: Sync {
     fn seal(&self, value: &Value) -> Result<Vec<u8>>;
     fn unseal(&self, value: &[u8]) -> Result<Value>;
 }
+// Repositories hold their codec by value so a host crate can pass a borrowed
+// handle wrapper (the orphan rule keeps it from implementing this trait on a
+// foreign storage type); plain references keep working through this impl.
+impl<T: RecordCodec + ?Sized> RecordCodec for &T {
+    fn seal(&self, value: &Value) -> Result<Vec<u8>> {
+        (**self).seal(value)
+    }
+    fn unseal(&self, value: &[u8]) -> Result<Value> {
+        (**self).unseal(value)
+    }
+}
 pub struct Repository<'a, C: RecordCodec> {
     app_pool: &'a SqlitePool,
-    codec: &'a C,
+    codec: C,
 }
 impl<'a, C: RecordCodec> Repository<'a, C> {
-    pub fn new(app_pool: &'a SqlitePool, codec: &'a C) -> Self {
+    pub fn new(app_pool: &'a SqlitePool, codec: C) -> Self {
         Self { app_pool, codec }
     }
     fn seal(&self, value: &Value) -> Result<Vec<u8>> {

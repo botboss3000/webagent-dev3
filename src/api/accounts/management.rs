@@ -2,14 +2,6 @@
 use crate::*;
 use axum::{extract::Path, Extension, Json};
 pub(crate) use webagent_accounts::api::{NewAccount, ProfileChange};
-impl From<webagent_accounts::api::Error> for ApiError {
-    fn from(error: webagent_accounts::api::Error) -> Self {
-        match error {
-            webagent_accounts::api::Error::Public(status, message) => Self(status, message),
-            webagent_accounts::api::Error::Storage(error) => Self::from(error),
-        }
-    }
-}
 impl webagent_accounts::api::Host for App {
     fn initial_guest_access(&self) -> webagent_accounts::InitialAccess<'_> {
         access::initial_guest_access()

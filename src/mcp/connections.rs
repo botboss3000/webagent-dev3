@@ -1,4 +1,5 @@
 //! Revisioned agent connection metadata and separate owner-bound credentials.
+use webagent_accounts_host::AccountsStore;
 use crate::State;
 use crate::{json, Api, ApiError, App, CancellationToken, Value};
 use axum::{

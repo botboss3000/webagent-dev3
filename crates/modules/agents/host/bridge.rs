@@ -1,4 +1,5 @@
 //! Borrow existing root resources; Access/Models/Storage/Engine retain their authority.
+use webagent_accounts_host::AccountsStore;
 use crate::{App, Store};
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
@@ -14,7 +15,7 @@ impl webagent_agents::service::Storage for Store {
         Store::agent_ids(self).await
     }
     async fn agent_pool(&self, agent: &str) -> Result<SqlitePool> {
-        Ok(self.for_agent(agent).await?.agent_pool)
+        Ok(self.for_agent(agent).await?.agent_pool.clone())
     }
     async fn creation_pool(&self, agent: &str) -> Result<SqlitePool> {
         crate::agent_storage::open_agent_pool(&self.root, agent).await

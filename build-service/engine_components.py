@@ -37,8 +37,14 @@ def package_path(path,entries):
     if path==ROOT+"catalog.json":return True
     for identity,registered in REGISTRY.items():
         if path.startswith(ROOT+identity+"/"):return True
-        if any(path=="v3/"+name or path.startswith("v3/"+name+"/")for name in registered["inputs"]if name.startswith("crates/")):return True
+        if any(path=="v3/"+name or path.startswith("v3/"+name+"/")and not nested_package(path,name,entries)
+            for name in registered["inputs"]if name.startswith("crates/")):return True
     return False
+
+def nested_package(path,name,entries):
+    """Whether path lies in a package nested inside input `name`; that crate is not part of this input."""
+    parts=path[len("v3/"+name+"/"):].split("/")[:-1]
+    return any("v3/"+name+"/"+"/".join(parts[:depth])+"/Cargo.toml"in entries for depth in range(1,len(parts)+1))
 
 def closure(root,identity=ID):
     """Expand local Cargo path dependencies, rejecting undeclared outside-workspace inputs."""
@@ -51,8 +57,11 @@ def closure(root,identity=ID):
         manifest=folder/"Cargo.toml"
         parsed=tomllib.loads(manifest.read_text())
         if parsed.get("package",{}).get("build"):raise ValueError("Engine build scripts require coordinated recipe review")
+        # A nested package (e.g. a module's host crate) is its own crate: it enters only as a path dependency.
+        nested=[m.parent for m in folder.rglob("Cargo.toml")if m.parent!=folder]
         for path in folder.rglob("*"):
             if path.is_symlink():raise ValueError("Engine source symlink")
+            if any(path.is_relative_to(n)for n in nested):continue
             if path.is_file():
                 relative=path.relative_to(root).as_posix()
                 if path.stat().st_size>16*1024*1024:raise ValueError("Engine source bound")

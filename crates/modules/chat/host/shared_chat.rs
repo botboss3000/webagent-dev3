@@ -1,4 +1,5 @@
 //! Shared conversation access keeps actor and storage-owner identities separate.
+use webagent_accounts_host::AccountsStore;
 use crate::{store::Store, App, key};
 use tokio_util::sync::CancellationToken;
 use std::time::Duration;

@@ -1,5 +1,6 @@
 //! Additive split of nondefault agent records from the original shared agent DB.
 //! The default agent keeps its existing path and all legacy rows remain for rollback.
+use webagent_accounts_host::AccountsStore;
 use crate::{access, store::{open_pool, Store}};
 use anyhow::{anyhow, bail, Result};
 use serde::Serialize;

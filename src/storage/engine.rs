@@ -9,8 +9,8 @@ impl Store {
  }
 }
 impl Records for Store {
- fn current_user_id(&self)->&str {Store::current_user_id(self)}
- fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {Store::encode_user_record(self,value)}
+ fn current_user_id(&self)->&str {StoreCore::current_user_id(self)}
+ fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {StoreCore::encode_user_record(self,value)}
  fn context_gate(&self)->&tokio::sync::RwLock<()> {&self.context_gate}
  fn invalidate(&self,keys:&[String]) {self.cache.lock().unwrap().invalidate(keys);}
  fn invalidate_context(&self,sid:&str) {self.context_cache.lock().unwrap().invalidate(&self.context_cache_key(sid));}
@@ -68,9 +68,9 @@ impl webagent_engine::runtime::ports::ScopedStorage for Store {
  fn user_pool(&self)->&SqlitePool{&self.pool}
  fn application_pool(&self)->&SqlitePool{&self.app_pool}
  fn agent_id(&self)->&str{&self.agent_id}
- fn configure_cache(&self,documents:usize,contexts:usize){Store::configure_cache(self,documents,contexts)}
+ fn configure_cache(&self,documents:usize,contexts:usize){StoreCore::configure_cache(self,documents,contexts)}
  fn for_user<'a>(&'a self,user:&'a str)->impl std::future::Future<Output=Result<Self>>+Send+'a{Store::for_user(self,user)}
- fn all_user_ids(&self)->impl std::future::Future<Output=Result<Vec<String>>>+Send{Store::all_user_ids(self)}
+ fn all_user_ids(&self)->impl std::future::Future<Output=Result<Vec<String>>>+Send{<StoreCore as webagent_accounts_host::AccountsStore>::all_user_ids(self)}
  fn get<'a>(&'a self,key:&'a str)->impl std::future::Future<Output=Result<Option<Value>>>+Send+'a{Store::get(self,key)}
  fn put<'a>(&'a self,key:&'a str,value:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a{Store::put(self,key,value)}
 }

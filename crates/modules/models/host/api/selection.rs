@@ -1,4 +1,6 @@
 //! Agent-scoped model administration. Installation oversight never implies credential ownership.
+#[cfg(test)]
+use webagent_accounts_host::AccountsStore;
 pub use webagent_models::api::selection::{ApiKey,Discovery};
 use crate::State;
 use crate::{App, Api, ApiError};

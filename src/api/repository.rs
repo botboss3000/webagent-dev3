@@ -1,4 +1,5 @@
 //! Tenant repository connections. Private tokens never enter API projections.
+use webagent_accounts_host::AccountsStore;
 use crate::State;
 use crate::{App, Api, ApiError};
 use axum::{extract::{Path}, http::StatusCode, Extension, Json};

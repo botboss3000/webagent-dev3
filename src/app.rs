@@ -29,49 +29,9 @@ struct App {
     message_api_token_hash: Option<[u8; 32]>,
     browser_login_bridge: Option<browser_login::Bridge>,
 }
-#[derive(Debug)]
-struct ApiError(StatusCode, String);
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        (self.0, Json(json!({"error":self.1}))).into_response()
-    }
-}
-impl From<anyhow::Error> for ApiError {
-    fn from(error: anyhow::Error) -> Self {
-        if error
-            .downcast_ref::<crate::store::session::RecycledSession>()
-            .is_some()
-        {
-            return ApiError(StatusCode::NOT_FOUND, "Session not found".into());
-        }
-        tracing::error!("Request storage or execution operation failed");
-        diagnostics::backend_error();
-        Self(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Operation failed; check development logs".into(),
-        )
-    }
-}
-type Api = std::result::Result<Json<Value>, ApiError>;
-fn bad(s: &str) -> ApiError {
-    ApiError(StatusCode::BAD_REQUEST, s.into())
-}
-fn conflict(s: &str) -> ApiError {
-    ApiError(StatusCode::CONFLICT, s.into())
-}
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock is after the Unix epoch")
-        .as_secs()
-}
-fn uuid() -> String {
-    Uuid::new_v4().to_string()
-}
+pub(crate) use webagent_host_core::{bad, conflict, now, uuid, Api, ApiError};
 use webagent_configuration::digest;
-fn key(prefix: &str, id: &str) -> String {
-    format!("{prefix}:{id}")
-}
+use webagent_host_core::key;
 fn terminal(status: &str) -> bool {
     webagent_engine::runtime::failure::terminal(status)
 }
@@ -1131,15 +1091,6 @@ impl App {
         )
     }
 }
-impl From<webagent_models::api::Error> for ApiError {
-    fn from(error: webagent_models::api::Error) -> Self {
-        match error {
-            webagent_models::api::Error::Public(status, message) => Self(status, message),
-            webagent_models::api::Error::Internal(error) => error.into(),
-        }
-    }
-}
-
 // Root host state completes native adapters without teaching Engine authentication fields.
 #[derive(Clone)]
 struct EngineHostState {

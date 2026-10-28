@@ -1,4 +1,5 @@
 //! Caller-specific public views for one canonical shared conversation.
+use webagent_accounts_host::AccountsStore;
 use crate::{json, shared_chat, App, Result, Value};
 pub(crate) fn observer(app: &App) -> bool {
     app.chat_access

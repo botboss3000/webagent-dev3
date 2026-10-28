@@ -461,6 +461,7 @@ mod session_statistics_tests {
 #[cfg(test)]
 mod shared_observer_mutation_tests {
  use serde_json::json;
+ use webagent_accounts_host::AccountsStore;
  use sqlx::Row;
  use tower::ServiceExt;
  #[tokio::test]
@@ -491,6 +492,7 @@ mod shared_observer_mutation_tests {
 #[cfg(test)]
 mod followup_route_tests {
     use super::*;
+    use webagent_accounts_host::AccountsStore;
     use axum::{body::Body, extract::Request, http::StatusCode};
     use serde_json::json;
     use tower::ServiceExt;

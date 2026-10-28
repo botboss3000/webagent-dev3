@@ -1,6 +1,7 @@
 //! Fresh bounded configuration excerpts accompanying a feature-bound source read.
 //! Index metadata is untrusted navigation data. Only native fixed configuration
 //! aliases appoint runtime reads; private snapshots never mix with live settings.
+use webagent_accounts_host::AccountsStore;
 use crate::App;
 use anyhow::{bail, Result};
 use serde_json::{json, Value};

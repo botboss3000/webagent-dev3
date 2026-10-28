@@ -8,9 +8,9 @@ static RECORDER:OnceLock<Recorder<Store>>=OnceLock::new();
 mod background;
 #[cfg(test)]mod tests;
 impl package::SnapshotStore for Store {
- fn current_user_id(&self)->&str {Store::current_user_id(self)}
- fn seal(&self,value:&Value)->anyhow::Result<Vec<u8>> {Store::seal(self,value)}
- fn unseal(&self,value:&[u8])->anyhow::Result<Value> {Store::unseal(self,value)}
+ fn current_user_id(&self)->&str {crate::store::StoreCore::current_user_id(self)}
+ fn seal(&self,value:&Value)->anyhow::Result<Vec<u8>> {crate::store::StoreCore::seal(self,value)}
+ fn unseal(&self,value:&[u8])->anyhow::Result<Value> {crate::store::StoreCore::unseal(self,value)}
  async fn session_exists(&self,sid:&str)->Result<bool,package::Error> {
   self.get(&format!("session:{sid}")).await.map(|v|v.is_some()).map_err(|error| {
    let error=crate::ApiError::from(error);package::Error(error.0,error.1)

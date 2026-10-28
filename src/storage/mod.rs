@@ -49,21 +49,22 @@ pub(crate) mod context_assets;
 mod engine;
 
 use crate::access;
-use crate::cache::{Cache, ContextCache};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteRow},
     Row, SqlitePool,
 };
-use std::{collections::HashMap, sync::{Arc, Mutex}};
-use std::path::{Path, PathBuf};
+use std::{collections::HashMap, sync::Arc};
+use std::path::Path;
 use tokio::sync::RwLock;
 
 use webagent_storage::recovery::recovery_item_digest;
 #[cfg(test)]
 use webagent_storage::{codec::load_or_create_key, recovery::recovery_digest};
-use webagent_storage::{codec::{AgentCipher, AgentKeys, Codec}, docs, pool::UserPlane, routing::Planes};
+use webagent_storage::{codec::{AgentKeys, Codec}, docs, pool::UserPlane};
+pub use webagent_host_core::StoreCore;
+use webagent_accounts_host::AccountsStore;
 // The app-settings policy is Storage-owned; existing callers keep the crate::store path.
 pub(crate) use webagent_storage::settings::{admin_encryption_enabled, read_app_settings};
 
@@ -74,23 +75,24 @@ const PROMPT_SLOT_CONTENT_MAX: usize = 16 * 1024;
 const PROMPT_SLOT_COUNT_MAX: usize = 32;
 const PROMPT_SLOT_TOTAL_MAX: usize = 64 * 1024;
 
+/// The root storage handle. Its resources and primitives are the shared
+/// [`StoreCore`], reached through `Deref`; module host crates extend `StoreCore`.
 #[derive(Clone)]
 pub struct Store {
-    pub app_pool: SqlitePool,
-    pub pool: SqlitePool,
-    pub agent_pool: SqlitePool,
-    pub(crate) root: PathBuf,
-    user_id: String,
-    agent_id: String,
-    user_states: Arc<RwLock<HashMap<String, UserPlane>>>,
-    agent_states: Arc<RwLock<HashMap<String, SqlitePool>>>,
-    codec: Codec,
-    // Store views share immutable expanded keys instead of copying large key schedules into futures.
-    agent_cipher: Option<AgentCipher>,
-    agent_keys: AgentKeys,
-    cache: Arc<Mutex<Cache>>,
-    context_cache: Arc<Mutex<ContextCache>>,
-    context_gate: Arc<RwLock<()>>,
+    core: StoreCore,
+}
+
+impl std::ops::Deref for Store {
+    type Target = StoreCore;
+    fn deref(&self) -> &StoreCore {
+        &self.core
+    }
+}
+
+impl std::ops::DerefMut for Store {
+    fn deref_mut(&mut self) -> &mut StoreCore {
+        &mut self.core
+    }
 }
 
 /// Open a storage authority and add the notification tables its plane stages.
@@ -114,7 +116,7 @@ impl Store {
         let shared_agent_pool = open_pool(&root.join("agent_data/shared_default/shared_default.db"),false,false).await?;
         let mut agent_states = HashMap::new();
         agent_states.insert("shared_default".to_owned(),shared_agent_pool.clone());
-        let mut store = Self {
+        let mut store = Self { core: StoreCore {
             app_pool: open_pool(&root.join("db/app.db"), true, false).await?,
             pool: admin_state.pool.clone(),
             agent_pool: shared_agent_pool,
@@ -129,7 +131,7 @@ impl Store {
             cache: admin_state.cache,
             context_cache: admin_state.context_cache,
             context_gate: admin_state.context_gate,
-        };
+        } };
         sqlx::raw_sql(
             "CREATE TABLE IF NOT EXISTS prompt_slots (
                 slot_name TEXT PRIMARY KEY, order_index INTEGER NOT NULL,
@@ -181,12 +183,12 @@ impl Store {
             }
         }};
         let migrated=state.migrated.clone();
-        let handle = Self {app_pool:self.app_pool.clone(),pool:state.pool,
+        let handle = Self { core: StoreCore {app_pool:self.app_pool.clone(),pool:state.pool,
             agent_pool:self.agent_pool.clone(),root:self.root.clone(),
             user_id:user_id.to_owned(),agent_id:self.agent_id.clone(),
             user_states:self.user_states.clone(),agent_states:self.agent_states.clone(),
             codec:self.codec.clone(),agent_cipher:self.agent_cipher.clone(),agent_keys:self.agent_keys.clone(),cache:state.cache,
-            context_cache:state.context_cache,context_gate:state.context_gate};
+            context_cache:state.context_cache,context_gate:state.context_gate} };
         // Marker-guarded migrations never revert; scans call for_user for every account each tick.
         if !migrated.load(std::sync::atomic::Ordering::Acquire) {
             handle.migrate_session_metadata().await?;
@@ -214,20 +216,16 @@ impl Store {
                 states.insert(agent_id.to_owned(),pool.clone()); pool
             }
         }};
-        let mut view=Self {app_pool:self.app_pool.clone(),pool:self.pool.clone(),
+        let mut view=Self { core: StoreCore {app_pool:self.app_pool.clone(),pool:self.pool.clone(),
             agent_pool:pool,root:self.root.clone(),
             user_id:self.user_id.clone(),agent_id:agent_id.to_owned(),
             user_states:self.user_states.clone(),agent_states:self.agent_states.clone(),
             codec:self.codec.clone(),agent_cipher:None,agent_keys:self.agent_keys.clone(),
             cache:self.cache.clone(),context_cache:self.context_cache.clone(),
-            context_gate:self.context_gate.clone()};
+            context_gate:self.context_gate.clone()} };
         view.initialize_agent_encryption().await?;
         Ok(view)
     }
-    /// Expose the agent identity already bound to this storage handle.
-    pub fn current_agent_id(&self)->&str {&self.agent_id}
-    /// Expose the canonical account identity already bound to this storage handle.
-    pub fn current_user_id(&self)->&str {&self.user_id}
     /// Create agent-owned tables and migrate the legacy default agent and prompt slots once.
     async fn init_agent_tables(&self) -> Result<()> {
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS agent_memberships(user_id TEXT NOT NULL,agent_id TEXT NOT NULL,value BLOB NOT NULL,PRIMARY KEY(user_id,agent_id));
@@ -331,18 +329,6 @@ impl Store {
     }
     fn ability_controls(&self)->webagent_abilities::controls::Repository<'_,Self> {
         webagent_abilities::controls::Repository::new(&self.agent_pool,&self.agent_id,self.current_user_id(),self)
-    }
-    /// Reject document access naming an agent other than this handle owns.
-    fn validate_agent_doc_key(&self,key:&str) -> Result<()> {
-        webagent_storage::routing::validate_agent_doc_key(&self.agent_id,key)
-    }
-    /// Borrow this view's three authorities for Storage routing.
-    fn planes(&self) -> Planes<'_> {
-        Planes {application:&self.app_pool,user:&self.pool,agent:&self.agent_pool}
-    }
-    /// Route each known namespace to its user, agent or application authority.
-    fn pool_for(&self, key: &str) -> &SqlitePool {
-        self.planes().for_key(key)
     }
     /// Reject ambiguous, reserved or oversized prompt-slot identities before agent-table access.
     fn validate_prompt_slot_name(name: &str) -> Result<()> {
@@ -603,35 +589,6 @@ impl Store {
     /// Copy and verify the legacy single database into the split authorities once.
     async fn migrate_legacy(&self, root: &Path) -> Result<()> {
         webagent_storage::migration::migrate_legacy_split(root, self.planes(), self).await
-    }
-    // Only user-plane writers may call this. seal() remains encrypted for
-    // application/agent secrets and authenticated search continuation cursors.
-    fn encode_user_record(&self, value: &Value) -> Result<Vec<u8>> {
-        self.codec.encode_user_record(&self.root, &self.user_id, value)
-    }
-    /// Apply optional administrator plaintext policy only to user-plane records; other authorities always seal.
-    fn encode_for_pool(&self, pool: &SqlitePool, value: &Value) -> Result<Vec<u8>> {
-        if std::ptr::eq(pool, &self.agent_pool) {self.seal_agent(value)}
-        else if std::ptr::eq(pool, &self.pool) {self.encode_user_record(value)} else {self.seal(value)}
-    }
-    /// Encode a JSON value with a fresh AES-GCM nonce and authenticated ciphertext.
-    pub fn seal(&self, value: &Value) -> Result<Vec<u8>> {
-        self.codec.seal(value)
-    }
-    /// Authenticate and decode agent, encrypted or explicitly versioned administrator plaintext records.
-    pub fn unseal(&self, data: &[u8]) -> Result<Value> {
-        if webagent_storage::codec::is_agent_envelope(data) {return self.unseal_agent(data);}
-        self.codec.unseal(data)
-    }
-    /// Reset the shared disposable caches, applying limits to existing and future
-    /// user handles alike. Database pools and active request copies are not covered.
-    pub fn configure_cache(&self, documents: usize, contexts: usize) {
-        *self.cache.lock().unwrap() = Cache::new(documents);
-        *self.context_cache.lock().unwrap() = ContextCache::new(contexts);
-    }
-    /// Qualify disposable context-cache entries by account so identical session IDs cannot collide.
-    fn context_cache_key(&self, sid: &str) -> String {
-        format!("{}:{sid}", self.user_id)
     }
     /// Reconstruct canonical checkpoint plus eligible interactions under the context invalidation gate.
     pub async fn context(&self, sid: &str) -> Result<Vec<Value>> {
@@ -2638,20 +2595,20 @@ mod admin_storage_policy_tests {
 
 // Storage primitives decode through this handle's agent key and plaintext policy.
 impl webagent_storage::ScopedCodec for Store {
-    fn seal(&self,value:&Value)->Result<Vec<u8>> {Store::seal(self,value)}
-    fn unseal(&self,data:&[u8])->Result<Value> {Store::unseal(self,data)}
-    fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {Store::encode_user_record(self,value)}
+    fn seal(&self,value:&Value)->Result<Vec<u8>> {StoreCore::seal(self,value)}
+    fn unseal(&self,data:&[u8])->Result<Value> {StoreCore::unseal(self,data)}
+    fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {StoreCore::encode_user_record(self,value)}
 }
 
 // Access borrows the existing cipher, identities and pools; no resource is duplicated.
 impl webagent_access::storage::RecordCodec for Store {
-    fn seal(&self,value:&Value)->Result<Vec<u8>> {Store::seal(self,value)}
-    fn unseal(&self,value:&[u8])->Result<Value> {Store::unseal(self,value)}
+    fn seal(&self,value:&Value)->Result<Vec<u8>> {StoreCore::seal(self,value)}
+    fn unseal(&self,value:&[u8])->Result<Value> {StoreCore::unseal(self,value)}
     fn encode_application(&self,value:&Value)->Result<Vec<u8>> {self.encode_for_pool(&self.app_pool,value)}
-    fn seal_agent(&self,value:&Value)->Result<Vec<u8>> {Store::seal_agent(self,value)}
-    fn unseal_agent(&self,value:&[u8])->Result<Value> {Store::unseal_agent(self,value)}
-    fn seal_agent_for(&self,agent:&str,value:&Value)->Result<Vec<u8>> {self.seal_agent_for(agent,value)}
-    fn unseal_agent_for(&self,agent:&str,value:&[u8])->Result<Value> {self.unseal_agent_for(agent,value)}
+    fn seal_agent(&self,value:&Value)->Result<Vec<u8>> {StoreCore::seal_agent(self,value)}
+    fn unseal_agent(&self,value:&[u8])->Result<Value> {StoreCore::unseal_agent(self,value)}
+    fn seal_agent_for(&self,agent:&str,value:&Value)->Result<Vec<u8>> {StoreCore::seal_agent_for(self,agent,value)}
+    fn unseal_agent_for(&self,agent:&str,value:&[u8])->Result<Value> {StoreCore::unseal_agent_for(self,agent,value)}
 }
 impl Store {
     pub(crate) fn access_repository(&self)->webagent_access::storage::Repository<'_,Self> {
@@ -2668,7 +2625,7 @@ impl webagent_models::storage::RuntimeStorage for Store {
             if !access::valid_agent_id(agent) {return Err(anyhow!("Invalid agent identity"));}
             // Catalog transactions already hold an app connection; initialized handles avoid pool reentry.
             if let Some(pool)=self.agent_states.read().await.get(agent).cloned() {return Ok(pool);}
-            Ok(self.for_agent(agent).await?.agent_pool)
+            Ok(self.for_agent(agent).await?.agent_pool.clone())
         }
     }
 }
@@ -2679,13 +2636,13 @@ impl Store {
 }
 
 impl webagent_manager::storage::RecordEffects for Store {
- fn unseal_agent(&self,agent:&str,bytes:&[u8])->Result<Value> {Store::unseal_agent_for(self,agent,bytes)}
- fn unseal(&self,value:&[u8])->Result<Value> {Store::unseal(self,value)}
- fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {Store::encode_user_record(self,value)}
+ fn unseal_agent(&self,agent:&str,bytes:&[u8])->Result<Value> {StoreCore::unseal_agent_for(self,agent,bytes)}
+ fn unseal(&self,value:&[u8])->Result<Value> {StoreCore::unseal(self,value)}
+ fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {StoreCore::encode_user_record(self,value)}
  fn public_usage(&self,value:&Value)->Value {crate::usage::public(value)}
  fn record_usage(&self,record:&mut Value,response:&Value) {crate::usage::record(record,response)}
  fn invalidate_documents(&self,keys:&[String]) {self.cache.lock().unwrap().invalidate(keys)}
- async fn agent_pool<'a>(&'a self,id:&'a str)->Result<SqlitePool> {Ok(self.for_agent(id).await?.agent_pool)}
+ async fn agent_pool<'a>(&'a self,id:&'a str)->Result<SqlitePool> {Ok(self.for_agent(id).await?.agent_pool.clone())}
  async fn list_documents<'a>(&'a self,prefix:&'a str)->Result<Vec<Value>> {self.list(prefix).await}
  async fn read_document<'a>(&'a self,key:&'a str)->Result<Option<Value>> {self.get(key).await}
  async fn requester_claim_ready<'a>(&'a self,run:&'a Value)->Result<bool> {Store::requester_claim_ready(self,run).await}
@@ -2727,8 +2684,8 @@ impl webagent_manager::storage::RecordEffects for Store {
 }
 
 impl webagent_webapp::preferences::RecordCodec for Store {
-    fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {Store::encode_user_record(self,value)}
-    fn unseal(&self,value:&[u8])->Result<Value> {Store::unseal(self,value)}
+    fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {StoreCore::encode_user_record(self,value)}
+    fn unseal(&self,value:&[u8])->Result<Value> {StoreCore::unseal(self,value)}
 }
 
 #[cfg(test)]mod core_private_namespace_tests{

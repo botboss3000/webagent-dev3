@@ -1,4 +1,6 @@
 //! HTTP authority stays in the root; Diagnostics owns bounded event semantics.
+#[cfg(test)]
+use webagent_accounts_host::AccountsStore;
 use super::*;
 use axum::{extract::DefaultBodyLimit,routing::post};
 use package::background::IssueEvent;

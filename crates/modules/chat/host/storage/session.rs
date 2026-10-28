@@ -11,9 +11,9 @@ pub(super) use webagent_chat::session::with_session_metadata;
 /// Chat repositories receive the Store codec; user-plane writes keep the owner's
 /// administrator-plaintext policy while `seal` always encrypts.
 impl webagent_chat::RecordCodec for Store {
-    fn seal(&self, value: &Value) -> Result<Vec<u8>> { Store::seal(self, value) }
-    fn unseal(&self, value: &[u8]) -> Result<Value> { Store::unseal(self, value) }
-    fn encode_user_record(&self, value: &Value) -> Result<Vec<u8>> { Store::encode_user_record(self, value) }
+    fn seal(&self, value: &Value) -> Result<Vec<u8>> { StoreCore::seal(self, value) }
+    fn unseal(&self, value: &[u8]) -> Result<Value> { StoreCore::unseal(self, value) }
+    fn encode_user_record(&self, value: &Value) -> Result<Vec<u8>> { StoreCore::encode_user_record(self, value) }
 }
 
 impl Store {

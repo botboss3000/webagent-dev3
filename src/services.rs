@@ -1,5 +1,6 @@
 //! Installation-owned startup service configuration, separate from agent ability grants.
 //! Encrypted app-plane reads are always fresh; caller stores and caches cannot route this policy.
+use webagent_accounts_host::AccountsStore;
 use crate::{access::Principal,store::Store};
 use anyhow::{anyhow,bail,Result};
 use serde::{Deserialize,Serialize};

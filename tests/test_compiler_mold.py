@@ -117,6 +117,17 @@ class MoldRecipeTests(unittest.TestCase):
             real=artifact.with_name("real");artifact.rename(real);artifact.symlink_to(real,target_is_directory=True)
             with self.assertRaisesRegex(ValueError,"identity invalid"):runner.plugin_artifact_verified(artifact,"native","a"*64)
 
+    def test_native_plugin_receipts_do_not_follow_dev_only_engine_recipe_changes(self):
+        # The plugin cache key omits the recipe, so a dev-only engine token must not invalidate it.
+        executor=host.executor_module
+        self.assertTrue(executor.COMPILER_RECIPE.startswith(executor.PLUGIN_COMPILER_RECIPE+":"))
+        with tempfile.TemporaryDirectory()as temporary:
+            artifact=Path(temporary)/"artifact";artifact.mkdir();binary=artifact/"native";binary.write_bytes(b"\x7fELF native")
+            recipe=executor.PLUGIN_COMPILER_RECIPE+":sha256:"+"b"*64+":native-release:locked:offline"
+            value={"input_key":"a"*64,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"recipe":recipe,"linker_comment":"mold 1.10.1 (compatible with GNU ld)"}
+            (artifact/"compiler-receipt.json").write_text(json.dumps(value))
+            self.assertEqual(host.Runner().plugin_artifact_verified(artifact,"native","a"*64),value)
+
     def test_root_and_native_proof_containers_pass_real_resource_identity_gate(self):
         import ast
         control=host.scheduler_module.sibling("resource_control")

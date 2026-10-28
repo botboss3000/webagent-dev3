@@ -41,7 +41,7 @@ impl<'a,C:RecordCodec> Repository<'a,C> {
     pub(crate) fn unseal(&self,value:&[u8])->Result<Value> {self.codec.unseal(value)}
     pub(crate) fn seal_agent(&self,value:&Value)->Result<Vec<u8>> {self.codec.seal_agent_for(self.agent_id,value)}
     pub(crate) fn unseal_agent(&self,value:&[u8])->Result<Value> {self.codec.unseal_agent_for(self.agent_id,value)}
-    pub(crate) fn accounts(&self)->webagent_accounts::Repository<'_,AccountsCodec<'_,C>> {
+    pub(crate) fn accounts(&self)->webagent_accounts::Repository<'_,&AccountsCodec<'a,C>> {
         webagent_accounts::Repository::new(self.app_pool,&self.accounts_codec)
     }
     pub async fn account_by_id(&self,id:&str)->Result<Option<Value>> {self.accounts().account_state(id).await}

@@ -1,0 +1,31 @@
+[package]
+name = "webagent-host-core"
+version = "0.1.0"
+edition = "2021"
+
+# Shared host layer for module host crates: the storage handle's resources and
+# primitives, the HTTP error type and small helpers. No module host code lives here.
+[features]
+# Shared StoreCore fixture for host crates' tests.
+test-support = []
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tokio = { version = "1", features = ["sync"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+webagent-accounts = { path = "../modules/accounts" }
+webagent-chat = { path = "../modules/chat" }
+webagent-configuration = { path = "../modules/configuration" }
+webagent-models = { path = "../modules/models" }
+webagent-storage = { path = "../modules/storage" }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

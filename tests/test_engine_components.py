@@ -332,6 +332,8 @@ class EngineRebaseAttestationOrderTests(unittest.TestCase):
             # A dev job builds the live release without the stable feature (the stable/ folder is not a flag).
             release=[argv for name,argv in calls if name=="compile_release"][0][-1]
             self.assertIn("--features webagent-v3/live-context\n",release+"\n");self.assertNotIn("stable-abilities",release)
+            # Dev jobs compile incrementally and keep the root's incremental state (no clean).
+            self.assertIs(job["cargo_incremental"],True);self.assertNotIn("cargo clean",release)
             builds=[argv for name,argv in calls if name=="linked_smoke"and argv[0]=="cargo"]
             self.assertEqual(builds,[]if hook else[["cargo","build","--locked","--offline","-p","webagent-v3","--bin","webagent-v3"]])
             linked=b"linked test binary"if hook else b"debug linked binary"

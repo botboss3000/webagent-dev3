@@ -1,4 +1,5 @@
 //! Authentication middleware composes Accounts identity with live Access authorization.
+use webagent_accounts_host::AccountsStore;
 use super::{
     access, json, now, phase3_api, registration, Api, ApiError, App, HashMap, HeaderMap,
     HeaderValue, Json, Next, Query, Request, Response, State, StatusCode, Value,

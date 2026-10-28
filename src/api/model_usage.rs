@@ -3,6 +3,7 @@
 //! Clearing history and resetting counters record time markers, and the latest
 //! one can be undone; run records, session totals and other users' views are
 //! never changed.
+use webagent_accounts_host::AccountsStore;
 use crate::{bad, Api, App, Store};
 use axum::{extract::{Query, State}, Extension, Json};
 use serde::Deserialize;

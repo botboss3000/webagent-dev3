@@ -16,7 +16,12 @@ def check_argv(task,profile=None):
     return (["cargo","check","--locked","--offline",*FEATURE_PROFILES[selected]]if task=="check"else["cargo","test","--locked","--offline","--no-run"])
 
 RUST="rust:1.99-bookworm@sha256:e9da6f6c3ed5095fd5d33bf7cdf309830a178a8147888f1b2f76d5769bd9306c"
-COMPILER_RECIPE=RUST+":jobs3:debug0:mold1.10.1:complete-tests-v8"
+# Native ability plugins never compile incrementally: their receipts keep the shared recipe,
+# and their cache key does not include it, so it must not change with dev-only settings.
+PLUGIN_COMPILER_RECIPE=RUST+":jobs3:debug0:mold1.10.1:complete-tests-v8"
+# incremental-dev-v1: dev engine compiles run CARGO_INCREMENTAL=1 (stable and every shared or
+# component build stay 0). Bumping it once invalidates the old non-incremental caches and seeds.
+COMPILER_RECIPE=PLUGIN_COMPILER_RECIPE+":incremental-dev-v1"
 RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"
 # Rust test harness threads need explicit stack headroom: an overflow aborts the
 # whole binary (853 tests) and costs a retry, while the extra stack is virtual.
@@ -65,6 +70,10 @@ SERVICE_SOURCES={
  "webagent-assets-service":"/build/crates/assets-service/src/main.rs",
  "webagent-capability-service":"/build/crates/capability-service/src/main.rs",
  "webagent-provider-service":"/build/crates/provider-service/src/main.rs",
+ # Module services: their integration tests spawn the real binary, so replayed tests need it too.
+ "webagent-toy-service":"/build/crates/module-toy/src/bin/webagent-toy-service.rs",
+ "webagent-usage-service":"/build/crates/usage-service/src/main.rs",
+ "webagent-models-service":"/build/crates/models-service/src/main.rs",
 }
 SMOKE_CASE_KEYS=("prepared","background_prepared","boot_prepared","assets_prepared","capability_prepared","provider_prepared")
 # @code-index {"version":1,"feature":"build-artifact-execution","aliases":["task fencing","verified builds"],"purpose":"Pinned attributable compiler/test/packaging recipes and verified content-addressed artifact reuse.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Identity, exact input verification and completion rules cannot be disabled by model or preference configuration."}}
@@ -107,6 +116,9 @@ class Executor:
     def compiler_recipe(self):
         """Bind every object/output certificate to the actual immutable linker image."""
         return COMPILER_RECIPE+":"+self.runner.compiler_runtime()["image"]
+    def plugin_compiler_recipe(self):
+        """The recipe native ability plugin receipts carry, independent of dev-only engine settings."""
+        return PLUGIN_COMPILER_RECIPE+":"+self.runner.compiler_runtime()["image"]
     def preflight_packaging(self,job,blob):
         """Pin all local execution images and verify OCI dependencies before compiler admission."""
         references={"compiler":self.runner.compiler_runtime(job)["image"],"toolchain":RUST,"packager":BUILDKIT}
@@ -148,6 +160,12 @@ class Executor:
         not queue behind the parallel release compile's disk writes. Exec stays allowed:
         component tests run service binaries copied into a tempdir."""
         return ["--tmpfs","/tmp:rw,exec,nosuid,nodev,size=2g,mode=1777"]if phase=="test"else[]
+    @staticmethod
+    def incremental(job,profile):
+        """Incremental only for a dev engine job's own engine phases; every phase sharing its target must agree,
+        since a 0-to-1 switch rebuilds every workspace crate. Snapshots, components, plugins, checks and
+        stable releases stay non-incremental."""
+        return "1"if job.get("cargo_incremental")is True and profile.startswith("engine:rust1.90:")else"0"
     @staticmethod
     def cpu_weight_args(phase):
         """The live release compile runs beside the full suite inside the build slice's CPU
@@ -216,7 +234,7 @@ class Executor:
             "--cap-drop","ALL","--security-opt","no-new-privileges","--pids-limit","256","--user",str(self.config["service_uid"])+":"+str(self.config["service_gid"]),
             "--network","bridge"if network else"none","--mount","type=bind,src="+str(source)+",dst=/build"+(""if phase=="test"else",readonly"),
             "--mount","type=bind,src="+str(output)+",dst=/output","-w","/build",
-            "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=3","-e","CARGO_INCREMENTAL=0","--env","RUSTFLAGS="+RUSTFLAGS,
+            "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=3","-e","CARGO_INCREMENTAL="+self.incremental(job,profile),"--env","RUSTFLAGS="+RUSTFLAGS,
             "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",*self.test_stack_env(phase),*self.test_tmpfs_args(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]
         if cap is not None:create[create.index(image):create.index(image)]=["--memory",str(cap),"--memory-swap",str(cap)]
         try:
@@ -1006,10 +1024,18 @@ class Executor:
             if not re.fullmatch(r"[a-f0-9-]{36}",value["job_id"]):raise ValueError("Engine cache job identity invalid")
             source=Path(self.config["state_root"])/"execution"/value["job_id"]/"output/artifacts"
             if self.artifact_hashes(source)!=value["artifacts"]:raise ValueError("Cached compiler output changed")
-            self.test_manifest(source)
+            # Output retained under an older inventory rule (e.g. before a service joined
+            # SERVICE_SOURCES) cannot replay its tests: compile fresh instead of failing.
+            try:self.test_manifest(source)
+            except ValueError:continue
             destination=output/"artifacts";shutil.copytree(source,destination)
             return destination,value
         return None
+    @staticmethod
+    def replay_argv(binary,*args):
+        """Run a retained test binary the way `cargo test` does: proc-macro crates' tests link
+        the toolchain's libstd dynamically; under rustup it lives in the target libdir, not sysroot/lib."""
+        return ["sh","-c",'LD_LIBRARY_PATH="$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "$0" "$@"',binary,*args]
     @staticmethod
     def local_dependency(name):
         """Normalize actual Cargo dep-info paths while rejecting escaped local inputs."""
@@ -1080,10 +1106,14 @@ class Executor:
         """Share optimized dependency objects while keeping the linked executable as a frozen artifact."""
         return ["cargo","build","--release","--locked","--offline","--bin","webagent-v3"]
     @staticmethod
-    def live_recipe(stable=False):
-        """The deployed release build; a stable release also links ability crates (STABLE_FEATURE) under the stable profile."""
+    def live_recipe(stable=False,incremental=False):
+        """The deployed release build; a stable release also links ability crates (STABLE_FEATURE) under the stable profile.
+
+        An incremental dev build keeps the root's incremental state instead of cleaning it; Cargo's
+        fingerprints (with restored source mtimes) still decide what rebuilds."""
         features="webagent-v3/live-context"+(",webagent-v3/"+STABLE_FEATURE if stable else "");profile="--profile stable"if stable else"--release"  # dev keeps its exact recipe (snapshot keys bind it)
-        return ["sh","-c","set -e\ncargo clean "+profile+" --package webagent-v3 --locked --offline\ncargo build --workspace "+profile+" --locked --offline --no-default-features --features "+features]
+        clean=""if incremental and not stable else"cargo clean "+profile+" --package webagent-v3 --locked --offline\n"
+        return ["sh","-c","set -e\n"+clean+"cargo build --workspace "+profile+" --locked --offline --no-default-features --features "+features]
     def linked_dependencies(self,metadata,target,files):
         """Attest linked implementation inputs separately from the deployed live dependency closure."""
         captured={}
@@ -1122,6 +1152,10 @@ class Executor:
         if not any(name in {"src/main.rs","/build/src/main.rs"}for name in dependencies):raise ValueError("Live root dependency attestation missing")
         return dependencies
 
+    @staticmethod
+    def incremental_path(relative):
+        """A target-relative path inside a profile's rustc incremental state (target/<profile>/incremental)."""
+        parts=relative.split("/");return len(parts)>2 and parts[1]=="incremental"
     @staticmethod
     def restore_mtimes(source,previous,target):
         """Give files byte-identical to the previous execution its mtime; make every other file newer than all seeded objects.
@@ -1164,12 +1198,12 @@ class Executor:
                 raise ValueError("Compiler cache symlink")
             if not receipt.is_file()or not captured.is_file():continue
             state=json.loads(receipt.read_text())
-            if state["job_id"]!=previous.name or state["status"]not in {"failed","completed"}or state.get("compiler_recipe")!=self.compiler_recipe():continue
+            if state["job_id"]!=previous.name or state["status"]not in {"failed","completed"}or state.get("compiler_recipe")!=self.compiler_recipe()or state.get("release_mode","dev")!=mode:continue
             old_blob=self.runner.execution_application_blob(captured.read_bytes())
             old=self.runner.execution_entries(old_blob);old_rust=self.rust_inputs(old)
             def eligible():
                 nonlocal binding
-                if changed or state["status"]!="completed"or state.get("release_mode","dev")!=mode or not set(old_rust)<=set(rust):return False
+                if changed or state["status"]!="completed"or not set(old_rust)<=set(rust):return False
                 if binding is None:binding=self.dependency_binding(source/"v3")
                 return self.dependency_binding(previous/"source/v3")==binding
             identical=old_rust==rust
@@ -1192,18 +1226,27 @@ class Executor:
         else:
             if changed is None:return False
             previous,old_rust=changed;identical=False
-        target=previous/"output/target";size=sum(p.lstat().st_size for p in target.rglob("*")if p.is_file())
-        if shutil.disk_usage(output).free<int(self.config.get("scheduler",{}).get("disk_min_free_bytes",5*1024**3))+size:
+        target=previous/"output/target";size=incremental=0
+        for path in target.rglob("*"):
+            if path.is_file():
+                size+=path.lstat().st_size
+                if self.incremental_path(path.relative_to(target).as_posix()):incremental+=path.lstat().st_size
+        free=shutil.disk_usage(output).free-int(self.config.get("scheduler",{}).get("disk_min_free_bytes",5*1024**3))
+        # Incremental state is only a speed-up: drop it before giving up the whole seed.
+        keep=free>=size
+        if not keep and free<size-incremental:
             job.setdefault("cargo_cache_rejections",[]).append({"job_id":previous.name,"reason":"insufficient_disk"});return False
-        before=self.artifact_hashes(target)
-        shutil.copytree(target,output/"target",symlinks=True)
-        if before!=self.artifact_hashes(target)or before!=self.artifact_hashes(output/"target"):
+        def hashes(folder):return {name:sha for name,sha in self.artifact_hashes(folder).items()if keep or not self.incremental_path(name)}
+        before=hashes(target)
+        shutil.copytree(target,output/"target",symlinks=True,ignore=None if keep else lambda folder,names:[n for n in names if n=="incremental"and Path(folder).parent==target])
+        if before!=hashes(target)or before!=self.artifact_hashes(output/"target"):
             raise ValueError("Previous compiler cache changed during copy")
         restored,newer=self.restore_mtimes(source,previous/"source",output/"target")
         job["cargo_cache_reuse"]=previous.name
         job["cargo_cache_seed"]={"job_id":previous.name,"decision":"identical_rust_inputs"if identical else"changed_rust_inputs",
             "rust_inputs_differing":sum(old_rust.get(name)!=sha for name,sha in rust.items()),"target_files":len(before),
-            "target_bytes":size,"mtimes_restored":restored,"files_newer":newer}
+            "target_bytes":size,"incremental_bytes":incremental,"incremental":"copied"if keep else"dropped_insufficient_disk",
+            "mtimes_restored":restored,"files_newer":newer}
         return True
     def retain_engine(self,job,blob,dependencies,hashes,log=None):
         """Publish a content-addressed cache receipt only after tests, source and every output are verified."""
@@ -1369,11 +1412,11 @@ class Executor:
             source=SERVICE_SOURCES.get(binary)
             if binary=="webagent-context-service"or binary in seen or source is None or item.get("file")!="test-support/debug/"+binary or item.get("destination")!="target/debug/"+binary or item.get("profile")!="debug"or item.get("source_path")!=source:raise ValueError("Service support provenance invalid")
             seen.add(binary)
-            related=[test for test in value["tests"]if test.get("kind")==["test"]and test.get("source_path","").startswith(source.removesuffix("/src/main.rs")+"/tests/")]
+            related=[test for test in value["tests"]if test.get("kind")==["test"]and test.get("source_path","").startswith(source.split("/src/")[0]+"/tests/")]
             if related and not all(test.get("package_id")==item.get("package_id")for test in related):raise ValueError("Service integration provenance invalid")
         for binary,source in SERVICE_SOURCES.items():
             if binary=="webagent-context-service":continue
-            if any(test.get("kind")==["test"]and test.get("source_path","").startswith(source.removesuffix("/src/main.rs")+"/tests/")for test in value["tests"])and binary not in seen:raise ValueError("Service support inventory incomplete")
+            if any(test.get("kind")==["test"]and test.get("source_path","").startswith(source.split("/src/")[0]+"/tests/")for test in value["tests"])and binary not in seen:raise ValueError("Service support inventory incomplete")
         support_files={item["file"]for item in [support,*extra]}
         names=[]
         for item in [*value["tests"],support,*extra]:
@@ -1414,7 +1457,7 @@ class Executor:
         job["compiler_recipe"]=self.compiler_recipe()
         blob=self.runner.execution_application_blob(blob)
         root.mkdir(parents=True,exist_ok=True);extract(source,blob);application=source/"v3";output.mkdir(exist_ok=True)
-        stable_release=job.get("release_mode")=="stable"
+        stable_release=job.get("release_mode")=="stable";job["cargo_incremental"]=not stable_release
         cached=self.cached_engine(blob,output,"stable"if stable_release else"dev")
         if cached:
             artifacts,old=cached;logs="Verified compiler artifacts reused; locked Rust tests previously passed on identical compiled inputs.\n"
@@ -1429,7 +1472,7 @@ class Executor:
                 replayed=0;results=0
                 for binary in sorted((artifacts/"tests").iterdir()):
                     if not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",binary.name):raise ValueError("Cached test executable name invalid")
-                    run=self.phase(job,"test","test",application,output,["/output/artifacts/tests/"+binary.name,"--test-threads="+str(TEST_THREADS)],"engine:rust1.90:test")
+                    run=self.phase(job,"test","test",application,output,Executor.replay_argv("/output/artifacts/tests/"+binary.name,"--test-threads="+str(TEST_THREADS)),"engine:rust1.90:test")
                     logs+=run;replayed+=1;results+=len(re.findall(r"test result:",run))
                 if replayed!=results:raise ValueError("Parallel replay skipped a retained test binary")
                 counts=Executor.suite_totals(logs)
@@ -1459,7 +1502,7 @@ class Executor:
         cargo=output/"cargo";cargo.mkdir(exist_ok=True)
         inputs=digest(blob);before=self.runner.execution_source_digest(source)
         logs=self.dependencies(job,application,output,prepare=True)
-        if seeded:logs+=self.phase(job,"dependency","dependency",application,output,["cargo","clean","--package","webagent-v3"],"engine:rust1.90:clean-root",600)
+        if seeded and stable_release:logs+=self.phase(job,"dependency","dependency",application,output,["cargo","clean","--package","webagent-v3"],"engine:rust1.90:clean-root",600)
         else:logs+=self.dependency_snapshot(job,application,output);logs+=self.workspace_snapshot(job,application,output)
         self.attest_release_base(job,context_blob)
         logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --exclude webagent-v3 --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"],"engine:rust1.90:compile_test")
@@ -1488,7 +1531,7 @@ class Executor:
         if self.runner.execution_source_digest(linked_source)!=before:raise ValueError("Compile source copy differs from captured inputs")
         self.attest_release_base(job,context_blob)
         suite=self.concurrent_phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads="+str(TEST_THREADS)],"engine:rust1.90:test")
-        try:live_log=self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(stable_release),"engine:rust1.90:release")
+        try:live_log=self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(stable_release,job["cargo_incremental"]),"engine:rust1.90:release")
         finally:
             try:suite_output=suite.result()
             finally:shutil.rmtree(linked_source,ignore_errors=True)

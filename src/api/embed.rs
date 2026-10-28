@@ -1,5 +1,6 @@
 //! Embed credentials authorize only the selected agent's caller-owned chat.
 //! Host-page configuration never changes agent, account, or tool authority.
+use webagent_accounts_host::AccountsStore;
 use super::{
     access, admin_agent_view, bad, conflict, digest, json, key, now, registration, required,
     ui_config_value, uuid, Api, ApiError, App, Deserialize, HashMap, HeaderMap, HeaderValue, Json,

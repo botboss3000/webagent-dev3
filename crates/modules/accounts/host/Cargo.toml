@@ -1,0 +1,22 @@
+[package]
+name = "webagent-accounts-host"
+version = "0.1.0"
+edition = "2021"
+
+# Accounts storage over the shared host core. HTTP handlers that need the root
+# `App` stay in the root crate (src/api/accounts/).
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+webagent-access = { path = "../../access" }
+webagent-accounts = { path = ".." }
+webagent-host-core = { path = "../../../host-core" }
+
+[dev-dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+webagent-host-core = { path = "../../../host-core", features = ["test-support"] }
+
+[lints]
+workspace = true

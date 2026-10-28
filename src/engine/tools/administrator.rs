@@ -1,5 +1,6 @@
 //! Compiled Administrator contracts. Model arguments never choose identity,
 //! agent, workspace, credentials, host origin, or a Docker command.
+use webagent_accounts_host::AccountsStore;
 pub(crate) fn supported_schema_name(name: &str) -> bool {
     crate::source_control::owns(name)
         || matches!(

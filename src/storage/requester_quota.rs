@@ -22,7 +22,7 @@ impl Store {
    if !path.exists(){continue;}
    // Reuse the account's cached pool: a fresh connection per account on every admission
    // spawned a thread and reopened the database. Range bounds use the docs key index.
-   let pool=self.for_user(&owner).await?.pool;
+   let pool=self.for_user(&owner).await?.pool.clone();
    let rows=sqlx::query("SELECT key,value FROM docs WHERE (key>='run:' AND key<'run;') OR (key>='manager_review:' AND key<'manager_review;') OR (key>='followup_queue:' AND key<'followup_queue;')").fetch_all(&pool).await?;
    for row in rows {
     let key:String=row.get("key");let value=self.unseal(&row.get::<Vec<u8>,_>("value"))?;

@@ -54,14 +54,14 @@ mod wake;
 #[path = "../crates/modules/chat/host/session_naming/mod.rs"] mod session_naming;
 mod administrator_services;
 #[path = "api/browser_login.rs"] mod browser_login;
-#[path = "../crates/modules/accounts/host/composition.rs"] mod accounts;
-#[path = "../crates/modules/accounts/host/registration.rs"] mod registration;
-#[path = "../crates/modules/accounts/host/repository.rs"] mod accounts_store;
-#[path = "../crates/modules/accounts/host/api.rs"] mod account_management;
-#[path = "../crates/modules/accounts/host/authentication.rs"] mod account_authentication;
+mod accounts;
+#[path = "api/accounts/registration.rs"] mod registration;
+#[path = "api/accounts/management.rs"] mod account_management;
+#[path = "api/accounts/authentication.rs"] mod account_authentication;
 #[cfg(test)]
-#[path = "../crates/modules/accounts/host/acceptance_tests.rs"] mod account_acceptance_tests;
-use webagent_storage::cache;
+#[path = "api/accounts/acceptance_tests.rs"] mod account_acceptance_tests;
+// Accounts storage methods on `Store` (through `Deref` to `StoreCore`).
+use webagent_accounts_host::AccountsStore;
 #[path = "engine/context/compaction.rs"] mod context_compaction;
 use webagent_files::attachments;
 #[path = "engine/context/memory.rs"] mod memory;

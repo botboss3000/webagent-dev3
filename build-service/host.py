@@ -1681,7 +1681,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         value=json.loads(receipt.read_bytes())
         if not isinstance(value,dict):raise ValueError("Plugin cache receipt object required")
         recipe=value.get("recipe");legacy=executor_module.RUST+":release:locked:offline:debug0"
-        mold=isinstance(recipe,str)and re.fullmatch(re.escape(executor_module.COMPILER_RECIPE)+r":sha256:[a-f0-9]{64}:native-release:locked:offline",recipe)is not None
+        mold=isinstance(recipe,str)and re.fullmatch(re.escape(executor_module.PLUGIN_COMPILER_RECIPE)+r":sha256:[a-f0-9]{64}:native-release:locked:offline",recipe)is not None
         expected={"input_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"recipe":recipe}
         if mold:
             comment=value.get("linker_comment")
@@ -1808,8 +1808,8 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 if output.is_symlink()or not output.is_file()or output.stat().st_size>32*1024*1024:raise ValueError("Invalid plugin artifact")
                 artifact.mkdir(parents=True,exist_ok=True);temporary=artifact/("."+entry+".new")
                 shutil.copyfile(output,temporary);temporary.chmod(0o555);os.replace(temporary,binary)
-                scheduler_module.Scheduler.write_record(artifact/"compiler-receipt.json",{"input_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"recipe":self.executor.compiler_recipe()+":native-release:locked:offline","linker_comment":linker_comment})
-                outputs.append({"package":manifest["id"],"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":False,"compiler_recipe":self.executor.compiler_recipe()+":native-release:locked:offline","linker":"mold"})
+                scheduler_module.Scheduler.write_record(artifact/"compiler-receipt.json",{"input_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"recipe":self.executor.plugin_compiler_recipe()+":native-release:locked:offline","linker_comment":linker_comment})
+                outputs.append({"package":manifest["id"],"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":False,"compiler_recipe":self.executor.plugin_compiler_recipe()+":native-release:locked:offline","linker":"mold"})
         return outputs
 
     # @code-index {"version":1,"feature":"ui-verification-runtime","aliases":["ui verification runtime"],"purpose":"Run selected fixtures in an isolated measured browser worker; reuse exact evidence. Config: build-service/scheduler-defaults.json -> ui_test_image, component_indexing.","span_lines":70,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/ui_test_image","/component_indexing"]}],"opportunities":[]}}

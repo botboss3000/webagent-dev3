@@ -1,5 +1,7 @@
 //! Application-wide records for who people are, what their tier permits, and
 //! which agents they may use. Conversations themselves belong to user storage.
+#[cfg(test)]
+use webagent_accounts_host::AccountsStore;
 use crate::access::{AccountStatus, Relationship, Role, Tier};
 use crate::store::Store;
 use anyhow::Result;

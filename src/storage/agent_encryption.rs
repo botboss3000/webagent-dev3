@@ -1,41 +1,10 @@
 //! Each agent has a random data key; only the trusted storage boundary unwraps it.
 //! Storage owns the envelope format and key conversion; this view selects the key.
-use super::*;
-
-impl Store {
-    pub(crate) fn seal_agent(&self,value:&Value)->Result<Vec<u8>> {
-        self.seal_agent_for(&self.agent_id,value)
-    }
-    /// Select the bound view's key first, then the shared registry.
-    fn agent_key(&self,agent:&str)->Result<AgentCipher> {
-        let keys=self.agent_keys.read().map_err(|_|anyhow!("Agent key registry unavailable"))?;
-        if agent==self.agent_id {self.agent_cipher.as_ref().or_else(||keys.get(agent))} else {keys.get(agent)}
-            .cloned().ok_or_else(||anyhow!("Agent key unavailable"))
-    }
-    pub(crate) fn seal_agent_for(&self,agent:&str,value:&Value)->Result<Vec<u8>> {
-        self.agent_key(agent)?.seal(agent,value)
-    }
-    pub(crate) fn unseal_agent(&self,data:&[u8])->Result<Value> {
-        self.unseal_agent_for(&self.agent_id,data)
-    }
-    pub(crate) fn unseal_agent_for(&self,agent:&str,data:&[u8])->Result<Value> {
-        if data.len()<36 || !webagent_storage::codec::is_agent_envelope(data) {return Err(anyhow!("Invalid agent record envelope"));}
-        self.agent_key(agent)?.unseal(agent,data)
-    }
-    pub(crate) async fn initialize_agent_encryption(&mut self)->Result<()> {
-        if let Some(cipher)=self.agent_keys.read().map_err(|_|anyhow!("Agent key registry unavailable"))?.get(&self.agent_id).cloned() {
-            self.agent_cipher=Some(cipher);return Ok(());
-        }
-        let cipher=webagent_storage::codec::initialize_agent_key(&self.agent_pool,&self.codec,&self.agent_id).await?;
-        self.agent_cipher=Some(cipher.clone());
-        self.agent_keys.write().map_err(|_|anyhow!("Agent key registry unavailable"))?.insert(self.agent_id.clone(),cipher);
-        Ok(())
-    }
-}
+// Agent key selection and envelopes are `StoreCore` primitives in webagent-host-core.
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::*;
     async fn second_agent(store:&Store)->Store {
         let id="key_isolation_test";
         let pool=crate::agent_storage::open_agent_pool(&store.root,id).await.unwrap();

@@ -59,6 +59,22 @@ class ComponentBuildTests(unittest.TestCase):
             self.assertTrue(engine.package_path("v3/crates/model-discovery/src/lib.rs",{}))
 
     # Require exact service dependency closures and reject symlinked source inputs.
+    def test_every_engine_service_binary_is_retained_for_test_replay(self):
+        # Integration tests spawn the service binary; a replay without it fails to start the service.
+        for identity,registered in engine.REGISTRY.items():
+            source=executor.SERVICE_SOURCES.get(registered["binary"])
+            self.assertIsNotNone(source,identity)
+            self.assertTrue(source.startswith("/build/"+registered["inputs"][0]+"/src/"),identity)
+            self.assertTrue((ROOT/source.removeprefix("/build/")).is_file(),identity)
+    def test_nested_host_crate_is_not_an_input_of_its_domain_crate_consumers(self):
+        # Model discovery depends on the Accounts domain crate, not on the Accounts host crate nested inside it.
+        inputs=engine.closure(ROOT,"model-discovery")
+        self.assertIn("crates/modules/accounts/src/lib.rs",inputs)
+        self.assertFalse(any(name.startswith("crates/modules/accounts/host/")for name in inputs))
+        self.assertFalse(any(name.startswith("crates/host-core/")for name in inputs))
+        entries={"v3/crates/modules/accounts/host/Cargo.toml":None}
+        self.assertTrue(engine.package_path("v3/crates/modules/accounts/src/lib.rs",entries))
+        self.assertFalse(engine.package_path("v3/crates/modules/accounts/host/src/lib.rs",entries))
     def test_each_service_closure_includes_shared_contracts_and_exact_local_dependencies(self):
         for identity,(_,service,implementation,contract,_)in NEW.items():
             with self.subTest(identity=identity),tempfile.TemporaryDirectory()as temporary:
