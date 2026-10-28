@@ -857,6 +857,16 @@ V3 owns the live file `crates/modules/access/access-policy.json` (listed in
 `live-files.json`): registration mode, account levels (tiers, order, names) and
 page policy, for example `{"registration": "restricted", ...}`.
 
+Its `login_protection` section tunes sign-in throttling (all values optional; these are
+the defaults): `{"address": {"failures": 5, "window_seconds": 300, "block_seconds": 60,
+"max_block_seconds": 3600}, "account": {"failures": 5, "window_seconds": 300,
+"delay_seconds": 5, "max_delay_seconds": 60}}`. After `failures` failed sign-ins within
+`window_seconds`, the address is blocked from that account (HTTP 429 with `Retry-After`),
+the block doubling per further failure up to its maximum; across all addresses the
+account is slowed, never locked: each attempt waits `delay_seconds`, doubling up to its
+maximum, and a correct password still signs in. A success clears both. State is in
+memory, so a restart clears it.
+
 `restricted` creates pending accounts requiring administrator approval; `open`
 activates ordinary registered accounts and enables the existing guest admission
 flow. Neither grants administrator privileges or agent/tool entitlements.

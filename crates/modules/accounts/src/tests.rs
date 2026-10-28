@@ -1776,3 +1776,84 @@ fn password_minimum_counts_characters_and_bounds_bytes() {
     assert!(crate::password_length_ok(&"é".repeat(8)));
     assert!(!crate::password_length_ok(&"x".repeat(1025)));
 }
+#[tokio::test]
+async fn login_protection_blocks_pairs_and_slows_accounts_from_live_policy() {
+    use crate::api::Error;
+    use axum::http::{HeaderMap, StatusCode};
+    let f = Fixture::new().await;
+    let repo = f.repo();
+    let host = AuthHost::new(&f);
+    host.policy.lock().unwrap()["login_protection"] = json!({
+        "address": {"failures": 2, "block_seconds": 30},
+        "account": {"failures": 3, "delay_seconds": 1, "max_delay_seconds": 1}
+    });
+    let attempts = LoginAttempts::default();
+    let mut headers = HeaderMap::new();
+    headers.insert("host", "native.test".parse().unwrap());
+    let password = concat!("fixture-guard", "-password");
+    let request = |n: u8| crate::AdmissionContext {
+        now: 100,
+        client: std::net::IpAddr::from([192, 0, 2, n]),
+    };
+    let (repo, host, attempts, headers) = (&repo, &host, &attempts, &headers);
+    let login = |user: &'static str, secret: &'static str, n: u8| async move {
+        let body = json!({"username": user, "password": secret});
+        crate::authentication_api::login(repo, host, attempts, headers, &body, true, request(n))
+            .await
+    };
+    crate::authentication_api::setup_admin(
+        repo,
+        host,
+        attempts,
+        headers,
+        &json!({"username": "guard-owner", "password": password}),
+        true,
+        request(1),
+    )
+    .await
+    .unwrap();
+    let wrong = concat!("wrong-", "fixture-value");
+    for user in ["guard-owner", "nobody"] {
+        for _ in 0..2 {
+            assert!(matches!(
+                login(user, wrong, 1).await,
+                Err(Error::Public(StatusCode::UNAUTHORIZED, _))
+            ));
+        }
+    }
+    // The blocked pair is refused before the (correct) password is checked.
+    let blocked = login("guard-owner", password, 1).await.unwrap();
+    assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
+    let (blocked_headers, body) = controller_response(blocked).await;
+    assert_eq!(blocked_headers["retry-after"], "30");
+    assert_eq!(body["retry_after"], 30);
+    assert!(body["error"].as_str().unwrap().contains("30 seconds"));
+    let unknown = login("nobody", wrong, 1).await.unwrap();
+    assert_eq!(unknown.status(), StatusCode::TOO_MANY_REQUESTS);
+    // A third failure from another address starts the account-wide slowdown.
+    assert!(matches!(
+        login("guard-owner", wrong, 2).await,
+        Err(Error::Public(StatusCode::UNAUTHORIZED, _))
+    ));
+    let started = std::time::Instant::now();
+    assert!(matches!(
+        login("guard-owner", wrong, 3).await,
+        Err(Error::Public(StatusCode::UNAUTHORIZED, _))
+    ));
+    assert!(started.elapsed() >= std::time::Duration::from_secs(1));
+    let started = std::time::Instant::now();
+    let signed_in = login("guard-owner", password, 3).await.unwrap();
+    assert_eq!(signed_in.status(), StatusCode::OK);
+    assert!(started.elapsed() >= std::time::Duration::from_secs(1));
+    // Success clears the account slowdown; the other address keeps its own block.
+    let started = std::time::Instant::now();
+    assert!(matches!(
+        login("guard-owner", wrong, 3).await,
+        Err(Error::Public(StatusCode::UNAUTHORIZED, _))
+    ));
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(
+        login("guard-owner", password, 1).await.unwrap().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}

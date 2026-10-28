@@ -134,7 +134,10 @@ pub mod self_service;
 pub use sessions::SessionCandidate;
 
 mod throttling;
-pub use throttling::{client_ip, Admission, AdmissionContext, LoginAttempts};
+pub use throttling::{
+    client_ip, AccountSlowdown, AddressBackoff, Admission, AdmissionContext, LoginAttempts,
+    LoginGate, LoginProtection,
+};
 
 /// Apply one minimum to every password-creation path; the byte cap bounds hashing input.
 pub fn password_length_ok(value: &str) -> bool {

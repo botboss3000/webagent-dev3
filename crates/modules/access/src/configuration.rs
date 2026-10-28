@@ -28,6 +28,7 @@ pub fn validate_configuration(value:&Value)->Result<()> {
         if webagent_accounts::RegistrationMode::from_policy(value).is_err() {
             return Err(anyhow!("Invalid access-policy.json registration policy"));
         }
+        webagent_accounts::LoginProtection::from_policy(value)?;
         if value.get("revision").is_some_and(|v|v.as_u64().is_none_or(|n|n==0)) {return Err(anyhow!("Invalid policy revision"));}
         if let Some(tiers)=value.get("tiers") {
             let map=tiers.as_object().ok_or_else(||anyhow!("Invalid policy tiers"))?;
@@ -58,6 +59,19 @@ mod tests {
             json!({"registration":"open","pages":{"unknown":{}}}),
             json!({"registration":"open","pages":{"main":{"chat":"unknown"}}})] {
             assert!(validate_configuration(&value).is_err());
+        }
+    }
+
+    #[test]
+    fn login_protection_values_are_bounded() {
+        validate_configuration(&json!({"registration":"open",
+            "login_protection":{"address":{"failures":10}}})).unwrap();
+        for section in [json!(null), json!({"address":{"failures":0}}),
+            json!({"address":{"failures":1001}}), json!({"account":{"window_seconds":86401}}),
+            json!({"address":{"block_seconds":120,"max_block_seconds":60}}),
+            json!({"account":{"delay_seconds":-1}}), json!({"account":{"unknown":1}})] {
+            let value = json!({"registration":"open","login_protection":section});
+            assert!(validate_configuration(&value).is_err(), "{section}");
         }
     }
 

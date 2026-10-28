@@ -51,7 +51,39 @@ pub async fn login<C: RecordCodec, H: Host>(
             "Try signing in again in one minute".into(),
         ));
     }
-    login_admitted(repo, host, attempts, headers, body, secure, request).await
+    let protection = crate::LoginProtection::from_policy(&host.registration_policy()?)?;
+    let delay = match attempts
+        .login_gate(&protection, client, username, now)
+        .await
+    {
+        crate::LoginGate::Blocked { retry_after } => return Ok(blocked(retry_after)),
+        crate::LoginGate::Proceed { delay } => delay,
+    };
+    // Waiting before the password check keeps both outcomes equally slow.
+    if delay > 0 {
+        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+    }
+    let result = login_admitted(repo, host, attempts, headers, body, secure, request).await;
+    if matches!(&result, Err(Error::Public(StatusCode::UNAUTHORIZED, _))) {
+        attempts
+            .failed_login(&protection, client, username, now)
+            .await;
+    }
+    result
+}
+fn blocked(retry_after: u64) -> Response {
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(json!({
+            "error": format!("Too many failed sign-ins; try again in {retry_after} seconds"),
+            "retry_after": retry_after,
+        })),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert("retry-after", HeaderValue::from(retry_after));
+    response
 }
 // Registration has already passed its independent admission window.
 pub(crate) async fn login_admitted<C: RecordCodec, H: Host>(
