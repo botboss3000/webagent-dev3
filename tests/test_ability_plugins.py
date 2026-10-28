@@ -68,7 +68,7 @@ class ArtifactCacheTests(unittest.TestCase):
             package=assets/"releases"/job/"v3/plugins/abilities/Custom/fixture";(package/"src").mkdir(parents=True)
             inputs={"Cargo.toml":b'[package]\nname="fixture_runner"\nversion="0.1.0"\nedition="2021"\n',"Cargo.lock":b"version = 4\n","src/main.rs":b"fn main() {}"}
             for name,value in inputs.items():(package/name).write_bytes(value)
-            build={"toolchain":"rust-1.90","inputs":list(inputs),"dependencies":[],"flags":[],"assets":[]}
+            build={"toolchain":"rust-1.99","inputs":list(inputs),"dependencies":[],"flags":[],"assets":[]}
             manifest={"id":"fixture","dispatch":"isolated","runtime":"executable","entrypoint":"fixture_runner","build":build}
             (package/"plugin.json").write_text(json.dumps(manifest))
             hashes={name:hashlib.sha256(value).hexdigest()for name,value in inputs.items()}

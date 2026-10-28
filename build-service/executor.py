@@ -15,7 +15,7 @@ def check_argv(task,profile=None):
         raise ValueError("Feature profiles apply only to compile checks")
     return (["cargo","check","--locked","--offline",*FEATURE_PROFILES[selected]]if task=="check"else["cargo","test","--locked","--offline","--no-run"])
 
-RUST="rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f"
+RUST="rust:1.99-bookworm@sha256:e9da6f6c3ed5095fd5d33bf7cdf309830a178a8147888f1b2f76d5769bd9306c"
 COMPILER_RECIPE=RUST+":jobs3:debug0:mold1.10.1:complete-tests-v8"
 RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"
 # Rust test harness threads need explicit stack headroom: an overflow aborts the
@@ -42,8 +42,8 @@ FROZEN_MTIME=946684800
 STABLE_FEATURE="stable-abilities"  # root feature a stable release adds to link ability crates
 MOLD_VERSION="1.10.1+dfsg-1"
 MOLD_SHA256="f85b0102cabeaee34b76ab195aacfa9ff9442d670948c88f6f353dd666ea5b64"
-MOLD_COMPILER_DOCKERFILE_SHA256="129a45c426d4683ab5a563ebdf764bf829826a415305dce15ab36c780a3ba815"
-MOLD_COMPILER_STAGE_SHA256="046c3f98cc75313c2dd6fee391328f5beea8dd537745429542e7c4710bd7e635"
+MOLD_COMPILER_DOCKERFILE_SHA256="9efba3943ef7e5d9ee4ca90913cc9710572e927444e1d3e458985f42434cf9dd"
+MOLD_COMPILER_STAGE_SHA256="0e39ec80fbabe0f482cd1ec80077813105f1776ccc60b5a566686823c3614098"
 BUILDKIT="moby/buildkit:v0.25.1@sha256:79cc6476ab1a3371c9afd8b44e7c55610057c43e18d9b39b68e2b0c2475cc1b6"
 COMPILER_STAGE_SHA256="474b034d7a843ebf324b654a785b5a5b23135804ef39c662f92fcb3e160dfeaf"
 # Coordinated Automation extraction removes only its root-bin distribution closure.

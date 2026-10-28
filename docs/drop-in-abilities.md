@@ -46,7 +46,7 @@ classifies every invocation as a potential write, including pure computations;
 new tool policy defaults deny until an administrator explicitly grants it.
 Background execution is limited to existing vetted native tools.
 
-A standalone Rust crate uses runtime=executable, build.toolchain=rust-1.90,
+A standalone Rust crate uses runtime=executable, build.toolchain=rust-1.99,
 a simple underscore identifier as entrypoint, and explicit compile inputs including
 Cargo.toml, Cargo.lock and every Rust source/include. Dependencies and flags must
 be empty in this first manifest interface. Cargo's locked dependency graph belongs

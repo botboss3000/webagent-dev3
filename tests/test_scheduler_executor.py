@@ -254,7 +254,7 @@ class NativeBuilderPhaseTests(unittest.TestCase):
         package=assets/'releases'/job_id/'v3/plugins/abilities/Custom/fixture';(package/'src').mkdir(parents=True)
         inputs={'Cargo.toml':'[package]\nname="fixture_runner"\nversion="0.1.0"\nedition="2021"\n','Cargo.lock':'version = 4\n','src/main.rs':'fn main() {}'}
         for name,value in inputs.items():(package/name).write_text(value)
-        (package/'plugin.json').write_text(json.dumps({'id':'fixture','dispatch':'isolated','runtime':'executable','entrypoint':'fixture_runner','build':{'toolchain':'rust-1.90','inputs':list(inputs),'dependencies':[],'flags':[],'assets':[]}}))
+        (package/'plugin.json').write_text(json.dumps({'id':'fixture','dispatch':'isolated','runtime':'executable','entrypoint':'fixture_runner','build':{'toolchain':'rust-1.99','inputs':list(inputs),'dependencies':[],'flags':[],'assets':[]}}))
         phases=[];runner=fixtures.host.Runner();runner.resources=types.SimpleNamespace(enabled=True);runner.job_context=types.SimpleNamespace(job={'job_id':job_id})
         def provision(cache):
             registry=cache/'cargo/registry';registry.mkdir(parents=True);(registry/'crate').write_bytes(b'verified crate')

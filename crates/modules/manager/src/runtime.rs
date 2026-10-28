@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use sqlx::SqlitePool;
 use webagent_models::{model_selection,provider,storage::{RuntimeStorage,Repository as ModelRepository},runtime::{Runtime as Models,SessionAuthority},transport::{Provider,Projection,CallDraft}};
 use crate::{Verdict,incoming_message,verdict,settings,storage::{RecordEffects,Repository}};
-// Rust 1.90 #100013: retain the same statically dispatched future behind its promised Send contract.
+// rustc #100013: retain the same statically dispatched future behind its promised Send contract.
 pub(crate) fn send_future<F:Future+Send>(future:F)->impl Future<Output=F::Output>+Send {future}
 pub(crate) fn now()->u64 {SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()}
 /// Actual Chat-scoped resources, returned by the existing owner after resolving the trusted requester.

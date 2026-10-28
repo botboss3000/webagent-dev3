@@ -28,7 +28,7 @@ class BackgroundEngineTests(unittest.TestCase):
                     "schema_version":1,"id":identity,"group":"engine-loop","interface_version":1,
                     "implementation_version":"0.1.0","operation":registered["operation"],"modes":["live","linked"],
                     "runtime_requirements":[],"executable":"artifact/"+registered["binary"],
-                    "build":{"package":registered["binary"],"source_inputs":registered["inputs"],"toolchain":"1.90.0","features":[],"runtime_assets":[]},
+                    "build":{"package":registered["binary"],"source_inputs":registered["inputs"],"toolchain":"1.99.1","features":[],"runtime_assets":[]},
                     "limits":{"max_request_bytes":registered["limit"],"max_response_bytes":registered["limit"],"timeout_ms":registered["timeout"],"max_concurrency":1}}
                 fixture.pop("artifact_sha256",None)
                 (folder/"component.json").write_text(json.dumps(fixture))

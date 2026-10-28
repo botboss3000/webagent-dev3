@@ -24,7 +24,7 @@ def package(binding):
     if manifest["id"]!=ident or type(manifest["protocol"])is not int or manifest["protocol"]!=1 or manifest.get("dispatch")!="isolated" or manifest.get("effect")!="write":
         raise ValueError("Unsupported package")
     executable=root/manifest["entrypoint"]
-    if manifest.get("build",{}).get("toolchain")=="rust-1.90":
+    if manifest.get("build",{}).get("toolchain")=="rust-1.99":
         build=manifest["build"]
         inputs={name:hashlib.sha256(read(name,16*1024*1024)).hexdigest()for name in sorted(build["inputs"])}
         compile_build=dict(build)

@@ -25,7 +25,7 @@
     "remember_automation_state"
   ],
   "build": {
-    "toolchain": "rust-1.90",
+    "toolchain": "rust-1.99",
     "inputs": [
       "Cargo.toml",
       "Cargo.lock",

@@ -6,7 +6,7 @@ docker run --rm --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID
   --mount type=bind,src=/home/ar/webagent-dev3,dst=/build,readonly \
   --tmpfs /run:rw,nosuid,nodev,size=16m \
   --tmpfs /workspaces:rw,nosuid,nodev,size=32m \
-  --workdir /build rust:1.90-bookworm \
+  --workdir /build rust:1.99-bookworm \
   python3 -B /build/tests/run_real_worker_integration.py
 
 No live state, workspace, source-promotion, or Docker socket mount is used.

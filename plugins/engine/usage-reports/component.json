@@ -13,7 +13,7 @@
       "Cargo.toml",
       "Cargo.lock"
     ],
-    "toolchain": "1.90.0"
+    "toolchain": "1.99.1"
   },
   "executable": "artifact/webagent-usage-service",
   "group": "module",

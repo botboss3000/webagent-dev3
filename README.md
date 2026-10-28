@@ -320,7 +320,7 @@ overrides yet, and reserves v2's special `__skills__` slot.
 
 The policy-gated `workspace_seed` tool copies the audited v3 source snapshot into
 `webagent-v3/` within one session workspace and creates a clean Git baseline. The runtime
-image includes Rust 1.90 and build tools for local verification. `source_review` gives a
+image includes Rust 1.99 and build tools for local verification. `source_review` gives a
 bounded read-only view of tracked edits and new files without changing the Git index.
 The authenticated `GET /api/v3/sessions/{id}/source-review` route exposes the same review to
 the administrator when policy allows it. A

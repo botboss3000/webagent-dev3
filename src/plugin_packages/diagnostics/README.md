@@ -24,7 +24,7 @@ or world-writable executables. Do not install untrusted binaries.
 Canonical broker build inputs live in `src/plugin_packages/diagnostics/` because
 the fixed broker allowlist already includes `src/`. The installed package lives
 under `plugins/`; its own Cargo manifest builds independently of the main app.
-Use the matching lockfile shipped with the source and pinned Rust 1.90 environment.
+Use the matching lockfile shipped with the source and pinned Rust 1.99 environment.
 The initial image includes the executable for explicit first installation; deleting
 an installed package does not resurrect it from that image.
 

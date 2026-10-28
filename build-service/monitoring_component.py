@@ -43,7 +43,7 @@ def inventory(folder):
         for dep in group.values():
             if isinstance(dep,dict)and any(k in dep for k in ("path","git","workspace","registry")):raise ValueError("Monitoring dependency escapes independent registry closure")
     declaration=json.loads((folder/"component.json").read_bytes())
-    expected={"schema_version":1,"id":"system-monitoring","interface_version":1,"binary":BINARY,"toolchain":"1.90.0"}
+    expected={"schema_version":1,"id":"system-monitoring","interface_version":1,"binary":BINARY,"toolchain":"1.99.1"}
     if declaration!=expected or type(declaration.get("schema_version"))is not int or type(declaration.get("interface_version"))is not int:raise ValueError("Monitoring descriptor contract")
     return result
 

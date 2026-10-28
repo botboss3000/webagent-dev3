@@ -1727,7 +1727,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         outputs=[]
         for declaration in sorted((root/ABILITY_ROOT).glob("*/*/plugin.json")):
             manifest=json.loads(declaration.read_bytes())
-            if manifest.get("dispatch")!="isolated"or manifest.get("build",{}).get("toolchain")!="rust-1.90":continue
+            if manifest.get("dispatch")!="isolated"or manifest.get("build",{}).get("toolchain")!="rust-1.99":continue
             package=declaration.parent;build=manifest["build"];entry=manifest.get("entrypoint")
             if manifest.get("runtime")!="executable"or not isinstance(entry,str)or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}",entry)or build.get("dependencies")!=[]or build.get("flags")!=[]:
                 raise ValueError("Unsupported standalone Rust build contract")
@@ -4840,7 +4840,7 @@ class Broker:
 
     def prepare_dependency_cache(self,request,args):
         """Operator schedules pinned runtime dependency preparation before an application build."""
-        if set(args)-{"action","task_id","request_id","refresh"} or not {"action","task_id","request_id"}<=set(args) or not request["trusted"].get("local_caller") or type(args.get("refresh",False))is not bool:
+        if set(args)-{"action","task_id","request_id","refresh","candidate_job"} or not {"action","task_id","request_id"}<=set(args) or not request["trusted"].get("local_caller") or type(args.get("refresh",False))is not bool:
             raise PermissionError("Bounded operator cache preparation required")
         trusted=request["trusted"];workspace=request["workspace"];owner=self.scheduler.owner(trusted,workspace)
         self.scheduler.journal_path(owner,args["request_id"],"dependency-cache")
@@ -4855,6 +4855,17 @@ class Broker:
             self.scheduler.store.assert_owned(item["key"],owner,item["ownership_epoch"],["module:broker"])
             if self._maintenance()["drained"]:raise ValueError("Broker maintenance drain prevents cache preparation")
             blob=self._current_release_blob()
+            if "candidate_job" in args:
+                # A release that changes the Dockerfile's pinned bases cannot build until they
+                # exist, and preparing from the deployed release would prepare the old ones:
+                # prepare from this task's own failed candidate, exactly as it was sealed.
+                candidate=self.jobs.get(args["candidate_job"])
+                if not candidate or candidate.get("task_id")!=item["task_id"] or candidate.get("operation")!="build_deploy" or candidate.get("status")!="failed":
+                    raise ValueError("Failed build candidate of this task required")
+                path=self.state/candidate["job_id"]/"candidate.tar"
+                if path.is_symlink() or not path.is_file():raise ValueError("Sealed build candidate unavailable")
+                blob=path.read_bytes()
+                if context_digest(blob)[0]!=candidate["inputs_sha256"]:raise ValueError("Build candidate changed")
             identity=str(uuid.uuid4());event=threading.Event()
             job={"job_id":identity,"task_id":item["task_id"],"request_key":request_key,"user_id":trusted["user_id"],"workspace":workspace,
                  "operation":"check","status":"running","phase":"preparing_dependency_cache","created_at":time.time(),"started_at":time.time(),

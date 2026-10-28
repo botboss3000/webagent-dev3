@@ -94,7 +94,7 @@ def runtime_recipe(dockerfile, role, helper, generation=1, workers=4):
         if not {"python3", "curl", "ca-certificates"} <= set(packages):
             raise ValueError("API prefetch bootstrap is not declared")
         prefix = graph["preview_tunnel"]["header"] + "\n" + graph["tested_builder"]["header"].replace(" AS tested_builder", " AS runtime_toolchain") + "\n"
-        if not re.fullmatch(r"rust:1\.90-bookworm@sha256:[a-f0-9]{64}", graph["tested_builder"]["image"]):
+        if not re.fullmatch(r"rust:1\.99-bookworm@sha256:[a-f0-9]{64}", graph["tested_builder"]["image"]):
             raise ValueError("Pinned compiler/runtime toolchain required")
     name = ALIASES[role]
     archive_id = "webagent-v3-bookworm-" + selected["image"].split("sha256:")[1][:12]

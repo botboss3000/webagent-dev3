@@ -42,7 +42,7 @@ pub use defaults as live_assets;
 pub use model_client as provider;
 pub use gates as gate_registry;
 pub use webagent_configuration::digest;
-// Rust 1.90 #100013: preserve generic owner futures' Send contract without wrapping or allocating.
+// rustc #100013: preserve generic owner futures' Send contract without wrapping or allocating.
 pub(crate) fn send_future<F:std::future::Future+Send>(future:F)
  ->impl std::future::Future<Output=F::Output>+Send {future}
 pub fn now()->u64 {std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()}

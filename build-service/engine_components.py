@@ -27,7 +27,7 @@ def descriptor(path):
     if set(value)-set(expected)-{"implementation_version","build","limits","artifact_sha256"}or type(value.get("schema_version"))is not int or type(value.get("interface_version"))is not int:raise ValueError("Engine contract fields")
     if any(value.get(k)!=v for k,v in expected.items()):raise ValueError("Unsupported engine contract")
     if not isinstance(value.get("implementation_version"),str)or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+",value["implementation_version"]):raise ValueError("Engine implementation version")
-    if value.get("build")!={"package":binary,"source_inputs":registered["inputs"],"toolchain":"1.90.0","features":[],"runtime_assets":[]}:raise ValueError("Unsupported engine build recipe")
+    if value.get("build")!={"package":binary,"source_inputs":registered["inputs"],"toolchain":"1.99.1","features":[],"runtime_assets":[]}:raise ValueError("Unsupported engine build recipe")
     if value.get("limits")!={"max_request_bytes":registered["limit"],"max_response_bytes":registered["limit"],"timeout_ms":registered["timeout"],"max_concurrency":1}:raise ValueError("Unsupported engine limits")
     if any(type(number)is not int for number in value["limits"].values()):raise ValueError("Engine limit types")
     return value

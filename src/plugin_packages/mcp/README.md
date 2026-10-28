@@ -59,7 +59,7 @@ https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/api/op
 
 The package has its own minimal pinned manifest and Cargo.lock; building it does
 not require compiling the WebAgent application. On the development server in an
-isolated reviewed source task and the pinned Rust 1.90 environment:
+isolated reviewed source task and the pinned Rust 1.99 environment:
 
 ```sh
 cargo build --locked --release --manifest-path src/plugin_packages/mcp/Cargo.toml

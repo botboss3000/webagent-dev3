@@ -96,7 +96,7 @@ fn automation_contract(
         "id":"automation", "dispatch":"isolated", "host_interface":"automation_v1",
         "protocol":1, "interface":1, "runtime":"executable", "entrypoint":"webagent_automation",
         "effect":"write", "schemas":"service/tool-schemas.json", "tools":AUTOMATION_TOOLS,
-        "build":{"toolchain":"rust-1.90", "inputs":["Cargo.toml","Cargo.lock","service/main.rs","service/engine.rs","service/contracts.rs"],
+        "build":{"toolchain":"rust-1.99", "inputs":["Cargo.toml","Cargo.lock","service/main.rs","service/engine.rs","service/contracts.rs"],
             "dependencies":[], "flags":[], "assets":["automation.json","automation.skill.md","service/package.json","service/tool-schemas.json","service/page.json","service/page.js","service/page.css"]}
     });
     if manifest!=&expected{anyhow::bail!("Unsupported native Automation contract");}
@@ -236,7 +236,7 @@ impl Package {
             ||manifest["interface"].as_u64()!=Some(1)||manifest["id"]!=id
             ||manifest["tools"]!=json!(tools)||!matches!(manifest["runtime"].as_str(),Some("python3"|"executable"))
             ||manifest["effect"]!="write" {anyhow::bail!("Unsupported isolated plugin contract");}
-        let executable=if manifest["build"]["toolchain"]=="rust-1.90" {
+        let executable=if manifest["build"]["toolchain"]=="rust-1.99" {
             let build_key=build_key(root,&manifest,legacy)?;
             PathBuf::from("/opt/v3/assets/artifacts").join(build_key).join(manifest["entrypoint"].as_str().ok_or_else(||anyhow!("Missing executable"))?)
         } else {relative(root,&manifest["entrypoint"])?};
@@ -392,7 +392,7 @@ pub mod catalog_tests {
  pub fn runtime_asset_declarations_do_not_change_the_compile_cache_key<H:crate::TestHost>(){
   let dir=tempfile::tempdir().unwrap();
   for name in ["Cargo.toml","Cargo.lock","main.rs"]{std::fs::write(dir.path().join(name),"fixed input").unwrap();}
-  let mut manifest=json!({"entrypoint":"fixture","build":{"toolchain":"rust-1.90","inputs":["Cargo.toml","Cargo.lock","main.rs"],"dependencies":[],"flags":[],"assets":[]}});
+  let mut manifest=json!({"entrypoint":"fixture","build":{"toolchain":"rust-1.99","inputs":["Cargo.toml","Cargo.lock","main.rs"],"dependencies":[],"flags":[],"assets":[]}});
   let before=build_key(dir.path(),&manifest,false).unwrap();let legacy=build_key(dir.path(),&manifest,true).unwrap();
   manifest["build"]["assets"]=json!(["new-guidance.md"]);
   assert_eq!(before,build_key(dir.path(),&manifest,false).unwrap());
@@ -443,7 +443,7 @@ pub mod native_automation_contract_tests {
         let manifest = json!({"id":"automation","dispatch":"isolated","host_interface":"automation_v1",
             "protocol":1,"interface":1,"runtime":"executable","entrypoint":"webagent_automation","effect":"write",
             "schemas":"service/tool-schemas.json","tools":tools,
-            "build":{"toolchain":"rust-1.90","inputs":["Cargo.toml","Cargo.lock","service/main.rs","service/engine.rs","service/contracts.rs"],"dependencies":[],"flags":[],
+            "build":{"toolchain":"rust-1.99","inputs":["Cargo.toml","Cargo.lock","service/main.rs","service/engine.rs","service/contracts.rs"],"dependencies":[],"flags":[],
                 "assets":["automation.json","automation.skill.md","service/package.json","service/tool-schemas.json","service/page.json","service/page.js","service/page.css"]}});
         for name in manifest["build"]["inputs"]
             .as_array()

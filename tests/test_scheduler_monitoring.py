@@ -12,7 +12,7 @@ class MonitoringTests(unittest.TestCase):
         (self.folder/"src").mkdir();(self.folder/"src/main.rs").write_text("fn main() {}\n")
         (self.folder/"Cargo.toml").write_text('[package]\nname="webagent-system-monitoring"\nversion="0.1.0"\nedition="2021"\nbuild=false\n[workspace]\n')
         (self.folder/"Cargo.lock").write_text('version=4\n[[package]]\nname="webagent-system-monitoring"\nversion="0.1.0"\n')
-        (self.folder/"component.json").write_text(json.dumps({"schema_version":1,"id":"system-monitoring","interface_version":1,"binary":m.BINARY,"toolchain":"1.90.0"}))
+        (self.folder/"component.json").write_text(json.dumps({"schema_version":1,"id":"system-monitoring","interface_version":1,"binary":m.BINARY,"toolchain":"1.99.1"}))
     def tearDown(self):self.tmp.cleanup()
     def test_standalone_inventory_and_source_mutation(self):
         before=m.inventory(self.folder);self.assertIn("src/main.rs",before)

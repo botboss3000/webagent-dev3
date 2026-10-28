@@ -9,7 +9,7 @@ executor=importlib.util.module_from_spec(spec);spec.loader.exec_module(executor)
 class EngineTests(unittest.TestCase):
     # Construct the coordinated context interface-v2 descriptor used by publication fixtures.
     def descriptor(self):
-        return {"schema_version":1,"id":"context-assembly","group":"engine-loop","interface_version":2,"implementation_version":"0.2.0","operation":"context.prepare","modes":["live","linked"],"runtime_requirements":[],"build":{"package":engine.BINARY,"source_inputs":engine.SOURCE_INPUTS,"toolchain":"1.90.0","features":[],"runtime_assets":[]},"executable":"artifact/"+engine.BINARY,"limits":{"max_request_bytes":16777216,"max_response_bytes":16777216,"timeout_ms":30000,"max_concurrency":1}}
+        return {"schema_version":1,"id":"context-assembly","group":"engine-loop","interface_version":2,"implementation_version":"0.2.0","operation":"context.prepare","modes":["live","linked"],"runtime_requirements":[],"build":{"package":engine.BINARY,"source_inputs":engine.SOURCE_INPUTS,"toolchain":"1.99.1","features":[],"runtime_assets":[]},"executable":"artifact/"+engine.BINARY,"limits":{"max_request_bytes":16777216,"max_response_bytes":16777216,"timeout_ms":30000,"max_concurrency":1}}
     # Preserve structured proof identity in artifact files despite diagnostic-log redaction.
     def test_structured_smoke_artifact_survives_true_environment_redaction(self):
         import test_admin_build as fixtures
