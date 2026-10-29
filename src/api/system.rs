@@ -1,7 +1,72 @@
 //! Administrator-only metrics routes; the parent router owns authentication and authorization.
 use super::*;
-#[path = "dashboard.rs"]
-mod dashboard;
+use axum::extract::Query;
+use serde::Deserialize;
+use webagent_system_host::{DashboardHost, Pending};
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct Window {
+    window: Option<String>,
+}
+
+/// The caller's `App` as the System dashboard host.
+struct Dashboard(App);
+
+impl DashboardHost for Dashboard {
+    fn store(&self) -> &webagent_host_core::StoreCore {
+        &self.0.store
+    }
+    fn session_page(
+        &self,
+        offset: usize,
+    ) -> Pending<'_, anyhow::Result<(Vec<Value>, Option<usize>)>> {
+        Box::pin(self.0.store.session_statistics_page(false, offset, 100))
+    }
+    fn admitted<'a>(&'a self, agent: &'a str) -> Pending<'a, bool> {
+        Box::pin(async move {
+            self.0
+                .store
+                .live_access(self.0.store.current_user_id(), agent)
+                .await
+                .is_ok_and(|a| a.admitted())
+        })
+    }
+    fn active_runs(&self) -> Pending<'_, anyhow::Result<Vec<Value>>> {
+        Box::pin(self.0.store.active_runs())
+    }
+    /// The broker reads private checkout metadata; the app never gains source filesystem permissions.
+    fn git_status(&self) -> Pending<'_, Value> {
+        Box::pin(async move {
+            match super::build_dashboard::list(State(self.0.clone())).await {
+                Ok(view) => view.0.get("source_git").cloned().unwrap_or_else(
+                    || json!({"available":false,"reason":"source_status_bridge_unavailable"}),
+                ),
+                Err(_) => json!({"available":false,"reason":"source_status_bridge_unavailable"}),
+            }
+        })
+    }
+    fn runtime_config(&self) -> anyhow::Result<Value> {
+        Ok(serde_json::to_value(loop_runtime::Config::read(&self.0.runtime_path)?)?)
+    }
+}
+
+/// Administrator middleware supplies the caller's existing Store; no caller-selected state paths.
+async fn dashboard(State(app): State<App>, Query(args): Query<Window>) -> Api {
+    let value = webagent_system_host::read(&Dashboard(app), args.window.as_deref()).await?;
+    Ok(Json(value))
+}
+
+/// Fixed section names project the same authenticated snapshot and window contract.
+async fn section(
+    State(app): State<App>,
+    Path(name): Path<String>,
+    Query(args): Query<Window>,
+) -> Api {
+    let value =
+        webagent_system_host::section(&Dashboard(app), &name, args.window.as_deref()).await?;
+    Ok(Json(value))
+}
 
 /// Collect bounded proc counters on the blocking pool instead of the HTTP executor.
 async fn summary() -> Api {
@@ -28,8 +93,8 @@ async fn metric(Path(name): Path<String>) -> Api {
 pub(crate) fn router() -> Router<App> {
     Router::new()
         .route("/summary", get(summary))
-        .route("/dashboard", get(dashboard::read))
-        .route("/dashboard/{section}", get(dashboard::section))
+        .route("/dashboard", get(dashboard))
+        .route("/dashboard/{section}", get(section))
         .route("/{metric}", get(metric))
 }
 

@@ -2702,6 +2702,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-system-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "webagent-host-core",
+ "webagent-system",
+]
+
+[[package]]
 name = "webagent-toy-service"
 version = "0.1.0"
 dependencies = [
@@ -2801,6 +2814,7 @@ dependencies = [
  "webagent-provider-projection",
  "webagent-storage",
  "webagent-system",
+ "webagent-system-host",
  "webagent-usage",
  "webagent-usage-reports",
  "webagent-webapp",

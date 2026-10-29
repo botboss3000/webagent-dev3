@@ -1,0 +1,23 @@
+[package]
+name = "webagent-system-host"
+version = "0.1.0"
+edition = "2021"
+
+# System dashboard collection over the shared host core. HTTP handlers and the
+# root-owned lookups (sessions, live access, runs, build status) stay in the root
+# crate (src/api/system.rs), which implements `DashboardHost`.
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tokio = { version = "1", features = ["rt", "time"] }
+webagent-host-core = { path = "../../../host-core" }
+webagent-system = { path = ".." }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+webagent-host-core = { path = "../../../host-core", features = ["test-support"] }
+
+[lints]
+workspace = true
