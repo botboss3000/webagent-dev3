@@ -73,6 +73,8 @@ pub(crate) mod failure;
 pub(crate) mod knowledge_files;
 #[path = "../../../plugins/abilities/Web/web_access/adapter.rs"]
 pub(crate) mod web_access;
+#[path = "../../../crates/modules/abilities/host/web_search.rs"]
+pub(crate) mod web_search;
 #[cfg(test)]
 pub(crate) use dispatch::call_raw;
 pub(crate) use dispatch::{call, call_foreground};
@@ -134,6 +136,7 @@ pub fn is_read(name: &str) -> bool {
 pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
     [
         web_access::TOOLS,
+        web_search::TOOLS,
         business_front_desk::TOOLS,
         knowledge_files::TOOLS,
         core_decision::TOOLS,
@@ -275,6 +278,7 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         }
         schemas.extend(crate::background_tasks::schemas());
         schemas.extend(web_access::schemas());
+        schemas.extend(web_search::schemas());
         schemas.extend(business_front_desk::schemas());
         schemas.extend(knowledge_files::schemas());
         schemas.extend(core_decision::schemas());

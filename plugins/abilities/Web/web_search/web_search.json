@@ -1,0 +1,88 @@
+{
+  "display_name": "Web Search",
+  "kind": "ability",
+  "description": "Search the web and read pages through providers you switch on and configure: Tavily, Brave Search, Wikipedia and DuckDuckGo.",
+  "icon": "search",
+  "color": "#7aa2f7",
+  "order": 3,
+  "placeholder": false,
+  "readiness": "ready",
+  "config": {
+    "settings": [
+      {
+        "key": "tavily_enabled",
+        "label": "Tavily",
+        "type": "boolean",
+        "default": true,
+        "hint": "AI-agent search with page reading. Free plan: 1,000 credits a month. Needs the tavily_api_key credential."
+      },
+      {
+        "key": "brave_enabled",
+        "label": "Brave Search",
+        "type": "boolean",
+        "default": false,
+        "hint": "Independent web index. About $5 of free credit a month (roughly 1,000 searches) and Brave attribution on your site. Needs the brave_search_api_key credential."
+      },
+      {
+        "key": "wikipedia_enabled",
+        "label": "Wikipedia",
+        "type": "boolean",
+        "default": true,
+        "hint": "Free encyclopedic results from English Wikipedia; no key."
+      },
+      {
+        "key": "duckduckgo_enabled",
+        "label": "DuckDuckGo",
+        "type": "boolean",
+        "default": false,
+        "hint": "Free, no key, but often blocks automated searches. Best kept as a last-resort fallback."
+      },
+      {
+        "key": "provider_order",
+        "label": "Provider order",
+        "type": "text",
+        "default": "tavily,brave,wikipedia,duckduckgo",
+        "hint": "Comma-separated order to try enabled providers in. Unknown names are ignored."
+      },
+      {
+        "key": "fallback",
+        "label": "Fall back to the next provider",
+        "type": "boolean",
+        "default": true,
+        "hint": "ON tries the next enabled provider when one fails, has no key or is over its cap. OFF stops at the first failure."
+      },
+      {
+        "key": "max_results",
+        "label": "Results per search",
+        "type": "number",
+        "default": 5,
+        "min": 1,
+        "max": 10,
+        "step": 1,
+        "hint": "Default number of results when the agent doesn't ask for a specific count."
+      },
+      {
+        "key": "tavily_monthly_cap",
+        "label": "Tavily monthly cap",
+        "type": "number",
+        "default": 1000,
+        "min": 0,
+        "max": 100000,
+        "step": 50,
+        "hint": "Requests per calendar month (UTC) for each user before Tavily is skipped. 0 means no cap."
+      },
+      {
+        "key": "brave_monthly_cap",
+        "label": "Brave monthly cap",
+        "type": "number",
+        "default": 1000,
+        "min": 0,
+        "max": 100000,
+        "step": 50,
+        "hint": "Requests per calendar month (UTC) for each user before Brave is skipped. 0 means no cap."
+      }
+    ]
+  },
+  "migration_note": "Executable plugin (requests_v1). Providers are declared in plugin.json; the host makes each provider call, adds the caller's vault key and counts monthly use, so the sandboxed plugin never sees keys or the network.",
+  "skill_summary": "Web search across switchable providers, and reading one page as text, with explicit error codes and recovery hints."
+}

@@ -1,0 +1,17 @@
+[package]
+name = "webagent-web-search"
+version = "1.0.0"
+edition = "2021"
+publish = false
+
+# Built alone by the broker's plugin lane (dev) and linked into the root behind the
+# `stable-abilities` feature (stable); the root workspace excludes this folder.
+[lib]
+path = "plugin/lib.rs"
+
+[[bin]]
+name = "webagent_web_search"
+path = "plugin/main.rs"
+
+[dependencies]
+serde_json = "1"

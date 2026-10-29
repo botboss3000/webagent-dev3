@@ -1,0 +1,29 @@
+{
+  "name": "web_read",
+  "description": "Read one public web page as plain text (Wikipedia articles directly, other pages through Tavily)",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 2048
+      },
+      "max_chars": {
+        "type": "integer",
+        "minimum": 500,
+        "maximum": 50000
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "additionalProperties": false
+  }
+}

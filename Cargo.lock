@@ -2896,7 +2896,15 @@ dependencies = [
  "webagent-system-host",
  "webagent-usage",
  "webagent-usage-reports",
+ "webagent-web-search",
  "webagent-webapp",
+]
+
+[[package]]
+name = "webagent-web-search"
+version = "1.0.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

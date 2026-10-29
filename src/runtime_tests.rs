@@ -7959,7 +7959,8 @@ async fn web_access_api_support_auth_csrf_revision_and_persistence() {
         .unwrap();
     assert_eq!(web["readiness"], "ready");
     assert_eq!(web["available"], true);
-    assert_eq!(web["tools"].as_array().unwrap().len(), 3);
+    // get_weather and maps_geocode; web_search moved to the Web Search ability.
+    assert_eq!(web["tools"].as_array().unwrap().len(), 2);
     assert!(web["tools"]
         .as_array()
         .unwrap()

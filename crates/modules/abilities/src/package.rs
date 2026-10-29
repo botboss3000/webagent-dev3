@@ -264,6 +264,7 @@ fn requests_contract(
         "effect",
         "tools",
         "requests",
+        "providers",
         "build",
     ];
     if manifest
@@ -291,10 +292,12 @@ fn requests_contract(
     Ok(declaration)
 }
 
-/// A validated `requests_v1` plugin: its tools, declared requests and artifact identity.
+/// A validated `requests_v1` plugin: its tools, declared requests, declared external
+/// providers and artifact identity.
 pub struct RequestsPlugin {
     pub tools: Vec<String>,
     pub requests: webagent_extensions::requests::Declaration,
+    pub providers: webagent_extensions::providers::Providers,
     key: String,
     entry: String,
 }
@@ -305,6 +308,7 @@ impl RequestsPlugin {
     pub fn load(root: &FsPath, id: &str, folders: &[String]) -> Result<Self> {
         let manifest: Value = serde_json::from_slice(&read(&root.join("plugin.json"), 64 * 1024)?)?;
         let requests = requests_contract(root, id, folders, &manifest)?;
+        let providers = webagent_extensions::providers::Providers::parse(&manifest, &requests)?;
         let entry = manifest["entrypoint"]
             .as_str()
             .filter(|entry| access::valid_id(entry))
@@ -320,6 +324,7 @@ impl RequestsPlugin {
         Ok(Self {
             tools,
             requests,
+            providers,
             key,
             entry,
         })

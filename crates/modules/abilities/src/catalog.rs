@@ -3627,7 +3627,7 @@ pub mod registered_tests {
                 .iter()
                 .filter(|entry| !matches!(entry.id.as_str(), "optimization" | "mcp"))
                 .collect::<Vec<_>>();
-            assert_eq!(ordinary.len(), 78);
+            assert_eq!(ordinary.len(), 79);
             assert_eq!(
                 catalog
                     .abilities
@@ -3652,14 +3652,14 @@ pub mod registered_tests {
                     .iter()
                     .filter(|entry| Catalog::<H>::executable(entry))
                     .count(),
-                19
+                20
             );
             assert_eq!(
                 ordinary
                     .iter()
                     .filter(|entry| entry.readiness == Readiness::Ready)
                     .count(),
-                20
+                21
             );
             assert_eq!(
                 catalog
@@ -3775,11 +3775,11 @@ pub mod registered_tests {
                 catalog.tool_abilities("maps_geocode", &v, &active, &run["loaded_abilities"]),
                 vec!["web_access"]
             );
-            p["rules"]["web_search"] = json!("deny");
+            p["rules"]["get_weather"] = json!("deny");
             assert!(!catalog
                 .schemas_with(&p, &run["loaded_abilities"], &v, &active)
                 .iter()
-                .any(|s| s["name"] == "web_search"));
+                .any(|s| s["name"] == "get_weather"));
             v["visibility"]["web_access"] = json!("off");
             assert!(!catalog.tool_available("maps_geocode", &v, &active, &run["loaded_abilities"]));
         }

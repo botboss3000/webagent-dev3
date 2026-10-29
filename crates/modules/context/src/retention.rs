@@ -243,6 +243,7 @@ pub fn eligible_tools() -> &'static [&'static str] {
         "file_search",
         "state_inspect",
         "web_search",
+        "web_read",
         "get_weather",
         "maps_geocode",
         "read_attachment",

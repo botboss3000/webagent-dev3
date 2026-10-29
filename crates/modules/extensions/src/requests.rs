@@ -16,6 +16,10 @@ pub enum Kind {
     /// Subscribe the current session to another of the caller's sessions; the app
     /// re-authorizes the tool call and its Automation dependency first.
     Watch,
+    /// One call to an external provider the plugin declared in `plugin.json`
+    /// (`providers`, see `crate::providers`). The app makes it, adding the caller's
+    /// vault key and counting the month's use, so the plugin never sees the key.
+    ProviderRequest,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,7 +31,7 @@ pub enum SkillAction {
 }
 
 /// Every request the app offers, by name.
-pub const OFFERED: [(&str, Kind); 23] = [
+pub const OFFERED: [(&str, Kind); 24] = [
     ("agents.list", Kind::Route("GET", "/models/agents")),
     (
         "agents.identity.read",
@@ -96,6 +100,7 @@ pub const OFFERED: [(&str, Kind); 23] = [
     ),
     ("sessions.watch", Kind::Watch),
     ("ability.settings", Kind::Settings),
+    ("web.provider_request", Kind::ProviderRequest),
 ];
 
 /// Why a declaration or a request was refused.

@@ -5,18 +5,22 @@
 //! in the plugin's `plugin.json`, and it runs as the chatting user with that user's
 //! permissions.
 use crate::{ability_controls, digest, modules, now, shared_chat, tools, App};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use webagent_abilities::package::RequestsPlugin;
 use webagent_extensions::plugin::Request;
+use webagent_extensions::providers::{self, Method, ProviderCall, Providers};
 use webagent_extensions::requests::{self, Declaration, Kind, SkillAction};
 
 /// Longest a plugin call may run, host requests included.
 const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 const MAX_WATCH_PROMPT: usize = 16_000;
 const MAX_WATCH_SECONDS: u64 = 30 * 86_400;
+/// Largest provider reply returned to a plugin.
+const MAX_PROVIDER_BODY: usize = 1024 * 1024;
+const PROVIDER_AGENT: &str = "WebAgent-v3/1.0 (+https://webagent.live)";
 
 /// One tool call routed to a plugin. `ability` is its `Group/ability_id` folder.
 pub(crate) struct Call<'a> {
@@ -82,10 +86,15 @@ pub(crate) async fn execute(call: Call<'_>) -> Result<Value> {
         actor: &actor,
         request_id: &request_id,
         declared: &plugin.requests,
+        providers: &plugin.providers,
     };
     let output = tokio::time::timeout(CALL_TIMEOUT, run(&plugin, id, &host, &context))
         .await
         .map_err(|_| anyhow!("Plugin call timed out"))??;
+    // A plugin reports a tool failure as an error output carrying its code and hint.
+    if output["status"] == "error" {
+        return Ok(output);
+    }
     Ok(json!({"status": "success", "output": output}))
 }
 
@@ -146,16 +155,30 @@ async fn run(
     host: &Host<'_>,
     context: &Value,
 ) -> Result<Value> {
-    let call = webagent_agent_management::Call {
-        tool: host.call.name,
-        arguments: host.call.args,
-        request_id: host.request_id,
-        now_ms: context["now_ms"].as_u64().unwrap_or_default(),
-    };
+    let now_ms = context["now_ms"].as_u64().unwrap_or_default();
     match id {
-        "agent_management" => webagent_agent_management::call(&Linked(host), call)
-            .await
-            .map_err(|error| anyhow!(error)),
+        "agent_management" => {
+            let call = webagent_agent_management::Call {
+                tool: host.call.name,
+                arguments: host.call.args,
+                request_id: host.request_id,
+                now_ms,
+            };
+            webagent_agent_management::call(&Linked(host), call)
+                .await
+                .map_err(|error| anyhow!(error))
+        }
+        "web_search" => {
+            let call = webagent_web_search::Call {
+                tool: host.call.name,
+                arguments: host.call.args,
+                request_id: host.request_id,
+                now_ms,
+            };
+            webagent_web_search::call(&Linked(host), call)
+                .await
+                .map_err(|error| anyhow!(error))
+        }
         _ => Err(anyhow!("Plugin {id} is not linked into this build")),
     }
 }
@@ -179,6 +202,50 @@ impl webagent_agent_management::Host for Linked<'_, '_> {
     }
 }
 
+#[cfg(feature = "stable-abilities")]
+impl webagent_web_search::Host for Linked<'_, '_> {
+    fn request(
+        &self,
+        name: &str,
+        params: Value,
+        body: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + Send {
+        self.0.answer(Request {
+            name: name.to_owned(),
+            params,
+            body,
+        })
+    }
+}
+
+/// HTTPS only, no redirects, bounded time: a declared origin is the only host reached.
+fn provider_client() -> Result<&'static reqwest::Client> {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let client = reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(20))
+        .user_agent(PROVIDER_AGENT)
+        .build()?;
+    Ok(CLIENT.get_or_init(|| client))
+}
+
+/// A provider reply as text, refused past `MAX_PROVIDER_BODY`.
+async fn bounded_text(mut response: reqwest::Response) -> Result<String> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if bytes.len() + chunk.len() > MAX_PROVIDER_BODY {
+            bail!("provider_error: the reply is larger than 1 MiB");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// Answers one call's host requests.
 struct Host<'a> {
     call: &'a Call<'a>,
@@ -186,6 +253,7 @@ struct Host<'a> {
     actor: &'a str,
     request_id: &'a str,
     declared: &'a Declaration,
+    providers: &'a Providers,
 }
 
 impl Host<'_> {
@@ -206,8 +274,81 @@ impl Host<'_> {
                 .await
                 .map(|(_, _, visibility, _)| visibility["settings"][self.ability].clone()),
             Kind::Watch => self.watch(&request.params, &request.body).await,
+            Kind::ProviderRequest => self.provider_request(&request.params, &request.body).await,
         };
         result.map_err(|error| format!("{error:#}"))
+    }
+
+    /// One call to a provider the plugin declared, made as the caller. The caller's vault
+    /// key goes into the declared header and is never returned to the plugin; a monthly
+    /// cap the plugin passes is checked against the caller's own counter. Refusals read
+    /// `code: message` so the plugin can map them to its error codes.
+    async fn provider_request(&self, params: &Value, body: &Value) -> Result<Value> {
+        let call = ProviderCall::parse(params, body)
+            .map_err(|error| anyhow!("invalid_request: {error}"))?;
+        let (provider, endpoint) = self
+            .providers
+            .endpoint(&call.provider, &call.endpoint)
+            .ok_or_else(|| anyhow!("invalid_request: undeclared provider endpoint"))?;
+        if call.json.is_some() && endpoint.method != Method::Post {
+            bail!("invalid_request: a JSON body needs a POST endpoint");
+        }
+        let store = self.call.app.store.for_user(self.actor).await?;
+        let credential = match &provider.credential {
+            Some(credential) => {
+                let record = store
+                    .get(&format!("core_vault:{}", credential.name))
+                    .await?
+                    .unwrap_or(Value::Null);
+                let key = record["value"]
+                    .as_str()
+                    .filter(|key| !key.is_empty())
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "credential_missing: no {} credential is saved",
+                            credential.name
+                        )
+                    })?;
+                Some((credential, format!("{}{key}", credential.prefix)))
+            }
+            None => None,
+        };
+        // Attempts count, not successes; concurrent calls may pass a cap by a few.
+        let counter = providers::usage_key(self.ability, &call.provider, &providers::month(now()));
+        let used = store
+            .get(&counter)
+            .await?
+            .and_then(|value| value["count"].as_u64())
+            .unwrap_or_default();
+        if call.monthly_cap > 0 && used >= call.monthly_cap {
+            bail!(
+                "quota_exhausted: {} reached its monthly cap of {}",
+                call.provider,
+                call.monthly_cap
+            );
+        }
+        store.put(&counter, &json!({"count": used + 1})).await?;
+        let url = format!("{}{}", provider.origin, endpoint.path);
+        let client = provider_client()?;
+        let mut request = match endpoint.method {
+            Method::Get => client.get(&url),
+            Method::Post => client.post(&url),
+        }
+        .query(&call.query)
+        .header("accept", "application/json, text/html;q=0.9");
+        if let Some(json) = &call.json {
+            request = request.json(json);
+        }
+        if let Some((credential, value)) = &credential {
+            request = request.header(credential.header.as_str(), value.as_str());
+        }
+        let response = tokio::select! {
+            _ = self.call.cancel.cancelled() => bail!("tool execution cancelled"),
+            sent = request.send() => sent
+                .map_err(|_| anyhow!("provider_unreachable: {} could not be reached", call.provider))?,
+        };
+        let status = response.status().as_u16();
+        Ok(json!({"status": status, "body": bounded_text(response).await?}))
     }
 
     /// The caller's own skills on an agent they administer.
@@ -355,6 +496,7 @@ mod tests {
             actor: &actor,
             request_id: "request",
             declared: &declared,
+            providers: &Providers::default(),
         };
         let request = |name: &str, params: Value| Request {
             name: name.into(),
@@ -386,5 +528,82 @@ mod tests {
             .answer(request("accounts.delete", Value::Null))
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn provider_requests_add_the_callers_key_and_enforce_the_cap() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let manifest = json!({"requests": ["web.provider_request"], "providers": {
+            "fixture": {"origin": "https://provider.invalid",
+                "credential": {"name": "fixture_key", "header": "X-Fixture", "prefix": ""},
+                "endpoints": {"search": {"method": "GET", "path": "/search"}}}}});
+        let declared = Declaration::parse(&manifest).unwrap();
+        let providers = Providers::parse(&manifest, &declared).unwrap();
+        let args = json!({});
+        let call = Call {
+            app: &app,
+            sid: &sid,
+            run_id: "run",
+            generation: "generation",
+            pending: "pending",
+            name: "web_search",
+            args: &args,
+            cancel: CancellationToken::new(),
+            ability: "Web/web_search",
+        };
+        let actor = shared_chat::actor(&app).to_owned();
+        let host = Host {
+            call: &call,
+            ability: "web_search",
+            actor: &actor,
+            request_id: "request",
+            declared: &declared,
+            providers: &providers,
+        };
+        let ask = |endpoint: &str, body: Value| Request {
+            name: "web.provider_request".into(),
+            params: json!({"provider": "fixture", "endpoint": endpoint}),
+            body,
+        };
+        // No saved key: refused before counting or any network call.
+        let missing = host
+            .answer(ask("search", json!({"monthly_cap": 5})))
+            .await
+            .unwrap_err();
+        assert!(missing.starts_with("credential_missing:"), "{missing}");
+        let store = app.store.for_user(&actor).await.unwrap();
+        let key = ["fixture", "provider", "value"].join("-");
+        store
+            .put("core_vault:fixture_key", &json!({"value": key}))
+            .await
+            .unwrap();
+        let counter = providers::usage_key("web_search", "fixture", &providers::month(now()));
+        store.put(&counter, &json!({"count": 5})).await.unwrap();
+        let capped = host
+            .answer(ask("search", json!({"monthly_cap": 5})))
+            .await
+            .unwrap_err();
+        assert!(capped.starts_with("quota_exhausted:"), "{capped}");
+        // Under the cap the attempt is counted and made; its failure never echoes the key.
+        let failed = host
+            .answer(ask(
+                "search",
+                json!({"monthly_cap": 10, "query": {"q": "x"}}),
+            ))
+            .await
+            .unwrap_err();
+        assert!(
+            failed.starts_with("provider_unreachable:") && !failed.contains(&key),
+            "{failed}"
+        );
+        assert_eq!(store.get(&counter).await.unwrap().unwrap()["count"], 6);
+        for (endpoint, body) in [
+            ("extract", json!({})),
+            ("search", json!({"json": {"q": "x"}})),
+        ] {
+            let refused = host.answer(ask(endpoint, body)).await.unwrap_err();
+            assert!(refused.starts_with("invalid_request:"), "{refused}");
+        }
     }
 }

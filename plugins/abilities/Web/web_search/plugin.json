@@ -1,0 +1,94 @@
+{
+  "id": "web_search",
+  "dispatch": "isolated",
+  "host_interface": "requests_v1",
+  "protocol": 2,
+  "interface": 1,
+  "runtime": "executable",
+  "entrypoint": "webagent_web_search",
+  "effect": "write",
+  "tools": [
+    "web_search",
+    "web_read"
+  ],
+  "requests": [
+    "ability.settings",
+    "web.provider_request"
+  ],
+  "providers": {
+    "tavily": {
+      "origin": "https://api.tavily.com",
+      "credential": {
+        "name": "tavily_api_key",
+        "header": "Authorization",
+        "prefix": "Bearer "
+      },
+      "endpoints": {
+        "search": {
+          "method": "POST",
+          "path": "/search"
+        },
+        "extract": {
+          "method": "POST",
+          "path": "/extract"
+        }
+      }
+    },
+    "brave": {
+      "origin": "https://api.search.brave.com",
+      "credential": {
+        "name": "brave_search_api_key",
+        "header": "X-Subscription-Token",
+        "prefix": ""
+      },
+      "endpoints": {
+        "search": {
+          "method": "GET",
+          "path": "/res/v1/web/search"
+        }
+      }
+    },
+    "wikipedia": {
+      "origin": "https://en.wikipedia.org",
+      "endpoints": {
+        "search": {
+          "method": "GET",
+          "path": "/w/rest.php/v1/search/page"
+        },
+        "extract": {
+          "method": "GET",
+          "path": "/w/api.php"
+        }
+      }
+    },
+    "duckduckgo": {
+      "origin": "https://html.duckduckgo.com",
+      "endpoints": {
+        "search": {
+          "method": "GET",
+          "path": "/html/"
+        }
+      }
+    }
+  },
+  "build": {
+    "toolchain": "rust-1.99",
+    "inputs": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "plugin/lib.rs",
+      "plugin/main.rs",
+      "web_search.json"
+    ],
+    "dependencies": [],
+    "flags": [],
+    "assets": [
+      "web_search.json",
+      "web_search.skill.md",
+      "tools/web_search/tool.json",
+      "tools/web_search/tool.skill.md",
+      "tools/web_read/tool.json",
+      "tools/web_read/tool.skill.md"
+    ]
+  }
+}
