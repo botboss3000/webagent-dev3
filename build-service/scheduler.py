@@ -313,10 +313,18 @@ class Scheduler:
         if key not in self.broker.work:raise ValueError("Owned source task required")
         if args.get("task_key")is not None and args["task_key"]!=key:raise PermissionError("Task key is outside this caller namespace")
         return self.broker.work[key]
+    @staticmethod
+    def release_synchronized(job):
+        """Synchronized, or an acknowledged proceed past checkout drift the build neither changed nor overwrote.
+        That drift belongs to the checkout, not the task; promoted bytes and the commit are still verified."""
+        sync=job.get("synchronization")or{}
+        if sync.get("status")=="synchronized":return True
+        return(sync.get("status")=="drift"and sync.get("digest")is not None and job.get("sync_ack_digest")==sync["digest"]
+            and sync.get("affected")==0 and sync.get("promotion_conflicts")==0)
     def verified(self,item,args,*,deployment_only=False):
         """Verify terminal publication, current promoted bytes and exact Git history before acceptance."""
         job=self.broker.jobs.get(args.get("job_id"))
-        if not job or job.get("task_id")!=item["task_id"]or job.get("user_id")!=item["user_id"]or job.get("workspace")!=item["workspace"]or job["status"]!="completed"or job.get("batch_parent")or job.get("synchronization",{}).get("status")!="synchronized":
+        if not job or job.get("task_id")!=item["task_id"]or job.get("user_id")!=item["user_id"]or job.get("workspace")!=item["workspace"]or job["status"]!="completed"or job.get("batch_parent")or not self.release_synchronized(job):
             raise ValueError("Current synchronized completed release required")
         if item.get("job_id")!=job["job_id"]or item["status"]!="closed":raise ValueError("Latest source generation must be published")
         if any(j.get("task_id")==item["task_id"]and j["status"]in {"queued","running","uncertain","needs_decision"}for j in self.broker.jobs.values()):

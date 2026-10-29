@@ -10,7 +10,10 @@ After verifying and committing exact promoted bytes, release source write claims
 with build_work release_claims and the release commit. The broker verifies the
 completed synchronized release, commit bytes and health; releasing the last held
 claim this way completes the task, with no separate acceptance or complete call.
-A partial release keeps the task owned. Reserve only modules fundamental to the
+A release answered `proceed` at the synchronization prompt also qualifies when the
+acknowledged drift was neither affected by the build nor a promotion conflict: that
+drift belongs to the checkout, not the task. Prefer `synchronize` when the drift is
+committed source that should ship. A partial release keeps the task owned. Reserve only modules fundamental to the
 actual edit; acquire other affected paths when changing them and release them
 when their deployed changes are safely committed. Post-deployment metadata work
 does not need an open task.

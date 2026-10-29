@@ -288,6 +288,22 @@ class SchedulerBrokerTests(unittest.TestCase):
         self.assertEqual(done["evidence"]["deployment"]["commit"],commit)
         self.assertTrue(self.broker.scheduler.retention_allowed(item["key"]))
         available,_=self.action(other["task_id"],"reserve",paths=["README.md"]);self.assertTrue(available["acquired"])
+    def test_release_claims_accepts_acknowledged_drift_the_build_did_not_touch(self):
+        """A proceed past unrelated checkout drift still frees the task; affected or unacknowledged drift does not."""
+        item=self.begin("proceed-release-task")
+        self.write(item,"README.md","published\n");job,commit=self.publish(item)
+        def release(n):
+            value=self.broker.scheduler.store.get(item["key"])
+            request={"action":"release_claims","task_id":item["task_id"],"scopes":value["scopes"],"reason":"Deployed and committed",
+                "commit":commit,"request_id":f"proceed-release-{n}","expected_revision":value["revision"],"expected_epoch":value["epoch"]}
+            with patch.object(self.broker,"_start_next"):return self.call("build_work",request)
+        drift={"status":"drift","digest":"d"*64,"affected":0,"promotion_conflicts":0}
+        for n,(sync,ack) in enumerate([(drift,None),(drift|{"affected":1},"d"*64),(drift|{"promotion_conflicts":1},"d"*64)]):
+            job.update(synchronization=sync,sync_ack_digest=ack)
+            with self.assertRaisesRegex(ValueError,"Current synchronized completed release required"):release(n)
+        job.update(synchronization=drift,sync_ack_digest="d"*64)
+        done=release(9)
+        self.assertEqual((done["state"],done["scopes"]),("complete",[]))
     def test_acceptance_allows_content_identical_path_absent_from_commit(self):
         """A mode-only released path has nothing to commit; a real change still must be committed."""
         self.runner.blob=fixtures.context(extra={"v3/README.md":"original\n","v3/docs/keep.md":"same\n"})
