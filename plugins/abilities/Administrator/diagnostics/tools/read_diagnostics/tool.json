@@ -1,6 +1,6 @@
 {
   "name": "read_diagnostics",
-  "description": "Read bounded content-free diagnostics for the current session run",
+  "description": "Read bounded content-free diagnostics (status, phase, turn) for the current session run",
   "effect": "read",
   "default_access": {
     "operator": "auto",
