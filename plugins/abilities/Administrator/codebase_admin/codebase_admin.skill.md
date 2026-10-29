@@ -10,7 +10,11 @@ For v3 Rust work, load the selectable rust_quality skill in this ability for own
 
 ## Source roots
 
-File tools and approved shell and Python commands start in /live-checkout, the independent V3 source root. Use Codebase Admin file tools without task_id for explicit direct/live file edits and runtime configuration. For application source changes intended for a build or release, supply one stable task_id to file tools; they automatically create an isolated broker task. Inspect that task before editing, use its latest input digest for writes, and use build_work review/check/preflight. Only explicit authorized build_work finish deploys; task edits alone never deploy. V2 source is outside this container mount. Tool reach is determined by container OS permissions; an empty session workspace does not mean source is unavailable.
+File tools and approved shell and Python commands start in /live-checkout, the independent V3 source root.
+
+Change and release the app through the broker. Edit with file_edit/file_write and one stable task_id (omitting it creates a task), inspect the task first, write with its latest input digest, then use build_work review/check/preflight. Only an explicitly authorized build_work finish builds, tests, deploys and promotes; task edits alone never deploy.
+
+checkout_edit writes the live checkout directly and takes effect only for live files: the .json and .md files listed in /live-checkout/live-files.json, such as prompt Markdown and runtime JSON configuration. The app reads those live, the broker commits their edits automatically, and broker tasks cannot change them. A direct edit to any other file changes nothing in the running app and shows up as checkout drift; ship it through a broker task instead. V2 source is outside this container mount. Tool reach is determined by container OS permissions; an empty session workspace does not mean source is unavailable.
 
 ## Early Rust feature checks
 
