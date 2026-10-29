@@ -1,1 +1,0 @@
-When a Decision model is assigned, route directory triage to score_directory_with_jev instead of listing directory contents, and route tool discovery to search_tools or decide_with_jev at the concrete selection moment. Use decide_with_jev for a decision among candidate options when that tool is available.
