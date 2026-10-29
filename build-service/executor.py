@@ -52,7 +52,7 @@ def live_profile(stable=False):return "stable"if stable else"release"
 MOLD_VERSION="1.10.1+dfsg-1"
 MOLD_SHA256="f85b0102cabeaee34b76ab195aacfa9ff9442d670948c88f6f353dd666ea5b64"
 MOLD_COMPILER_DOCKERFILE_SHA256="9efba3943ef7e5d9ee4ca90913cc9710572e927444e1d3e458985f42434cf9dd"
-MOLD_COMPILER_STAGE_SHA256="0e39ec80fbabe0f482cd1ec80077813105f1776ccc60b5a566686823c3614098"
+MOLD_COMPILER_STAGE_SHA256="cce5bddb6c58a318ad2794caa9efcd997fecc4b367e02c548323dc46dfb46ef8"
 BUILDKIT="moby/buildkit:v0.25.1@sha256:79cc6476ab1a3371c9afd8b44e7c55610057c43e18d9b39b68e2b0c2475cc1b6"
 COMPILER_STAGE_SHA256="474b034d7a843ebf324b654a785b5a5b23135804ef39c662f92fcb3e160dfeaf"
 # Coordinated Automation extraction removes only its root-bin distribution closure.

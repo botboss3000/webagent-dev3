@@ -14,6 +14,11 @@ import uuid
 # Task-only troubleshooting data; never part of an image/release candidate.
 INSPECTION_CONTEXT = ("v3/data/user_data/admin", "v3/data/agent_data/shared_default")
 MAX_INSPECTION_FILE = 256 * 1024 * 1024
+# Gate settings moved to crates/modules/engine/gates (2026-10-29). Stored task baselines
+# and the release deployed before then still carry these copies: they stay readable,
+# are never snapshotted again and are dropped from every new candidate.
+RETIRED_CONTEXT = ("v3/data/config/gates/message_visibility_v1.json",
+                   "v3/data/config/gates/closing_status_v1.json")
 
 
 def inspection_path(name):
@@ -216,7 +221,8 @@ def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False, s
     (base,base_inspection),(task,task_inspection),(live,_) = (candidate_entries(value,validate)for value in (base_blob,task_blob,live_blob))
     # Same attested identity without holding private inspection bodies in memory.
     if base_inspection!=task_inspection:raise ValueError("read-only inspection snapshot changed")
-    changed = [name for name in sorted(set(base) | set(task)) if source_differs(base.get(name), task.get(name))]
+    changed = [name for name in sorted(set(base) | set(task))
+               if name not in RETIRED_CONTEXT and source_differs(base.get(name), task.get(name))]
     if (not changed and not allow_empty) or len(changed) > 256 or any(
             not name.startswith("v3/") or name.startswith("v3/data/")
             for name in changed):
@@ -228,7 +234,7 @@ def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False, s
     if held and not skip_live:
         raise ValueError("live file is edited in place, not through tasks (remove it from live-files.json first to change it in a task): " + held[0].removeprefix("v3/"))
     changed = [name for name in changed if name not in held]
-    merged = dict(live)
+    merged = {name: value for name, value in live.items() if name not in RETIRED_CONTEXT}
     for name in changed:
         if live.get(name) not in (base.get(name), task.get(name)):
             raise ValueError("source conflict: " + name)

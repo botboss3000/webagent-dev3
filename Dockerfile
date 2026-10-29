@@ -19,8 +19,6 @@ COPY v3/crates ./crates
 # COMPACTION CONFIG: build-time tests read this fixture; runtime uses the single
 # host config directory mounted by deploy.sh, not an embedded configuration.
 COPY v3/config ./config
-# GATE-CONFIG: only the two selected non-secret live JSON files enter the image.
-COPY v3/data/config/gates ./data/config/gates
 COPY v3/build-service ./build-service
 COPY v3/plugins ./plugins
 # Runtime tests load the installed ability catalog and chat configuration.

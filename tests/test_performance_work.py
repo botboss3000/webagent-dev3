@@ -99,9 +99,7 @@ class PerformancePolicyTests(unittest.TestCase):
         host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); source = root / "source"; source.mkdir()
-            for name in ("Dockerfile", "Cargo.toml", "Cargo.lock",
-                         "data/config/gates/message_visibility_v1.json",
-                         "data/config/gates/closing_status_v1.json", "config/prompts.json"):
+            for name in ("Dockerfile", "Cargo.toml", "Cargo.lock", "config/prompts.json"):
                 path = source / "v3" / name; path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("original")
             private = source / "v3/task-inspection/admin/chat.db"; private.parent.mkdir(parents=True)

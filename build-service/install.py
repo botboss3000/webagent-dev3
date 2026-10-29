@@ -416,14 +416,13 @@ def snapshot_context(context):
             for name in context:
                 if not isinstance(name, str) or name.startswith("/") or ".." in Path(name).parts or not name.startswith(("v3/", "ui/")):
                     raise ValueError("fixed source context rejected")
-                if name.startswith("v3/data/") and name not in ("v3/data/config/gates/message_visibility_v1.json", "v3/data/config/gates/closing_status_v1.json", *INSPECTION_CONTEXT):
-                    raise ValueError("runtime data outside gate allowlist")
+                if name.startswith("v3/data/") and name not in INSPECTION_CONTEXT:
+                    raise ValueError("runtime data outside inspection allowlist")
                 if name.startswith(("v3/workspaces/", "v3/build-jobs/", "v3/rollback/", "v3/runtime/", "v3/target/")):
                     raise ValueError("runtime directory rejected")
                 # Preserve archive names while reading V3 from its independent root.
                 inspection = name in INSPECTION_CONTEXT
                 source = V3 / name.removeprefix("v3/") if name.startswith("v3/") else SHARED_SOURCE / name
-                if name.startswith("v3/data/config/gates/") and not source.exists():source=V3/"config/gates"/source.name
                 if name in {"v3/build-service","v3/crates","v3/plugins/engine","v3/services/system-monitoring"} and not source.exists()and not source.is_symlink():continue
                 parent_path, leaf = source.parent, source.name
                 try:

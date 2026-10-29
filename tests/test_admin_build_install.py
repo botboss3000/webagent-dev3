@@ -168,7 +168,7 @@ class InstallTests(unittest.TestCase):
         finally:
             os.close(source_fd); os.close(destination_fd)
 
-    def test_snapshot_is_fixed_source_and_two_gate_files(self):
+    def test_snapshot_is_fixed_source_without_runtime_data(self):
         src = self.v3 / "src"
         src.mkdir()
         (src / "main.rs").write_text("fn main() {}")
@@ -179,13 +179,14 @@ class InstallTests(unittest.TestCase):
         gates = self.v3 / "data/config/gates"
         gates.mkdir(parents=True)
         (gates / "message_visibility_v1.json").write_text("{}")
-        context = installer.snapshot_context(("v3/src", "v3/data/config/gates/message_visibility_v1.json"))
+        context = installer.snapshot_context(("v3/src",))
         self.assertGreater(len(context), 0)
         with installer.tarfile.open(fileobj=installer.io.BytesIO(context)) as archive:
             names = [member.name for member in archive]
         self.assertIn("v3/src/main.rs", names)
         self.assertFalse(any("__pycache__" in name or name.endswith((".pyc", ".pyo")) for name in names))
-        for invalid in ("v3/data/session.db", "v3/workspaces/source", "v3/../data"):
+        for invalid in ("v3/data/session.db", "v3/data/config/gates/message_visibility_v1.json",
+                        "v3/workspaces/source", "v3/../data"):
             with self.assertRaises(ValueError): installer.snapshot_context((invalid,))
         (src / "secret.db").write_bytes(b"SQLite format 3")
         with self.assertRaisesRegex(ValueError, "database"): installer.snapshot_context(("v3/src",))

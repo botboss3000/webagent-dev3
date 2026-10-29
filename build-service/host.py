@@ -80,8 +80,6 @@ CONTEXT = (
     "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/plugins/abilities", "v3/plugins/gates", "v3/worker.py",
     "v3/sandbox.py", "v3/ability_plugin_worker.py", "v3/launch.py", "v3/promote.py", "v3/ui-baseline.json", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
     "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service",
-    "v3/data/config/gates/message_visibility_v1.json",
-    "v3/data/config/gates/closing_status_v1.json",
     "ui/shared/css/app1.css", "ui/shared/css/app2.css", "ui/shared/css/app3.css",
     "ui/shared/css/design-system.css", "ui/shared/css/index.css",
     "ui/main-panel/agents/agents.html", "ui/main-panel/agents/agents.css",
@@ -524,7 +522,7 @@ def context_digest(blob):
             if name.startswith("./"):
                 name = name[2:]
             parts = Path(name).parts
-            if name.startswith("/") or ".." in parts or not any(name == p or name.startswith(p + "/") for p in TASK_CONTEXT):
+            if name.startswith("/") or ".." in parts or not (name in release.RETIRED_CONTEXT or any(name == p or name.startswith(p + "/") for p in TASK_CONTEXT)):
                 raise ValueError("snapshot escaped build allowlist")
             if "__pycache__" in parts or name.endswith((".pyc", ".pyo")):
                 raise ValueError("generated Python cache is not a build input")
@@ -539,8 +537,7 @@ def context_digest(blob):
                 while chunk:=body.read(1024*1024):digest.update(chunk);size+=len(chunk)
             if size!=member.size:raise ValueError("Incomplete snapshot input")
             entries[name] = (member.mode & 0o777, size, digest.hexdigest())
-    for required in ("v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock",
-                     "v3/data/config/gates/message_visibility_v1.json", "v3/data/config/gates/closing_status_v1.json"):
+    for required in ("v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock"):
         if required not in entries:
             raise ValueError("snapshot missing required input")
     if "v3/ui-baseline.json" in entries:

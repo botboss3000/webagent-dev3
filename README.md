@@ -691,10 +691,9 @@ within that checkpoint. Unknown, duplicate, or wrong-checkpoint modules fail
 validation. Only the isolated Python size plugin accepts the `optional:` prefix.
 
 The integral module definitions and settings are single live JSON files at
-`v3/data/config/gates/message_visibility_v1.json` and
-`v3/data/config/gates/closing_status_v1.json` (mounted at
-`/state/config/gates`). These same files are selected build/test inputs;
-there is no duplicate packaged default. The visibility module adds the v2
+`crates/modules/engine/gates/message_visibility_v1.json` and
+`crates/modules/engine/gates/closing_status_v1.json`, read through the shared
+live-file reader; no runtime data enters the build. The visibility module adds the v2
 message-visibility guidance and private `publish_main_message` control before
 a model call. A validated call commits a nonterminal working chat row while
 the run continues. The closing module offers private `set_closer_status`

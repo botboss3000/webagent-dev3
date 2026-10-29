@@ -25,9 +25,7 @@ spec.loader.exec_module(host)
 
 def context(version="one", extra=None):
     files = {"v3/Dockerfile": "FROM test " + version,
-             "v3/Cargo.toml": "fixture", "v3/Cargo.lock": "locked",
-             "v3/data/config/gates/message_visibility_v1.json": "{}",
-             "v3/data/config/gates/closing_status_v1.json": "{}"}
+             "v3/Cargo.toml": "fixture", "v3/Cargo.lock": "locked"}
     files.update(extra or {})
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w") as archive:
@@ -438,7 +436,22 @@ class BuildTests(unittest.TestCase):
         executable=host.release.archive(acl,host.context_digest)
         self.assertEqual(1,host.release.checkout_drift(base,executable,base,(),host.context_digest)["total"])
 
-    def test_sync_report_is_bounded_and_excludes_runtime_data(self):
+    def test_retired_gate_copies_stay_readable_and_leave_new_candidates(self):
+        # Startup re-reads stored baselines from before the gate move; they must still load.
+        retired={name:"{}" for name in host.release.RETIRED_CONTEXT}
+        old=context(extra=retired)
+        self.assertLessEqual(set(retired),set(host.Broker.scheduler_entries(old)))
+        # A task begun before the move has them in its baseline only, or in both.
+        for task in (context(extra={"v3/src/main.rs":"changed"}),
+                     context(extra=dict(retired,**{"v3/src/main.rs":"changed"}))):
+            blob,changed=host.release.candidate(old,task,old,host.context_digest)
+            self.assertEqual(["v3/src/main.rs"],changed)
+            self.assertFalse(set(retired)&set(host.release.entries(blob,host.context_digest)))
+        # Other runtime data is still refused.
+        with self.assertRaisesRegex(ValueError,"escaped build allowlist"):
+            host.context_digest(context(extra={"v3/data/config/gates/other.json":"{}"}))
+
+    def test_sync_report_is_bounded_and_content_free(self):
         files={"v3/src/f%d.rs"%i:"sensitive contents" for i in range(90)}
         base=context()
         report=host.release.checkout_drift(base,context(extra=files),base,(),host.context_digest)
@@ -447,8 +460,6 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(40,len(report["files"]))
         self.assertEqual(report["digest"],page["digest"])
         self.assertNotIn("sensitive contents",json.dumps(report))
-        changed=context(extra={"v3/data/config/gates/closing_status_v1.json":'{"enabled":true}'})
-        self.assertEqual(0,host.release.checkout_drift(base,changed,base,(),host.context_digest)["total"])
 
 
     def test_paused_batch_keeps_all_task_changes_under_one_decision(self):
