@@ -1,0 +1,27 @@
+{
+  "name": "resume_automation",
+  "description": "resume automation through the optional Automation service. Changes use revision checks; external adapters are unavailable.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "required": [
+      "id",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

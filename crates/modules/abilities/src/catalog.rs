@@ -362,6 +362,21 @@ impl<H: Host> Catalog<H> {
                 .filter_map(|a| a.plugin.as_ref().filter(|_| Self::present(a)))
                 .flat_map(|p| p.schemas.clone()),
         );
+        // Checkout edits: tools turned off leave, live descriptions replace the built ones.
+        let drift = H::drift();
+        schemas.retain(|schema| {
+            !schema["name"]
+                .as_str()
+                .is_some_and(|name| drift.disabled(name))
+        });
+        for schema in &mut schemas {
+            if let Some(definition) = schema["name"]
+                .as_str()
+                .and_then(|name| drift.definition(name))
+            {
+                schema["description"] = json!(definition.description);
+            }
+        }
         schemas
     }
 
@@ -985,11 +1000,17 @@ impl<H: Host> Catalog<H> {
         if !declared || !valid_id(name) {
             return None;
         }
-        let path = Self::published_skill(ability, kind, name).unwrap_or_else(|| match kind {
-            "ability" => ability.path.join(format!("{name}.skill.md")),
-            "tool" => crate::tool_definitions::skill_path(&ability.path, name),
-            _ => ability.path.join("skills").join(format!("{name}.skill.md")),
-        });
+        // Changed guidance in the live checkout replaces the built text.
+        let live = H::drift()
+            .guidance(&ability.id, kind, name)
+            .map(Path::to_path_buf);
+        let path = live
+            .or_else(|| Self::published_skill(ability, kind, name))
+            .unwrap_or_else(|| match kind {
+                "ability" => ability.path.join(format!("{name}.skill.md")),
+                "tool" => crate::tool_definitions::skill_path(&ability.path, name),
+                _ => ability.path.join("skills").join(format!("{name}.skill.md")),
+            });
         if !path.parent().is_some_and(|parent| {
             fs::symlink_metadata(parent).is_ok_and(|m| m.file_type().is_dir())
         }) {
@@ -1248,11 +1269,14 @@ impl<H: Host> Catalog<H> {
         Some(true)
     }
 
+    /// Whether `name` can run; a tool the checkout turned off cannot.
     fn installed(&self, name: &str) -> bool {
-        self.abilities
+        (self
+            .abilities
             .iter()
             .any(|a| a.plugin.as_ref().is_some_and(|p| p.owns(name)))
-            || Self::supported(name)
+            || Self::supported(name))
+            && !H::drift().disabled(name)
     }
     fn supported(name: &str) -> bool {
         is_discovery(name)

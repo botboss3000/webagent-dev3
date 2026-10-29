@@ -1,6 +1,11 @@
 //! Optional administrator-installed packages. The host owns storage and admission;
 //! package reducers never receive encryption keys, raw databases or approvals.
-use crate::*;
+use crate::{
+    access, anyhow, bad, conflict, digest, json, key, now, required, session_agent_id, shared_chat,
+    status, terminal, uuid, wake, AccountsStore, Api, ApiError, App, CancellationToken, Digest,
+    Duration, File, FileExt, HashMap, Json, OpenOptions, Path, PathBuf, Result, Sha256, StatusCode,
+    Store, Uuid, Value, Write,
+};
 use axum::Extension;
 use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
@@ -29,7 +34,9 @@ pub(crate) fn is_read(name: &str) -> bool {
             | "status"
     )
 }
-fn package_lock(app: &App, id: &str, exclusive: bool) -> Result<File> {package_lock_store(&app.store,id,exclusive)}
+fn package_lock(app: &App, id: &str, exclusive: bool) -> Result<File> {
+    package_lock_store(&app.store, id, exclusive)
+}
 fn package_lock_store(store: &Store, id: &str, exclusive: bool) -> Result<File> {
     if !IDS.contains(&id) {
         return Err(anyhow!("Unknown module"));
@@ -373,7 +380,12 @@ pub(crate) fn available(id: &str) -> bool {
         None
     };
     let root = PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
-    idle::available(&health_path(&root, id), &gen, implementation.as_deref(), now())
+    idle::available(
+        &health_path(&root, id),
+        &gen,
+        implementation.as_deref(),
+        now(),
+    )
 }
 /// Legacy package probes keep their existing activation-bound health format.
 fn mark_health(app: &App, id: &str, gen: &str, healthy: bool) -> Result<()> {
@@ -404,7 +416,9 @@ fn write_health(
     std::fs::rename(temp, file)?;
     Ok(())
 }
-pub(crate) async fn binding_lease(app: &App, run: &Value) -> Result<Option<File>> {binding_lease_store(&app.store,run).await}
+pub(crate) async fn binding_lease(app: &App, run: &Value) -> Result<Option<File>> {
+    binding_lease_store(&app.store, run).await
+}
 pub(crate) async fn binding_lease_store(store: &Store, run: &Value) -> Result<Option<File>> {
     if run["module_binding"].is_null() {
         return Ok(None);
@@ -422,30 +436,51 @@ fn generation(id: &str) -> Result<String> {
     let (path, descriptor) = manifest(id)?;
     manifest_generation(id, &path, &descriptor)
 }
-pub(crate) fn schemas() -> Vec<Value> {
-    let mut schemas = Vec::new();
-    for id in IDS {
-        if available(id) {
-            if let Some(root) = package_root(id) {
-                if let Ok(bytes) = std::fs::read(root.join("tool-schemas.json")) {
-                    if bytes.len() < 256 * 1024 {
-                        if let Ok(items) = serde_json::from_slice::<Vec<Value>>(&bytes) {
-                            schemas.extend(items.into_iter().map(|item| {
-                                if item["function"].is_object() {
-                                    let mut schema = item["function"].clone();
-                                    schema["type"] = json!("function");
-                                    schema
-                                } else {
-                                    item
-                                }
-                            }));
-                        }
-                    }
-                }
-            }
-        }
+/// A package's tool schemas: Automation's from its tool folders, others from their
+/// `tool-schemas.json`. Invalid definitions are left out.
+fn package_schemas(id: &str) -> Vec<Value> {
+    if automation_ability_host(id) {
+        let folders = webagent_abilities::tool_definitions::read_folder(&automation_ability_root());
+        return folders
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|tool| {
+                tool.definition
+                    .as_ref()
+                    .ok()
+                    .map(|definition| definition.schema())
+            })
+            .collect();
     }
-    schemas
+    let Some(bytes) =
+        package_root(id).and_then(|root| std::fs::read(root.join("tool-schemas.json")).ok())
+    else {
+        return Vec::new();
+    };
+    if bytes.len() >= 256 * 1024 {
+        return Vec::new();
+    }
+    let items: Vec<Value> = serde_json::from_slice(&bytes).unwrap_or_default();
+    items
+        .into_iter()
+        .map(|item| {
+            if item["function"].is_object() {
+                let mut schema = item["function"].clone();
+                schema["type"] = json!("function");
+                schema
+            } else {
+                item
+            }
+        })
+        .collect()
+}
+pub(crate) fn schemas() -> Vec<Value> {
+    IDS.into_iter()
+        .filter(|id| available(id))
+        .flat_map(package_schemas)
+        .collect()
 }
 pub(crate) fn owns_tool(name: &str) -> bool {
     schemas().iter().any(|schema| schema["name"] == name)
@@ -453,14 +488,9 @@ pub(crate) fn owns_tool(name: &str) -> bool {
 fn tool_package(name: &str) -> Option<&'static str> {
     IDS.into_iter().find(|id| {
         available(id)
-            && package_root(id)
-                .and_then(|root| std::fs::read(root.join("tool-schemas.json")).ok())
-                .and_then(|bytes| serde_json::from_slice::<Vec<Value>>(&bytes).ok())
-                .is_some_and(|items| {
-                    items
-                        .iter()
-                        .any(|item| item["name"] == name || item["function"]["name"] == name)
-                })
+            && package_schemas(id)
+                .iter()
+                .any(|schema| schema["name"] == name)
     })
 }
 async fn administrator(app: &App) -> bool {
@@ -624,16 +654,20 @@ fn apply_completion_ack(envelope: &mut Value, completed_oid: Option<&str>) {
 }
 /// Private schedule namespaces are available only after host-side Notes binding
 /// checks. HTTP callers cannot manufacture this trusted execution-scope marker.
-fn main_notes_schedule_guard(op:&str,args:&Value,scope:&Value)->Result<()> {
-    if matches!(op,"schedule_task"|"remind_me"|"event_subscribe") {
-        let id=args["request_id"].as_str().unwrap_or("");
-        if id.starts_with("main-notes-review-") || id.starts_with("main-notes-action-")&&scope["main_notes_binding_verified"]!=true {
+fn main_notes_schedule_guard(op: &str, args: &Value, scope: &Value) -> Result<()> {
+    if matches!(op, "schedule_task" | "remind_me" | "event_subscribe") {
+        let id = args["request_id"].as_str().unwrap_or("");
+        if id.starts_with("main-notes-review-")
+            || id.starts_with("main-notes-action-") && scope["main_notes_binding_verified"] != true
+        {
             return Err(anyhow!("Main Notes schedules require coordinator binding"));
         }
     }
-    if op=="update_automation" {
-        let id=args["id"].as_str().unwrap_or("");
-        if id.starts_with("main-notes-review-") || id.starts_with("main-notes-action-")&&scope["main_notes_binding_verified"]!=true {
+    if op == "update_automation" {
+        let id = args["id"].as_str().unwrap_or("");
+        if id.starts_with("main-notes-review-")
+            || id.starts_with("main-notes-action-") && scope["main_notes_binding_verified"] != true
+        {
             return Err(anyhow!("Main Notes schedules require coordinator binding"));
         }
     }
@@ -649,7 +683,9 @@ async fn perform(
     internal: bool,
     scope: Value,
 ) -> Result<Value> {
-    if id=="automation"&&!internal{main_notes_schedule_guard(op,&args,&scope)?;}
+    if id == "automation" && !internal {
+        main_notes_schedule_guard(op, &args, &scope)?;
+    }
     let _package_lease = if internal {
         None
     } else {
@@ -757,9 +793,10 @@ async fn perform(
         envelope["pending"] = json!([]);
     }
     if let Some(admissions) = result["admissions"].as_array() {
-        if admissions.len() > 128
-            || envelope["pending"].as_array().unwrap().len() + admissions.len() > 256
-        {
+        let pending = envelope["pending"]
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("Module admission queue missing"))?;
+        if admissions.len() > 128 || pending.len() + admissions.len() > 256 {
             return Err(anyhow!("Module admission queue full"));
         }
         for admission in admissions {
@@ -769,16 +806,8 @@ async fn perform(
             if oid.is_empty() || oid.len() > 256 {
                 return Err(anyhow!("Invalid occurrence identity"));
             }
-            if !envelope["pending"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|v| v["occurrence_id"] == oid)
-            {
-                envelope["pending"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(admission.clone());
+            if !pending.iter().any(|v| v["occurrence_id"] == oid) {
+                pending.push(admission.clone());
             }
         }
     }
@@ -797,7 +826,11 @@ async fn perform(
             envelope["receipts"] = json!({});
         }
         // Receipts retain mutation idempotency and are bounded with explicit quota.
-        if envelope["receipts"].as_object().unwrap().len() >= 4096 {
+        if envelope["receipts"]
+            .as_object()
+            .map_or(0, serde_json::Map::len)
+            >= 4096
+        {
             return Err(anyhow!("Module receipt quota reached"));
         }
         envelope["receipts"][rid] = json!({"digest":input_digest,"result":public});
@@ -836,9 +869,16 @@ pub(crate) async fn tool_call(
         .await
         .map_err(|_| anyhow!("Agent unavailable"))?;
     if let Some(target) = args["id"].as_str() {
-        if target.starts_with("main-notes-action-")||target.starts_with("main-notes-review-") {
-            let notes=scoped.store.for_agent(&agent).await?.main_chat_state().await?;
-            if notes["session_id"]!=sid {return Err(anyhow!("Only Main Chat manages Main Notes schedules"));}
+        if target.starts_with("main-notes-action-") || target.starts_with("main-notes-review-") {
+            let notes = scoped
+                .store
+                .for_agent(&agent)
+                .await?
+                .main_chat_state()
+                .await?;
+            if notes["session_id"] != sid {
+                return Err(anyhow!("Only Main Chat manages Main Notes schedules"));
+            }
         }
         let state = scoped.store.module_state(id).await?;
         if let Some(owner) = state["state"]["definitions"][target]["agent_id"].as_str() {
@@ -847,42 +887,111 @@ pub(crate) async fn tool_call(
             }
         }
     }
-    if let Some(binding)=args.get("main_notes_action").filter(|v|!v.is_null()) {
-        if !matches!(name,"schedule_task"|"remind_me"|"update_automation") {return Err(anyhow!("Main Notes action binding requires a schedule operation"));}
-        let notes=scoped.store.for_agent(&agent).await?.main_chat_state().await?;
-        if notes["settings"]["enabled"]!=true||notes["session_id"]!=sid {return Err(anyhow!("Only Main Chat coordinates Main Notes schedules"));}
-        let topic=binding["topic_id"].as_str().ok_or_else(||anyhow!("Topic ID required"))?.to_owned();
-        let entry=binding["entry_id"].as_str().ok_or_else(||anyhow!("Entry ID required"))?.to_owned();
-        let action=&notes["topics"][&topic]["entries"][&entry];
-        let action_id=format!("main-notes-action-{}",&digest(&json!([agent,topic,entry]))[..40]);
-        let updating=name=="update_automation";
-        if updating&&args["id"]!=action_id {return Err(anyhow!("Schedule identity does not match the Main Notes action"));}
-        let existing=if updating {scoped.store.module_state("automation").await?["state"]["definitions"][&action_id].clone()}else{Value::Null};
-        let trigger=if updating&&args["trigger"].is_null(){
-            if action["timing"]["kind"]=="delay"&&existing["trigger"]["kind"]=="once"&&existing["main_notes_intent"]==crate::main_chat::action_intent(&notes["topics"][&topic],action) {
-                action["timing"].clone()
-            }else{existing["trigger"].clone()}
-        }else{args["trigger"].clone()};
-        let prompt=if updating&&args["prompt"].is_null(){existing["prompt"].clone()}else{args["prompt"].clone()};
-        if action.is_null()||action["timing"].is_null()||action["timing"]!=trigger||action["text"]!=prompt {
-            return Err(anyhow!("Schedule prompt and timing must match the current Main Notes action"));
+    if let Some(binding) = args.get("main_notes_action").filter(|v| !v.is_null()) {
+        if !matches!(name, "schedule_task" | "remind_me" | "update_automation") {
+            return Err(anyhow!(
+                "Main Notes action binding requires a schedule operation"
+            ));
         }
-        if matches!(action["state"].as_str(),Some("done"|"cancelled")) {return Err(anyhow!("Action is already terminal"));}
-        if name!="remind_me" {
-            let destination=if updating&&args["destination"].is_null(){&existing["destination"]}else{&args["destination"]};
-            let kind=destination["type"].as_str().or_else(||destination["kind"].as_str()).unwrap_or("");
-            if !matches!(kind,"existing_chat"|"existing_session"|"chat")||destination["session_id"]!=sid {
-                return Err(anyhow!("Main Notes schedules must explicitly target Main Chat"));
+        let notes = scoped
+            .store
+            .for_agent(&agent)
+            .await?
+            .main_chat_state()
+            .await?;
+        if notes["settings"]["enabled"] != true || notes["session_id"] != sid {
+            return Err(anyhow!("Only Main Chat coordinates Main Notes schedules"));
+        }
+        let topic = binding["topic_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Topic ID required"))?
+            .to_owned();
+        let entry = binding["entry_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Entry ID required"))?
+            .to_owned();
+        let action = &notes["topics"][&topic]["entries"][&entry];
+        let action_id = format!(
+            "main-notes-action-{}",
+            &digest(&json!([agent, topic, entry]))[..40]
+        );
+        let updating = name == "update_automation";
+        if updating && args["id"] != action_id {
+            return Err(anyhow!(
+                "Schedule identity does not match the Main Notes action"
+            ));
+        }
+        let existing = if updating {
+            scoped.store.module_state("automation").await?["state"]["definitions"][&action_id]
+                .clone()
+        } else {
+            Value::Null
+        };
+        let trigger = if updating && args["trigger"].is_null() {
+            if action["timing"]["kind"] == "delay"
+                && existing["trigger"]["kind"] == "once"
+                && existing["main_notes_intent"]
+                    == crate::main_chat::action_intent(&notes["topics"][&topic], action)
+            {
+                action["timing"].clone()
+            } else {
+                existing["trigger"].clone()
+            }
+        } else {
+            args["trigger"].clone()
+        };
+        let prompt = if updating && args["prompt"].is_null() {
+            existing["prompt"].clone()
+        } else {
+            args["prompt"].clone()
+        };
+        if action.is_null()
+            || action["timing"].is_null()
+            || action["timing"] != trigger
+            || action["text"] != prompt
+        {
+            return Err(anyhow!(
+                "Schedule prompt and timing must match the current Main Notes action"
+            ));
+        }
+        if matches!(action["state"].as_str(), Some("done" | "cancelled")) {
+            return Err(anyhow!("Action is already terminal"));
+        }
+        if name != "remind_me" {
+            let destination = if updating && args["destination"].is_null() {
+                &existing["destination"]
+            } else {
+                &args["destination"]
+            };
+            let kind = destination["type"]
+                .as_str()
+                .or_else(|| destination["kind"].as_str())
+                .unwrap_or("");
+            if !matches!(kind, "existing_chat" | "existing_session" | "chat")
+                || destination["session_id"] != sid
+            {
+                return Err(anyhow!(
+                    "Main Notes schedules must explicitly target Main Chat"
+                ));
             }
         }
-        let intent=crate::main_chat::action_intent(&notes["topics"][&topic],action);
-        if !updating {args["request_id"]=json!(action_id);}
-        args["main_notes_intent"]=json!(intent);
-    } else if name=="update_automation"&&args["id"].as_str().is_some_and(|v|v.starts_with("main-notes-action-")) {
-        return Err(anyhow!("Main Notes updates require their current action binding"));
+        let intent = crate::main_chat::action_intent(&notes["topics"][&topic], action);
+        if !updating {
+            args["request_id"] = json!(action_id);
+        }
+        args["main_notes_intent"] = json!(intent);
+    } else if name == "update_automation"
+        && args["id"]
+            .as_str()
+            .is_some_and(|v| v.starts_with("main-notes-action-"))
+    {
+        return Err(anyhow!(
+            "Main Notes updates require their current action binding"
+        ));
     }
     let mut scope = execution_scope(&scoped, &agent, Some(sid), false).await?;
-    scope["main_notes_binding_verified"]=json!(args.get("main_notes_action").is_some_and(|v|!v.is_null()));
+    scope["main_notes_binding_verified"] =
+        json!(args.get("main_notes_action").is_some_and(|v| !v.is_null()));
     if name == "remember_automation_state" {
         let run = app.run(rid).await?;
         if run["module_binding"]["id"] != "automation"
@@ -1045,27 +1154,45 @@ pub(crate) async fn call_api(
     })?;
     Ok(Json(result))
 }
-pub(crate) async fn binding_valid(app: &App, run: &Value) -> bool {binding_valid_store(&app.store,run).await}
+pub(crate) async fn binding_valid(app: &App, run: &Value) -> bool {
+    binding_valid_store(&app.store, run).await
+}
 pub(crate) async fn binding_valid_store(store: &Store, run: &Value) -> bool {
     let binding = &run["module_binding"];
     if binding.is_null() {
         return true;
     }
-    if binding["id"]=="automation" {
-        let aid=binding["automation_id"].as_str().unwrap_or("");
-        if aid.starts_with("main-notes-review-")||aid.starts_with("main-notes-action-") {
-            let Some(agent)=run["agent_id"].as_str() else{return false};
-            let Ok(store)=store.for_agent(agent).await else{return false};
-            let Ok(notes)=store.main_chat_state().await else{return false};
-            if notes["session_id"]!=run["session_id"]{return false;}
-            if notes["settings"]["enabled"]!=true {return false;}
+    if binding["id"] == "automation" {
+        let aid = binding["automation_id"].as_str().unwrap_or("");
+        if aid.starts_with("main-notes-review-") || aid.starts_with("main-notes-action-") {
+            let Some(agent) = run["agent_id"].as_str() else {
+                return false;
+            };
+            let Ok(store) = store.for_agent(agent).await else {
+                return false;
+            };
+            let Ok(notes) = store.main_chat_state().await else {
+                return false;
+            };
+            if notes["session_id"] != run["session_id"] {
+                return false;
+            }
+            if notes["settings"]["enabled"] != true {
+                return false;
+            }
             if aid.starts_with("main-notes-action-") {
-                let definition=store.module_state("automation").await.ok()
-                    .map(|s|s["state"]["definitions"][aid].clone()).unwrap_or(Value::Null);
-                let current=crate::main_chat::scheduled_entry_current(&notes,aid,&definition);
+                let definition = store
+                    .module_state("automation")
+                    .await
+                    .ok()
+                    .map(|s| s["state"]["definitions"][aid].clone())
+                    .unwrap_or(Value::Null);
+                let current = crate::main_chat::scheduled_entry_current(&notes, aid, &definition);
                 // A completed action may publish its final model reply. A further
                 // tool dispatch has a pending call and still fails this live fence.
-                if !current && !(run["phase"]=="model"&&run["pending"].is_null()) {return false;}
+                if !current && !(run["phase"] == "model" && run["pending"].is_null()) {
+                    return false;
+                }
             }
         }
     }
@@ -1126,13 +1253,21 @@ async fn admit(app: &App, id: &str, gen: &str, admission: &Value) -> Result<Valu
     let definition =
         &snapshot["state"]["definitions"][admission["automation_id"].as_str().unwrap_or("")];
     let occurrence = &snapshot["state"]["occurrences"][oid];
-    let aid=admission["automation_id"].as_str().unwrap_or("");
-    if aid.starts_with("main-notes-review-")||aid.starts_with("main-notes-action-") {
-        let agent=definition["agent_id"].as_str().ok_or_else(||anyhow!("Missing Notes agent"))?;
-        let notes=app.store.for_agent(agent).await?.main_chat_state().await?;
-        if definition["destination"]["session_id"]!=notes["session_id"]{return Err(anyhow!("Main Chat destination changed"));}
-        if notes["settings"]["enabled"]!=true {return Err(anyhow!("Main Chat is disabled"));}
-        if aid.starts_with("main-notes-action-")&&!crate::main_chat::scheduled_entry_current(&notes,aid,&definition) {
+    let aid = admission["automation_id"].as_str().unwrap_or("");
+    if aid.starts_with("main-notes-review-") || aid.starts_with("main-notes-action-") {
+        let agent = definition["agent_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing Notes agent"))?;
+        let notes = app.store.for_agent(agent).await?.main_chat_state().await?;
+        if definition["destination"]["session_id"] != notes["session_id"] {
+            return Err(anyhow!("Main Chat destination changed"));
+        }
+        if notes["settings"]["enabled"] != true {
+            return Err(anyhow!("Main Chat is disabled"));
+        }
+        if aid.starts_with("main-notes-action-")
+            && !crate::main_chat::scheduled_entry_current(&notes, aid, &definition)
+        {
             return Err(anyhow!("Automation proposal withdrawn"));
         }
     }
@@ -1219,11 +1354,11 @@ async fn admit(app: &App, id: &str, gen: &str, admission: &Value) -> Result<Valu
             }
         }
     }
-    let sid = session
-        .as_ref()
-        .map(|s| s.result["id"].as_str().unwrap())
-        .or(sid)
-        .unwrap();
+    let sid = match session.as_ref() {
+        Some(prepared) => prepared.result["id"].as_str(),
+        None => sid,
+    }
+    .ok_or_else(|| anyhow!("Destination session required"))?;
     if !new_session {
         let stored = scoped
             .store
@@ -1357,11 +1492,16 @@ async fn package_service(app: App, id: &'static str) {
                         break;
                     }
                     let uid = user.store.current_user_id().to_owned();
-                    let wake_sequence=*wake_hints.borrow();
+                    let wake_sequence = *wake_hints.borrow();
                     // A wake received during an in-flight reducer stays pending for
                     // that user. Same-second writes do not depend on polling recovery.
-                    let hinted=id=="automation"&&last_dispatched_wake.get(&uid)!=Some(&wake_sequence);
-                    if !hinted && next_poll.get(&uid).is_some_and(|deadline| tokio::time::Instant::now() < *deadline) {
+                    let hinted = id == "automation"
+                        && last_dispatched_wake.get(&uid) != Some(&wake_sequence);
+                    if !hinted
+                        && next_poll
+                            .get(&uid)
+                            .is_some_and(|deadline| tokio::time::Instant::now() < *deadline)
+                    {
                         continue;
                     }
                     if !inflight.insert(uid.clone()) {
@@ -1369,7 +1509,7 @@ async fn package_service(app: App, id: &'static str) {
                     }
                     let startup = !seen.contains(&uid);
                     cursor = cursor.wrapping_add(1);
-                    last_dispatched_wake.insert(uid.clone(),wake_sequence);
+                    last_dispatched_wake.insert(uid.clone(), wake_sequence);
                     jobs.spawn(futures_util::FutureExt::boxed(async move {
                         let result = tick_package(&user, id, startup).await;
                         (uid, result)
@@ -1436,27 +1576,44 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
     if id == "outbound_notifications" && !administrator(app).await {
         return Ok(15000);
     }
-    let mut notes_by_agent=json!({});
-    if id=="automation" {
+    let mut notes_by_agent = json!({});
+    if id == "automation" {
         for agent in app.store.main_chat_agent_ids().await? {
-            let notes=app.store.for_agent(&agent).await?.main_chat_state().await?;
-            if notes["settings"]["enabled"]==true {
-                if let Some(sid)=notes["session_id"].as_str() {
-                    if let Ok(scope)=execution_scope(app,&agent,Some(sid),false).await {
-                        if perform(app,id,"bootstrap_main",json!({"session_id":sid,"id":crate::main_chat::review_id(&agent)}),None,None,true,scope).await.is_err() {
-                            tracing::warn!(operation="main_notes_subscription","Main Notes review subscription unavailable");
+            let notes = app.store.for_agent(&agent).await?.main_chat_state().await?;
+            if notes["settings"]["enabled"] == true {
+                if let Some(sid) = notes["session_id"].as_str() {
+                    if let Ok(scope) = execution_scope(app, &agent, Some(sid), false).await {
+                        if perform(
+                            app,
+                            id,
+                            "bootstrap_main",
+                            json!({"session_id":sid,"id":crate::main_chat::review_id(&agent)}),
+                            None,
+                            None,
+                            true,
+                            scope,
+                        )
+                        .await
+                        .is_err()
+                        {
+                            tracing::warn!(
+                                operation = "main_notes_subscription",
+                                "Main Notes review subscription unavailable"
+                            );
                         }
                     }
                 }
             }
-            notes_by_agent[agent]=notes;
+            notes_by_agent[agent] = notes;
         }
     }
     let initial = app.store.module_state(id).await?;
     let latest = app.store.notification_page(i64::MAX, 1).await?["latest_seq"]
         .as_i64()
         .unwrap_or(0);
-    if id == "automation" && idle::empty(&initial, latest, &gen) { return Ok(15000); }
+    if id == "automation" && idle::empty(&initial, latest, &gen) {
+        return Ok(15000);
+    }
     // A generation transition deactivates every retained subscription before tick.
     // It has no active consumer of pre-installation events.
     let cursor = if initial["generation"].is_string() && initial["generation"] != gen {
@@ -1546,12 +1703,21 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
             }
         }
     }
-    let mut notes_inputs=json!({});
-    for (agent,notes) in notes_by_agent.as_object().into_iter().flatten() {
-        let cursor=initial["state"]["main_notes_cursors"][agent].as_u64().unwrap_or(0);
-        let mut changes:Vec<Value>=notes["changes"].as_object().into_iter().flatten().map(|(_,v)|v.clone()).filter(|v|v["version"].as_u64().unwrap_or(0)>cursor).collect();
-        changes.sort_by_key(|v|v["version"].as_u64().unwrap_or(0));changes.truncate(128);
-        notes_inputs[agent]=json!({"enabled":notes["settings"]["enabled"],"session_id":notes["session_id"],"changes":changes});
+    let mut notes_inputs = json!({});
+    for (agent, notes) in notes_by_agent.as_object().into_iter().flatten() {
+        let cursor = initial["state"]["main_notes_cursors"][agent]
+            .as_u64()
+            .unwrap_or(0);
+        let mut changes: Vec<Value> = notes["changes"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(_, v)| v.clone())
+            .filter(|v| v["version"].as_u64().unwrap_or(0) > cursor)
+            .collect();
+        changes.sort_by_key(|v| v["version"].as_u64().unwrap_or(0));
+        changes.truncate(128);
+        notes_inputs[agent] = json!({"enabled":notes["settings"]["enabled"],"session_id":notes["session_id"],"changes":changes});
     }
     let tick = perform(app,id,"tick",json!({"events":page["events"],"cursor":page["next_seq"],"pruned_through":page["pruned_through"],"event_page":page,"agent_settings":settings,"agent_allowed":allowed,"main_notes_agents":notes_inputs}),None,None,true,json!({"startup":startup,"event_scan_cursor":cursor})).await?;
     if id == "outbound_notifications" {
@@ -1620,7 +1786,16 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
         )
         .await?;
     }
-    Ok(if id == "automation" { idle::delay(&initial, &envelope, tick["result"]["next_deadline_ms"].as_u64(), now().saturating_mul(1000)) } else { 1000 })
+    Ok(if id == "automation" {
+        idle::delay(
+            &initial,
+            &envelope,
+            tick["result"]["next_deadline_ms"].as_u64(),
+            now().saturating_mul(1000),
+        )
+    } else {
+        1000
+    })
 }
 fn copy_distribution(source: &FsPath, target: &FsPath) -> Result<()> {
     std::fs::create_dir(target)?;
@@ -1690,7 +1865,10 @@ async fn lifecycle_inner(app: App, id: String, body: Value) -> Result<Value> {
                 return Err(anyhow!("Package already exists"));
             }
             let distribution = PathBuf::from("/usr/local/lib/webagent/modules").join(&id);
-            std::fs::create_dir_all(root.parent().unwrap())?;
+            let parent = root
+                .parent()
+                .ok_or_else(|| anyhow!("Invalid package root"))?;
+            std::fs::create_dir_all(parent)?;
             let staged = root.with_extension(format!("install-{}", uuid()));
             copy_distribution(&distribution, &staged)?;
             let mut manifest: Value =
@@ -2174,6 +2352,8 @@ mod automation_evidence_privacy_tests {
 mod authenticated_caller_namespace_tests {
     use super::*;
     use axum::body::Body;
+    use axum::extract::Request;
+    use axum::Router;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
     async fn request(
@@ -2235,12 +2415,29 @@ mod authenticated_caller_namespace_tests {
             .await
             .unwrap();
         // Both ceilings permit Automation; authenticated caller identity still owns its namespace.
-        let mut ceiling=app.store.entitlement_tier("operator").await.unwrap().unwrap();let ceiling_revision=ceiling.revision;
-        ceiling.ability_permissions.insert("automation".into(),crate::access::Permission::Auto);
-        app.store.save_entitlement_tier(ceiling,ceiling_revision).await.unwrap();
-        let ladder=app.store.capability_levels("shared_default").await.unwrap();
-        let mut operator=ladder.levels["operator"].clone();operator.ability_permissions.insert("automation".into(),crate::access::Permission::Auto);
-        app.store.save_capability_level("shared_default",operator,ladder.revision).await.unwrap();
+        let mut ceiling = app
+            .store
+            .entitlement_tier("operator")
+            .await
+            .unwrap()
+            .unwrap();
+        let ceiling_revision = ceiling.revision;
+        ceiling
+            .ability_permissions
+            .insert("automation".into(), crate::access::Permission::Auto);
+        app.store
+            .save_entitlement_tier(ceiling, ceiling_revision)
+            .await
+            .unwrap();
+        let ladder = app.store.capability_levels("shared_default").await.unwrap();
+        let mut operator = ladder.levels["operator"].clone();
+        operator
+            .ability_permissions
+            .insert("automation".into(), crate::access::Permission::Auto);
+        app.store
+            .save_capability_level("shared_default", operator, ladder.revision)
+            .await
+            .unwrap();
         let mut tier = app.store.entitlement_tier("basic").await.unwrap().unwrap();
         let expected = tier.revision;
         tier.ability_permissions
@@ -2489,11 +2686,31 @@ mod main_notes_namespace_tests {
     use super::*;
     #[test]
     fn reserved_schedules_require_host_binding() {
-        let args=json!({"request_id":"main-notes-action-intent"});
-        assert!(main_notes_schedule_guard("schedule_task",&args,&json!({})).is_err());
-        assert!(main_notes_schedule_guard("schedule_task",&args,&json!({"main_notes_binding_verified":true})).is_ok());
-        assert!(main_notes_schedule_guard("event_subscribe",&json!({"request_id":"main-notes-review-agent"}),&json!({"main_notes_binding_verified":true})).is_err());
-        assert!(main_notes_schedule_guard("update_automation",&json!({"id":"main-notes-action-intent"}),&json!({})).is_err());
-        assert!(main_notes_schedule_guard("schedule_task",&json!({"request_id":"ordinary"}),&json!({})).is_ok());
+        let args = json!({"request_id":"main-notes-action-intent"});
+        assert!(main_notes_schedule_guard("schedule_task", &args, &json!({})).is_err());
+        assert!(main_notes_schedule_guard(
+            "schedule_task",
+            &args,
+            &json!({"main_notes_binding_verified":true})
+        )
+        .is_ok());
+        assert!(main_notes_schedule_guard(
+            "event_subscribe",
+            &json!({"request_id":"main-notes-review-agent"}),
+            &json!({"main_notes_binding_verified":true})
+        )
+        .is_err());
+        assert!(main_notes_schedule_guard(
+            "update_automation",
+            &json!({"id":"main-notes-action-intent"}),
+            &json!({})
+        )
+        .is_err());
+        assert!(main_notes_schedule_guard(
+            "schedule_task",
+            &json!({"request_id":"ordinary"}),
+            &json!({})
+        )
+        .is_ok());
     }
 }

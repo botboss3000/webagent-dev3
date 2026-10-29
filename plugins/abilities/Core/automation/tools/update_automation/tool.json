@@ -1,0 +1,105 @@
+{
+  "name": "update_automation",
+  "description": "update automation through the optional Automation service. Changes use revision checks; external adapters are unavailable.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "prompt": {
+        "type": "string"
+      },
+      "trigger": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "once",
+              "delay",
+              "cron"
+            ]
+          },
+          "at_ms": {
+            "type": "integer"
+          },
+          "delay_ms": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expression": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "destination": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "existing_chat",
+              "new_session",
+              "silent"
+            ]
+          },
+          "session_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "source": {
+        "enum": [
+          "session_settled",
+          "run.completed",
+          "run.failed",
+          "run.cancelled",
+          "webhook.received"
+        ]
+      },
+      "filter": {
+        "type": "object"
+      },
+      "main_notes_action": {
+        "type": "object",
+        "properties": {
+          "topic_id": {
+            "type": "string"
+          },
+          "entry_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic_id",
+          "entry_id"
+        ],
+        "additionalProperties": false,
+        "description": "Bind a Main Notes action. Only Main Chat may coordinate it; trigger must match saved user timing. Uses one stable schedule identity."
+      }
+    },
+    "required": [
+      "id",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

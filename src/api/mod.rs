@@ -2,206 +2,385 @@
 #[path = "../../crates/modules/chat/host/api/shared_chat.rs"]
 pub(crate) mod shared_chat;
 use super::*;
-mod auth;
-pub(crate) mod embed;
 mod admin;
-pub(crate) mod sessions;
+mod auth;
 #[path = "../../crates/modules/chat/host/api/sessions.rs"]
 pub(crate) mod chat_sessions;
 #[path = "../../crates/modules/chat/host/api/conversation_history.rs"]
 pub(crate) mod conversation_history;
+pub(crate) mod embed;
+pub(crate) mod sessions;
 pub(crate) use conversation_history::*;
-mod promotions;
-pub(crate) mod chat;
-#[path = "../../crates/modules/chat/host/api/followup_queue.rs"]
-pub(crate) mod followup_queue;
-#[path = "../../crates/modules/chat/host/api/session_messaging.rs"]
-pub(crate) mod session_messaging;
-pub(crate) mod direct_messages;
-#[path = "../../crates/modules/chat/host/api/chat_controls.rs"]
-mod chat_controls;
-pub(crate) mod media_lane;
-#[path = "../../crates/modules/files/host/api/uploads.rs"]
-pub(crate) mod uploads;
-mod voice;
-#[cfg(test)]mod composer_tests;
-#[cfg(test)]
-#[path = "../../crates/modules/chat/host/api/session_deletion_tests.rs"]
-mod session_deletion_tests;
 mod ability_admin;
-mod agent_members;
-mod service_admin;
-mod administrator;
-#[path = "../../crates/modules/models/host/api/platform_catalog.rs"]
-mod model_catalog;
+mod ability_drift;
 #[path = "../../crates/modules/models/host/api/account_catalog.rs"]
 mod account_models;
+mod administrator;
+mod agent_members;
 #[path = "../../crates/modules/webapp/host/agent_pages.rs"]
 mod agent_pages;
 #[path = "../../crates/modules/webapp/host/app_pages.rs"]
 mod app_pages;
-#[path = "../../crates/modules/files/host/api/file_manager.rs"]
-mod file_manager;
-mod build_dashboard;
 #[path = "../../crates/modules/configuration/host/app_settings.rs"]
 mod app_settings;
+mod build_dashboard;
+pub(crate) mod chat;
+#[path = "../../crates/modules/chat/host/api/chat_controls.rs"]
+mod chat_controls;
+#[cfg(test)]
+mod composer_tests;
+pub(crate) mod direct_messages;
+mod engine_components;
+#[path = "../../crates/modules/files/host/api/file_manager.rs"]
+mod file_manager;
+#[path = "../../crates/modules/chat/host/api/followup_queue.rs"]
+pub(crate) mod followup_queue;
 #[path = "../../crates/modules/configuration/host/api.rs"]
 pub(crate) mod live_configuration;
-mod system;
-mod model_usage;
 mod loop_settings;
-mod engine_components;
+pub(crate) mod media_lane;
+#[path = "../../crates/modules/models/host/api/platform_catalog.rs"]
+mod model_catalog;
+mod model_usage;
 pub(crate) mod notifications;
+mod promotions;
 pub(crate) mod repository;
-pub(crate) use auth::*;
+mod service_admin;
+#[cfg(test)]
+#[path = "../../crates/modules/chat/host/api/session_deletion_tests.rs"]
+mod session_deletion_tests;
+#[path = "../../crates/modules/chat/host/api/session_messaging.rs"]
+pub(crate) mod session_messaging;
+mod system;
+#[path = "../../crates/modules/files/host/api/uploads.rs"]
+pub(crate) mod uploads;
+mod voice;
 pub(crate) use admin::*;
-pub(crate) use sessions::*;
-pub(crate) use chat_sessions::*;
-pub(crate) use promotions::*;
+pub(crate) use auth::*;
 pub(crate) use chat::*;
 pub(crate) use chat_controls::*;
+pub(crate) use chat_sessions::*;
+pub(crate) use promotions::*;
+pub(crate) use sessions::*;
+pub(crate) use uploads::{attachment_get, upload, upload_content, upload_delete, upload_describe};
 pub(crate) use voice::*;
-pub(crate) use uploads::{attachment_get,upload,upload_delete,upload_content,upload_describe};
 // CONTEXT-CONFIG AUTHORITY: one validated live file (`live-files.json`); saves go
 // through the broker. Model boundaries reread it; existing runs keep their history.
 async fn context_config_get(State(app): State<App>) -> Api {
-    let config=crate::context_compaction::Config::read(&app.compaction_config_path)?;
-    let value=serde_json::to_value(config).map_err(anyhow::Error::from)?;
+    let config = crate::context_compaction::Config::read(&app.compaction_config_path)?;
+    let value = serde_json::to_value(config).map_err(anyhow::Error::from)?;
     Ok(Json(json!({"config":value,"digest":crate::digest(&value)})))
 }
 async fn context_config_put(State(app): State<App>, Json(body): Json<Value>) -> Api {
-    let expected=body["expected_digest"].as_str()
-        .filter(|s|s.len()==64 && s.bytes().all(|b|b.is_ascii_hexdigit()))
-        .ok_or_else(||bad("Expected context configuration digest required"))?;
-    let config:crate::context_compaction::Config=serde_json::from_value(body["config"].clone())
-        .map_err(|_|bad("Invalid context configuration"))?;
-    config.validate().map_err(|_|bad("Invalid context configuration"))?;
-    let _guard=app.gate.lock().await;
-    let current=crate::context_compaction::Config::read(&app.compaction_config_path)?;
-    if crate::digest(&serde_json::to_value(current).map_err(anyhow::Error::from)?)!=expected {
-        return Err(conflict("Context configuration changed; reload before saving"));
+    let expected = body["expected_digest"]
+        .as_str()
+        .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| bad("Expected context configuration digest required"))?;
+    let config: crate::context_compaction::Config = serde_json::from_value(body["config"].clone())
+        .map_err(|_| bad("Invalid context configuration"))?;
+    config
+        .validate()
+        .map_err(|_| bad("Invalid context configuration"))?;
+    let _guard = app.gate.lock().await;
+    let current = crate::context_compaction::Config::read(&app.compaction_config_path)?;
+    if crate::digest(&serde_json::to_value(current).map_err(anyhow::Error::from)?) != expected {
+        return Err(conflict(
+            "Context configuration changed; reload before saving",
+        ));
     }
     if app.compaction_config_path.is_relative() {
-        let relative=app.compaction_config_path.to_str().ok_or_else(||anyhow!("Invalid live path"))?;
-        let bytes=crate::live_files::current(relative,64*1024)?;
-        let body=crate::live_files::pretty(&serde_json::to_value(&config).map_err(anyhow::Error::from)?)?;
-        crate::live_files::save(&app,relative,&body,&bytes).await
-            .map_err(|_|conflict("Context configuration changed; reload before saving"))?;
+        let relative = app
+            .compaction_config_path
+            .to_str()
+            .ok_or_else(|| anyhow!("Invalid live path"))?;
+        let bytes = crate::live_files::current(relative, 64 * 1024)?;
+        let body = crate::live_files::pretty(
+            &serde_json::to_value(&config).map_err(anyhow::Error::from)?,
+        )?;
+        crate::live_files::save(&app, relative, &body, &bytes)
+            .await
+            .map_err(|_| conflict("Context configuration changed; reload before saving"))?;
     } else {
         config.persist(&app.compaction_config_path)?;
     }
-    let value=serde_json::to_value(config).map_err(anyhow::Error::from)?;
+    let value = serde_json::to_value(config).map_err(anyhow::Error::from)?;
     Ok(Json(json!({"config":value,"digest":crate::digest(&value)})))
 }
 
 pub(super) fn router(app: App) -> Router {
-    let event_aliases=Router::new()
-        .route("/admin/events",get(notifications::read))
-        .route("/admin/events/stream",get(notifications::stream))
-        .route_layer(middleware::from_fn_with_state(app.clone(),admin_auth))
-        .route_layer(middleware::from_fn_with_state(app.clone(),auth));
-    let messaging = user_api::messaging_router()
-        .route_layer(middleware::from_fn_with_state(app.clone(), message_api_auth));
+    let event_aliases = Router::new()
+        .route("/admin/events", get(notifications::read))
+        .route("/admin/events/stream", get(notifications::stream))
+        .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth))
+        .route_layer(middleware::from_fn_with_state(app.clone(), auth));
+    let messaging = user_api::messaging_router().route_layer(middleware::from_fn_with_state(
+        app.clone(),
+        message_api_auth,
+    ));
     let admin_api = Router::new()
         .merge(diagnostics::router())
         .nest("/admin/system", system::router())
-        .route("/admin/event-readers",get(notifications::readers).post(notifications::issue_reader))
-        .route("/admin/event-readers/{id}",axum::routing::delete(notifications::revoke_reader))
-        .route("/admin/events",get(notifications::read))
-        .route("/admin/events/stream",get(notifications::stream))
-        .route("/admin/modules",get(crate::modules::admin_list))
-        .route("/admin/modules/{id}",post(crate::modules::lifecycle))
+        .route(
+            "/admin/event-readers",
+            get(notifications::readers).post(notifications::issue_reader),
+        )
+        .route(
+            "/admin/event-readers/{id}",
+            axum::routing::delete(notifications::revoke_reader),
+        )
+        .route("/admin/events", get(notifications::read))
+        .route("/admin/events/stream", get(notifications::stream))
+        .route("/admin/modules", get(crate::modules::admin_list))
+        .route("/admin/modules/{id}", post(crate::modules::lifecycle))
         .route("/status", get(overview))
         .route("/settings", put(settings))
-        .route("/admin/configuration",get(live_configuration::list))
-        .route("/admin/configuration/{id}",get(live_configuration::get_config).put(live_configuration::put_config))
-        .route("/admin/publication/status",get(live_configuration::publication))
-        .route("/admin/app-settings/encryption", get(app_settings::read).put(app_settings::update))
-        .route("/admin/engine-components",get(engine_components::read))
-        .route("/admin/engine-components/{id}",put(engine_components::update))
-        .route("/admin/loop-runtime", get(loop_settings::read).put(loop_settings::update))
-        .route("/admin/context-compaction", get(context_config_get).put(context_config_put))
-        .nest("/admin/access", phase3_api::router().merge(crate::agents_api::admin_router()))
+        .route("/admin/configuration", get(live_configuration::list))
+        .route(
+            "/admin/configuration/{id}",
+            get(live_configuration::get_config).put(live_configuration::put_config),
+        )
+        .route(
+            "/admin/publication/status",
+            get(live_configuration::publication),
+        )
+        .route(
+            "/admin/app-settings/encryption",
+            get(app_settings::read).put(app_settings::update),
+        )
+        .route("/admin/engine-components", get(engine_components::read))
+        .route(
+            "/admin/engine-components/{id}",
+            put(engine_components::update),
+        )
+        .route(
+            "/admin/loop-runtime",
+            get(loop_settings::read).put(loop_settings::update),
+        )
+        .route(
+            "/admin/context-compaction",
+            get(context_config_get).put(context_config_put),
+        )
+        .nest(
+            "/admin/access",
+            phase3_api::router().merge(crate::agents_api::admin_router()),
+        )
         .nest("/admin/services", service_admin::router())
         .nest("/admin/models/rosters", model_catalog::router())
-        .route("/admin/usage/models/analytics", get(model_usage::admin_analytics).delete(model_usage::admin_clear))
+        .route(
+            "/admin/usage/models/analytics",
+            get(model_usage::admin_analytics).delete(model_usage::admin_clear),
+        )
         .route("/admin/usage/models/totals", get(model_usage::admin_totals))
         .route("/admin/usage/models/undo", post(model_usage::admin_undo))
-        .route("/admin/access/registration", get(registration::access_mode).put(registration::set_mode))
-        .route("/workflow/policy", get(workflow_policy_get).put(workflow_policy_set))
+        .route(
+            "/admin/access/registration",
+            get(registration::access_mode).put(registration::set_mode),
+        )
+        .route(
+            "/workflow/policy",
+            get(workflow_policy_get).put(workflow_policy_set),
+        )
         .route("/agents/{id}/model", get(agent_model).put(agent_model_set))
-        .route("/agents/{id}/chat-config/{document}",get(crate::chat_config::get).patch(crate::chat_config::patch).delete(crate::chat_config::reset))
+        .route(
+            "/agents/{id}/chat-config/{document}",
+            get(crate::chat_config::get)
+                .patch(crate::chat_config::patch)
+                .delete(crate::chat_config::reset),
+        )
         .route("/policy", get(policy_get).put(policy_set))
         .route("/abilities", get(ability_catalog))
         .route("/provider/login", post(provider_start))
         .route("/provider/logout", post(provider_logout))
         .route("/control", put(control))
         .route("/file-manager", post(file_manager::action))
+        .route("/admin/ability-drift", get(ability_drift::read))
+        .route("/admin/ability-drift/dismiss", post(ability_drift::dismiss))
         .route("/admin/builds", get(build_dashboard::list))
         .route("/admin/builds/scheduler", post(build_dashboard::scheduler))
-        .route("/admin/builds/{job_id}/result", get(build_dashboard::result))
-        .route("/admin/builds/{job_id}/cancel", post(build_dashboard::cancel))
-        .route("/admin/builds/leftovers/{id}/review", post(build_dashboard::review_leftover))
+        .route(
+            "/admin/builds/{job_id}/result",
+            get(build_dashboard::result),
+        )
+        .route(
+            "/admin/builds/{job_id}/cancel",
+            post(build_dashboard::cancel),
+        )
+        .route(
+            "/admin/builds/leftovers/{id}/review",
+            post(build_dashboard::review_leftover),
+        )
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth));
     // Model handlers enforce tenant authority themselves; all retain browser auth and CSRF.
     let api = Router::new()
         .merge(diagnostics::background_router())
-        .route("/modules/{id}/assets/{asset}",get(crate::ui_pages::module_asset))
-        .route("/modules/{id}/status",get(crate::modules::status_api))
-        .route("/modules/{id}/call",post(crate::modules::call_api))
-        .route("/sessions/{sid}/administrator/artifacts/{id}",get(administrator::artifact))
-        .route("/sessions/{sid}/administrator/notices",get(administrator::notices))
-        .route("/sessions/{sid}/administrator/notices/{id}/review",post(administrator::review_notice))
-        .nest("/models", model_selection_api::router().merge(crate::agents_api::router()))
-        .route("/models/me/catalog",get(account_models::read).put(account_models::save))
-        .route("/models/me/catalog/default",put(account_models::set_default))
-        .route("/models/agents/{id}/adoptions",post(account_models::adopt))
-        .route("/agents/{id}/context-composition",get(ability_admin::composition))
-        .route("/agents/{id}/slots",get(ability_admin::slots))
-        .route("/agents/{id}/slots/{name}",get(ability_admin::slot).put(ability_admin::slot_put).delete(ability_admin::slot_delete))
-        .route("/agents/{id}/mcp",get(crate::mcp::read))
-        .route("/agents/{id}/mcp/search",post(crate::mcp::search))
-        .route("/agents/{id}/mcp/inspect",post(crate::mcp::inspect))
-        .route("/agents/{id}/mcp/connections/{connection}",put(crate::mcp::put).delete(crate::mcp::remove))
-        .route("/agents/{id}/source-control/sites",get(crate::source_control::settings_get))
-        .route("/agents/{id}/source-control/sites/{site}",put(crate::source_control::settings_put))
-        .route("/agents/{id}/repository-connections",get(repository::read))
-        .route("/agents/{id}/repository-connections/{connection}",put(repository::put))
-        .route("/agents/{id}/abilities",get(ability_admin::read))
-        .route("/agents/{id}/abilities/{ability}/settings",put(ability_admin::settings_set))
-        .route("/agents/{id}/abilities/effective",get(ability_admin::preview))
-        .route("/agents/{id}/ability-members",get(ability_admin::members))
-        .route("/agents/{id}/ability-permissions",put(ability_admin::permissions_set))
-        .route("/agents/{id}/capability-levels/{level}",put(ability_admin::level_set))
-        .route("/agents/{id}/members/{user}/capability-level",put(ability_admin::member_set))
-        .route("/agents/{id}/abilities/{ability}/visibility",put(ability_admin::visibility_set))
-        .route("/agents/{id}/abilities/{ability}/skill-visibility",put(ability_admin::skill_set))
-        .route("/agents/{id}/abilities/{ability}/skill-content",get(ability_admin::skill_content))
-        .route("/agents/{id}/abilities/{ability}/skills/{skill}/content",get(ability_admin::skill_named_content))
-        .route("/agents/{id}/abilities/{ability}/skills/{skill}/visibility",put(ability_admin::skill_named_set))
-        .route("/agents/{id}/abilities/{ability}/tools/{tool}/skill-content",get(ability_admin::tool_skill_content))
-        .route("/agents/{id}/abilities/{ability}/tools/{tool}/mode",put(ability_admin::tool_set))
-        .route("/agents/{id}/abilities/{ability}/tools/{tool}/execution",put(ability_admin::execution_set))
-        .route("/agents/{id}/abilities/{ability}/tools/{tool}/result-deduplication",put(ability_admin::result_deduplication_set))
-        .route("/user/agent-page-favorites",get(agent_pages::read).put(agent_pages::save))
-        .route("/user/app-page-favorites",get(app_pages::read).put(app_pages::save))
-        .route("/agents/{id}/embed",get(embed::config_get).put(embed::config_put))
-        .route("/embed/challenges/{id}",get(embed::challenge_info))
-        .route("/embed/authorize",post(embed::authorize))
-        .route("/embed/credentials/{id}",axum::routing::delete(embed::revoke))
-        .route("/core/vault/{sid}/{name}",post(tools::core_vault::save).layer(DefaultBodyLimit::max(16384)).delete(tools::core_vault::dismiss))
-        .route("/core/visuals/{id}/view",get(tools::core_visualizer::view))
-        .route("/core/webhooks/{id}/setup",get(tools::core_webhooks::setup))
-        .route("/usage/models/analytics", get(model_usage::analytics).delete(model_usage::clear))
+        .route(
+            "/modules/{id}/assets/{asset}",
+            get(crate::ui_pages::module_asset),
+        )
+        .route("/modules/{id}/status", get(crate::modules::status_api))
+        .route("/modules/{id}/call", post(crate::modules::call_api))
+        .route(
+            "/sessions/{sid}/administrator/artifacts/{id}",
+            get(administrator::artifact),
+        )
+        .route(
+            "/sessions/{sid}/administrator/notices",
+            get(administrator::notices),
+        )
+        .route(
+            "/sessions/{sid}/administrator/notices/{id}/review",
+            post(administrator::review_notice),
+        )
+        .nest(
+            "/models",
+            model_selection_api::router().merge(crate::agents_api::router()),
+        )
+        .route(
+            "/models/me/catalog",
+            get(account_models::read).put(account_models::save),
+        )
+        .route(
+            "/models/me/catalog/default",
+            put(account_models::set_default),
+        )
+        .route("/models/agents/{id}/adoptions", post(account_models::adopt))
+        .route(
+            "/agents/{id}/context-composition",
+            get(ability_admin::composition),
+        )
+        .route("/agents/{id}/slots", get(ability_admin::slots))
+        .route(
+            "/agents/{id}/slots/{name}",
+            get(ability_admin::slot)
+                .put(ability_admin::slot_put)
+                .delete(ability_admin::slot_delete),
+        )
+        .route("/agents/{id}/mcp", get(crate::mcp::read))
+        .route("/agents/{id}/mcp/search", post(crate::mcp::search))
+        .route("/agents/{id}/mcp/inspect", post(crate::mcp::inspect))
+        .route(
+            "/agents/{id}/mcp/connections/{connection}",
+            put(crate::mcp::put).delete(crate::mcp::remove),
+        )
+        .route(
+            "/agents/{id}/source-control/sites",
+            get(crate::source_control::settings_get),
+        )
+        .route(
+            "/agents/{id}/source-control/sites/{site}",
+            put(crate::source_control::settings_put),
+        )
+        .route("/agents/{id}/repository-connections", get(repository::read))
+        .route(
+            "/agents/{id}/repository-connections/{connection}",
+            put(repository::put),
+        )
+        .route("/agents/{id}/abilities", get(ability_admin::read))
+        .route(
+            "/agents/{id}/abilities/{ability}/settings",
+            put(ability_admin::settings_set),
+        )
+        .route(
+            "/agents/{id}/abilities/effective",
+            get(ability_admin::preview),
+        )
+        .route("/agents/{id}/ability-members", get(ability_admin::members))
+        .route(
+            "/agents/{id}/ability-permissions",
+            put(ability_admin::permissions_set),
+        )
+        .route(
+            "/agents/{id}/capability-levels/{level}",
+            put(ability_admin::level_set),
+        )
+        .route(
+            "/agents/{id}/members/{user}/capability-level",
+            put(ability_admin::member_set),
+        )
+        .route(
+            "/agents/{id}/abilities/{ability}/visibility",
+            put(ability_admin::visibility_set),
+        )
+        .route(
+            "/agents/{id}/abilities/{ability}/skill-visibility",
+            put(ability_admin::skill_set),
+        )
+        .route(
+            "/agents/{id}/abilities/{ability}/skill-content",
+            get(ability_admin::skill_content),
+        )
+        .route(
+            "/agents/{id}/abilities/{ability}/skills/{skill}/content",
+            get(ability_admin::skill_named_content),
+        )
+        .route(
+            "/agents/{id}/abilities/{ability}/skills/{skill}/visibility",
+            put(ability_admin::skill_named_set),
+        )
+        .route(
+            "/agents/{id}/abilities/{ability}/tools/{tool}/skill-content",
+            get(ability_admin::tool_skill_content),
+        )
+        .route(
+            "/agents/{id}/abilities/{ability}/tools/{tool}/mode",
+            put(ability_admin::tool_set),
+        )
+        .route(
+            "/agents/{id}/abilities/{ability}/tools/{tool}/execution",
+            put(ability_admin::execution_set),
+        )
+        .route(
+            "/agents/{id}/abilities/{ability}/tools/{tool}/result-deduplication",
+            put(ability_admin::result_deduplication_set),
+        )
+        .route(
+            "/user/agent-page-favorites",
+            get(agent_pages::read).put(agent_pages::save),
+        )
+        .route(
+            "/user/app-page-favorites",
+            get(app_pages::read).put(app_pages::save),
+        )
+        .route(
+            "/agents/{id}/embed",
+            get(embed::config_get).put(embed::config_put),
+        )
+        .route("/embed/challenges/{id}", get(embed::challenge_info))
+        .route("/embed/authorize", post(embed::authorize))
+        .route(
+            "/embed/credentials/{id}",
+            axum::routing::delete(embed::revoke),
+        )
+        .route(
+            "/core/vault/{sid}/{name}",
+            post(tools::core_vault::save)
+                .layer(DefaultBodyLimit::max(16384))
+                .delete(tools::core_vault::dismiss),
+        )
+        .route("/core/visuals/{id}/view", get(tools::core_visualizer::view))
+        .route(
+            "/core/webhooks/{id}/setup",
+            get(tools::core_webhooks::setup),
+        )
+        .route(
+            "/usage/models/analytics",
+            get(model_usage::analytics).delete(model_usage::clear),
+        )
         .route("/usage/models/reset", post(model_usage::reset))
         .route("/usage/models/undo", post(model_usage::undo))
         .route("/usage/models/totals", get(model_usage::totals))
         .route("/auth/me", get(me))
         .route("/auth/ui-config", get(chat_ui_config))
         .route("/auth/profile", put(update_profile))
-        .route("/auth/session-policy", get(session_policy).put(update_session_policy))
+        .route(
+            "/auth/session-policy",
+            get(session_policy).put(update_session_policy),
+        )
         .route("/auth/sessions", get(list_auth_sessions))
-        .route("/auth/sessions/{id}", axum::routing::delete(revoke_auth_session))
+        .route(
+            "/auth/sessions/{id}",
+            axum::routing::delete(revoke_auth_session),
+        )
         .route("/auth/change-password", post(change_password))
         .route("/auth/logout", post(logout))
         .merge(user_api::router())
@@ -256,12 +435,30 @@ pub(super) fn router(app: App) -> Router {
 }
 
 // Native Core tools arrive after persisted tool-policy/approval checks. Domain handlers still own tenant and revision admission.
-pub(crate) fn core_tools_router()->Router<App> {
-    Router::new().nest("/models",model_selection_api::router().merge(crate::agents_api::router()))
-        .route("/agents/{id}/abilities",get(ability_admin::read))
-        .route("/agents/{id}/abilities/{ability}/visibility",put(ability_admin::visibility_set))
-        .route("/agents/{id}/abilities/{ability}/tools/{tool}/mode",put(ability_admin::tool_set))
-        .route("/agents/{id}/slots/{name}",get(ability_admin::slot).put(ability_admin::slot_put))
-        .route("/agents/{id}/chat-config/{document}",get(crate::chat_config::get).patch(crate::chat_config::patch).delete(crate::chat_config::reset))
+pub(crate) fn core_tools_router() -> Router<App> {
+    Router::new()
+        .nest(
+            "/models",
+            model_selection_api::router().merge(crate::agents_api::router()),
+        )
+        .route("/agents/{id}/abilities", get(ability_admin::read))
+        .route(
+            "/agents/{id}/abilities/{ability}/visibility",
+            put(ability_admin::visibility_set),
+        )
+        .route(
+            "/agents/{id}/abilities/{ability}/tools/{tool}/mode",
+            put(ability_admin::tool_set),
+        )
+        .route(
+            "/agents/{id}/slots/{name}",
+            get(ability_admin::slot).put(ability_admin::slot_put),
+        )
+        .route(
+            "/agents/{id}/chat-config/{document}",
+            get(crate::chat_config::get)
+                .patch(crate::chat_config::patch)
+                .delete(crate::chat_config::reset),
+        )
         .merge(user_api::router())
 }

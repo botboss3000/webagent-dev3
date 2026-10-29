@@ -132,14 +132,28 @@ pub fn is_read(name: &str) -> bool {
 
 /// Compiled handlers whose schemas, effect and role defaults live in tool folders.
 pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
-    [web_access::TOOLS, business_front_desk::TOOLS, knowledge_files::TOOLS, core_decision::TOOLS,
-        core_directory_decision::TOOLS, core_user_files::TOOLS, core_model_switcher::TOOLS,
-        core_agent_management::TOOLS, core_image_vision::TOOLS, core_image_generation::TOOLS,
-        core_app_control::TOOLS, core_ui_admin::TOOLS, core_functions::TOOLS, core_orchestration::TOOLS,
-        core_visualizer::TOOLS, core_vault::TOOLS, core_visual_capture::TOOLS]
-        .into_iter()
-        .flatten()
-        .copied()
+    [
+        web_access::TOOLS,
+        business_front_desk::TOOLS,
+        knowledge_files::TOOLS,
+        core_decision::TOOLS,
+        core_directory_decision::TOOLS,
+        core_user_files::TOOLS,
+        core_model_switcher::TOOLS,
+        core_agent_management::TOOLS,
+        core_image_vision::TOOLS,
+        core_image_generation::TOOLS,
+        core_app_control::TOOLS,
+        core_ui_admin::TOOLS,
+        core_functions::TOOLS,
+        core_orchestration::TOOLS,
+        core_visualizer::TOOLS,
+        core_vault::TOOLS,
+        core_visual_capture::TOOLS,
+    ]
+    .into_iter()
+    .flatten()
+    .copied()
 }
 
 /// Schemas for `names` from their tool folders. A tool whose folder is missing or invalid
@@ -156,13 +170,31 @@ pub(crate) fn folder_schemas(names: &[&str]) -> Vec<Value> {
 /// definition has a compiled handler. Each problem disables only its own tool.
 pub(crate) fn definition_problems() -> Vec<String> {
     use webagent_abilities::tool_definitions as definitions;
-    let handlers: std::collections::BTreeSet<_> =
-        folder_handlers().chain(webagent_administration::tools::TOOLS).collect();
+    let handlers: std::collections::BTreeSet<_> = folder_handlers()
+        .chain(webagent_administration::tools::TOOLS)
+        .chain(
+            webagent_abilities::package::AUTOMATION_TOOLS
+                .iter()
+                .copied(),
+        )
+        .collect();
     let mut problems = definitions::problems().to_vec();
-    problems.extend(handlers.iter().filter(|name| definitions::get(name).is_none())
-        .map(|name| format!("Compiled tool {name} has no tool folder definition; it is disabled")));
-    problems.extend(definitions::definitions().keys().filter(|name| !handlers.contains(name.as_str()))
-        .map(|name| format!("Tool folder {name} has no compiled handler; it is listed but cannot run")));
+    problems.extend(
+        handlers
+            .iter()
+            .filter(|name| definitions::get(name).is_none())
+            .map(|name| {
+                format!("Compiled tool {name} has no tool folder definition; it is disabled")
+            }),
+    );
+    problems.extend(
+        definitions::definitions()
+            .keys()
+            .filter(|name| !handlers.contains(name.as_str()))
+            .map(|name| {
+                format!("Tool folder {name} has no compiled handler; it is listed but cannot run")
+            }),
+    );
     problems
 }
 
@@ -172,6 +204,10 @@ fn tool_defaults(name: &str, rungs: &[String]) -> Option<webagent_access::Permis
     if webagent_abilities::base::owns(name) {
         let read = is_read(name) || webagent_abilities::is_discovery(name);
         return Some(webagent_abilities::base::default_access(rungs, read));
+    }
+    // Role defaults edited in the live checkout apply at once.
+    if let Some(definition) = crate::ability_drift::current().definition(name) {
+        return Some(definition.default_for(rungs));
     }
     webagent_abilities::tool_definitions::get(name).map(|definition| definition.default_for(rungs))
 }

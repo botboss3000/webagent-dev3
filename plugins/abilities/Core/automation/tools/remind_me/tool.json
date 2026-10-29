@@ -1,0 +1,71 @@
+{
+  "name": "remind_me",
+  "description": "remind me through the optional Automation service. Changes use revision checks; external adapters are unavailable.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "request_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "prompt": {
+        "type": "string"
+      },
+      "delay_ms": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "daily_cap": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000
+      },
+      "expires_ms": {
+        "type": "integer"
+      },
+      "retry_limit": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 5
+      },
+      "runner": {
+        "enum": [
+          "inline"
+        ]
+      },
+      "filter": {
+        "type": "object"
+      },
+      "main_notes_action": {
+        "type": "object",
+        "properties": {
+          "topic_id": {
+            "type": "string"
+          },
+          "entry_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic_id",
+          "entry_id"
+        ],
+        "additionalProperties": false,
+        "description": "Bind a Main Notes action. Only Main Chat may coordinate it; trigger must match saved user timing. Uses one stable schedule identity."
+      }
+    },
+    "required": [
+      "request_id",
+      "prompt",
+      "delay_ms"
+    ],
+    "additionalProperties": false
+  }
+}

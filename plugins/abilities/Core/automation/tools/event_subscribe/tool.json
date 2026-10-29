@@ -1,0 +1,79 @@
+{
+  "name": "event_subscribe",
+  "description": "event subscribe through the optional Automation service. Changes use revision checks; external adapters are unavailable.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "request_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "source": {
+        "enum": [
+          "session_settled",
+          "run.completed",
+          "run.failed",
+          "run.cancelled",
+          "main_notes.updated",
+          "webhook.received"
+        ]
+      },
+      "prompt": {
+        "type": "string"
+      },
+      "destination": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "existing_chat",
+              "new_session",
+              "silent"
+            ]
+          },
+          "session_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "daily_cap": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000
+      },
+      "expires_ms": {
+        "type": "integer"
+      },
+      "retry_limit": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 5
+      },
+      "runner": {
+        "enum": [
+          "inline"
+        ]
+      },
+      "filter": {
+        "type": "object"
+      }
+    },
+    "required": [
+      "request_id",
+      "source",
+      "prompt",
+      "destination"
+    ],
+    "additionalProperties": false
+  }
+}

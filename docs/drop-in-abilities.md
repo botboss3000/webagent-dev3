@@ -29,6 +29,23 @@ not list. Each catalog snapshot reads these schemas from its own folders, so a p
 description edit needs no Rust build; release validation refuses a missing or invalid
 Administrator folder.
 
+Automation, a packaged ability, keeps its manifest `tools` list and also defines each
+tool in a folder; its `plugin.json` lists every `tools/<tool>/tool.json` as an asset, so
+a definition edit changes the package's runtime identity but not its build key.
+
+## Checkout edits
+
+The running app compares `/live-checkout/plugins/abilities` with the published release
+it runs (`crates/modules/abilities/src/drift.rs`, rechecked at most every five seconds).
+Edits to a tool's description or `default_access`, and changed guidance text
+(`tool.skill.md`, `<id>.skill.md`, `skills/*.skill.md`), apply at once with no notice.
+A removed tool or ability, an invalid `tool.json`, or a `tool.json` whose name,
+parameters, effect or `strict` changed turns that tool off at once. Added abilities and
+tools stay inactive, and changed code or manifests keep the last build running. Every
+change that needs a rebuild is listed in an administrator-only popup
+(`/api/v3/admin/ability-drift`); dismissing it hides that change set until the next login
+or, with "Remind me at next login" unchecked, for good. A new change set shows again.
+
 ## Isolated packages
 
 An isolated package lives at plugins/abilities/<Group>/<ability_id>. Retain the

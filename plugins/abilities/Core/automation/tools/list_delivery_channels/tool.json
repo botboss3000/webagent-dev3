@@ -1,0 +1,16 @@
+{
+  "name": "list_delivery_channels",
+  "description": "list delivery channels through the optional Automation service. Changes use revision checks; external adapters are unavailable.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

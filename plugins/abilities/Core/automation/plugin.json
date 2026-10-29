@@ -7,7 +7,6 @@
   "runtime": "executable",
   "entrypoint": "webagent_automation",
   "effect": "write",
-  "schemas": "service/tool-schemas.json",
   "tools": [
     "list_event_sources",
     "list_delivery_channels",
@@ -39,10 +38,23 @@
       "automation.json",
       "automation.skill.md",
       "service/package.json",
-      "service/tool-schemas.json",
       "service/page.json",
       "service/page.js",
-      "service/page.css"
+      "service/page.css",
+      "tools/list_event_sources/tool.json",
+      "tools/list_delivery_channels/tool.json",
+      "tools/event_subscribe/tool.json",
+      "tools/list_event_subscriptions/tool.json",
+      "tools/event_unsubscribe/tool.json",
+      "tools/schedule_task/tool.json",
+      "tools/remind_me/tool.json",
+      "tools/list_automations/tool.json",
+      "tools/update_automation/tool.json",
+      "tools/pause_automation/tool.json",
+      "tools/resume_automation/tool.json",
+      "tools/cancel_automation/tool.json",
+      "tools/run_automation_now/tool.json",
+      "tools/remember_automation_state/tool.json"
     ]
   }
 }
