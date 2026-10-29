@@ -26,6 +26,9 @@ export function closeFloatingMenu() {
   menu?.remove();
   menu = null;
 }
+function onMenuKey(event) {
+  if (event.key === 'Escape') closeFloatingMenu();
+}
 export function openFloatingMenu(items, top, left) {
   closeFloatingMenu();
   const host = document.createElement('div');
