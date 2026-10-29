@@ -4025,6 +4025,41 @@ class Broker:
         self._start_next()
         return {"job_id":job["job_id"],"status":"completed","effects_replayed":False}
 
+    def _reconcile_build_promotion(self, job, trusted):
+        # Operator continuation after an uncertain checkout promotion of a healthy
+        # isolated build release. Never rebuild, recreate or restart: retry only the
+        # checked promotion from the release the job was admitted against (an adopted
+        # job is itself the "current" release, so that cannot be the baseline).
+        # promote_checkout validates every path before writing, so a conflict
+        # changes nothing and keeps the previous adopt outcome.
+        if job.get("batch_members") or job.get("revoked") or not self._runtime_release_matches(job):
+            raise ValueError("uncertain release does not match healthy runtime")
+        deadline,_=self._incoming_lease(trusted)
+        folder=self.state/job["job_id"]
+        candidate=(folder/"candidate.tar").read_bytes()
+        admitted=(folder/"admitted_base.tar").read_bytes()
+        job["lease_until"]=min(deadline,time.time()+180)
+        try:
+            self.runner.promote_checkout(admitted,candidate,job.get("changed_paths",()))
+        except ValueError as error:
+            job["operator_adopted_at"]=time.time()
+            job["reason"]=("healthy deployed images accepted as queue base; checkout promotion conflict remains: "
+                           +scrub(str(error),self.runner.secrets))
+            self._save(job)
+            self._start_next()
+            return {"job_id":job["job_id"],"status":job["status"],"operator_adopted":True,
+                    "checkout_promotion":"conflicted","reason":job["reason"]}
+        after=context_digest(release.snapshot(Path(job["release_root"]),CONTEXT,context_digest))[0]
+        if after!=job["inputs_sha256"]:
+            raise ValueError("Frozen release root changed; reconciliation incomplete")
+        job.update(status="completed",phase="finished",finished_at=time.time(),operator_reconciled_at=time.time(),
+            reason="Running build release verified and source promoted; no effects replayed",
+            synchronization=self._sync_report(candidate,candidate,()))
+        job.setdefault("phase_history",[]).append({"phase":"finished","at":job["finished_at"]})
+        self._save(job)
+        self._start_next()
+        return {"job_id":job["job_id"],"status":"completed","effects_replayed":False,"checkout_promotion":"promoted"}
+
     def _runtime_release_matches(self, job):
         # An operator may accept a healthy deployed image while checkout
         # promotion remains conflicted; never replay its external effects.
@@ -5364,6 +5399,9 @@ class Broker:
                     return self._reconcile_plugin_publication(job,trusted,workspace)
                 if job.get("operation")=="build_deploy" and job.get("phase")=="checking_ui":
                     return self._reconcile_build_ui_check(job,trusted,workspace)
+                if (job.get("operation")=="build_deploy" and job.get("phase")=="promoting_checkout"
+                        and (self.state/job["job_id"]/"admitted_base.tar").is_file()):
+                    return self._reconcile_build_promotion(job,trusted)
                 if not self._runtime_release_matches(job):
                     raise ValueError("uncertain release does not match healthy runtime")
                 job["operator_adopted_at"] = time.time()

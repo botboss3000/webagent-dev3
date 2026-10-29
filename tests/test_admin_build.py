@@ -1867,6 +1867,40 @@ class BuildTests(unittest.TestCase):
         self.assertFalse(self.broker._has_unresolved_release())
         self.assertEqual(job["inputs_sha256"], host.context_digest(self.broker._current_release_blob())[0])
 
+    def test_operator_adopt_retries_checkout_promotion_from_admitted_base(self):
+        """Adopt retries only the checked promotion; a resolved conflict completes the release."""
+        self.call("v3_build_work", {"action": "begin", "task_id": "adopt-promotion",
+            "summary": "Adopt promotion", "mode": "isolated"})
+        status = self.call("v3_build_work", {"action": "status", "task_id": "adopt-promotion"})["own"][0]
+        source = Path(status["workspace_path"], "src", "adopt_promotion.rs")
+        source.parent.mkdir(exist_ok=True)
+        source.write_text("promote")
+        digest = self.call("v3_build_work", {"action": "status",
+            "task_id": "adopt-promotion"})["own"][0]["workspace_inputs_sha256"]
+        original, bases = self.runner.promote_checkout, []
+        def conflicts_once(before, after, changed):
+            bases.append(before)
+            if len(bases) == 1:
+                raise ValueError("checkout changed during release: v3/src/adopt_promotion.rs")
+            return original(before, after, changed)
+        self.runner.promote_checkout = conflicts_once
+        receipt = self.call("v3_build_work", {"action": "finish",
+            "task_id": "adopt-promotion", "expected_inputs_sha256": digest})
+        self.assertEqual("uncertain", self.wait(receipt)["status"])
+        mutations = len([c for c in self.runner.calls if c[0] in ("stop", "rename", "create", "start")])
+        local = {"user_id": "codex-local", "session_id": host.LOCAL_WORKSPACE,
+                 "local_caller": True, "lease_until": time.time() + 30,
+                 "access_fingerprint": "a" * 64}
+        accepted = self.call("v3_build_adopt_release", {"job_id": receipt["job_id"]},
+                             trusted=local, workspace=host.LOCAL_WORKSPACE)
+        self.assertEqual((accepted["status"], accepted["checkout_promotion"], accepted["effects_replayed"]),
+                         ("completed", "promoted", False))
+        job = self.broker.jobs[receipt["job_id"]]
+        self.assertEqual(job["phase"], "finished")
+        self.assertEqual(bases[1], (self.state / receipt["job_id"] / "admitted_base.tar").read_bytes())
+        self.assertEqual(mutations, len([c for c in self.runner.calls if c[0] in ("stop", "rename", "create", "start")]))
+        self.assertFalse(self.broker._has_unresolved_release())
+
     def test_operator_adopts_healthy_hot_ui_checkout_conflict(self):
         self.runner.hot_assets = True
         task = self.call("v3_build_work", {"action": "begin", "task_id": "adopt-hot-ui",
