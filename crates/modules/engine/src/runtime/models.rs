@@ -29,10 +29,14 @@ impl<'a,S:ModelRecords,M:ModuleAuthority,Q:SessionAuthority> ModelServices<'a,S,
  pub fn new(store:&'a S,provider:&'a Provider,gate:&'a Arc<Mutex<()>>,refresh:&'a Arc<Mutex<()>>,login:&'a Arc<RwLock<Option<Value>>>,stop:&'a CancellationToken,modules:M,authority:Q)->Self {
   Self{store,provider,gate,refresh,login,stop,modules,authority}
  }
- fn models_runtime(&self)->Runtime<'_,S> {
-  let repository=Repository::new(AgentMetadata::root(self.store),ModelRecords::application_pool(self.store),AgentMetadata::agent_pool(self.store),ModelRecords::agent_id(self.store),Records::current_user_id(self.store),self.store);
-  Runtime::new(repository,self.provider,self.gate,self.refresh,self.login,self.stop)
+ fn repository(&self)->Repository<'_,S> {
+  Repository::new(AgentMetadata::root(self.store),ModelRecords::application_pool(self.store),AgentMetadata::agent_pool(self.store),ModelRecords::agent_id(self.store),Records::current_user_id(self.store),self.store)
  }
+ fn models_runtime(&self)->Runtime<'_,S> {
+  Runtime::new(self.repository(),self.provider,self.gate,self.refresh,self.login,self.stop)
+ }
+ /// The current model catalog of this store's application plane.
+ pub async fn model_catalog(&self)->Result<webagent_models::model_selection::Catalog> {self.repository().model_catalog().await}
  pub async fn pin_model_plan(&self,plan:&mut SelectionPlan,actor:&str,session:Option<&str>)->Result<()> {
   self.models_runtime().pin_model_plan(plan,actor,session,&self.authority).await
  }

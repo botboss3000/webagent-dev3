@@ -24,6 +24,7 @@ pub mod components;
 pub mod ports;
 pub mod scope;
 pub mod images;
+pub mod lane;
 pub use scope::Scope;
 /// These are the existing shared identities, created once by root composition.
 #[derive(Clone)]
