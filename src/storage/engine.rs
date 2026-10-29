@@ -73,6 +73,7 @@ impl webagent_engine::runtime::ports::ScopedStorage for Store {
  fn all_user_ids(&self)->impl std::future::Future<Output=Result<Vec<String>>>+Send{<StoreCore as webagent_accounts_host::AccountsStore>::all_user_ids(self)}
  fn get<'a>(&'a self,key:&'a str)->impl std::future::Future<Output=Result<Option<Value>>>+Send+'a{StoreCore::get(self,key)}
  fn put<'a>(&'a self,key:&'a str,value:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a{Store::put(self,key,value)}
+ fn native_fence<'a>(&'a self,sid:&'a str,rid:&'a str,pending:&'a str,generation:&'a str)->impl std::future::Future<Output=Result<()>>+Send+'a{StoreCore::core_native_fence(self,sid,rid,pending,generation)}
 }
 impl webagent_engine::runtime::ports::RunPresentation for Store {fn present_run(&self,run:&Value)->Value{crate::public_run(run)}}
 

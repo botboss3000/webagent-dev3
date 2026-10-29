@@ -19,6 +19,14 @@ pub trait ScopedStorage:
         key: &'a str,
         value: &'a Value,
     ) -> impl Future<Output = Result<()>> + Send + 'a;
+    /// Fails unless the run is still the session's live, leased dispatch of `pending`.
+    fn native_fence<'a>(
+        &'a self,
+        sid: &'a str,
+        rid: &'a str,
+        pending: &'a str,
+        generation: &'a str,
+    ) -> impl Future<Output = Result<()>> + Send + 'a;
 }
 /// Existing public API projection remains with its Usage/Abilities privacy owners.
 pub trait RunPresentation: Sync {

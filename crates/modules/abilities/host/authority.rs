@@ -10,90 +10,14 @@ pub async fn check(
     args: &Value,
     cancel: &CancellationToken,
 ) -> Result<Value> {
-    let run = app.run(rid).await?;
-    let pending = if run["pending"]["id"] == pending_id {
-        &run["pending"]
-    } else {
-        run["batch"]
-            .as_array()
-            .and_then(|xs| xs.iter().find(|x| x["pending"]["id"] == pending_id))
-            .map(|v| &v["pending"])
-            .unwrap_or(&Value::Null)
-    };
-    if cancel.is_cancelled()
-        || app.shutoff().await?
-        || run["session_id"] != sid
-        || run["status"] != "running"
-        || run["generation"] != generation
-        || pending["name"] != name
-        || pending["state"] != "executing"
-        || pending["arguments"] != *args
-        || !app.store.participation_allows_run(&run).await?
-    {
-        return Err(anyhow!("Core invocation is no longer authorized"));
-    }
-    let agent = session_agent_id(app, sid).await?;
-    if run["agent_id"].as_str().unwrap_or("shared_default") != agent {
-        return Err(anyhow!("Run agent changed"));
-    }
-    let (policy, _, visibility, state) = ability_controls(app, sid).await?;
-    let mode = session_mode(app, sid).await?;
-    let access = shared_chat::live_access(&app.store, shared_chat::actor(app), sid, &agent).await?;
-    let decision = live_tool_decision(
-        app,
-        &access,
-        name,
-        &policy,
-        &visibility,
-        &state,
-        &run["loaded_abilities"],
-        mode["mode"] == "read_only",
-    )
-    .for_execution_mode(&mode);
-    if !access.admitted()
-        || decision.permission == access::Permission::Deny
-        || decision.permission == access::Permission::Ask && pending["human_approved"] != true
-    {
-        return Err(anyhow!(
-            "Core tool access changed; obtain fresh authorization"
-        ));
-    }
-    app.store
-        .core_native_fence(sid, rid, pending_id, generation)
-        .await?;
-    let selected = pending.clone();
-    let mut view = run;
-    view["pending"] = selected;
-    Ok(view)
+    app.engine()
+        .authorize_native(sid, rid, generation, pending_id, name, args, cancel)
+        .await
 }
 
 /// A wrapper cannot use another ability's implementation to bypass its live tool denial.
 pub async fn dependency(app: &App, sid: &str, run: &Value, name: &str) -> Result<()> {
-    let agent = session_agent_id(app, sid).await?;
-    let (policy, _, visibility, state) = ability_controls(app, sid).await?;
-    let mode = session_mode(app, sid).await?;
-    let access = shared_chat::live_access(&app.store, shared_chat::actor(app), sid, &agent).await?;
-    let decision = live_tool_decision(
-        app,
-        &access,
-        name,
-        &policy,
-        &visibility,
-        &state,
-        &run["loaded_abilities"],
-        mode["mode"] == "read_only",
-    )
-    .for_execution_mode(&mode);
-    if !access.admitted()
-        || decision.permission == access::Permission::Deny
-        || decision.permission == access::Permission::Ask
-            && run["pending"]["human_approved"] != true
-    {
-        return Err(anyhow!(
-            "Required dependency tool is unavailable or needs fresh approval"
-        ));
-    }
-    Ok(())
+    app.engine().authorize_dependency(sid, run, name).await
 }
 
 #[cfg(test)]

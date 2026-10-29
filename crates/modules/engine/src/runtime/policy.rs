@@ -167,6 +167,109 @@ impl<
         }
         Ok(())
     }
+    /// Rechecks a native tool invocation against its persisted run and the caller's live policy
+    /// immediately before it executes, then fences the run's database lease. Returns the run
+    /// with `pending` set to the invocation being executed, which may come from a batch.
+    pub async fn authorize_native(
+        &self,
+        sid: &str,
+        rid: &str,
+        generation: &str,
+        pending_id: &str,
+        name: &str,
+        args: &Value,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<Value> {
+        let mut run = self.run(rid).await?;
+        let pending = if run["pending"]["id"] == pending_id {
+            run["pending"].clone()
+        } else {
+            run["batch"]
+                .as_array()
+                .and_then(|xs| xs.iter().find(|x| x["pending"]["id"] == pending_id))
+                .map(|v| v["pending"].clone())
+                .unwrap_or(Value::Null)
+        };
+        if cancel.is_cancelled()
+            || self.shutoff().await?
+            || run["session_id"] != sid
+            || run["status"] != "running"
+            || run["generation"] != generation
+            || pending["name"] != name
+            || pending["state"] != "executing"
+            || pending["arguments"] != *args
+            || !self
+                .chat
+                .participation_allows_run(self.store.records(), &run)
+                .await?
+        {
+            return Err(anyhow!("Core invocation is no longer authorized"));
+        }
+        let agent = self.session_agent_id(sid).await?;
+        if run["agent_id"].as_str().unwrap_or("shared_default") != agent {
+            return Err(anyhow!("Run agent changed"));
+        }
+        if !self.live_tool_allowed(sid, &agent, name, &run, &pending).await? {
+            return Err(anyhow!(
+                "Core tool access changed; obtain fresh authorization"
+            ));
+        }
+        self.store
+            .records()
+            .native_fence(sid, rid, pending_id, generation)
+            .await?;
+        run["pending"] = pending;
+        Ok(run)
+    }
+    /// A wrapper cannot use another ability's implementation to bypass its live tool denial.
+    pub async fn authorize_dependency(&self, sid: &str, run: &Value, name: &str) -> Result<()> {
+        let agent = self.session_agent_id(sid).await?;
+        if !self
+            .live_tool_allowed(sid, &agent, name, run, &run["pending"])
+            .await?
+        {
+            return Err(anyhow!(
+                "Required dependency tool is unavailable or needs fresh approval"
+            ));
+        }
+        Ok(())
+    }
+    /// The live decision for `name` admits the caller now: denied tools fail, and tools that
+    /// ask need the pending call's recorded human approval.
+    async fn live_tool_allowed(
+        &self,
+        sid: &str,
+        agent: &str,
+        name: &str,
+        run: &Value,
+        pending: &Value,
+    ) -> Result<bool> {
+        let (policy, _, visibility, state) = self.ability_controls(sid).await?;
+        let mode = self.session_mode(sid).await?;
+        let actor = self
+            .chat_actor
+            .as_deref()
+            .unwrap_or(self.store.current_user_id());
+        let access = self
+            .chat
+            .live_access(self.store.records(), actor, sid, agent)
+            .await?;
+        let decision = self
+            .live_tool_decision(
+                &access,
+                name,
+                &policy,
+                &visibility,
+                &state,
+                &run["loaded_abilities"],
+                mode["mode"] == "read_only",
+            )
+            .for_execution_mode(&mode);
+        Ok(access.admitted()
+            && decision.permission != access::Permission::Deny
+            && (decision.permission != access::Permission::Ask
+                || pending["human_approved"] == true))
+    }
     pub fn live_tool_decision(
         &self,
         access: &LiveAccess,

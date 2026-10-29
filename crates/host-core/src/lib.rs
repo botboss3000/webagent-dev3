@@ -6,6 +6,7 @@
 mod documents;
 mod error;
 pub mod notifications;
+mod run_fence;
 mod store;
 
 pub use error::{bad, conflict, Api, ApiError};
