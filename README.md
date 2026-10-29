@@ -511,7 +511,7 @@ Policy/approval denials mark the pre-tool receipt rejected; a denied tool result
 also records rejection while retaining its dispatch generation and policy revision.
 Receipt reasons use fixed labels rather than copying arbitrary tool output.
 
-`src/workflow.defaults.json` is embedded at compile time. Authenticated
+Defaults are the Engine's built-in loop-runtime workflow and context limits. Authenticated
 `GET /api/v3/workflow/policy` returns effective policy/revision;
 `PUT` validates JSON overrides and persists the resolved policy in the application
 plane. Browser writes require the existing CSRF contract. Unknown fields,

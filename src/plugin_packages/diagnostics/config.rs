@@ -69,12 +69,36 @@ fn category_default() -> bool {
 impl Config {
     pub fn disabled() -> Self {
         // Fail-closed state, not installation defaults or a last-good configuration.
-        Self { version:1, enabled:false, capture_scope:"fixed_admin".into(),
-            categories:Categories {provider:true,context_assembly:true,run:true,tool:true,recovery:true},
-            assembly_successes:false, retention:Retention {hours:168,max_rows:200000},
-            full_context:FullContext {enabled:false,sessions:Vec::new(),retention_hours:24,max_snapshot_bytes:16777216,max_retained_bytes:268435456},
-            background_issues:BackgroundIssues::default() }
+        Self {
+            version: 1,
+            enabled: false,
+            capture_scope: "fixed_admin".into(),
+            categories: Categories {
+                provider: true,
+                context_assembly: true,
+                run: true,
+                tool: true,
+                recovery: true,
+            },
+            assembly_successes: false,
+            retention: Retention {
+                hours: 168,
+                max_rows: 200000,
+            },
+            full_context: FullContext {
+                enabled: false,
+                sessions: Vec::new(),
+                retention_hours: 24,
+                max_snapshot_bytes: 16777216,
+                max_retained_bytes: 268435456,
+            },
+            background_issues: BackgroundIssues::default(),
+        }
     }
+    /// The live settings file (`live-files.json`), read directly so an invalid edit
+    /// fails closed instead of falling back to a last-good copy.
+    pub const LIVE: &'static str =
+        "/live-checkout/src/plugin_packages/diagnostics/diagnostics.json";
     pub fn read(path: &Path) -> Result<(Self, String)> {
         use std::io::Read;
         let mut raw = Vec::new();

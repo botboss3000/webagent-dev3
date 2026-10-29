@@ -12,11 +12,10 @@ use tokio::{
 fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+        .map_or(0, |elapsed| elapsed.as_secs())
 }
 use crate::config;
-async fn handle(mut stream: UnixStream, pool: SqlitePool, root: &Path) -> Result<()> {
+async fn handle(mut stream: UnixStream, pool: SqlitePool, settings: &Path) -> Result<()> {
     if stream.peer_cred()?.uid() != unsafe { getuid() } {
         bail!("Peer rejected")
     }
@@ -30,7 +29,7 @@ async fn handle(mut stream: UnixStream, pool: SqlitePool, root: &Path) -> Result
     if request["version"] != 1 {
         bail!("Version rejected")
     }
-    let (c, digest) = config::Config::read(&root.join("diagnostics.json"))?;
+    let (c, digest) = config::Config::read(settings)?;
     let event = &request["event"];
     match request["operation"].as_str() {
         Some("configuration") => {
@@ -81,8 +80,7 @@ async fn handle(mut stream: UnixStream, pool: SqlitePool, root: &Path) -> Result
                 if sealed.len() > c.full_context.max_snapshot_bytes + 1024 {
                     bail!("Ciphertext rejected")
                 }
-                let (current, current_digest) =
-                    config::Config::read(&root.join("diagnostics.json"))?;
+                let (current, current_digest) = config::Config::read(settings)?;
                 if current_digest != digest
                     || !current.selected(event["session_id"].as_str().unwrap_or(""), now())
                 {
@@ -131,10 +129,10 @@ pub async fn run() -> Result<()> {
     loop {
         tokio::select! {
          _=interval.tick()=>{
-          if ticks%60==0 {if let Ok((c,_))=config::Config::read(&root.join("diagnostics.json")){let _=prune(&pool,&c).await;}}ticks=ticks.wrapping_add(1);},
+          if ticks%60==0 {if let Ok((c,_))=config::Config::read(Path::new(config::Config::LIVE)){let _=prune(&pool,&c).await;}}ticks=ticks.wrapping_add(1);},
          accepted=listener.accept()=>{let (stream,_)=accepted?;
           // One bounded frame at a time; excess clients remain in the bounded socket backlog.
-          let _=tokio::time::timeout(Duration::from_secs(10),handle(stream,pool.clone(),&root)).await;
+          let _=tokio::time::timeout(Duration::from_secs(10),handle(stream,pool.clone(),Path::new(config::Config::LIVE))).await;
          }
         }
     }
@@ -207,7 +205,7 @@ mod tests {
         ] {
             let (mut client, server) = UnixStream::pair().unwrap();
             let p = pool.clone();
-            let path = root.path().to_path_buf();
+            let path = root.path().join("diagnostics.json");
             let task = tokio::spawn(async move { handle(server, p, &path).await });
             let bytes=serde_json::to_vec(&serde_json::json!({"version":version,"operation":"event","event":{"owner":owner,"category":"provider","config_digest":digest}})).unwrap();
             client.write_u32(bytes.len() as u32).await.unwrap();
@@ -221,65 +219,96 @@ mod tests {
         assert_eq!(count, 1);
         let (mut client, server) = UnixStream::pair().unwrap();
         let p = pool.clone();
-        let path = root.path().to_path_buf();
+        let path = root.path().join("diagnostics.json");
         let task = tokio::spawn(async move { handle(server, p, &path).await });
         client.write_u32(136 * 1024 * 1024 + 1).await.unwrap();
         assert!(task.await.unwrap().is_err());
     }
 
     async fn submit_background(pool: &SqlitePool, root: &Path, digest: &str, event: &str) -> bool {
-        let (mut client,server)=UnixStream::pair().unwrap();
-        let p=pool.clone();let path=root.to_path_buf();
-        let task=tokio::spawn(async move {handle(server,p,&path).await});
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let p = pool.clone();
+        let path = root.join("diagnostics.json");
+        let task = tokio::spawn(async move { handle(server, p, &path).await });
         let bytes=serde_json::to_vec(&serde_json::json!({"version":1,"operation":"event","event":{
             "owner":"admin","category":"app_background","config_digest":digest,"issue_id":"retry-fixture","event":event
         }})).unwrap();
         client.write_u32(bytes.len() as u32).await.unwrap();
         client.write_all(&bytes).await.unwrap();
-        let accepted=task.await.unwrap().is_ok();
-        if accepted {assert_eq!(client.read_u8().await.unwrap(),1);}
+        let accepted = task.await.unwrap().is_ok();
+        if accepted {
+            assert_eq!(client.read_u8().await.unwrap(), 1);
+        }
         accepted
     }
     #[tokio::test]
     async fn background_protocol_is_retry_safe_and_visibility_independent() {
-        let root=tempfile::tempdir().unwrap();
-        let pool=open(root.path()).await.unwrap();
-        let mut c=config::Config::disabled();c.enabled=true;c.background_issues.show_toasts=false;
-        let path=root.path().join("diagnostics.json");
-        std::fs::write(&path,serde_json::to_vec(&c).unwrap()).unwrap();
-        let (_,digest)=config::Config::read(&path).unwrap();
-        for event in ["issue_opened","issue_opened","issue_resolved","issue_resolved"] {
-            assert!(submit_background(&pool,root.path(),&digest,event).await);
+        let root = tempfile::tempdir().unwrap();
+        let pool = open(root.path()).await.unwrap();
+        let mut c = config::Config::disabled();
+        c.enabled = true;
+        c.background_issues.show_toasts = false;
+        let path = root.path().join("diagnostics.json");
+        std::fs::write(&path, serde_json::to_vec(&c).unwrap()).unwrap();
+        let (_, digest) = config::Config::read(&path).unwrap();
+        for event in [
+            "issue_opened",
+            "issue_opened",
+            "issue_resolved",
+            "issue_resolved",
+        ] {
+            assert!(submit_background(&pool, root.path(), &digest, event).await);
         }
-        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM diagnostics WHERE category='app_background'").fetch_one(&pool).await.unwrap();
-        assert_eq!(count,2);
-        assert!(!submit_background(&pool,root.path(),"stale-digest","issue_opened").await);
-        c.enabled=false;std::fs::write(&path,serde_json::to_vec(&c).unwrap()).unwrap();
-        let (_,digest)=config::Config::read(&path).unwrap();
-        assert!(!submit_background(&pool,root.path(),&digest,"issue_opened").await);
-        c.enabled=true;c.background_issues.enabled=false;
-        std::fs::write(&path,serde_json::to_vec(&c).unwrap()).unwrap();
-        let (_,digest)=config::Config::read(&path).unwrap();
-        assert!(!submit_background(&pool,root.path(),&digest,"issue_opened").await);
-        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM diagnostics").fetch_one(&pool).await.unwrap();
-        assert_eq!(count,2);
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM diagnostics WHERE category='app_background'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 2);
+        assert!(!submit_background(&pool, root.path(), "stale-digest", "issue_opened").await);
+        c.enabled = false;
+        std::fs::write(&path, serde_json::to_vec(&c).unwrap()).unwrap();
+        let (_, digest) = config::Config::read(&path).unwrap();
+        assert!(!submit_background(&pool, root.path(), &digest, "issue_opened").await);
+        c.enabled = true;
+        c.background_issues.enabled = false;
+        std::fs::write(&path, serde_json::to_vec(&c).unwrap()).unwrap();
+        let (_, digest) = config::Config::read(&path).unwrap();
+        assert!(!submit_background(&pool, root.path(), &digest, "issue_opened").await);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM diagnostics")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
     }
 
     #[tokio::test]
     async fn actual_socket_configuration_reload_withdraws_old_digest_and_invalid_capture() {
-        let root=tempfile::tempdir().unwrap();let pool=open(root.path()).await.unwrap();
-        let path=root.path().join("diagnostics.json");
-        let mut config=config::Config::disabled();config.enabled=true;
-        std::fs::write(&path,serde_json::to_vec(&config).unwrap()).unwrap();
-        let (_,first)=config::Config::read(&path).unwrap();
-        assert!(submit_background(&pool,root.path(),&first,"issue_opened").await);
-        config.background_issues.show_toasts=false;
-        let next=path.with_extension("next");std::fs::write(&next,serde_json::to_vec(&config).unwrap()).unwrap();std::fs::rename(next,&path).unwrap();
-        let (_,second)=config::Config::read(&path).unwrap();assert_ne!(first,second);
-        assert!(!submit_background(&pool,root.path(),&first,"issue_resolved").await);
-        assert!(submit_background(&pool,root.path(),&second,"issue_resolved").await);
-        std::fs::write(&path,b"{bad}").unwrap();assert!(!submit_background(&pool,root.path(),&second,"issue_opened").await);
-        std::fs::remove_file(&path).unwrap();assert!(!submit_background(&pool,root.path(),&second,"issue_opened").await);
-        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM diagnostics").fetch_one(&pool).await.unwrap();assert_eq!(count,2);assert!(!path.exists());
+        let root = tempfile::tempdir().unwrap();
+        let pool = open(root.path()).await.unwrap();
+        let path = root.path().join("diagnostics.json");
+        let mut config = config::Config::disabled();
+        config.enabled = true;
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let (_, first) = config::Config::read(&path).unwrap();
+        assert!(submit_background(&pool, root.path(), &first, "issue_opened").await);
+        config.background_issues.show_toasts = false;
+        let next = path.with_extension("next");
+        std::fs::write(&next, serde_json::to_vec(&config).unwrap()).unwrap();
+        std::fs::rename(next, &path).unwrap();
+        let (_, second) = config::Config::read(&path).unwrap();
+        assert_ne!(first, second);
+        assert!(!submit_background(&pool, root.path(), &first, "issue_resolved").await);
+        assert!(submit_background(&pool, root.path(), &second, "issue_resolved").await);
+        std::fs::write(&path, b"{bad}").unwrap();
+        assert!(!submit_background(&pool, root.path(), &second, "issue_opened").await);
+        std::fs::remove_file(&path).unwrap();
+        assert!(!submit_background(&pool, root.path(), &second, "issue_opened").await);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM diagnostics")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+        assert!(!path.exists());
     }
 }

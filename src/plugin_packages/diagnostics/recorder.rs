@@ -143,7 +143,7 @@ pub async fn init<S: SnapshotStore>(cell: &'static OnceLock<Recorder<S>>, root: 
     bridge::init(root, role).await;
     // Package absence disables capture; never recreate a removed package.
     let folder = bridge::folder();
-    let path = folder.join("diagnostics.json");
+    let path = std::path::PathBuf::from(Config::LIVE);
     let loop_role = role == "loop";
     let pool = match reader(&folder) {
         Ok(pool) => pool,
@@ -176,25 +176,22 @@ pub async fn init<S: SnapshotStore>(cell: &'static OnceLock<Recorder<S>>, root: 
                 continue;
             }
             if persist(&pool, &event).await.is_err() {
-                cell.get()
-                    .expect("recorder is set before its writers start")
-                    .write_errors
-                    .fetch_add(1, Ordering::Relaxed);
+                if let Some(recorder) = cell.get() {
+                    recorder.write_errors.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
     });
-    let pool = cell
-        .get()
-        .expect("recorder is set before its writers start")
-        .pool
-        .clone();
+    let Some(recorder) = cell.get() else {
+        return;
+    };
+    let pool = recorder.pool.clone();
     tokio::spawn(async move {
         while let Some(snapshot) = sx.recv().await {
             if persist_snapshot(cell.get(), &pool, snapshot).await.is_err() {
-                cell.get()
-                    .expect("recorder is set before its writers start")
-                    .write_errors
-                    .fetch_add(1, Ordering::Relaxed);
+                if let Some(recorder) = cell.get() {
+                    recorder.write_errors.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
     });
@@ -252,7 +249,8 @@ pub fn seed(path: &Path) -> std::io::Result<()> {
         .create_new(true)
         .open(path)
     {
-        Ok(mut file) => file.write_all(include_bytes!("diagnostics.json")),
+        // The fixed fail-closed settings, not the live file's current values.
+        Ok(mut file) => file.write_all(&serde_json::to_vec(&Config::disabled())?),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(e),
     }

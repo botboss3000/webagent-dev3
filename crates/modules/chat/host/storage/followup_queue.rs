@@ -1,12 +1,34 @@
 //! Durable encrypted followups, serialized against publication in the user file.
-use super::*;
+use super::{anyhow, json, Result, Store, Value};
+use sqlx::Row;
 impl Store {
-    async fn legacy_followup_fence(&self,t:&mut sqlx::Transaction<'_,sqlx::Sqlite>,sid:&str,template:&Value)->Result<()> {
-        webagent_chat::followup::legacy_followup_fence(self,self.current_user_id(),t,sid,template).await
+    async fn legacy_followup_fence(
+        &self,
+        t: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        sid: &str,
+        template: &Value,
+    ) -> Result<()> {
+        webagent_chat::followup::legacy_followup_fence(
+            self,
+            self.current_user_id(),
+            t,
+            sid,
+            template,
+        )
+        .await
     }
-    pub(super) async fn legacy_message_meta(&self,t:&mut sqlx::Transaction<'_,sqlx::Sqlite>,entry:&Value,eligible:bool)->Result<()> {
-        let (key,meta)=webagent_chat::followup::legacy_message_meta_doc(self.current_user_id(),entry,eligible)?;
-        self.write_document(t,&key,&meta).await
+    pub(super) async fn legacy_message_meta(
+        &self,
+        t: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        entry: &Value,
+        eligible: bool,
+    ) -> Result<()> {
+        let (key, meta) = webagent_chat::followup::legacy_message_meta_doc(
+            self.current_user_id(),
+            entry,
+            eligible,
+        )?;
+        self.write_document(t, &key, &meta).await
     }
     pub(super) async fn queue_read_tx(
         &self,
@@ -37,14 +59,17 @@ impl Store {
         }
         let mut q = self.queue_read_tx(t, s).await?;
         let mut changed = q["held"] == true || !q["reason"].is_null();
-        for e in q["entries"].as_array_mut().unwrap() {
+        for e in q["entries"]
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("Invalid follow-up queue"))?
+        {
             if matches!(e["status"].as_str(), Some("pending" | "reviewing" | "held")) {
-                self.legacy_message_meta(t,e,false).await?;
+                self.legacy_message_meta(t, e, false).await?;
                 e["status"] = json!("cancelled");
                 e["choice"] = json!("cancel");
                 e["revision"] = json!(e["revision"]
                     .as_u64()
-                    .unwrap()
+                    .ok_or_else(|| anyhow!("Invalid follow-up revision"))?
                     .checked_add(1)
                     .ok_or_else(|| anyhow!("Queue entry revision exhausted"))?);
                 e["review_status"] = json!("cancelled");
@@ -107,11 +132,12 @@ impl Store {
             }
             return Ok(v["result"].clone());
         }
-        self.legacy_followup_fence(&mut t,s,&e["template"]).await?;
+        self.legacy_followup_fence(&mut t, s, &e["template"])
+            .await?;
         let mut q = self.queue_read_tx(&mut t, s).await?;
         if q["entries"]
             .as_array()
-            .unwrap()
+            .ok_or_else(|| anyhow!("Invalid follow-up queue"))?
             .iter()
             .filter(|e| {
                 !matches!(
@@ -127,21 +153,32 @@ impl Store {
         for (k, v) in docs {
             self.write_document(&mut t, &k, &v).await?;
         }
-        self.legacy_message_meta(&mut t,&e,false).await?;
-        self.insert_chat(&mut t, s, e["id"].as_str().unwrap(), "user", &e["content"])
-            .await?;
-        q["entries"].as_array_mut().unwrap().push(e);
+        self.legacy_message_meta(&mut t, &e, false).await?;
+        self.insert_chat(
+            &mut t,
+            s,
+            e["id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Invalid follow-up record"))?,
+            "user",
+            &e["content"],
+        )
+        .await?;
+        q["entries"]
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("Invalid follow-up queue"))?
+            .push(e);
         self.queue_write_tx(&mut t, &mut q).await?;
         self.write_document(&mut t, &key, &json!({"digest":digest,"result":result}))
             .await?;
         t.commit().await?;
         self.context_cache
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate(&self.context_cache_key(s));
         self.cache
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate(&[format!("session:{s}"), key]);
         Ok(result.clone())
     }
@@ -171,7 +208,7 @@ impl Store {
         if let Some(id) = id {
             let e = q["entries"]
                 .as_array_mut()
-                .unwrap()
+                .ok_or_else(|| anyhow!("Invalid follow-up queue"))?
                 .iter_mut()
                 .find(|e| e["id"] == id)
                 .ok_or_else(|| anyhow!("Queued message not found"))?;
@@ -183,21 +220,31 @@ impl Store {
             {
                 return Err(anyhow!("Message delivery already claimed"));
             }
-            let choice = body["choice"].as_str().unwrap();
-            if e["agent_message"].is_object(){e["messaging_route"]=Value::Null;}
+            let choice = body["choice"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Invalid follow-up record"))?;
+            if e["agent_message"].is_object() {
+                e["messaging_route"] = Value::Null;
+            }
             e["choice"] = json!(choice);
             e["revision"] = json!(expected + 1);
             if choice == "cancel" {
-                self.legacy_message_meta(&mut t,e,false).await?;
+                self.legacy_message_meta(&mut t, e, false).await?;
                 e["status"] = json!("cancelled");
             }
             if choice == "interrupt" {
                 e["interrupt_committed"] = json!(true);
                 let target:Option<String>=sqlx::query_scalar("SELECT id FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed') ORDER BY enqueue_seq DESC LIMIT 1").bind(s).fetch_optional(&mut *t).await?;
-                if e["agent_message"].is_object(){
-                    let id=target.as_deref().ok_or_else(||anyhow!("No active recipient run to interrupt"))?;
-                    let raw:Vec<u8>=sqlx::query_scalar("SELECT value FROM docs WHERE key=?").bind(format!("run:{id}")).fetch_one(&mut *t).await?;
-                    let target_run=self.unseal(&raw)?;e["interrupt_generation"]=target_run["generation"].clone();
+                if e["agent_message"].is_object() {
+                    let id = target
+                        .as_deref()
+                        .ok_or_else(|| anyhow!("No active recipient run to interrupt"))?;
+                    let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
+                        .bind(format!("run:{id}"))
+                        .fetch_one(&mut *t)
+                        .await?;
+                    let target_run = self.unseal(&raw)?;
+                    e["interrupt_generation"] = target_run["generation"].clone();
                 }
                 e["target_run_id"] = json!(target);
             }
@@ -218,7 +265,10 @@ impl Store {
             .fetch_optional(&mut *t)
             .await?;
             q["resumed_after_run_id"] = json!(last);
-            for e in q["entries"].as_array_mut().unwrap() {
+            for e in q["entries"]
+                .as_array_mut()
+                .ok_or_else(|| anyhow!("Invalid follow-up queue"))?
+            {
                 if e["status"] == "held" && e["review_status"] == "acceptable" {
                     e["status"] = json!("pending");
                 }
@@ -233,7 +283,10 @@ impl Store {
         )
         .await?;
         t.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[key]);
+        self.cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .invalidate(&[key]);
         Ok(result)
     }
     pub(crate) async fn followup_review_cas(
@@ -249,7 +302,7 @@ impl Store {
         let mut q = self.queue_read_tx(&mut t, s).await?;
         let Some(e) = q["entries"]
             .as_array_mut()
-            .unwrap()
+            .ok_or_else(|| anyhow!("Invalid follow-up queue"))?
             .iter_mut()
             .find(|e| e["id"] == id)
         else {
@@ -263,7 +316,13 @@ impl Store {
         {
             return Ok(false);
         }
-        if self.legacy_followup_fence(&mut t,s,&e["template"]).await.is_err(){return Ok(false);}
+        if self
+            .legacy_followup_fence(&mut t, s, &e["template"])
+            .await
+            .is_err()
+        {
+            return Ok(false);
+        }
         e["revision"] = json!(expected + 1);
         e["status"] = json!(status);
         if let Some(r) = review {
@@ -297,11 +356,16 @@ impl Store {
             .execute(&mut **t)
             .await?;
         let q = self.queue_read_tx(t, s).await?;
-        if q["entries"].as_array().unwrap().iter().any(|e| {
-            e["status"] == "pending"
-                && e["review_status"] == "acceptable"
-                && matches!(e["choice"].as_str(), Some("steer" | "interrupt"))
-        }) {
+        if q["entries"]
+            .as_array()
+            .ok_or_else(|| anyhow!("Invalid follow-up queue"))?
+            .iter()
+            .any(|e| {
+                e["status"] == "pending"
+                    && e["review_status"] == "acceptable"
+                    && matches!(e["choice"].as_str(), Some("steer" | "interrupt"))
+            })
+        {
             return Err(anyhow!("Pending followup prevents terminal publication"));
         }
         Ok(())
@@ -319,7 +383,11 @@ impl Store {
             let lease = sqlx::query(
                 "SELECT lease_epoch,lease_owner,lease_expires_at FROM run_index WHERE id=?",
             )
-            .bind(run["id"].as_str().unwrap())
+            .bind(
+                run["id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Invalid follow-up record"))?,
+            )
             .fetch_one(&mut **t)
             .await?;
             let epoch: i64 = lease.get("lease_epoch");
@@ -353,7 +421,7 @@ impl Store {
         }
         let mut picked = q["entries"]
             .as_array()
-            .unwrap()
+            .ok_or_else(|| anyhow!("Invalid follow-up queue"))?
             .iter()
             .filter(|e| {
                 e["status"] == "pending"
@@ -369,10 +437,18 @@ impl Store {
             }
             picked.truncate(1);
         }
-        if picked.is_empty() {return Ok(false);}
-        self.legacy_followup_fence(&mut t,s,run).await?;
-        for entry in &picked {self.legacy_followup_fence(&mut t,s,&entry["template"]).await?; self.validate_agent_delivery_tx(&mut t,entry).await?;}
-        if let Some(parent)=origin.as_deref(){self.legacy_followup_fence(&mut t,s,parent).await?;}
+        if picked.is_empty() {
+            return Ok(false);
+        }
+        self.legacy_followup_fence(&mut t, s, run).await?;
+        for entry in &picked {
+            self.legacy_followup_fence(&mut t, s, &entry["template"])
+                .await?;
+            self.validate_agent_delivery_tx(&mut t, entry).await?;
+        }
+        if let Some(parent) = origin.as_deref() {
+            self.legacy_followup_fence(&mut t, s, parent).await?;
+        }
 
         // The preflight template must still belong to the actual first consumer;
         // a concurrent choice edit causes a fresh scheduler pass, never a wrong model.
@@ -382,12 +458,21 @@ impl Store {
         {
             return Ok(false);
         }
-        if choice!="steer" {
-            let reservation=if let Some(parent)=origin.as_deref().filter(|parent|!matches!(parent["status"].as_str(),Some("completed"|"cancelled"|"stopped"|"failed"))){self.transfer_requester_run(parent,run).await}else{self.reserve_requester_run(run).await};
-            match reservation{
-                Ok(())=>{},
-                Err(error) if error.to_string()=="Account run limit reached"=>return Ok(false),
-                Err(error)=>return Err(error),
+        if choice != "steer" {
+            let reservation = if let Some(parent) = origin.as_deref().filter(|parent| {
+                !matches!(
+                    parent["status"].as_str(),
+                    Some("completed" | "cancelled" | "stopped" | "failed")
+                )
+            }) {
+                self.transfer_requester_run(parent, run).await
+            } else {
+                self.reserve_requester_run(run).await
+            };
+            match reservation {
+                Ok(()) => {}
+                Err(error) if error.to_string() == "Account run limit reached" => return Ok(false),
+                Err(error) => return Err(error),
             }
         }
         let rid = run["id"]
@@ -405,14 +490,30 @@ impl Store {
             .join("\n\n");
         let attachment_count = picked
             .iter()
-            .map(|e| e["attachments"].as_array().unwrap().len())
-            .sum::<usize>();
+            .map(|e| {
+                e["attachments"]
+                    .as_array()
+                    .map(Vec::len)
+                    .ok_or_else(|| anyhow!("Invalid follow-up queue"))
+            })
+            .sum::<Result<usize>>()?;
         // Queued batches use the session agent's effective chat.json, as upload admission does.
         let session: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(format!("session:{s}")).fetch_one(&mut *t).await?;
-        let agent = self.unseal(&session)?["agent_id"].as_str().unwrap_or("shared_default").to_owned();
-        let config = crate::chat_config::effective_chat(self, &self.root.join("config/chat.json"), &agent).await?;
-        let maximum = webagent_chat::configuration::parse_attachment_limits(&config)?.max_per_message;
+            .bind(format!("session:{s}"))
+            .fetch_one(&mut *t)
+            .await?;
+        let agent = self.unseal(&session)?["agent_id"]
+            .as_str()
+            .unwrap_or("shared_default")
+            .to_owned();
+        let config = crate::chat_config::effective_chat(
+            self,
+            std::path::Path::new(webagent_chat::configuration::LIVE_CHAT),
+            &agent,
+        )
+        .await?;
+        let maximum =
+            webagent_chat::configuration::parse_attachment_limits(&config)?.max_per_message;
         if text.len() > 65536 || maximum.is_some_and(|max| attachment_count > max) {
             q["held"] = json!(true);
             q["reason"]=json!("Combined queued input exceeds message or attachment limits; cancel messages to reduce it");
@@ -422,7 +523,9 @@ impl Store {
         }
         let item = json!({"role":"user","content":text});
         let mut next = run.clone();
-        if picked.iter().any(|e|e["agent_message"].is_object()){next["received_agent_message"]=json!(true);}
+        if picked.iter().any(|e| e["agent_message"].is_object()) {
+            next["received_agent_message"] = json!(true);
+        }
         if choice == "steer" || choice == "interrupt" {
             next["input"]
                 .as_array_mut()
@@ -435,7 +538,12 @@ impl Store {
         if let Some(original) = origin.as_deref() {
             let mut old = original.clone();
             let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-                .bind(format!("run:{}", old["id"].as_str().unwrap()))
+                .bind(format!(
+                    "run:{}",
+                    old["id"]
+                        .as_str()
+                        .ok_or_else(|| anyhow!("Invalid follow-up record"))?
+                ))
                 .fetch_one(&mut *t)
                 .await?;
             let previous = self.unseal(&raw)?;
@@ -453,7 +561,12 @@ impl Store {
                 .await?;
             self.write_document(
                 &mut t,
-                &format!("run:{}", old["id"].as_str().unwrap()),
+                &format!(
+                    "run:{}",
+                    old["id"]
+                        .as_str()
+                        .ok_or_else(|| anyhow!("Invalid follow-up record"))?
+                ),
                 &old,
             )
             .await?;
@@ -475,14 +588,19 @@ impl Store {
                     self.insert_interaction(
                         &mut t,
                         s,
-                        old["id"].as_str().unwrap(),
+                        old["id"]
+                            .as_str()
+                            .ok_or_else(|| anyhow!("Invalid follow-up record"))?,
                         &format!("tool:{call}"),
                         item,
                     )
                     .await?;
                 }
             }
-            for entry in q["entries"].as_array_mut().unwrap() {
+            for entry in q["entries"]
+                .as_array_mut()
+                .ok_or_else(|| anyhow!("Invalid follow-up queue"))?
+            {
                 if entry["choice"] == "interrupt"
                     && entry["status"] == "pending"
                     && entry["target_run_id"] == old["id"]
@@ -518,9 +636,12 @@ impl Store {
         self.index_run(&mut t, &next).await?;
         self.insert_interaction(&mut t, s, &rid, &format!("followup:{batch}"), &item)
             .await?;
-        for e in q["entries"].as_array_mut().unwrap() {
+        for e in q["entries"]
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("Invalid follow-up queue"))?
+        {
             if picked.iter().any(|p| p["id"] == e["id"]) {
-                self.legacy_message_meta(&mut t,e,true).await?;
+                self.legacy_message_meta(&mut t, e, true).await?;
                 e["status"] = json!("delivered");
                 e["consuming_run_id"] = json!(rid);
                 e["batch_id"] = json!(batch);
@@ -531,20 +652,23 @@ impl Store {
         t.commit().await?;
         *run = next;
         if let (Some(target), Some(saved)) = (origin.as_deref_mut(), saved_origin) {
-            let old_id = saved["id"].as_str().unwrap().to_owned();
+            let old_id = saved["id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Invalid follow-up record"))?
+                .to_owned();
             *target = saved;
             self.cache
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .invalidate(&[format!("run:{old_id}"), format!("run_view:{old_id}")]);
         }
         self.context_cache
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate(&self.context_cache_key(s));
         self.cache
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .invalidate(&[format!("run:{rid}"), format!("run_view:{rid}")]);
         Ok(true)
     }
@@ -556,7 +680,9 @@ mod tests {
     async fn fixture() -> (tempfile::TempDir, Store) {
         let root = tempfile::tempdir().unwrap();
         let s = Store::open(root.path()).await.unwrap();
-        s.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();
+        s.create_admin_account("root", "long-hash-placeholder", "generation")
+            .await
+            .unwrap();
         s.put(
             "session:s",
             &json!({"id":"s","agent_id":"shared_default","status":"active"}),
@@ -990,16 +1116,29 @@ mod tests {
 
     #[tokio::test]
     async fn private_queued_text_stays_excluded_after_deactivation_and_reactivation() {
-        let (_root,s)=fixture().await;
-        submit(&s,"private-sentinel","PRIVATE-QUEUED-SENTINEL","queue").await;
-        assert!(!s.model_message_allowed("s","private-sentinel").await.unwrap());
+        let (_root, s) = fixture().await;
+        submit(&s, "private-sentinel", "PRIVATE-QUEUED-SENTINEL", "queue").await;
+        assert!(!s
+            .model_message_allowed("s", "private-sentinel")
+            .await
+            .unwrap());
         assert!(s.shared_model_context("s").await.unwrap().is_empty());
-        s.set_participation("s",s.current_user_id(),false,0,"off").await.unwrap();
-        assert_eq!(s.followup_queue("s").await.unwrap()["entries"][0]["status"],"cancelled");
-        s.set_participation("s",s.current_user_id(),true,1,"on").await.unwrap();
-        assert!(!s.model_message_allowed("s","private-sentinel").await.unwrap());
+        s.set_participation("s", s.current_user_id(), false, 0, "off")
+            .await
+            .unwrap();
+        assert_eq!(
+            s.followup_queue("s").await.unwrap()["entries"][0]["status"],
+            "cancelled"
+        );
+        s.set_participation("s", s.current_user_id(), true, 1, "on")
+            .await
+            .unwrap();
+        assert!(!s
+            .model_message_allowed("s", "private-sentinel")
+            .await
+            .unwrap());
         assert!(s.shared_model_context("s").await.unwrap().is_empty());
-        assert!(s.model_chat_page("s",0,50).await.unwrap()["messages"][0]["content"].is_null());
+        assert!(s.model_chat_page("s", 0, 50).await.unwrap()["messages"][0]["content"].is_null());
         assert!(s.context("s").await.unwrap().is_empty());
     }
 }

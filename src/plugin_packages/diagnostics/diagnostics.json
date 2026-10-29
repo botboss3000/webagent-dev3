@@ -1,15 +1,12 @@
 {
   "version": 1,
-  "enabled": false,
+  "enabled": true,
   "capture_scope": "fixed_admin",
   "categories": {
     "provider": true,
-    "context_assembly": true,
-    "run": true,
-    "tool": true,
-    "recovery": true
+    "context_assembly": true
   },
-  "assembly_successes": false,
+  "assembly_successes": true,
   "retention": {
     "hours": 168,
     "max_rows": 200000

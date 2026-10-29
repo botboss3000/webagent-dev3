@@ -16,6 +16,7 @@
     "crates/modules/engine/loop-runtime.json",
     "crates/modules/models/providers/*.json",
     "crates/modules/webapp/app-settings.json",
+    "src/plugin_packages/diagnostics/diagnostics.json",
     "ui/chat/chat.json"
   ]
 }
