@@ -16,7 +16,7 @@ __pycache__/
 provider.json
 bootstrap.json
 bootstrap.applied.json
-app-settings.json
+/app-settings.json
 .venv/
 node_modules/
 *.log

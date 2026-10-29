@@ -11,6 +11,7 @@
     "crates/modules/configuration/prompts/tool_result_deduplication/*.md",
     "crates/modules/context/context-compaction.json",
     "crates/modules/context/tool-output-retention.json",
+    "crates/modules/engine/engine-components.json",
     "crates/modules/engine/gates/*.json",
     "crates/modules/engine/loop-runtime.json",
     "crates/modules/models/providers/*.json",
