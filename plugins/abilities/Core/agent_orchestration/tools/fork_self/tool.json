@@ -1,0 +1,28 @@
+{
+  "name": "fork_self",
+  "description": "Fork this caller-owned conversation at a published message using an exact history cursor. Creates a private conversation; no tool authority is copied from history.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "expected_last_seq": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "message_id": {
+        "maxLength": 128,
+        "type": "string"
+      }
+    },
+    "required": [
+      "message_id",
+      "expected_last_seq"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "create_tool",
+  "description": "Save a private callable pure Python expression function. Source must be def name(args): return one_expression. Supports JSON indexing, arithmetic, comparisons, conditionals and pure len/sum/min/max/abs/round/sorted/str/int/float/bool calls. No imports, attributes, loops, filesystem or network. Invoke it with run_soft_ability; this does not grant a new top-level tool permission.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "maxLength": 16384,
+        "type": "string"
+      },
+      "description": {
+        "maxLength": 1000,
+        "type": "string"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "name": {
+        "maxLength": 64,
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "description",
+      "code",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

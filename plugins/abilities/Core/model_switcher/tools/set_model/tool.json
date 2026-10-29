@@ -1,0 +1,24 @@
+{
+  "name": "set_model",
+  "description": "Select one existing model entry for the rest of this run. Applies at the next model boundary; does not edit agent assignments.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "entry_id": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "entry_id"
+    ],
+    "additionalProperties": false
+  }
+}

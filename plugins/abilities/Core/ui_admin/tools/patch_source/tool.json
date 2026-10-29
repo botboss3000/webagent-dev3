@@ -1,0 +1,58 @@
+{
+  "name": "patch_source",
+  "description": "Apply a checked unified diff containing only ui/ text assets. Requires broker_id and the current task digest.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "broker_id": {
+        "maxLength": 80,
+        "type": "string"
+      },
+      "content": {
+        "type": "string"
+      },
+      "expected_inputs_sha256": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "limit": {
+        "maximum": 200,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "new_text": {
+        "type": "string"
+      },
+      "offset": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "old_text": {
+        "type": "string"
+      },
+      "patch": {
+        "type": "string"
+      },
+      "path": {
+        "maxLength": 240,
+        "type": "string"
+      },
+      "query": {
+        "maxLength": 1000,
+        "type": "string"
+      }
+    },
+    "required": [
+      "patch",
+      "broker_id",
+      "expected_inputs_sha256"
+    ],
+    "additionalProperties": false
+  }
+}

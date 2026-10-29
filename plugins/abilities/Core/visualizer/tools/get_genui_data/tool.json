@@ -1,0 +1,23 @@
+{
+  "name": "get_genui_data",
+  "description": "Read a mini app's private JSON data snapshot. This is stored data, not a network fetch or a credential lookup.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "genui_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "genui_id"
+    ],
+    "additionalProperties": false
+  }
+}

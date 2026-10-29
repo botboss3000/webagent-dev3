@@ -1,0 +1,23 @@
+{
+  "name": "get_genui_logs",
+  "description": "Read bounded mini app edit activity and the last isolated browser capture's diagnostics. This does not claim continuous telemetry from a user's browser.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "genui_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "genui_id"
+    ],
+    "additionalProperties": false
+  }
+}

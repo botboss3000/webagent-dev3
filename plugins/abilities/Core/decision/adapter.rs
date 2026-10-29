@@ -12,12 +12,10 @@ const MAX_RESPONSE: usize = 512 * 1024;
 
 pub fn owns(name: &str) -> bool { name == "decide_with_jev" }
 
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["decide_with_jev"];
 pub fn schemas() -> Vec<Value> {
-    vec![json!({"type":"function","name":"decide_with_jev",
-        "description":"Ask the assigned TypeSafe Jev Decision model typed questions about supplied state; it cannot read files or call tools",
-        "parameters":{"type":"object","properties":{"request_json":{"type":"string",
-            "description":"JSON System One request with state, named choice/score/noul questions, and optional model matching the assigned Decision model",
-            "minLength":2,"maxLength":65536}},"required":["request_json"],"additionalProperties":false}})]
+    crate::tools::folder_schemas(TOOLS)
 }
 
 #[derive(Deserialize)]

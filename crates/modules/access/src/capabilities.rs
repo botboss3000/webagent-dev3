@@ -22,6 +22,22 @@ pub struct CapabilityLevel {
     pub tool_exposure:BTreeMap<String,Exposure>,
     #[serde(default)]
     pub skill_exposure:BTreeMap<String,Exposure>,
+    /// Set by `CapabilityLevels::effective`: this level's rungs (it, then the levels
+    /// below it) and saved tool permissions, followed by each level above it.
+    #[serde(skip)]
+    pub chain:Vec<(Vec<String>,BTreeMap<String,Permission>)>,
+}
+/// Default access for a tool with a definition, given a level's rungs; `None` for a
+/// tool without one. The app installs it from the tool definitions.
+pub type ToolDefaults=fn(&str,&[String])->Option<Permission>;
+static TOOL_DEFAULTS:std::sync::OnceLock<ToolDefaults>=std::sync::OnceLock::new();
+pub fn install_tool_defaults(defaults:ToolDefaults) {let _=TOOL_DEFAULTS.set(defaults);}
+/// A level's saved permission, else the tool's default for its rungs. Tools without a
+/// definition keep the earlier Auto until they move to a tool folder.
+fn level_tool_permission(saved:&BTreeMap<String,Permission>,rungs:&[String],id:&str)->Permission {
+    saved.get(id).or_else(||saved.get("*")).copied()
+        .or_else(||TOOL_DEFAULTS.get().and_then(|defaults|defaults(id,rungs)))
+        .unwrap_or(Permission::Auto)
 }
 impl CapabilityLevel {
     pub fn validate(&self)->Result<()> {
@@ -44,8 +60,11 @@ impl CapabilityLevel {
             .copied().unwrap_or(Permission::Deny)
     }
     pub fn tool_permission(&self,id:&str)->Permission {
-        self.tool_permissions.get(id).or_else(||self.tool_permissions.get("*"))
-            .copied().unwrap_or(Permission::Auto)
+        if self.chain.is_empty() {
+            return level_tool_permission(&self.tool_permissions,std::slice::from_ref(&self.id),id);
+        }
+        self.chain.iter().fold(Permission::Auto,|permission,(rungs,saved)|
+            permission.meet(level_tool_permission(saved,rungs,id)))
     }
 }
 #[derive(Clone,Debug,Eq,PartialEq,Serialize,Deserialize)]
@@ -90,7 +109,7 @@ impl Default for CapabilityLevels {
         Self {revision:0,order:vec!["operator".into(),"member".into(),"visitor".into()],levels:[("visitor","Visitor"),("member","Member"),("operator","Operator")]
             .into_iter().map(|(id,name)|(id.into(),CapabilityLevel {id:id.into(),name:name.into(),revision:1,
                 ability_permissions:BTreeMap::new(),tool_permissions:BTreeMap::new(),
-                ability_exposure:BTreeMap::new(),tool_exposure:BTreeMap::new(),skill_exposure:BTreeMap::new()})).collect()}
+                ability_exposure:BTreeMap::new(),tool_exposure:BTreeMap::new(),skill_exposure:BTreeMap::new(),chain:Vec::new()})).collect()}
     }
 }
 /// Shown in chat and the effective-abilities response for agents without saved levels.
@@ -146,6 +165,10 @@ impl CapabilityLevels {
         self.validate()?;
         let position=self.order.iter().position(|item|item==id).ok_or_else(||anyhow!("Capability level not found"))?;
         let mut result=self.levels[id].clone();
+        result.chain=self.order[..=position].iter().rev().map(|level|{
+            let at=self.order.iter().position(|item|item==level).unwrap_or(position);
+            (self.order[at..].to_vec(),self.levels[level].tool_permissions.clone())
+        }).collect();
         for upper_id in &self.order[..position] {
             let upper=&self.levels[upper_id];
             meet_permissions(&mut result.ability_permissions,&upper.ability_permissions,Permission::Deny);

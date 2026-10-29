@@ -1,0 +1,16 @@
+{
+  "name": "list_models",
+  "description": "List this agent's permitted roster and assigned model roles; never returns credentials.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

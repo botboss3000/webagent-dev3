@@ -1,0 +1,30 @@
+{
+  "name": "set_genui_data",
+  "description": "Replace a mini app's private JSON data snapshot, at most 16 KiB, using its exact revision; refreshes its display in this conversation.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "data": {},
+      "expected_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "genui_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "genui_id",
+      "expected_revision",
+      "data"
+    ],
+    "additionalProperties": false
+  }
+}

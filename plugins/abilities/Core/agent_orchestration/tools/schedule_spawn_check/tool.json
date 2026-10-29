@@ -1,0 +1,29 @@
+{
+  "name": "schedule_spawn_check",
+  "description": "Create a durable follow-up reminder to inspect a child after a bounded delay. Requires the installed Automation service and its live permissions; activation may need a person.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "delay_ms": {
+        "maximum": 2592000000,
+        "minimum": 1000,
+        "type": "integer"
+      },
+      "session_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "delay_ms"
+    ],
+    "additionalProperties": false
+  }
+}

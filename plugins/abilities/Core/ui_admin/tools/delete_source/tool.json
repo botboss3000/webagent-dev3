@@ -1,0 +1,59 @@
+{
+  "name": "delete_source",
+  "description": "Delete exactly one UI file through a reviewed full deletion diff. Requires path, patch, broker_id and the current task digest.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "broker_id": {
+        "maxLength": 80,
+        "type": "string"
+      },
+      "content": {
+        "type": "string"
+      },
+      "expected_inputs_sha256": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "limit": {
+        "maximum": 200,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "new_text": {
+        "type": "string"
+      },
+      "offset": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "old_text": {
+        "type": "string"
+      },
+      "patch": {
+        "type": "string"
+      },
+      "path": {
+        "maxLength": 240,
+        "type": "string"
+      },
+      "query": {
+        "maxLength": 1000,
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "patch",
+      "broker_id",
+      "expected_inputs_sha256"
+    ],
+    "additionalProperties": false
+  }
+}

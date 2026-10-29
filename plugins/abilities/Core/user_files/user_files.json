@@ -2,12 +2,6 @@
   "display_name": "User Files",
   "kind": "ability",
   "description": "Save and read caller-private file records, with bounded byte paging and explicit attachment copies into the current conversation.",
-  "tools": [
-    "save_file",
-    "list_user_files",
-    "read_user_file",
-    "attach_file"
-  ],
   "icon": "folder",
   "color": "#9ece6a",
   "order": 10,

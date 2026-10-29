@@ -1,0 +1,16 @@
+{
+  "name": "use_premium_model",
+  "description": "Use this agent's assigned Premium role for this run. Requires exact human approval.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

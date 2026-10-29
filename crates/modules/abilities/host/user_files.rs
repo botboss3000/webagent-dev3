@@ -10,21 +10,10 @@ pub fn owns(name: &str) -> bool {
         "save_file" | "list_user_files" | "read_user_file" | "attach_file"
     )
 }
-pub fn is_read(name: &str) -> bool {
-    matches!(name, "list_user_files" | "read_user_file")
-}
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["save_file", "list_user_files", "read_user_file", "attach_file"];
 pub fn schemas() -> Vec<Value> {
-    [
-        ("save_file","Save a file in the current caller's private files. Use revision 0 to create; read before replacing. Supply exactly one of text or base64 data.",
-            json!({"name":{"type":"string","minLength":1,"maxLength":255},"media_type":{"type":"string","maxLength":128},"text":{"type":"string"},"data":{"type":"string"},"expected_revision":{"type":"integer","minimum":0}}),vec!["name","expected_revision"]),
-        ("list_user_files","List private saved-file metadata in bounded pages.",
-            json!({"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}}),vec![]),
-        ("read_user_file","Read a bounded byte page of a private saved file as base64 and UTF-8 text when valid.",
-            json!({"name":{"type":"string","maxLength":255},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}),vec!["name"]),
-        ("attach_file","Attach a private saved file to the current conversation and return its authenticated download URL.",
-            json!({"name":{"type":"string","maxLength":255}}),vec!["name"])
-    ].into_iter().map(|(name,description,properties,required)|json!({"type":"function","name":name,"description":description,
-        "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
+    crate::tools::folder_schemas(TOOLS)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

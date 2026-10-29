@@ -1,0 +1,16 @@
+{
+  "name": "business_profile_get",
+  "description": "Read this business's operator-maintained profile: name, contact details, hours, services or menu with prices, and policies. Answer visitor questions from it; say so when a fact is missing instead of guessing.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

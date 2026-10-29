@@ -1,0 +1,39 @@
+{
+  "name": "save_file",
+  "description": "Save a file in the current caller's private files. Use revision 0 to create; read before replacing. Supply exactly one of text or base64 data.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "data": {
+        "type": "string"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "media_type": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

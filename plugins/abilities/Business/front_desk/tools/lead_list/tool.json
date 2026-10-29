@@ -1,0 +1,31 @@
+{
+  "name": "lead_list",
+  "description": "Staff only. List the newest leads, optionally filtered by status.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "maximum": 50,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "status": {
+        "enum": [
+          "new",
+          "contacted",
+          "won",
+          "closed"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

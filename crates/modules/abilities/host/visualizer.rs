@@ -19,29 +19,10 @@ pub fn owns(name: &str) -> bool {
             | "get_genui_reference"
     )
 }
-pub fn is_read(name: &str) -> bool {
-    matches!(
-        name,
-        "list_genui" | "get_genui" | "get_genui_data" | "get_genui_logs" | "get_genui_reference"
-    )
-}
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["render_visual", "create_genui", "edit_genui", "list_genui", "get_genui", "delete_genui", "rename_genui", "get_genui_data", "set_genui_data", "get_genui_logs", "refresh_genui", "get_genui_reference"];
 pub fn schemas() -> Vec<Value> {
-    let id = json!({"type":"string","format":"uuid"});
-    let rev = json!({"type":"integer","minimum":1});
-    [
- ("render_visual","Save and display a private self-contained HTML/JavaScript mini app in this conversation. Inline code runs in an opaque sandbox without platform cookies, API access, forms, popups or external subresources. HTML is at most 32 KiB and optional JSON data at most 16 KiB. Use get_genui_reference for the data/theme contract.",json!({"name":{"type":"string","maxLength":120},"html":{"type":"string","maxLength":32768},"data":{}}),vec!["name","html"]),
- ("create_genui","Save a private self-contained mini app without displaying it. Use refresh_genui to display a saved app in this conversation.",json!({"name":{"type":"string","maxLength":120},"html":{"type":"string","maxLength":32768},"data":{}}),vec!["name","html"]),
- ("edit_genui","Edit one private mini app using its exact revision. Supply replacement html or exactly one old_text/new_text replacement. Displays the updated app in this conversation.",json!({"genui_id":id,"expected_revision":rev,"html":{"type":"string","maxLength":32768},"old_text":{"type":"string","maxLength":32768},"new_text":{"type":"string","maxLength":32768}}),vec!["genui_id","expected_revision"]),
- ("list_genui","List caller-private mini app names and revisions without source or data.",json!({}),vec![]),
- ("get_genui","Read one caller-private mini app's bounded HTML, data and revision.",json!({"genui_id":id}),vec!["genui_id"]),
- ("delete_genui","Delete the active private mini app using its exact revision. Conversation history and prior attachments are independent retained records.",json!({"genui_id":id,"expected_revision":rev}),vec!["genui_id","expected_revision"]),
- ("rename_genui","Rename a caller-private mini app using its exact revision.",json!({"genui_id":id,"expected_revision":rev,"name":{"type":"string","maxLength":120}}),vec!["genui_id","expected_revision","name"]),
- ("get_genui_data","Read a mini app's private JSON data snapshot. This is stored data, not a network fetch or a credential lookup.",json!({"genui_id":id}),vec!["genui_id"]),
- ("set_genui_data","Replace a mini app's private JSON data snapshot, at most 16 KiB, using its exact revision; refreshes its display in this conversation.",json!({"genui_id":id,"expected_revision":rev,"data":{}}),vec!["genui_id","expected_revision","data"]),
- ("get_genui_logs","Read bounded mini app edit activity and the last isolated browser capture's diagnostics. This does not claim continuous telemetry from a user's browser.",json!({"genui_id":id}),vec!["genui_id"]),
- ("refresh_genui","Display the current stored app and data in this conversation using its exact revision. Does not fetch external data or execute a backend script.",json!({"genui_id":id,"expected_revision":rev}),vec!["genui_id","expected_revision"]),
- ("get_genui_reference","Read the mini app HTML, data, theme and isolation contract with a small interactive example.",json!({}),vec![])
- ].into_iter().map(|(name,description,properties,required)|json!({"type":"function","name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
+    crate::tools::folder_schemas(TOOLS)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,7 +107,7 @@ pub async fn execute(
     };
     Uuid::parse_str(&id)?;
     let signature = digest(&json!([tool, args]));
-    if !is_read(tool) {
+    if !crate::tools::is_read(tool) {
         if let Some(receipt) = app
             .store
             .get(&format!("receipt:base:{sid}:{rid}:{pending}"))

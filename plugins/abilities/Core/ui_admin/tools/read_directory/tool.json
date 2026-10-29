@@ -1,0 +1,54 @@
+{
+  "name": "read_directory",
+  "description": "List frontend directories in bounded broker pages.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "broker_id": {
+        "maxLength": 80,
+        "type": "string"
+      },
+      "content": {
+        "type": "string"
+      },
+      "expected_inputs_sha256": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "limit": {
+        "maximum": 100,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "new_text": {
+        "type": "string"
+      },
+      "offset": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "old_text": {
+        "type": "string"
+      },
+      "patch": {
+        "type": "string"
+      },
+      "path": {
+        "maxLength": 240,
+        "type": "string"
+      },
+      "query": {
+        "maxLength": 1000,
+        "type": "string"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

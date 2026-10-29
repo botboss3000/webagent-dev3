@@ -1,0 +1,23 @@
+{
+  "name": "get_agent",
+  "description": "Read one accessible agent's identity and current revision.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "agent_id": {
+        "maxLength": 128,
+        "type": "string"
+      }
+    },
+    "required": [
+      "agent_id"
+    ],
+    "additionalProperties": false
+  }
+}

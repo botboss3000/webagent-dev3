@@ -1,0 +1,32 @@
+{
+  "name": "set_app_view",
+  "description": "Request a registered app destination in this caller's active conversation browser. Existing page permissions still apply. No browser means the request remains unapplied.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "view": {
+        "enum": [
+          "chat",
+          "files",
+          "agents",
+          "models",
+          "abilities",
+          "settings",
+          "automations",
+          "builds"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "view"
+    ],
+    "additionalProperties": false
+  }
+}

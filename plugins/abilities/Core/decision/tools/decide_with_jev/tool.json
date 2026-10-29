@@ -1,0 +1,25 @@
+{
+  "name": "decide_with_jev",
+  "description": "Ask the assigned TypeSafe Jev Decision model typed questions about supplied state; it cannot read files or call tools",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "request_json": {
+        "description": "JSON System One request with state, named choice/score/noul questions, and optional model matching the assigned Decision model",
+        "maxLength": 65536,
+        "minLength": 2,
+        "type": "string"
+      }
+    },
+    "required": [
+      "request_json"
+    ],
+    "additionalProperties": false
+  }
+}

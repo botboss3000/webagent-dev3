@@ -20,6 +20,10 @@ pub enum Relationship { Revoked, Owner, Member, Caller }
 #[serde(rename_all = "snake_case")]
 pub enum Permission { Deny, Ask, Auto }
 
+/// The built-in Base ability: its tools are compiled in and need no capability-level
+/// ability grant; their coded role defaults and any saved tool permission decide.
+pub const BUILT_IN_ABILITY: &str = "base";
+
 impl Permission {
     pub fn from_policy(value: &str) -> Result<Self> {
         match value {

@@ -1,0 +1,54 @@
+{
+  "name": "screenshot_genui",
+  "description": "Capture an actual PNG of a caller-private mini app in a fresh offline browser. Optional bounded CSS clicks verify this app only. No platform login or external origin is available. Returns a private attachment plus bounded visible text and console diagnostics. Requires the app's exact revision.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "click_selectors": {
+        "items": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 10,
+        "type": "array"
+      },
+      "expected_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "genui_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "height": {
+        "maximum": 1200,
+        "minimum": 240,
+        "type": "integer"
+      },
+      "theme": {
+        "enum": [
+          "light",
+          "dark"
+        ],
+        "type": "string"
+      },
+      "width": {
+        "maximum": 1600,
+        "minimum": 320,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "genui_id",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

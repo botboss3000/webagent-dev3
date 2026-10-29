@@ -1,0 +1,28 @@
+{
+  "name": "refresh_genui",
+  "description": "Display the current stored app and data in this conversation using its exact revision. Does not fetch external data or execute a backend script.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "expected_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "genui_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "genui_id",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "generate_image",
+  "description": "Generate one image using this agent's assigned Image Out role. Returns an authenticated image URL. Interrupted requests are not silently repeated.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "prompt"
+    ],
+    "additionalProperties": false
+  }
+}

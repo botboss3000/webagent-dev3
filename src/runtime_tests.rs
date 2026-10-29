@@ -123,6 +123,7 @@ pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
     (root, app)
 }
 pub(crate) async fn fixture() -> (TempDir, App) {
+    crate::tools::install_tool_defaults();
     let (root, app) = fixture_uninitialized().await;
     app.store
         .create_admin_account("admin", "fixture-only-password-hash", "fixture-generation")
@@ -10493,13 +10494,15 @@ async fn live_context_default_stack_journey() {
     use axum::routing::post;
     let (root, mut app) = Box::pin(fixture()).await;
     Box::pin(visibility_fixture_base_access(&app)).await;
+    Box::pin(visibility_fixture_ability_access(&app, "web_access")).await;
     let source = root.path().join("live-source");
     let abilities = source.join("plugins/abilities");
+    // Base is built in, so the live selectable skill lives in a folder ability.
     copy_live_context_fixture(
-        &app.abilities.snapshot_root().join("Core/base"),
-        &abilities.join("Core/base"),
+        &app.abilities.snapshot_root().join("Web/web_access"),
+        &abilities.join("Web/web_access"),
     );
-    let skill = abilities.join("Core/base/skills/live_refresh.skill.md");
+    let skill = abilities.join("Web/web_access/skills/live_refresh.skill.md");
     std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
     std::fs::write(&skill, live_context_fixture_skill("LIVE_SKILL_FIRST")).unwrap();
     // The catalog source carries its own prompt files; edits to them are adopted live.
@@ -10544,7 +10547,7 @@ async fn live_context_default_stack_journey() {
             captured.push(body);
             let output=match captured.len() {
                 1=>json!([{"type":"function_call","call_id":"select-live-skill","name":"load_skill",
-                    "arguments":"{\"ability_id\":\"base\",\"kind\":\"selectable\",\"skill_id\":\"live_refresh\"}"}]),
+                    "arguments":"{\"ability_id\":\"web_access\",\"kind\":\"selectable\",\"skill_id\":\"live_refresh\"}"}]),
                 2=>{
                     std::fs::write(prompt.join("base_instructions.md"),"LIVE_MAIN_CURRENT").unwrap();
                     std::fs::write(prompt.join("jev_guidance.md"),"LIVE_JEV_SOURCE_CURRENT").unwrap();
@@ -10636,10 +10639,10 @@ async fn live_context_default_stack_journey() {
     }
     assert_eq!(
         durable["loaded_skills"],
-        json!([{"ability_id":"base","kind":"selectable","skill_id":"live_refresh"}])
+        json!([{"ability_id":"web_access","kind":"selectable","skill_id":"live_refresh"}])
     );
     let selector =
-        json!({"type":"skill","ability_id":"base","kind":"selectable","skill_id":"live_refresh"});
+        json!({"type":"skill","ability_id":"web_access","kind":"selectable","skill_id":"live_refresh"});
     let ledger = app
         .store
         .context_assets(&sid, "shared_default", app.store.current_user_id())
@@ -11361,6 +11364,17 @@ async fn consolidated_build_finish_waits_for_receipt_without_replaying_write() {
 // Native catalog journeys use isolated storage and exact dispatch, without a
 // Decision model or external worker; grants remain independent of discovery.
 async fn visibility_fixture_base_access(app: &App) {
+    visibility_fixture_ability_access(app, "base").await;
+    let mut visibility = app.store.agent_abilities().await.unwrap();
+    let revision = visibility["revision"].as_u64().unwrap();
+    visibility["visibility"]["codebase_admin"] = json!("visible");
+    app.store
+        .save_agent_abilities(&visibility, revision)
+        .await
+        .unwrap();
+}
+/// Grant one ability to the admin on shared_default and make it and its skills visible.
+async fn visibility_fixture_ability_access(app: &App, id: &str) {
     let mut tier = app
         .store
         .entitlement_tier("operator")
@@ -11369,7 +11383,7 @@ async fn visibility_fixture_base_access(app: &App) {
         .unwrap();
     let revision = tier.revision;
     tier.ability_permissions
-        .insert("base".into(), access::Permission::Auto);
+        .insert(id.into(), access::Permission::Auto);
     app.store
         .save_entitlement_tier(tier, revision)
         .await
@@ -11382,7 +11396,7 @@ async fn visibility_fixture_base_access(app: &App) {
         .capability_level;
     level
         .ability_permissions
-        .insert("base".into(), access::Permission::Auto);
+        .insert(id.into(), access::Permission::Auto);
     app.store
         .save_capability_level(
             "shared_default",
@@ -11397,9 +11411,8 @@ async fn visibility_fixture_base_access(app: &App) {
         .unwrap();
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
-    visibility["visibility"]["base"] = json!("visible");
-    visibility["skill_visibility"]["base"] = json!("visible");
-    visibility["visibility"]["codebase_admin"] = json!("visible");
+    visibility["visibility"][id] = json!("visible");
+    visibility["skill_visibility"][id] = json!("visible");
     app.store
         .save_agent_abilities(&visibility, revision)
         .await

@@ -4,11 +4,14 @@ use serde::Deserialize;
 pub fn owns(name: &str) -> bool {
     matches!(name, "create_tool" | "run_soft_ability")
 }
+/// Tools whose schemas live in tool folders; `run_soft_ability` is built-in Base.
+pub const TOOLS: &[&str] = &["create_tool"];
 pub fn schemas() -> Vec<Value> {
-    [
- ("create_tool","Save a private callable pure Python expression function. Source must be def name(args): return one_expression. Supports JSON indexing, arithmetic, comparisons, conditionals and pure len/sum/min/max/abs/round/sorted/str/int/float/bool calls. No imports, attributes, loops, filesystem or network. Invoke it with run_soft_ability; this does not grant a new top-level tool permission.",json!({"name":{"type":"string","maxLength":64},"description":{"type":"string","maxLength":1000},"code":{"type":"string","maxLength":16384},"expected_revision":{"type":"integer","minimum":0}}),vec!["name","description","code","expected_revision"]),
- ("run_soft_ability","List private saved functions when name is omitted, or call one by name with JSON arguments. The current run's normal tool policy still applies.",json!({"name":{"type":"string","maxLength":64},"arguments":{"type":"object"}}),vec![])
- ].into_iter().map(|(name,description,properties,required)|json!({"type":"function","name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
+    let mut schemas = crate::tools::folder_schemas(TOOLS);
+    schemas.push(json!({"type":"function","name":"run_soft_ability",
+        "description":"List private saved functions when name is omitted, or call one by name with JSON arguments. The current run's normal tool policy still applies.",
+        "parameters":{"type":"object","properties":{"name":{"type":"string","maxLength":64},"arguments":{"type":"object"}},"required":[],"additionalProperties":false}}));
+    schemas
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -1,0 +1,32 @@
+{
+  "name": "spawn_agent",
+  "description": "Start an owner-private helper conversation with this agent or an accessible saved agent. Supply a specific task in text. Uses that agent's configured persona, abilities and assigned models; requires exact owner approval. Returns queue admission; inspect results with read_spawn.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "agent_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 200,
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
+  }
+}

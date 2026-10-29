@@ -1,0 +1,33 @@
+{
+  "name": "delegate_to_agent",
+  "description": "Hand off to an accessible saved agent in a new owner-private conversation using an explicit text summary. Requires exact owner approval. Requests navigation in the active browser and preserves the original conversation.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "agent_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 200,
+        "type": "string"
+      }
+    },
+    "required": [
+      "text",
+      "agent_id"
+    ],
+    "additionalProperties": false
+  }
+}

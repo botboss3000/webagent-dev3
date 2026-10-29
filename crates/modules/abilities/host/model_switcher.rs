@@ -7,15 +7,10 @@ pub fn owns(name: &str) -> bool {
         "list_models" | "set_model" | "use_premium_model" | "set_effort" | "reset_to_default"
     )
 }
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["list_models", "set_model", "use_premium_model", "set_effort", "reset_to_default"];
 pub fn schemas() -> Vec<Value> {
-    [
- ("list_models","List this agent's permitted roster and assigned model roles; never returns credentials.",json!({}),vec![]),
- ("set_model","Select one existing model entry for the rest of this run. Applies at the next model boundary; does not edit agent assignments.",json!({"entry_id":{"type":"string","minLength":1,"maxLength":128}}),vec!["entry_id"]),
- ("use_premium_model","Use this agent's assigned Premium role for this run. Requires exact human approval.",json!({}),vec![]),
- ("set_effort","Set reasoning effort for subsequent calls in this run. Supported levels depend on the current model; list_models shows them.",json!({"effort":{"type":"string","enum":webagent_models::providers::EFFORTS}}),vec!["effort"]),
- ("reset_to_default","Return this run to the assigned Standard model and default reasoning effort.",json!({}),vec![])
- ].into_iter().map(|(name,description,properties,required)|json!({"type":"function","name":name,"description":description,
- "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
+    crate::tools::folder_schemas(TOOLS)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

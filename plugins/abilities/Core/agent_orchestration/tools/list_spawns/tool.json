@@ -1,0 +1,16 @@
+{
+  "name": "list_spawns",
+  "description": "List owner-private child conversations created through this conversation's attributed messaging receipts.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

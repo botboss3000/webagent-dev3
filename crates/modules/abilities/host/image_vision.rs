@@ -4,11 +4,10 @@ use serde::Deserialize;
 pub fn owns(name: &str) -> bool {
     name == "process_image"
 }
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["process_image"];
 pub fn schemas() -> Vec<Value> {
-    vec![
-        json!({"type":"function","name":"process_image","description":"Ask this agent's assigned Image In model a specific question about an image attached to this conversation. No Standard-model fallback.",
- "parameters":{"type":"object","properties":{"attachment_id":{"type":"string","format":"uuid"},"question":{"type":"string","minLength":1,"maxLength":8192}},"required":["attachment_id","question"],"additionalProperties":false}}),
-    ]
+    crate::tools::folder_schemas(TOOLS)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

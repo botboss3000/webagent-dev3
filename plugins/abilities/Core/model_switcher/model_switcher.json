@@ -2,13 +2,6 @@
   "display_name": "Model Switcher",
   "kind": "ability",
   "description": "Select a permitted text-chat model or reasoning effort for the current run. Premium selection requires exact human approval; later runs retain their normal assignments.",
-  "tools": [
-    "list_models",
-    "set_model",
-    "use_premium_model",
-    "set_effort",
-    "reset_to_default"
-  ],
   "icon": "gauge",
   "color": "#bb9af7",
   "order": 8,

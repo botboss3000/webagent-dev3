@@ -10,12 +10,10 @@ const MAX_BODY: usize = 512 * 1024;
 const USER_AGENT: &str = "WebAgent-v3/1.0 (+https://webagent.live)";
 
 pub fn owns(name: &str) -> bool { matches!(name, "web_search" | "get_weather" | "maps_geocode") }
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["web_search", "get_weather", "maps_geocode"];
 pub fn schemas() -> Vec<Value> {
-    [
-        ("web_search", "Search public web results via DuckDuckGo; provider challenges are errors, not empty results", json!({"query":{"type":"string","minLength":1,"maxLength":512},"max_results":{"type":"integer","minimum":1,"maximum":10}}), vec!["query"]),
-        ("get_weather", "Current Open-Meteo weather by city or lat,lon; no API key required", json!({"location":{"type":"string","minLength":1,"maxLength":256},"units":{"type":"string","enum":["metric","imperial"]}}), vec!["location"]),
-        ("maps_geocode", "Nominatim forward/reverse geocoding or local great-circle distance in km/miles", json!({"action":{"type":"string","enum":["geocode","reverse","distance"]},"location":{"type":"string","minLength":1,"maxLength":256},"lat":{"type":"number","minimum":-90,"maximum":90},"lon":{"type":"number","minimum":-180,"maximum":180},"lat2":{"type":"number","minimum":-90,"maximum":90},"lon2":{"type":"number","minimum":-180,"maximum":180},"limit":{"type":"integer","minimum":1,"maximum":10}}), vec!["action"]),
-    ].into_iter().map(|(name,description,properties,required)|json!({"type":"function","name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
+    crate::tools::folder_schemas(TOOLS)
 }
 fn five() -> usize {5}
 fn metric() -> String {"metric".into()}

@@ -11,17 +11,10 @@ pub fn owns(name: &str) -> bool {
     matches!(name, "knowledge_file_list" | "knowledge_file_search" | "knowledge_file_get"
         | "knowledge_file_save" | "knowledge_file_delete")
 }
-pub fn is_read(name: &str) -> bool {
-    matches!(name, "knowledge_file_list" | "knowledge_file_search" | "knowledge_file_get")
-}
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["knowledge_file_list", "knowledge_file_search", "knowledge_file_get", "knowledge_file_save", "knowledge_file_delete"];
 pub fn schemas() -> Vec<Value> {
-    [
- ("knowledge_file_list","List this agent's knowledge files with names, sizes and revisions.",json!({}),vec![]),
- ("knowledge_file_search","Search this agent's knowledge files by words and return the best-matching files with short excerpts. Use before answering questions about the business.",json!({"query":{"type":"string","maxLength":200},"limit":{"type":"integer","minimum":1,"maximum":10}}),vec!["query"]),
- ("knowledge_file_get","Read one knowledge file's full text by ID.",json!({"file_id":{"type":"string","maxLength":64}}),vec!["file_id"]),
- ("knowledge_file_save","Staff only. Create a text or Markdown knowledge file (omit file_id, expected_revision 0) or replace one (file_id with its current revision). Up to 200 KiB of text.",json!({"name":{"type":"string","maxLength":120},"content":{"type":"string"},"file_id":{"type":"string","maxLength":64},"expected_revision":{"type":"integer","minimum":0}}),vec!["name","content","expected_revision"]),
- ("knowledge_file_delete","Staff only. Delete a knowledge file using its current revision.",json!({"file_id":{"type":"string","maxLength":64},"expected_revision":{"type":"integer","minimum":1}}),vec!["file_id","expected_revision"]),
-    ].into_iter().map(|(name,description,properties,required)|json!({"type":"function","name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
+    crate::tools::folder_schemas(TOOLS)
 }
 
 fn file_id(value: &Value) -> Result<String> {
@@ -61,7 +54,7 @@ pub async fn execute(app: &App, sid: &str, rid: &str, generation: &str, pending:
     let run = super::core_authority::check(app, sid, rid, generation, pending, name, args, &cancel).await?;
     let agent = run["agent_id"].as_str().unwrap_or("shared_default").to_owned();
     let actor = shared_chat::actor(app).to_owned();
-    if !is_read(name) && !matches!(shared_chat::live_access(&app.store, &actor, sid, &agent).await?.relationship,
+    if !crate::tools::is_read(name) && !matches!(shared_chat::live_access(&app.store, &actor, sid, &agent).await?.relationship,
         Relationship::Owner | Relationship::Member) {
         return Ok(json!({"status":"denied","output":"Staff access required"}));
     }

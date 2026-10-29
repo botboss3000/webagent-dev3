@@ -1,0 +1,37 @@
+{
+  "name": "set_agent_tool",
+  "description": "Set availability for one declared tool; does not raise permission or tier ceilings. Request: visibility off/visible/discoverable and expected_revision.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "ability_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "agent_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "request": {
+        "type": "object"
+      },
+      "tool": {
+        "maxLength": 128,
+        "type": "string"
+      }
+    },
+    "required": [
+      "agent_id",
+      "ability_id",
+      "tool",
+      "request"
+    ],
+    "additionalProperties": false
+  }
+}

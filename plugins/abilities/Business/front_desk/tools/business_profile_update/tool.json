@@ -1,0 +1,27 @@
+{
+  "name": "business_profile_update",
+  "description": "Staff only. Replace the business profile with a JSON object (for example name, address, phone, email, hours, services, policies, notes). Pass the revision from business_profile_get; 0 creates the first profile.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "profile": {
+        "type": "object"
+      }
+    },
+    "required": [
+      "profile",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

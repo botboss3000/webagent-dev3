@@ -1,0 +1,23 @@
+{
+  "name": "knowledge_file_get",
+  "description": "Read one knowledge file's full text by ID.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "file_id": {
+        "maxLength": 64,
+        "type": "string"
+      }
+    },
+    "required": [
+      "file_id"
+    ],
+    "additionalProperties": false
+  }
+}

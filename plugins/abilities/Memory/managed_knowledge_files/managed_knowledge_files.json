@@ -2,13 +2,6 @@
   "display_name": "Managed Knowledge Files",
   "kind": "ability",
   "description": "Staff-maintained text and Markdown files (menus, price lists, policies, FAQs) the agent can list, search and read.",
-  "tools": [
-    "knowledge_file_list",
-    "knowledge_file_search",
-    "knowledge_file_get",
-    "knowledge_file_save",
-    "knowledge_file_delete"
-  ],
   "icon": "files",
   "color": "#73daca",
   "order": 3,

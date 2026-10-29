@@ -1,0 +1,23 @@
+{
+  "name": "attach_file",
+  "description": "Attach a private saved file to the current conversation and return its authenticated download URL.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "maxLength": 255,
+        "type": "string"
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "additionalProperties": false
+  }
+}

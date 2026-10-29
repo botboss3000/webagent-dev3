@@ -1,0 +1,16 @@
+{
+  "name": "list_task_delegatable_agents",
+  "description": "List accessible private agents eligible for a child task, with current model assignment status.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

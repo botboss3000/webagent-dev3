@@ -1,0 +1,37 @@
+{
+  "name": "message_spawn",
+  "description": "Continue an attributed conversation with a child. Normal queue/steer/interrupt rules and exact owner approval remain authoritative.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "delivery": {
+        "enum": [
+          "queue",
+          "steer",
+          "interrupt"
+        ],
+        "type": "string"
+      },
+      "target_session_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "target_session_id",
+      "text"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "reset_to_default",
+  "description": "Return this run to the assigned Standard model and default reasoning effort.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

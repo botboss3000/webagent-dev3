@@ -16,17 +16,10 @@ const RUBRIC: [&str; 5] = [
 
 pub fn owns(name: &str) -> bool { name == "score_directory_with_jev" }
 
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["score_directory_with_jev"];
 pub fn schemas() -> Vec<Value> {
-    vec![json!({"type":"function","name":"score_directory_with_jev",
-        "description":"Discover and score files in an authorized directory, optionally recursively by basename glob and with bounded source excerpts",
-        "parameters":{"type":"object","properties":{
-            "path":{"type":"string","description":"Directory path accepted by file_list"},
-            "search_criteria":{"type":"string","description":"What the sought file or directory should contain or do"},
-            "file_glob":{"type":"string","description":"Optional basename pattern such as *.js; matches files only"},
-            "recursive":{"type":"boolean","description":"Search subdirectories when file_glob is set"},
-            "include_content":{"type":"boolean","description":"Send up to 1024 bytes from each matched file to Jev; requires automatic file_read permission"},
-            "offset":{"type":"integer","minimum":0,"maximum":10000}
-        },"required":["path","search_criteria"],"additionalProperties":false}})]
+    crate::tools::folder_schemas(TOOLS)
 }
 
 #[derive(Deserialize)]

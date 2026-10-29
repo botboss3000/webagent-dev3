@@ -817,6 +817,8 @@ async fn run_process() -> Result<()> {
         .skip(1)
         .find_map(|arg| arg.strip_prefix("--validate-assets=").map(PathBuf::from))
     {
+        // Tool schemas come from the candidate's own tool folders.
+        webagent_abilities::tool_definitions::use_root(path.join("plugins/abilities"));
         let catalog = abilities::Catalog::load_snapshot(&path.join("plugins/abilities"))?;
         let _ = crate::live_assets::native_schema_snapshot_at(Some(&path))?;
         let engine = crate::engine_components::load(&path, "candidate")?;
@@ -937,6 +939,7 @@ async fn run_process() -> Result<()> {
     // Catalog roles become authoritative once; later clears never restore legacy defaults.
     model_selection_api::migrate_legacy_default(&store).await?;
     migrate_tool_policy_defaults(&store).await?;
+    crate::tools::install_tool_defaults();
     let abilities_root = std::env::var("V3_ABILITIES_ROOT")
         .unwrap_or_else(|_| "/opt/v3/plugins/abilities".to_owned());
     let catalog = abilities::Catalog::load(&PathBuf::from(abilities_root))?;

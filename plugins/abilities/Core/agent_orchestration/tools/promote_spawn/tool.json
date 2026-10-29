@@ -1,0 +1,39 @@
+{
+  "name": "promote_spawn",
+  "description": "Create a reusable caller-owned agent from this conversation's child task with an explicit prompt. Uses safe platform defaults; does not copy credentials, model assignments or permission grants. Requires create_agent and edit_agent_prompt access.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "description": {
+        "maxLength": 2000,
+        "type": "string"
+      },
+      "instructions": {
+        "maxLength": 16000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "session_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "name",
+      "instructions"
+    ],
+    "additionalProperties": false
+  }
+}

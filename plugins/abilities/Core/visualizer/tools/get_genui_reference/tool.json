@@ -1,0 +1,16 @@
+{
+  "name": "get_genui_reference",
+  "description": "Read the mini app HTML, data, theme and isolation contract with a small interactive example.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

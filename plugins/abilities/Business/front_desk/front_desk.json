@@ -2,15 +2,6 @@
   "display_name": "Front Desk",
   "kind": "ability",
   "description": "Answer website visitors from the business profile, save their contact requests as leads, hand the chat to staff, and offer reply buttons.",
-  "tools": [
-    "business_profile_get",
-    "business_profile_update",
-    "lead_capture",
-    "lead_list",
-    "lead_update",
-    "request_human",
-    "offer_choices"
-  ],
   "icon": "store",
   "color": "#e0af68",
   "order": 1,

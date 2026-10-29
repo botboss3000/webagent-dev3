@@ -12,11 +12,10 @@ use uuid::Uuid;
 pub fn owns(name: &str) -> bool {
     name == "generate_image"
 }
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["generate_image"];
 pub fn schemas() -> Vec<Value> {
-    vec![
-        json!({"type":"function","name":"generate_image","description":"Generate one image using this agent's assigned Image Out role. Returns an authenticated image URL. Interrupted requests are not silently repeated.",
- "parameters":{"type":"object","properties":{"prompt":{"type":"string","minLength":1,"maxLength":16384}},"required":["prompt"],"additionalProperties":false}}),
-    ]
+    crate::tools::folder_schemas(TOOLS)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

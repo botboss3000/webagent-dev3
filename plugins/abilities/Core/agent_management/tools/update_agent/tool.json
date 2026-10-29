@@ -1,0 +1,27 @@
+{
+  "name": "update_agent",
+  "description": "Update an agent the caller can manage. Request fields: revision plus name and/or description; owning Identity API validates other supported settings.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "agent_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "request": {
+        "type": "object"
+      }
+    },
+    "required": [
+      "agent_id",
+      "request"
+    ],
+    "additionalProperties": false
+  }
+}

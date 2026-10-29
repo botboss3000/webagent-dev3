@@ -1,0 +1,32 @@
+{
+  "name": "set_agent_ability",
+  "description": "Set availability for one installed ability without granting new authority. Request: visibility and expected_revision.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "ability_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "agent_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "request": {
+        "type": "object"
+      }
+    },
+    "required": [
+      "agent_id",
+      "ability_id",
+      "request"
+    ],
+    "additionalProperties": false
+  }
+}

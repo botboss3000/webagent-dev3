@@ -1,0 +1,57 @@
+{
+  "name": "write_source",
+  "description": "Create or replace frontend text only in isolated UI broker work. An existing draft requires its latest expected_inputs_sha256.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "broker_id": {
+        "maxLength": 80,
+        "type": "string"
+      },
+      "content": {
+        "type": "string"
+      },
+      "expected_inputs_sha256": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "limit": {
+        "maximum": 200,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "new_text": {
+        "type": "string"
+      },
+      "offset": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "old_text": {
+        "type": "string"
+      },
+      "patch": {
+        "type": "string"
+      },
+      "path": {
+        "maxLength": 240,
+        "type": "string"
+      },
+      "query": {
+        "maxLength": 1000,
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "content"
+    ],
+    "additionalProperties": false
+  }
+}

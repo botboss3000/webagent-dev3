@@ -1,0 +1,16 @@
+{
+  "name": "list_agent_templates",
+  "description": "List available safe agent creation templates.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

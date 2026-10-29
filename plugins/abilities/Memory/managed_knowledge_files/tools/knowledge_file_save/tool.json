@@ -1,0 +1,36 @@
+{
+  "name": "knowledge_file_save",
+  "description": "Staff only. Create a text or Markdown knowledge file (omit file_id, expected_revision 0) or replace one (file_id with its current revision). Up to 200 KiB of text.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "content": {
+        "type": "string"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "file_id": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 120,
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "content",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

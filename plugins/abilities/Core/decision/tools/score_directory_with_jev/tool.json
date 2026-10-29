@@ -1,0 +1,45 @@
+{
+  "name": "score_directory_with_jev",
+  "description": "Discover and score files in an authorized directory, optionally recursively by basename glob and with bounded source excerpts",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "file_glob": {
+        "description": "Optional basename pattern such as *.js; matches files only",
+        "type": "string"
+      },
+      "include_content": {
+        "description": "Send up to 1024 bytes from each matched file to Jev; requires automatic file_read permission",
+        "type": "boolean"
+      },
+      "offset": {
+        "maximum": 10000,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "path": {
+        "description": "Directory path accepted by file_list",
+        "type": "string"
+      },
+      "recursive": {
+        "description": "Search subdirectories when file_glob is set",
+        "type": "boolean"
+      },
+      "search_criteria": {
+        "description": "What the sought file or directory should contain or do",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "search_criteria"
+    ],
+    "additionalProperties": false
+  }
+}

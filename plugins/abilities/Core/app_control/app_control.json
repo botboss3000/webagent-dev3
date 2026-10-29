@@ -2,9 +2,6 @@
   "display_name": "App Control",
   "kind": "ability",
   "description": "Request a registered app destination in the current caller’s active browser. Navigation preserves unsent chat drafts and existing page permissions.",
-  "tools": [
-    "set_app_view"
-  ],
   "icon": "app-window",
   "color": "#73daca",
   "order": 3,

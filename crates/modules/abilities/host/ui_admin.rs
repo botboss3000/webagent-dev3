@@ -13,23 +13,10 @@ pub fn owns(name: &str) -> bool {
             | "search_source"
     )
 }
-pub fn is_read(name: &str) -> bool {
-    matches!(name, "read_source" | "read_directory" | "search_source")
-}
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["read_source", "write_source", "edit_source", "patch_source", "delete_source", "read_directory", "search_source"];
 pub fn schemas() -> Vec<Value> {
-    let common = json!({"path":{"type":"string","maxLength":240},"broker_id":{"type":"string","maxLength":80},"expected_inputs_sha256":{"type":"string","maxLength":64},
-  "content":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"},"patch":{"type":"string"},"query":{"type":"string","maxLength":1000},
-  "offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":200}});
-    [
- ("read_source","Read frontend text from a protected UI source snapshot; optional broker_id selects private work.",vec!["path"]),
- ("write_source","Create or replace frontend text only in isolated UI broker work. An existing draft requires its latest expected_inputs_sha256.",vec!["path","content"]),
- ("edit_source","Replace exactly one frontend text span in isolated UI work; requires the current task digest.",vec!["path","old_text","new_text","expected_inputs_sha256"]),
- ("patch_source","Apply a checked unified diff containing only ui/ text assets. Requires broker_id and the current task digest.",vec!["patch","broker_id","expected_inputs_sha256"]),
- ("delete_source","Delete exactly one UI file through a reviewed full deletion diff. Requires path, patch, broker_id and the current task digest.",vec!["path","patch","broker_id","expected_inputs_sha256"]),
- ("read_directory","List frontend directories in bounded broker pages.",vec![]),
- ("search_source","Search UI source by literal text in the selected isolated work; no backend paths.",vec!["query"])
- ].into_iter().map(|(name,description,required)|json!({"type":"function","name":name,"description":description,
- "parameters":{"type":"object","properties":({let mut properties=common.clone();if name=="read_directory"{properties["limit"]["maximum"]=json!(100);}properties}),"required":required,"additionalProperties":false}})).collect()
+    crate::tools::folder_schemas(TOOLS)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -216,7 +203,7 @@ pub async fn execute(
             forwarded["limit"] = json!(limit);
         }
     }
-    if !is_read(name) {
+    if !crate::tools::is_read(name) {
         forwarded["request_id"] = json!(format!("ui-{}", digest(&json!([sid, rid, pending]))));
     }
     tools::administrator::ui_host(app, sid, rid, name, operation, &forwarded, cancel).await

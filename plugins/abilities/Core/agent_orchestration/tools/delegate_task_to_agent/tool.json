@@ -1,0 +1,33 @@
+{
+  "name": "delegate_task_to_agent",
+  "description": "Delegate a specific task to an accessible saved agent in a private child conversation. The recipient retains its own persona, policy and assigned models; requires exact owner approval.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "agent_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 200,
+        "type": "string"
+      }
+    },
+    "required": [
+      "text",
+      "agent_id"
+    ],
+    "additionalProperties": false
+  }
+}

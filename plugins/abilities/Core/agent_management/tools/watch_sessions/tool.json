@@ -1,0 +1,33 @@
+{
+  "name": "watch_sessions",
+  "description": "Watch an accessible session for a settled turn through the installed Automation service. Creates a durable subscription delivering to this conversation; normal automation activation and permissions remain required.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "expires_ms": {
+        "type": "integer"
+      },
+      "prompt": {
+        "maxLength": 16000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "session_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "prompt",
+      "expires_ms"
+    ],
+    "additionalProperties": false
+  }
+}

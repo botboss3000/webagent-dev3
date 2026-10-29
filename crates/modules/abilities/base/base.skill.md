@@ -1,6 +1,6 @@
 # Shared tool execution guidance
 
-Rust's effective tool-execution flags are authoritative; bundled skills describe usage, never grant permission. This shared core guidance lives at `plugins/abilities/Core/base/base.skill.md`: the catalog loads an ability's `<id>.skill.md` in `src/abilities.rs`. It is guidance, not a substitute for the trusted per-call runtime contribution.
+Rust's effective tool-execution flags are authoritative; bundled skills describe usage, never grant permission. This shared core guidance is compiled into the built-in Base ability (`crates/modules/abilities/base/base.skill.md`). It is guidance, not a substitute for the trusted per-call runtime contribution.
 
 ## Execution and completion
 

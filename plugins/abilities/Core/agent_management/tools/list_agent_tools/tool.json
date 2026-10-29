@@ -1,0 +1,23 @@
+{
+  "name": "list_agent_tools",
+  "description": "Read an accessible agent's effective ability/tool catalog and revisions.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "agent_id": {
+        "maxLength": 128,
+        "type": "string"
+      }
+    },
+    "required": [
+      "agent_id"
+    ],
+    "additionalProperties": false
+  }
+}

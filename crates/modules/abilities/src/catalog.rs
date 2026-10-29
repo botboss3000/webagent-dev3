@@ -69,6 +69,12 @@ struct Ability {
     #[serde(skip_serializing)]
     path: PathBuf,
     manifest_digest: String,
+    /// Freshness inputs: the manifest's own bytes and the tool folder names. Folder
+    /// contents count toward `manifest_digest` but are not re-read on every check.
+    #[serde(skip_serializing)]
+    manifest_bytes_digest: String,
+    #[serde(skip_serializing)]
+    tool_folders: Option<Vec<String>>,
     plugin: Option<crate::package::Package>,
     #[serde(skip_serializing)]
     frozen: bool,
@@ -160,7 +166,7 @@ fn optional_setting_value_valid(declaration: &Value, value: &Value) -> bool {
     }
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id
@@ -281,7 +287,7 @@ fn discovery_score(ability: &Value, query: &str) -> usize {
         .sum()
 }
 
-fn read_bytes(path: &Path, limit: u64) -> Result<Vec<u8>> {
+pub(crate) fn read_bytes(path: &Path, limit: u64) -> Result<Vec<u8>> {
     let meta = fs::symlink_metadata(path)?;
     if !meta.file_type().is_file() || meta.len() > limit {
         bail!("Invalid ability file: {}", path.display());
@@ -305,7 +311,7 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
         .with_context(|| format!("Invalid ability manifest: {}", path.display()))
 }
 
-fn optional_skill(path: &Path) -> Result<Option<String>> {
+pub(crate) fn optional_skill(path: &Path) -> Result<Option<String>> {
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
@@ -390,7 +396,11 @@ impl<H: Host> Catalog<H> {
         let native_schemas = H::native_schemas_for_catalog(root, publication)?;
         let mut abilities = Vec::new();
         let mut ids = HashSet::new();
-        let mut owners = BTreeMap::new();
+        // Built-in Base tools are owned before any folder is read.
+        let mut owners: BTreeMap<String, String> = crate::base::TOOLS
+            .iter()
+            .map(|tool| (tool.to_string(), crate::base::ID.to_string()))
+            .collect();
         if root.exists() && fs::symlink_metadata(root)?.file_type().is_symlink() {
             bail!("Symlink catalog root");
         }
@@ -458,7 +468,7 @@ impl<H: Host> Catalog<H> {
                 if !valid_id(&id) || !ids.insert(id.clone()) {
                     bail!("Invalid or duplicate ability identifier: {id}");
                 }
-                if matches!(id.as_str(), "optimization" | "mcp") {
+                if matches!(id.as_str(), "optimization" | "mcp" | crate::base::ID) {
                     bail!("Ability ID is reserved for its executable plugin");
                 }
                 let ability_path = folder.path();
@@ -489,9 +499,30 @@ impl<H: Host> Catalog<H> {
                     }
                 }
                 let manifest_bytes = read_bytes(&manifest_path, MAX_MANIFEST_BYTES)?;
-                let manifest_digest = hex::encode(Sha256::digest(&manifest_bytes));
-                let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
+                let manifest_bytes_digest = hex::encode(Sha256::digest(&manifest_bytes));
+                let mut manifest_digest = manifest_bytes_digest.clone();
+                let mut manifest: Manifest = serde_json::from_slice(&manifest_bytes)
                     .with_context(|| format!("Invalid ability manifest: {id}"))?;
+                // Per-tool folders replace the manifest's tool list; an invalid folder
+                // drops only its own tool.
+                let folder_tools = crate::tool_definitions::read_folder(&ability_path)?;
+                let mut folder_skills = BTreeMap::new();
+                if let Some(tools) = &folder_tools {
+                    if !manifest.tools.is_empty() {
+                        bail!("Ability lists tools in both its manifest and tool folders: {id}");
+                    }
+                    manifest_digest = crate::tool_definitions::folded_digest(&manifest_digest, tools);
+                    for tool in tools {
+                        if let Err(error) = &tool.definition {
+                            eprintln!("Tool {} in ability {id} is disabled: {error:#}", tool.name);
+                            continue;
+                        }
+                        manifest.tools.push(tool.name.clone());
+                        if let Some(skill) = &tool.skill {
+                            folder_skills.insert(tool.name.clone(), skill.clone());
+                        }
+                    }
+                }
                 if manifest.display_name.is_empty()
                     || manifest.display_name.len() > 100
                     || manifest.description.is_empty()
@@ -569,9 +600,12 @@ impl<H: Host> Catalog<H> {
                     if !local.insert(tool) {
                         bail!("Ability {id} declares a duplicate tool: {tool}");
                     }
-                    if let Some(skill) = optional_skill(
-                        &ability_path.join("tools").join(format!("{tool}.skill.md")),
-                    )? {
+                    let skill = if folder_tools.is_some() {
+                        folder_skills.remove(tool)
+                    } else {
+                        optional_skill(&ability_path.join("tools").join(format!("{tool}.skill.md")))?
+                    };
+                    if let Some(skill) = skill {
                         tool_skills.insert(tool.clone(), skill);
                     }
                 }
@@ -600,6 +634,10 @@ impl<H: Host> Catalog<H> {
                     id,
                     path: ability_path,
                     manifest_digest,
+                    manifest_bytes_digest,
+                    tool_folders: folder_tools
+                        .as_ref()
+                        .map(|tools| tools.iter().map(|tool| tool.name.clone()).collect()),
                     plugin,
                     frozen: false,
                     group: group_id.clone(),
@@ -634,6 +672,8 @@ impl<H: Host> Catalog<H> {
                 id: "optimization".into(),
                 path: H::optimization_folder(),
                 manifest_digest: generation,
+                manifest_bytes_digest: String::new(),
+                tool_folders: None,
                 plugin: None,
                 frozen: false,
                 group: "Administrator".into(),
@@ -656,10 +696,47 @@ impl<H: Host> Catalog<H> {
                 selectable_skills: BTreeMap::new(),
             });
         }
+        // Base sorts with the Core group's other abilities when that group exists.
+        let (group_name, group_order) = abilities
+            .iter()
+            .find(|ability| ability.group == "Core")
+            .map_or(("Core".to_string(), 1), |core| (core.group_name.clone(), core.group_order));
+        abilities.push(Ability {
+            id: crate::base::ID.into(),
+            path: PathBuf::new(),
+            manifest_digest: hex::encode(Sha256::digest(crate::base::SKILL.as_bytes())),
+            manifest_bytes_digest: String::new(),
+            tool_folders: None,
+            plugin: None,
+            frozen: false,
+            group: "Core".into(),
+            group_name,
+            group_order,
+            name: crate::base::NAME.into(),
+            description: crate::base::DESCRIPTION.into(),
+            skill_summary: None,
+            migration_note: Some(crate::base::MIGRATION_NOTE.into()),
+            required_module: None,
+            icon: Some(crate::base::ICON.into()),
+            color: Some(crate::base::COLOR.into()),
+            order: 0,
+            kind: EntryKind::VirtualCore,
+            readiness: Readiness::Ready,
+            config: json!({}),
+            tools: crate::base::TOOLS.iter().map(|tool| tool.to_string()).collect(),
+            skill: Some(crate::base::SKILL.into()),
+            tool_skills: crate::base::TOOL_SKILLS
+                .iter()
+                .map(|(tool, text)| (tool.to_string(), text.to_string()))
+                .collect(),
+            selectable_skills: BTreeMap::new(),
+        });
         abilities.push(Ability {
             id: "mcp".into(),
             path: H::mcp_folder(),
             manifest_digest: "mcp-v1".into(),
+            manifest_bytes_digest: String::new(),
+            tool_folders: None,
             plugin: None,
             frozen: false,
             group: "Connections".into(),
@@ -780,6 +857,9 @@ impl<H: Host> Catalog<H> {
         if ability.id == "mcp" {
             return H::mcp_available();
         }
+        if ability.id == crate::base::ID {
+            return true;
+        }
         if ability.id == "optimization" {
             return H::optimization_available();
         }
@@ -800,7 +880,8 @@ impl<H: Host> Catalog<H> {
                 &ability.path.join(format!("{}.json", ability.id)),
                 MAX_MANIFEST_BYTES,
             )
-            .is_ok_and(|bytes| hex::encode(Sha256::digest(&bytes)) == ability.manifest_digest)
+            .is_ok_and(|bytes| hex::encode(Sha256::digest(&bytes)) == ability.manifest_bytes_digest)
+            && crate::tool_definitions::folder_names(&ability.path) == ability.tool_folders
     }
 
     // Only registered, validated bundle IDs can select an asset. Each model call
@@ -828,7 +909,7 @@ impl<H: Host> Catalog<H> {
                 Some(folder.join(format!("{}.skill.md", ability.id)))
             }
             "tool" if ability.tools.iter().any(|tool| tool == name) => {
-                Some(folder.join("tools").join(format!("{name}.skill.md")))
+                Some(crate::tool_definitions::skill_path(&folder, name))
             }
             "selectable" if ability.selectable_skills.contains_key(name) => {
                 Some(folder.join("skills").join(format!("{name}.skill.md")))
@@ -849,6 +930,15 @@ impl<H: Host> Catalog<H> {
         name: &str,
         cached: &'a str,
     ) -> Option<Cow<'a, str>> {
+        // Base guidance is compiled in, so the cached text is always current.
+        if ability.id == crate::base::ID {
+            let declared = match kind {
+                "ability" => name == ability.id,
+                "tool" => ability.tool_skills.contains_key(name),
+                _ => false,
+            };
+            return declared.then_some(Cow::Borrowed(cached));
+        }
         if ability.id == "mcp" {
             return (H::mcp_available()
                 && kind == "ability"
@@ -876,7 +966,7 @@ impl<H: Host> Catalog<H> {
         }
         let path = Self::published_skill(ability, kind, name).unwrap_or_else(|| match kind {
             "ability" => ability.path.join(format!("{name}.skill.md")),
-            "tool" => ability.path.join("tools").join(format!("{name}.skill.md")),
+            "tool" => crate::tool_definitions::skill_path(&ability.path, name),
             _ => ability.path.join("skills").join(format!("{name}.skill.md")),
         });
         if !path.parent().is_some_and(|parent| {
@@ -2844,14 +2934,16 @@ pub mod registered_tests {
             let state = json!({"active":["codebase_admin"]});
             assert!(empty
                 .configuration_catalog(&policy::<H>(), &visibility)
-                .is_empty());
+                .iter()
+                .all(|entry| entry["id"] == crate::base::ID));
             assert!(!empty.tool_available("file_read", &visibility, &state, &Value::Null));
             assert_ne!(empty.version(), catalog.version());
             fs::remove_dir_all(root.path().join("Administrator/codebase_admin")).unwrap();
             assert!(!catalog.tool_available("file_read", &visibility, &state, &Value::Null));
             assert!(catalog
                 .configuration_catalog(&policy::<H>(), &visibility)
-                .is_empty());
+                .iter()
+                .all(|entry| entry["id"] == crate::base::ID));
             let partial = Catalog::<H>::load(root.path()).unwrap();
             assert!(!partial.tool_available("file_read", &visibility, &state, &Value::Null));
         }
@@ -2860,28 +2952,28 @@ pub mod registered_tests {
             H: crate::TestHost,
         >() {
             let (root, _) = fixture::<H>();
-            let path = root.path().join("Core/base");
+            let path = root.path().join("Core/core_probe");
             fs::create_dir_all(&path).unwrap();
-            let manifest = path.join("base.json");
+            let manifest = path.join("core_probe.json");
             fs::write(
                 &manifest,
-                r#"{"display_name":"Base","kind":"virtual_core",
+                r#"{"display_name":"Core probe","kind":"virtual_core",
             "description":"Partial core","readiness":"partial",
-            "tools":["calculate","legacy_unwired_tool"]}"#,
+            "tools":["get_weather","legacy_unwired_tool"]}"#,
             )
             .unwrap();
             let catalog = Catalog::<H>::load(root.path()).unwrap();
-            let policy = json!({"rules":{"calculate":"allow","legacy_unwired_tool":"allow"}});
-            let visibility = json!({"visibility":{"base":"visible"}});
-            let state = json!({"active":["base"]});
+            let policy = json!({"rules":{"get_weather":"allow","legacy_unwired_tool":"allow"}});
+            let visibility = json!({"visibility":{"core_probe":"visible"}});
+            let state = json!({"active":["core_probe"]});
             let item = catalog
                 .configuration_catalog(&policy, &visibility)
                 .into_iter()
-                .find(|entry| entry["id"] == "base")
+                .find(|entry| entry["id"] == "core_probe")
                 .unwrap();
             assert_eq!(item["readiness"], "partial");
             assert_eq!(item["available"], true);
-            assert!(catalog.tool_available("calculate", &visibility, &state, &Value::Null));
+            assert!(catalog.tool_available("get_weather", &visibility, &state, &Value::Null));
             assert!(!catalog.tool_available(
                 "legacy_unwired_tool",
                 &visibility,
@@ -2890,34 +2982,29 @@ pub mod registered_tests {
             ));
             fs::write(
                 &manifest,
-                r#"{"display_name":"Base","kind":"virtual_core",
-            "description":"Disabled","readiness":"pending","tools":["calculate"]}"#,
+                r#"{"display_name":"Core probe","kind":"virtual_core",
+            "description":"Disabled","readiness":"pending","tools":["get_weather"]}"#,
             )
             .unwrap();
-            assert!(!catalog.tool_available("calculate", &visibility, &state, &Value::Null));
+            assert!(!catalog.tool_available("get_weather", &visibility, &state, &Value::Null));
             let disabled = Catalog::<H>::load(root.path()).unwrap();
-            assert!(!disabled.tool_available("calculate", &visibility, &state, &Value::Null));
+            assert!(!disabled.tool_available("get_weather", &visibility, &state, &Value::Null));
         }
 
         pub fn catalog_only_v2_tool_is_listed_but_never_executable<H: crate::TestHost>() {
             let (root, _) = fixture::<H>();
-            fs::write(
-                root.path()
-                    .join("Administrator/codebase_admin/codebase_admin.json"),
-                r#"{"display_name":"Discovery","kind":"ability","description":"Native discovery",
-                "tools":["list_abilities","load_ability"]}"#,
-            )
-            .unwrap();
+            // Discovery tools belong to built-in Base and are always supported.
             let discovery = Catalog::<H>::load(root.path())
                 .unwrap()
                 .configuration_catalog(&policy::<H>(), &Value::Null)
                 .into_iter()
-                .find(|item| item["id"] == "codebase_admin")
+                .find(|item| item["id"] == "base")
                 .unwrap();
             assert!(discovery["tools"]
                 .as_array()
                 .unwrap()
                 .iter()
+                .filter(|tool| tool["name"].as_str().is_some_and(is_discovery))
                 .all(|tool| tool["supported"] == true));
             let path = root.path().join("Administrator/computer_control");
             fs::create_dir_all(&path).unwrap();
@@ -3297,7 +3384,8 @@ pub mod registered_tests {
                 catalog
                     .configuration_catalog(&policy::<H>(), &Value::Null)
                     .len(),
-                6
+                // The five typed entries and fixture Codebase Admin, plus built-in Base.
+                7
             );
             for id in [
                 "core_entry",
@@ -3541,7 +3629,8 @@ pub mod registered_tests {
                 .iter()
                 .find(|entry| entry.id == "base")
                 .unwrap();
-            assert_eq!(base.tools.len(), 42);
+            assert_eq!(base.tools, crate::base::TOOLS);
+            assert!(base.tools.len() >= 42);
             let p2p = catalog.abilities.iter().find(|a| a.id == "p2p").unwrap();
             assert_eq!(p2p.readiness, Readiness::Pending);
             assert!(!Catalog::<H>::executable(p2p));

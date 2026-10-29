@@ -1,0 +1,47 @@
+{
+  "name": "manage_agent_chat_config",
+  "description": "Read, merge-patch or reset an agent's overlay of chat.json (chat) or the session dropdown JSON (session_dropdown); base JSON fills everything not overridden. Patch null removes a key. Requires agent administration and the current overlay revision for writes.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "enum": [
+          "read",
+          "patch",
+          "reset"
+        ],
+        "type": "string"
+      },
+      "agent_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "document": {
+        "enum": [
+          "chat",
+          "session_dropdown"
+        ],
+        "type": "string"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "patch": {
+        "type": "object"
+      }
+    },
+    "required": [
+      "agent_id",
+      "action",
+      "document"
+    ],
+    "additionalProperties": false
+  }
+}

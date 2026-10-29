@@ -48,22 +48,8 @@ mod tests {
     async fn approved_test_adapter_dispatches_only_with_fresh_owner_binding() {
         let (root, mut app) = crate::runtime_tests::fixture().await;
         let packages = root.path().join("test-packages");
-        let base = packages.join("Core/base");
-        std::fs::create_dir_all(&base).unwrap();
-        let source =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities/Core/base");
-        let mut manifest: Value =
-            serde_json::from_slice(&std::fs::read(source.join("base.json")).unwrap()).unwrap();
-        manifest["tools"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("test_owner_purchase"));
-        std::fs::write(
-            base.join("base.json"),
-            serde_json::to_vec(&manifest).unwrap(),
-        )
-        .unwrap();
-        std::fs::copy(source.join("base.skill.md"), base.join("base.skill.md")).unwrap();
+        // Test builds list the fixture tool in built-in Base; no package folder is needed.
+        std::fs::create_dir_all(&packages).unwrap();
         app.abilities = std::sync::Arc::new(abilities::Catalog::load(&packages).unwrap());
         // Install the development adapter grants only in this disposable fixture.
         let mut access_policy=app.store.read_access_policy().unwrap();

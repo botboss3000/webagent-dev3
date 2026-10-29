@@ -1,0 +1,29 @@
+{
+  "name": "create_genui",
+  "description": "Save a private self-contained mini app without displaying it. Use refresh_genui to display a saved app in this conversation.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "data": {},
+      "html": {
+        "maxLength": 32768,
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 120,
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "html"
+    ],
+    "additionalProperties": false
+  }
+}

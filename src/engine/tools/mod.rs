@@ -17,9 +17,9 @@ pub(crate) mod core_app_control;
 pub(crate) mod core_authority;
 #[path = "../../../crates/modules/abilities/host/base_extras.rs"]
 pub(crate) mod core_base_extras;
-#[path = "../../../plugins/abilities/Core/base/compaction_adapter.rs"]
+#[path = "../../../crates/modules/abilities/host/base/compaction_adapter.rs"]
 pub(crate) mod core_compaction;
-#[path = "../../../plugins/abilities/Core/base/context_assets_adapter.rs"]
+#[path = "../../../crates/modules/abilities/host/base/context_assets_adapter.rs"]
 pub(crate) mod core_context_assets;
 #[path = "../../../plugins/abilities/Core/decision/adapter.rs"]
 pub(crate) mod core_decision;
@@ -31,33 +31,33 @@ pub(crate) mod core_functions;
 pub(crate) mod core_image_generation;
 #[path = "../../../crates/modules/abilities/host/image_vision.rs"]
 pub(crate) mod core_image_vision;
-#[path = "../../../plugins/abilities/Core/base/mode_adapter.rs"]
+#[path = "../../../crates/modules/abilities/host/base/mode_adapter.rs"]
 pub(crate) mod core_mode;
 #[path = "../../../crates/modules/abilities/host/model_switcher.rs"]
 pub(crate) mod core_model_switcher;
 #[path = "../../../crates/modules/abilities/host/orchestration.rs"]
 pub(crate) mod core_orchestration;
-#[path = "../../../plugins/abilities/Core/base/prompt_adapter.rs"]
+#[path = "../../../crates/modules/abilities/host/base/prompt_adapter.rs"]
 pub(crate) mod core_prompt;
-#[path = "../../../plugins/abilities/Core/base/recall_adapter.rs"]
+#[path = "../../../crates/modules/abilities/host/base/recall_adapter.rs"]
 pub(crate) mod core_recall;
-#[path = "../../../plugins/abilities/Core/base/search_adapter.rs"]
+#[path = "../../../crates/modules/abilities/host/base/search_adapter.rs"]
 pub(crate) mod core_search;
-#[path = "../../../plugins/abilities/Core/base/self_edit_adapter.rs"]
+#[path = "../../../crates/modules/abilities/host/base/self_edit_adapter.rs"]
 pub(crate) mod core_self_edit;
-#[path = "../../../plugins/abilities/Core/base/session_adapter.rs"]
+#[path = "../../../crates/modules/abilities/host/base/session_adapter.rs"]
 pub(crate) mod core_session;
-#[path = "../../../plugins/abilities/Core/base/skills_adapter.rs"]
+#[path = "../../../crates/modules/abilities/host/base/skills_adapter.rs"]
 pub(crate) mod core_skills;
-#[path = "../../../plugins/abilities/Core/base/task_adapter.rs"]
+#[path = "../../../crates/modules/abilities/host/base/task_adapter.rs"]
 pub(crate) mod core_task;
-#[path = "../../../plugins/abilities/Core/base/tool_search_adapter.rs"]
+#[path = "../../../crates/modules/abilities/host/base/tool_search_adapter.rs"]
 pub(crate) mod core_tool_search;
 #[path = "../../../crates/modules/abilities/host/ui_admin.rs"]
 pub(crate) mod core_ui_admin;
 #[path = "../../../crates/modules/abilities/host/user_files.rs"]
 pub(crate) mod core_user_files;
-#[path = "../../../plugins/abilities/Core/base/adapter.rs"]
+#[path = "../../../crates/modules/abilities/host/base/adapter.rs"]
 pub(crate) mod core_utilities;
 #[path = "../../../crates/modules/abilities/host/vault.rs"]
 pub(crate) mod core_vault;
@@ -84,19 +84,14 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+/// Whether a tool only reads. A tool folder's `effect` decides; tools still defined in
+/// code use the lists below, and an unknown tool counts as a write.
 pub fn is_read(name: &str) -> bool {
+    if let Some(definition) = webagent_abilities::tool_definitions::get(name) {
+        return definition.is_read();
+    }
     crate::source_control::is_read(name)
-        || name == "process_image"
-        || core_vault::is_read(name)
-        || core_visualizer::is_read(name)
         || core_webhooks::is_read(name)
-        || business_front_desk::is_read(name)
-        || knowledge_files::is_read(name)
-        || core_orchestration::is_read(name)
-        || core_ui_admin::is_read(name)
-        || core_agent_management::is_read(name)
-        || name == "list_models"
-        || core_user_files::is_read(name)
         || name == "main_notes_read"
         || crate::modules::is_read(name)
         || matches!(
@@ -111,8 +106,6 @@ pub fn is_read(name: &str) -> bool {
                 | "search_tools"
                 | "list_tools"
                 | "load_tool"
-                | "decide_with_jev"
-                | "score_directory_with_jev"
                 | "get_time"
                 | "get_date"
                 | "calculate"
@@ -127,9 +120,6 @@ pub fn is_read(name: &str) -> bool {
                 | "get_task_checkpoint"
                 | "compact_context"
                 | "recall_compacted"
-                | "web_search"
-                | "get_weather"
-                | "maps_geocode"
                 | "file_list"
                 | "file_read"
                 | "file_search"
@@ -157,6 +147,56 @@ pub fn is_read(name: &str) -> bool {
         )
 }
 
+/// Compiled handlers whose schemas, effect and role defaults live in tool folders.
+pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
+    [web_access::TOOLS, business_front_desk::TOOLS, knowledge_files::TOOLS, core_decision::TOOLS,
+        core_directory_decision::TOOLS, core_user_files::TOOLS, core_model_switcher::TOOLS,
+        core_agent_management::TOOLS, core_image_vision::TOOLS, core_image_generation::TOOLS,
+        core_app_control::TOOLS, core_ui_admin::TOOLS, core_functions::TOOLS, core_orchestration::TOOLS,
+        core_visualizer::TOOLS, core_vault::TOOLS, core_visual_capture::TOOLS]
+        .into_iter()
+        .flatten()
+        .copied()
+}
+
+/// Schemas for `names` from their tool folders. A tool whose folder is missing or invalid
+/// is left out, so the model never sees it and the catalog marks it unsupported.
+pub(crate) fn folder_schemas(names: &[&str]) -> Vec<Value> {
+    names
+        .iter()
+        .filter_map(|name| webagent_abilities::tool_definitions::get(name))
+        .map(webagent_abilities::tool_definitions::ToolDefinition::schema)
+        .collect()
+}
+
+/// Startup check, both ways: every folder handler has a valid definition and every
+/// definition has a compiled handler. Each problem disables only its own tool.
+pub(crate) fn definition_problems() -> Vec<String> {
+    use webagent_abilities::tool_definitions as definitions;
+    let handlers: std::collections::BTreeSet<_> = folder_handlers().collect();
+    let mut problems = definitions::problems().to_vec();
+    problems.extend(handlers.iter().filter(|name| definitions::get(name).is_none())
+        .map(|name| format!("Compiled tool {name} has no tool folder definition; it is disabled")));
+    problems.extend(definitions::definitions().keys().filter(|name| !handlers.contains(name.as_str()))
+        .map(|name| format!("Tool folder {name} has no compiled handler; it is listed but cannot run")));
+    problems
+}
+
+/// Default access for a tool built into Base or defined in a tool folder; `None` keeps
+/// the earlier Auto for tools still defined only in code.
+fn tool_defaults(name: &str, rungs: &[String]) -> Option<webagent_access::Permission> {
+    if webagent_abilities::base::owns(name) {
+        let read = is_read(name) || webagent_abilities::is_discovery(name);
+        return Some(webagent_abilities::base::default_access(rungs, read));
+    }
+    webagent_abilities::tool_definitions::get(name).map(|definition| definition.default_for(rungs))
+}
+
+/// Let capability levels fall back to these defaults; once per process.
+pub(crate) fn install_tool_defaults() {
+    webagent_access::capabilities::install_tool_defaults(tool_defaults);
+}
+
 pub fn schemas() -> Vec<Value> {
     let mut schemas = native_schemas();
     schemas.extend(crate::ability_plugins::current_schemas());
@@ -169,7 +209,9 @@ pub(crate) fn native_schemas() -> Vec<Value> {
 }
 pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
     static SCHEMAS: OnceLock<Vec<Value>> = OnceLock::new();
-    let mut schemas=SCHEMAS.get_or_init(|| { let mut schemas: Vec<Value> = [
+    let mut schemas=SCHEMAS.get_or_init(|| {
+        for problem in definition_problems() {eprintln!("{problem}");}
+        let mut schemas: Vec<Value> = [
         ("file_list", "List a directory by absolute container path or relative live-checkout path", json!({"path":{"type":"string"}}), vec![]),
         ("file_read", "Read a bounded page of file lines from a container or live-checkout path", json!({"path":{"type":"string"},"offset":{"type":"integer","minimum":1,"maximum":10000000},"limit":{"type":"integer","minimum":1,"maximum":200}}), vec!["path"]),
         ("file_search", "Search container or live-checkout files by literal or regex query; outline comments in one file", json!({"path":{"type":"string"},"query":{"type":"string"},"regex":{"type":"boolean"},"file_glob":{"type":"string"},"comments_only":{"type":"boolean"}}), vec![]),
@@ -309,4 +351,12 @@ pub(crate) fn normalize_native_schemas(mut schemas: Vec<Value>) -> Vec<Value> {
         }
     }
     schemas
+}
+
+#[cfg(test)]
+mod definition_tests {
+    #[test]
+    fn every_folder_handler_and_definition_match() {
+        assert_eq!(super::definition_problems(), Vec::<String>::new());
+    }
 }

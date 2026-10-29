@@ -113,7 +113,11 @@ impl LiveAccess {
     pub fn ability_permission(&self,ability_id:&str) -> Permission {
         if !self.capability_level.ability_enabled(ability_id) {return Permission::Deny;}
         self.base_ability_permission(ability_id).meet(self.tier.ability_permission(ability_id))
-            .meet(self.capability_level.ability_permission(ability_id))
+            .meet(self.level_ability_permission(ability_id))
+    }
+    fn level_ability_permission(&self,ability_id:&str) -> Permission {
+        if ability_id==access::BUILT_IN_ABILITY {Permission::Auto}
+        else {self.capability_level.ability_permission(ability_id)}
     }
     fn base_ability_permission(&self,ability_id:&str) -> Permission {
         match self.ability_permissions.get(ability_id)
@@ -168,7 +172,7 @@ impl LiveAccess {
             if ability_ids.iter().any(|id|self.tier.ability_permission(id)==Permission::Deny) {
                 return ToolDecision {permission:Permission::Deny,reason:access::Reason::TierDenied};
             }
-            if ability_ids.iter().any(|id|self.capability_level.ability_permission(id)==Permission::Deny) {
+            if ability_ids.iter().any(|id|self.level_ability_permission(id)==Permission::Deny) {
                 return ToolDecision {permission:Permission::Deny,reason:access::Reason::CapabilityDenied};
             }
         }

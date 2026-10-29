@@ -3,15 +3,6 @@
   "kind": "ability",
   "skill_summary": "Default UI guidance for transparent tap highlights, optional touch haptics, persistent outlined controls, and complete interaction-state verification.",
   "description": "Read and edit frontend text through isolated checked broker work, retaining administrator authority and source permission ceilings.",
-  "tools": [
-    "read_source",
-    "write_source",
-    "edit_source",
-    "patch_source",
-    "delete_source",
-    "read_directory",
-    "search_source"
-  ],
   "icon": "paintbrush",
   "color": "#7dcfff",
   "order": 9,

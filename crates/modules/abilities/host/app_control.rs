@@ -4,11 +4,10 @@ use serde::Deserialize;
 pub fn owns(name: &str) -> bool {
     name == "set_app_view"
 }
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["set_app_view"];
 pub fn schemas() -> Vec<Value> {
-    vec![
-        json!({"type":"function","name":"set_app_view","description":"Request a registered app destination in this caller's active conversation browser. Existing page permissions still apply. No browser means the request remains unapplied.",
- "parameters":{"type":"object","properties":{"view":{"type":"string","enum":["chat","files","agents","models","abilities","settings","automations","builds"]}},"required":["view"],"additionalProperties":false}}),
-    ]
+    crate::tools::folder_schemas(TOOLS)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

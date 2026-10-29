@@ -5,6 +5,23 @@ boundaries. New isolated abilities require no main-app compilation. Publish thro
 the protected broker; source directory edits alone are not installation.
 The first general-loader migration requires an engine release.
 
+## Tool folders for compiled abilities
+
+A compiled ability declares each tool in its own folder,
+`plugins/abilities/<Group>/<ability_id>/tools/<tool>/`, and leaves `tools` out of
+its manifest. `tool.json` holds `name` (the folder name), `description`, JSON-schema
+`parameters`, `effect` (`read` or `write`) and `default_access` per role
+(`operator`, `member`, `visitor`: `auto`, `ask` or `deny`); `tool.skill.md` is its
+optional guidance. The handler stays compiled Rust and lists the tool in its adapter's
+`TOOLS`. At startup every listed handler must have a valid folder and every folder a
+handler; a missing or invalid folder disables only that tool. A capability level with
+no saved permission for a tool uses `default_access` for its role, then the next role
+down, then deny. Built-in Base tools are compiled in (`crates/modules/abilities/src/base.rs`)
+with coded defaults: Operators get them all, Members and Visitors may ask for read tools.
+Abilities not yet moved keep the manifest `tools` list and flat `tools/<tool>.skill.md`.
+
+## Isolated packages
+
 An isolated package lives at plugins/abilities/<Group>/<ability_id>. Retain the
 existing <ability_id>.json declaration format, own .skill.md, tools/ guidance
 and skills/ selectable guidance. Add plugin.json and schemas.json:

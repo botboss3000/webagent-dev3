@@ -1,0 +1,16 @@
+{
+  "name": "list_user_sessions",
+  "description": "List this caller's accessible active conversations.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

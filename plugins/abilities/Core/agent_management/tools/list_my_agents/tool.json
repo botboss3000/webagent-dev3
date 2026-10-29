@@ -1,0 +1,16 @@
+{
+  "name": "list_my_agents",
+  "description": "List agents currently visible to this caller, including whether this caller can manage them.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

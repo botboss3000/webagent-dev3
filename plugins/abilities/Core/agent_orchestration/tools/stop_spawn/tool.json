@@ -1,0 +1,23 @@
+{
+  "name": "stop_spawn",
+  "description": "Cancel a child's active runs and pending queued messages through normal owner controls. Does not undo completed or uncertain external effects.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "session_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id"
+    ],
+    "additionalProperties": false
+  }
+}

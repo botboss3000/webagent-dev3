@@ -2,7 +2,6 @@
   "display_name": "Decision",
   "kind": "ability",
   "description": "Ask the assigned TypeSafe Jev model bounded questions or score filtered files discovered in an authorized directory.",
-  "tools": ["decide_with_jev", "score_directory_with_jev"],
   "icon": "git-branch",
   "color": "#7dcfff",
   "order": 12,

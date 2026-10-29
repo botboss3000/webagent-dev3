@@ -1,0 +1,16 @@
+{
+  "name": "list_delegatable_agents",
+  "description": "List accessible private agents eligible for attributed task delegation; reports whether a Standard model is assigned.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

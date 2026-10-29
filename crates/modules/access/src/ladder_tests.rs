@@ -74,3 +74,33 @@ fn unsaved_levels_grant_no_abilities_and_never_fall_back_to_codebase_admin() {
     let mut saved=CapabilityLevels::default();saved.revision=1;
     assert!(!saved.unset());assert_eq!(saved.tools_notice(),None);
 }
+
+#[test]
+fn defined_tools_fall_back_to_role_defaults_then_deny() {
+    // Only `fixture_` tools have definitions here, so other tests keep the legacy Auto.
+    fn defaults(id:&str,rungs:&[String])->Option<Permission> {
+        let access=match id {
+            "fixture_write"=>[("operator",Permission::Auto),("member",Permission::Ask)].as_slice(),
+            "fixture_read"=>[("visitor",Permission::Auto)].as_slice(),
+            _=>return None,
+        };
+        Some(rungs.iter().find_map(|rung|access.iter().find(|(role,_)|role==rung).map(|(_,p)|*p)).unwrap_or(Permission::Deny))
+    }
+    crate::capabilities::install_tool_defaults(defaults);
+    let mut levels=CapabilityLevels::default();
+    let mut trusted=levels.levels["member"].clone();trusted.id="trusted".into();trusted.name="Trusted".into();
+    levels.levels.insert("trusted".into(),trusted);levels.order.insert(1,"trusted".into());
+    let level=|levels:&CapabilityLevels,id:&str|levels.effective(id).unwrap();
+    assert_eq!(level(&levels,"operator").tool_permission("fixture_write"),Permission::Auto);
+    // A custom level without its own default takes the next rung down.
+    assert_eq!(level(&levels,"trusted").tool_permission("fixture_write"),Permission::Ask);
+    assert_eq!(level(&levels,"visitor").tool_permission("fixture_write"),Permission::Deny);
+    // Every level meets the levels above it, each at its own default.
+    assert_eq!(level(&levels,"member").tool_permission("fixture_read"),Permission::Auto);
+    levels.levels.get_mut("operator").unwrap().tool_permissions.insert("fixture_read".into(),Permission::Ask);
+    assert_eq!(level(&levels,"visitor").tool_permission("fixture_read"),Permission::Ask);
+    // A saved permission replaces the default; undefined tools keep Auto.
+    levels.levels.get_mut("visitor").unwrap().tool_permissions.insert("fixture_write".into(),Permission::Auto);
+    assert_eq!(level(&levels,"visitor").tool_permission("fixture_write"),Permission::Ask);
+    assert_eq!(level(&levels,"visitor").tool_permission("unrelated"),Permission::Auto);
+}

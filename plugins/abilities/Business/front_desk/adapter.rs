@@ -13,19 +13,10 @@ pub fn owns(name: &str) -> bool {
     matches!(name, "business_profile_get" | "business_profile_update" | "lead_capture" | "lead_list"
         | "lead_update" | "request_human" | "offer_choices")
 }
-pub fn is_read(name: &str) -> bool {
-    matches!(name, "business_profile_get" | "lead_list")
-}
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["business_profile_get", "business_profile_update", "lead_capture", "lead_list", "lead_update", "request_human", "offer_choices"];
 pub fn schemas() -> Vec<Value> {
-    [
- ("business_profile_get","Read this business's operator-maintained profile: name, contact details, hours, services or menu with prices, and policies. Answer visitor questions from it; say so when a fact is missing instead of guessing.",json!({}),vec![]),
- ("business_profile_update","Staff only. Replace the business profile with a JSON object (for example name, address, phone, email, hours, services, policies, notes). Pass the revision from business_profile_get; 0 creates the first profile.",json!({"profile":{"type":"object"},"expected_revision":{"type":"integer","minimum":0}}),vec!["profile","expected_revision"]),
- ("lead_capture","Save a visitor's contact details and request for staff follow-up. Ask for consent first and include at least an email or phone number. Never collect payment card or government ID numbers.",json!({"name":{"type":"string","maxLength":120},"email":{"type":"string","maxLength":200},"phone":{"type":"string","maxLength":40},"kind":{"type":"string","enum":LEAD_KINDS},"message":{"type":"string","maxLength":2000}}),vec!["name","kind","message"]),
- ("lead_list","Staff only. List the newest leads, optionally filtered by status.",json!({"status":{"type":"string","enum":LEAD_STATUSES},"limit":{"type":"integer","minimum":1,"maximum":50}}),vec![]),
- ("lead_update","Staff only. Change a lead's status and optionally add a note, using the lead's current revision.",json!({"lead_id":{"type":"string","maxLength":64},"status":{"type":"string","enum":LEAD_STATUSES},"note":{"type":"string","maxLength":1000},"expected_revision":{"type":"integer","minimum":1}}),vec!["lead_id","status","expected_revision"]),
- ("request_human","Ask the business's staff to take over this conversation, when the visitor asks for a person or needs something you cannot do. Staff are notified in the app; tell the visitor someone will join.",json!({"reason":{"type":"string","maxLength":300}}),vec!["reason"]),
- ("offer_choices","Show the visitor up to 8 reply buttons (for example time slots or menu sections). A click sends that label as the visitor's own next message; it authorizes nothing by itself.",json!({"prompt":{"type":"string","maxLength":200},"options":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string","maxLength":80}}}),vec!["prompt","options"]),
-    ].into_iter().map(|(name,description,properties,required)|json!({"type":"function","name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
+    crate::tools::folder_schemas(TOOLS)
 }
 
 fn text(value: &str, limit: usize) -> Result<String> {

@@ -1,0 +1,42 @@
+{
+  "name": "lead_update",
+  "description": "Staff only. Change a lead's status and optionally add a note, using the lead's current revision.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "expected_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "lead_id": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "note": {
+        "maxLength": 1000,
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "new",
+          "contacted",
+          "won",
+          "closed"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "lead_id",
+      "status",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

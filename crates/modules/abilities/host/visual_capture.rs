@@ -3,10 +3,10 @@ use crate::*;
 use base64::Engine as _;
 use serde::Deserialize;
 use sha2::Digest as _;
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["screenshot_genui"];
 pub fn schemas() -> Vec<Value> {
-    vec![
-        json!({"type":"function","name":"screenshot_genui","description":"Capture an actual PNG of a caller-private mini app in a fresh offline browser. Optional bounded CSS clicks verify this app only. No platform login or external origin is available. Returns a private attachment plus bounded visible text and console diagnostics. Requires the app's exact revision.","parameters":{"type":"object","properties":{"genui_id":{"type":"string","format":"uuid"},"expected_revision":{"type":"integer","minimum":1},"width":{"type":"integer","minimum":320,"maximum":1600},"height":{"type":"integer","minimum":240,"maximum":1200},"theme":{"type":"string","enum":["light","dark"]},"click_selectors":{"type":"array","maxItems":10,"items":{"type":"string","minLength":1,"maxLength":200}}},"required":["genui_id","expected_revision"],"additionalProperties":false}}),
-    ]
+    crate::tools::folder_schemas(TOOLS)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

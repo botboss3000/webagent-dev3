@@ -1,0 +1,16 @@
+{
+  "name": "knowledge_file_list",
+  "description": "List this agent's knowledge files with names, sizes and revisions.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

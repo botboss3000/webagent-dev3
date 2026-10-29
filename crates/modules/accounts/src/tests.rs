@@ -1813,12 +1813,17 @@ async fn login_protection_blocks_pairs_and_slows_accounts_from_live_policy() {
     .await
     .unwrap();
     let wrong = concat!("wrong-", "fixture-value");
+    // Unthrottled failures measure this machine's password-check cost, so the timing
+    // checks below compare the slowdown against it rather than a fixed second.
+    let mut baseline = std::time::Duration::ZERO;
     for user in ["guard-owner", "nobody"] {
         for _ in 0..2 {
+            let started = std::time::Instant::now();
             assert!(matches!(
                 login(user, wrong, 1).await,
                 Err(Error::Public(StatusCode::UNAUTHORIZED, _))
             ));
+            baseline = baseline.max(started.elapsed());
         }
     }
     // The blocked pair is refused before the (correct) password is checked.
@@ -1851,7 +1856,7 @@ async fn login_protection_blocks_pairs_and_slows_accounts_from_live_policy() {
         login("guard-owner", wrong, 3).await,
         Err(Error::Public(StatusCode::UNAUTHORIZED, _))
     ));
-    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert!(started.elapsed() < baseline + std::time::Duration::from_millis(900));
     assert_eq!(
         login("guard-owner", password, 1).await.unwrap().status(),
         StatusCode::TOO_MANY_REQUESTS

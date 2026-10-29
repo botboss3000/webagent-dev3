@@ -8,15 +8,10 @@ pub fn owns(name: &str) -> bool {
         "check_credential" | "request_credential" | "list_vault_keys"
     )
 }
-pub fn is_read(name: &str) -> bool {
-    matches!(name, "check_credential" | "list_vault_keys")
-}
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+pub const TOOLS: &[&str] = &["check_credential", "request_credential", "list_vault_keys"];
 pub fn schemas() -> Vec<Value> {
-    [
- ("check_credential","Check presence, revision and service origin for one caller-private credential. Returns metadata only; does not validate a remote provider or reveal the secret.",json!({"name":{"type":"string","maxLength":64}}),vec!["name"]),
- ("request_credential","Request a private human credential form in the active conversation. Supply a plain key name and HTTPS service origin, plus a human label and the HTTPS page where the user creates the value when known. The form stays in this conversation until the user saves or dismisses it. The user enters the value directly; models and mini apps receive only metadata. Does not grant network access or silently use this credential.",json!({"name":{"type":"string","maxLength":64},"origin":{"type":"string","maxLength":500},"label":{"type":"string","maxLength":80},"create_url":{"type":"string","maxLength":500}}),vec!["name","origin"]),
- ("list_vault_keys","List caller-private credential names, origins and revisions without values.",json!({}),vec![])
- ].into_iter().map(|(name,description,properties,required)|json!({"type":"function","name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
+    crate::tools::folder_schemas(TOOLS)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

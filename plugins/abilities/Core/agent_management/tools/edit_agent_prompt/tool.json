@@ -1,0 +1,32 @@
+{
+  "name": "edit_agent_prompt",
+  "description": "Edit one unlocked prompt slot for an agent the caller manages. Request: content, expected_revision, optional order_index, lock, merge_mode.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "agent_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "request": {
+        "type": "object"
+      },
+      "slot": {
+        "maxLength": 128,
+        "type": "string"
+      }
+    },
+    "required": [
+      "agent_id",
+      "slot",
+      "request"
+    ],
+    "additionalProperties": false
+  }
+}

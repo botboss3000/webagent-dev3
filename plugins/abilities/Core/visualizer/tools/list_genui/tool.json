@@ -1,0 +1,16 @@
+{
+  "name": "list_genui",
+  "description": "List caller-private mini app names and revisions without source or data.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

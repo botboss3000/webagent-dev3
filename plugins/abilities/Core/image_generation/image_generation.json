@@ -2,9 +2,6 @@
   "display_name": "Image Generation",
   "kind": "ability",
   "description": "Generate an image from text using this agent’s assigned Image Out role and return a private authenticated attachment.",
-  "tools": [
-    "generate_image"
-  ],
   "icon": "image",
   "color": "#bb9af7",
   "order": 6,

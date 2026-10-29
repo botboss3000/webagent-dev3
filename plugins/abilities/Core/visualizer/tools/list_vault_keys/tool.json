@@ -1,0 +1,16 @@
+{
+  "name": "list_vault_keys",
+  "description": "List caller-private credential names, origins and revisions without values.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

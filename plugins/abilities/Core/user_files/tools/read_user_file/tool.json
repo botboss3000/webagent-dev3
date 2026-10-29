@@ -1,0 +1,32 @@
+{
+  "name": "read_user_file",
+  "description": "Read a bounded byte page of a private saved file as base64 and UTF-8 text when valid.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "maximum": 65536,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "name": {
+        "maxLength": 255,
+        "type": "string"
+      },
+      "offset": {
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "additionalProperties": false
+  }
+}

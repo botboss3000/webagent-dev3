@@ -1,0 +1,57 @@
+{
+  "name": "maps_geocode",
+  "description": "Nominatim forward/reverse geocoding or local great-circle distance in km/miles",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "enum": [
+          "geocode",
+          "reverse",
+          "distance"
+        ],
+        "type": "string"
+      },
+      "lat": {
+        "maximum": 90,
+        "minimum": -90,
+        "type": "number"
+      },
+      "lat2": {
+        "maximum": 90,
+        "minimum": -90,
+        "type": "number"
+      },
+      "limit": {
+        "maximum": 10,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "location": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "lon": {
+        "maximum": 180,
+        "minimum": -180,
+        "type": "number"
+      },
+      "lon2": {
+        "maximum": 180,
+        "minimum": -180,
+        "type": "number"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  }
+}

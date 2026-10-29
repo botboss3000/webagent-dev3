@@ -1,0 +1,36 @@
+{
+  "name": "manage_user_session",
+  "description": "Rename, pin, recycle or restore a caller-owned session. Request: expected_revision plus title/pinned for update. Recycling is reversible.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "enum": [
+          "update",
+          "recycle",
+          "restore"
+        ],
+        "type": "string"
+      },
+      "request": {
+        "type": "object"
+      },
+      "session_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "action",
+      "request"
+    ],
+    "additionalProperties": false
+  }
+}

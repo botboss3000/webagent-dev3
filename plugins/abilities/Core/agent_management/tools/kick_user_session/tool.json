@@ -1,0 +1,37 @@
+{
+  "name": "kick_user_session",
+  "description": "Send a caller-attributed message to an owner-private session through normal queue admission. Requires exact owner approval; returns admission, not a completed answer.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "delivery": {
+        "enum": [
+          "queue",
+          "steer",
+          "interrupt"
+        ],
+        "type": "string"
+      },
+      "target_session_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "target_session_id",
+      "text"
+    ],
+    "additionalProperties": false
+  }
+}

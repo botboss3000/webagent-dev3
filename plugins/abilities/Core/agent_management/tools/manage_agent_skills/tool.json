@@ -1,0 +1,49 @@
+{
+  "name": "manage_agent_skills",
+  "description": "List, read, save or remove an agent's self-authored selectable skills. Writes require agent administration and exact skill revision.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "enum": [
+          "list",
+          "read",
+          "save",
+          "remove"
+        ],
+        "type": "string"
+      },
+      "agent_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "description": {
+        "maxLength": 256,
+        "type": "string"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "instructions": {
+        "maxLength": 16384,
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 64,
+        "type": "string"
+      }
+    },
+    "required": [
+      "agent_id",
+      "action"
+    ],
+    "additionalProperties": false
+  }
+}

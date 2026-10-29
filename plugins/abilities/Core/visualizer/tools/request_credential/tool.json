@@ -1,0 +1,36 @@
+{
+  "name": "request_credential",
+  "description": "Request a private human credential form in the active conversation. Supply a plain key name and HTTPS service origin, plus a human label and the HTTPS page where the user creates the value when known. The form stays in this conversation until the user saves or dismisses it. The user enters the value directly; models and mini apps receive only metadata. Does not grant network access or silently use this credential.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "create_url": {
+        "maxLength": 500,
+        "type": "string"
+      },
+      "label": {
+        "maxLength": 80,
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "origin": {
+        "maxLength": 500,
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "origin"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -2,9 +2,6 @@
   "display_name": "Create Tools",
   "kind": "ability",
   "description": "Save private, bounded pure Python expression functions and invoke them through Base run_soft_ability, without filesystem, network or credentials.",
-  "tools": [
-    "create_tool"
-  ],
   "icon": "wrench",
   "color": "#7dcfff",
   "order": 5,

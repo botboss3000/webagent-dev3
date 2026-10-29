@@ -1,0 +1,29 @@
+{
+  "name": "render_visual",
+  "description": "Save and display a private self-contained HTML/JavaScript mini app in this conversation. Inline code runs in an opaque sandbox without platform cookies, API access, forms, popups or external subresources. HTML is at most 32 KiB and optional JSON data at most 16 KiB. Use get_genui_reference for the data/theme contract.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "data": {},
+      "html": {
+        "maxLength": 32768,
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 120,
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "html"
+    ],
+    "additionalProperties": false
+  }
+}

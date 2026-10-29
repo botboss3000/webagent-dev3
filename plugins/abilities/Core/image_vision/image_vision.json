@@ -2,9 +2,6 @@
   "display_name": "Image Vision",
   "kind": "ability",
   "description": "Inspect an image from the current conversation using this agent’s assigned Image In role.",
-  "tools": [
-    "process_image"
-  ],
   "icon": "eye",
   "color": "#7dcfff",
   "order": 7,

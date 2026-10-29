@@ -1,0 +1,29 @@
+{
+  "name": "process_image",
+  "description": "Ask this agent's assigned Image In model a specific question about an image attached to this conversation. No Standard-model fallback.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "attachment_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "question": {
+        "maxLength": 8192,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "attachment_id",
+      "question"
+    ],
+    "additionalProperties": false
+  }
+}

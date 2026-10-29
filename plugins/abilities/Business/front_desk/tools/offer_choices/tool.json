@@ -1,0 +1,33 @@
+{
+  "name": "offer_choices",
+  "description": "Show the visitor up to 8 reply buttons (for example time slots or menu sections). A click sends that label as the visitor's own next message; it authorizes nothing by itself.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "options": {
+        "items": {
+          "maxLength": 80,
+          "type": "string"
+        },
+        "maxItems": 8,
+        "minItems": 1,
+        "type": "array"
+      },
+      "prompt": {
+        "maxLength": 200,
+        "type": "string"
+      }
+    },
+    "required": [
+      "prompt",
+      "options"
+    ],
+    "additionalProperties": false
+  }
+}

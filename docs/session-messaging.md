@@ -54,7 +54,7 @@ source, destination, delivery and recipient mode. Its opt-in checkbox remembers
 only eligible queue/steer routes. Polling preserves the explicit checkbox choice;
 interrupt/new-session/onward requests cannot grant a reusable route.
 
-Config: plugins/abilities/Core/base/base.json -> /tools registers the native tools.
+Config: the built-in Base ability (crates/modules/abilities/src/base.rs) lists the native tools.
 Tool schemas live in session_messaging::schemas; discovery is filtered by live
 ability access and policy. Agent policy rules and runtime access assignments are
 revisioned host state, not a new source JSON switch. policy_defaults fills absent

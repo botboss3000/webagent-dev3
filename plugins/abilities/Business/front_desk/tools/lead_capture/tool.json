@@ -1,0 +1,48 @@
+{
+  "name": "lead_capture",
+  "description": "Save a visitor's contact details and request for staff follow-up. Ask for consent first and include at least an email or phone number. Never collect payment card or government ID numbers.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "email": {
+        "maxLength": 200,
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "inquiry",
+          "booking",
+          "event",
+          "catering",
+          "callback",
+          "other"
+        ],
+        "type": "string"
+      },
+      "message": {
+        "maxLength": 2000,
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 120,
+        "type": "string"
+      },
+      "phone": {
+        "maxLength": 40,
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "kind",
+      "message"
+    ],
+    "additionalProperties": false
+  }
+}

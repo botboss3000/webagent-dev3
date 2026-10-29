@@ -1,0 +1,28 @@
+{
+  "name": "quote_spawn",
+  "description": "Return an exact published message from this conversation's child with source attribution. Does not send it anywhere.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "message_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "session_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "message_id"
+    ],
+    "additionalProperties": false
+  }
+}

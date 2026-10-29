@@ -1,0 +1,31 @@
+{
+  "name": "get_weather",
+  "description": "Current Open-Meteo weather by city or lat,lon; no API key required",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "location": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "units": {
+        "enum": [
+          "metric",
+          "imperial"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "location"
+    ],
+    "additionalProperties": false
+  }
+}

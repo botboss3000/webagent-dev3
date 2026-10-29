@@ -1,0 +1,33 @@
+{
+  "name": "rename_genui",
+  "description": "Rename a caller-private mini app using its exact revision.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "expected_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "genui_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 120,
+        "type": "string"
+      }
+    },
+    "required": [
+      "genui_id",
+      "expected_revision",
+      "name"
+    ],
+    "additionalProperties": false
+  }
+}

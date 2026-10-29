@@ -1,0 +1,31 @@
+{
+  "name": "set_effort",
+  "description": "Set reasoning effort for subsequent calls in this run. Supported levels depend on the current model; list_models shows them.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "effort": {
+        "enum": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "effort"
+    ],
+    "additionalProperties": false
+  }
+}
