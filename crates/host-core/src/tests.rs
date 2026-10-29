@@ -56,3 +56,26 @@ fn api_errors_hide_internal_causes() {
     assert_ne!(uuid(), uuid());
     assert!(now() > 0);
 }
+
+#[tokio::test]
+async fn documents_round_trip_and_run_writes_need_the_run_index() {
+    let root = tempfile::tempdir().expect("fixture root");
+    let store = core(root.path(), "user-1").await;
+    let value = json!({"enabled": true});
+    store.put("preference:a", &value).await.unwrap();
+    store.put("preference:b", &json!({"enabled": false})).await.unwrap();
+    assert_eq!(store.get("preference:a").await.unwrap(), Some(value));
+    assert_eq!(store.list("preference:").await.unwrap().len(), 2);
+    store.delete("preference:a").await.unwrap();
+    assert_eq!(store.get("preference:a").await.unwrap(), None);
+    assert_eq!(store.list("preference:").await.unwrap().len(), 1);
+    // Stored rows are encoded with the handle's codec, never plain JSON.
+    let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='preference:b'")
+        .fetch_one(store.pool_for("preference:b"))
+        .await
+        .unwrap();
+    assert!(serde_json::from_slice::<serde_json::Value>(&raw).is_err());
+    let run = json!({"id": "r1", "session_id": "s1", "status": "completed"});
+    assert!(store.put("run:r1", &run).await.is_err());
+    assert_eq!(store.get("run:r1").await.unwrap(), None);
+}

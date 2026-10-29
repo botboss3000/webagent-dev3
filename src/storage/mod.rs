@@ -827,87 +827,20 @@ impl Store {
         }
         Ok(())
     }
-    /// Reconstruct a split recovery record under the reader's transaction.
-    async fn decode_document(&self, connection: &mut sqlx::SqliteConnection, raw: &[u8]) -> Result<Value> {
-        webagent_storage::recovery::read_document(connection, self, raw).await
-    }
-
-    /// Persist a document and its recovery-input delta in one transaction.
-    /// Unchanged items retain their ciphertext; append, replacement, compaction,
-    /// and truncation update only affected rows. A metadata reference is published
-    /// only alongside its complete item set. No transcript rows are deleted.
-    async fn write_document(&self, tx: &mut sqlx::Transaction<'_,sqlx::Sqlite>, key: &str, value: &Value) -> Result<()> {
-        if key.starts_with("run:") && !matches!(value["status"].as_str(), Some("completed" | "cancelled" | "failed")) {
-            self.require_active_session(tx, value["session_id"].as_str().ok_or_else(||anyhow!("Run has no session"))?).await?;
-            if !matches!(value["status"].as_str(),Some("stopped"|"recovery")) {self.require_participation(tx,value).await?;}
-        }
-        let session_value;
-        let value = if key.starts_with("session:") {
-            session_value = self.prepare_session_document(tx, key, value).await?;
-            &session_value
-        } else { value };
-        let metadata;
-        let stored = if key.starts_with("run:") && value["input"].is_array() {
-            metadata = webagent_storage::recovery::save_run_input(tx, self, key, value).await?;
-            &metadata
-        } else { value };
-        let encoded = if webagent_storage::routing::always_sealed(key) {self.seal(stored)?} else {self.encode_for_pool(self.pool_for(key), stored)?};
-        docs::upsert(tx, key, &encoded).await?;
-        Ok(())
-    }
-
-    /// Read and authenticate a namespace-selected document, reconstructing split recovery input in one snapshot.
-    pub async fn get(&self, key: &str) -> Result<Option<Value>> {
-        self.validate_agent_doc_key(key)?;
-        // These documents are shared with the independent loop process.
-        let cacheable = false;
-        let epoch = {
-            let mut cache = self.cache.lock().unwrap();
-            if cacheable {
-                if let Some(value) = cache.get(key) {
-                    return Ok(Some(value));
-                }
-            }
-            cache.epoch
-        };
-        let mut tx = self.pool_for(key).begin().await?;
-        let result = match docs::read(&mut tx, key).await? {
-            Some(raw) => Some(self.decode_document(&mut tx, &raw).await?),
-            None => None,
-        };
-        tx.commit().await?;
-        if cacheable {
-            if let Some(value) = &result {
-                self.cache
-                    .lock()
-                    .unwrap()
-                    .insert(key.into(), value.clone(), epoch);
-            }
-        }
-        Ok(result)
-    }
-    /// Write a document through its authority and lifecycle guards, then invalidate affected disposable caches.
+    /// Write a document; run documents also update the run index in the same
+    /// transaction. Every other key goes through `StoreCore::put`.
     pub async fn put(&self, key: &str, value: &Value) -> Result<()> {
+        if !key.starts_with("run:") {
+            return self.core.put(key, value).await;
+        }
         self.validate_agent_doc_key(key)?;
-        let session_id = key.strip_prefix("session:");
-        let _context_guard = if session_id.is_some() {
-            Some(self.context_gate.write().await)
-        } else {
-            None
-        };
         let mut tx = self.pool_for(key).begin().await?;
-        if key.starts_with("run:") {
-            self.require_active_session(&mut tx,value["session_id"].as_str().ok_or_else(||anyhow!("Run has no session"))?).await?;
-        }
-        self.write_document(&mut tx,key,value).await?;
-        if key.starts_with("run:") {
-            self.index_run(&mut tx, value).await?;
-        }
+        let sid = value["session_id"].as_str().ok_or_else(|| anyhow!("Run has no session"))?;
+        self.require_active_session(&mut tx, sid).await?;
+        self.write_document(&mut tx, key, value).await?;
+        self.index_run(&mut tx, value).await?;
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[key.into()]);
-        if let Some(sid) = session_id {
-            self.context_cache.lock().unwrap().invalidate(&self.context_cache_key(sid));
-        }
+        self.invalidate_document(key);
         Ok(())
     }
     /// Update run lookup, redacted view and usage deltas in the same checkpoint transaction.
@@ -925,34 +858,6 @@ impl Store {
     /// List bounded recent session runs or application-wide failures using redacted stored views.
     pub async fn recent_runs(&self, sid: Option<&str>) -> Result<Vec<Value>> {
         self.engine_repository().recent_runs(sid).await
-    }
-    /// Delete a namespace document and any owned recovery rows together before invalidating caches.
-    pub async fn delete(&self, key: &str) -> Result<()> {
-        self.validate_agent_doc_key(key)?;
-        let session_id = key.strip_prefix("session:");
-        let _context_guard = if session_id.is_some() {
-            Some(self.context_gate.write().await)
-        } else {
-            None
-        };
-        let mut tx = self.pool_for(key).begin().await?;
-        docs::remove(&mut tx, key).await?;
-        tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[key.into()]);
-        if let Some(sid) = session_id {
-            self.context_cache.lock().unwrap().invalidate(&self.context_cache_key(sid));
-        }
-        Ok(())
-    }
-    /// Read matching authority documents in one snapshot and reconstruct any split run inputs.
-    pub async fn list(&self, prefix: &str) -> Result<Vec<Value>> {
-        self.validate_agent_doc_key(prefix)?;
-        let mut tx = self.pool_for(prefix).begin().await?;
-        let rows = docs::scan(&mut tx, prefix).await?;
-        let mut values = Vec::with_capacity(rows.len());
-        for raw in rows { values.push(self.decode_document(&mut tx,&raw).await?); }
-        tx.commit().await?;
-        Ok(values)
     }
     /// Append an encoded event to the application or user plane selected by session identity.
     pub async fn event(&self, sid: &str, kind: &str, payload: &Value) -> Result<()> {

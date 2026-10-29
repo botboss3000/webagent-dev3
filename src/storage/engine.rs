@@ -15,8 +15,8 @@ impl Records for Store {
  fn invalidate(&self,keys:&[String]) {self.cache.lock().unwrap().invalidate(keys);}
  fn invalidate_context(&self,sid:&str) {self.context_cache.lock().unwrap().invalidate(&self.context_cache_key(sid));}
  fn reasoning_hashes(&self,source:&[Value])->Result<Vec<String>> {reasoning_cleanup::hashes(source)}
- fn decode_document<'a>(&'a self,connection:&'a mut sqlx::SqliteConnection,raw:&'a [u8])->impl std::future::Future<Output=Result<Value>>+Send+'a {Store::decode_document(self,connection,raw)}
- fn write_document<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,key:&'a str,value:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a where 'c:'a {Store::write_document(self,tx,key,value)}
+ fn decode_document<'a>(&'a self,connection:&'a mut sqlx::SqliteConnection,raw:&'a [u8])->impl std::future::Future<Output=Result<Value>>+Send+'a {StoreCore::decode_document(self,connection,raw)}
+ fn write_document<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,key:&'a str,value:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a where 'c:'a {StoreCore::write_document(self,tx,key,value)}
 }
 impl AgentMetadata for Store {
  type Agent=Store;
@@ -71,7 +71,7 @@ impl webagent_engine::runtime::ports::ScopedStorage for Store {
  fn configure_cache(&self,documents:usize,contexts:usize){StoreCore::configure_cache(self,documents,contexts)}
  fn for_user<'a>(&'a self,user:&'a str)->impl std::future::Future<Output=Result<Self>>+Send+'a{Store::for_user(self,user)}
  fn all_user_ids(&self)->impl std::future::Future<Output=Result<Vec<String>>>+Send{<StoreCore as webagent_accounts_host::AccountsStore>::all_user_ids(self)}
- fn get<'a>(&'a self,key:&'a str)->impl std::future::Future<Output=Result<Option<Value>>>+Send+'a{Store::get(self,key)}
+ fn get<'a>(&'a self,key:&'a str)->impl std::future::Future<Output=Result<Option<Value>>>+Send+'a{StoreCore::get(self,key)}
  fn put<'a>(&'a self,key:&'a str,value:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a{Store::put(self,key,value)}
 }
 impl webagent_engine::runtime::ports::RunPresentation for Store {fn present_run(&self,run:&Value)->Value{crate::public_run(run)}}

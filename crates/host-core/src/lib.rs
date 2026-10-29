@@ -3,6 +3,7 @@
 //! The root binary's `Store` wraps [`StoreCore`] and dereferences to it, so root code keeps
 //! its field and method paths while module host crates add storage behaviour through
 //! extension traits on `StoreCore`. Everything links into the one program.
+mod documents;
 mod error;
 mod store;
 
