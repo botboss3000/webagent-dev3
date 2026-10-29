@@ -1,0 +1,20 @@
+{
+  "name": "repository_access",
+  "description": "Report current-agent repository configuration and bounded GitHub metadata; never prints credentials or infers push permission from token presence",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "verify_remote": {
+        "type": "boolean"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

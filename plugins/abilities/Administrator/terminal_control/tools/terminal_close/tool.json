@@ -1,0 +1,22 @@
+{
+  "name": "terminal_close",
+  "description": "Close a PTY and its descendant processes; policy-gated",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "terminal_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "terminal_id"
+    ],
+    "additionalProperties": false
+  }
+}

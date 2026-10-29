@@ -1,0 +1,20 @@
+{
+  "name": "login_as_current_user",
+  "description": "Open a development browser authenticated as the current caller; never returns credentials",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

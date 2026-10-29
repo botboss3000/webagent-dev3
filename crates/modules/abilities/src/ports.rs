@@ -4,7 +4,6 @@ use serde_json::Value;
 use std::path::{Path,PathBuf};
 pub trait Host:Clone+Send+Sync+'static {
  fn selected_source()->Result<Option<PathBuf>>;
- fn native_schema_snapshot_at(source:Option<&Path>)->Result<Vec<Value>>;
  fn native_schemas_for_catalog(root:&Path,publication:bool)->Result<Vec<Value>>;
  fn native_schemas_without_administrator()->Vec<Value>;
  fn native_schemas()->Vec<Value>;

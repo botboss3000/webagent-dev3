@@ -1,0 +1,100 @@
+{
+  "name": "source_site_create",
+  "description": "Configure a caller-owned site connection with public metadata, create a private GitHub repository and static Cloudflare Worker, or connect an existing static site. Configure returns private vault request names; tokens are never tool arguments.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "site_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      },
+      "connection_revision": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "request_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      },
+      "operation": {
+        "type": "string",
+        "enum": [
+          "create",
+          "connect",
+          "configure"
+        ]
+      },
+      "configuration": {
+        "type": "object",
+        "properties": {
+          "github_owner": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "github_repo": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "production_branch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "cloudflare_account_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "worker_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63
+          },
+          "build_token_uuid": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 36
+          },
+          "root_directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "build_command": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "github_owner",
+          "github_repo",
+          "production_branch",
+          "cloudflare_account_id",
+          "worker_name",
+          "build_token_uuid",
+          "root_directory",
+          "build_command"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "site_id",
+      "connection_revision",
+      "request_id",
+      "operation"
+    ],
+    "additionalProperties": false
+  }
+}

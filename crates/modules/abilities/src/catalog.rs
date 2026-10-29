@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -508,21 +508,38 @@ impl<H: Host> Catalog<H> {
                 let folder_tools = crate::tool_definitions::read_folder(&ability_path)?;
                 let mut folder_skills = BTreeMap::new();
                 if let Some(tools) = &folder_tools {
-                    if !manifest.tools.is_empty() {
-                        bail!("Ability lists tools in both its manifest and tool folders: {id}");
+                    // Packaged abilities keep their manifest list for their package
+                    // contract; it must then name exactly the tool folders.
+                    let listed: BTreeSet<&str> =
+                        manifest.tools.iter().map(String::as_str).collect();
+                    let folders: BTreeSet<&str> =
+                        tools.iter().map(|tool| tool.name.as_str()).collect();
+                    if !manifest.tools.is_empty() && listed != folders {
+                        bail!("Ability's manifest tools differ from its tool folders: {id}");
                     }
                     manifest_digest =
                         crate::tool_definitions::folded_digest(&manifest_digest, tools);
+                    let order = std::mem::take(&mut manifest.tools);
+                    let mut valid = BTreeSet::new();
                     for tool in tools {
                         if let Err(error) = &tool.definition {
                             eprintln!("Tool {} in ability {id} is disabled: {error:#}", tool.name);
                             continue;
                         }
-                        manifest.tools.push(tool.name.clone());
+                        valid.insert(tool.name.clone());
                         if let Some(skill) = &tool.skill {
                             folder_skills.insert(tool.name.clone(), skill.clone());
                         }
                     }
+                    // Keep a listed order; otherwise folder order.
+                    manifest.tools = if order.is_empty() {
+                        valid.into_iter().collect()
+                    } else {
+                        order
+                            .into_iter()
+                            .filter(|name| valid.contains(name))
+                            .collect()
+                    };
                 }
                 if manifest.display_name.is_empty()
                     || manifest.display_name.len() > 100
@@ -821,14 +838,10 @@ impl<H: Host> Catalog<H> {
             .then(|| self.root.parent().and_then(Path::parent))
             .flatten()
     }
-    /// Recheck one complete native snapshot at the existing final dispatch fence.
+    /// Recheck the Administrator schemas at the final dispatch fence: reread this
+    /// snapshot's own tool folders and compare.
     pub fn native_snapshot_current(&self) -> Result<bool> {
-        let current = if self.published {
-            H::native_schema_snapshot_at(None)?
-        } else {
-            H::native_schemas_for_catalog(&self.root, false)?
-        };
-        Ok(current == self.native_schemas)
+        Ok(H::native_schemas_for_catalog(&self.root, self.published)? == self.native_schemas)
     }
     pub fn version(&self) -> &str {
         &self.version

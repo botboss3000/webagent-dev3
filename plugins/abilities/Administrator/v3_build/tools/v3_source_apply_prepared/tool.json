@@ -1,0 +1,38 @@
+{
+  "name": "v3_source_apply_prepared",
+  "description": "Apply the exact reviewed diff returned by v3_source_prepare using only its prepared_id; do not include patch text",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "task_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{8,80}$"
+      },
+      "request_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{8,80}$"
+      },
+      "prepared_id": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{32}$"
+      },
+      "expected_inputs_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    },
+    "required": [
+      "task_id",
+      "request_id",
+      "prepared_id",
+      "expected_inputs_sha256"
+    ],
+    "additionalProperties": false
+  }
+}

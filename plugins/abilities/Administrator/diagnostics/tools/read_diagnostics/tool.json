@@ -1,0 +1,21 @@
+{
+  "name": "read_diagnostics",
+  "description": "Read bounded content-free diagnostics for the current session run",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "run_id": {
+        "type": "string",
+        "description": "Omit, leave empty, or use current for the active run; otherwise provide a known canonical run UUID from this session"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

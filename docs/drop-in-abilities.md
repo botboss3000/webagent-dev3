@@ -9,16 +9,25 @@ The first general-loader migration requires an engine release.
 
 A compiled ability declares each tool in its own folder,
 `plugins/abilities/<Group>/<ability_id>/tools/<tool>/`, and leaves `tools` out of
-its manifest. `tool.json` holds `name` (the folder name), `description`, JSON-schema
-`parameters`, `effect` (`read` or `write`) and `default_access` per role
-(`operator`, `member`, `visitor`: `auto`, `ask` or `deny`); `tool.skill.md` is its
-optional guidance. The handler stays compiled Rust and lists the tool in its adapter's
+its manifest; a packaged ability whose package contract checks the manifest list keeps
+it, naming exactly its tool folders. `tool.json` holds `name` (the folder name),
+`description`, JSON-schema `parameters`, optional `strict`, `effect` (`read` or
+`write`) and `default_access` per role (`operator`, `member`, `visitor`: `auto`,
+`ask` or `deny`); `tool.skill.md` is its optional guidance. The handler stays compiled Rust and lists the tool in its adapter's
 `TOOLS`. At startup every listed handler must have a valid folder and every folder a
 handler; a missing or invalid folder disables only that tool. A capability level with
 no saved permission for a tool uses `default_access` for its role, then the next role
 down, then deny. Built-in Base tools are compiled in (`crates/modules/abilities/src/base.rs`)
 with coded defaults: Operators get them all, Members and Visitors may ask for read tools.
 Abilities not yet moved keep the manifest `tools` list and flat `tools/<tool>.skill.md`.
+
+Administrator native tools (`webagent_administration::tools::TOOLS`) use the same
+folders under `plugins/abilities/Administrator/`. Tools with no catalog ability (the
+in-app broker, terminal and tunnel tools) live in the retired `v3_build`,
+`v3_workspace`, `terminal_control` and `remote_tunnel` folders, which the catalog does
+not list. Each catalog snapshot reads these schemas from its own folders, so a published
+description edit needs no Rust build; release validation refuses a missing or invalid
+Administrator folder.
 
 ## Isolated packages
 

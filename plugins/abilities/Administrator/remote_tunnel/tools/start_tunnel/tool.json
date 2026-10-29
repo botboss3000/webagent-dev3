@@ -1,0 +1,29 @@
+{
+  "name": "start_tunnel",
+  "description": "Create a bounded authenticated preview lease for this session isolated app",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "port": {
+        "type": "integer",
+        "minimum": 1024,
+        "maximum": 65535
+      },
+      "duration_seconds": {
+        "type": "integer",
+        "minimum": 30,
+        "maximum": 1800
+      }
+    },
+    "required": [
+      "port"
+    ],
+    "additionalProperties": false
+  }
+}

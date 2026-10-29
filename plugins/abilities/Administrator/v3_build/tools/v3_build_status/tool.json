@@ -1,0 +1,16 @@
+{
+  "name": "v3_build_status",
+  "description": "Read development build broker status; installation administrator only",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

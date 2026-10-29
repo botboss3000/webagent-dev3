@@ -1,0 +1,27 @@
+{
+  "name": "v3_build_image",
+  "description": "Submit an immutable development image build; never deploy implicitly",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "request_id": {
+        "type": "string"
+      },
+      "expected_inputs_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    },
+    "required": [
+      "request_id",
+      "expected_inputs_sha256"
+    ],
+    "additionalProperties": false
+  }
+}

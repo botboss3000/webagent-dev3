@@ -1,0 +1,50 @@
+{
+  "name": "code_index_trace",
+  "description": "code index trace in this session isolated source snapshot; freshness is explicit",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "root": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200
+      },
+      "offset": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 5000
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "asset",
+          "data_attribute",
+          "endpoint",
+          "event",
+          "import",
+          "selector",
+          "symbol"
+        ]
+      },
+      "value": {
+        "type": "string",
+        "maxLength": 512
+      }
+    },
+    "required": [
+      "kind",
+      "value"
+    ],
+    "additionalProperties": false
+  }
+}

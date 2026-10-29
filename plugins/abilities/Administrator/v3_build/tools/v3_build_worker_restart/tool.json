@@ -1,0 +1,23 @@
+{
+  "name": "v3_build_worker_restart",
+  "description": "Restart only the idle dedicated V3 development build worker; installation administrator only",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "request_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,80}$"
+      }
+    },
+    "required": [
+      "request_id"
+    ],
+    "additionalProperties": false
+  }
+}

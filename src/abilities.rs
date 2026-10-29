@@ -5,7 +5,6 @@ pub(crate) type Catalog=webagent_abilities::Catalog<NativeHost>;
 pub(crate) use webagent_abilities::{is_discovery,public_context,search_words,near_word,AbilityContext,AbilityInclusion,SkillInclusion};
 impl webagent_abilities::Host for NativeHost {
  fn selected_source()->Result<Option<PathBuf>> {webagent_configuration::prompts::default_source(None)}
- fn native_schema_snapshot_at(source:Option<&std::path::Path>)->Result<Vec<Value>> {crate::live_assets::native_schema_snapshot_at(source)}
  fn native_schemas_for_catalog(root:&std::path::Path,publication:bool)->Result<Vec<Value>> {crate::live_assets::native_schemas_for_catalog(root,publication)}
  fn native_schemas_without_administrator()->Vec<Value> {crate::tools::native_schemas_without_administrator()}
  fn native_schemas()->Vec<Value> {crate::tools::native_schemas()}

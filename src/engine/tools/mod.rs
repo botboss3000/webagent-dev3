@@ -127,23 +127,6 @@ pub fn is_read(name: &str) -> bool {
                 | "state_inspect"
                 | "prompt_slot_read"
                 | "set_execution_mode"
-                | "code_index_lookup"
-                | "code_index_coverage"
-                | "code_index_trace"
-                | "code_index_progress"
-                | "terminal_read"
-                | "terminal_wait"
-                | "terminal_list"
-                | "v3_workspace_status"
-                | "v3_workspace_receipt"
-                | "v3_build_status"
-                | "v3_source_list"
-                | "v3_source_read"
-                | "v3_worker_job"
-                | "read_diagnostics"
-                | "dev_browser_url"
-                | "get_tunnel_url"
-                | "repository_access"
         )
 }
 
@@ -173,7 +156,8 @@ pub(crate) fn folder_schemas(names: &[&str]) -> Vec<Value> {
 /// definition has a compiled handler. Each problem disables only its own tool.
 pub(crate) fn definition_problems() -> Vec<String> {
     use webagent_abilities::tool_definitions as definitions;
-    let handlers: std::collections::BTreeSet<_> = folder_handlers().collect();
+    let handlers: std::collections::BTreeSet<_> =
+        folder_handlers().chain(webagent_administration::tools::TOOLS).collect();
     let mut problems = definitions::problems().to_vec();
     problems.extend(handlers.iter().filter(|name| definitions::get(name).is_none())
         .map(|name| format!("Compiled tool {name} has no tool folder definition; it is disabled")));

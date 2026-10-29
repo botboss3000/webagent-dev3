@@ -1,0 +1,38 @@
+{
+  "name": "v3_worker_submit",
+  "description": "Submit a fixed build or approved development deployment; installation administrator only",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "request_id": {
+        "type": "string"
+      },
+      "operation": {
+        "type": "string",
+        "enum": [
+          "build",
+          "deploy"
+        ]
+      },
+      "expected_inputs_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "job_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "request_id",
+      "operation",
+      "expected_inputs_sha256"
+    ],
+    "additionalProperties": false
+  }
+}

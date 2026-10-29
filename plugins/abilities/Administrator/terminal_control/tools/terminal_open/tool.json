@@ -1,0 +1,32 @@
+{
+  "name": "terminal_open",
+  "description": "Open a persistent isolated workspace PTY; policy-gated",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string"
+      },
+      "cols": {
+        "type": "integer",
+        "minimum": 40,
+        "maximum": 240
+      },
+      "rows": {
+        "type": "integer",
+        "minimum": 10,
+        "maximum": 100
+      }
+    },
+    "required": [
+      "command"
+    ],
+    "additionalProperties": false
+  }
+}

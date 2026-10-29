@@ -1,0 +1,64 @@
+{
+  "name": "v3_build_work",
+  "description": "Register V3 source work, inspect coordination, or finish with an exact source digest to trigger one validated automatic build and deployment",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "status",
+          "begin",
+          "finish",
+          "abandon",
+          "preflight",
+          "decide"
+        ]
+      },
+      "task_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{8,80}$"
+      },
+      "summary": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "isolated"
+        ]
+      },
+      "expected_inputs_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "sync_decision": {
+        "type": "string",
+        "enum": [
+          "synchronize",
+          "proceed",
+          "cancel"
+        ]
+      },
+      "expected_sync_digest": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "offset": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  }
+}

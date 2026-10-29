@@ -1,0 +1,20 @@
+{
+  "name": "dev_browser_url",
+  "description": "Get an authenticated development route for the current session",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

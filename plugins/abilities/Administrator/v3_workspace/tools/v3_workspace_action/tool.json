@@ -1,0 +1,62 @@
+{
+  "name": "v3_workspace_action",
+  "description": "Perform a fixed source operation with a durable request receipt; policy-gated",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "request_id": {
+        "type": "string"
+      },
+      "action": {
+        "type": "string",
+        "enum": [
+          "seed",
+          "review",
+          "read",
+          "patch",
+          "check",
+          "test",
+          "propose"
+        ]
+      },
+      "path": {
+        "type": "string"
+      },
+      "offset": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 2000
+      },
+      "patch": {
+        "type": "string"
+      },
+      "expected_review_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 600
+      },
+      "summary": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "request_id",
+      "action"
+    ],
+    "additionalProperties": false
+  }
+}

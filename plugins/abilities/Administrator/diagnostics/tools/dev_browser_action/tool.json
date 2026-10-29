@@ -1,0 +1,39 @@
+{
+  "name": "dev_browser_action",
+  "description": "Operate the current caller development browser; input requires a fresh observation and approval",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "navigate",
+          "read",
+          "click",
+          "type",
+          "screenshot",
+          "close"
+        ]
+      },
+      "path": {
+        "type": "string"
+      },
+      "selector": {
+        "type": "string"
+      },
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  }
+}

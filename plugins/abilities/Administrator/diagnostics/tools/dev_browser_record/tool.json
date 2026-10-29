@@ -1,0 +1,27 @@
+{
+  "name": "dev_browser_record",
+  "description": "Record bounded screenshots of the development browser",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "start",
+          "stop",
+          "status"
+        ]
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  }
+}

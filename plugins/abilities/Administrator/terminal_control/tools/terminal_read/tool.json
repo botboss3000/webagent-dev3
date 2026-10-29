@@ -1,0 +1,26 @@
+{
+  "name": "terminal_read",
+  "description": "Read bounded PTY output and receive a fresh observation sequence",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "terminal_id": {
+        "type": "string"
+      },
+      "cursor": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "required": [
+      "terminal_id"
+    ],
+    "additionalProperties": false
+  }
+}

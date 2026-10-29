@@ -1,0 +1,24 @@
+[package]
+name = "webagent-administration"
+version = "0.1.0"
+edition = "2021"
+
+# Administration rules shared by its host crate and the root: the Administrator native
+# tool set and its tool-folder schemas, argument projections for the protected build
+# broker, and checks on broker notices and source reviews. Host IO lives in `host/`.
+[dependencies]
+anyhow = "1"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+url = "2"
+uuid = "1"
+webagent-abilities = { path = "../abilities" }
+webagent-configuration = { path = "../configuration" }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

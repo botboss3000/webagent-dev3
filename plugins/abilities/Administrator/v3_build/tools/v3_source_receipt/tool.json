@@ -1,0 +1,28 @@
+{
+  "name": "v3_source_receipt",
+  "description": "Read a durable task workspace patch receipt",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "task_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{8,80}$"
+      },
+      "request_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{8,80}$"
+      }
+    },
+    "required": [
+      "task_id",
+      "request_id"
+    ],
+    "additionalProperties": false
+  }
+}

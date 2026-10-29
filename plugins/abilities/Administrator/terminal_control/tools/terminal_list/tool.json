@@ -1,0 +1,16 @@
+{
+  "name": "terminal_list",
+  "description": "List only this session persistent PTYs",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

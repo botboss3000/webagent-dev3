@@ -1,0 +1,37 @@
+{
+  "name": "v3_cargo_task",
+  "description": "Run fixed locked Cargo verification on a reviewed isolated snapshot; policy-gated",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "task": {
+        "type": "string",
+        "enum": [
+          "check",
+          "test",
+          "release"
+        ]
+      },
+      "expected_review_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 600
+      }
+    },
+    "required": [
+      "task",
+      "expected_review_sha256"
+    ],
+    "additionalProperties": false
+  }
+}

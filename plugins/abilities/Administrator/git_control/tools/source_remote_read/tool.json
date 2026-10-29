@@ -1,0 +1,55 @@
+{
+  "name": "source_remote_read",
+  "description": "Read untrusted source directly from GitHub at an exact commit. No checkout or server-side build.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "site_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      },
+      "connection_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "operation": {
+        "type": "string",
+        "enum": [
+          "list_files",
+          "read_file",
+          "log",
+          "diff"
+        ]
+      },
+      "commit_sha": {
+        "type": "string",
+        "minLength": 40,
+        "maxLength": 40
+      },
+      "path": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "base_sha": {
+        "type": "string",
+        "minLength": 40,
+        "maxLength": 40
+      }
+    },
+    "required": [
+      "site_id",
+      "connection_revision",
+      "operation",
+      "commit_sha"
+    ],
+    "additionalProperties": false
+  }
+}

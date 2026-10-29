@@ -1,0 +1,40 @@
+{
+  "name": "v3_source_apply",
+  "description": "Apply a reviewed standard Git unified diff to an open isolated V3 task; use v3_source_apply_prepared for a prepared_id",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "task_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{8,80}$"
+      },
+      "request_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{8,80}$"
+      },
+      "patch": {
+        "type": "string",
+        "description": "Full Git unified diff, starting with diff --git a/<V3-relative-path> b/<V3-relative-path>. Include ---/+++ and @@ line-count hunks; new files also need new file mode 100644 and --- /dev/null. Do not use *** Begin Patch, *** Add File, or *** End Patch markers.",
+        "pattern": "^diff --git a/",
+        "maxLength": 1048576
+      },
+      "expected_inputs_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    },
+    "required": [
+      "task_id",
+      "request_id",
+      "patch",
+      "expected_inputs_sha256"
+    ],
+    "additionalProperties": false
+  }
+}

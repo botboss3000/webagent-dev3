@@ -1,0 +1,42 @@
+{
+  "name": "code_index_progress",
+  "description": "code index progress in this session isolated source snapshot; freshness is explicit",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "root": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200
+      },
+      "offset": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 5000
+      },
+      "batch_id": {
+        "type": "string",
+        "maxLength": 80
+      },
+      "action": {
+        "type": "string",
+        "enum": [
+          "get",
+          "list"
+        ]
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

@@ -8,7 +8,6 @@ thread_local! {static SOURCE:RefCell<Option<PathBuf>>=const {RefCell::new(None)}
 #[derive(Clone)]struct Fixture;
 impl Host for Fixture {
  fn selected_source()->Result<Option<PathBuf>> {Ok(SOURCE.with(|v|v.borrow().clone()))}
- fn native_schema_snapshot_at(_:Option<&Path>)->Result<Vec<Value>> {Ok(vec![])}
  fn native_schemas_for_catalog(_: &Path,_:bool)->Result<Vec<Value>> {Ok(vec![])}
  fn native_schemas_without_administrator()->Vec<Value> {vec![]}
  fn native_schemas()->Vec<Value> {vec![json!({"name":"reserved_native"})]}

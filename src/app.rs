@@ -820,7 +820,12 @@ async fn run_process() -> Result<()> {
         // Tool schemas come from the candidate's own tool folders.
         webagent_abilities::tool_definitions::use_root(path.join("plugins/abilities"));
         let catalog = abilities::Catalog::load_snapshot(&path.join("plugins/abilities"))?;
-        let _ = crate::live_assets::native_schema_snapshot_at(Some(&path))?;
+        let administrator = webagent_administration::schemas::load(&path.join("plugins/abilities"))?;
+        anyhow::ensure!(
+            administrator.problems.is_empty(),
+            "Invalid Administrator tool folders: {}",
+            administrator.problems.join("; ")
+        );
         let engine = crate::engine_components::load(&path, "candidate")?;
         let prompts: Value =
             serde_json::from_slice(&crate::live_assets::prompt_defaults_at(Some(&path))?)?;

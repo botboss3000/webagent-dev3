@@ -1,0 +1,45 @@
+{
+  "name": "commit_and_push",
+  "description": "Commit explicit reviewed paths and push without force; reconcile any uncertain result",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "repo": {
+        "type": "string"
+      },
+      "paths": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 100
+      },
+      "message": {
+        "type": "string"
+      },
+      "expected_head": {
+        "type": "string"
+      },
+      "expected_review_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "remote": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "paths",
+      "message",
+      "expected_head",
+      "expected_review_sha256"
+    ],
+    "additionalProperties": false
+  }
+}

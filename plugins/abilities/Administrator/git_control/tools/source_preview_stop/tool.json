@@ -1,0 +1,35 @@
+{
+  "name": "source_preview_stop",
+  "description": "Cancel/reconcile pending build, delete only the recorded preview and verify its URLs. cleanup_pending is not disabled.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "site_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      },
+      "connection_revision": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "request_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      }
+    },
+    "required": [
+      "site_id",
+      "connection_revision",
+      "request_id"
+    ],
+    "additionalProperties": false
+  }
+}

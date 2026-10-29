@@ -31,6 +31,9 @@ pub enum Effect {
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,
+    /// Kept only when a schema opts out of strict argument validation.
+    #[serde(default)]
+    pub strict: Option<bool>,
     pub parameters: Value,
     pub effect: Effect,
     /// Access when an agent's capability level saves no explicit tool permission.
@@ -83,7 +86,12 @@ impl ToolDefinition {
 
     /// The function schema the model sees.
     pub fn schema(&self) -> Value {
-        json!({"type":"function","name":self.name,"description":self.description,"parameters":self.parameters})
+        let mut schema = json!({"type":"function","name":self.name,
+            "description":self.description,"parameters":self.parameters});
+        if let Some(strict) = self.strict {
+            schema["strict"] = json!(strict);
+        }
+        schema
     }
 
     /// Default access for the first of `rungs` (a level, then the levels below it) this

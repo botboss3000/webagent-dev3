@@ -1,0 +1,37 @@
+{
+  "name": "terminal_send",
+  "description": "Send text or a named key after a fresh observation; policy-gated",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "terminal_id": {
+        "type": "string"
+      },
+      "expected_sequence": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "text": {
+        "type": "string"
+      },
+      "keys": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 16
+      }
+    },
+    "required": [
+      "terminal_id",
+      "expected_sequence"
+    ],
+    "additionalProperties": false
+  }
+}

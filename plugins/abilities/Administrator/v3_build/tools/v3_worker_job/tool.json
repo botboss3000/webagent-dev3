@@ -1,0 +1,22 @@
+{
+  "name": "v3_worker_job",
+  "description": "Poll a caller-owned durable build job; never rerun a mutation",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "job_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "job_id"
+    ],
+    "additionalProperties": false
+  }
+}

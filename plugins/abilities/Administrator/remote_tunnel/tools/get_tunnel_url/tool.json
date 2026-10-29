@@ -1,0 +1,16 @@
+{
+  "name": "get_tunnel_url",
+  "description": "Read this session active preview lease",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}
