@@ -8,6 +8,10 @@ For UI presentation/layout questions and every UI change, read `plugins/abilitie
 
 For v3 Rust work, load the selectable rust_quality skill in this ability for ownership, async design, correctness, and measured optimization guidance. This standard skill remains authoritative for task editing and release workflow.
 
+## Source roots
+
+File tools and approved shell and Python commands start in /live-checkout, the independent V3 source root. Use Codebase Admin file tools without task_id for explicit direct/live file edits and runtime configuration. For application source changes intended for a build or release, supply one stable task_id to file tools; they automatically create an isolated broker task. Inspect that task before editing, use its latest input digest for writes, and use build_work review/check/preflight. Only explicit authorized build_work finish deploys; task edits alone never deploy. V2 source is outside this container mount. Tool reach is determined by container OS permissions; an empty session workspace does not mean source is unavailable.
+
 ## Early Rust feature checks
 
 Before a full v3 release build, run default and live compile checks when changing shared host code, feature-gated paths, engine integration, service wrappers, or implementation-crate dependencies. These checks catch feature-boundary errors before optimized release compilation. Guidance-only and asset-only changes do not require Rust checks unless their actual compile dependencies change.

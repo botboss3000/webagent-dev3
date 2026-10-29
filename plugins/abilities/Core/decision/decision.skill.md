@@ -1,5 +1,7 @@
 # Decision
 
+When ranking many candidate tools, files or abilities, use these tools instead of loading full catalogs or listings into context: route directory triage to score_directory_with_jev instead of listing directory contents, and route tool discovery to search_tools or decide_with_jev at the concrete selection moment.
+
 Use decide_with_jev for any bounded classification, comparison, routing, or
 relevance judgment from evidence already in hand. The agent defines the
 purpose, options, rubric, and number of questions at call time; the tool has

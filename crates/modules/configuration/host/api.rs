@@ -108,7 +108,7 @@ pub(crate) fn validate_prompts(value: &Value) -> Result<()> {
         .as_str()
         .context("Required duplicate-result placeholder missing")?;
     webagent_context_contracts::tool_results::validate_template(placeholder)?;
-    for key in ["base_instructions", "closing_reporting", "jev_guidance"] {
+    for key in ["base_instructions", "closing_reporting"] {
         if value[key]
             .as_str()
             .is_none_or(|s| s.trim().is_empty() || s.len() > 65536)

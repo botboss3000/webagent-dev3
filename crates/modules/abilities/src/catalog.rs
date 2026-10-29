@@ -511,7 +511,8 @@ impl<H: Host> Catalog<H> {
                     if !manifest.tools.is_empty() {
                         bail!("Ability lists tools in both its manifest and tool folders: {id}");
                     }
-                    manifest_digest = crate::tool_definitions::folded_digest(&manifest_digest, tools);
+                    manifest_digest =
+                        crate::tool_definitions::folded_digest(&manifest_digest, tools);
                     for tool in tools {
                         if let Err(error) = &tool.definition {
                             eprintln!("Tool {} in ability {id} is disabled: {error:#}", tool.name);
@@ -603,7 +604,9 @@ impl<H: Host> Catalog<H> {
                     let skill = if folder_tools.is_some() {
                         folder_skills.remove(tool)
                     } else {
-                        optional_skill(&ability_path.join("tools").join(format!("{tool}.skill.md")))?
+                        optional_skill(
+                            &ability_path.join("tools").join(format!("{tool}.skill.md")),
+                        )?
                     };
                     if let Some(skill) = skill {
                         tool_skills.insert(tool.clone(), skill);
@@ -700,7 +703,9 @@ impl<H: Host> Catalog<H> {
         let (group_name, group_order) = abilities
             .iter()
             .find(|ability| ability.group == "Core")
-            .map_or(("Core".to_string(), 1), |core| (core.group_name.clone(), core.group_order));
+            .map_or(("Core".to_string(), 1), |core| {
+                (core.group_name.clone(), core.group_order)
+            });
         abilities.push(Ability {
             id: crate::base::ID.into(),
             path: PathBuf::new(),
@@ -723,7 +728,10 @@ impl<H: Host> Catalog<H> {
             kind: EntryKind::VirtualCore,
             readiness: Readiness::Ready,
             config: json!({}),
-            tools: crate::base::TOOLS.iter().map(|tool| tool.to_string()).collect(),
+            tools: crate::base::TOOLS
+                .iter()
+                .map(|tool| tool.to_string())
+                .collect(),
             skill: Some(crate::base::SKILL.into()),
             tool_skills: crate::base::TOOL_SKILLS
                 .iter()
@@ -1545,6 +1553,22 @@ impl<H: Host> Catalog<H> {
             .collect()
     }
 
+    /// True when an ability-provided tool is switched off for this agent: the tool
+    /// itself, or every executable ability providing it. Tools no ability provides
+    /// are never "off".
+    pub fn tool_off(&self, name: &str, visibility: &Value) -> bool {
+        let mut providers = self.abilities.iter().filter(|ability| {
+            Self::executable(ability) && ability.tools.iter().any(|tool| tool == name)
+        });
+        let Some(first) = providers.next() else {
+            return false;
+        };
+        Self::tool_mode(visibility, name) == "off"
+            || std::iter::once(first)
+                .chain(providers)
+                .all(|ability| Self::is_off(visibility, &ability.id))
+    }
+
     /// Separate installed support from the effective agent/session visibility.
     /// The two gates do not include operator, tier, or caller permissions.
     pub fn tool_gate(
@@ -2181,11 +2205,12 @@ impl<H: Host> Catalog<H> {
                 else {
                     return json!({"status":"denied","output":"Ability unavailable"});
                 };
+                // Off abilities answer like unknown ones so a refusal never confirms they exist.
+                if Self::is_off(visibility, id) {
+                    return json!({"status":"denied","output":"Ability unavailable"});
+                }
                 if !Self::executable(entry) {
                     return json!({"status":"denied","output":"Ability pending or non-executable"});
-                }
-                if Self::is_off(visibility, id) {
-                    return json!({"status":"denied","output":"Ability disabled for this agent"});
                 }
                 if Self::suppressed(state, id) {
                     return json!({"status":"denied","output":"Ability suppressed in this session"});
@@ -3087,6 +3112,11 @@ pub mod registered_tests {
                 catalog.tool_gate("file_read", &disabled_tool, &state, &Value::Null),
                 (true, false)
             );
+            assert!(catalog.tool_off("file_read", &hidden));
+            assert!(catalog.tool_off("file_read", &disabled_tool));
+            assert!(!catalog.tool_off("file_read", &visible));
+            assert!(!catalog.tool_off("file_read", &json!({})));
+            assert!(!catalog.tool_off("missing", &hidden));
         }
 
         pub fn catalog_version_changes_with_skill<H: crate::TestHost>() {

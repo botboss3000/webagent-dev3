@@ -209,7 +209,10 @@ impl<
         if run["agent_id"].as_str().unwrap_or("shared_default") != agent {
             return Err(anyhow!("Run agent changed"));
         }
-        if !self.live_tool_allowed(sid, &agent, name, &run, &pending).await? {
+        if !self
+            .live_tool_allowed(sid, &agent, name, &run, &pending)
+            .await?
+        {
             return Err(anyhow!(
                 "Core tool access changed; obtain fresh authorization"
             ));
@@ -299,7 +302,7 @@ impl<
         } else {
             access::Permission::Auto
         };
-        access.tool_decision_for_abilities(
+        let decision = access.tool_decision_for_abilities(
             name,
             &ability_ids,
             installation.meet(caution),
@@ -307,7 +310,18 @@ impl<
             visible,
             read_only && !H::messaging_owns(name),
             A::is_read(name),
-        )
+        );
+        // A tool switched off for this agent is denied as if it did not exist, so no
+        // denial reason confirms a hidden capability. Only the reason changes.
+        if decision.permission == access::Permission::Deny
+            && self.abilities.tool_off(name, visibility)
+        {
+            return access::ToolDecision {
+                permission: access::Permission::Deny,
+                reason: access::Reason::Unavailable,
+            };
+        }
+        decision
     }
     pub fn policy_default(&self) -> Value {
         default_policy::<A, X>()

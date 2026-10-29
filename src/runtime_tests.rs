@@ -10514,7 +10514,6 @@ async fn live_context_default_stack_journey() {
     for (name, text) in [
         ("base_instructions", "LIVE_MAIN_FIRST"),
         ("closing_reporting", "LIVE_CLOSING"),
-        ("jev_guidance", "LIVE_JEV_SOURCE_FIRST"),
     ] {
         std::fs::write(prompt.join(format!("{name}.md")), text).unwrap();
     }
@@ -10550,7 +10549,6 @@ async fn live_context_default_stack_journey() {
                     "arguments":"{\"ability_id\":\"web_access\",\"kind\":\"selectable\",\"skill_id\":\"live_refresh\"}"}]),
                 2=>{
                     std::fs::write(prompt.join("base_instructions.md"),"LIVE_MAIN_CURRENT").unwrap();
-                    std::fs::write(prompt.join("jev_guidance.md"),"LIVE_JEV_SOURCE_CURRENT").unwrap();
                     std::fs::write(&skill,live_context_fixture_skill("LIVE_SKILL_CURRENT")).unwrap();
                     Box::pin(store.upsert_prompt_slot("live_refresh","LIVE_SLOT_CURRENT",None,None,None,slot_revision)).await.unwrap();
                     json!([{"type":"function_call","call_id":"refresh-native-round","name":"get_time","arguments":"{}"}])
@@ -10619,7 +10617,7 @@ async fn live_context_default_stack_journey() {
             json!(["type", "tool_name"])
         );
         let instructions = request["instructions"].as_str().unwrap();
-        assert!(instructions.contains("LIVE_CLOSING") && instructions.contains("LIVE_JEV_SOURCE_"));
+        assert!(instructions.contains("LIVE_CLOSING"));
     }
     assert!(!requests[0]["input"]
         .to_string()
@@ -10641,8 +10639,7 @@ async fn live_context_default_stack_journey() {
         durable["loaded_skills"],
         json!([{"ability_id":"web_access","kind":"selectable","skill_id":"live_refresh"}])
     );
-    let selector =
-        json!({"type":"skill","ability_id":"web_access","kind":"selectable","skill_id":"live_refresh"});
+    let selector = json!({"type":"skill","ability_id":"web_access","kind":"selectable","skill_id":"live_refresh"});
     let ledger = app
         .store
         .context_assets(&sid, "shared_default", app.store.current_user_id())
