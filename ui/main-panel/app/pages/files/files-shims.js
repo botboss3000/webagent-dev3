@@ -1,7 +1,7 @@
 'use strict';
 
 let menu = null;
-let outside = null;
+let cleanup = null;
 
 export function authHeaders() {
   const token = window.__v3FilesCsrf || '';
@@ -21,16 +21,10 @@ export function _refreshLucideIcons() {
   window.lucide?.createIcons?.();
 }
 export function closeFloatingMenu() {
-  if (outside) {
-    document.removeEventListener('pointerdown', outside, true);
-    document.removeEventListener('keydown', onMenuKey, true);
-    outside = null;
-  }
+  cleanup?.();
+  cleanup = null;
   menu?.remove();
   menu = null;
-}
-function onMenuKey(event) {
-  if (event.key === 'Escape') closeFloatingMenu();
 }
 export function openFloatingMenu(items, top, left) {
   closeFloatingMenu();
@@ -102,16 +96,60 @@ export function openFloatingMenu(items, top, left) {
     host.append(button);
   }
   document.body.append(host);
-  const rect = host.getBoundingClientRect();
-  host.style.top = Math.max(8, Math.min(window.innerHeight - rect.height - 8, top)) + 'px';
-  host.style.left = Math.max(8, Math.min(window.innerWidth - rect.width - 8, left)) + 'px';
+  menu = host;
+  // Cap the menu to the viewport so it scrolls inside itself instead of spilling
+  // past an edge; re-run on resize so a resized window keeps it whole.
+  const position = () => {
+    host.style.maxWidth = (window.innerWidth - 16) + 'px';
+    host.style.maxHeight = (window.innerHeight - 16) + 'px';
+    host.style.overflowY = 'auto';
+    const rect = host.getBoundingClientRect();
+    host.style.top = Math.max(8, Math.min(window.innerHeight - rect.height - 8, top)) + 'px';
+    host.style.left = Math.max(8, Math.min(window.innerWidth - rect.width - 8, left)) + 'px';
+  };
+  position();
   _refreshLucideIcons();
-  outside = event => { if (!host.contains(event.target)) closeFloatingMenu(); };
+  // An outside press only closes the menu: its mousedown, touchend and click never
+  // reach the page, so engaging another control takes a second press. The next
+  // pointerdown ends the swallow even if no click followed (a drag).
+  const outside = event => {
+    if (host.contains(event.target)) return;
+    closeFloatingMenu();
+    if (event.type !== 'pointerdown') return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const swallowed = ['mousedown', 'mouseup', 'touchend', 'click'];
+    const release = () => {
+      for (const type of swallowed) document.removeEventListener(type, eat, true);
+      document.removeEventListener('pointerdown', release, true);
+    };
+    const eat = e => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (e.type === 'click') release();
+    };
+    for (const type of swallowed) document.addEventListener(type, eat, true);
+    document.addEventListener('pointerdown', release, true);
+  };
+  // Scrolling anything but the menu closes it instead of leaving it behind; a
+  // focused field inside it is exempt because a mobile keyboard scrolls the page.
+  const onScroll = event => {
+    const active = document.activeElement;
+    if (host.contains(event.target) || (active?.tagName === 'INPUT' && host.contains(active))) return;
+    closeFloatingMenu();
+  };
+  cleanup = () => {
+    document.removeEventListener('pointerdown', outside, true);
+    document.removeEventListener('scroll', onScroll, true);
+    document.removeEventListener('keydown', onMenuKey, true);
+    window.removeEventListener('resize', position);
+  };
   queueMicrotask(() => {
-    if (outside) {
-      document.addEventListener('pointerdown', outside, true);
-      document.addEventListener('keydown', onMenuKey, true);
-    }
+    if (menu !== host) return;
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('scroll', onScroll, true);
+    document.addEventListener('keydown', onMenuKey, true);
+    window.addEventListener('resize', position);
   });
 }
 export function applyRubberBand() {}
