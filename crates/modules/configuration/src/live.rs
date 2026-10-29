@@ -4,7 +4,10 @@
 //! before promotion still finds the file (tests and local runs, which have no checkout,
 //! use this workspace instead). A file that stops validating keeps serving its last
 //! good version. One `stat` per use tells whether a file changed: unchanged files are
-//! not read again, and `parsed` values are not parsed again.
+//! not read again, and `parsed` values are not parsed again. Folder listings are
+//! kept the same way: a folder's own version changes whenever an entry is added,
+//! removed or renamed. A version modified within the last two seconds is never reused,
+//! since a filesystem with coarse timestamps can give two quick changes the same one.
 use anyhow::{anyhow, bail, Result};
 use std::{
     any::{Any, TypeId},
@@ -13,6 +16,7 @@ use std::{
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{Mutex, MutexGuard, OnceLock},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 /// Mounted checkout in the API and loop containers.
@@ -49,6 +53,10 @@ struct Parsed {
 /// Keyed by roots and file, value type and parser.
 type ParsedKey = (String, TypeId, usize);
 static PARSED: Mutex<BTreeMap<ParsedKey, Parsed>> = Mutex::new(BTreeMap::new());
+
+/// `(name, is_folder)` entries last listed for a folder, with that folder's version.
+type Listing = (Stamp, Vec<(String, bool)>);
+static LISTED: Mutex<BTreeMap<PathBuf, Listing>> = Mutex::new(BTreeMap::new());
 
 /// Replaces a live file if it still holds `expected`; installed once by the app process.
 type Writer = dyn Fn(&str, &[u8], &[u8]) -> Result<()> + Send + Sync;
@@ -122,13 +130,27 @@ fn stamp(path: &Path, limit: u64) -> Result<Option<Stamp>> {
     if !info.is_file() || info.len() > limit {
         bail!("Invalid live file {}", path.display());
     }
-    Ok(Some(Stamp {
+    Ok(Some(version(&info)))
+}
+
+/// Whether `stamp` is old enough to reuse: two changes within one coarse clock tick can
+/// share a version, so a recent one is read again. The modification time is used (not
+/// the change time) so tests can settle fixtures by backdating it.
+fn settled(stamp: &Stamp) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() as i64);
+    stamp.modified.0 < now - 1
+}
+
+fn version(info: &std::fs::Metadata) -> Stamp {
+    Stamp {
         device: info.dev(),
         inode: info.ino(),
         len: info.len(),
         modified: (info.mtime(), info.mtime_nsec()),
         changed: (info.ctime(), info.ctime_nsec()),
-    }))
+    }
 }
 
 /// The version and bytes of `path` (stamped before reading, so an edit racing the read
@@ -179,7 +201,7 @@ pub fn read_from(
             cache(&LAST_GOOD)
                 .as_ref()
                 .and_then(|seen| seen.get(&key))
-                .filter(|seen| seen.path == path && seen.stamp == stamp)
+                .filter(|seen| seen.path == path && seen.stamp == stamp && settled(&stamp))
                 .map(|seen| seen.bytes.clone())
         });
         if let Some(bytes) = unchanged.filter(|bytes| validate(bytes).is_ok()) {
@@ -233,6 +255,9 @@ fn parsed_hit<T: Clone + 'static>(
     let Some((path, stamp)) = current else {
         return Ok(value(good));
     };
+    if !settled(&stamp) {
+        return Ok(None);
+    }
     if let Some(hit) = value(good.filter(|(p, s, _)| p == path && *s == stamp)) {
         return Ok(Some(hit));
     }
@@ -404,33 +429,47 @@ pub fn text(relative: &str, limit: u64) -> Result<String> {
     parsed(relative, limit, utf8)
 }
 
-/// `(name, is_folder)` entries of `relative` from the first of `roots` that has that folder.
+/// `(name, is_folder)` entries of `relative` from the first of `roots` that has that
+/// folder. An unchanged folder is not listed again.
 pub fn entries_from(roots: &[PathBuf], relative: &str) -> Result<Vec<(String, bool)>> {
     checked(relative)?;
     for root in roots {
         let folder = root.join(relative);
-        if folder.is_dir() && !folder.is_symlink() {
-            // A folder this process cannot list yet (permissions not exposed) falls through.
-            let Ok(items) = std::fs::read_dir(folder) else {
-                continue;
-            };
-            let mut names = Vec::new();
-            for item in items {
-                let item = item?;
-                let kind = item.file_type()?;
-                if let Some(name) = item
-                    .file_name()
-                    .to_str()
-                    .filter(|name| !name.starts_with('.'))
-                {
-                    if kind.is_file() || kind.is_dir() {
-                        names.push((name.to_owned(), kind.is_dir()));
-                    }
+        // Missing, unreadable or symlinked folders fall through to the next root.
+        let Ok(info) = std::fs::symlink_metadata(&folder) else {
+            continue;
+        };
+        if !info.is_dir() {
+            continue;
+        }
+        // Stamped before listing, so an entry added during the listing is a change next time.
+        let stamp = version(&info);
+        if let Some((seen, names)) = cache(&LISTED).get(&folder) {
+            if *seen == stamp && settled(&stamp) {
+                return Ok(names.clone());
+            }
+        }
+        // A folder this process cannot list yet (permissions not exposed) falls through.
+        let Ok(items) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        let mut names = Vec::new();
+        for item in items {
+            let item = item?;
+            let kind = item.file_type()?;
+            if let Some(name) = item
+                .file_name()
+                .to_str()
+                .filter(|name| !name.starts_with('.'))
+            {
+                if kind.is_file() || kind.is_dir() {
+                    names.push((name.to_owned(), kind.is_dir()));
                 }
             }
-            names.sort();
-            return Ok(names);
         }
+        names.sort();
+        cache(&LISTED).insert(folder, (stamp, names.clone()));
+        return Ok(names);
     }
     Ok(Vec::new())
 }
@@ -497,33 +536,68 @@ mod tests {
     }
 
     #[test]
+    fn listings_follow_added_removed_and_replaced_entries() {
+        let (live, published) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let roots = [live.path().to_path_buf(), published.path().to_path_buf()];
+        std::fs::create_dir(published.path().join("set")).unwrap();
+        std::fs::write(published.path().join("set/a.json"), "{}").unwrap();
+        let list = || entries_from(&roots, "set").unwrap();
+        assert_eq!(list(), [("a.json".to_owned(), false)]);
+        assert_eq!(list(), [("a.json".to_owned(), false)]);
+        std::fs::write(published.path().join("set/b.json"), "{}").unwrap();
+        assert_eq!(list().len(), 2);
+        std::fs::remove_file(published.path().join("set/b.json")).unwrap();
+        std::fs::create_dir(published.path().join("set/b.json")).unwrap();
+        assert_eq!(list()[1], ("b.json".to_owned(), true));
+        // The checkout's folder wins once it appears.
+        std::fs::create_dir(live.path().join("set")).unwrap();
+        assert!(list().is_empty());
+        std::fs::write(live.path().join("set/c.md"), "c").unwrap();
+        assert_eq!(list(), [("c.md".to_owned(), false)]);
+    }
+
+    /// Write a fixture and backdate it (uniquely) so it counts as settled.
+    fn put(path: impl AsRef<Path>, bytes: &[u8]) {
+        static AGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        std::fs::write(&path, bytes).unwrap();
+        let age = 1000 - AGE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let when = SystemTime::now() - std::time::Duration::from_secs(age);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+    }
+
+    #[test]
     fn parsed_values_are_reused_until_the_file_changes() {
         let (live, published) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let roots = [live.path().to_owned(), published.path().to_owned()];
         let file = live.path().join("a.json");
         let read = || parsed_from(&roots, "a.json", 64, counted);
-        std::fs::write(&file, b"{\"v\":1}").unwrap();
+        put(&file, b"{\"v\":1}");
         let start = parses();
         assert_eq!(read().unwrap(), 1);
         assert_eq!(read().unwrap(), 1);
         assert_eq!(parses() - start, 1, "an unchanged file is parsed once");
         // Same size, written in place straight after a read: still seen as a change.
-        std::fs::write(&file, b"{\"v\":2}").unwrap();
+        put(&file, b"{\"v\":2}");
         assert_eq!(read().unwrap(), 2);
         assert_eq!(parses() - start, 2);
         // A broken edit is parsed once and serves the last good value until fixed.
-        std::fs::write(&file, b"{broken").unwrap();
+        put(&file, b"{broken");
         assert_eq!(read().unwrap(), 2);
         assert_eq!(read().unwrap(), 2);
         assert_eq!(parses() - start, 3, "a broken version is parsed once");
-        std::fs::write(&file, b"{\"v\":3}").unwrap();
+        put(&file, b"{\"v\":3}");
         assert_eq!(read().unwrap(), 3);
         // A missing checkout file uses the release; a broken one with no good value too.
         std::fs::remove_file(&file).unwrap();
-        std::fs::write(published.path().join("a.json"), b"{\"v\":9}").unwrap();
+        put(published.path().join("a.json"), b"{\"v\":9}");
         assert_eq!(read().unwrap(), 9);
-        std::fs::write(live.path().join("b.json"), b"{broken").unwrap();
-        std::fs::write(published.path().join("b.json"), b"{\"v\":5}").unwrap();
+        put(live.path().join("b.json"), b"{broken");
+        put(published.path().join("b.json"), b"{\"v\":5}");
         let before = parses();
         for _ in 0..3 {
             assert_eq!(parsed_from(&roots, "b.json", 64, counted).unwrap(), 5);
