@@ -33,6 +33,23 @@ Automation, a packaged ability, keeps its manifest `tools` list and also defines
 tool in a folder; its `plugin.json` lists every `tools/<tool>/tool.json` as an asset, so
 a definition edit changes the package's runtime identity but not its build key.
 
+## Plugins that call the app (`requests_v1`)
+
+A Rust ability plugin can ask the app to act for it. Its `plugin.json` sets
+`"host_interface": "requests_v1"`, `"protocol": 2`, the tools it serves (a subset of its
+tool folders) and `requests`, the host requests it uses, chosen from the offered set in
+`crates/modules/extensions/src/requests.rs` (fixed user-API routes, the caller's own
+skills, the ability's settings and session watches). Every request runs as the chatting
+user with that user's permissions, after the app re-authorizes the tool call; a request
+the plugin did not declare is refused, and route parameters cannot leave their path
+segment. Agent Management (`plugins/abilities/Core/agent_management`) is the first.
+
+The plugin is one standalone crate with no workspace dependencies (the root workspace
+excludes its folder). Dev releases build it in the broker's plugin lane and run each call
+in its own sandboxed process over JSON lines (`crates/modules/extensions/src/plugin.rs`,
+runner in `crates/modules/extensions/host/plugins.rs`). Stable releases link it into the
+binary through the root Cargo feature `stable-abilities`.
+
 ## Checkout edits
 
 The running app compares `/live-checkout/plugins/abilities` with the published release
@@ -45,6 +62,11 @@ tools stay inactive, and changed code or manifests keep the last build running. 
 change that needs a rebuild is listed in an administrator-only popup
 (`/api/v3/admin/ability-drift`); dismissing it hides that change set until the next login
 or, with "Remind me at next login" unchecked, for good. A new change set shows again.
+The popup's Rebuild button (`POST /api/v3/admin/ability-drift/rebuild`) asks the broker to
+release the live checkout as it is (`v3_build_rebuild_checkout`): a dev rebuild publishes
+changed ability packages without a restart, and a stable release is a full build that links
+the ability plugins (`stable-abilities`) and restarts the app briefly. Only the installation
+administrator may rebuild; the broker commits what it released.
 
 ## Isolated packages
 

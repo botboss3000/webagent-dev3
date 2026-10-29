@@ -428,7 +428,7 @@ let abilityDrift=null;
 function abilityDriftFor(me){
   if(!me?.is_admin){abilityDrift?.stop();abilityDrift=null;return;}
   if(abilityDrift)return;
-  const view=abilityDriftView(document,remind=>abilityDrift?.dismiss(remind),requestTouchVibration);
+  const view=abilityDriftView(document,remind=>abilityDrift?.dismiss(remind),requestTouchVibration,mode=>abilityDrift.rebuild(mode));
   document.getElementById('ability-drift')?.remove();document.body.append(view.element);
   abilityDrift=createAbilityDrift({request:api,render:view.render});abilityDrift.start();
 }

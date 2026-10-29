@@ -16,6 +16,7 @@ hex="0.4"
 sqlx={version="0.8",default-features=false,features=["runtime-tokio","sqlite"]}
 webagent-access={path="../access"}
 webagent-configuration={path="../configuration"}
+webagent-extensions={path="../extensions"}
 webagent-context-contracts={path="../../context-contracts"}
 webagent-capability-contracts={path="../../capability-contracts"}
 tempfile={version="3",optional=true}

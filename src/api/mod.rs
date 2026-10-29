@@ -195,6 +195,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/file-manager", post(file_manager::action))
         .route("/admin/ability-drift", get(ability_drift::read))
         .route("/admin/ability-drift/dismiss", post(ability_drift::dismiss))
+        .route("/admin/ability-drift/rebuild", post(ability_drift::rebuild))
         .route("/admin/builds", get(build_dashboard::list))
         .route("/admin/builds/scheduler", post(build_dashboard::scheduler))
         .route(

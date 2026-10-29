@@ -470,7 +470,7 @@ cache policies are frozen.
 The Automation reducer is a standalone ability crate at
 plugins/abilities/Core/automation rather than an application Cargo binary.
 src/ability_plugins.rs validates its fixed automation_v1 registration and
-immutable artifact identity; src/modules.rs owns lifecycle, scoped reducer
+immutable artifact identity; crates/modules/extensions/host/modules.rs owns lifecycle, scoped reducer
 transport, namespace CAS and health. The loop retains durable event scanning
 and background admissions. Generic background tasks do not depend on Automation.
 

@@ -1,0 +1,22 @@
+[package]
+name = "webagent-extensions"
+version = "0.1.0"
+edition = "2021"
+
+# Generic package and plugin contracts: the host requests an ability plugin may make,
+# their validation, and the JSON-lines driver for a plugin process. Host IO stays in
+# the root and the `host/` crate.
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "io-util", "net", "process", "time", "macros", "rt"] }
+futures-util = "0.3"
+tokio-util = "0.7"
+webagent-configuration = { path = "../configuration" }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["io-util", "macros", "rt"] }
+
+[lints]
+workspace = true

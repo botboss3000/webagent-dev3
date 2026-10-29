@@ -13,7 +13,6 @@ use std::{
     process::Stdio,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-mod idle;
 const IDS: [&str; 2] = ["automation", "outbound_notifications"];
 // A bounded sealed namespace plus a bounded read page may appear in one response.
 const LIMIT: usize = 8 * 1024 * 1024;
@@ -346,23 +345,6 @@ fn manifest(id: &str) -> Result<(PathBuf, Value)> {
 fn health_path(root: &FsPath, id: &str) -> PathBuf {
     root.join("modules").join(format!("health-{id}.json"))
 }
-fn health_current(health: &Value, gen: &str, at: u64) -> bool {
-    health["healthy"] == true
-        && health["generation"] == gen
-        && health["checked_at"]
-            .as_u64()
-            .is_some_and(|checked| checked <= at && at.saturating_sub(checked) <= 15)
-}
-/// Bind native health to current implementation while retaining legacy probe semantics.
-fn health_binding_current(
-    health: &Value,
-    generation: &str,
-    implementation: Option<&str>,
-    at: u64,
-) -> bool {
-    health_current(health, generation, at)
-        && implementation.is_none_or(|value| health["implementation"] == value)
-}
 /// Resolve current code and activation together; health from an older implementation cannot authorize tools.
 pub(crate) fn available(id: &str) -> bool {
     let Ok((path, descriptor)) = manifest(id) else {
@@ -380,7 +362,7 @@ pub(crate) fn available(id: &str) -> bool {
         None
     };
     let root = PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
-    idle::available(
+    webagent_extensions::health::available(
         &health_path(&root, id),
         &gen,
         implementation.as_deref(),
@@ -508,8 +490,8 @@ fn reducer_process(id: &str, executable: &FsPath) -> Result<tokio::process::Comm
     let mut command = tokio::process::Command::new(executable);
     if automation_ability_host(id) {
         let sandbox = crate::engine_sandbox::prepare(executable)?;
-        // Preparation allocates and holds path rules in the parent. The pre-exec
-        // closure only applies the existing host Landlock/seccomp/descriptor fence.
+        // SAFETY: preparation allocates and holds the path rules in the parent; the pre-exec
+        // closure only applies that Landlock/seccomp/descriptor fence between fork and exec.
         unsafe {
             command.pre_exec(move || sandbox.apply());
         }
@@ -1611,7 +1593,7 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
     let latest = app.store.notification_page(i64::MAX, 1).await?["latest_seq"]
         .as_i64()
         .unwrap_or(0);
-    if id == "automation" && idle::empty(&initial, latest, &gen) {
+    if id == "automation" && webagent_extensions::health::idle(&initial, latest, &gen) {
         return Ok(15000);
     }
     // A generation transition deactivates every retained subscription before tick.
@@ -1787,7 +1769,7 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
         .await?;
     }
     Ok(if id == "automation" {
-        idle::delay(
+        webagent_extensions::health::delay(
             &initial,
             &envelope,
             tick["result"]["next_deadline_ms"].as_u64(),
@@ -2106,10 +2088,16 @@ mod tests {
     #[test]
     fn health_withdraws_stale_changed_and_failed_packages() {
         let health = json!({"generation":"current","healthy":true,"checked_at":100});
-        assert!(health_current(&health, "current", 115));
-        assert!(!health_current(&health, "current", 116));
-        assert!(!health_current(&health, "changed", 100));
-        assert!(!health_current(
+        assert!(webagent_extensions::health::current(
+            &health, "current", 115
+        ));
+        assert!(!webagent_extensions::health::current(
+            &health, "current", 116
+        ));
+        assert!(!webagent_extensions::health::current(
+            &health, "changed", 100
+        ));
+        assert!(!webagent_extensions::health::current(
             &json!({"generation":"current","healthy":false,"checked_at":100}),
             "current",
             100
@@ -2595,44 +2583,6 @@ mod automation_ability_host_tests {
             manifest_generation("automation", path, &first).unwrap(),
             manifest_generation("automation", path, &next).unwrap()
         );
-    }
-    /// A fresh receipt cannot carry health across either a code update or activation revocation.
-    #[test]
-    fn native_health_requires_both_current_bindings_and_a_fresh_probe() {
-        let mut health =
-            json!({"healthy":true,"generation":"epoch","implementation":"code-a","checked_at":100});
-        assert!(health_binding_current(
-            &health,
-            "epoch",
-            Some("code-a"),
-            100
-        ));
-        assert!(!health_binding_current(
-            &health,
-            "epoch",
-            Some("code-b"),
-            100
-        ));
-        assert!(!health_binding_current(
-            &health,
-            "next-epoch",
-            Some("code-a"),
-            100
-        ));
-        assert!(!health_binding_current(
-            &health,
-            "epoch",
-            Some("code-a"),
-            116
-        ));
-        health["implementation"] = Value::Null;
-        assert!(!health_binding_current(
-            &health,
-            "epoch",
-            Some("code-a"),
-            100
-        ));
-        assert!(health_binding_current(&health, "epoch", None, 100));
     }
     /// Source presence or retained legacy metadata must not silently reinstall an explicitly removed ability.
     #[test]

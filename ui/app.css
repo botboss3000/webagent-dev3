@@ -296,3 +296,7 @@ body {
 #ability-drift button{-webkit-tap-highlight-color:transparent;border:var(--border-width) solid var(--border);border-radius:var(--r-sm);background:transparent;color:inherit;padding:6px 14px;font:inherit;cursor:pointer}
 #ability-drift button:hover,#ability-drift button:focus-visible{border-color:var(--accent)}
 #ability-drift button:active{border-color:var(--accent);background:rgba(var(--brand-rgb),.12)}
+#ability-drift .ability-drift-confirm{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;margin-top:10px;padding-top:10px;border-top:var(--border-width) solid var(--border)}
+#ability-drift .ability-drift-confirm p{grid-column:1/-1;margin:0}
+#ability-drift .ability-drift-confirm small{opacity:.8}
+#ability-drift .ability-drift-status{margin:10px 0 0}

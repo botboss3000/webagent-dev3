@@ -11,6 +11,8 @@ use webagent_usage as usage;
 mod abilities;
 mod ability_drift;
 mod ability_plugins;
+#[path = "../crates/modules/extensions/host/plugins.rs"]
+mod extension_plugins;
 #[path = "../crates/modules/access/host/policy.rs"]
 mod access_policy;
 #[path = "../crates/modules/access/host/repository.rs"]
@@ -47,6 +49,7 @@ mod live_assets;
 mod live_files;
 #[path = "runtime_config.rs"]
 mod loop_runtime;
+#[path = "../crates/modules/extensions/host/mcp/mod.rs"]
 mod mcp;
 mod model_discovery;
 #[cfg(feature = "live-context")]
@@ -84,6 +87,7 @@ mod administrator_services;
 mod browser_login;
 #[path = "../crates/modules/chat/host/main_chat.rs"]
 mod main_chat;
+#[path = "../crates/modules/extensions/host/modules.rs"]
 mod modules;
 #[path = "api/accounts/registration.rs"]
 mod registration;

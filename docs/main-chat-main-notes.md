@@ -56,7 +56,7 @@ membership alone does not grant access to someone else's private Notes.
 
 Approved committed changes advance a Notes version and transactionally emit
 `main_notes.updated`. Pending proposals do not advance that version. The fixed
-`main-notes-review` subscription bootstraps through `src/modules.rs::tick_package`
+`main-notes-review` subscription bootstraps through `crates/modules/extensions/host/modules.rs::tick_package`
 when enabled and permitted. It persists across restarts without duplicate IDs.
 The Automation reducer consumes changes with a durable cursor and deduplicated
 version occurrence IDs. New evidence or intent still wakes review; Main Chat's

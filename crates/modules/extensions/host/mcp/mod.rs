@@ -1,5 +1,5 @@
 //! The host owns authority and encrypted connections; the live package only transports MCP.
-pub(crate) mod bridge;
+pub(crate) use webagent_extensions::mcp_bridge as bridge;
 mod connections;
 use crate::{json, App, CancellationToken, Result, Value};
 pub(crate) use connections::{configured, inspect, put, read, remove, search};

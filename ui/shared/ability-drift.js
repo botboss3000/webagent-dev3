@@ -5,7 +5,7 @@ const LABELS={added_ability:'New ability',removed_ability:'Removed ability',adde
 const SHOWN=20;
 
 /** Poll the change set and keep `render` showing it until it is dismissed or gone. */
-export function createAbilityDrift({request,render,setIntervalFn=setInterval,clearIntervalFn=clearInterval,intervalMs=30000}){
+export function createAbilityDrift({request,render,setIntervalFn=setInterval,clearIntervalFn=clearInterval,intervalMs=30000,uuid=()=>crypto.randomUUID()}){
   let timer=null,current=null,turn=0;
   async function poll(){
     const mine=++turn;
@@ -17,15 +17,25 @@ export function createAbilityDrift({request,render,setIntervalFn=setInterval,cle
     const digest=current.digest;current=null;turn++;render(null);
     try{await request('/admin/ability-drift/dismiss','POST',{digest,remind_next_login:!!remind});}catch{await poll();}
   }
+  // One request id per press; the broker returns the same job when a press is retried.
+  async function rebuild(mode){
+    return request('/admin/ability-drift/rebuild','POST',{mode,request_id:uuid()});
+  }
   return {
     start(){if(timer!==null)return;void poll();timer=setIntervalFn(()=>void poll(),intervalMs);},
     stop(){if(timer!==null){clearIntervalFn(timer);timer=null;}turn++;current=null;render(null);},
-    dismiss,poll,
+    dismiss,poll,rebuild,
   };
 }
 
-/** The popup element and its renderer; `onDismiss(remind)` receives the checkbox state. */
-export function abilityDriftView(doc,onDismiss,vibrate=()=>{}){
+const REBUILDS=[
+  ['dev','Rebuild packages','Dev release: rebuilds the changed abilities; the app keeps running.'],
+  ['stable','Stable release','Full rebuild linking every ability; the app restarts briefly.'],
+];
+
+/** The popup element and its renderer; `onDismiss(remind)` receives the checkbox state and
+ * `onRebuild(mode)` resolves to the broker's reply. */
+export function abilityDriftView(doc,onDismiss,vibrate=()=>{},onRebuild=null){
   const box=doc.createElement('section');
   box.id='ability-drift';box.hidden=true;box.setAttribute('role','alertdialog');box.setAttribute('aria-labelledby','ability-drift-title');
   function render(value){
@@ -45,8 +55,40 @@ export function abilityDriftView(doc,onDismiss,vibrate=()=>{}){
     box_.type='checkbox';box_.checked=true;remind.append(box_,' Remind me at next login');
     const button=doc.createElement('button');button.type='button';button.textContent='Dismiss';
     button.addEventListener('click',()=>{vibrate();void onDismiss(box_.checked);});
-    const actions=doc.createElement('div');actions.className='ability-drift-actions';actions.append(remind,button);
+    const actions=doc.createElement('div');actions.className='ability-drift-actions';actions.append(remind);
+    if(onRebuild){
+      const rebuild=doc.createElement('button');rebuild.type='button';rebuild.textContent='Rebuild…';
+      rebuild.addEventListener('click',()=>{vibrate();confirmRebuild();});
+      actions.append(rebuild);
+    }
+    actions.append(button);
     box.append(title,intro,list,actions);
+  }
+  // Confirm first: the broker releases the whole live checkout as it is.
+  function confirmRebuild(){
+    const panel=doc.createElement('div');panel.className='ability-drift-confirm';
+    const warning=doc.createElement('p');
+    warning.textContent='This releases the live checkout as it is, including any other uncommitted edits in it.';
+    panel.append(warning);
+    for(const [mode,label,detail] of REBUILDS){
+      const choice=doc.createElement('button');choice.type='button';choice.textContent=label;choice.title=detail;
+      const note=doc.createElement('small');note.textContent=detail;
+      choice.addEventListener('click',()=>{vibrate();void start(mode,panel);});
+      panel.append(choice,note);
+    }
+    const cancel=doc.createElement('button');cancel.type='button';cancel.textContent='Cancel';
+    cancel.addEventListener('click',()=>{vibrate();panel.remove();});
+    panel.append(cancel);
+    box.querySelector('.ability-drift-confirm')?.remove();box.append(panel);
+  }
+  async function start(mode,panel){
+    const status=doc.createElement('p');status.className='ability-drift-status';status.textContent='Starting the '+mode+' rebuild…';
+    panel.replaceWith(status);
+    try{
+      const reply=await onRebuild(mode);
+      status.textContent=reply?.status==='no_changes'?'Nothing to rebuild: the checkout matches the running release.'
+        :'Rebuild '+(reply?.job_id?'job '+reply.job_id+' ':'')+'queued. Follow it on the Builds page.';
+    }catch(error){status.textContent='Rebuild refused: '+(error?.message||'unknown error');}
   }
   return {element:box,render};
 }

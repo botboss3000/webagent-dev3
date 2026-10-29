@@ -1,14 +1,10 @@
 //! Revisioned agent connection metadata and separate owner-bound credentials.
-use webagent_accounts_host::AccountsStore;
 use crate::State;
 use crate::{json, Api, ApiError, App, CancellationToken, Value};
-use axum::{
-    extract::{Path},
-    http::StatusCode,
-    Extension, Json,
-};
+use axum::{extract::Path, http::StatusCode, Extension, Json};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use webagent_accounts_host::AccountsStore;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Connection {

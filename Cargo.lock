@@ -2180,6 +2180,7 @@ dependencies = [
  "webagent-capability-contracts",
  "webagent-configuration",
  "webagent-context-contracts",
+ "webagent-extensions",
 ]
 
 [[package]]
@@ -2282,6 +2283,13 @@ dependencies = [
  "webagent-accounts-host",
  "webagent-administration",
  "webagent-host-core",
+]
+
+[[package]]
+name = "webagent-agent-management"
+version = "1.0.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -2577,6 +2585,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-extensions"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "webagent-configuration",
+]
+
+[[package]]
 name = "webagent-files"
 version = "0.1.0"
 dependencies = [
@@ -2845,6 +2866,7 @@ dependencies = [
  "webagent-accounts-host",
  "webagent-administration",
  "webagent-administration-host",
+ "webagent-agent-management",
  "webagent-agents",
  "webagent-assets-contracts",
  "webagent-background-contracts",
@@ -2860,6 +2882,7 @@ dependencies = [
  "webagent-context-contracts",
  "webagent-diagnostics",
  "webagent-engine",
+ "webagent-extensions",
  "webagent-files",
  "webagent-host-core",
  "webagent-manager",

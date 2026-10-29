@@ -230,6 +230,114 @@ fn automation_contract(
     }
     Ok(key)
 }
+/// A plugin that calls back into the app through declared host requests
+/// (`webagent_extensions::requests`), running only tools its ability's folders define.
+/// Returns the plugin's declared requests.
+fn requests_contract(
+    root: &FsPath,
+    id: &str,
+    folders: &[String],
+    manifest: &Value,
+) -> Result<webagent_extensions::requests::Declaration> {
+    let fixed = [
+        ("id", json!(id)),
+        ("dispatch", json!("isolated")),
+        ("host_interface", json!("requests_v1")),
+        ("protocol", json!(webagent_extensions::plugin::PROTOCOL)),
+        ("interface", json!(1)),
+        ("runtime", json!("executable")),
+        ("effect", json!("write")),
+    ];
+    if fixed.iter().any(|(key, value)| &manifest[*key] != value)
+        || manifest["build"]["toolchain"] != "rust-1.99"
+    {
+        anyhow::bail!("Unsupported plugin contract");
+    }
+    let known = [
+        "id",
+        "dispatch",
+        "host_interface",
+        "protocol",
+        "interface",
+        "runtime",
+        "entrypoint",
+        "effect",
+        "tools",
+        "requests",
+        "build",
+    ];
+    if manifest
+        .as_object()
+        .is_none_or(|fields| fields.keys().any(|key| !known.contains(&key.as_str())))
+    {
+        anyhow::bail!("Unknown plugin manifest field");
+    }
+    let tools = manifest["tools"]
+        .as_array()
+        .filter(|tools| !tools.is_empty() && tools.len() <= 64)
+        .ok_or_else(|| anyhow!("Plugin tools required"))?;
+    let mut seen = std::collections::BTreeSet::new();
+    for tool in tools {
+        let tool = tool
+            .as_str()
+            .ok_or_else(|| anyhow!("Invalid plugin tool"))?;
+        if !folders.iter().any(|folder| folder == tool) || !seen.insert(tool) {
+            anyhow::bail!("Plugin tools must be distinct tools of its ability");
+        }
+    }
+    let declaration = webagent_extensions::requests::Declaration::parse(manifest)?;
+    build_key(root, manifest, false)?;
+    runtime_input_hashes(root, manifest)?;
+    Ok(declaration)
+}
+
+/// A validated `requests_v1` plugin: its tools, declared requests and artifact identity.
+pub struct RequestsPlugin {
+    pub tools: Vec<String>,
+    pub requests: webagent_extensions::requests::Declaration,
+    key: String,
+    entry: String,
+}
+
+impl RequestsPlugin {
+    /// Read and validate the `requests_v1` plugin in `root`, an ability folder of one
+    /// published revision whose tool folders are `folders`.
+    pub fn load(root: &FsPath, id: &str, folders: &[String]) -> Result<Self> {
+        let manifest: Value = serde_json::from_slice(&read(&root.join("plugin.json"), 64 * 1024)?)?;
+        let requests = requests_contract(root, id, folders, &manifest)?;
+        let entry = manifest["entrypoint"]
+            .as_str()
+            .filter(|entry| access::valid_id(entry))
+            .ok_or_else(|| anyhow!("Invalid plugin entrypoint"))?
+            .to_owned();
+        let tools = manifest["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|tool| tool.as_str().map(str::to_owned))
+            .collect();
+        let key = build_key(root, &manifest, false)?;
+        Ok(Self {
+            tools,
+            requests,
+            key,
+            entry,
+        })
+    }
+
+    /// The plugin's content-addressed executable under `artifacts`, if it was built.
+    pub fn executable(&self, artifacts: &FsPath) -> Result<PathBuf> {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = artifacts.join(&self.key).join(&self.entry);
+        let meta = std::fs::symlink_metadata(&executable)?;
+        let mode = meta.permissions().mode();
+        if !meta.is_file() || mode & 0o111 == 0 || mode & 0o022 != 0 {
+            anyhow::bail!("Plugin artifact unavailable");
+        }
+        Ok(executable)
+    }
+}
+
 /// Resolve a content-addressed artifact from the same immutable ability revision as its assets.
 /// Missing/invalid artifacts withdraw the service; there is no image-distribution fallback.
 pub fn automation_service(root: &FsPath) -> Result<AutomationService> {
@@ -301,8 +409,18 @@ impl Package {
         }
         let bytes = read(&path, 64 * 1024)?;
         let manifest: Value = serde_json::from_slice(&bytes)?;
-        if manifest.get("host_interface").is_some() {
-            automation_contract(root, id, tools, &manifest)?;
+        // Plugins with a host interface run through the app's own dispatch, never as
+        // generic isolated packages.
+        if let Some(interface) = manifest.get("host_interface") {
+            match interface.as_str() {
+                Some("automation_v1") => {
+                    automation_contract(root, id, tools, &manifest)?;
+                }
+                Some("requests_v1") => {
+                    requests_contract(root, id, tools, &manifest)?;
+                }
+                _ => anyhow::bail!("Unsupported plugin host interface"),
+            }
             return Ok(None);
         }
         // Existing native package adapters retain their own contract.
@@ -923,5 +1041,85 @@ pub mod registered_tests {
             std::fs::write(root.path().join("service/engine.rs"), b"new compiled input").unwrap();
             assert!(automation_service_at(root.path(), registry.path()).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod requests_contract_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    /// A plugin folder with tool folders `read_a` and `write_b`, serving `read_a`.
+    fn fixture() -> (tempfile::TempDir, Value, Vec<String>) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let manifest = json!({"id":"demo","dispatch":"isolated","host_interface":"requests_v1",
+            "protocol":2,"interface":1,"runtime":"executable","entrypoint":"webagent_demo",
+            "effect":"write","tools":["read_a"],"requests":["agents.list"],
+            "build":{"toolchain":"rust-1.99","inputs":["Cargo.toml","Cargo.lock","plugin/lib.rs"],
+                "dependencies":[],"flags":[],"assets":["demo.json"]}});
+        for name in ["Cargo.toml", "Cargo.lock", "plugin/lib.rs", "demo.json"] {
+            let path = root.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, name).unwrap();
+        }
+        std::fs::write(
+            root.join("plugin.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        (temp, manifest, vec!["read_a".into(), "write_b".into()])
+    }
+
+    #[test]
+    fn a_valid_plugin_declares_offered_requests_for_its_own_tools() {
+        let (root, _, folders) = fixture();
+        let plugin = RequestsPlugin::load(root.path(), "demo", &folders).unwrap();
+        assert_eq!(plugin.tools, ["read_a"]);
+        assert!(plugin.requests.kind("agents.list").is_ok());
+        assert!(plugin.requests.kind("sessions.list").is_err());
+    }
+
+    #[test]
+    fn foreign_tools_unoffered_requests_and_unknown_fields_are_refused() {
+        let (root, manifest, folders) = fixture();
+        let mut cases = Vec::new();
+        for (field, value) in [
+            ("tools", json!(["read_a", "build_work"])),
+            ("tools", json!(["read_a", "read_a"])),
+            ("requests", json!(["accounts.delete"])),
+            ("protocol", json!(1)),
+            ("host_interface", json!("automation_v1")),
+            ("id", json!("other")),
+            ("credentials", json!("x")),
+        ] {
+            let mut bad = manifest.clone();
+            bad[field] = value;
+            cases.push(requests_contract(root.path(), "demo", &folders, &bad).is_err());
+        }
+        assert!(cases.iter().all(|refused| *refused), "{cases:?}");
+        assert!(requests_contract(root.path(), "demo", &folders, &manifest).is_ok());
+    }
+
+    #[test]
+    fn the_executable_must_be_its_built_artifact() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, manifest, folders) = fixture();
+        let plugin = RequestsPlugin::load(root.path(), "demo", &folders).unwrap();
+        let artifacts = tempfile::tempdir().unwrap();
+        assert!(plugin.executable(artifacts.path()).is_err());
+        let directory = artifacts
+            .path()
+            .join(build_key(root.path(), &manifest, false).unwrap());
+        std::fs::create_dir(&directory).unwrap();
+        let binary = directory.join("webagent_demo");
+        std::fs::write(&binary, b"artifact").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o555)).unwrap();
+        assert_eq!(plugin.executable(artifacts.path()).unwrap(), binary);
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(
+            plugin.executable(artifacts.path()).is_err(),
+            "group/world writable"
+        );
     }
 }

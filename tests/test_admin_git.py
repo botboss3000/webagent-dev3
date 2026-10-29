@@ -79,7 +79,7 @@ class GitTests(unittest.IsolatedAsyncioTestCase):
 
  async def test_mcp_credential_url_fixtures_are_commit_safe(self):
   root=FILE.parents[4]
-  for name in ("src/mcp/connections.rs","src/plugin_packages/mcp/main.rs","tests/test_admin_git.py"):
+  for name in ("crates/modules/extensions/host/mcp/connections.rs","src/plugin_packages/mcp/main.rs","tests/test_admin_git.py"):
    with self.subTest(file=name):
     self.assertFalse(git.secret((root/name).read_bytes()))
   for credentials in (b"u:p",b"user:password"):

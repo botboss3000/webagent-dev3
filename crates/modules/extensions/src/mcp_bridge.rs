@@ -13,11 +13,18 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+/// Unix seconds.
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+}
+
 static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 const FRAME_LIMIT: usize = 1024 * 1024;
 const BINARY_LIMIT: u64 = 32 * 1024 * 1024;
 
-pub(crate) fn folder() -> PathBuf {
+pub fn folder() -> PathBuf {
     PathBuf::from(
         std::env::var("V3_PLUGIN_TEST_ROOT").unwrap_or_else(|_| "/live-checkout/plugins".into()),
     )
@@ -70,7 +77,7 @@ fn package(root: &Path) -> Option<String> {
     if value != json!({"version":1,"id":"mcp","executable":"webagent-mcp","protocol":1}) {
         return None;
     }
-    Some(crate::digest(&json!([
+    Some(webagent_configuration::digest(&json!([
         directory.dev(),
         directory.ino(),
         directory.uid(),
@@ -102,12 +109,12 @@ fn fresh(root: &Path, digest: &str) -> bool {
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .is_some_and(|time| {
-                let now = crate::now();
+                let now = now();
                 time <= now && now - time <= 6
             })
 }
 
-pub(crate) fn available() -> bool {
+pub fn available() -> bool {
     ROOT.get()
         .is_some_and(|root| package(&folder()).is_some_and(|digest| fresh(root, &digest)))
 }
@@ -146,7 +153,7 @@ async fn exchange(mut stream: UnixStream, bytes: &[u8]) -> anyhow::Result<Value>
     response(&bytes)
 }
 
-pub(super) async fn call(mut request: Value, cancel: CancellationToken) -> anyhow::Result<Value> {
+pub async fn call(mut request: Value, cancel: CancellationToken) -> anyhow::Result<Value> {
     let root = ROOT
         .get()
         .ok_or_else(|| anyhow::anyhow!("MCP plugin not initialized"))?;
@@ -193,7 +200,7 @@ pub(super) async fn call(mut request: Value, cancel: CancellationToken) -> anyho
     Ok(output)
 }
 
-pub(crate) async fn init(root: &Path, role: &str) {
+pub async fn init(root: &Path, role: &str) {
     let _ = ROOT.set(root.to_path_buf());
     if role != "api" {
         return;
@@ -272,6 +279,7 @@ pub(crate) async fn init(root: &Path, role: &str) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
     fn fixture() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
@@ -331,11 +339,7 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         std::fs::create_dir(state.path().join("mcp")).unwrap();
         std::fs::write(state.path().join("mcp/plugin.package"), &digest).unwrap();
-        std::fs::write(
-            state.path().join("mcp/plugin.ready"),
-            crate::now().to_string(),
-        )
-        .unwrap();
+        std::fs::write(state.path().join("mcp/plugin.ready"), now().to_string()).unwrap();
         assert!(fresh(state.path(), &digest));
         let replacement = root.path().join("new");
         std::fs::write(&replacement, b"replacement").unwrap();
@@ -346,7 +350,7 @@ mod tests {
         assert!(package(root.path()).is_none());
         std::fs::write(
             state.path().join("mcp/plugin.ready"),
-            crate::now().saturating_sub(7).to_string(),
+            now().saturating_sub(7).to_string(),
         )
         .unwrap();
         assert!(!fresh(state.path(), &digest));

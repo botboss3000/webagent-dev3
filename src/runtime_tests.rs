@@ -18,9 +18,11 @@ pub(crate) fn native_catalog() -> abilities::Catalog {
             if declaration.is_file() {
                 let manifest: Value =
                     serde_json::from_slice(&std::fs::read(declaration).unwrap()).unwrap();
+                // Host-interface plugins are dispatched by the app itself, so they load natively.
                 let native_automation =
                     manifest["id"] == "automation" && manifest["host_interface"] == "automation_v1";
-                if manifest["dispatch"] == "isolated" && !native_automation {
+                let host_requests = manifest["host_interface"] == "requests_v1";
+                if manifest["dispatch"] == "isolated" && !native_automation && !host_requests {
                     return;
                 }
             }

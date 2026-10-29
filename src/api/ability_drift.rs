@@ -65,3 +65,68 @@ pub(crate) async fn dismiss(
     app.store.put(STATE, &state).await?;
     Ok(Json(json!({"show": false})))
 }
+
+/// The broker's administrator workspace for checkout rebuilds.
+const ADMIN_WORKSPACE: &str = "00000000-0000-0000-0000-000000000000";
+
+/// POST `{mode, request_id}`: release the live checkout as it is through the protected
+/// broker. `dev` publishes ability packages when only abilities changed (no restart);
+/// `stable` is a full build that links ability plugins and briefly restarts the app. The
+/// broker accepts only the installation administrator and returns the same job when the
+/// same `request_id` is retried.
+pub(crate) async fn rebuild(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Json(body): Json<Value>,
+) -> Api {
+    let mode = match body["mode"].as_str() {
+        Some(mode @ ("dev" | "stable")) => mode,
+        _ => return Err(ApiError(StatusCode::BAD_REQUEST, "mode must be dev or stable".into())),
+    };
+    let request_id = body["request_id"]
+        .as_str()
+        .filter(|id| {
+            (8..=64).contains(&id.len())
+                && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+        .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "request_id required".into()))?;
+    let user = identity["_user_id"].as_str().unwrap_or_else(|| app.store.current_user_id());
+    let fingerprint = hex::encode(Sha256::digest(format!("ability-rebuild\0{user}\0{request_id}")));
+    let trusted = json!({"user_id": user, "session_id": ADMIN_WORKSPACE,
+        "lease_until": webagent_host_core::now() + 30, "access_fingerprint": fingerprint});
+    let reply = crate::tools::execute_host_trusted(
+        "v3_build_rebuild_checkout",
+        &json!({"mode": mode, "request_id": request_id}),
+        ADMIN_WORKSPACE,
+        &app.build_socket,
+        Some(trusted),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .map_err(|error| ApiError(StatusCode::BAD_GATEWAY, format!("Build service unavailable: {error:#}")))?;
+    if reply["status"] != "success" {
+        let reason = reply["output"].as_str().unwrap_or("Rebuild refused").to_owned();
+        let status = if reason.contains("Administrator rebuild required") { StatusCode::FORBIDDEN } else { StatusCode::CONFLICT };
+        return Err(ApiError(status, reason));
+    }
+    Ok(Json(reply["output"].clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[tokio::test]
+    async fn rebuild_requires_a_mode_and_request_id_and_reports_an_absent_broker() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let identity = json!({"_user_id": "admin", "_auth_key": "login"});
+        let call = |body: Value| rebuild(State(app.clone()), Extension(identity.clone()), Json(body));
+        for body in [json!({"mode": "release", "request_id": "press-0001"}), json!({"mode": "dev"}),
+            json!({"mode": "dev", "request_id": "x"}), json!({"mode": "dev", "request_id": "a/b/c/d/e"})] {
+            assert_eq!(call(body).await.unwrap_err().0, StatusCode::BAD_REQUEST);
+        }
+        let unavailable = call(json!({"mode": "dev", "request_id": "press-0001"})).await.unwrap_err();
+        assert_eq!(unavailable.0, StatusCode::BAD_GATEWAY);
+    }
+}
