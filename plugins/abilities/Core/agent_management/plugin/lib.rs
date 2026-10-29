@@ -84,7 +84,7 @@ pub trait Host {
     ) -> impl Future<Output = Result<Value, String>> + Send;
 }
 
-/// One tool call, with the facts the host supplies.
+/// One tool call and the facts the host supplies with it.
 pub struct Call<'a> {
     pub tool: &'a str,
     pub arguments: &'a Value,
