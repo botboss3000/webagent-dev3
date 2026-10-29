@@ -1891,6 +1891,17 @@ class BuildTests(unittest.TestCase):
         local = {"user_id": "codex-local", "session_id": host.LOCAL_WORKSPACE,
                  "local_caller": True, "lease_until": time.time() + 30,
                  "access_fingerprint": "a" * 64}
+        # A later completed release republished the assets over this one; an unrelated pointer is refused.
+        job = self.broker.jobs[receipt["job_id"]]
+        job.setdefault("asset_previous", "earlier-release")
+        later = {"job_id": "later-asset-release", "operation": "host_service_deploy", "status": "completed",
+                 "isolated": True, "asset_previous": "unrelated", "created_at": time.time(), "finished_at": time.time()}
+        self.broker.jobs[later["job_id"]] = later
+        self.runner.asset_id = later["job_id"]
+        with self.assertRaisesRegex(ValueError, "does not match healthy runtime"):
+            self.call("v3_build_adopt_release", {"job_id": receipt["job_id"]},
+                      trusted=local, workspace=host.LOCAL_WORKSPACE)
+        later["asset_previous"] = receipt["job_id"]
         accepted = self.call("v3_build_adopt_release", {"job_id": receipt["job_id"]},
                              trusted=local, workspace=host.LOCAL_WORKSPACE)
         self.assertEqual((accepted["status"], accepted["checkout_promotion"], accepted["effects_replayed"]),

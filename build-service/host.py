@@ -4087,11 +4087,25 @@ class Broker:
                 if (not self.runner.healthy(name, job["images"][role]) or
                         self.runner.inspect(job["rollback"][role])["State"]["Status"] != "exited"):
                     return False
-            if "asset_previous" in job and self.runner.current_asset_id() != job["job_id"]:
+            if "asset_previous" in job and not self._assets_built_on(job):
                 return False
             return True
         except Exception:
             return False
+
+    def _assets_built_on(self, job):
+        # The active asset release is this job's own, or a completed release published
+        # over it: each publication records the release it replaced in asset_previous.
+        current, seen = self.runner.current_asset_id(), set()
+        while current and current not in seen and len(seen) < 32:
+            if current == job["job_id"]:
+                return True
+            seen.add(current)
+            later = self.jobs.get(current)
+            if not later or later.get("status") != "completed" or not later.get("isolated"):
+                return False
+            current = later.get("asset_previous")
+        return False
 
 
     def unified_files(self, request, trusted, workspace, args):
