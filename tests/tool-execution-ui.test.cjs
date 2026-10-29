@@ -176,7 +176,7 @@ test('policy disclosure renders native collapsed details and clamps to measured 
   }
   const body = element('body');
   const context = { closeFloatingMenu() {}, _refreshLucideIcons() {},
-    window: { innerWidth: 360, innerHeight: 640 },
+    window: { innerWidth: 360, innerHeight: 640, addEventListener() {} },
     document: { createElement: element, body, addEventListener() {} } };
   const start = source.indexOf('export function openFloatingMenu(');
   const end = source.indexOf('export function _buildAbilitySettingsList', start);
@@ -196,6 +196,44 @@ test('policy disclosure renders native collapsed details and clamps to measured 
   menu.height = 500;
   details.handlers.toggle();
   assert.equal(menu.style.top, '132px');
+  assert.equal(menu.style.maxHeight, '624px');
+  assert.equal(menu.style.maxWidth, '344px');
+});
+
+test('floating panel closes on outside scroll and swallows the dismissing press', () => {
+  function element(tag) {
+    return { tag, children: [], style: {}, classList: { add() {} }, appendChild(child) { this.children.push(child); },
+      setAttribute() {}, addEventListener() {}, contains: target => target === 'inside',
+      getBoundingClientRect() { return { width: 180, height: 100 }; } };
+  }
+  const handlers = {};
+  let closes = 0;
+  const document = { createElement: element, body: element('body'), activeElement: null,
+    addEventListener(type, fn) { (handlers[type] ||= new Set()).add(fn); },
+    removeEventListener(type, fn) { handlers[type]?.delete(fn); } };
+  const context = { closeFloatingMenu() { closes++; }, _refreshLucideIcons() {}, document,
+    window: { innerWidth: 800, innerHeight: 600, addEventListener() {} } };
+  const start = source.indexOf('export function openFloatingMenu(');
+  const end = source.indexOf('export function _buildAbilitySettingsList', start);
+  vm.runInNewContext(source.slice(start, end).replace('export function', 'function') +
+    '\nglobalThis.open = openFloatingMenu;', context);
+  context.open([{ label: 'Off', action() {} }], 100, 100);
+  const fire = (type, target) => {
+    const event = { type, target, prevented: false, stopped: false,
+      preventDefault() { this.prevented = true; }, stopImmediatePropagation() { this.stopped = true; } };
+    for (const fn of [...(handlers[type] || [])]) fn(event);
+    return event;
+  };
+  fire('scroll', 'inside');
+  assert.equal(closes, 1); // only the initial closeFloatingMenu() in open
+  fire('scroll', document);
+  assert.equal(closes, 2);
+  const press = fire('pointerdown', {});
+  assert.equal(closes, 3);
+  assert(press.prevented && press.stopped);
+  const click = fire('click', {});
+  assert(click.prevented && click.stopped);
+  assert.equal(fire('click', {}).stopped, false); // the next press reaches the page
 });
 
 test('duplicate protection is independently configurable and retains the complete execution settings', async () => {

@@ -766,6 +766,11 @@ export function openFloatingMenu(items, top, left, owner = null) {
   document.body.appendChild(menu);
 
   function positionMenu() {
+    // Cap the panel to the viewport so it scrolls inside itself instead of
+    // spilling past an edge; re-run on resize so a narrowed window keeps it whole.
+    menu.style.maxWidth = (window.innerWidth - 16) + 'px';
+    menu.style.maxHeight = (window.innerHeight - 16) + 'px';
+    menu.style.overflowY = 'auto';
     const rect = menu.getBoundingClientRect();
     const menuWidth = rect.width || 180;
     const menuHeight = rect.height || 8;
@@ -778,23 +783,52 @@ export function openFloatingMenu(items, top, left, owner = null) {
 
   _refreshLucideIcons(menu);
 
-  // The owning toggle handles repeat clicks; all other outside clicks dismiss.
+  // The owning toggle handles repeat clicks; any other outside press dismisses.
   const outside = event => {
     const proxy = event.target.closest?.('.ac-row-more');
     if (menu.contains(event.target) || owner?.contains(event.target) ||
         (owner && proxy?._floatingMenuOwner === owner)) return;
     closeFloatingMenu();
+    if (event.type !== 'pointerdown') return;
+    // The dismissing press only closes the panel: its mousedown, touchend and
+    // click never reach the page, so engaging another control takes a second press.
+    // The next pointerdown ends the swallow even if no click followed (a drag).
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const swallowed = ['mousedown', 'mouseup', 'touchend', 'click'];
+    const release = () => {
+      for (const type of swallowed) document.removeEventListener(type, eat, true);
+      document.removeEventListener('pointerdown', release, true);
+    };
+    const eat = e => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (e.type === 'click') release();
+    };
+    for (const type of swallowed) document.addEventListener(type, eat, true);
+    document.addEventListener('pointerdown', release, true);
+  };
+  // Scrolling anything but the panel closes it instead of leaving it behind; a
+  // focused field inside it is exempt because a mobile keyboard scrolls the page.
+  const onScroll = event => {
+    const active = document.activeElement;
+    if (menu.contains(event.target) || (active?.tagName === 'INPUT' && menu.contains(active))) return;
+    closeFloatingMenu();
   };
   const onKey = event => { if (event.key === 'Escape') closeFloatingMenu(); };
   const cleanup = () => {
-    document.removeEventListener('click', outside, true);
+    document.removeEventListener('pointerdown', outside, true);
     document.removeEventListener('contextmenu', outside, true);
+    document.removeEventListener('scroll', onScroll, true);
     document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('resize', positionMenu);
   };
   floatingMenuCleanup = cleanup;
-  document.addEventListener('click', outside, true);
+  document.addEventListener('pointerdown', outside, true);
   document.addEventListener('contextmenu', outside, true);
+  document.addEventListener('scroll', onScroll, true);
   document.addEventListener('keydown', onKey, true);
+  window.addEventListener('resize', positionMenu);
 }
 
 export function _buildAbilitySettingsList() {
