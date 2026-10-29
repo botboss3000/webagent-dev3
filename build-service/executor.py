@@ -926,6 +926,14 @@ class Executor:
                     argv=["cargo","test","--locked","--offline","-p",item["package"]]
                     if "test"in item:argv.extend((["--lib"]if item.get("target_kind")=="lib"else["--bin",item["target"]])+[item["test"],"--","--exact","--test-threads=1"])
                     else:argv.extend(["--","--test-threads=1"])
+                    entry["recipe"]="engine:rust1.90:focused-v2:"+item.get("id",item["package"])
+                    package=self.focused_package_binaries(item,metadata,manifest)if fresh_tests is not None and "test"not in item else None
+                    if package is not None:
+                        # `cargo test -p` resolves features for that package alone and so compiles a second
+                        # debug variant of its closure (tower-http, reqwest, sqlx, models, chat, host-core
+                        # for accounts-host). compile_test already built this package's test executables
+                        # with the workspace features the required suite runs; execute those instead.
+                        argv=self.package_replay_argv(*package);entry.update(recipe="engine:rust1.90:focused-v3:"+item["package"],reuse="workspace_test_binaries",binaries=len(package[1]))
                     if retained is not None or fresh_tests is not None and "test"in item:
                         matches=[row for row in manifest["tests"]if row["target_name"]==item.get("target")and row["source_path"]==item.get("source_path","/build/src/main.rs")]
                         if item.get("target_kind")=="lib":
@@ -939,7 +947,7 @@ class Executor:
                             matches=[row for row in matches if row.get("kind")==["bin"]and row.get("package_id","").startswith(prefix)and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?",row["package_id"][len(prefix):])]
                         if len(matches)!=1:raise ValueError("Registered retained host test binary unavailable")
                         argv=["/output/artifacts/"+matches[0]["file"],item["test"],"--exact","--test-threads=1"]
-                    entry["argv"]=argv;entry["recipe"]="engine:rust1.90:focused-v2:"+item.get("id",item["package"])
+                    entry["argv"]=argv
                     log=self.phase(job,"test","test",application,output,argv,entry["recipe"],min(120 if "test"in item else 300,remaining))
                     authorized()
                     counts=re.findall(r"test result: ok\. ([0-9]+) passed; ([0-9]+) failed",log[-1024*1024:])
@@ -1041,6 +1049,22 @@ class Executor:
         """Run a retained test binary the way `cargo test` does: proc-macro crates' tests link
         the toolchain's libstd dynamically; under rustup it lives in the target libdir, not sysroot/lib."""
         return ["sh","-c",'LD_LIBRARY_PATH="$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" exec "$0" "$@"',binary,*args]
+    @staticmethod
+    def package_replay_argv(directory,binaries):
+        """Run one package's test executables in sequence the way `cargo test -p` does: from the
+        package directory, with the toolchain libdir for proc-macro tests; the first failure stops."""
+        return ["sh","-c",'set -e\ncd "$0"\nexport LD_LIBRARY_PATH="$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nfor binary in "$@"; do "$binary" --test-threads=1; done',directory,*binaries]
+    @staticmethod
+    def focused_package_binaries(item,metadata,manifest):
+        """(package directory, retained executables) of a focused package's workspace-built tests, or
+        None when Cargo metadata or the retained manifest cannot name them (then `cargo test -p` runs)."""
+        found=[p for p in metadata.get("packages",[])if p.get("name")==item["package"]and p.get("source")is None]
+        if len(found)!=1 or not isinstance(manifest,dict):return None
+        directory=posixpath.dirname(found[0].get("manifest_path",""))
+        if not directory.startswith("/build")or ".."in directory.split("/"):return None
+        rows=[row for row in manifest.get("tests",[])if row.get("package_id")==found[0].get("id")]
+        if not rows or any(not re.fullmatch(r"tests/[a-z0-9_]+-[a-f0-9]{16}",row.get("file",""))for row in rows):return None
+        return directory,["/output/artifacts/"+row["file"]for row in sorted(rows,key=lambda row:row["file"])]
     @staticmethod
     def local_dependency(name):
         """Normalize actual Cargo dep-info paths while rejecting escaped local inputs."""

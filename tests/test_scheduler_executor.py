@@ -815,6 +815,36 @@ class HostFocusedVerificationTests(unittest.TestCase):
         self.assertEqual(len(self.calls),2)
         self.assertEqual(self.job["focused_verification"]["runs"][-1]["package"],"webagent-engine")
 
+    def focus_package(self,rows):
+        from unittest.mock import patch
+        import json
+        identity="path+file:///build/crates/modules/accounts/host#webagent-accounts-host@0.1.0"
+        (self.output/"dependency-metadata.json").write_text(json.dumps({"packages":[{"source":None,"name":"webagent-accounts-host","id":identity,"manifest_path":"/build/crates/modules/accounts/host/Cargo.toml"}]}))
+        self.job["changed_paths"]=["v3/crates/modules/accounts/host/src/lib.rs"]
+        manifest={"tests":[*({"file":"tests/"+name,"target_name":"t","source_path":"/build/x.rs","kind":["test"],"package_id":identity}for name in rows),
+            {"file":"tests/webagent_chat-0123456789abcdef","target_name":"webagent_chat","source_path":"/build/crates/modules/chat/src/lib.rs","kind":["lib"],"package_id":"path+file:///build/crates/modules/chat#webagent-chat@0.1.0"}]}
+        with patch.object(self.worker,"test_manifest",return_value=manifest):self.worker.focused_tests(self.job,self.source/"v3",self.output,fresh_tests=self.output/"artifacts")
+        return self.job["focused_verification"]["runs"][0]
+    def test_fresh_focused_package_runs_workspace_test_binaries_without_a_feature_variant_compile(self):
+        run=self.focus_package(["webagent_accounts_host-fedcba9876543210","store-0123456789abcdef"])
+        self.assertEqual(len(self.calls),1);argv=self.calls[0][5]
+        self.assertNotIn("cargo",argv);self.assertEqual(argv[:2],["sh","-c"])
+        self.assertEqual(argv[3:],["/build/crates/modules/accounts/host","/output/artifacts/tests/store-0123456789abcdef","/output/artifacts/tests/webagent_accounts_host-fedcba9876543210"])
+        self.assertEqual((run["recipe"],run["reuse"],run["binaries"],run["status"]),("engine:rust1.90:focused-v3:webagent-accounts-host","workspace_test_binaries",2,"passed"))
+    def test_fresh_focused_package_without_retained_binaries_keeps_cargo_test(self):
+        run=self.focus_package([])
+        self.assertEqual(self.calls[0][5],["cargo","test","--locked","--offline","-p","webagent-accounts-host","--","--test-threads=1"])
+        self.assertEqual(run["recipe"],"engine:rust1.90:focused-v2:webagent-accounts-host");self.assertNotIn("reuse",run)
+    def test_package_replay_runs_each_binary_in_the_package_directory_and_stops_at_failure(self):
+        import subprocess
+        with tempfile.TemporaryDirectory()as directory:
+            folder=Path(directory);record=folder/"record"
+            for name,status in (("a",0),("b",3),("c",0)):
+                script=folder/name;script.write_text("#!/bin/sh\necho "+name+" \"$PWD\" \"$@\" >> "+str(record)+"\nexit "+str(status)+"\n");script.chmod(0o755)
+            result=subprocess.run(module.Executor.package_replay_argv(directory,[str(folder/name)for name in "abc"]),env={"PATH":"/usr/bin:/bin"},capture_output=True)
+            self.assertEqual(result.returncode,3)
+            self.assertEqual(record.read_text().split("\n"),["a "+directory+" --test-threads=1","b "+directory+" --test-threads=1",""])
+
     def test_invalid_retained_manifest_is_not_left_running(self):
         from unittest.mock import patch
         with patch.object(self.worker,"test_manifest",side_effect=ValueError("Invalid retained manifest")):
