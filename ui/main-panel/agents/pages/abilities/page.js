@@ -9,6 +9,7 @@ import { buildPolicyControls, permissionControl, effectiveLabel, readinessLabel 
 
 import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from '../../../../shared/ability-row-controls.js';
 import { buildSkillRow } from './rows.js';
+import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-utils.js';
 
 const node = (tag, className = '', text = '') => {
   const element = document.createElement(tag);
@@ -80,30 +81,41 @@ export async function renderAbilities(host, request, options) {
   if (host._abilityGeneration !== generation) return;
   overview.querySelector('[data-tier-selector]').replaceChildren(controls.selector);
 
+  // The spinner covers the control until the re-read confirms the change; a failure
+  // leaves the control unchanged and shows the reason in red under its row.
   const save = async (ability, kind, mode, control, toolName = null) => {
-    control.disabled = true;
-    if(levelId!=='operator'){
-      try{
-        const level=structuredClone(data.capability_levels.levels[levelId]);
-        const key=kind==='ability'?'ability_exposure':kind==='tool'?'tool_exposure':'skill_exposure';
-        const id=kind==='tool'?toolName:kind==='skill'&&toolName&&toolName!=='core'?ability.id+':'+toolName:ability.id;
-        level[key]||={};level[key][id]=mode;
-        await request(scope+'/capability-levels/'+encodeURIComponent(levelId),'PUT',{expected_revision:data.capability_levels.revision,level});
-        expandedAbility=ability.id;await rerender({});return;
-      }catch(error){status.textContent=error.message;control.disabled=false;throw error;}
-    }
+    const input = control.querySelector('input') || control;
+    const row = control.closest('.ac-ability-row');
+    row?.nextElementSibling?.classList.contains('v3-toggle-error') && row.nextElementSibling.remove();
+    input.disabled = true;
+    _markSaving(control);
     try {
-      const path = scope + '/abilities/' + encodeURIComponent(ability.id) +
-        (kind === 'tool' ? '/tools/' + encodeURIComponent(toolName) + '/mode' :
-          kind === 'skill' && toolName && toolName !== 'core'
-            ? '/skills/' + encodeURIComponent(toolName) + '/visibility'
-            : '/' + (kind === 'skill' ? 'skill-visibility' : 'visibility'));
-      await request(path, 'PUT', { visibility: mode, expected_revision: data.revision });
+      if (levelId !== 'operator') {
+        const level = structuredClone(data.capability_levels.levels[levelId]);
+        const key = kind === 'ability' ? 'ability_exposure' : kind === 'tool' ? 'tool_exposure' : 'skill_exposure';
+        const id = kind === 'tool' ? toolName : kind === 'skill' && toolName && toolName !== 'core' ? ability.id + ':' + toolName : ability.id;
+        level[key] ||= {};
+        level[key][id] = mode;
+        await request(scope + '/capability-levels/' + encodeURIComponent(levelId), 'PUT',
+          { expected_revision: data.capability_levels.revision, level });
+      } else {
+        const path = scope + '/abilities/' + encodeURIComponent(ability.id) +
+          (kind === 'tool' ? '/tools/' + encodeURIComponent(toolName) + '/mode' :
+            kind === 'skill' && toolName && toolName !== 'core'
+              ? '/skills/' + encodeURIComponent(toolName) + '/visibility'
+              : '/' + (kind === 'skill' ? 'skill-visibility' : 'visibility'));
+        await request(path, 'PUT', { visibility: mode, expected_revision: data.revision });
+      }
       expandedAbility = ability.id;
       await rerender({});
     } catch (error) {
-      status.textContent = error.status === 409 ? 'Settings changed. Reload before saving: ' + error.message : error.message;
-      control.disabled = false;
+      const message = 'Could not change availability: ' + (error.status === 409
+        ? 'settings changed elsewhere. Reload and try again.' : error.message || 'unknown error');
+      _flashSaveCheck(control, false, message);
+      const note = node('p', 'v3-toggle-error', message);
+      note.setAttribute('role', 'alert');
+      row ? row.after(note) : (status.textContent = message);
+      input.disabled = false;
       throw error;
     }
   };
@@ -112,7 +124,7 @@ export async function renderAbilities(host, request, options) {
       icon: mode === 'off' ? 'eye-off' : mode === 'visible' ? 'eye' : 'download',
       label: mode[0].toUpperCase() + mode.slice(1), checked: current === mode,
       disabled: !canManage || !!previewUser,
-      action: () => save(ability, kind, mode, trigger, toolName).catch(() => {}),
+      action: () => save(ability, kind, mode, trigger._floatingMenuOwner || trigger, toolName).catch(() => {}),
     })), { title: 'Choose ' + kind + ' availability' });
     if (anchorOnly) trigger.classList.add('ac-ability-more-anchor');
     return trigger;
@@ -282,17 +294,17 @@ export async function renderAbilities(host, request, options) {
       toggle.disabled = !canManage || !!previewUser;
       toggle.checked = ability.visibility !== 'off';
       toggle.setAttribute('aria-label',
-        ability.name + ' availability: ' + ability.visibility + '. Toggle on or off.');
+        ability.name + ' availability: ' + ability.visibility + '. Choose availability.');
+      toggle.setAttribute('aria-haspopup', 'menu');
       const menu = modeMenu(ability, 'ability', ability.visibility, null, true);
+      menu._floatingMenuOwner = toggleWrap;
+      // As in v2, the switch opens Off · Discoverable · Visible; it moves only after the save is re-read.
       toggle.addEventListener('click', event => {
+        event.preventDefault();
         event.stopPropagation();
-      });
-      // The switch saves immediately; the adjacent menu offers Discoverable.
-      toggle.addEventListener('change', () => {
-        const mode = toggle.checked ? 'visible' : 'off';
-        save(ability, 'ability', mode, toggle).catch(() => {
-          toggle.checked = ability.visibility !== 'off';
-        });
+        const rect = toggle.getBoundingClientRect();
+        menu._floatingMenuAnchorPoint = { x: event.clientX || rect.right, y: event.clientY || rect.bottom };
+        menu.click();
       });
       toggleWrap.append(toggle, node('span', 'conn-toggle-track'));
       header.append(chevron, icon, label, toggleWrap, menu);

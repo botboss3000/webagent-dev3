@@ -191,6 +191,7 @@ body.chat-resizing,body.chat-resizing *{cursor:col-resize!important;user-select:
 #abilities-page .v3-ability:not(.expanded)>.ac-ability-body{display:none}
 #abilities-page .v3-ability-note{margin:10px 8px;color:var(--fg-3);font-size:12px}
 #abilities-page .v3-ability-status{min-height:20px;color:var(--warning)}
+#abilities-page .v3-toggle-error{margin:2px 10px 6px;color:var(--danger);font-size:12px;text-align:right}
 /* Group flags retain the v2 state palette, independent of the app brand accent. */
 #abilities-page .ac-group-status[data-state="on"]{color:var(--success);border-color:var(--success-mid);background:var(--success-soft)}
 #abilities-page .ac-group-status[data-state="mixed"]{color:var(--warning);border-color:var(--warning-soft);background:var(--warning-soft)}
