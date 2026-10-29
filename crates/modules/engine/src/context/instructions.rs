@@ -9,12 +9,14 @@ pub fn instructions_for_turn(pinned: &str) -> String {
         .unwrap_or(pinned);
     format!("{}{}", configured_base_instructions(), slots)
 }
+/// Prompt files are live: the checkout's edits apply on the next call, ahead of the
+/// release snapshot `source`. `_root` (the state root) holds no prompt overrides.
 pub fn instructions_for_snapshot(
     pinned: &str,
-    root: &std::path::Path,
+    _root: &std::path::Path,
     source: Option<&std::path::Path>,
 ) -> Result<String> {
-    let value = crate::defaults::resolved_prompts_at(root, source)?;
+    let value = crate::defaults::runtime_prompts_at(source)?;
     let mut parts = Vec::new();
     for key in ["base_instructions", "closing_reporting"] {
         let text = value[key]

@@ -99,9 +99,56 @@ pub fn resolved_prompts_at(
 ) -> Result<Value> {
     assemble(&roots(source)?, PROMPTS, 0)
 }
+/// Runtime prompts: live files are edited in place in the checkout, so the mounted
+/// checkout comes first, then the call's release snapshot (or the configured
+/// publication). Validation and tests that name a candidate use `resolved_prompts_at`.
+pub fn runtime_prompts_at(
+    source: Option<&std::path::Path>,
+    _fallback_directory: &std::path::Path,
+) -> Result<Value> {
+    assemble(
+        &runtime_roots(std::path::Path::new(crate::live::CHECKOUT), source)?,
+        PROMPTS,
+        0,
+    )
+}
+/// The listing comes from the first root holding the prompts folder, so a prompt
+/// deleted from the checkout stays deleted rather than reappearing from the release.
+fn runtime_roots(
+    checkout: &std::path::Path,
+    source: Option<&std::path::Path>,
+) -> Result<Vec<PathBuf>> {
+    let mut roots = Vec::new();
+    if checkout.is_dir() {
+        roots.push(checkout.to_owned());
+    }
+    match default_source(source)? {
+        Some(snapshot) => roots.push(snapshot),
+        None if roots.is_empty() => return Ok(crate::live::roots()),
+        None => {}
+    }
+    Ok(roots)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn runtime_prompts_prefer_the_checkout_over_the_snapshot() {
+        let checkout = tempfile::tempdir().unwrap();
+        let snapshot = tempfile::tempdir().unwrap();
+        for (root, text) in [(checkout.path(), "Live\n"), (snapshot.path(), "Released\n")] {
+            std::fs::create_dir_all(root.join(PROMPTS)).unwrap();
+            std::fs::write(root.join(PROMPTS).join("base.md"), text).unwrap();
+        }
+        std::fs::write(snapshot.path().join(PROMPTS).join("retired.md"), "Gone\n").unwrap();
+        let roots = runtime_roots(checkout.path(), Some(snapshot.path())).unwrap();
+        assert_eq!(
+            assemble(&roots, PROMPTS, 0).unwrap(),
+            serde_json::json!({"base": "Live"})
+        );
+        let roots = runtime_roots(&checkout.path().join("absent"), Some(snapshot.path())).unwrap();
+        assert_eq!(assemble(&roots, PROMPTS, 0).unwrap()["base"], "Released");
+    }
     #[test]
     fn folder_tree_assembles_the_owner_json_shape() {
         let root = tempfile::tempdir().unwrap();
