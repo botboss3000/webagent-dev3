@@ -38,7 +38,11 @@ const REBUILDS=[
 export function abilityDriftView(doc,onDismiss,vibrate=()=>{},onRebuild=null){
   const box=doc.createElement('section');
   box.id='ability-drift';box.hidden=true;box.setAttribute('role','alertdialog');box.setAttribute('aria-labelledby','ability-drift-title');
+  let shown=null;
+  // A poll of the change set already shown keeps an open confirmation or rebuild status.
   function render(value){
+    if(value&&!box.hidden&&shown===value.digest)return;
+    shown=value?value.digest:null;
     box.replaceChildren();box.hidden=!value;
     if(!value)return;
     const title=doc.createElement('h2');title.id='ability-drift-title';title.textContent='Rebuild needed';
