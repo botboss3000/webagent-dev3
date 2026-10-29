@@ -2,7 +2,7 @@
 
 Only boot.plan selection is replaceable. No production/v2 names or remote HTTP
 probes are accepted. Config: protected build-service.json fixes all target names;
-data/config/engine-components.json owns disabled/revision. Host state owns manual
+the live file crates/modules/engine/engine-components.json owns disabled/revision. Host state owns manual
 and uncertain pauses. Healthy idle has no scan timer.
 """
 import ctypes,hashlib,http.client,json,os,selectors,socket,struct,subprocess,threading,time
@@ -121,7 +121,7 @@ class Engine:
         uuid.UUID(namespace["revision"])
         ids=[item["id"] for item in namespace["components"]]
         if ids!=sorted(set(ids)) or "boot-supervisor" in ids and "boot-supervisor" in namespace["withdrawn"]:raise ValueError("Boot membership conflict")
-        controls=bounded_json(Path(self.cfg["checkout_root"])/"data/config/engine-components.json",32768)
+        controls=bounded_json(Path(self.cfg["checkout_root"])/"crates/modules/engine/engine-components.json",32768)
         if type(controls.get("revision"))is not int or not isinstance(controls.get("disabled"),list) or len(controls["disabled"])>256:raise ValueError("Boot control bounds")
         if namespace["revision"]!=root.parent.name:raise ValueError("Boot publication revision mismatch")
         revision=namespace["revision"];control_revision=controls["revision"]
