@@ -38,21 +38,20 @@ pub fn parse_chat_preferences(document: &Value) -> Result<ChatModePreferences> {
     })
 }
 
-/// Read the installation chat.json on every use; per-agent overlays merge over this base.
-/// A missing file means defaults; an unreadable or invalid one fails closed rather than
-/// falling back to a compiled default.
 /// Chat's live file (`live-files.json`), relative to the checkout.
 pub const LIVE_CHAT: &str = "ui/chat/chat.json";
 
+/// The installation chat.json, parsed again only when it changes; per-agent overlays merge
+/// over this base. A missing file means defaults; a broken live edit keeps the last good
+/// version, and with none (or for a fixture path) it fails closed.
 pub async fn read_chat_document(path: &Path) -> Result<Value> {
-    let valid = |bytes: &[u8]| serde_json::from_slice::<Value>(bytes).map(|_| ()).map_err(Into::into);
-    match webagent_configuration::live::read_path(path, 4 * 1024 * 1024, valid) {
-        Ok(bytes) => {
-            serde_json::from_slice(&bytes).map_err(|_| anyhow!("Chat configuration invalid"))
-        }
+    let parse = |bytes: &[u8]| serde_json::from_slice::<Value>(bytes).map_err(Into::into);
+    match webagent_configuration::live::parsed_path(path, 4 * 1024 * 1024, parse) {
+        Ok(value) => Ok(value),
         Err(error) if webagent_configuration::live::missing(&error) => {
             Ok(Value::Object(Default::default()))
         }
+        Err(error) if error.is::<serde_json::Error>() => Err(anyhow!("Chat configuration invalid")),
         Err(_) => Err(anyhow!("Chat configuration unavailable")),
     }
 }
@@ -119,6 +118,10 @@ pub fn main_chat_prompts_at(
     source: Option<&Path>,
     fallback_directory: &Path,
 ) -> Result<Value> {
-    let prompts = webagent_configuration::prompts::resolved_prompts_at(root, source, fallback_directory)?;
-    Ok(prompts.get("main_chat_skills").cloned().unwrap_or(Value::Null))
+    let prompts =
+        webagent_configuration::prompts::resolved_prompts_at(root, source, fallback_directory)?;
+    Ok(prompts
+        .get("main_chat_skills")
+        .cloned()
+        .unwrap_or(Value::Null))
 }

@@ -546,6 +546,7 @@ fn parse_controls(bytes: &[u8]) -> Result<Controls> {
     }
     Ok(value)
 }
+/// The current bytes, for the save fence.
 fn controls_bytes(root: &std::path::Path) -> Result<Option<Vec<u8>>> {
     match webagent_configuration::live::read_path(&controls_path(root), CONTROLS_LIMIT, |bytes| {
         parse_controls(bytes).map(|_| ())
@@ -561,7 +562,14 @@ pub fn initialize(root: &std::path::Path) -> Result<()> {
 }
 /// Runtime controls are distinct from immutable packages and contain no credentials.
 pub fn controls(root: &std::path::Path) -> Result<Controls> {
-    controls_bytes(root)?.map_or_else(|| Ok(Controls::default()), |bytes| parse_controls(&bytes))
+    match webagent_configuration::live::parsed_path(
+        &controls_path(root),
+        CONTROLS_LIMIT,
+        parse_controls,
+    ) {
+        Err(e) if webagent_configuration::live::missing(&e) => Ok(Controls::default()),
+        result => result,
+    }
 }
 /// Admission and dispatch both read current controls; there is no built-in fallback on removal.
 static BACKGROUND_FAILURE_UNTIL: OnceLock<StdMutex<Option<std::time::Instant>>> = OnceLock::new();

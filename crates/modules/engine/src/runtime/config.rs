@@ -255,11 +255,7 @@ impl<C: SchemaCatalog> Config<C> {
             c.validate()?;
             Ok(c)
         };
-        parse(&webagent_configuration::live::read_path(
-            path,
-            1024 * 1024,
-            |bytes| parse(bytes).map(|_| ()),
-        )?)
+        webagent_configuration::live::parsed_path(path, 1024 * 1024, parse)
     }
     /// Write a fixture file; the live file is saved through the broker.
     pub fn persist(&self, path: &Path) -> Result<()> {

@@ -41,12 +41,11 @@ fn source(id: &str) -> Result<String> {
         MESSAGE_VISIBILITY | CLOSING_STATUS => {
             // Live files beside this crate (`live-files.json`); an integral gate has no
             // packaged default, so a missing file fails closed.
-            let bytes = webagent_configuration::live::read(
+            webagent_configuration::live::parsed(
                 &format!("{GATE_FOLDER}/{id}.json"),
                 64 * 1024,
-                |bytes| std::str::from_utf8(bytes).map(|_| ()).map_err(Into::into),
-            )?;
-            Ok(String::from_utf8(bytes)?)
+                webagent_configuration::live::utf8,
+            )
         }
         PUBLICATION_SIZE => {
             publication_source(webagent_configuration::prompts::default_source(None)?.as_deref())
@@ -188,7 +187,7 @@ pub fn parse_selection(checkpoint: Checkpoint, configured: &str) -> Result<Selec
 pub fn selected(policy: &Policy, checkpoint: Checkpoint) -> Result<Vec<Selection>> {
     let name = serde_json::to_value(checkpoint)?
         .as_str()
-        .expect("checkpoint serializes to a string")
+        .ok_or_else(|| anyhow::anyhow!("Checkpoint name invalid"))?
         .to_owned();
     let mut seen = BTreeSet::new();
     let mut result = Vec::new();

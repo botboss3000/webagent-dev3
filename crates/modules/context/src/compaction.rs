@@ -1,7 +1,9 @@
 //! Core configuration/storage adapter for the pure context library.
 use anyhow::{anyhow, Result};
-#[cfg(test)] use serde_json::{json,Value};
-#[cfg(test)] use sha2::{Digest,Sha256};
+#[cfg(test)]
+use serde_json::{json, Value};
+#[cfg(test)]
+use sha2::{Digest, Sha256};
 pub use webagent_context_contracts::context_compaction::*;
 /// Agent overrides affect history folding, while the data-root file retains
 /// summary size, source limits, and every other app-wide safety bound.
@@ -24,12 +26,21 @@ impl AgentThresholds {
 }
 
 /// Load and unseal agent-owned policy in the core; the pure component never accesses storage.
-pub async fn agent_thresholds(store: &impl crate::ports::AgentMetadata, agent_id: &str) -> Result<Option<AgentThresholds>> {
+pub async fn agent_thresholds(
+    store: &impl crate::ports::AgentMetadata,
+    agent_id: &str,
+) -> Result<Option<AgentThresholds>> {
     let blob: Vec<u8> = sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?")
-        .bind(agent_id).fetch_one(store.agent_pool()).await?;
+        .bind(agent_id)
+        .fetch_one(store.agent_pool())
+        .await?;
     let metadata = store.unseal(&blob)?;
-    if metadata["compaction_thresholds"].is_null() { return Ok(None); }
-    Ok(Some(serde_json::from_value(metadata["compaction_thresholds"].clone())?))
+    if metadata["compaction_thresholds"].is_null() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_value(
+        metadata["compaction_thresholds"].clone(),
+    )?))
 }
 
 /// Live compaction policy, relative to the checkout.
@@ -41,14 +52,26 @@ pub const LIVE_COMPACTION: &str = "crates/modules/context/context-compaction.jso
 pub struct Config(pub webagent_context_contracts::context_compaction::Config);
 /// Resolve host-owned summary instructions after decoding persisted policy; the JSON cannot override them.
 impl<'de> serde::Deserialize<'de> for Config {
- fn deserialize<D:serde::Deserializer<'de>>(deserializer:D)->std::result::Result<Self,D::Error> {
-  let mut policy=<webagent_context_contracts::context_compaction::Config as serde::Deserialize>::deserialize(deserializer)?;
-  policy.summary_instructions=webagent_context_contracts::compatibility::ENGINE_INSTRUCTION_SEED.to_owned();
-  Ok(Self(policy))
- }
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let mut policy=<webagent_context_contracts::context_compaction::Config as serde::Deserialize>::deserialize(deserializer)?;
+        policy.summary_instructions =
+            webagent_context_contracts::compatibility::ENGINE_INSTRUCTION_SEED.to_owned();
+        Ok(Self(policy))
+    }
 }
-impl std::ops::Deref for Config {type Target=webagent_context_contracts::context_compaction::Config;fn deref(&self)->&Self::Target{&self.0}}
-impl std::ops::DerefMut for Config {fn deref_mut(&mut self)->&mut Self::Target{&mut self.0}}
+impl std::ops::Deref for Config {
+    type Target = webagent_context_contracts::context_compaction::Config;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for Config {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 impl Config {
     /// The live policy file (`live-files.json`), relative to the checkout.
     pub fn configured_path() -> std::path::PathBuf {
@@ -66,27 +89,35 @@ impl Config {
             config.validate()?;
             Ok(config)
         };
-        let bytes = webagent_configuration::live::read_path(path, 64 * 1024, |bytes| parse(bytes).map(|_| ()))?;
-        parse(&bytes)
+        webagent_configuration::live::parsed_path(path, 64 * 1024, parse)
     }
     /// Same temp/fsync/rename discipline as loop-runtime.json.
     /// Fixture and explicit-file writes; the live file is saved through the broker.
     pub fn persist(&self, path: &std::path::Path) -> Result<()> {
         use std::io::Write;
         self.validate()?;
-        if path.is_relative() { anyhow::bail!("Live compaction policy is saved through the broker"); }
-        let parent = path.parent().ok_or_else(|| anyhow!("Config parent missing"))?;
+        if path.is_relative() {
+            anyhow::bail!("Live compaction policy is saved through the broker");
+        }
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow!("Config parent missing"))?;
         std::fs::create_dir_all(parent)?;
         let temp = parent.join(format!(".context-compaction.{}.tmp", uuid::Uuid::new_v4()));
         let result = (|| -> Result<()> {
-            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp)?;
             file.write_all(&serde_json::to_vec_pretty(self)?)?;
             file.sync_all()?;
             std::fs::rename(&temp, path)?;
             std::fs::File::open(parent)?.sync_all()?;
             Ok(())
         })();
-        if result.is_err() { let _ = std::fs::remove_file(temp); }
+        if result.is_err() {
+            let _ = std::fs::remove_file(temp);
+        }
         result
     }
 }
@@ -107,7 +138,8 @@ mod tests {
     fn oversized_tool_result_is_bounded_once_and_keeps_provenance() {
         let full = json!({"status":"success","output":"\\n".repeat(500_000)}).to_string();
         let hash = hex::encode(Sha256::digest(full.as_bytes()));
-        let mut input = vec![json!({"type":"function_call_output","call_id":"big-search","output":full})];
+        let mut input =
+            vec![json!({"type":"function_call_output","call_id":"big-search","output":full})];
         assert!(project_tool_results(&mut input, 8192).unwrap());
         let receipt = input[0]["output"].as_str().unwrap();
         assert!(receipt.len() <= 8192);
@@ -123,17 +155,22 @@ mod tests {
 
     #[test]
     fn loader_acknowledgments_pass_unchanged_to_replay_and_summary() {
-        let config=Config::configured().unwrap();
-        for name in ["load_ability","load_tool","load_skill"] {
-            let output=json!({"status":"success","output":{"status":"loaded",
-                "scope":"run","context_source":"live_skill_catalog"}}).to_string();
-            let mut input=vec![
+        let config = Config::configured().unwrap();
+        for name in ["load_ability", "load_tool", "load_skill"] {
+            let output = json!({"status":"success","output":{"status":"loaded",
+                "scope":"run","context_source":"live_skill_catalog"}})
+            .to_string();
+            let mut input = vec![
                 json!({"type":"function_call","call_id":"load","name":name,"arguments":"{}"}),
-                json!({"type":"function_call_output","call_id":"load","output":output})];
-            let original=input.clone();
-            assert!(!project_tool_results(&mut input,8192).unwrap());
-            assert_eq!(input,original);
-            assert!(config.prompt_source(&input,true).unwrap().contains("live_skill_catalog"));
+                json!({"type":"function_call_output","call_id":"load","output":output}),
+            ];
+            let original = input.clone();
+            assert!(!project_tool_results(&mut input, 8192).unwrap());
+            assert_eq!(input, original);
+            assert!(config
+                .prompt_source(&input, true)
+                .unwrap()
+                .contains("live_skill_catalog"));
         }
     }
 
@@ -141,11 +178,14 @@ mod tests {
     fn large_history_folds_in_stages_with_bounded_sources() {
         let mut config = rolling_config();
         config.max_source_bytes = 6000;
-        let mut input = vec![user("long task"), call("first"),
+        let mut input = vec![
+            user("long task"),
+            call("first"),
             json!({"type":"function_call_output","call_id":"first","output":"x".repeat(3500)}),
             call("second"),
             json!({"type":"function_call_output","call_id":"second","output":"y".repeat(3500)}),
-            user("finish")];
+            user("finish"),
+        ];
         let first = plan_rolling(&input, 4000, &config).unwrap().unwrap();
         assert!(serde_json::to_vec(&first.source).unwrap().len() <= config.max_source_bytes);
         input = apply_summary(&input, &first, "first search done").unwrap();
@@ -157,15 +197,18 @@ mod tests {
 
     #[test]
     fn reasoning_projection_is_idempotent_and_keeps_visible_content() {
-        let source=vec![json!({"type":"reasoning","encrypted_content":"opaque"}),
+        let source = vec![
+            json!({"type":"reasoning","encrypted_content":"opaque"}),
             json!({"type":"message","role":"assistant","content":"answer",
-                "deepseek_reasoning":"hidden"}),json!({"role":"user","content":"next"})];
-        let once=recall_source(&source);
-        assert_eq!(once.len(),2);
-        assert_eq!(once[0]["content"],"answer");
+                "deepseek_reasoning":"hidden"}),
+            json!({"role":"user","content":"next"}),
+        ];
+        let once = recall_source(&source);
+        assert_eq!(once.len(), 2);
+        assert_eq!(once[0]["content"], "answer");
         assert!(once[0].get("deepseek_reasoning").is_none());
-        assert_eq!(recall_source(&once),once);
-        assert_eq!(source[0]["encrypted_content"],"opaque");
+        assert_eq!(recall_source(&once), once);
+        assert_eq!(source[0]["encrypted_content"], "opaque");
     }
 
     fn user(text: &str) -> Value {
@@ -250,19 +293,29 @@ mod tests {
         let planned = plan(&input, 700, 250).unwrap().unwrap();
         assert_eq!(planned.boundary, Boundary::CompletedToolExchange);
         assert_eq!(planned.drop_until, 3);
-        let compacted = apply_summary(&input, &planned,
-            "The issue is under investigation. First read completed; repair remains pending.").unwrap();
+        let compacted = apply_summary(
+            &input,
+            &planned,
+            "The issue is under investigation. First read completed; repair remains pending.",
+        )
+        .unwrap();
         assert_eq!(&compacted[1..], &input[3..]);
-        assert!(compacted[0]["content"].as_str().unwrap().contains("Active task progress"));
+        assert!(compacted[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Active task progress"));
         assert!(plan(&compacted, 700, 250).unwrap().is_none());
     }
 
     #[test]
     fn active_compaction_rejects_mismatched_tool_results() {
-        let input = vec![user("Do work"), call("first"),
+        let input = vec![
+            user("Do work"),
+            call("first"),
             json!({"type":"function_call_output","call_id":"first","output":"x".repeat(2000)}),
             call("second"),
-            json!({"type":"function_call_output","call_id":"unknown","output":"bad"})];
+            json!({"type":"function_call_output","call_id":"unknown","output":"bad"}),
+        ];
         assert!(plan(&input, 700, 250).is_err());
     }
     fn rolling_config() -> Config {
@@ -280,8 +333,13 @@ mod tests {
         c.trigger_tokens = 150_000;
         c.tail_tokens = 40_000;
         c.summary_reserve_bytes = 300;
-        let input = vec![user(&"old".repeat(500)), assistant("done"),
-            user(&"recent".repeat(500)), assistant("done"), user("continue")];
+        let input = vec![
+            user(&"old".repeat(500)),
+            assistant("done"),
+            user(&"recent".repeat(500)),
+            assistant("done"),
+            user("continue"),
+        ];
         let budget = c.summary_envelope_bytes(&input[..2]).unwrap() + 100;
         assert!(plan_rolling(&input, 262144, &c).unwrap().is_none());
         c.system_input_budget = Some(budget);
@@ -289,18 +347,24 @@ mod tests {
         assert_eq!(plan.drop_until, 2);
         assert!(c.summary_envelope_bytes(&plan.source).unwrap() <= budget);
         assert_eq!(c.trigger_tokens, 150_000);
-        assert!(serde_json::to_value(&c).unwrap().get("system_input_budget").is_none());
+        assert!(serde_json::to_value(&c)
+            .unwrap()
+            .get("system_input_budget")
+            .is_none());
     }
 
     #[test]
     fn system_budget_counts_json_escaping_and_manual_tool_boundaries() {
         let mut c = Config::configured().unwrap();
         c.summary_reserve_bytes = 300;
-        let input = vec![user("work"), call("one"),
+        let input = vec![
+            user("work"),
+            call("one"),
             json!({"type":"function_call_output","call_id":"one","output":"\"\\".repeat(300)}),
             call("two"),
             json!({"type":"function_call_output","call_id":"two","output":"\"\\".repeat(300)}),
-            user("continue")];
+            user("continue"),
+        ];
         let budget = c.summary_envelope_bytes(&input[..3]).unwrap();
         c.system_input_budget = Some(budget);
         let plan = plan_manual(&input, 262144, &c).unwrap().unwrap();
@@ -313,11 +377,18 @@ mod tests {
     #[test]
     fn manual_fold_waits_for_a_safe_completed_exchange() {
         let c = rolling_config();
-        let input = vec![user("old request"), assistant("old answer"), user("current request")];
+        let input = vec![
+            user("old request"),
+            assistant("old answer"),
+            user("current request"),
+        ];
         assert!(plan_rolling(&input, 4096, &c).unwrap().is_none());
         let requested = plan_manual(&input, 4096, &c).unwrap().unwrap();
         assert_eq!(requested.drop_until, 2);
-        assert_eq!(&apply_summary(&input, &requested, "prior answer").unwrap()[1..], &input[2..]);
+        assert_eq!(
+            &apply_summary(&input, &requested, "prior answer").unwrap()[1..],
+            &input[2..]
+        );
         assert!(plan_manual(&[user("only request")], 4096, &c).is_err());
     }
     #[test]
@@ -329,7 +400,8 @@ mod tests {
         assert_eq!(p.drop_until, 2);
         let result = apply_summary(&input, &p, "remember original goal").unwrap();
         assert_eq!(&result[1..], &input[2..]);
-        let mut raised = c.clone(); raised.trigger_tokens = 500;
+        let mut raised = c.clone();
+        raised.trigger_tokens = 500;
         assert!(plan_rolling(&input, 4096, &raised).unwrap().is_none());
     }
     #[test]
@@ -385,8 +457,13 @@ mod tests {
     #[test]
     fn completed_exchange_remains_an_available_rolling_boundary() {
         let c = rolling_config();
-        let input = vec![user(&"task".repeat(250)), call("first"), output("first"),
-            call("last"), output("last")];
+        let input = vec![
+            user(&"task".repeat(250)),
+            call("first"),
+            output("first"),
+            call("last"),
+            output("last"),
+        ];
         let p = plan_rolling(&input, 4096, &c).unwrap().unwrap();
         assert_eq!(p.boundary, Boundary::CompletedToolExchange);
         let result = apply_summary(&input, &p, "completed first exchange").unwrap();
@@ -402,7 +479,9 @@ mod tests {
         for _ in 0..3 {
             state.sync(&history).unwrap();
             let (sizes, characters) = state.measurements();
-            let cached = plan_cached(&history, 4096, &config, sizes, characters).unwrap().unwrap();
+            let cached = plan_cached(&history, 4096, &config, sizes, characters)
+                .unwrap()
+                .unwrap();
             let reference = plan_rolling(&history, 4096, &config).unwrap().unwrap();
             assert_eq!(cached.drop_until, reference.drop_until);
             assert_eq!(cached.source_digest, reference.source_digest);
@@ -412,22 +491,24 @@ mod tests {
             history.push(assistant("next"));
         }
     }
-
 }
 
 #[cfg(test)]
 mod model_limit_regression {
- use super::*;
- #[test]
- fn summary_chunk_cap_does_not_replace_history_trigger() {
-  let mut c=Config::configured().unwrap();
-  c.system_input_budget=Some(3_688_000);
-  let input=vec![json!({"role":"user","content":"x".repeat(270_000)}),
-      json!({"role":"user","content":"continue"})];
-  assert!(plan_rolling(&input,4_194_304,&c).unwrap().is_none());
-  c.trigger_tokens=50_000;c.tail_tokens=10_000;
-  let plan=plan_rolling(&input,4_194_304,&c);
-  // A single oversized turn cannot be safely split; it must be reported rather than dropped.
-  assert!(plan.is_err());
- }
+    use super::*;
+    #[test]
+    fn summary_chunk_cap_does_not_replace_history_trigger() {
+        let mut c = Config::configured().unwrap();
+        c.system_input_budget = Some(3_688_000);
+        let input = vec![
+            json!({"role":"user","content":"x".repeat(270_000)}),
+            json!({"role":"user","content":"continue"}),
+        ];
+        assert!(plan_rolling(&input, 4_194_304, &c).unwrap().is_none());
+        c.trigger_tokens = 50_000;
+        c.tail_tokens = 10_000;
+        let plan = plan_rolling(&input, 4_194_304, &c);
+        // A single oversized turn cannot be safely split; it must be reported rather than dropped.
+        assert!(plan.is_err());
+    }
 }

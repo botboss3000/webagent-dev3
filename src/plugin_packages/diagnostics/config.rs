@@ -95,25 +95,19 @@ impl Config {
             background_issues: BackgroundIssues::default(),
         }
     }
-    /// The live settings file (`live-files.json`), read directly so an invalid edit
-    /// fails closed instead of falling back to a last-good copy.
-    pub const LIVE: &'static str =
-        "/live-checkout/src/plugin_packages/diagnostics/diagnostics.json";
+    /// The live settings file (`live-files.json`), relative to the checkout: a broken
+    /// edit keeps the last good settings. An absolute path (fixtures) is read as is.
+    pub const LIVE: &'static str = "src/plugin_packages/diagnostics/diagnostics.json";
+    /// The settings and the digest of their bytes, re-read only when the file changes.
     pub fn read(path: &Path) -> Result<(Self, String)> {
-        use std::io::Read;
-        let mut raw = Vec::new();
-        std::fs::File::open(path)?
-            .take(65537)
-            .read_to_end(&mut raw)?;
-        if raw.len() > 65536 {
-            bail!("Diagnostics configuration too large");
-        }
-        let config: Self = serde_json::from_slice(&raw)?;
-        config.validate()?;
-        Ok((
-            config,
-            hex::encode(sha2::Sha256::digest(serde_json::to_vec(&raw)?)),
-        ))
+        webagent_configuration::live::parsed_path(path, 65536, |raw| {
+            let config: Self = serde_json::from_slice(raw)?;
+            config.validate()?;
+            Ok((
+                config,
+                hex::encode(sha2::Sha256::digest(serde_json::to_vec(raw)?)),
+            ))
+        })
     }
     pub fn validate(&self) -> Result<()> {
         if self.version != 1

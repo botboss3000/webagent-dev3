@@ -78,22 +78,16 @@ pub const LIVE_SETTINGS: &str = "crates/modules/webapp/app-settings.json";
 /// UI settings from `settings`: the live file when relative, that exact file when absolute
 /// (fixtures). A missing file means defaults.
 pub fn app_settings(settings: &Path) -> Result<Value> {
-    let valid = |bytes: &[u8]| -> Result<()> {
+    let parse = |bytes: &[u8]| -> Result<Value> {
         let value: Value = serde_json::from_slice(bytes)?;
         validate_app_settings(&value)?;
         if !value.is_object() {
             return Err(anyhow!("app-settings.json must be an object"));
         }
-        Ok(())
+        Ok(value)
     };
-    match webagent_configuration::live::read_path(settings, 64 * 1024, valid) {
-        Ok(bytes) => {
-            let value: Value = serde_json::from_slice(&bytes)?;
-            if !value.is_object() {
-                return Err(anyhow!("app-settings.json must be an object"));
-            }
-            Ok(value)
-        }
+    match webagent_configuration::live::parsed_path(settings, 64 * 1024, parse) {
+        Ok(value) => Ok(value),
         Err(error) if webagent_configuration::live::missing(&error) => Ok(json!({})),
         Err(error) => Err(error),
     }
@@ -113,24 +107,14 @@ pub enum Error {
 /// Preserve the UI API's bounded status and public error messages.
 pub async fn ui_config(chat_path: &Path, settings: &Path) -> Result<Value, Error> {
     use axum::http::StatusCode;
-    let valid = |bytes: &[u8]| {
-        serde_json::from_slice::<Value>(bytes)
-            .map(|_| ())
-            .map_err(Into::into)
-    };
-    let bytes = webagent_configuration::live::read_path(chat_path, 4 * 1024 * 1024, valid)
+    let parse = |bytes: &[u8]| serde_json::from_slice::<Value>(bytes).map_err(Into::into);
+    let chat_ui = webagent_configuration::live::parsed_path(chat_path, 4 * 1024 * 1024, parse)
         .map_err(|_| {
             Error::Http(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Chat UI configuration unavailable",
             )
         })?;
-    let chat_ui: Value = serde_json::from_slice(&bytes).map_err(|_| {
-        Error::Http(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Chat UI configuration invalid",
-        )
-    })?;
     if !chat_ui["chat_common"].is_object() {
         return Err(Error::Http(
             StatusCode::INTERNAL_SERVER_ERROR,

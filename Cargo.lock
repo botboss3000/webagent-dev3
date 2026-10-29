@@ -2524,6 +2524,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "webagent-configuration",
  "webagent-context",
  "webagent-models",
 ]

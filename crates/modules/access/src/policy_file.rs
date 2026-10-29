@@ -38,12 +38,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             validate_configuration(&value)?;
             Ok(value)
         };
-        let bytes = webagent_configuration::live::read_path(
-            &self.access_policy_path(),
-            POLICY_LIMIT,
-            |bytes| parse(bytes).map(|_| ()),
-        )?;
-        parse(&bytes)
+        webagent_configuration::live::parsed_path(&self.access_policy_path(), POLICY_LIMIT, parse)
     }
     pub fn save_page_policy(&self, pages: Value, expected: u64) -> Result<Value> {
         validate_pages(&pages)?;

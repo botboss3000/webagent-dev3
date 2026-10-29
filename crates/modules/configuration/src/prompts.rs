@@ -54,25 +54,22 @@ fn assemble(roots: &[PathBuf], relative: &str, depth: usize) -> Result<Value> {
         let (key, value) = if folder {
             (name.clone(), assemble(roots, &path, depth + 1)?)
         } else if let Some(key) = name.strip_suffix(".md") {
-            let bytes = crate::live::read_from(roots, &path, FILE_LIMIT, |bytes| {
-                std::str::from_utf8(bytes)
-                    .map(|_| ())
-                    .map_err(|_| anyhow!("Prompt file is not UTF-8"))
+            let text = crate::live::parsed_from(roots, &path, FILE_LIMIT, |bytes| {
+                String::from_utf8(bytes.to_vec()).map_err(|_| anyhow!("Prompt file is not UTF-8"))
             })?;
-            let text = String::from_utf8(bytes)?;
             // Files end with one newline by convention; the prompt text does not.
             (
                 key.to_owned(),
                 Value::String(text.strip_suffix('\n').unwrap_or(&text).to_owned()),
             )
         } else if let Some(key) = name.strip_suffix(".json") {
-            let bytes = crate::live::read_from(roots, &path, FILE_LIMIT, |bytes| {
+            let settings = crate::live::parsed_from(roots, &path, FILE_LIMIT, |bytes| {
                 match serde_json::from_slice::<Value>(bytes)? {
-                    Value::Object(_) => Ok(()),
+                    settings @ Value::Object(_) => Ok(settings),
                     _ => bail!("Prompt settings must be an object"),
                 }
             })?;
-            (key.to_owned(), serde_json::from_slice(&bytes)?)
+            (key.to_owned(), settings)
         } else {
             continue;
         };

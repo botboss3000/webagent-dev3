@@ -24,6 +24,7 @@ hex = "0.4"
 fs2 = "0.4"
 tracing = "0.1"
 webagent-context = { path = "../../../crates/modules/context", default-features = false }
+webagent-configuration = { path = "../../../crates/modules/configuration" }
 webagent-models = { path = "../../../crates/modules/models" }
 
 [dev-dependencies]

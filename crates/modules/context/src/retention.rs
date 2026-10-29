@@ -2,9 +2,8 @@
 //!
 //! Raw outputs remain in durable run input. This module stores only bounded
 //! references and returns a projected copy for one model request.
-use anyhow::{bail, Context, Result};
-use webagent_access::storage::RecordCodec;
 use crate::ports::AgentMetadata;
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -13,6 +12,7 @@ use std::{
     fs,
     path::Path,
 };
+use webagent_access::storage::RecordCodec;
 
 pub const CONTROL_NAME: &str = "manage_tool_context";
 const STATE_KEY: &str = "tool_context_state";
@@ -79,7 +79,12 @@ impl Policy {
     }
     /// Read the policy from the first of `roots` that has it; tests pass their own root.
     pub fn read_in(roots: &[std::path::PathBuf]) -> Result<Self> {
-        Self::parse(&webagent_configuration::live::read_from(roots, LIVE_POLICY, MAX_POLICY_BYTES as u64, |bytes| Self::parse(bytes).map(|_| ()))?)
+        webagent_configuration::live::parsed_from(
+            roots,
+            LIVE_POLICY,
+            MAX_POLICY_BYTES as u64,
+            Self::parse,
+        )
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -133,7 +138,10 @@ impl Policy {
 
 /// Load an agent override from encrypted agent metadata, without returning it
 /// to any model-facing output. The override is a complete effective policy.
-pub async fn agent_override(store: &impl crate::ports::AgentMetadata, agent_id: &str) -> Result<Option<Value>> {
+pub async fn agent_override(
+    store: &impl crate::ports::AgentMetadata,
+    agent_id: &str,
+) -> Result<Option<Value>> {
     let view = store.for_agent(agent_id).await?;
     let blob: Vec<u8> = sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?")
         .bind(agent_id)
@@ -174,10 +182,9 @@ fn embedded_prompt_defaults(template: &Value) -> Result<(String, String)> {
         .and_then(Value::as_object)
         .context("Embedded tool output retention prompt section is missing or invalid")?;
     let field = |name: &str| -> Result<String> {
-        let text = fields
-            .get(name)
-            .and_then(Value::as_str)
-            .with_context(|| format!("Embedded tool output retention {name} prompt is missing or invalid"))?;
+        let text = fields.get(name).and_then(Value::as_str).with_context(|| {
+            format!("Embedded tool output retention {name} prompt is missing or invalid")
+        })?;
         if text.trim().is_empty() || text.len() > 8192 {
             bail!("Embedded tool output retention prompt is invalid");
         }
@@ -190,13 +197,13 @@ impl Prompts {
     /// Read live prompts. Missing section/keys fall back to validated embedded JSON;
     /// malformed present values fail closed.
     pub fn read(root: &Path) -> Result<Self> {
-        Self::read_at(root,crate::defaults::published_root().as_deref())
+        Self::read_at(root, crate::defaults::published_root().as_deref())
     }
-    pub fn read_at(root:&Path,source:Option<&Path>)->Result<Self>{
+    pub fn read_at(root: &Path, source: Option<&Path>) -> Result<Self> {
         let template: Value = serde_json::from_slice(&crate::defaults::prompt_defaults_at(source)?)
             .context("Embedded prompt configuration is malformed")?;
         let (guidance_default, placeholder_default) = embedded_prompt_defaults(&template)?;
-        let live=crate::defaults::resolved_prompts_at(root,source)?;
+        let live = crate::defaults::resolved_prompts_at(root, source)?;
         let section = live.get("tool_output_retention");
         if section.is_some_and(|value| !value.is_object()) {
             bail!("Invalid tool output retention prompt section");
@@ -422,9 +429,10 @@ pub fn register(run: &mut Value, call: &Value, output: &Value, policy: &Policy) 
     let hash = hash_output(output);
     let state = state_mut(run);
     let clock = state["clock"].as_u64().unwrap_or(0);
-    let entries = state["entries"]
-        .as_array_mut()
-        .expect("state initializes entries");
+    // `state_mut` always initializes the entries array.
+    let Some(entries) = state["entries"].as_array_mut() else {
+        return;
+    };
     if entries.iter().any(|entry| entry_key(entry, &run_id, &id)) {
         return;
     }
@@ -709,7 +717,7 @@ pub fn project(run: &Value, policy: &Policy, placeholder: &str) -> Result<Option
 /// name and digest; after compaction removes both items, a unique eligible ledger
 /// entry remains the only permitted source of origin identity.
 pub fn origin_run_id<'a>(run: &'a Value, id: &str) -> Option<&'a str> {
-    if let Some(origin)=run["tool_result_projection"]["origins"].get(id) {
+    if let Some(origin) = run["tool_result_projection"]["origins"].get(id) {
         return origin["run_id"].as_str();
     }
     let input = run.get("input")?.as_array()?;
@@ -756,8 +764,9 @@ pub fn origin_run_id<'a>(run: &'a Value, id: &str) -> Option<&'a str> {
 /// Verify an archived result against the unique source digest retained in the
 /// current run's metadata ledger before exposing any page of that result.
 pub fn verify_origin_output(run: &Value, id: &str, name: &str, raw: &str) -> bool {
-    if let Some(origin)=run["tool_result_projection"]["origins"].get(id) {
-        return origin["tool"]==name && origin["sha256"]==webagent_context_contracts::tool_results::fingerprint(raw);
+    if let Some(origin) = run["tool_result_projection"]["origins"].get(id) {
+        return origin["tool"] == name
+            && origin["sha256"] == webagent_context_contracts::tool_results::fingerprint(raw);
     }
     if !perishable_read(name) {
         return false;
@@ -781,7 +790,7 @@ pub fn touch(run: &mut Value, origin_run_id: &str, id: &str) -> Result<()> {
     let clock = state["clock"].as_u64().unwrap_or(0);
     let entries = state["entries"]
         .as_array_mut()
-        .expect("state initializes entries");
+        .ok_or_else(|| anyhow!("Tool output retention state invalid"))?;
     let Some(entry) = entries
         .iter_mut()
         .find(|entry| entry_key(entry, origin_run_id, id))
@@ -924,39 +933,64 @@ pub fn schema() -> Value {
 // Exact duplicate suppression is independent of the disabled experimental lifetime policy.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
-pub struct DedupPolicy { pub enabled: bool }
-impl Default for DedupPolicy { fn default() -> Self { Self { enabled: true } } }
+pub struct DedupPolicy {
+    pub enabled: bool,
+}
+impl Default for DedupPolicy {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
 
 pub const DEDUP_DEFAULT_TOOLS: &[&str] = &[
-    "file_read", "file_list", "file_search", "v3_source_read", "v3_source_list",
-    "code_index_lookup", "code_index_coverage", "code_index_trace", "code_index_progress",
+    "file_read",
+    "file_list",
+    "file_search",
+    "v3_source_read",
+    "v3_source_list",
+    "code_index_lookup",
+    "code_index_coverage",
+    "code_index_trace",
+    "code_index_progress",
 ];
 
 pub fn dedup_included(settings: &Value, name: &str) -> bool {
-    settings["tool_result_deduplication"].get(name).and_then(Value::as_bool)
+    settings["tool_result_deduplication"]
+        .get(name)
+        .and_then(Value::as_bool)
         .unwrap_or_else(|| DEDUP_DEFAULT_TOOLS.contains(&name))
 }
 
-pub async fn dedup_policy<S:crate::ports::AgentMetadata>(store: &S, agent: &str) -> Result<DedupPolicy> {
+pub async fn dedup_policy<S: crate::ports::AgentMetadata>(
+    store: &S,
+    agent: &str,
+) -> Result<DedupPolicy> {
     let scoped = store.for_agent(agent).await?;
     let raw: Vec<u8> = sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?")
-        .bind(agent).fetch_one(crate::ports::AgentMetadata::agent_pool(&scoped)).await?;
+        .bind(agent)
+        .fetch_one(crate::ports::AgentMetadata::agent_pool(&scoped))
+        .await?;
     let metadata = scoped.unseal(&raw)?;
     match metadata.get("tool_result_deduplication") {
         Some(value) => {
             // Older releases mixed per-tool overrides into this policy object.
             // The request DTO remains strict; persisted policy reads select only its enabled field.
-            let fields=value.as_object().context("Invalid duplicate-result agent policy")?;
-            Ok(serde_json::from_value(json!({"enabled":fields.get("enabled").cloned().unwrap_or(json!(true))}))?)
-        },
+            let fields = value
+                .as_object()
+                .context("Invalid duplicate-result agent policy")?;
+            Ok(serde_json::from_value(
+                json!({"enabled":fields.get("enabled").cloned().unwrap_or(json!(true))}),
+            )?)
+        }
         None => Ok(DedupPolicy::default()),
     }
 }
 
 /// Read the live placeholder file (`prompts/tool_result_deduplication/placeholder.md`); it has no default.
 pub fn dedup_template(root: &Path) -> Result<String> {
-    let prompts=crate::defaults::resolved_prompts(root)?;
-    let text=prompts["tool_result_deduplication"]["placeholder"].as_str()
+    let prompts = crate::defaults::resolved_prompts(root)?;
+    let text = prompts["tool_result_deduplication"]["placeholder"]
+        .as_str()
         .context("prompts: tool_result_deduplication/placeholder.md is required")?;
     webagent_context_contracts::tool_results::validate_template(text)?;
     Ok(text.to_owned())
@@ -969,155 +1003,316 @@ fn dedup_scope(run: &Value) -> Value {
 
 /// Capture immutable provenance before native tool completion clears its pending identity.
 fn record_dedup_origin(run: &mut Value, call: &Value, output: &Value) -> Result<()> {
-    let Some(id)=call_id(call) else {return Ok(());};
-    let id=id.to_owned();
+    let Some(id) = call_id(call) else {
+        return Ok(());
+    };
+    let id = id.to_owned();
     // Native controls retain only call_id in pending state. Resolve their name
     // from the host-recorded model call before freezing provenance.
-    let name=call["name"].as_str().filter(|name|!name.is_empty()).or_else(||
-        run["input"].as_array().and_then(|input|input.iter().find(|item|
-            item["type"]=="function_call" && call_id(item)==Some(id.as_str())))
-            .and_then(|item|item["name"].as_str()).filter(|name|!name.is_empty()));
-    let Some(name)=name else {return Ok(());};
-    let origin=json!({"run_id":rid(run),"tool":name,"scope":dedup_scope(run),"sha256":webagent_context_contracts::tool_results::fingerprint(&output.to_string()),"previewed":false});
-    if !run["tool_result_projection"].is_object() {run["tool_result_projection"]=json!({});}
-    if !run["tool_result_projection"]["origins"].is_object(){run["tool_result_projection"]["origins"]=json!({});}
-    let origins=run["tool_result_projection"]["origins"].as_object_mut().context("Projection origins missing")?;
-    if let Some(existing)=origins.get(&id) {
-        if existing!=&origin {bail!("Tool-result provenance changed");}
-    } else {origins.insert(id,origin);}
+    let name = call["name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            run["input"]
+                .as_array()
+                .and_then(|input| {
+                    input.iter().find(|item| {
+                        item["type"] == "function_call" && call_id(item) == Some(id.as_str())
+                    })
+                })
+                .and_then(|item| item["name"].as_str())
+                .filter(|name| !name.is_empty())
+        });
+    let Some(name) = name else {
+        return Ok(());
+    };
+    let origin = json!({"run_id":rid(run),"tool":name,"scope":dedup_scope(run),"sha256":webagent_context_contracts::tool_results::fingerprint(&output.to_string()),"previewed":false});
+    if !run["tool_result_projection"].is_object() {
+        run["tool_result_projection"] = json!({});
+    }
+    if !run["tool_result_projection"]["origins"].is_object() {
+        run["tool_result_projection"]["origins"] = json!({});
+    }
+    let origins = run["tool_result_projection"]["origins"]
+        .as_object_mut()
+        .context("Projection origins missing")?;
+    if let Some(existing) = origins.get(&id) {
+        if existing != &origin {
+            bail!("Tool-result provenance changed");
+        }
+    } else {
+        origins.insert(id, origin);
+    }
     Ok(())
 }
 
 /// Build model-only replacements from journal originals. Every reconstructed origin stays session scoped.
 
-
 /// Preserve component-withdrawal recovery while keeping configuration/reconstruction errors actionable.
-
 
 /// Expand model-only references for summarization; callers retain the original verified folding plan.
 
-
-
-
-
-
-
-pub async fn dedup_prepare(run: &mut Value, preview_bytes: usize, root:&Path, policy:DedupPolicy, template:Option<String>, settings:&impl crate::ports::DedupSettings,
-    journal:&impl crate::ports::Journal, planner:&impl crate::ports::Planner, cancel: &tokio_util::sync::CancellationToken) -> Result<(Vec<Value>,bool)> {
+pub async fn dedup_prepare(
+    run: &mut Value,
+    preview_bytes: usize,
+    root: &Path,
+    policy: DedupPolicy,
+    template: Option<String>,
+    settings: &impl crate::ports::DedupSettings,
+    journal: &impl crate::ports::Journal,
+    planner: &impl crate::ports::Planner,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<(Vec<Value>, bool)> {
     use webagent_context_contracts::tool_results as contract;
-    let sid=run["session_id"].as_str().context("Projection session missing")?.to_owned();
-    let agent=run["agent_id"].as_str().unwrap_or("shared_default").to_owned();
+    let sid = run["session_id"]
+        .as_str()
+        .context("Projection session missing")?
+        .to_owned();
+    let agent = run["agent_id"]
+        .as_str()
+        .unwrap_or("shared_default")
+        .to_owned();
     if !run["tool_result_projection"].is_object() {
-        let session=journal.document(&format!("session:{sid}")).await?;
-        run["tool_result_projection"]=session.as_ref().and_then(|s|s.get("tool_result_projection"))
-            .filter(|v|v.is_object()).cloned().unwrap_or_else(||json!({}));
+        let session = journal.document(&format!("session:{sid}")).await?;
+        run["tool_result_projection"] = session
+            .as_ref()
+            .and_then(|s| s.get("tool_result_projection"))
+            .filter(|v| v.is_object())
+            .cloned()
+            .unwrap_or_else(|| json!({}));
     }
-    let before=run["tool_result_projection"].clone();
-    let mut document=before.clone();
-    if !document["origins"].is_object(){document["origins"]=json!({});}
-    let seed=document["initialized"]!=true;
-    let state:contract::State=match document.get("planner") {
-        Some(v)=>serde_json::from_value(v.clone())?,None=>contract::State::default(),
+    let before = run["tool_result_projection"].clone();
+    let mut document = before.clone();
+    if !document["origins"].is_object() {
+        document["origins"] = json!({});
+    }
+    let seed = document["initialized"] != true;
+    let state: contract::State = match document.get("planner") {
+        Some(v) => serde_json::from_value(v.clone())?,
+        None => contract::State::default(),
     };
-    let rebase=document["rebase"]==true;
-    let settings=settings.dedup_settings(&sid).await?;
-    let input=run["input"].as_array().context("Projection input missing")?.clone();
-    let calls:HashMap<_,_>=input.iter().filter(|item|item["type"]=="function_call")
-        .filter_map(|item|call_id(item).map(|id|(id.to_owned(),item))).collect();
-    if calls.len()!=input.iter().filter(|item|item["type"]=="function_call").count() {bail!("Ambiguous tool-result call identity");}
-    let mut observations=Vec::new();
-    let mut scopes:HashMap<String,Value>=HashMap::new();
-    let mut originals=HashMap::new();
-    for item in input.iter().filter(|item|item["type"]=="function_call_output") {
-        let Some(id)=call_id(item) else {continue;};
-        let Some(call)=calls.get(id) else {continue;};
-        let Some(name)=call["name"].as_str() else {continue;};
-        let origin=document["origins"].get(id).cloned();
-        let (source_run,raw)=if let Some(origin)=&origin {
-            let source=origin["run_id"].as_str().context("Projection origin run missing")?;
-            if origin["sha256"]==hash_output(&item["output"]) {
-                (source.to_owned(),output_text(&item["output"]))
-            } else {
-                let result=journal.tool_result(&sid,source,id).await?.context("Original tool output unavailable")?;
-                (source.to_owned(),result["output"].as_str().context("Original result text missing")?.to_owned())
-            }
-        } else if let Some((source,result))=journal.tool_result_origin(&sid,id).await? {
-            (source,result["output"].as_str().context("Original result text missing")?.to_owned())
-        } else {
-            if is_compacted_preview(&item["output"],id) {bail!("Original tool output unavailable for preview reconstruction");}
-            (rid(run).to_owned(),output_text(&item["output"]))
+    let rebase = document["rebase"] == true;
+    let settings = settings.dedup_settings(&sid).await?;
+    let input = run["input"]
+        .as_array()
+        .context("Projection input missing")?
+        .clone();
+    let calls: HashMap<_, _> = input
+        .iter()
+        .filter(|item| item["type"] == "function_call")
+        .filter_map(|item| call_id(item).map(|id| (id.to_owned(), item)))
+        .collect();
+    if calls.len()
+        != input
+            .iter()
+            .filter(|item| item["type"] == "function_call")
+            .count()
+    {
+        bail!("Ambiguous tool-result call identity");
+    }
+    let mut observations = Vec::new();
+    let mut scopes: HashMap<String, Value> = HashMap::new();
+    let mut originals = HashMap::new();
+    for item in input
+        .iter()
+        .filter(|item| item["type"] == "function_call_output")
+    {
+        let Some(id) = call_id(item) else {
+            continue;
         };
-        let source_scope=if source_run==rid(run) {dedup_scope(run)} else if let Some(scope)=scopes.get(&source_run) {scope.clone()} else {
-            let source=journal.run(&source_run).await?;
-            if source["session_id"]!=sid || source["agent_id"].as_str().unwrap_or("shared_default")!=agent {
+        let Some(call) = calls.get(id) else {
+            continue;
+        };
+        let Some(name) = call["name"].as_str() else {
+            continue;
+        };
+        let origin = document["origins"].get(id).cloned();
+        let (source_run, raw) = if let Some(origin) = &origin {
+            let source = origin["run_id"]
+                .as_str()
+                .context("Projection origin run missing")?;
+            if origin["sha256"] == hash_output(&item["output"]) {
+                (source.to_owned(), output_text(&item["output"]))
+            } else {
+                let result = journal
+                    .tool_result(&sid, source, id)
+                    .await?
+                    .context("Original tool output unavailable")?;
+                (
+                    source.to_owned(),
+                    result["output"]
+                        .as_str()
+                        .context("Original result text missing")?
+                        .to_owned(),
+                )
+            }
+        } else if let Some((source, result)) = journal.tool_result_origin(&sid, id).await? {
+            (
+                source,
+                result["output"]
+                    .as_str()
+                    .context("Original result text missing")?
+                    .to_owned(),
+            )
+        } else {
+            if is_compacted_preview(&item["output"], id) {
+                bail!("Original tool output unavailable for preview reconstruction");
+            }
+            (rid(run).to_owned(), output_text(&item["output"]))
+        };
+        let source_scope = if source_run == rid(run) {
+            dedup_scope(run)
+        } else if let Some(scope) = scopes.get(&source_run) {
+            scope.clone()
+        } else {
+            let source = journal.run(&source_run).await?;
+            if source["session_id"] != sid
+                || source["agent_id"].as_str().unwrap_or("shared_default") != agent
+            {
                 bail!("Tool-result origin is outside this conversation");
             }
-            let scope=dedup_scope(&source);scopes.insert(source_run.clone(),scope.clone());scope
+            let scope = dedup_scope(&source);
+            scopes.insert(source_run.clone(), scope.clone());
+            scope
         };
-        let sha=contract::fingerprint(&raw);
-        let scope=origin.as_ref().map(|value|value["scope"].clone()).unwrap_or(source_scope);
-        if let Some(origin)=&origin {
-            if origin["sha256"]!=sha {bail!("Original tool output failed provenance verification");}
-            if origin["tool"]!=name {
+        let sha = contract::fingerprint(&raw);
+        let scope = origin
+            .as_ref()
+            .map(|value| value["scope"].clone())
+            .unwrap_or(source_scope);
+        if let Some(origin) = &origin {
+            if origin["sha256"] != sha {
+                bail!("Original tool output failed provenance verification");
+            }
+            if origin["tool"] != name {
                 // Recover previously saved native-control origins only from the
                 // authorized immutable call journal; mismatched names stay fatal.
-                let recorded=if origin["tool"].is_null() {
-                    journal.tool_call_record(&sid,&source_run,id).await?
-                } else {None};
-                if !recorded.is_some_and(|call|call["call_id"]==id && call["name"]==name) {
+                let recorded = if origin["tool"].is_null() {
+                    journal.tool_call_record(&sid, &source_run, id).await?
+                } else {
+                    None
+                };
+                if !recorded.is_some_and(|call| call["call_id"] == id && call["name"] == name) {
                     bail!("Original tool output failed provenance verification");
                 }
             }
         }
-        let old_preview=origin.as_ref().is_some_and(|value|value["previewed"]==true) || (seed && output_text(&item["output"])!=raw);
-        document["origins"][id]=json!({"run_id":source_run,"tool":name,"scope":scope,"sha256":sha,"previewed":old_preview});
-        observations.push(contract::Observation {call_id:id.to_owned(),tool:name.to_owned(),inputs:call_arguments(call),
-            scope,success:successful_output(&json!(raw)),output:raw.clone(),included:dedup_included(&settings,name)&&!old_preview});
-        originals.insert(id.to_owned(),raw);
+        let old_preview = origin
+            .as_ref()
+            .is_some_and(|value| value["previewed"] == true)
+            || (seed && output_text(&item["output"]) != raw);
+        document["origins"][id] = json!({"run_id":source_run,"tool":name,"scope":scope,"sha256":sha,"previewed":old_preview});
+        observations.push(contract::Observation {
+            call_id: id.to_owned(),
+            tool: name.to_owned(),
+            inputs: call_arguments(call),
+            scope,
+            success: successful_output(&json!(raw)),
+            output: raw.clone(),
+            included: dedup_included(&settings, name) && !old_preview,
+        });
+        originals.insert(id.to_owned(), raw);
     }
     // Output completion may be asynchronous; canonical model-call order owns first/full selection.
-    let call_order:HashMap<_,_>=input.iter().enumerate().filter(|(_,item)|item["type"]=="function_call")
-        .filter_map(|(position,item)|call_id(item).map(|id|(id.to_owned(),position))).collect();
-    observations.sort_by_key(|item|call_order[&item.call_id]);
-    let request=contract::Request {version:contract::VERSION,observations,state,enabled:policy.enabled&&!seed,
-        template:template.clone(),rebase};
-    let plan=planner.tool_results_plan(root,run,&request,cancel).await?;
-    contract::validate_plan(&request,&plan)?;
-    let mut projected=input;
-    for item in projected.iter_mut().filter(|item|item["type"]=="function_call_output") {
-        let Some(id)=call_id(item).map(str::to_owned) else {continue;};
-        if let Some(text)=plan.replacements.get(&id) {item["output"]=json!(text);continue;}
-        let controlled=plan.state.assignments.get(&id).is_some_and(|entry|entry.template.is_some());
+    let call_order: HashMap<_, _> = input
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item["type"] == "function_call")
+        .filter_map(|(position, item)| call_id(item).map(|id| (id.to_owned(), position)))
+        .collect();
+    observations.sort_by_key(|item| call_order[&item.call_id]);
+    let request = contract::Request {
+        version: contract::VERSION,
+        observations,
+        state,
+        enabled: policy.enabled && !seed,
+        template: template.clone(),
+        rebase,
+    };
+    let plan = planner
+        .tool_results_plan(root, run, &request, cancel)
+        .await?;
+    contract::validate_plan(&request, &plan)?;
+    let mut projected = input;
+    for item in projected
+        .iter_mut()
+        .filter(|item| item["type"] == "function_call_output")
+    {
+        let Some(id) = call_id(item).map(str::to_owned) else {
+            continue;
+        };
+        if let Some(text) = plan.replacements.get(&id) {
+            item["output"] = json!(text);
+            continue;
+        }
+        let controlled = plan
+            .state
+            .assignments
+            .get(&id)
+            .is_some_and(|entry| entry.template.is_some());
         if controlled {
-            item["output"]=json!(originals.get(&id).context("Full primary output unavailable")?);
+            item["output"] = json!(originals
+                .get(&id)
+                .context("Full primary output unavailable")?);
         } else {
-            crate::compaction::project_tool_results(std::slice::from_mut(item),preview_bytes)?;
+            crate::compaction::project_tool_results(std::slice::from_mut(item), preview_bytes)?;
         }
     }
-    document["config_fingerprint"]=json!(crate::digest(&json!([policy,template,settings["tool_result_deduplication"]])));
-    document["planner"]=serde_json::to_value(&plan.state)?;
-    document["initialized"]=json!(true);document["rebase"]=json!(false);
+    document["config_fingerprint"] = json!(crate::digest(&json!([
+        policy,
+        template,
+        settings["tool_result_deduplication"]
+    ])));
+    document["planner"] = serde_json::to_value(&plan.state)?;
+    document["initialized"] = json!(true);
+    document["rebase"] = json!(false);
     if rebase {
-        let present:HashSet<_>=request.observations.iter().map(|item|item.call_id.as_str()).collect();
-        document["origins"].as_object_mut().context("Projection origins missing")?.retain(|id,_|present.contains(id.as_str()));
+        let present: HashSet<_> = request
+            .observations
+            .iter()
+            .map(|item| item.call_id.as_str())
+            .collect();
+        document["origins"]
+            .as_object_mut()
+            .context("Projection origins missing")?
+            .retain(|id, _| present.contains(id.as_str()));
     }
-    let changed=document!=before;
+    let changed = document != before;
     if changed {
-        document["revision"]=json!(before["revision"].as_u64().unwrap_or(0).checked_add(1).context("Projection revision overflow")?);
-        run["tool_result_projection"]=document;
+        document["revision"] = json!(before["revision"]
+            .as_u64()
+            .unwrap_or(0)
+            .checked_add(1)
+            .context("Projection revision overflow")?);
+        run["tool_result_projection"] = document;
     }
-    Ok((projected,changed))
+    Ok((projected, changed))
 }
-pub async fn dedup_summary_source(journal:&impl crate::ports::Journal, run: &Value, source: &[Value]) -> Result<Vec<Value>> {
-    let sid=run["session_id"].as_str().context("Summary session missing")?;
-    let mut full=source.to_vec();
+pub async fn dedup_summary_source(
+    journal: &impl crate::ports::Journal,
+    run: &Value,
+    source: &[Value],
+) -> Result<Vec<Value>> {
+    let sid = run["session_id"]
+        .as_str()
+        .context("Summary session missing")?;
+    let mut full = source.to_vec();
     for item in &mut full {
-        if item["type"]!="function_call_output" {continue;}
-        let Some(id)=call_id(item) else {continue;};
-        if let Some(origin)=run["tool_result_projection"]["origins"].get(id) {
-            let origin=origin["run_id"].as_str().context("Summary origin missing")?;
-            let result=journal.tool_result(sid,origin,id).await?.context("Summary original unavailable")?;
-            item["output"]=result["output"].clone();
+        if item["type"] != "function_call_output" {
+            continue;
+        }
+        let Some(id) = call_id(item) else {
+            continue;
+        };
+        if let Some(origin) = run["tool_result_projection"]["origins"].get(id) {
+            let origin = origin["run_id"]
+                .as_str()
+                .context("Summary origin missing")?;
+            let result = journal
+                .tool_result(sid, origin, id)
+                .await?
+                .context("Summary original unavailable")?;
+            item["output"] = result["output"].clone();
         }
     }
     Ok(full)
@@ -1474,7 +1669,10 @@ mod tests {
         let valid = br#"{"enabled":false}"#;
         assert_eq!(Policy::parse(valid).unwrap(), Policy::default());
         fs::write(&path, valid).unwrap();
-        assert_eq!(Policy::read_in(&roots).unwrap(), Policy::parse(valid).unwrap());
+        assert_eq!(
+            Policy::read_in(&roots).unwrap(),
+            Policy::parse(valid).unwrap()
+        );
         let mut at_limit = vec![b' '; MAX_POLICY_BYTES - 2];
         at_limit.extend_from_slice(b"{}");
         assert!(Policy::parse(&at_limit).is_ok());
@@ -1491,7 +1689,10 @@ mod tests {
             assert!(Policy::parse(&bytes).is_err());
             fs::write(&path, &bytes).unwrap();
             // The live reader serves the last good bytes once a file has validated.
-            assert_eq!(Policy::read_in(&roots).unwrap(), Policy::parse(valid).unwrap());
+            assert_eq!(
+                Policy::read_in(&roots).unwrap(),
+                Policy::parse(valid).unwrap()
+            );
         }
     }
 
@@ -1535,19 +1736,29 @@ mod tests {
         assert_eq!(
             embedded_prompt_defaults(&json!({"tool_output_retention":{
                 "guidance":"Configured guidance", "placeholder":"Configured placeholder"
-            }})).unwrap(),
-            ("Configured guidance".into(), "Configured placeholder".into())
+            }}))
+            .unwrap(),
+            (
+                "Configured guidance".into(),
+                "Configured placeholder".into()
+            )
         );
         assert!(embedded_prompt_defaults(&json!({})).is_err());
-        assert!(embedded_prompt_defaults(&json!({"tool_output_retention":{"guidance":false}})).is_err());
+        assert!(
+            embedded_prompt_defaults(&json!({"tool_output_retention":{"guidance":false}})).is_err()
+        );
         // A candidate source whose guidance file is blank is rejected.
-        let folder = dir.path().join(webagent_configuration::prompts::PROMPTS).join("tool_output_retention");
+        let folder = dir
+            .path()
+            .join(webagent_configuration::prompts::PROMPTS)
+            .join("tool_output_retention");
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("guidance.md"), "  \n").unwrap();
         assert!(Prompts::read_at(dir.path(), Some(dir.path())).is_err());
     }
 }
 
-
-#[cfg(any(test,feature="test-support"))]
-pub fn fixture_record_dedup_origin(run:&mut Value,call:&Value,output:&Value)->Result<()> {record_dedup_origin(run,call,output)}
+#[cfg(any(test, feature = "test-support"))]
+pub fn fixture_record_dedup_origin(run: &mut Value, call: &Value, output: &Value) -> Result<()> {
+    record_dedup_origin(run, call, output)
+}
