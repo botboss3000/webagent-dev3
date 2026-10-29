@@ -316,10 +316,12 @@ class Scheduler:
     @staticmethod
     def release_synchronized(job):
         """Synchronized, or an acknowledged proceed past checkout drift the build neither changed nor overwrote.
-        That drift belongs to the checkout, not the task; promoted bytes and the commit are still verified."""
+        That drift belongs to the checkout, not the task; promoted bytes and the commit are still verified.
+        The report is recomputed after deployment (its digest covers the new live release), so the
+        acknowledgement is matched by presence and the final report must still show nothing affected."""
         sync=job.get("synchronization")or{}
         if sync.get("status")=="synchronized":return True
-        return(sync.get("status")=="drift"and sync.get("digest")is not None and job.get("sync_ack_digest")==sync["digest"]
+        return(sync.get("status")=="drift"and bool(job.get("sync_ack_digest"))
             and sync.get("affected")==0 and sync.get("promotion_conflicts")==0)
     def verified(self,item,args,*,deployment_only=False):
         """Verify terminal publication, current promoted bytes and exact Git history before acceptance."""

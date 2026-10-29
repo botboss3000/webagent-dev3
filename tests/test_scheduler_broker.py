@@ -297,7 +297,8 @@ class SchedulerBrokerTests(unittest.TestCase):
             request={"action":"release_claims","task_id":item["task_id"],"scopes":value["scopes"],"reason":"Deployed and committed",
                 "commit":commit,"request_id":f"proceed-release-{n}","expected_revision":value["revision"],"expected_epoch":value["epoch"]}
             with patch.object(self.broker,"_start_next"):return self.call("build_work",request)
-        drift={"status":"drift","digest":"d"*64,"affected":0,"promotion_conflicts":0}
+        # The final report is recomputed after deployment, so its digest differs from the acknowledged one.
+        drift={"status":"drift","digest":"e"*64,"affected":0,"promotion_conflicts":0}
         for n,(sync,ack) in enumerate([(drift,None),(drift|{"affected":1},"d"*64),(drift|{"promotion_conflicts":1},"d"*64)]):
             job.update(synchronization=sync,sync_ack_digest=ack)
             with self.assertRaisesRegex(ValueError,"Current synchronized completed release required"):release(n)
