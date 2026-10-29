@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import sqlite3
 import asyncio
 import os
@@ -914,8 +915,9 @@ class BuildTests(unittest.TestCase):
             root, before, after, changed, lambda _: None, standalone=True))
 
     def test_source_apply_schemas_have_disjoint_arguments(self):
-        path = Path(__file__).resolve().parents[1] / "src/engine/tools/native-tools.json"
-        schemas = {item["name"]: item["parameters"] for item in json.loads(path.read_text())}
+        tools = Path(__file__).resolve().parents[1] / "plugins/abilities/Administrator/v3_build/tools"
+        schemas = {name: json.loads((tools / name / "tool.json").read_text())["parameters"]
+                   for name in ("v3_source_apply_prepared", "v3_source_apply")}
         prepared = schemas["v3_source_apply_prepared"]
         raw = schemas["v3_source_apply"]
         self.assertEqual({"task_id", "request_id", "prepared_id", "expected_inputs_sha256"},
@@ -1804,6 +1806,38 @@ class BuildTests(unittest.TestCase):
         again = self.rebuild("dev", "request-drift")
         self.assertEqual(again["job_id"], first["job_id"])
         self.assertEqual(len([c for c in self.runner.calls if c[0] == "commit_release"]), 1)
+
+    def test_rebuild_outlasting_the_callers_short_lease_still_finishes(self):
+        self.deployed_baseline();self.drift(**{"v3/src/rebuilt.rs": "fn rebuilt() {}"})
+        snapshot = self.runner.snapshot
+        def slow(inspection=False):
+            time.sleep(.3)
+            return snapshot(inspection)
+        self.runner.snapshot = slow
+        brief = dict(self.admin(), lease_until=time.time() + .2)
+        result = self.rebuild("dev", "request-slow", trusted=brief)
+        self.assertEqual(result["status"], "closed")
+        self.assertEqual(self.settle(result["job_id"])["status"], "completed")
+        with self.assertRaisesRegex(ValueError, "lease"):
+            self.rebuild("dev", "request-expired", trusted=dict(self.admin(), lease_until=time.time() - 1))
+
+    def test_retry_resumes_a_press_that_stopped_before_finish(self):
+        self.deployed_baseline();self.drift(**{"v3/src/rebuilt.rs": "fn rebuilt() {}"})
+        task_id = "rebuild-" + hashlib.sha256(b"request-stopped").hexdigest()[:24]
+        self.call("v3_build_work", {"action": "begin", "task_id": task_id, "summary": "Stopped rebuild", "mode": "isolated"},
+                  trusted=self.admin(), workspace=host.ADMIN_WORKSPACE)
+        result = self.rebuild("dev", "request-stopped")
+        self.assertEqual((result["task_id"], result["status"]), (task_id, "closed"))
+        self.assertEqual(self.settle(result["job_id"])["status"], "completed")
+        self.assertEqual(self.rebuild("dev", "request-stopped")["job_id"], result["job_id"])
+
+    def test_retry_of_a_stopped_press_without_drift_abandons_it(self):
+        task_id = "rebuild-" + hashlib.sha256(b"request-idle").hexdigest()[:24]
+        self.call("v3_build_work", {"action": "begin", "task_id": task_id, "summary": "Stopped rebuild", "mode": "isolated"},
+                  trusted=self.admin(), workspace=host.ADMIN_WORKSPACE)
+        self.assertEqual(self.rebuild("dev", "request-idle")["status"], "no_changes")
+        key = hashlib.sha256(host.canonical(["admin", host.ADMIN_WORKSPACE, task_id])).hexdigest()
+        self.assertEqual(self.broker.work[key]["status"], "abandoned")
 
     def test_only_one_rebuild_runs_at_a_time(self):
         self.deployed_baseline();self.drift(**{"v3/src/rebuilt.rs": "fn rebuilt() {}"})

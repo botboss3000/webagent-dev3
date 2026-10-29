@@ -3891,21 +3891,29 @@ class Broker:
         if (set(args) != {"mode", "request_id"} or args["mode"] not in ("dev", "stable")
                 or not isinstance(args["request_id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", args["request_id"])):
             raise ValueError("rebuild requires mode dev or stable and a stable request_id")
+        # The caller's short lease is checked once, here. Snapshotting the checkout and
+        # writing the task tree can outlast it, so the inner begin and finish run on a lease
+        # the broker renews for them; finish then gives the job its own long lease.
+        self._incoming_lease(trusted)
         task_id = "rebuild-" + hashlib.sha256(args["request_id"].encode()).hexdigest()[:24]
         key = hashlib.sha256(canonical([trusted["user_id"], workspace, task_id])).hexdigest()
         def call(arguments):
+            inner = dict(trusted, lease_until=time.time() + 30) if admin else trusted
             return self.handle({"id": str(uuid.uuid4()), "name": "v3_build_work", "arguments": arguments,
-                                "workspace": workspace, "trusted": trusted})
+                                "workspace": workspace, "trusted": inner})
         existing = self.work.get(key)
-        if existing:
+        if existing and (existing.get("job_id") or existing.get("status") != "open"):
             # A retried request returns the same task and job; it never queues a second build.
             return {"task_id": task_id, "mode": existing.get("release_mode"), "status": existing["status"],
                     "job_id": existing.get("job_id")}
+        # An open task without a job is a press that stopped before finish: resume it.
         if any(job.get("rebuild") and job["status"] in ("queued", "running") for job in self.jobs.values()):
             raise ValueError("A checkout rebuild is already queued or running")
         checkout, live = self.runner.snapshot(), self._current_release_blob()
         _, drift = release.candidate(live, checkout, live, context_digest, allow_empty=True, skip_live=True)
         if args["mode"] == "dev" and not drift:
+            if existing:
+                call({"action": "abandon", "task_id": task_id})
             return {"task_id": task_id, "mode": "dev", "status": "no_changes", "changed_paths": []}
         released = release.entries(live, context_digest)
         patterns = release.live_patterns(released)
@@ -3926,9 +3934,12 @@ class Broker:
             # The stable live compile selects --profile stable (thin LTO, opt-level 3); refuse before claiming.
             if manifest.get("profile", {}).get("stable", {}).get("inherits") != "release":
                 raise ValueError("Stable release requires the app to declare [profile.stable] inheriting release")
-        begun = call({"action": "begin", "task_id": task_id, "mode": "isolated",
-                      "summary": "Rebuild current checkout (" + args["mode"] + ") requested by " + ("an administrator" if admin else "the local operator")})
-        tree = Path(begun["workspace_path"]).parent
+        if existing:
+            tree = Path(existing["workspace_path"]).parent
+        else:
+            begun = call({"action": "begin", "task_id": task_id, "mode": "isolated",
+                          "summary": "Rebuild current checkout (" + args["mode"] + ") requested by " + ("an administrator" if admin else "the local operator")})
+            tree = Path(begun["workspace_path"]).parent
         if tree.parent != self.work_dir / "trees" or tree.is_symlink():
             raise ValueError("Rebuild task tree outside the broker work directory")
         for name in release.entries(release.snapshot(tree, TASK_CONTEXT, context_digest), context_digest):
