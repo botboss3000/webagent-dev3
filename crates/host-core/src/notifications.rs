@@ -1,10 +1,18 @@
 //! Metadata-only lifecycle notifications. This is distinct from private chat events.
-use super::*;
-pub(crate) const RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
+//! Every module stages notifications inside its own write transaction, so the
+//! staging, relay and retention store lives on the shared handle.
+use crate::StoreCore;
+use anyhow::{anyhow, Result};
+use serde_json::{json, Value};
+use sqlx::{Row, SqlitePool};
+
+/// How long relayed notifications stay readable.
+pub const RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
 const MAX_OUTBOX_ROWS: i64 = 1_000_000;
 const MAX_STAGED_ROWS: i64 = 10_000;
 
-pub(crate) async fn schema(pool: &SqlitePool, user: bool) -> Result<()> {
+/// Create the user plane staging tables (`user`) or the application outbox tables.
+pub async fn schema(pool: &SqlitePool, user: bool) -> Result<()> {
     if user {
         sqlx::raw_sql("CREATE TABLE IF NOT EXISTS notification_stage(
             source_seq INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT NOT NULL UNIQUE,
@@ -27,9 +35,9 @@ pub(crate) async fn schema(pool: &SqlitePool, user: bool) -> Result<()> {
     Ok(())
 }
 
-impl Store {
+impl StoreCore {
     // Called only from the lifecycle owner's transaction. No caller payload is copied.
-    pub(crate) async fn stage_notification(
+    pub async fn stage_notification(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         event_key: &str,
@@ -92,7 +100,7 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) async fn stage_run_notification(
+    pub async fn stage_run_notification(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         run: &Value,
@@ -139,7 +147,7 @@ impl Store {
 
     // The durable application watermark and insertion share a transaction.
     // If acknowledgement crashes, retries below the watermark cannot recreate pruned events.
-    pub(crate) async fn relay_notifications(&self) -> Result<usize> {
+    pub async fn relay_notifications(&self) -> Result<usize> {
         let mut tx = self.app_pool.begin().await?;
         sqlx::query("INSERT OR IGNORE INTO notification_relay VALUES(?,0)")
             .bind(&self.user_id)
@@ -220,7 +228,7 @@ impl Store {
         Ok(0)
     }
 
-    pub(crate) async fn prune_notifications(&self, now: i64) -> Result<usize> {
+    pub async fn prune_notifications(&self, now: i64) -> Result<usize> {
         let mut tx = self.app_pool.begin().await?;
         sqlx::query(
             "UPDATE notification_retention SET pruned_through=pruned_through WHERE singleton=1",
@@ -232,7 +240,7 @@ impl Store {
         Ok(removed)
     }
 
-    pub(crate) async fn notification_page(&self, since: i64, limit: i64) -> Result<Value> {
+    pub async fn notification_page(&self, since: i64, limit: i64) -> Result<Value> {
         let mut tx = self.app_pool.begin().await?;
         let floor: i64 = sqlx::query_scalar(
             "SELECT pruned_through FROM notification_retention WHERE singleton=1",
@@ -281,10 +289,15 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    // The workspace has no clippy.toml with `allow-unwrap-in-tests` yet.
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
-    async fn source() -> (tempfile::TempDir, Store) {
+    use crate::test_support::store_core;
+
+    async fn source() -> (tempfile::TempDir, StoreCore) {
         let root = tempfile::tempdir().unwrap();
-        let store = Store::open(root.path()).await.unwrap();
+        let store = store_core(root.path(), "admin").await;
         store
             .put("session:s", &json!({"id":"s","agent_id":"shared_default"}))
             .await
@@ -373,7 +386,7 @@ mod tests {
             .prune_notifications(crate::now() as i64 + RETENTION_SECONDS + 1)
             .await
             .unwrap();
-        let reopened = Store::open(root.path()).await.unwrap();
+        let reopened = store_core(root.path(), "admin").await;
         assert_eq!(
             reopened.notification_page(0, 20).await.unwrap()["error"],
             "cursor_expired"

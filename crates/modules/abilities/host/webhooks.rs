@@ -1,5 +1,6 @@
 //! Private bounded webhook inboxes. Bearer setup stays in the authenticated human page.
 use crate::*;
+use webagent_abilities_host::AbilitiesStore;
 use axum::{
     body::Bytes,
     http::{HeaderMap, StatusCode},

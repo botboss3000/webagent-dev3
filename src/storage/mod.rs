@@ -26,12 +26,8 @@ mod background_followup;
 mod followup_queue;
 #[path = "../../crates/modules/chat/host/storage/session_messaging.rs"]
 mod session_messaging;
-#[path = "../../crates/modules/abilities/host/webhook_storage.rs"]
-mod core_webhooks;
-#[path = "../../crates/modules/abilities/host/vault_storage.rs"]
-mod core_vault;
 mod reasoning_cleanup;
-pub(crate) mod notifications;
+pub(crate) use webagent_host_core::notifications;
 #[path = "../../crates/modules/chat/host/storage/shared_chat.rs"]
 pub(crate) mod shared_chat;
 #[path = "../../crates/modules/chat/host/storage/participation.rs"]

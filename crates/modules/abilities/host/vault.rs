@@ -1,5 +1,6 @@
 //! Human-entered generic credentials remain encrypted and are never returned to mini apps or models.
 use crate::*;
+use webagent_abilities_host::AbilitiesStore;
 use axum::Extension;
 use serde::Deserialize;
 pub fn owns(name: &str) -> bool {
@@ -34,13 +35,7 @@ pub fn create_url(raw: &str) -> Result<String> {
     }
     Ok(url.to_string())
 }
-pub fn valid_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 64
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-}
+pub use webagent_abilities_host::valid_credential_name as valid_name;
 pub fn origin(raw: &str) -> Result<String> {
     let url = reqwest::Url::parse(raw)?;
     if raw.len() > 500

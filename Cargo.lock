@@ -2183,6 +2183,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-abilities-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "webagent-chat",
+ "webagent-host-core",
+]
+
+[[package]]
 name = "webagent-access"
 version = "0.1.0"
 dependencies = [
@@ -2786,6 +2800,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "webagent-abilities",
+ "webagent-abilities-host",
  "webagent-access",
  "webagent-accounts",
  "webagent-accounts-host",

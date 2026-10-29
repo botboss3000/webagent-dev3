@@ -5,6 +5,7 @@
 //! extension traits on `StoreCore`. Everything links into the one program.
 mod documents;
 mod error;
+pub mod notifications;
 mod store;
 
 pub use error::{bad, conflict, Api, ApiError};

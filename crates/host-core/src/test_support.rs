@@ -7,8 +7,8 @@ use webagent_storage::cache::{Cache, ContextCache};
 use webagent_storage::codec::{AgentKeys, Codec};
 
 /// Open a handle for `user` and agent `shared_default` under `root`, with a fixed
-/// fixture key and an `agents` table so agent keys can be initialized. Root-only
-/// schema (notification tables) is not created.
+/// fixture key, an `agents` table so agent keys can be initialized and the
+/// notification tables. Opening the same `root` again reopens the same files.
 pub async fn store_core(root: &Path, user: &str) -> StoreCore {
     // Event/run tables per plane as root `Store::open` creates them.
     let open = |name: &str, events: bool, runs: bool| {
@@ -21,14 +21,22 @@ pub async fn store_core(root: &Path, user: &str) -> StoreCore {
     };
     let agent_pool = open("agent.db", false, false).await;
     sqlx::raw_sql(
-        "CREATE TABLE agents(id TEXT PRIMARY KEY, metadata BLOB, revision INTEGER NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS agents(id TEXT PRIMARY KEY, metadata BLOB, revision INTEGER NOT NULL)",
     )
     .execute(&agent_pool)
     .await
     .expect("fixture agents table");
+    let app_pool = open("app.db", true, false).await;
+    let pool = open("user.db", true, true).await;
+    crate::notifications::schema(&app_pool, false)
+        .await
+        .expect("fixture outbox tables");
+    crate::notifications::schema(&pool, true)
+        .await
+        .expect("fixture staging tables");
     StoreCore {
-        app_pool: open("app.db", true, false).await,
-        pool: open("user.db", true, true).await,
+        app_pool,
+        pool,
         agent_pool,
         root: root.to_owned(),
         user_id: user.to_owned(),

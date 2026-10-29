@@ -1,0 +1,23 @@
+[package]
+name = "webagent-abilities-host"
+version = "0.1.0"
+edition = "2021"
+
+# Abilities storage over the shared host core: Core Vault credential submission
+# and Core Webhooks ingestion. Tool handlers that need the root `App` stay in the
+# root crate (the files beside this folder).
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+uuid = "1"
+webagent-chat = { path = "../../../chat" }
+webagent-host-core = { path = "../../../../host-core" }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+webagent-host-core = { path = "../../../../host-core", features = ["test-support"] }
+
+[lints]
+workspace = true

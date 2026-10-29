@@ -41,8 +41,8 @@ impl AdmissionEffects for Store {
  fn reserve_requester_run<'a>(&'a self,run:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a {Store::reserve_requester_run(self,run)}
 }
 impl NotificationEffects for Store {
- fn stage_run_notification<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,run:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a where 'c:'a {Store::stage_run_notification(self,tx,run)}
- fn stage_notification<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,event_key:&'a str,kind:&'a str,sid:&'a str,rid:Option<&'a str>,status:Option<&'a str>)->impl std::future::Future<Output=Result<()>>+Send+'a where 'c:'a {Store::stage_notification(self,tx,event_key,kind,sid,rid,status)}
+ fn stage_run_notification<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,run:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a where 'c:'a {StoreCore::stage_run_notification(self,tx,run)}
+ fn stage_notification<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,event_key:&'a str,kind:&'a str,sid:&'a str,rid:Option<&'a str>,status:Option<&'a str>)->impl std::future::Future<Output=Result<()>>+Send+'a where 'c:'a {StoreCore::stage_notification(self,tx,event_key,kind,sid,rid,status)}
 }
 impl UsageEffects for Store {
  fn stage_run_usage_in<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,run:&'a Value)->impl std::future::Future<Output=Result<Value>>+Send+'a where 'c:'a {webagent_usage::stage_session_total(self,tx,run)}
